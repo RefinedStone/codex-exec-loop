@@ -5,7 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use crate::domain::kernel_spec::ReasonCode;
-use crate::domain::kernel_spec::{KernelCommandKind, KernelRecordKind};
+use crate::domain::kernel_spec::{
+    CommandCompletion, KernelCommandKind, KernelRecordKind, OperationState,
+};
 use crate::domain::planning::ManualPromptMainSessionHandoff;
 
 /*
@@ -20,6 +22,9 @@ pub struct QueuedThreadPrompt {
     #[schemars(skip)]
     pub handoff: ManualPromptMainSessionHandoff,
     pub task_id: String,
+    /// 이 프롬프트를 낸 명령의 연산 id 이다 (plan 18 K4-4). 다시 낸 턴도 같은 연산이다. K4-4 이전의 기록에는 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op_id: Option<i64>,
 }
 
 /// 남긴 프롬프트가 어떻게 끝났는가이다.
@@ -57,6 +62,30 @@ pub enum TurnEndOutcome {
     Failed,
     /// app-server 가 끝을 확정하지 못했다.
     Unknown,
+    /// 턴이 도는 채로 커널이 다시 조립되었다 (plan 18 K4-4). 새 커널은 그 턴의 끝을 받지 못한다.
+    Lost,
+}
+
+/// 턴 기록 없이 끝난 명령의 결과이다 (plan 18 K4-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationEnd {
+    Done,
+    Failed,
+    /// 연산이 열린 채로 커널이 다시 조립되었다.
+    Lost,
+}
+
+/*
+ * 턴을 내거나 돌리는 thread 하나이다 (plan 19 Q3-2, plan 18 K4-4). thread 요약에서 만들고, 두 값을 비교해 턴 기록을
+ * 낸다. `turn_id` 는 app-server 가 턴을 시작한 뒤에 있다. `op_id` 는 그 턴을 낸 명령의 연산이고, 명령이 낸 턴이
+ * 아니면(사람의 TUI 턴, 자동 후속) 비어 있다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadTurn {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub op_id: Option<i64>,
 }
 
 /// 턴 뒤 평가가 고른 다음 경로이다.
@@ -144,6 +173,8 @@ pub enum KernelEvent {
         workspace_directory: String,
         task_id: String,
         settlement: ThreadPromptSettlement,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op_id: Option<i64>,
     },
     /// thread 지정 프롬프트를 준비 전에 거절했다 (plan 19 Q3-2).
     ThreadPromptRejected {
@@ -151,13 +182,21 @@ pub enum KernelEvent {
         reason: ReasonCode,
     },
     /// 턴 제출을 받아들였다. `submission` 은 그 제출의 세대 번호이다. 새 대화의 첫 턴은 thread id 가 비어 있다.
+    /// `op_id` 는 그 턴을 낸 명령의 연산이다 (plan 18 K4-4). 명령이 낸 턴이 아니면 없다. 턴의 시작과 끝도 같다.
     TurnSubmitted {
         thread_id: String,
         submission: u64,
         origin: TurnOrigin,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op_id: Option<i64>,
     },
     /// app-server 가 턴을 시작했다.
-    TurnStarted { thread_id: String, turn_id: String },
+    TurnStarted {
+        thread_id: String,
+        turn_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op_id: Option<i64>,
+    },
     /// 턴이 끝났다. `outcome` 은 그 dispatch 의 입력이 끝을 알렸을 때만 있다 (Q3-3b). 대화 무효화처럼 다른 일로
     /// 요약에서 빠진 턴은 비어 있다. Q3-3b 이전의 기록에는 이 필드가 없다.
     TurnEnded {
@@ -165,6 +204,8 @@ pub enum KernelEvent {
         turn_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outcome: Option<TurnEndOutcome>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op_id: Option<i64>,
     },
     /// 턴 뒤 평가의 경로를 정했다.
     PostTurnRouted {
@@ -195,6 +236,14 @@ pub enum KernelEvent {
         thread_id: String,
         reason: ReasonCode,
     },
+    /// 명령이 턴 기록 없이 끝났다 (plan 18 K4-4). 턴이 끝나서 끝난 명령은 `turn_ended` 가 알린다.
+    CommandCompleted {
+        op_id: i64,
+        thread_id: String,
+        result: OperationEnd,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<ReasonCode>,
+    },
 }
 
 /// 기록에서 읽은 사건 하나이다 (plan 19 Q3-3). `sequence` 는 기록 순서이고 cursor 로 쓴다.
@@ -215,6 +264,34 @@ pub struct KernelEventPage {
     pub next_after: i64,
 }
 
+/*
+ * 연산 하나의 상태와 그 연산의 기록이다 (plan 18 K4-4). `operation` 조회의 답이다. 상태는 이 기록에서 계산한 값이다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OperationStatus {
+    pub op_id: i64,
+    pub state: OperationState,
+    pub records: Vec<RecordedKernelEvent>,
+}
+
+impl OperationStatus {
+    /// 기록 순서대로 읽은 사건에서 그 연산의 것만 골라 상태를 계산한다.
+    pub fn from_records(
+        op_id: i64,
+        records: impl IntoIterator<Item = RecordedKernelEvent>,
+    ) -> Self {
+        let records = records
+            .into_iter()
+            .filter(|record| record.event.op_id() == Some(op_id))
+            .collect::<Vec<_>>();
+        Self {
+            op_id,
+            state: operation_state(op_id, records.iter().map(|record| &record.event)),
+            records,
+        }
+    }
+}
+
 /// 남김 종류가 아닌 사건을 최근 이만큼만 남긴다 (plan 19 Q3-3). 남김 종류는 복구에 필요해서 지우지 않는다.
 pub const RETAINED_KERNEL_EVENTS: i64 = 10_000;
 
@@ -225,6 +302,18 @@ pub const MAX_KERNEL_EVENT_PAGE: usize = 500;
 pub const THREAD_PROMPT_QUEUE_KINDS: [&str; 2] = [
     KernelRecordKind::ThreadPromptQueued.name(),
     KernelRecordKind::ThreadPromptSettled.name(),
+];
+
+/// 연산의 상태를 계산할 때 읽는 사건 종류이다 (plan 18 K4-4). 커널을 조립할 때 열린 턴과 연산을 찾는 데 쓴다.
+pub const OPERATION_KINDS: [&str; 8] = [
+    KernelRecordKind::CommandReceived.name(),
+    KernelRecordKind::CommandRejected.name(),
+    KernelRecordKind::CommandCompleted.name(),
+    KernelRecordKind::ThreadPromptQueued.name(),
+    KernelRecordKind::ThreadPromptSettled.name(),
+    KernelRecordKind::TurnSubmitted.name(),
+    KernelRecordKind::TurnStarted.name(),
+    KernelRecordKind::TurnEnded.name(),
 ];
 
 /// 처리한 명령을 되돌릴 때 읽는 사건 종류이다 (plan 19 Q3-6).
@@ -250,6 +339,7 @@ impl QueuedThreadPrompt {
             workspace_directory: self.workspace_directory.clone(),
             task_id: self.task_id.clone(),
             settlement,
+            op_id: self.op_id,
         }
     }
 }
@@ -305,6 +395,7 @@ impl KernelEvent {
             Self::ApprovalResolved { .. } => KernelRecordKind::ApprovalResolved,
             Self::CommandReceived { .. } => KernelRecordKind::CommandReceived,
             Self::CommandRejected { .. } => KernelRecordKind::CommandRejected,
+            Self::CommandCompleted { .. } => KernelRecordKind::CommandCompleted,
         }
     }
 
@@ -315,6 +406,7 @@ impl KernelEvent {
             Self::ApprovalResolved { thread_id, .. }
             | Self::CommandReceived { thread_id, .. }
             | Self::CommandRejected { thread_id, .. }
+            | Self::CommandCompleted { thread_id, .. }
             | Self::ThreadPromptSettled { thread_id, .. }
             | Self::ThreadPromptRejected { thread_id, .. }
             | Self::TurnSubmitted { thread_id, .. }
@@ -325,38 +417,214 @@ impl KernelEvent {
     }
 }
 
+impl KernelEvent {
+    /// 이 사건이 속한 연산이다 (plan 18 K4-4). 명령에서 나오지 않은 사건은 `None` 이다.
+    pub fn op_id(&self) -> Option<i64> {
+        match self {
+            Self::CommandReceived { op_id, .. }
+            | Self::CommandRejected { op_id, .. }
+            | Self::CommandCompleted { op_id, .. } => Some(*op_id),
+            Self::ThreadPromptQueued(prompt) => prompt.op_id,
+            Self::ThreadPromptSettled { op_id, .. }
+            | Self::TurnSubmitted { op_id, .. }
+            | Self::TurnStarted { op_id, .. }
+            | Self::TurnEnded { op_id, .. } => *op_id,
+            Self::ThreadPromptRejected { .. }
+            | Self::PostTurnRouted { .. }
+            | Self::ApprovalRequested(_)
+            | Self::ApprovalResolved { .. } => None,
+        }
+    }
+
+    /// 이 사건 뒤의 그 연산의 상태이다. 상태를 바꾸지 않는 사건은 `None` 이다.
+    fn operation_step(&self) -> Option<OperationState> {
+        let state = match self {
+            Self::CommandReceived { command, .. } => {
+                let ends_at_once = KernelCommandKind::from_name(command)
+                    .is_some_and(|kind| kind.spec().completion == CommandCompletion::Accepted);
+                if ends_at_once {
+                    OperationState::Done
+                } else {
+                    OperationState::Accepted
+                }
+            }
+            Self::CommandRejected { .. } => OperationState::Rejected,
+            Self::ThreadPromptQueued(_) | Self::TurnSubmitted { .. } | Self::TurnStarted { .. } => {
+                OperationState::Running
+            }
+            Self::ThreadPromptSettled { settlement, .. } => match settlement {
+                ThreadPromptSettlement::Submitted => OperationState::Running,
+                ThreadPromptSettlement::ParallelSlots | ThreadPromptSettlement::TaskFinished => {
+                    OperationState::Done
+                }
+                ThreadPromptSettlement::RejectedAgain => OperationState::Failed,
+            },
+            Self::TurnEnded { outcome, .. } => match outcome {
+                Some(TurnEndOutcome::Failed) => OperationState::Failed,
+                Some(TurnEndOutcome::Lost) => OperationState::Lost,
+                Some(
+                    TurnEndOutcome::Completed
+                    | TurnEndOutcome::Interrupted
+                    | TurnEndOutcome::Unknown,
+                )
+                | None => OperationState::Done,
+            },
+            Self::CommandCompleted { result, .. } => match result {
+                OperationEnd::Done => OperationState::Done,
+                OperationEnd::Failed => OperationState::Failed,
+                OperationEnd::Lost => OperationState::Lost,
+            },
+            Self::ThreadPromptRejected { .. }
+            | Self::PostTurnRouted { .. }
+            | Self::ApprovalRequested(_)
+            | Self::ApprovalResolved { .. } => return None,
+        };
+        Some(state)
+    }
+}
+
+/*
+ * 기록 순서대로 읽은 사건에서 연산마다의 상태를 계산한다 (plan 18 K4-4, 설계 §3.4). 상태는 저장하지 않는다. 그 연산의
+ * 마지막 사건이 상태를 정한다. 받은 기록(`command_received`)이 없는 연산은 넣지 않는다. 그 기록이 보존 한도를 넘어
+ * 지워졌으면 뒤의 사건만으로는 무슨 명령이었는지 알 수 없다.
+ */
+pub fn operation_states<'a>(
+    events: impl IntoIterator<Item = &'a KernelEvent>,
+) -> std::collections::BTreeMap<i64, OperationState> {
+    let mut states = std::collections::BTreeMap::new();
+    for event in events {
+        let (Some(op_id), Some(state)) = (event.op_id(), event.operation_step()) else {
+            continue;
+        };
+        if matches!(event, KernelEvent::CommandReceived { .. }) || states.contains_key(&op_id) {
+            states.insert(op_id, state);
+        }
+    }
+    states
+}
+
+/// 연산 하나의 상태이다. 받은 기록이 없으면 `unknown` 이다.
+pub fn operation_state<'a>(
+    op_id: i64,
+    events: impl IntoIterator<Item = &'a KernelEvent>,
+) -> OperationState {
+    operation_states(events)
+        .get(&op_id)
+        .copied()
+        .unwrap_or(OperationState::Unknown)
+}
+
+/*
+ * 커널을 다시 조립할 때 이전 커널이 열어 둔 턴과 연산을 닫는 사건이다 (plan 18 K4-4). 승인의 `lost` (Q3-5)와 같은
+ * 규칙이다. 새 커널은 이전 커널의 턴이 어떻게 끝났는지 받지 못한다.
+ *
+ * - 시작했지만 끝나지 않은 턴은 `turn_ended` 의 `lost` 로 닫는다.
+ * - 그 뒤에도 열려 있는 연산은 `command_completed` 의 `lost` 로 닫는다. 큐에 남은 프롬프트의 연산은 닫지 않는다.
+ *   새 커널이 그 프롬프트를 다시 내고, 그 턴도 같은 연산이다.
+ * - 끝을 알리지 않는 명령(`CommandCompletion::Unreported`)의 연산은 닫지 않는다. 그 상태는 원래 `accepted` 로 남는다.
+ */
+pub fn restart_closures(events: &[KernelEvent]) -> Vec<KernelEvent> {
+    let mut open_turns: Vec<(&str, &str, Option<i64>)> = Vec::new();
+    for event in events {
+        match event {
+            KernelEvent::TurnStarted {
+                thread_id,
+                turn_id,
+                op_id,
+            } => open_turns.push((thread_id, turn_id, *op_id)),
+            KernelEvent::TurnEnded {
+                thread_id, turn_id, ..
+            } => open_turns.retain(|(thread, turn, _)| (*thread, *turn) != (thread_id, turn_id)),
+            _ => {}
+        }
+    }
+    let mut closures = open_turns
+        .into_iter()
+        .map(|(thread_id, turn_id, op_id)| KernelEvent::TurnEnded {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            outcome: Some(TurnEndOutcome::Lost),
+            op_id,
+        })
+        .collect::<Vec<_>>();
+    let queued = open_queued_thread_prompts(events.iter().cloned())
+        .into_iter()
+        .filter_map(|prompt| prompt.op_id)
+        .collect::<Vec<_>>();
+    let states = operation_states(events.iter().chain(&closures));
+    for event in events {
+        let KernelEvent::CommandReceived {
+            op_id,
+            command,
+            thread_id,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let reports_its_end = KernelCommandKind::from_name(command)
+            .is_some_and(|kind| kind.spec().completion == CommandCompletion::Records);
+        let open = states.get(op_id).is_some_and(|state| !state.is_end());
+        if reports_its_end && open && !queued.contains(op_id) {
+            closures.push(KernelEvent::CommandCompleted {
+                op_id: *op_id,
+                thread_id: thread_id.clone(),
+                result: OperationEnd::Lost,
+                reason: None,
+            });
+        }
+    }
+    closures
+}
+
 /*
  * thread 요약 두 개를 비교해 턴의 시작과 끝을 낸다 (plan 19 Q3-2). 요약은 보지 않는 thread 를 포함하므로 모든 thread 의
- * 턴을 본다. 끝을 시작보다 먼저 낸다. 같은 thread 에서 턴이 바뀌면 이전 턴이 먼저 끝났기 때문이다. 값은
- * `(thread id, 진행 중 턴 id)` 이다.
+ * 턴을 본다. 끝을 시작보다 먼저 낸다. 같은 thread 에서 턴이 바뀌면 이전 턴이 먼저 끝났기 때문이다.
+ *
+ * 명령이 낸 턴 제출이 턴을 시작하지 못하고 사라지면(시작 전의 스트림 실패) 턴 기록이 없다. 그 연산이 끝나지 않으므로
+ * `command_completed` 의 `failed` 를 낸다 (plan 18 K4-4).
  */
-pub fn turn_events_between(
-    before: &[(String, Option<String>)],
-    after: &[(String, Option<String>)],
-) -> Vec<KernelEvent> {
-    let running = |turns: &[(String, Option<String>)]| {
+pub fn turn_events_between(before: &[ThreadTurn], after: &[ThreadTurn]) -> Vec<KernelEvent> {
+    let same_turn = |left: &ThreadTurn, right: &ThreadTurn| {
+        left.thread_id == right.thread_id && left.turn_id == right.turn_id
+    };
+    let started_turns = |turns: &[ThreadTurn]| {
         turns
             .iter()
-            .filter_map(|(thread_id, turn_id)| Some((thread_id.clone(), turn_id.clone()?)))
+            .filter(|turn| turn.turn_id.is_some())
+            .cloned()
             .collect::<Vec<_>>()
     };
-    let (before, after) = (running(before), running(after));
-    let ended = before
+    let (running_before, running_after) = (started_turns(before), started_turns(after));
+    let ended = running_before
         .iter()
-        .filter(|turn| !after.contains(turn))
-        .map(|(thread_id, turn_id)| KernelEvent::TurnEnded {
-            thread_id: thread_id.clone(),
-            turn_id: turn_id.clone(),
+        .filter(|turn| !running_after.iter().any(|other| same_turn(turn, other)))
+        .map(|turn| KernelEvent::TurnEnded {
+            thread_id: turn.thread_id.clone(),
+            turn_id: turn.turn_id.clone().unwrap_or_default(),
             outcome: None,
+            op_id: turn.op_id,
         });
-    let started = after
+    let started = running_after
         .iter()
-        .filter(|turn| !before.contains(turn))
-        .map(|(thread_id, turn_id)| KernelEvent::TurnStarted {
-            thread_id: thread_id.clone(),
-            turn_id: turn_id.clone(),
+        .filter(|turn| !running_before.iter().any(|other| same_turn(turn, other)))
+        .map(|turn| KernelEvent::TurnStarted {
+            thread_id: turn.thread_id.clone(),
+            turn_id: turn.turn_id.clone().unwrap_or_default(),
+            op_id: turn.op_id,
         });
-    ended.chain(started).collect()
+    let closed_without_a_turn = before
+        .iter()
+        .filter(|turn| turn.turn_id.is_none())
+        .filter_map(|turn| Some((turn, turn.op_id?)))
+        .filter(|(_, op_id)| !after.iter().any(|other| other.op_id == Some(*op_id)))
+        .map(|(turn, op_id)| KernelEvent::CommandCompleted {
+            op_id,
+            thread_id: turn.thread_id.clone(),
+            result: OperationEnd::Failed,
+            reason: None,
+        });
+    ended.chain(started).chain(closed_without_a_turn).collect()
 }
 
 /*
@@ -534,6 +802,7 @@ mod tests {
                 task: None,
             },
             task_id: task_id.to_string(),
+            op_id: None,
         }
     }
 
@@ -553,8 +822,228 @@ mod tests {
         assert_eq!(open, vec![queued("task-2"), queued("task-3")]);
     }
 
-    fn turn(thread: &str, turn: Option<&str>) -> (String, Option<String>) {
-        (thread.to_string(), turn.map(str::to_string))
+    fn turn(thread: &str, turn: Option<&str>) -> ThreadTurn {
+        operation_turn(thread, turn, None)
+    }
+
+    fn operation_turn(thread: &str, turn: Option<&str>, op_id: Option<i64>) -> ThreadTurn {
+        ThreadTurn {
+            thread_id: thread.to_string(),
+            turn_id: turn.map(str::to_string),
+            op_id,
+        }
+    }
+
+    fn received_command(op_id: i64, command: &str) -> KernelEvent {
+        KernelEvent::CommandReceived {
+            op_id,
+            command: command.to_string(),
+            thread_id: "thread-1".to_string(),
+            fingerprint: "fp".to_string(),
+            idempotency_key: None,
+        }
+    }
+
+    fn turn_started(turn: &str, op_id: Option<i64>) -> KernelEvent {
+        KernelEvent::TurnStarted {
+            thread_id: "thread-1".to_string(),
+            turn_id: turn.to_string(),
+            op_id,
+        }
+    }
+
+    fn turn_ended(turn: &str, outcome: TurnEndOutcome, op_id: Option<i64>) -> KernelEvent {
+        KernelEvent::TurnEnded {
+            thread_id: "thread-1".to_string(),
+            turn_id: turn.to_string(),
+            outcome: Some(outcome),
+            op_id,
+        }
+    }
+
+    #[test]
+    fn turn_records_carry_the_operation_of_the_command_that_submitted_the_turn() {
+        // plan 18 K4-4: the start and the end of a turn name the operation, so the operation's end is known.
+        let submitting = [operation_turn("thread-1", None, Some(7))];
+        let running = [operation_turn("thread-1", Some("turn-1"), Some(7))];
+        assert_eq!(
+            turn_events_between(&submitting, &running),
+            vec![turn_started("turn-1", Some(7))]
+        );
+        assert_eq!(
+            turn_events_between(&running, &[]),
+            vec![KernelEvent::TurnEnded {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                outcome: None,
+                op_id: Some(7),
+            }]
+        );
+        // A submission that closes before a turn started has no turn record. The operation still ends.
+        assert_eq!(
+            turn_events_between(&submitting, &[]),
+            vec![KernelEvent::CommandCompleted {
+                op_id: 7,
+                thread_id: "thread-1".to_string(),
+                result: OperationEnd::Failed,
+                reason: None,
+            }]
+        );
+        // A turn that no command submitted (a TUI turn, automatic follow-up) closes without an operation record.
+        assert!(turn_events_between(&[turn("thread-1", None)], &[]).is_empty());
+    }
+
+    #[test]
+    fn the_operation_state_is_the_last_record_of_the_operation() {
+        let queued_prompt = QueuedThreadPrompt {
+            op_id: Some(7),
+            ..queued("task-1")
+        };
+        let mut records = vec![received_command(7, "submit_prompt")];
+        let state = |records: &[KernelEvent]| operation_state(7, records);
+        assert_eq!(state(&records), OperationState::Accepted);
+        records.push(KernelEvent::ThreadPromptQueued(queued_prompt.clone()));
+        assert_eq!(
+            state(&records),
+            OperationState::Running,
+            "queued is not an end"
+        );
+        records.push(queued_prompt.settled(ThreadPromptSettlement::Submitted));
+        records.push(turn_started("turn-1", Some(7)));
+        // Records of other operations and of no operation do not change the state.
+        records.push(turn_ended("turn-9", TurnEndOutcome::Failed, None));
+        records.push(received_command(8, "submit_prompt"));
+        assert_eq!(state(&records), OperationState::Running);
+        records.push(turn_ended("turn-1", TurnEndOutcome::Completed, Some(7)));
+        assert_eq!(state(&records), OperationState::Done);
+        assert_eq!(operation_state(8, &records), OperationState::Accepted);
+
+        let ends = [
+            (
+                KernelEvent::CommandRejected {
+                    op_id: 7,
+                    thread_id: "thread-1".to_string(),
+                    reason: ReasonCode::Busy,
+                },
+                OperationState::Rejected,
+            ),
+            (
+                turn_ended("turn-1", TurnEndOutcome::Failed, Some(7)),
+                OperationState::Failed,
+            ),
+            (
+                turn_ended("turn-1", TurnEndOutcome::Interrupted, Some(7)),
+                OperationState::Done,
+            ),
+            (
+                turn_ended("turn-1", TurnEndOutcome::Lost, Some(7)),
+                OperationState::Lost,
+            ),
+            (
+                queued_prompt.settled(ThreadPromptSettlement::TaskFinished),
+                OperationState::Done,
+            ),
+            (
+                queued_prompt.settled(ThreadPromptSettlement::RejectedAgain),
+                OperationState::Failed,
+            ),
+            (
+                KernelEvent::CommandCompleted {
+                    op_id: 7,
+                    thread_id: "thread-1".to_string(),
+                    result: OperationEnd::Failed,
+                    reason: Some(ReasonCode::PlanningRefused),
+                },
+                OperationState::Failed,
+            ),
+        ];
+        for (end, expected) in ends {
+            assert_eq!(
+                operation_state(7, &[received_command(7, "submit_prompt"), end.clone()]),
+                expected,
+                "{end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_operation_without_its_received_record_is_unknown() {
+        // The received record names the command. Without it the later records do not say what ended.
+        assert_eq!(
+            operation_state(
+                7,
+                &[turn_ended("turn-1", TurnEndOutcome::Completed, Some(7))]
+            ),
+            OperationState::Unknown
+        );
+        assert_eq!(operation_state(7, &[]), OperationState::Unknown);
+        // A command that ends when the kernel accepts it is done at once.
+        assert_eq!(
+            operation_state(3, &[received_command(3, "pause_auto_follow")]),
+            OperationState::Done
+        );
+        // A command whose end the kernel does not report yet stays accepted.
+        assert_eq!(
+            operation_state(4, &[received_command(4, "steer_turn")]),
+            OperationState::Accepted
+        );
+    }
+
+    #[test]
+    fn a_restart_closes_open_turns_and_operations_but_not_a_queued_prompt() {
+        let queued_prompt = QueuedThreadPrompt {
+            op_id: Some(3),
+            ..queued("task-3")
+        };
+        let records = [
+            // 1: its turn runs. 2: still preparing. 3: queued. 4: ended. 5: a command without a reported end.
+            received_command(1, "submit_prompt"),
+            turn_started("turn-1", Some(1)),
+            received_command(2, "submit_prompt"),
+            received_command(3, "submit_prompt"),
+            KernelEvent::ThreadPromptQueued(queued_prompt),
+            received_command(4, "submit_prompt"),
+            turn_started("turn-4", Some(4)),
+            turn_ended("turn-4", TurnEndOutcome::Completed, Some(4)),
+            received_command(5, "steer_turn"),
+            // A turn that no command submitted.
+            turn_started("turn-auto", None),
+        ];
+        let closures = restart_closures(&records);
+        assert_eq!(
+            closures,
+            vec![
+                turn_ended("turn-1", TurnEndOutcome::Lost, Some(1)),
+                turn_ended("turn-auto", TurnEndOutcome::Lost, None),
+                KernelEvent::CommandCompleted {
+                    op_id: 2,
+                    thread_id: "thread-1".to_string(),
+                    result: OperationEnd::Lost,
+                    reason: None,
+                },
+            ]
+        );
+        let after = records.iter().chain(&closures).cloned().collect::<Vec<_>>();
+        assert_eq!(operation_state(1, &after), OperationState::Lost);
+        assert_eq!(operation_state(2, &after), OperationState::Lost);
+        assert_eq!(operation_state(3, &after), OperationState::Running);
+        assert_eq!(operation_state(4, &after), OperationState::Done);
+        assert_eq!(operation_state(5, &after), OperationState::Accepted);
+        // The next restart finds nothing more to close.
+        assert!(restart_closures(&after).is_empty());
+    }
+
+    #[test]
+    fn records_written_before_the_operation_id_still_read() {
+        let old: KernelEvent = serde_json::from_value(serde_json::json!({
+            "kind": "turn_started", "thread_id": "thread-1", "turn_id": "turn-1"
+        }))
+        .expect("a record without `op_id` should still decode");
+        assert_eq!(old, turn_started("turn-1", None));
+        assert!(
+            serde_json::to_value(&old).expect("event should serialize")["op_id"].is_null(),
+            "a turn that no command submitted leaves the field out"
+        );
     }
 
     #[test]
@@ -591,6 +1080,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 outcome: None,
+                op_id: None,
             }
         );
         assert!(
@@ -640,15 +1130,18 @@ mod tests {
                 thread_id: String::new(),
                 submission: 3,
                 origin: TurnOrigin::AutoFollow,
+                op_id: None,
             },
             KernelEvent::TurnStarted {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                op_id: None,
             },
             KernelEvent::TurnEnded {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 outcome: Some(TurnEndOutcome::Interrupted),
+                op_id: None,
             },
             KernelEvent::PostTurnRouted {
                 thread_id: "thread-1".to_string(),
@@ -662,6 +1155,12 @@ mod tests {
                 op_id: 7,
                 thread_id: "thread-1".to_string(),
                 reason: ReasonCode::NoMatchingTurn,
+            },
+            KernelEvent::CommandCompleted {
+                op_id: 7,
+                thread_id: "thread-1".to_string(),
+                result: OperationEnd::Failed,
+                reason: Some(ReasonCode::PlanningRefused),
             },
         ];
         // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.

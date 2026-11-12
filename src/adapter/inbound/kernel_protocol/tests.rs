@@ -93,6 +93,7 @@ fn every_command_maps_to_one_core_command() {
                 workspace_directory: "/workspace".to_string(),
                 thread_id: "thread-2".to_string(),
                 prompt: "fix the failing test".to_string(),
+                op_id: None,
             }
         )))
     );
@@ -526,7 +527,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 6);
+    assert_eq!(queries.len(), 7);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
@@ -537,6 +538,7 @@ fn events_and_description_have_stable_wire_shapes() {
             after: None,
             limit: None,
         },
+        KernelQuery::Operation { op_id: 7 },
     ]) {
         assert_eq!(
             serde_json::to_value(query).expect("query should serialize")["type"],
@@ -628,6 +630,7 @@ fn a_recorded_event_carries_the_log_sequence_for_the_history_cursor() {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             outcome: Some(crate::domain::kernel_event::TurnEndOutcome::Interrupted),
+            op_id: None,
         },
     });
     assert_eq!(
@@ -718,6 +721,7 @@ fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
             event: crate::domain::kernel_event::KernelEvent::TurnStarted {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                op_id: None,
             },
         }],
         next_after: 42,
@@ -725,7 +729,7 @@ fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
     let snapshot = crate::core::app::AppSnapshot::initial();
     let answer = next
         .query
-        .answer(&snapshot, &[], no_parallel(), Some(page.clone()));
+        .answer(&snapshot, &[], no_parallel(), Some(page.clone()), None);
     assert_eq!(answer, KernelQueryAnswer::History(page));
     assert_eq!(
         serde_json::to_value(&answer).expect("the answer should serialize"),
@@ -740,12 +744,117 @@ fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
         })
     );
     assert_eq!(
-        first.query.answer(&snapshot, &[], no_parallel(), None),
+        first
+            .query
+            .answer(&snapshot, &[], no_parallel(), None, None),
         KernelQueryAnswer::History(crate::domain::kernel_event::KernelEventPage {
             records: Vec::new(),
             next_after: 0,
         }),
         "a kernel without a log answers with an empty page"
+    );
+}
+
+#[test]
+fn an_operation_query_answers_with_the_state_and_the_records_of_one_command() {
+    // plan 18 K4-4: the kernel computes the state from the records of that operation.
+    use crate::domain::kernel_event::{KernelEvent as Record, OperationStatus, TurnEndOutcome};
+    let request: QueryRequest =
+        serde_json::from_value(json!({ "query": { "type": "operation", "op_id": 7 } }))
+            .expect("an operation query should parse");
+    assert_eq!(request.query.operation_id(), Some(7));
+    assert_eq!(request.query.history_range(), None);
+    assert_eq!(KernelQuery::Planning {}.operation_id(), None);
+
+    let record = |sequence, event| crate::domain::kernel_event::RecordedKernelEvent {
+        sequence,
+        recorded_at: "2026-11-12T00:00:00Z".to_string(),
+        event,
+    };
+    let status = OperationStatus::from_records(
+        7,
+        [
+            record(
+                7,
+                Record::CommandReceived {
+                    op_id: 7,
+                    command: "submit_prompt".to_string(),
+                    thread_id: "thread-1".to_string(),
+                    fingerprint: "0123".to_string(),
+                    idempotency_key: None,
+                },
+            ),
+            // A record of another turn is not part of this operation.
+            record(
+                8,
+                Record::TurnStarted {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-other".to_string(),
+                    op_id: None,
+                },
+            ),
+            record(
+                9,
+                Record::TurnEnded {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    outcome: Some(TurnEndOutcome::Completed),
+                    op_id: Some(7),
+                },
+            ),
+        ],
+    );
+    let snapshot = crate::core::app::AppSnapshot::initial();
+    let answer = request
+        .query
+        .answer(&snapshot, &[], no_parallel(), None, Some(status));
+    let answer = serde_json::to_value(&answer).expect("the answer should serialize");
+    assert_eq!(answer["type"], json!("operation"));
+    assert_eq!(answer["op_id"], json!(7));
+    assert_eq!(answer["state"], json!("done"));
+    assert_eq!(
+        answer["records"]
+            .as_array()
+            .expect("records")
+            .iter()
+            .map(|record| record["sequence"].as_i64())
+            .collect::<Vec<_>>(),
+        [Some(7), Some(9)]
+    );
+    assert_eq!(answer["records"][1]["event"]["op_id"], json!(7));
+    assert_eq!(
+        serde_json::to_value(
+            request
+                .query
+                .answer(&snapshot, &[], no_parallel(), None, None)
+        )
+        .expect("the answer should serialize"),
+        json!({ "type": "operation", "op_id": 7, "state": "unknown", "records": [] }),
+        "a kernel without a log knows no operation"
+    );
+
+    // The spec tells when each command ends and what each state means.
+    let spec = spec_json();
+    let completion = |name: &str| {
+        spec["commands"]
+            .as_array()
+            .expect("commands")
+            .iter()
+            .find(|command| command["name"] == json!(name))
+            .map(|command| command["completion"].clone())
+    };
+    assert_eq!(completion("submit_prompt"), Some(json!("records")));
+    assert_eq!(completion("pause_auto_follow"), Some(json!("accepted")));
+    assert_eq!(completion("steer_turn"), Some(json!("unreported")));
+    assert_eq!(
+        names_of(&spec["terms"]["operation_state"]),
+        [
+            "accepted", "running", "done", "rejected", "failed", "lost", "unknown"
+        ]
+    );
+    assert_eq!(
+        names_of(&spec["terms"]["completion"]),
+        ["accepted", "records", "unreported"]
     );
 }
 
@@ -756,13 +865,15 @@ fn a_query_answers_with_the_event_of_the_same_name() {
         serde_json::from_value(json!({ "query": { "type": "auto_follow" } }))
             .expect("query request should parse");
     assert_eq!(
-        request.query.answer(&snapshot, &[], no_parallel(), None),
+        request
+            .query
+            .answer(&snapshot, &[], no_parallel(), None, None),
         KernelQueryAnswer::AutoFollow(AutoFollowSettings::from_core(
             &snapshot.conversation_runtime
         ))
     );
     assert_eq!(
-        KernelQuery::ThreadActivity {}.answer(&snapshot, &[], no_parallel(), None),
+        KernelQuery::ThreadActivity {}.answer(&snapshot, &[], no_parallel(), None, None),
         KernelQueryAnswer::ThreadActivity {
             threads: Vec::new()
         }
@@ -1696,6 +1807,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             task: None,
         },
         task_id: "task-1".to_string(),
+        op_id: None,
     };
     let approval = PendingApproval::new(
         "thread-1",
@@ -1715,20 +1827,24 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             thread_id: String::new(),
             submission: 3,
             origin: TurnOrigin::AutoFollow,
+            op_id: None,
         },
         Record::TurnStarted {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            op_id: None,
         },
         Record::TurnEnded {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             outcome: Some(TurnEndOutcome::Interrupted),
+            op_id: None,
         },
         Record::TurnEnded {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-2".to_string(),
             outcome: None,
+            op_id: None,
         },
         Record::PostTurnRouted {
             thread_id: "thread-1".to_string(),
@@ -1748,6 +1864,12 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             op_id: 7,
             thread_id: "thread-1".to_string(),
             reason: ReasonCode::Busy,
+        },
+        Record::CommandCompleted {
+            op_id: 7,
+            thread_id: "thread-1".to_string(),
+            result: crate::domain::kernel_event::OperationEnd::Failed,
+            reason: Some(ReasonCode::PlanningRefused),
         },
     ]
 }
@@ -1813,7 +1935,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
                 .collect(),
             next_after: 12,
         };
-        let answer = query.answer(&snapshot, &[], no_parallel(), Some(page));
+        let answer = query.answer(&snapshot, &[], no_parallel(), Some(page), None);
         assert_matches_spec(&spec, "queries", "output", &to_json(&answer));
     }
     // 값이 채워진 상태이다. 빈 목록만 보내면 중첩된 타입의 스키마를 검사하지 못한다.

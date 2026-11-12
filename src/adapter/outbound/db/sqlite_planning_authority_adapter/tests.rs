@@ -152,6 +152,7 @@ fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
     let started = |turn_id: &str| KernelEvent::TurnStarted {
         thread_id: "thread-1".to_string(),
         turn_id: turn_id.to_string(),
+        op_id: None,
     };
     let queued = KernelEvent::ThreadPromptQueued(QueuedThreadPrompt {
         thread_id: "thread-1".to_string(),
@@ -162,6 +163,7 @@ fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
             task: None,
         },
         task_id: "task-1".to_string(),
+        op_id: None,
     });
     adapter
         .append_kernel_events(
@@ -283,6 +285,7 @@ fn kernel_events_append_in_order_and_skip_unknown_kinds() {
             task: None,
         },
         task_id: task_id.to_string(),
+        op_id: None,
     };
     let first = KernelEvent::ThreadPromptQueued(queued("task-1"));
     let second = queued("task-1").settled(ThreadPromptSettlement::Submitted);
@@ -290,6 +293,7 @@ fn kernel_events_append_in_order_and_skip_unknown_kinds() {
     let other_kind = KernelEvent::TurnStarted {
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        op_id: None,
     };
     adapter
         .append_kernel_events(

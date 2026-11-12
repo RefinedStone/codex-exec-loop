@@ -16,7 +16,8 @@ use crate::core::native_client_port::{
 };
 use crate::core::runtime::CoreInputWaker;
 use crate::domain::kernel_event::{
-    KernelCommandDescriptor, KernelEventPage, OperationReceipt, RecordedKernelEvent,
+    KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus,
+    RecordedKernelEvent,
 };
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use crate::domain::planning::RuntimeProjection;
@@ -188,6 +189,11 @@ enum KernelHostInput {
         limit: usize,
         reply: Sender<Result<KernelEventPage, String>>,
     },
+    /// 연산 하나의 상태와 기록을 읽는다 (plan 18 K4-4).
+    Operation {
+        op_id: i64,
+        reply: Sender<Result<OperationStatus, String>>,
+    },
     Detach {
         client_id: KernelClientId,
     },
@@ -344,6 +350,18 @@ impl KernelCommandSender {
             limit,
             reply,
         })?;
+        wait_reply(&answer, timeout)
+    }
+
+    /// 연산 하나의 상태와 기록을 읽는다 (plan 18 K4-4). 기록을 읽지 못하면 안쪽 `Err` 에 이유를 담는다.
+    pub(crate) fn operation(
+        &self,
+        op_id: i64,
+        timeout: Duration,
+    ) -> Result<Result<OperationStatus, String>, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox
+            .send(KernelHostInput::Operation { op_id, reply })?;
         wait_reply(&answer, timeout)
     }
 
@@ -583,6 +601,13 @@ impl KernelHostLoop {
                     .kernel_event_history(after, limit)
                     .map_err(|error| format!("{error:#}"));
                 let _ = reply.send(page);
+            }
+            KernelHostInput::Operation { op_id, reply } => {
+                let status = self
+                    .runtime
+                    .kernel_operation(op_id)
+                    .map_err(|error| format!("{error:#}"));
+                let _ = reply.send(status);
             }
             KernelHostInput::Query { reply } => {
                 let _ = reply.send(KernelHostView {
@@ -992,6 +1017,7 @@ mod tests {
                     workspace_directory: workspace.to_string(),
                     thread_id: "thread-2".to_string(),
                     prompt: "fix the test".to_string(),
+                    op_id: None,
                 },
             ))),
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(Box::new(
@@ -1164,6 +1190,7 @@ mod tests {
                         workspace_directory: "/workspace".to_string(),
                         thread_id: "thread-9".to_string(),
                         prompt: "hello".to_string(),
+                        op_id: None,
                     },
                 )))
                 .is_some()
@@ -1314,6 +1341,7 @@ mod tests {
         let started = |turn_id: &str| crate::domain::kernel_event::KernelEvent::TurnStarted {
             thread_id: "thread-1".to_string(),
             turn_id: turn_id.to_string(),
+            op_id: None,
         };
         let (mut runtime, _turns) = recording_runtime_for_test();
         runtime.attach_kernel_event_log(

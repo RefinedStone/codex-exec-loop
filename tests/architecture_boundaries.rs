@@ -14336,6 +14336,8 @@ fn verify_client_runtime_api_boundary(
         "host_waker",
         // plan 19 Q3-3: the kernel host reads the event log for a client's history query.
         "kernel_event_history",
+        // plan 18 K4-4: the kernel host reads one operation's state and records for a client's query.
+        "kernel_operation",
         // plan 19 Q3-4: the kernel host sleeps until the next clock deadline.
         "next_deadline",
         "parallel_control_plane_projection",
@@ -14358,6 +14360,7 @@ fn verify_client_runtime_api_boundary(
         "has_remaining_work",
         "host_waker",
         "kernel_event_history",
+        "kernel_operation",
         "next_deadline",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",

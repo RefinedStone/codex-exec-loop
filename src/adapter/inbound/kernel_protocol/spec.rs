@@ -19,8 +19,8 @@ use super::{
 };
 use crate::domain::kernel_event::KernelEvent as KernelRecord;
 use crate::domain::kernel_spec::{
-    CommandEffect, CommandIdempotency, CommandScope, KernelCommandKind, KernelRecordKind,
-    ReasonCode,
+    CommandCompletion, CommandEffect, CommandIdempotency, CommandScope, KernelCommandKind,
+    KernelRecordKind, OperationState, ReasonCode,
 };
 use crate::domain::parallel_mode::ParallelModeAgentRosterState;
 
@@ -57,6 +57,10 @@ pub struct Terms {
     pub idempotency: Vec<TermEntry>,
     /// 병렬 에이전트의 `state` 값이다 (plan 18 K4-2). 이름만으로 뜻을 알기 어려운 값이라서 설명을 싣는다.
     pub agent_state: Vec<TermEntry>,
+    /// 명령의 `completion` 값이다 (plan 18 K4-4).
+    pub completion: Vec<TermEntry>,
+    /// 연산의 `state` 값이다 (plan 18 K4-4).
+    pub operation_state: Vec<TermEntry>,
 }
 
 /// 메서드가 답을 받는 요청인가, 커널이 보내는 알림인가이다.
@@ -88,6 +92,8 @@ pub struct CommandEntry {
     pub idempotency: CommandIdempotency,
     /// 커널이 이 명령을 바로 거절할 때 낼 수 있는 이유 코드이다. 뜻은 `reasons` 에 있다.
     pub rejections: Vec<&'static str>,
+    /// 이 명령이 언제 끝나는가이다 (plan 18 K4-4). 뜻은 `terms.completion` 에 있다.
+    pub completion: CommandCompletion,
     /// `akra/kernel/command` 의 `command` 값이다.
     pub input: Value,
     /// 모든 명령의 답은 같은 모양이다.
@@ -204,6 +210,14 @@ pub fn describe() -> KernelSpec {
                 .iter()
                 .map(|state| term(state.name(), state.summary()))
                 .collect(),
+            completion: CommandCompletion::ALL
+                .iter()
+                .map(|completion| term(completion.name(), completion.summary()))
+                .collect(),
+            operation_state: OperationState::ALL
+                .iter()
+                .map(|state| term(state.name(), state.summary()))
+                .collect(),
         },
         methods,
         commands: KernelCommandKind::ALL
@@ -217,6 +231,7 @@ pub fn describe() -> KernelSpec {
                     effect: spec.effect,
                     idempotency: spec.idempotency,
                     rejections: spec.rejections.iter().map(|reason| reason.name()).collect(),
+                    completion: spec.completion,
                     input: schema_named(&commands, kind.name()),
                     output: command_output.clone(),
                 }

@@ -206,6 +206,19 @@ runs, forgets what the log has trimmed, and is rebuilt from the command kinds wh
 attached. A resend with the same key and fingerprint does not run again while the kernel runs and
 after a restart that wrote its records; after a crash that lost the record it runs again. A kernel
 without a log refuses a command that carries a key.
+The state of an operation is not stored. `operation_states` folds the records that carry an `op_id`
+(`command_received`, `command_rejected`, `command_completed`, the queue kinds, and the turn kinds);
+the last record of an operation gives its state. The runtime puts the operation id into
+`SubmitThreadPrompt` after it records the command (`AppCommand::with_operation`). Core carries it
+through the prompt preparation, the queued prompt, and the thread session of the turn
+(`ThreadSession.operation`), so `turn_submitted`, `turn_started`, and `turn_ended` name the
+operation. A command that ends without a turn gets `command_completed`: a failed preparation, a
+hand-over to parallel slots at the first attempt, or a turn submission that closes before a turn
+started. When a kernel attaches its log, `restart_closures` closes every turn that started without
+an end as `turn_ended` with `lost`, and every other open operation as `command_completed` with
+`lost`, except the operation of a queued prompt, which the new kernel submits again. The
+`operation` kernel query reads the log after the operation id on the kernel host thread and adds
+the latest records the runtime keeps in memory, because the recorder may not have written them yet.
 The table
 is created on first use, without a schema version change, so older binaries still open the store.
 The TUI runtime drops kernel records. Reopening a thread

@@ -138,9 +138,10 @@ impl CoreController {
         self.record_turn_submissions(&outcome.effects);
         if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
             // 턴의 시작과 끝은 thread 요약의 변화로 기록한다 (plan 19 Q3-2). 요약은 보지 않는 thread 도 담는다.
-            for mut event in
-                kernel_event::turn_events_between(&turns_before, &thread_turns(&activity))
-            {
+            for mut event in kernel_event::turn_events_between(
+                &turns_before,
+                &self.conversation_turn.published_thread_turns(),
+            ) {
                 // 이 입력이 턴의 끝을 알렸으면 그 결과를 붙인다 (plan 19 Q3-3b). 턴은 한 번에 하나만 돈다.
                 if let KernelEvent::TurnEnded { outcome, .. } = &mut event {
                     *outcome = ending;
@@ -195,6 +196,7 @@ impl CoreController {
                 thread_id: request.thread_id.clone().unwrap_or_default(),
                 submission: correlation.generation,
                 origin: turn_origin(request.prompt_origin),
+                op_id: self.conversation_turn.operation_of_turn(*correlation),
             };
             if !self.conversation_turn.has_kernel_record(&submitted) {
                 self.conversation_turn.record_kernel_event(submitted);
@@ -1223,7 +1225,7 @@ impl CoreController {
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
-                let addressed_thread_id = self
+                let addressed = self
                     .planning
                     .manual_prompt_preparation_thread(result.correlation());
                 let Some(disposition) = self
@@ -1236,8 +1238,8 @@ impl CoreController {
                         snapshot: self.shared_snapshot(),
                     };
                 };
-                if let Some(thread_id) = addressed_thread_id {
-                    return self.submit_prepared_thread_prompt(thread_id, *result, disposition);
+                if let Some(addressed) = addressed {
+                    return self.submit_prepared_thread_prompt(addressed, *result, disposition);
                 }
                 let snapshot = self.shared_snapshot();
                 CoreDispatchOutcome {
@@ -1649,6 +1651,7 @@ impl CoreController {
                 submission.workspace_directory,
                 &submission.thread_id,
                 submission.prompt,
+                submission.op_id,
             ),
             Some(true) => (
                 super::ThreadPromptAdmission::RejectedParallelMode,
@@ -1682,6 +1685,7 @@ impl CoreController {
         workspace_directory: String,
         thread_id: &str,
         prompt: String,
+        op_id: Option<i64>,
     ) -> (super::ThreadPromptAdmission, Vec<CoreEffect>) {
         if !self.thread_is_known(thread_id) {
             return (
@@ -1700,6 +1704,7 @@ impl CoreController {
                 parent_turn_id: None,
             },
             thread_id.to_string(),
+            op_id,
         );
         match reduction.admission {
             super::ManualPromptPreparationAdmission::Accepted { correlation } => {
@@ -1737,10 +1742,11 @@ impl CoreController {
      */
     fn submit_prepared_thread_prompt(
         &mut self,
-        thread_id: String,
+        addressed: super::planning_reducer::AddressedThreadPrompt,
         result: crate::domain::planning::ManualPromptOutcome,
         disposition: ManualPromptCompletionDisposition,
     ) -> CoreDispatchOutcome {
+        let super::planning_reducer::AddressedThreadPrompt { thread_id, op_id } = addressed;
         let workspace_directory = result.correlation().workspace_directory.clone();
         let (outcome, effects, record) = match prepared_thread_prompt_handoff(result, disposition) {
             Ok((handoff, task_id)) => self.submit_thread_prompt_handoff(
@@ -1749,14 +1755,24 @@ impl CoreController {
                     workspace_directory,
                     handoff,
                     task_id,
+                    op_id,
                 },
                 true,
             ),
-            Err(failure) => (
-                super::ThreadPromptOutcome::PreparationFailed(failure),
-                Vec::new(),
-                None,
-            ),
+            Err(failure) => {
+                // 준비가 실패한 명령은 턴 기록이 없다. 그 연산의 끝을 따로 적는다 (plan 18 K4-4).
+                let record = operation_ended(
+                    op_id,
+                    &thread_id,
+                    kernel_event::OperationEnd::Failed,
+                    failure.reason(),
+                );
+                (
+                    super::ThreadPromptOutcome::PreparationFailed(failure),
+                    Vec::new(),
+                    record,
+                )
+            }
         };
         self.thread_prompt_submitted_outcome(thread_id, outcome, effects, record)
     }
@@ -1794,8 +1810,17 @@ impl CoreController {
     ) {
         let task_id = prompt.task_id.clone();
         if self.planning.host_parallel_mode() != Some(false) {
-            let record = (!queue_on_rejection)
-                .then(|| prompt.settled(ThreadPromptSettlement::ParallelSlots));
+            // 처음 낼 때의 병렬 넘김은 남김이 아니다. 턴도 없으므로 그 연산의 끝을 따로 적는다 (plan 18 K4-4).
+            let record = if queue_on_rejection {
+                operation_ended(
+                    prompt.op_id,
+                    &prompt.thread_id,
+                    kernel_event::OperationEnd::Done,
+                    kernel_event::ReasonCode::ParallelModeStarted,
+                )
+            } else {
+                Some(prompt.settled(ThreadPromptSettlement::ParallelSlots))
+            };
             return (
                 super::ThreadPromptOutcome::ParallelModeStarted { task_id },
                 Vec::new(),
@@ -1807,9 +1832,11 @@ impl CoreController {
             prompt.workspace_directory.clone(),
             prompt.handoff.clone(),
         );
-        let admission = self
-            .conversation_turn
-            .admit_thread_turn_submission(&prompt.thread_id, &request);
+        let admission = self.conversation_turn.admit_thread_turn_submission(
+            &prompt.thread_id,
+            &request,
+            prompt.op_id,
+        );
         match admission {
             TurnSubmissionAdmission::Accepted { correlation } => (
                 super::ThreadPromptOutcome::Submitted { admission, task_id },
@@ -2225,11 +2252,19 @@ fn approval_resolution(input: &CoreInput) -> Option<(String, kernel_event::Appro
     Some((request_identity.approval_id.clone(), resolution))
 }
 
-fn thread_turns(activity: &[super::ThreadActivitySummary]) -> Vec<(String, Option<String>)> {
-    activity
-        .iter()
-        .map(|thread| (thread.thread_id.clone(), thread.active_turn_id.clone()))
-        .collect()
+/// 명령이 턴 기록 없이 끝났다는 사건이다 (plan 18 K4-4). 명령에서 오지 않은 일(연산 id 가 없다)은 적지 않는다.
+fn operation_ended(
+    op_id: Option<i64>,
+    thread_id: &str,
+    result: kernel_event::OperationEnd,
+    reason: kernel_event::ReasonCode,
+) -> Option<KernelEvent> {
+    Some(KernelEvent::CommandCompleted {
+        op_id: op_id?,
+        thread_id: thread_id.to_string(),
+        result,
+        reason: Some(reason),
+    })
 }
 
 fn turn_origin(origin: super::CorePromptOrigin) -> kernel_event::TurnOrigin {
@@ -10075,6 +10110,7 @@ mod tests {
                 workspace_directory: "/tmp/workspace".to_string(),
                 thread_id: thread_id.to_string(),
                 prompt: prompt.to_string(),
+                op_id: None,
             },
         )))
     }
@@ -10349,6 +10385,177 @@ mod tests {
         }
     }
 
+    /// 런타임이 기록한 명령처럼 연산 id 를 가진 thread 지정 프롬프트이다 (plan 18 K4-4).
+    fn operation_prompt(thread_id: &str, prompt: &str, op_id: i64) -> CoreInput {
+        let CoreInput::Command(command) = thread_prompt(thread_id, prompt) else {
+            unreachable!("a thread prompt is a command");
+        };
+        CoreInput::Command(command.with_operation(op_id))
+    }
+
+    /// 그 연산의 기록 종류와, 받은 기록을 앞에 둔 그 연산의 상태이다.
+    fn operation_records(
+        controller: &mut CoreController,
+        op_id: i64,
+    ) -> (Vec<KernelEvent>, crate::domain::kernel_spec::OperationState) {
+        let own = controller
+            .take_kernel_records()
+            .into_iter()
+            .filter(|record| record.op_id() == Some(op_id))
+            .collect::<Vec<_>>();
+        let received = KernelEvent::CommandReceived {
+            op_id,
+            command: "submit_prompt".to_string(),
+            thread_id: "thread-beta".to_string(),
+            fingerprint: "fp".to_string(),
+            idempotency_key: None,
+        };
+        let state =
+            kernel_event::operation_state(op_id, std::iter::once(&received).chain(own.iter()));
+        (own, state)
+    }
+
+    fn kinds(records: &[KernelEvent]) -> Vec<&'static str> {
+        records.iter().map(KernelEvent::kind).collect()
+    }
+
+    /// 준비가 끝난 프롬프트가 낸 턴 제출이다.
+    fn submitted_turn(prepared: &CoreDispatchOutcome) -> TurnSubmissionCorrelation {
+        match prepared.effects.as_slice() {
+            [CoreEffect::SubmitTurn { correlation, .. }] => *correlation,
+            other => panic!("the prepared prompt should submit one turn: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_records_of_a_thread_prompt_carry_its_operation_to_the_turn_end() {
+        // plan 18 K4-4: the turn records name the operation, so a client knows when its command ended.
+        use crate::domain::kernel_spec::OperationState;
+        let mut controller = hosted_controller(false);
+        load_test_session_catalog(&mut controller);
+        controller.handle_input(operation_prompt("thread-beta", "fix the test", 7));
+        let prepared =
+            controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
+        let turn = submitted_turn(&prepared);
+        let (records, state) = operation_records(&mut controller, 7);
+        assert_eq!(kinds(&records), ["turn_submitted"]);
+        assert_eq!(state, OperationState::Running);
+
+        controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-9".to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        let (records, state) = operation_records(&mut controller, 7);
+        assert_eq!(kinds(&records), ["turn_started"]);
+        assert_eq!(state, OperationState::Running);
+
+        end_test_turn(&mut controller, turn);
+        let (records, state) = operation_records(&mut controller, 7);
+        assert_eq!(kinds(&records), ["turn_ended"]);
+        assert!(state.is_end(), "{state:?}");
+
+        // The next turn on that thread belongs to no command.
+        let next = start_test_turn(&mut controller, "thread-beta", "turn-10");
+        end_test_turn(&mut controller, next);
+        assert!(operation_records(&mut controller, 7).0.is_empty());
+    }
+
+    #[test]
+    fn a_turn_submission_that_closes_before_a_turn_starts_ends_its_operation() {
+        use crate::domain::kernel_spec::OperationState;
+        let mut controller = hosted_controller(false);
+        load_test_session_catalog(&mut controller);
+        controller.handle_input(operation_prompt("thread-beta", "fix the test", 7));
+        let prepared =
+            controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
+        let turn = submitted_turn(&prepared);
+        controller.take_kernel_records();
+
+        // The stream fails before the app-server starts a turn. No turn record exists.
+        end_test_turn(&mut controller, turn);
+        let (records, state) = operation_records(&mut controller, 7);
+        assert_eq!(
+            records,
+            vec![KernelEvent::CommandCompleted {
+                op_id: 7,
+                thread_id: "thread-beta".to_string(),
+                result: kernel_event::OperationEnd::Failed,
+                reason: None,
+            }]
+        );
+        assert_eq!(state, OperationState::Failed);
+    }
+
+    #[test]
+    fn a_failed_preparation_and_a_parallel_handover_end_the_operation_without_a_turn() {
+        use crate::domain::kernel_spec::OperationState;
+        use kernel_event::{OperationEnd, ReasonCode};
+        let mut controller = hosted_controller(false);
+        load_test_session_catalog(&mut controller);
+        controller.handle_input(operation_prompt("thread-beta", "first", 7));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(ManualPromptOutcome::Rejected {
+                correlation: manual_prompt_correlation(1, "/tmp/workspace"),
+                transcript_text: "first".to_string(),
+                runtime_projection: Box::new(PlanningRuntimeProjection::invalid("test")),
+                reason: "planning is invalid".to_string(),
+            })),
+        ));
+        let (records, state) = operation_records(&mut controller, 7);
+        assert_eq!(
+            records,
+            vec![KernelEvent::CommandCompleted {
+                op_id: 7,
+                thread_id: "thread-beta".to_string(),
+                result: OperationEnd::Failed,
+                reason: Some(ReasonCode::PlanningRefused),
+            }]
+        );
+        assert_eq!(state, OperationState::Failed);
+
+        // Parallel mode starts while the next prompt is prepared. The slots take the task and no turn starts.
+        controller.handle_input(operation_prompt("thread-beta", "fix the test", 8));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelModeEnabled(true)));
+        controller.handle_input(prepared_thread_prompt(2, "fix the test", "planned prompt"));
+        let (records, state) = operation_records(&mut controller, 8);
+        assert_eq!(
+            records,
+            vec![KernelEvent::CommandCompleted {
+                op_id: 8,
+                thread_id: "thread-beta".to_string(),
+                result: OperationEnd::Done,
+                reason: Some(ReasonCode::ParallelModeStarted),
+            }]
+        );
+        assert_eq!(state, OperationState::Done);
+    }
+
+    #[test]
+    fn a_queued_thread_prompt_keeps_its_operation_until_the_resubmitted_turn() {
+        use crate::domain::kernel_spec::OperationState;
+        let mut controller = hosted_controller(false);
+        load_test_session_catalog(&mut controller);
+        controller.handle_input(operation_prompt("thread-beta", "fix the test", 7));
+        let running = start_test_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
+        let (records, state) = operation_records(&mut controller, 7);
+        assert_eq!(kinds(&records), ["thread_prompt_queued"]);
+        assert_eq!(
+            state,
+            OperationState::Running,
+            "a queued prompt is not an end"
+        );
+
+        end_test_turn(&mut controller, running);
+        controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        let (records, state) = operation_records(&mut controller, 7);
+        assert_eq!(kinds(&records), ["thread_prompt_settled", "turn_submitted"]);
+        assert_eq!(state, OperationState::Running);
+    }
+
     #[test]
     fn the_core_records_turn_lifecycle_route_and_prompt_rejection_decisions() {
         // plan 19 Q3-2: decisions go to the record buffer, not to the client events.
@@ -10362,10 +10569,12 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     submission: turn.generation,
                     origin: TurnOrigin::Manual,
+                    op_id: None,
                 },
                 KernelEvent::TurnStarted {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
+                    op_id: None,
                 },
             ]
         );
@@ -10383,6 +10592,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 outcome: Some(kernel_event::TurnEndOutcome::Completed),
+                op_id: None,
             }]
         );
         assert!(
@@ -10481,6 +10691,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     outcome: Some(kernel_event::TurnEndOutcome::Completed),
+                    op_id: None,
                 },
                 resolved("approval-2", ApprovalResolution::Withdrawn),
             ]
@@ -10502,6 +10713,7 @@ mod tests {
                         task: None,
                     },
                     task_id: "task-1".to_string(),
+                    op_id: None,
                 }],
             )));
         assert!(

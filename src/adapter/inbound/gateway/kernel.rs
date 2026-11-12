@@ -259,6 +259,20 @@ impl KernelSession {
             }
             None => None,
         };
+        let operation = match request.query.operation_id() {
+            Some(op_id) => {
+                let commands = attached.commands.clone();
+                let status = blocking(move || commands.operation(op_id, KERNEL_CALL_TIMEOUT))
+                    .await?
+                    .map_err(|error| match error {
+                        KernelCallError::Stopped => unavailable(error.to_string()),
+                        KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
+                    })?
+                    .map_err(unavailable)?;
+                Some(status)
+            }
+            None => None,
+        };
         let commands = attached.commands.clone();
         let view = blocking(move || commands.query(KERNEL_CALL_TIMEOUT))
             .await?
@@ -271,6 +285,7 @@ impl KernelSession {
             &view.thread_activity,
             parallel_source(&view.parallel),
             history,
+            operation,
         ))
     }
 

@@ -314,8 +314,23 @@ the desktop app itself is not shipped yet.
   as `lost` and cannot answer them. `akra/kernel/command` accepts an optional `idempotency_key`
   (1 to 128 characters) and answers a recorded command with
   `operation { op_id, state, next { query, after }, replayed }`: `op_id` is the sequence of the
-  `command_received` record, `state` is `accepted` or `rejected`, and the progress of the command is
-  the log after `op_id`. A resend with the same key and the same command does not run again and gets
+  `command_received` record, `state` is `accepted` or `rejected` (the result of the admission), and
+  the progress of the command is the log after `op_id`. The `operation` query
+  (`{"type": "operation", "op_id": <id>}`) answers with the current `state` of that operation and its
+  `records`: `accepted`, `running`, `done`, `rejected`, `failed`, `lost` (the kernel was built again
+  while the operation was open), or `unknown` (no command record has that id, or it is older than the
+  retention limit). The kernel computes the state from the records. Each command in the spec has
+  `completion`: `accepted` (it ends when the kernel accepts it), `records` (it ends with a later
+  record; only `submit_prompt` now), or `unreported` (`rename_session`, `steer_turn`, `stop_all`,
+  `decide_approval`, and `reset_planning`: the kernel does not report their end yet and their state
+  stays `accepted`). A `submit_prompt` ends with the `turn_ended` record of its turn, or with
+  `command_completed` when no turn ran (failed preparation, hand-over to parallel slots, a turn
+  submission that closed before a turn started), or with the settlement of its queued prompt. A
+  queued prompt is `running`, not an end. The records of a `submit_prompt` carry its `op_id`
+  (`thread_prompt_queued`, `thread_prompt_settled`, `turn_submitted`, `turn_started`, `turn_ended`).
+  A restarted kernel records the turns of the previous kernel as `turn_ended` with `lost` and its
+  other open operations as `command_completed` with `lost`; a queued prompt keeps its operation and
+  the new kernel submits it again. A resend with the same key and the same command does not run again and gets
   the first receipt with `replayed`; the same key with another command fails with `-32014`. A refused
   command keeps its refusal for its key; send a new key to try again. Keys are shared by all clients
   of the repository kernel, so a client uses a random key for each command. Keys are remembered while

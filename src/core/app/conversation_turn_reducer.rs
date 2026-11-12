@@ -115,6 +115,8 @@ struct ThreadSession {
     post_turn_messages: PostTurnMessages,
     // 자동 후속 턴에 쓸 턴 옵션이다 (plan 18 K1-5). 대화 로드, 제출, 클라이언트 변경으로 갱신한다.
     turn_options: crate::domain::conversation::ConversationTurnOptions,
+    // 지금 턴을 낸 명령의 연산 id 이다 (plan 18 K4-4). 턴을 받을 때마다 다시 정한다. 명령이 낸 턴이 아니면 비어 있다.
+    operation: Option<i64>,
 }
 
 impl ThreadSession {
@@ -128,6 +130,7 @@ impl ThreadSession {
             active_turn_steer: None,
             post_turn_messages: PostTurnMessages::default(),
             turn_options: Default::default(),
+            operation: None,
         }
     }
 
@@ -202,6 +205,18 @@ impl ThreadSession {
     fn streams_thread(&self, thread_id: &str) -> bool {
         self.turn_stream_state.matches_thread(thread_id)
     }
+
+    /// 이 thread 가 내거나 돌리는 턴이다 (plan 19 Q3-2). 턴이 없으면 `None` 이다.
+    fn thread_turn(&self) -> Option<crate::domain::kernel_event::ThreadTurn> {
+        let thread_id = self.turn_stream_state.thread_id()?.to_string();
+        let runtime = self.conversation_runtime.snapshot();
+        let active_turn = runtime.active_turn.as_ref()?;
+        Some(crate::domain::kernel_event::ThreadTurn {
+            thread_id,
+            turn_id: active_turn.turn_id.clone(),
+            op_id: self.operation,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -219,6 +234,8 @@ pub(super) struct ConversationTurnFeatureReducer {
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     // 클라이언트에 마지막으로 알린 뒤의 thread 요약이다 (plan 18 K2-4).
     published_thread_activity: Vec<ThreadActivitySummary>,
+    // 그 요약을 알릴 때의 thread 별 턴이다 (plan 19 Q3-2, plan 18 K4-4). 턴 기록의 이전 값이다.
+    published_thread_turns: Vec<crate::domain::kernel_event::ThreadTurn>,
     // 호스트가 꺼내 가기 전의 판단 사건이다 (plan 19 Q3-1, Q3-2). 클라이언트에 알릴 thread 요약처럼 내보낼 값이다.
     kernel_records: Vec<crate::domain::kernel_event::KernelEvent>,
     next_conversation_load_generation: u64,
@@ -306,15 +323,23 @@ impl ConversationTurnFeatureReducer {
     /// 마지막으로 알린 뒤 일이 남은 thread 요약이 바뀌었으면 새 요약을 돌려준다 (plan 18 K2-4, K3-3a).
     /// 보는 thread 도 일이 남아 있으면 담는다. 원격 클라이언트는 보는 자리를 모르기 때문이다.
     pub(super) fn take_thread_activity_change(&mut self) -> Option<Vec<ThreadActivitySummary>> {
-        let activity = std::iter::once(&self.session)
-            .filter(|session| session.is_busy())
-            .chain(&self.background_sessions)
+        let busy_sessions = || {
+            std::iter::once(&self.session)
+                .filter(|session| session.is_busy())
+                .chain(&self.background_sessions)
+        };
+        let activity = busy_sessions()
             .filter_map(ThreadSession::activity_summary)
             .collect::<Vec<_>>();
-        if activity == self.published_thread_activity {
+        let turns = busy_sessions()
+            .filter_map(ThreadSession::thread_turn)
+            .collect::<Vec<_>>();
+        // 턴의 연산 id 는 요약에 없다. 그래서 턴도 따로 견준다. 보통은 요약과 함께 바뀐다.
+        if activity == self.published_thread_activity && turns == self.published_thread_turns {
             return None;
         }
         self.published_thread_activity = activity.clone();
+        self.published_thread_turns = turns;
         Some(activity)
     }
 
@@ -333,12 +358,17 @@ impl ConversationTurnFeatureReducer {
         std::mem::take(&mut self.kernel_records)
     }
 
-    /// 마지막으로 알린 thread 요약의 `(thread id, 진행 중 턴 id)` 이다 (plan 19 Q3-2). 턴 기록의 이전 값이다.
-    pub(super) fn published_thread_turns(&self) -> Vec<(String, Option<String>)> {
-        self.published_thread_activity
-            .iter()
-            .map(|thread| (thread.thread_id.clone(), thread.active_turn_id.clone()))
-            .collect()
+    /// 마지막으로 thread 요약을 알릴 때의 thread 별 턴이다 (plan 19 Q3-2). 턴 기록의 이전 값이다.
+    pub(super) fn published_thread_turns(&self) -> Vec<crate::domain::kernel_event::ThreadTurn> {
+        self.published_thread_turns.clone()
+    }
+
+    /// 이 턴 제출을 낸 명령의 연산 id 이다 (plan 18 K4-4). 명령이 낸 턴이 아니면 `None` 이다.
+    pub(super) fn operation_of_turn(&self, correlation: TurnSubmissionCorrelation) -> Option<i64> {
+        std::iter::once(&self.session)
+            .chain(&self.background_sessions)
+            .find(|session| session.owns_turn(correlation))
+            .and_then(|session| session.operation)
     }
 
     /// 마지막으로 알린 thread 요약의 기다리는 승인이다 (plan 19 Q3-5). 승인 기록의 이전 값이다.
@@ -458,6 +488,7 @@ impl ConversationTurnFeatureReducer {
             serving_background: false,
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             published_thread_activity: Vec::new(),
+            published_thread_turns: Vec::new(),
             kernel_records: Vec::new(),
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
@@ -687,6 +718,7 @@ impl ConversationTurnFeatureReducer {
         &mut self,
         thread_id: &str,
         request: &TurnSubmissionRequest,
+        op_id: Option<i64>,
     ) -> TurnSubmissionAdmission {
         if !self.has_session_for_thread(thread_id) {
             let mut session = self.session.detached_view();
@@ -700,7 +732,13 @@ impl ConversationTurnFeatureReducer {
         }
         self.with_owning_session(
             |session| session.streams_thread(thread_id),
-            |reducer| reducer.admit_turn_submission_in_session(request),
+            |reducer| {
+                let admission = reducer.admit_turn_submission_in_session(request);
+                if matches!(admission, TurnSubmissionAdmission::Accepted { .. }) {
+                    reducer.session.operation = op_id;
+                }
+                admission
+            },
         )
         .unwrap_or(TurnSubmissionAdmission::RejectedUnavailable)
     }
@@ -773,6 +811,8 @@ impl ConversationTurnFeatureReducer {
             "turn submission",
         ));
         self.session.guarded_session_rename_stream = None;
+        // 새 턴은 이전 턴의 연산에 속하지 않는다. 명령이 낸 턴이면 부르는 쪽이 뒤에 넣는다.
+        self.session.operation = None;
         if !request.transcript_text.trim().is_empty() {
             self.session.post_turn_messages.latest_user_message =
                 Some(request.transcript_text.clone());

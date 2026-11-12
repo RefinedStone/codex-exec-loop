@@ -114,6 +114,7 @@ mod tests {
             event: KernelEvent::TurnStarted {
                 thread_id: "thread-1".to_string(),
                 turn_id: turn_id.to_string(),
+                op_id: None,
             },
         }
     }

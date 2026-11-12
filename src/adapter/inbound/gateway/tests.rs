@@ -367,6 +367,36 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     );
     assert_eq!(event.unwrap()["params"]["event"]["max_turns"], json!(3));
 
+    // plan 18 K4-4: the operation query answers with the state and the records of that command. This command
+    // ends when the kernel accepts it, so it is done. The query sees the record before the recorder wrote it.
+    let operation = kernel_request(
+        &mut client,
+        "operation",
+        "akra/kernel/query",
+        json!({"query": {"type": "operation", "op_id": commanded["operation"]["op_id"]}}),
+    )
+    .await;
+    let operation = &operation["result"];
+    assert_eq!(operation["type"], json!("operation"), "{operation}");
+    assert_eq!(operation["state"], json!("done"), "{operation}");
+    assert_eq!(
+        operation["records"][0]["event"]["kind"],
+        json!("command_received"),
+        "{operation}"
+    );
+    assert_eq!(
+        operation["records"][0]["sequence"], commanded["operation"]["op_id"],
+        "{operation}"
+    );
+    let unknown = kernel_request(
+        &mut client,
+        "unknown-operation",
+        "akra/kernel/query",
+        json!({"query": {"type": "operation", "op_id": 999_999}}),
+    )
+    .await;
+    assert_eq!(unknown["result"]["state"], json!("unknown"), "{unknown}");
+
     // A resend with the same key does not run again and gets the first receipt.
     let keyed = |id: &'static str, value: u64| {
         (

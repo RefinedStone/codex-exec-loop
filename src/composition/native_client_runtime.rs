@@ -50,8 +50,9 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
     APPROVAL_KINDS, ApprovalResolution, COMMAND_KINDS, CommandMemory, CommandRecall,
-    KernelCommandDescriptor, KernelEvent, KernelEventPage, OperationReceipt, ReasonCode,
-    RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS, open_approvals, open_queued_thread_prompts,
+    KernelCommandDescriptor, KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, OPERATION_KINDS,
+    OperationReceipt, OperationStatus, ReasonCode, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
+    open_approvals, open_queued_thread_prompts, restart_closures,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -114,6 +115,11 @@ pub(crate) struct NativeClientRuntime {
     last_kernel_sequence: i64,
     // 클라이언트에 아직 보내지 않은 기록이다 (plan 19 Q3-3b). 커널 호스트가 꺼내 `recorded` 이벤트로 보낸다.
     published_kernel_records: Vec<RecordedKernelEvent>,
+    /*
+     * 방금 낸 기록이다 (plan 18 K4-4). 기록기는 따로 쓰므로 방금 낸 사건은 아직 저장소에 없을 수 있다. 연산 조회는
+     * 저장소에서 읽은 기록 뒤에 이 값을 잇는다. 그래서 명령의 답을 받자마자 조회해도 그 명령이 보인다.
+     */
+    recent_kernel_records: std::collections::VecDeque<RecordedKernelEvent>,
     /// 멱등 키로 기억하는 처리한 명령이다 (plan 19 Q3-6). 기록의 투영이고, 기록을 붙일 때 다시 만든다.
     command_memory: CommandMemory,
     // 마지막 주기가 입력 상한에서 멈췄다 (plan 19 Q3-4). 입력함에 남은 입력은 호스트를 다시 깨우지 않으므로, 다음
@@ -168,6 +174,9 @@ enum NativeClientPollLane {
 
 /// 한 dispatch 에서 호스트가 하는 턴 뒤 단계의 최대 수이다. 단계마다 상태가 바뀌므로 보통 1~3 개로 끝난다.
 const MAX_POST_TURN_HOST_STEPS: usize = 8;
+
+/// 연산 조회가 저장소 뒤에 잇는 최근 기록의 수이다 (plan 18 K4-4). 기록기가 아직 쓰지 못한 기록을 덮을 만큼이면 된다.
+const RECENT_KERNEL_RECORDS: usize = 2048;
 
 /*
  * 턴 뒤 단계의 결과를 넣을 자리이다 (plan 19 Q2-2). core 는 그 단계가 생긴 사건의 결과 안에 표시 이벤트를 둔다.
@@ -576,6 +585,7 @@ impl NativeClientRuntime {
             kernel_event_log: None,
             last_kernel_sequence: 0,
             published_kernel_records: Vec::new(),
+            recent_kernel_records: std::collections::VecDeque::new(),
             command_memory: CommandMemory::default(),
             inputs_left_after_cycle: false,
         }
@@ -1096,6 +1106,11 @@ impl NativeClientRuntime {
             Some(CommandAdmission::KeyUnavailable) => return ClientCommandDispatch::KeyUnavailable,
             Some(CommandAdmission::Recorded(_) | CommandAdmission::Unrecorded) | None => {}
         }
+        // 기록한 명령은 연산 id 를 가진다. core 가 그 명령이 만든 기록에 같은 id 를 싣는다 (plan 18 K4-4).
+        let command = match admission {
+            Some(CommandAdmission::Recorded(op_id)) => command.with_operation(op_id),
+            _ => command,
+        };
         let outcome =
             self.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(command)));
         let operation = match (descriptor, admission) {
@@ -1185,7 +1200,43 @@ impl NativeClientRuntime {
         if let Some(recorder) = &self.kernel_events {
             recorder.record(records.clone());
         }
+        self.recent_kernel_records.extend(records.iter().cloned());
+        while self.recent_kernel_records.len() > RECENT_KERNEL_RECORDS {
+            self.recent_kernel_records.pop_front();
+        }
         self.published_kernel_records.extend(records);
+    }
+
+    /*
+     * 연산 하나의 상태와 기록을 읽는다 (plan 18 K4-4). 상태는 저장하지 않고 그 연산의 기록에서 계산한다. 기록이 없는
+     * 커널은 `unknown` 을 답한다.
+     *
+     * shortcut: 연산 id 뒤의 기록을 모두 읽어 거른다 (보존 한도는 10,000개, 한 쪽은 500개). 연산 조회가 잦아지면
+     * 저장소에 연산 id 로 읽는 조회를 더한다.
+     */
+    pub(crate) fn kernel_operation(&self, op_id: i64) -> anyhow::Result<OperationStatus> {
+        let mut records = Vec::new();
+        if let Some((log, workspace_dir)) = &self.kernel_event_log {
+            let mut after = op_id.saturating_sub(1);
+            loop {
+                let page =
+                    log.load_kernel_events_after(workspace_dir, after, MAX_KERNEL_EVENT_PAGE)?;
+                let read_to_the_end = page.next_after == after;
+                after = page.next_after;
+                records.extend(page.records);
+                if read_to_the_end {
+                    break;
+                }
+            }
+        }
+        let stored_to = records.last().map_or(op_id - 1, |record| record.sequence);
+        records.extend(
+            self.recent_kernel_records
+                .iter()
+                .filter(|record| record.sequence > stored_to)
+                .cloned(),
+        );
+        Ok(OperationStatus::from_records(op_id, records))
     }
 
     /// 사건에 기록 sequence 와 시각을 붙인다 (plan 19 Q3-3b). 기록과 실시간 이벤트가 같은 sequence 를 쓴다.
@@ -1227,20 +1278,24 @@ impl NativeClientRuntime {
             .and_then(|prompts| {
                 let approvals = log.load_kernel_events(workspace_dir, &APPROVAL_KINDS)?;
                 let commands = log.load_kernel_events(workspace_dir, &COMMAND_KINDS)?;
+                let operations = log.load_kernel_events(workspace_dir, &OPERATION_KINDS)?;
                 Ok((
                     prompts,
                     approvals,
                     commands,
+                    operations,
                     log.last_kernel_event_sequence(workspace_dir)?,
                 ))
             });
-        let (open, lost_approvals, last_sequence) = match read {
-            Ok((prompts, approvals, commands, last_sequence)) => {
+        let (open, lost_approvals, lost_work, last_sequence) = match read {
+            Ok((prompts, approvals, commands, operations, last_sequence)) => {
                 // 이전 커널이 받은 명령의 멱등 키를 되돌린다 (Q3-6). 재전송은 커널을 다시 켜도 한 번만 실행된다.
                 self.command_memory = CommandMemory::from_events(commands);
                 (
                     open_queued_thread_prompts(prompts),
                     open_approvals(approvals),
+                    // 이전 커널이 열어 둔 턴과 연산이다 (K4-4). 큐에 남은 프롬프트의 연산은 여기에 없다.
+                    restart_closures(&operations),
                     last_sequence,
                 )
             }
@@ -1264,6 +1319,8 @@ impl NativeClientRuntime {
                 .map(|approval| approval.resolved(ApprovalResolution::Lost))
                 .collect(),
         );
+        // 열린 턴과 연산도 잃은 것으로 닫는다 (K4-4). 되돌린 프롬프트를 다시 내기 전에 적는다.
+        self.record_kernel_events(lost_work);
         if !open.is_empty() {
             // 아직 클라이언트가 없다. 결과는 조회로 보인다. 기록용 사건은 이 dispatch 안에서 기록된다.
             let _ = self.dispatch_core_input(CoreInput::Command(
@@ -2236,6 +2293,7 @@ pub(crate) mod tests {
                     workspace_directory: "/workspace".to_string(),
                     thread_id: "thread-9".to_string(),
                     prompt: "fix the test".to_string(),
+                    op_id: None,
                 }),
             ))),
         ) else {
@@ -2291,6 +2349,7 @@ pub(crate) mod tests {
                 workspace_directory: "/workspace".to_string(),
                 thread_id: "thread-1".to_string(),
                 prompt: "fix the test".to_string(),
+                op_id: None,
             })),
         )));
         let blocking = start_turn(&mut runtime, "turn-2");
@@ -2386,6 +2445,118 @@ pub(crate) mod tests {
                 .cloned()
                 .collect())
         }
+
+        /// 저장된 차례가 sequence 이다 (1 부터).
+        fn load_kernel_events_after(
+            &self,
+            _workspace_dir: &str,
+            after: i64,
+            limit: usize,
+        ) -> anyhow::Result<KernelEventPage> {
+            let stored = self.0.lock().expect("log should lock");
+            let records = stored
+                .iter()
+                .zip(1..)
+                .filter(|(_, sequence)| *sequence > after)
+                .take(limit)
+                .map(|(event, sequence)| RecordedKernelEvent {
+                    sequence,
+                    recorded_at: String::new(),
+                    event: event.clone(),
+                })
+                .collect::<Vec<_>>();
+            let next_after = records.last().map_or(after, |record| record.sequence);
+            Ok(KernelEventPage {
+                records,
+                next_after,
+            })
+        }
+    }
+
+    #[test]
+    fn the_operation_query_sees_a_command_at_once_and_a_restart_closes_it_as_lost() {
+        // plan 18 K4-4: the state is computed from the records. Nothing else is stored.
+        use crate::domain::kernel_event::{KernelCommandDescriptor, KernelEvent, OperationEnd};
+        use crate::domain::kernel_spec::{KernelCommandKind, OperationState};
+        let described = |command| KernelCommandDescriptor {
+            command,
+            thread_id: "thread-1".to_string(),
+            fingerprint: "fp-1".to_string(),
+            idempotency_key: None,
+        };
+        let state_and_kinds = |runtime: &NativeClientRuntime, op_id: i64| {
+            let status = runtime
+                .kernel_operation(op_id)
+                .expect("the operation should read");
+            let kinds = status
+                .records
+                .iter()
+                .map(|record| (record.sequence, record.event.kind()))
+                .collect::<Vec<_>>();
+            (status.state, kinds)
+        };
+        let log = Arc::new(MemoryKernelEventLog::default());
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        assert_eq!(
+            state_and_kinds(&runtime, 1),
+            (OperationState::Unknown, Vec::new()),
+            "a kernel without a log knows no operation"
+        );
+        runtime.attach_kernel_event_log(log.clone(), "/workspace");
+        assert_eq!(
+            runtime.admit_command(&described(KernelCommandKind::SubmitPrompt)),
+            CommandAdmission::Recorded(1)
+        );
+        assert_eq!(
+            runtime.admit_command(&described(KernelCommandKind::PauseAutoFollow)),
+            CommandAdmission::Recorded(2)
+        );
+        // The recorder writes on its own thread. The query still sees the command it just recorded.
+        assert_eq!(
+            state_and_kinds(&runtime, 1),
+            (OperationState::Accepted, vec![(1, "command_received")])
+        );
+        assert_eq!(
+            state_and_kinds(&runtime, 2),
+            (OperationState::Done, vec![(2, "command_received")]),
+            "this command ends when the kernel accepts it"
+        );
+        assert_eq!(
+            state_and_kinds(&runtime, 3),
+            (OperationState::Unknown, Vec::new())
+        );
+        drop(runtime);
+
+        // The previous kernel stopped while operation 1 was open. The new kernel closes it once.
+        let (mut restarted, _turns) = recording_runtime_for_test();
+        restarted.attach_kernel_event_log(log.clone(), "/workspace");
+        let lost = KernelEvent::CommandCompleted {
+            op_id: 1,
+            thread_id: "thread-1".to_string(),
+            result: OperationEnd::Lost,
+            reason: None,
+        };
+        assert_eq!(
+            restarted
+                .take_published_kernel_records()
+                .iter()
+                .map(|record| &record.event)
+                .collect::<Vec<_>>(),
+            [&lost]
+        );
+        assert_eq!(
+            state_and_kinds(&restarted, 1),
+            (
+                OperationState::Lost,
+                vec![(1, "command_received"), (3, "command_completed")]
+            )
+        );
+        drop(restarted);
+        let (mut third, _turns) = recording_runtime_for_test();
+        third.attach_kernel_event_log(log.clone(), "/workspace");
+        assert!(third.take_published_kernel_records().is_empty());
+        drop(third);
+        assert_eq!(log.0.lock().expect("log should lock").len(), 3);
     }
 
     #[test]
@@ -2403,6 +2574,7 @@ pub(crate) mod tests {
                 task: None,
             },
             task_id: task_id.to_string(),
+            op_id: None,
         };
         let log = Arc::new(MemoryKernelEventLog::default());
         log.0.lock().expect("log should lock").extend([
@@ -2434,6 +2606,7 @@ pub(crate) mod tests {
                     thread_id: "thread-1".to_string(),
                     submission: 1,
                     origin: crate::domain::kernel_event::TurnOrigin::ManualIntake,
+                    op_id: None,
                 },
             ],
             "the resubmission is recorded before the runtime is gone"
