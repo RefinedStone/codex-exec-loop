@@ -113,6 +113,9 @@ kernel: 원격 thread 를 소유하지 않는다. 명령도 내지 않는다. �
 
 - 규모 (코드 조사의 추정): S1a 1~2일, S1b 2~3일, S2 3~5일, S3 1~2일.
 - S1a 만 G0 과 무관하다. S1b 부터는 G0 이 충족된 뒤에 한다.
+- S1a 는 구현되었다 (Q-C2, Q-C3 의 기본값을 썼다). 동작은
+  [current-product](../reference/current-product.md) 의 Gateway 절에 있다. 운영 구성은 `local` 만 등록하므로
+  `composition/production.rs` 는 바뀌지 않았다. 원격 접속의 `akra/context/*` 는 빈 `resources` 로 답한다.
 
 ## 6. 프로토콜 버전 차이
 

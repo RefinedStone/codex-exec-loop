@@ -48,7 +48,7 @@ impl GatewayRecorder {
         Self::create(&akra_home.join(RECORDINGS_DIRECTORY_NAME)).map(Some)
     }
 
-    fn create(directory: &Path) -> Result<Self> {
+    pub(super) fn create(directory: &Path) -> Result<Self> {
         crate::private_directory::ensure_private_directory(directory)?;
         Ok(Self {
             directory: directory.to_path_buf(),

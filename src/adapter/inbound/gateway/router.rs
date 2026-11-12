@@ -48,12 +48,26 @@ pub(super) fn route_client_text(text: &str) -> ClientTextRoute {
 }
 
 /// `akra/*` 요청에 대한 JSON-RPC 응답 문자열이다.
+/// `host` 는 이 접속이 고른 호스트이다. 위쪽 필드는 그 호스트의 상태이고 `hosts` 는 목록 전체이다 (plan 25 S1a).
 pub(super) fn respond_to_akra_request(
     id: Value,
     method: &str,
-    snapshot: &GatewayUpstreamSnapshot,
+    host: &str,
+    hosts: &[(String, GatewayUpstreamSnapshot)],
 ) -> String {
-    let response = if method == GATEWAY_INFO_METHOD {
+    let connected = hosts.iter().find(|(host_id, _)| host_id == host);
+    let response = if let (true, Some((_, snapshot))) = (method == GATEWAY_INFO_METHOD, connected) {
+        let hosts: Vec<Value> = hosts
+            .iter()
+            .map(|(host_id, snapshot)| {
+                json!({
+                    "id": host_id,
+                    "codexVersion": snapshot.codex_version,
+                    "startedAt": snapshot.started_at,
+                    "upstreamRestarts": snapshot.restarts,
+                })
+            })
+            .collect();
         json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -62,6 +76,8 @@ pub(super) fn respond_to_akra_request(
                 "codexVersion": snapshot.codex_version,
                 "startedAt": snapshot.started_at,
                 "upstreamRestarts": snapshot.restarts,
+                "host": host,
+                "hosts": hosts,
             }
         })
     } else {
@@ -75,6 +91,19 @@ pub(super) fn respond_to_akra_request(
         })
     };
     response.to_string()
+}
+
+/// `local` 이 아닌 접속의 `akra/kernel/*` 답이다. kernel 은 원격 thread 를 소유하지 않는다 (plan 25 §3.5).
+pub(super) fn refuse_kernel_on_remote_host(id: Value, method: &str) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": JSON_RPC_METHOD_NOT_FOUND,
+            "message": format!("`{method}` is available only on host `local`"),
+        }
+    })
+    .to_string()
 }
 
 #[cfg(test)]
@@ -126,12 +155,16 @@ mod tests {
             started_at: "2026-11-05T00:00:00+00:00".to_string(),
             restarts: 2,
         };
+        let hosts = [("local".to_string(), snapshot)];
         let info: Value = serde_json::from_str(&respond_to_akra_request(
             json!(1),
             "akra/gateway/info",
-            &snapshot,
+            "local",
+            &hosts,
         ))
         .unwrap();
+        assert_eq!(info["result"]["host"], json!("local"));
+        assert_eq!(info["result"]["hosts"][0]["id"], json!("local"));
         assert_eq!(info["id"], json!(1));
         assert_eq!(info["result"]["codexVersion"], json!("codex-cli 0.166.0"));
         assert_eq!(info["result"]["upstreamRestarts"], json!(2));
@@ -140,9 +173,13 @@ mod tests {
             json!(env!("CARGO_PKG_VERSION"))
         );
 
-        let unknown: Value =
-            serde_json::from_str(&respond_to_akra_request(json!(2), "akra/nope", &snapshot))
-                .unwrap();
+        let unknown: Value = serde_json::from_str(&respond_to_akra_request(
+            json!(2),
+            "akra/nope",
+            "local",
+            &hosts,
+        ))
+        .unwrap();
         assert_eq!(unknown["error"]["code"], json!(-32601));
     }
 }
