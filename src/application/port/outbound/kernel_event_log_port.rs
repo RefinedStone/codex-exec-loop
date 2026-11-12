@@ -8,7 +8,7 @@ use crate::domain::kernel_event::{KernelEvent, KernelEventPage, RecordedKernelEv
  */
 pub trait KernelEventLogPort: Send + Sync {
     /// 사건을 커널이 정한 sequence 와 시각 그대로 쓴다 (Q3-3b). 남김 종류가 아닌 오래된 사건은 최근
-    /// `RETAINED_KERNEL_EVENTS` 개만 남긴다 (Q3-3).
+    /// `RETAINED_KERNEL_EVENTS` 개만 남긴다 (Q3-3). 마지막 `repository_changed` 는 한도와 관계없이 남긴다.
     fn append_kernel_events(
         &self,
         workspace_dir: &str,

@@ -363,6 +363,7 @@ impl OperationStatus {
 }
 
 /// 남김 종류가 아닌 사건을 최근 이만큼만 남긴다 (plan 19 Q3-3). 남김 종류는 복구에 필요해서 지우지 않는다.
+/// 마지막 `repository_changed` 하나도 지우지 않는다. 다음 커널이 그 상태에서 시작한다.
 pub const RETAINED_KERNEL_EVENTS: i64 = 10_000;
 
 /// 한 번에 읽는 사건 수의 한도이다.

@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::domain::kernel_event::{
-    KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, RETAINED_KERNEL_EVENTS,
+    KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, REPOSITORY_KINDS, RETAINED_KERNEL_EVENTS,
     RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
 };
 
@@ -61,15 +61,19 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
                 .context("failed to append a kernel event")?;
         }
         // 남김 종류는 복구에 필요하므로 지우지 않는다. 다른 사건은 최근 것만 남긴다 (plan 19 Q3-3).
+        // 마지막 git 상태도 남긴다. 다음 커널이 그 상태와 견준다 (plan 20 §4.1). 그 앞의 git 사건은 지운다.
         transaction
             .execute(
                 "DELETE FROM kernel_events
                  WHERE kind NOT IN (?1, ?2)
-                   AND sequence <= (SELECT MAX(sequence) FROM kernel_events) - ?3",
+                   AND sequence <= (SELECT MAX(sequence) FROM kernel_events) - ?3
+                   AND sequence <> COALESCE(
+                       (SELECT MAX(sequence) FROM kernel_events WHERE kind = ?4), 0)",
                 params![
                     THREAD_PROMPT_QUEUE_KINDS[0],
                     THREAD_PROMPT_QUEUE_KINDS[1],
-                    RETAINED_KERNEL_EVENTS
+                    RETAINED_KERNEL_EVENTS,
+                    REPOSITORY_KINDS[0]
                 ],
             )
             .context("failed to trim old kernel events")?;

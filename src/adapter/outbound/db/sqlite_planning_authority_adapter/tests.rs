@@ -143,11 +143,19 @@ fn numbered(
 #[test]
 fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
     // plan 19 Q3-3: a page reads after a cursor; the queue kinds survive the trim.
+    // plan 20 §4.1: the newest repository state also survives, so the next kernel can compare with it.
     use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
     use crate::domain::kernel_event::{
-        KernelEvent, QueuedThreadPrompt, RETAINED_KERNEL_EVENTS, THREAD_PROMPT_QUEUE_KINDS,
+        KernelEvent, QueuedThreadPrompt, REPOSITORY_KINDS, RETAINED_KERNEL_EVENTS,
+        THREAD_PROMPT_QUEUE_KINDS,
     };
     let workspace = temp_workspace("kernel-event-pages");
+    let repository = |head: &str, previous: Option<&str>| KernelEvent::RepositoryChanged {
+        head: head.to_string(),
+        branch: Some("main".to_string()),
+        previous_head: previous.map(str::to_string),
+        previous_branch: previous.map(|_| "main".to_string()),
+    };
     let adapter = SqlitePlanningAuthorityAdapter::new();
     let started = |turn_id: &str| KernelEvent::TurnStarted {
         thread_id: "thread-1".to_string(),
@@ -217,6 +225,13 @@ fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
     assert!(empty.records.is_empty());
     assert_eq!(empty.next_after, 4);
 
+    adapter
+        .append_kernel_events(
+            &workspace,
+            &numbered(5, &[repository("a", None), repository("b", Some("a"))]),
+        )
+        .expect("events should append");
+
     // 보존 한도를 넘게 채운 뒤 하나를 더 쓰면 오래된 사건이 지워진다. 남김은 남는다.
     open_authority_connection(&location)
         .expect("store should open")
@@ -257,6 +272,13 @@ fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
             .expect("queue events should load"),
         vec![queued],
         "the queue kinds are never trimmed"
+    );
+    assert_eq!(
+        adapter
+            .load_kernel_events(&workspace, &REPOSITORY_KINDS)
+            .expect("repository events should load"),
+        vec![repository("b", Some("a"))],
+        "only the newest repository state is kept"
     );
 }
 
