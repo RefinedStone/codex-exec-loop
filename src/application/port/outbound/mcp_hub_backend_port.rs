@@ -1,7 +1,9 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::Value;
 
-use crate::domain::mcp_hub::{McpHubServerSpec, McpHubServerStatus};
+use crate::domain::mcp_hub::{
+    McpHubServerSpec, McpHubServerStatus, McpHubSharedSkill, McpHubSharedSkillAction,
+};
 
 /*
  * MCP hub backend 는 서버 등록부와 실제 MCP 연결을 가진 바깥 경계다.
@@ -26,6 +28,11 @@ pub trait McpHubBackendPort: Send + Sync {
 
     /// OAuth 로그인을 시작한다. 인증 주소를 알려 준 뒤 사용자가 끝낼 때까지 기다린다.
     fn login(&self, server: &str, on_authorization_url: &mut dyn FnMut(&str)) -> Result<()>;
+
+    /// 사용자의 Codex 홈에 있는 hub skill 을 읽거나 쓰거나 지운다. 파일시스템을 가진 backend 만 한다.
+    fn shared_skill(&self, _action: McpHubSharedSkillAction) -> Result<McpHubSharedSkill> {
+        bail!("this MCP hub backend cannot manage the shared skill")
+    }
 
     /// 유지 중인 연결을 내린다. 다음 요청이 등록부와 로그인을 다시 읽는다. 연결을 유지하지 않으면 할 일이 없다.
     fn reload(&self) -> Result<()> {

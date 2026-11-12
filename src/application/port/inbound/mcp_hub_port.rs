@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::domain::mcp_hub::{
-    McpHubServerSpec, McpHubServerSummary, McpHubToolDetail, McpHubToolSummary,
+    McpHubServerSpec, McpHubServerSummary, McpHubSharedSkill, McpHubSharedSkillAction,
+    McpHubToolDetail, McpHubToolSummary,
 };
 
 /*
@@ -17,4 +18,6 @@ pub trait McpHubPort: Send + Sync {
     fn search(&self, query: &str) -> Result<Vec<McpHubToolSummary>>;
     fn describe(&self, server: &str, tool: &str) -> Result<McpHubToolDetail>;
     fn call(&self, server: &str, tool: &str, arguments: Value) -> Result<Value>;
+    /// hub skill 을 사용자의 Codex 홈에 두거나 지운다. Akra 가 열지 않은 Codex 세션도 hub 를 쓰게 된다.
+    fn shared_skill(&self, action: McpHubSharedSkillAction) -> Result<McpHubSharedSkill>;
 }

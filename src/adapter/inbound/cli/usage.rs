@@ -12,7 +12,8 @@ pub(super) const RESET_USAGE: &str =
     "Usage: akra reset <queue|directions|all> [workspace_dir] [--confirm]";
 pub(super) const PLANNING_TOOL_USAGE: &str =
     "Usage: akra planning-tool <contract|run> [workspace_dir]";
-pub(super) const MCP_USAGE: &str = "Usage: akra mcp <servers|add|remove|login|search|describe|call>
+pub(super) const MCP_USAGE: &str =
+    "Usage: akra mcp <servers|add|remove|login|search|describe|call|skill>
   akra mcp servers
   akra mcp add <name> --url <https-url>
   akra mcp add <name> -- <command> [args...]
@@ -20,7 +21,8 @@ pub(super) const MCP_USAGE: &str = "Usage: akra mcp <servers|add|remove|login|se
   akra mcp login <name>
   akra mcp search [words...]
   akra mcp describe <server> <tool>
-  akra mcp call <server> <tool> [<json-object>|-]";
+  akra mcp call <server> <tool> [<json-object>|-]
+  akra mcp skill <status|install|remove>";
 pub(super) const PARALLEL_TICK_USAGE: &str = "Usage: akra parallel-tick [workspace_dir]";
 pub(super) const CONFIG_USAGE: &str =
     "Usage: akra config <list|get|set|unset|path|doctor> [--global|--project] [key] [value]";

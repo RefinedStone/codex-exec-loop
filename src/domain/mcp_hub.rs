@@ -130,6 +130,21 @@ pub struct McpHubServerSummary {
     pub error: Option<String>,
 }
 
+/// 사용자의 Codex 홈에 둔 hub skill 에 할 일이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpHubSharedSkillAction {
+    Status,
+    Install,
+    Remove,
+}
+
+/// 사용자의 Codex 홈에 둔 hub skill 의 상태이다. `path` 는 설치되지 않았어도 설치될 자리를 알린다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct McpHubSharedSkill {
+    pub installed: bool,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct McpHubToolSummary {
     pub server: String,
