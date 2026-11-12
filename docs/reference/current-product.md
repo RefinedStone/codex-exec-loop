@@ -400,6 +400,12 @@ call tools on demand.
   `$AKRA_HOME/mcp-hub/agent-skills/akra-mcp-hub/SKILL.md`, and every Akra app-server connection
   registers that folder with `skills/extraRoots/set` right after `initialize`. A failure only leaves
   a warning. Connections opened before the first server was added do not see the skill.
+- `akra mcp skill install` writes the same skill to the user's Codex home
+  (`$CODEX_HOME/skills/akra-mcp-hub/SKILL.md`, default `~/.codex`) and adds the full path of the `akra`
+  executable. Codex sessions that Akra did not open read that folder, so they can use the hub too.
+  `akra mcp skill status` and `remove` print the same JSON (`installed`, `path`); `remove` deletes only
+  that file and the folder when it is empty. While the installed copy exists, Akra connections do not
+  register the hub folder, so a session sees the skill once.
 
 ## Work Context
 

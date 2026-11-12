@@ -16,7 +16,8 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
     MCP_HUB_GATEWAY_CALL, MCP_HUB_GATEWAY_OTHER_HUB, MCP_HUB_GATEWAY_RELOAD,
-    MCP_HUB_GATEWAY_STATUSES, McpHubServerSpec, McpHubServerStatus,
+    MCP_HUB_GATEWAY_STATUSES, McpHubServerSpec, McpHubServerStatus, McpHubSharedSkill,
+    McpHubSharedSkillAction,
 };
 
 const GATEWAY_WEBSOCKET_URL: &str = "ws://localhost/rpc";
@@ -227,6 +228,10 @@ impl McpHubBackendPort for GatewayRoutedMcpHubBackend {
         let result = self.local.login(server, on_authorization_url);
         self.reload_gateway();
         result
+    }
+
+    fn shared_skill(&self, action: McpHubSharedSkillAction) -> Result<McpHubSharedSkill> {
+        self.local.shared_skill(action)
     }
 }
 

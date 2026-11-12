@@ -24,7 +24,8 @@ pub(crate) use self::gateway_client::GatewayRoutedMcpHubBackend;
 use self::session::HubAppServerSession;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
-    McpHubServerSpec, McpHubServerStatus, McpHubToolInfo, McpHubTransport,
+    McpHubServerSpec, McpHubServerStatus, McpHubSharedSkill, McpHubSharedSkillAction,
+    McpHubToolInfo, McpHubTransport,
 };
 
 const HUB_DIRECTORY: &str = "mcp-hub";
@@ -226,6 +227,11 @@ impl McpHubBackendPort for CodexMcpHubBackend {
         })
     }
 
+    fn shared_skill(&self, action: McpHubSharedSkillAction) -> Result<McpHubSharedSkill> {
+        let akra = std::env::current_exe().context("failed to find the akra executable path")?;
+        shared_skill_in(&codex_skills_dir()?, &akra, action)
+    }
+
     /// 로그인은 사용자를 오래 기다리므로 상주 엔진을 쓰지 않고 따로 연다. 끝나면 상주 엔진을 내린다.
     fn login(&self, server: &str, on_authorization_url: &mut dyn FnMut(&str)) -> Result<()> {
         let mut session = self.open_session()?;
@@ -321,7 +327,74 @@ pub(crate) fn agent_skill_roots() -> Vec<PathBuf> {
     let Ok(home) = hub_home() else {
         return Vec::new();
     };
+    // Codex 홈에 설치한 skill 은 app-server 가 직접 읽는다. 같은 skill 을 두 번 싣지 않는다.
+    if codex_skills_dir().is_ok_and(|skills| shared_skill_path(&skills).exists()) {
+        return Vec::new();
+    }
     agent_skill_roots_in(&home)
+}
+
+/// Codex 가 사용자 skill 을 읽는 폴더이다. Akra 가 열지 않은 Codex 세션도 이 폴더를 읽는다.
+fn codex_skills_dir() -> Result<PathBuf> {
+    let home = match std::env::var_os("CODEX_HOME").filter(|path| !path.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+            let user_home = std::env::var_os(variable)
+                .filter(|path| !path.is_empty())
+                .with_context(|| {
+                    format!("`{variable}` is not set, so the Codex home is unknown")
+                })?;
+            PathBuf::from(user_home).join(".codex")
+        }
+    };
+    Ok(home.join("skills"))
+}
+
+fn shared_skill_path(codex_skills: &Path) -> PathBuf {
+    codex_skills.join(SKILL_NAME).join("SKILL.md")
+}
+
+/*
+ * 설치본은 `akra` 의 전체 경로를 함께 적는다. Akra 가 열지 않은 세션의 셸은 `akra` 를 PATH 에서 찾지 못할 수
+ * 있기 때문이다. 지울 때는 이 skill 의 파일과 빈 폴더만 지운다.
+ */
+fn shared_skill_in(
+    codex_skills: &Path,
+    akra: &Path,
+    action: McpHubSharedSkillAction,
+) -> Result<McpHubSharedSkill> {
+    let path = shared_skill_path(codex_skills);
+    let directory = codex_skills.join(SKILL_NAME);
+    match action {
+        McpHubSharedSkillAction::Status => {}
+        McpHubSharedSkillAction::Install => {
+            std::fs::create_dir_all(&directory)
+                .with_context(|| format!("failed to create `{}`", directory.display()))?;
+            let text = format!(
+                "{SKILL_TEXT}\n## Command location\n\nIf the shell cannot find `akra`, run it by \
+                 its full path:\n\n```text\n{}\n```\n",
+                akra.display()
+            );
+            std::fs::write(&path, text)
+                .with_context(|| format!("failed to write `{}`", path.display()))?;
+        }
+        McpHubSharedSkillAction::Remove => {
+            match std::fs::remove_file(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error)
+                        .with_context(|| format!("failed to remove `{}`", path.display()));
+                }
+                _ => {}
+            }
+            // 사용자가 폴더에 다른 파일을 두었으면 폴더는 남는다.
+            let _ = std::fs::remove_dir(&directory);
+        }
+    }
+    Ok(McpHubSharedSkill {
+        installed: path.exists(),
+        path: path.display().to_string(),
+    })
 }
 
 fn agent_skill_roots_in(home: &Path) -> Vec<PathBuf> {
@@ -500,6 +573,30 @@ mod tests {
         .unwrap();
         assert!(skill.starts_with("---\nname: akra-mcp-hub\n"));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn shared_skill_installs_with_the_command_path_and_removes_only_its_own_file() {
+        let skills = temp_home("shared-skill").join("skills");
+        let akra = Path::new("/opt/akra/bin/akra");
+        let status = |action| shared_skill_in(&skills, akra, action).unwrap();
+
+        assert!(!status(McpHubSharedSkillAction::Status).installed);
+        assert!(!skills.exists());
+
+        let installed = status(McpHubSharedSkillAction::Install);
+        assert!(installed.installed);
+        let text = std::fs::read_to_string(&installed.path).unwrap();
+        assert!(text.starts_with("---\nname: akra-mcp-hub\n"));
+        assert!(text.contains(&akra.display().to_string()));
+
+        // 사용자가 둔 다른 파일과 폴더는 지우지 않는다.
+        let other = skills.join(SKILL_NAME).join("notes.md");
+        std::fs::write(&other, "keep").unwrap();
+        assert!(!status(McpHubSharedSkillAction::Remove).installed);
+        assert!(other.exists());
+        assert!(!status(McpHubSharedSkillAction::Remove).installed);
+        let _ = std::fs::remove_dir_all(skills.parent().unwrap());
     }
 
     #[test]

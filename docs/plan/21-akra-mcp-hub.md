@@ -1,6 +1,6 @@
 # 21. Akra MCP hub
 
-상태: 3단계 완료 (CLI + skill, Gateway 상주 엔진, Desktop Notion 패널) · 기준일: 2026-11-11 · 관련: plan 17 R4(업무 패널), plan 20(observe-and-offer)
+상태: 4단계 구현 (CLI + skill, Gateway 상주 엔진, Desktop Notion 패널, Akra 밖의 Codex 세션) · 기준일: 2026-11-13 · 관련: plan 17 R4(업무 패널), plan 20(observe-and-offer)
 
 ## 목표
 
@@ -76,6 +76,22 @@
   페이지, 검색, 제목 클릭(브라우저), "스레드로 넘기기"(페이지 내용으로 새 스레드의 입력창만 채움)이다.
 - 확인: 가짜 Gateway 와 가짜 MCP hub 로 화면 시험(`test/e2e/notion-panel.mjs`)을 숨긴 창에서 돌렸다. 실제
   Notion 로그인과 호출은 하지 않았다.
+
+## 4단계 (구현, 2026-11-13): Akra 밖의 Codex 세션
+
+- 문제: hub skill 은 Akra 가 연 app-server 연결에만 등록된다. 공식 Codex 앱의 세션과, 클라우드 에이전트가 이
+  컴퓨터에서 명령을 실행하는 세션은 hub 를 모른다. `akra` 가 PATH 에 없으면 명령도 찾지 못한다.
+- 결정: 공식 접점만 쓴다. Codex 의 사용자 skill 폴더(`$CODEX_HOME/skills`)와 셸이다. 클라우드 에이전트의 비공개
+  백엔드에는 연결하지 않는다 (plan 17 D-03 그대로).
+- `akra mcp skill install|remove|status`. `install` 은 hub skill 을 `$CODEX_HOME/skills/akra-mcp-hub/SKILL.md`
+  에 쓰고, 실행한 `akra` 의 전체 경로를 문서 끝에 적는다. `remove` 는 그 파일과 빈 폴더만 지운다. 출력은 JSON
+  (`installed`, `path`)이다.
+- 설치본이 있으면 Akra 의 연결은 hub 폴더를 skill root 로 등록하지 않는다. 세션에 같은 skill 이 한 번만 실린다.
+- 설치는 사용자가 명령으로 한다. Akra 가 Codex 홈을 스스로 고치지 않는다.
+- 확인: 단위 시험(설치, 경로 기록, 지우기, 다른 파일 보존, CLI 의 JSON). 실제 클라우드 에이전트 세션이 이 skill 을
+  읽는지는 확인하지 않았다. 모델 턴이 필요하다.
+- 한계: `akra` 를 옮기면 적힌 경로가 틀린다. `install` 을 다시 실행한다. Akra 를 올린 뒤에도 설치본은 예전
+  문서이다.
 
 ## 남은 단계 (proposed)
 

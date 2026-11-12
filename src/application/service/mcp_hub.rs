@@ -6,8 +6,9 @@ use serde_json::Value;
 use crate::application::port::inbound::mcp_hub_port::McpHubPort;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
-    McpHubServerSpec, McpHubServerSummary, McpHubToolDetail, McpHubToolSummary,
-    summarized_description, tool_matches_query, validated_server_name,
+    McpHubServerSpec, McpHubServerSummary, McpHubSharedSkill, McpHubSharedSkillAction,
+    McpHubToolDetail, McpHubToolSummary, summarized_description, tool_matches_query,
+    validated_server_name,
 };
 
 /*
@@ -75,6 +76,10 @@ impl McpHubPort for McpHubService {
     fn login(&self, name: &str, on_authorization_url: &mut dyn FnMut(&str)) -> Result<()> {
         let name = self.require_registered(name)?;
         self.backend.login(&name, on_authorization_url)
+    }
+
+    fn shared_skill(&self, action: McpHubSharedSkillAction) -> Result<McpHubSharedSkill> {
+        self.backend.shared_skill(action)
     }
 
     fn search(&self, query: &str) -> Result<Vec<McpHubToolSummary>> {

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::application::port::inbound::mcp_hub_port::McpHubPort;
-use crate::domain::mcp_hub::McpHubServerSpec;
+use crate::domain::mcp_hub::{McpHubServerSpec, McpHubSharedSkillAction};
 
 use super::usage::MCP_USAGE;
 
@@ -28,6 +28,7 @@ pub(super) enum McpCliCommand {
         tool: String,
         arguments: CallArguments,
     },
+    Skill(McpHubSharedSkillAction),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +72,9 @@ pub(super) fn parse(args: &[OsString]) -> Result<McpCliCommand> {
         ["call", server, tool] => call(server, tool, CallArguments::Empty),
         ["call", server, tool, "-"] => call(server, tool, CallArguments::Stdin),
         ["call", server, tool, json] => call(server, tool, CallArguments::Inline(json.to_string())),
+        ["skill", "status"] => McpCliCommand::Skill(McpHubSharedSkillAction::Status),
+        ["skill", "install"] => McpCliCommand::Skill(McpHubSharedSkillAction::Install),
+        ["skill", "remove"] => McpCliCommand::Skill(McpHubSharedSkillAction::Remove),
         _ => bail!("{MCP_USAGE}"),
     })
 }
@@ -118,6 +122,7 @@ pub(super) fn run(
             tool,
             arguments,
         } => hub.call(&server, &tool, parse_arguments(arguments, stdin)?)?,
+        McpCliCommand::Skill(action) => serde_json::to_value(hub.shared_skill(action)?)?,
     };
     writeln!(stdout, "{}", serde_json::to_string_pretty(&output)?)?;
     let failed_call = output.get("isError").and_then(Value::as_bool) == Some(true);
@@ -144,7 +149,9 @@ fn parse_arguments(arguments: CallArguments, stdin: &mut dyn Read) -> Result<Val
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::mcp_hub::{McpHubServerSummary, McpHubToolDetail, McpHubToolSummary};
+    use crate::domain::mcp_hub::{
+        McpHubServerSummary, McpHubSharedSkill, McpHubToolDetail, McpHubToolSummary,
+    };
     use std::sync::Mutex;
 
     fn parse_words(words: &[&str]) -> Result<McpCliCommand> {
@@ -213,6 +220,28 @@ mod tests {
             self.calls.lock().unwrap().push(arguments.clone());
             Ok(json!({ "content": [], "isError": arguments.get("fail").is_some() }))
         }
+        fn shared_skill(&self, action: McpHubSharedSkillAction) -> Result<McpHubSharedSkill> {
+            Ok(McpHubSharedSkill {
+                installed: action == McpHubSharedSkillAction::Install,
+                path: "/codex/skills/akra-mcp-hub/SKILL.md".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn skill_subcommands_report_the_shared_skill_as_json() {
+        let hub = FakeHub::default();
+        let (code, stdout, _) = run_words(&hub, &["skill", "install"], "");
+        let output: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(output["installed"], true);
+        assert_eq!(output["path"], "/codex/skills/akra-mcp-hub/SKILL.md");
+        let (_, stdout, _) = run_words(&hub, &["skill", "remove"], "");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout).unwrap()["installed"],
+            false
+        );
+        assert!(parse_words(&["skill"]).is_err());
     }
 
     fn run_words(hub: &FakeHub, words: &[&str], input: &str) -> (i32, String, String) {
