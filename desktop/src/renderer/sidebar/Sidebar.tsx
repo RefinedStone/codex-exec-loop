@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 
 import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
-import { useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
+import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
 import { MOD_KEY, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
@@ -89,8 +89,58 @@ function FolderSection({ folder, connected, onOpenThread }: { folder: WorkspaceF
   );
 }
 
-export function Sidebar({ onOpenThread }: { onOpenThread(threadId: string): void }) {
+/**
+ * 원격 호스트(클라우드 에이전트, plan 25) 하나의 구역이다. 그 호스트의 저장소를 읽는다. 원격의 작업 폴더는 이 컴퓨터에
+ * 없으므로 폴더로 묶지 않고 최근 대화부터 보인다.
+ */
+function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host: string, threadId: string): void }) {
+  const useStore = remoteHostStore(host);
+  const [open, setOpen] = useState(true);
+  const phase = useStore((state) => state.connection?.phase ?? "connecting");
+  const problem = useStore((state) => (state.connection?.phase === "connected" ? state.sessionError : (state.connection?.detail ?? null)));
+  const folders = useStore((state) => state.folders);
+  const openThreadId = useStore((state) => state.openThreadId);
+  const showing = useUiStore((state) => state.view === "remote" && state.remoteHost === host);
+  const threads = useMemo(() => folders.flatMap((folder) => folder.threads).sort((left, right) => right.updatedAt - left.updatedAt), [folders]);
+  return (
+    <section className="project" data-testid="remote-host">
+      <header className="project-header" title={`Gateway 호스트 ${host} (읽기 전용)`}>
+        <button type="button" className="project-name" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
+          <Icon name="globe" size={14} />
+          <span>{host}</span>
+        </button>
+        <span className="connection" title="이 호스트의 연결 상태">
+          <span className={`connection-dot connection-${phase}`} />
+          <span data-testid="remote-phase">{PHASE_LABEL[phase]}</span>
+        </span>
+      </header>
+      {open && problem && <p className="empty-row error">{problem}</p>}
+      {open && !problem && phase === "connected" && threads.length === 0 && <p className="empty-row">대화가 없습니다.</p>}
+      {open && (
+        <ul>
+          {threads.map((thread) => (
+            <li className="thread-row" key={thread.id}>
+              <button type="button" className={showing && openThreadId === thread.id ? "thread selected" : "thread"} onClick={() => onOpenThread(host, thread.id)} data-testid="remote-thread-entry">
+                <StatusMark mark="idle" />
+                <span className="thread-text">
+                  <span className="thread-title">{thread.title}</span>
+                </span>
+                <span className="thread-age">{relativeAge(thread.updatedAt, Date.now())}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(threadId: string): void; onOpenRemoteThread(host: string, threadId: string): void }) {
   const folders = useDesktopStore((state) => state.folders);
+  // 원격 구역은 사용자가 켰고 Gateway 에 원격 호스트가 있을 때만 보인다.
+  const remoteAgents = useUiStore((state) => state.remoteAgents);
+  const remoteHosts = useDesktopStore(remoteHostKey);
   const connection = useDesktopStore((state) => state.connection);
   const codexVersion = useDesktopStore((state) => state.gateway?.codexVersion ?? null);
   const marks = useThreadMarks();
@@ -124,6 +174,7 @@ export function Sidebar({ onOpenThread }: { onOpenThread(threadId: string): void
         {folders.map((folder) => (
           <FolderSection key={folder.cwd} folder={folder} connected={phase === "connected"} onOpenThread={onOpenThread} />
         ))}
+        {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <RemoteSection key={host} host={host} onOpenThread={onOpenRemoteThread} />)}
       </div>
       <footer className="sidebar-footer">
         <span className="connection" title="Gateway 연결 상태">

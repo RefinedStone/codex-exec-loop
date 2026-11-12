@@ -71,6 +71,7 @@ function harness() {
       openExternal: () => undefined,
     },
     notion: { openExternal: () => undefined },
+    remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {

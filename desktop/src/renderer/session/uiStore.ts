@@ -1,7 +1,7 @@
 // 화면 틀의 상태이다: 어떤 보기와 패널이 열려 있는지. 대화 상태는 `desktopStore` 에 있다.
 import { create } from "zustand";
 
-export type View = "home" | "thread" | "fleet";
+export type View = "home" | "thread" | "fleet" | "remote";
 export type PanelId = "review" | "kernel" | "browser" | "work" | "docs";
 export type Theme = "light" | "dark";
 
@@ -26,6 +26,20 @@ export interface UiState {
   /** 입력창에 쓰던 글이다. 키는 스레드 id 이고, 새 스레드 화면은 `HOME_DRAFT` 이다. 보기를 바꿔도 남는다. */
   drafts: Record<string, string>;
   toasts: Toast[];
+  /** 원격 호스트(클라우드 에이전트, plan 25)의 구역을 켰다. 기본값은 꺼짐이고, 꺼져 있으면 접속하지 않는다. */
+  remoteAgents: boolean;
+  /** `remote` 보기가 보여 주는 호스트이다. */
+  remoteHost: string | null;
+}
+
+const REMOTE_AGENTS_KEY = "akra.remoteAgents";
+
+function storedRemoteAgents(): boolean {
+  try {
+    return window.localStorage.getItem(REMOTE_AGENTS_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function initialTheme(): Theme {
@@ -43,6 +57,8 @@ export const useUiStore = create<UiState>(() => ({
   homeCwd: null,
   drafts: {},
   toasts: [],
+  remoteAgents: storedRemoteAgents(),
+  remoteHost: null,
 }));
 
 const set = useUiStore.setState;
@@ -84,6 +100,26 @@ export function togglePanel(panel: PanelId): void {
 
 export function toggleTerminal(): void {
   set((state) => ({ terminalOpen: !state.terminalOpen, paletteOpen: false }));
+}
+
+export const REMOTE_AGENTS_WARNING =
+  "클라우드 에이전트의 대화를 이 앱에서 읽습니다. 공급자의 약관과 계정 정책이 외부 클라이언트를 허용하는지 먼저 확인하세요. 켭니까?";
+
+/** 원격 호스트 구역을 켜거나 끈다. 켤 때는 경고를 보이고 사용자가 확인해야 켠다 (plan 25 §8). */
+export function toggleRemoteAgents(confirm: (message: string) => boolean = (message) => window.confirm(message)): void {
+  const enable = !useUiStore.getState().remoteAgents;
+  if (enable && !confirm(REMOTE_AGENTS_WARNING)) return;
+  try {
+    window.localStorage.setItem(REMOTE_AGENTS_KEY, enable ? "1" : "0");
+  } catch {
+    // 저장하지 못하면 이 창에서만 유지된다.
+  }
+  set({ remoteAgents: enable, paletteOpen: false });
+}
+
+/** 원격 호스트의 대화 화면을 연다. */
+export function showRemote(host: string): void {
+  set({ view: "remote", remoteHost: host, paletteOpen: false });
 }
 
 export function toggleTheme(): void {

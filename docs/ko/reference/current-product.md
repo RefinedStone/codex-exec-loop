@@ -225,6 +225,14 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   횟수)도 돌려준다. `local` 이 아닌 접속에서 `akra/kernel/*` 는 `-32601` 로 거절하고, `akra/context/*` 는 빈
   `resources` 로 답하며 장부를 읽거나 쓰지 않는다. `akra/mcp/*` 는 그대로이고 `AKRA_GATEWAY_RECORD` 는
   기록하지 않는다.
+- Desktop 의 원격 호스트 (plan 25, S2 의 Desktop 부분): Desktop 은 `akra/gateway/info` 의 `hosts` 를 읽는다.
+  `local` 이 아닌 호스트가 있으면 명령 팔레트에 "클라우드 에이전트 켜기 / 끄기" 가 보인다. 기본값은 꺼짐이고,
+  켤 때 경고를 먼저 보인다. 켜져 있는 동안 창마다 원격 호스트 하나에 Gateway 접속 하나를 `/host/<id>` 로 더
+  열고, 사이드바에 그 호스트의 구역과 스레드를 보인다. 원격 스레드는 읽기 전용으로 열린다: Desktop 은 원격
+  호스트에 턴, 새 스레드, 승인 응답을 보내지 않고, 원격 대화는 커널, 변경, 문서, 터미널 패널을 쓰지 않는다.
+  원격 상태는 메모리에만 있다. Gateway 가 `1008` 로 닫은 접속은 다시 시도하지 않는다. 운영 구성은 `local` 만
+  등록하므로 운영에서는 이 명령과 구역이 보이지 않는다. 원격 upstream adapter 는 아직 없다
+  (`desktop/src/main/gatewayConnection.ts`, `desktop/src/renderer/session/`).
 - 커널 프로토콜(`akra/kernel/*`, plan 18 K3 프로토콜 v0): 클라이언트가 작업 공간과 함께
   `akra/kernel/attach` 를 보내면 그 공간이 속한 저장소의 커널에 붙는다. Gateway 는 처음 붙을 때 커널을 만들고,
   클라이언트가 모두 떠나도 남겨 둔다. 그래서 자동 후속과 병렬 배분이 계속 돈다. 한 저장소의 worktree 들은 커널

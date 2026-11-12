@@ -57,7 +57,10 @@ export function uniqueTestEndpoint(): string {
 
 export interface FakeGateway {
   readonly endpoint: string;
+  /** `local` 접속이 보낸 요청이다. */
   readonly receivedMethods: string[];
+  /** 원격 호스트(`/host/<id>`, plan 25) 접속이 보낸 요청이다. */
+  readonly remoteReceivedMethods: string[];
   /** 먼저 도착해서 쓰인 서버 요청 답이다. */
   readonly answeredRequests: Array<{ requestId: string; result: unknown }>;
   close(): Promise<void>;
@@ -176,6 +179,11 @@ export async function startFakeGateway(
     threadDocuments?: Record<string, FakeThreadDocument[]>;
     /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 뒤에는 다시 찾지 않는다. */
     changedThreadDocuments?: Record<string, string[]>;
+    /**
+     * `local` 외에 중계하는 호스트 id 이다 (plan 25 S1a). 접속은 요청 경로 `/host/<id>` 로 고른다. 모르는 id 는 1008 로
+     * 닫는다. 원격 접속은 같은 녹화를 재생하고, `akra/kernel/*` 는 거절하고, `akra/context/*` 는 빈 목록으로 답한다.
+     */
+    hosts?: string[];
   } = {},
 ): Promise<FakeGateway> {
   // 작업 컨텍스트의 바뀜 상태이다: `스레드 id\n문서 키`. 읽은 문서는 같은 버전으로 다시 바뀜이 되지 않는다.
@@ -192,6 +200,8 @@ export async function startFakeGateway(
   }
   const segments = paths.flatMap((path) => loadReplaySegments(path));
   const receivedMethods: string[] = [];
+  const remoteReceivedMethods: string[] = [];
+  const hostIds = ["local", ...(options.hosts ?? [])];
   const answeredRequests: Array<{ requestId: string; result: unknown }> = [];
   const server: Server = createServer();
   const sockets = new WebSocketServer({ server });
@@ -199,7 +209,14 @@ export async function startFakeGateway(
   const resolvedRequestIds = new Set<string>();
   /** 서버 요청 id → 그 요청을 받은 접속들과 스레드 id */
   const openServerRequests = new Map<string, { threadId: string; sockets: Set<WebSocket> }>();
-  sockets.on("connection", (socket) => {
+  sockets.on("connection", (socket, request) => {
+    const path = request.url ?? "/";
+    const host = path.startsWith("/host/") ? (path.slice("/host/".length).split("/")[0] ?? "") : "local";
+    if (!hostIds.includes(host)) {
+      socket.close(1008, "unknown host");
+      return;
+    }
+    const remote = host !== "local";
     let kernelEventsSent = false;
     // 녹화 재생은 접속마다 따로 한다. 창 두 개가 같은 스레드를 열면 둘 다 같은 기록을 받는다.
     const used = new Set<ReplaySegment>();
@@ -249,8 +266,22 @@ export async function startFakeGateway(
         replayFollowUps(message);
         return;
       }
-      receivedMethods.push(message.method);
+      (remote ? remoteReceivedMethods : receivedMethods).push(message.method);
       options.onRequest?.(message.method);
+      const hasId = message.id !== undefined && message.id !== null;
+      if (remote && hasId && message.method.startsWith("akra/kernel/")) {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "kernel methods are local only" } }));
+        return;
+      }
+      if (remote && hasId && message.method.startsWith("akra/context/")) {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources: [] } }));
+        return;
+      }
+      if (options.hosts && hasId && message.method === "akra/gateway/info") {
+        const recorded = (table.get(message.method)?.result ?? {}) as object;
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { ...recorded, host, hosts: hostIds.map((id) => ({ id })) } }));
+        return;
+      }
       if (options.kernel && message.method.startsWith("akra/kernel/")) {
         answerKernel(options.kernel, socket, message);
         if (message.method === "akra/kernel/attach") kernelEventsSent = false;
@@ -300,6 +331,7 @@ export async function startFakeGateway(
   return {
     endpoint,
     receivedMethods,
+    remoteReceivedMethods,
     answeredRequests,
     close: async () => {
       for (const client of sockets.clients) {

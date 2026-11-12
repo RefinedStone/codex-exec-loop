@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type WebContents } from "electron";
 
-import { type BrowserBounds, IPC_CHANNELS, type TerminalOpenRequest } from "../shared/bridge";
+import { type BrowserBounds, IPC_CHANNELS, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
@@ -26,6 +26,9 @@ if (process.env.AKRA_DESKTOP_USER_DATA) {
 }
 
 const connections = new Map<number, GatewayConnection>();
+/** 원격 호스트(plan 25)의 접속이다. 키는 `창 id:호스트 id` 이다. renderer 가 열라고 한 것만 있다. */
+const remoteConnections = new Map<string, GatewayConnection>();
+const remoteKey = (contentsId: number, host: string) => `${contentsId}:${host}`;
 const terminals = new TerminalService(spawnPty);
 const browsers = new BrowserPanelService();
 const browserSettingsPath = () => join(app.getPath("userData"), "browser-settings.json");
@@ -48,33 +51,56 @@ function startGatewayDaemon(): void {
   }
 }
 
-function attachGatewayConnection(contents: WebContents): void {
-  // 화면을 다시 불러오면 renderer 가 initialize 를 처음부터 하므로 접속도 새로 연다.
-  connections.get(contents.id)?.close();
+function closeRemoteConnections(contentsId: number): void {
+  for (const [key, connection] of remoteConnections) {
+    if (key.startsWith(`${contentsId}:`)) {
+      connection.close();
+      remoteConnections.delete(key);
+    }
+  }
+}
+
+/** `host` 가 없으면 창의 `local` 접속이다. 있으면 그 호스트의 접속이고, 메시지와 상태 앞에 호스트 id 를 붙여 보낸다. */
+function attachGatewayConnection(contents: WebContents, host?: string): void {
+  const messageChannel = host ? IPC_CHANNELS.remoteMessage : IPC_CHANNELS.message;
+  const stateChannel = host ? IPC_CHANNELS.remoteState : IPC_CHANNELS.connectionState;
+  const prefix = host ? [host] : [];
+  if (host) {
+    remoteConnections.get(remoteKey(contents.id, host))?.close();
+  } else {
+    // 화면을 다시 불러오면 renderer 가 initialize 를 처음부터 하므로 접속도 새로 연다. 원격 접속은 renderer 가 다시 연다.
+    connections.get(contents.id)?.close();
+    closeRemoteConnections(contents.id);
+  }
   let endpoint: string;
   try {
     endpoint = resolveGatewayEndpoint();
   } catch (error) {
     // 주소를 정하지 못해도 main 이 멈추지 않게 화면에 이유를 보여 준다.
     const detail = error instanceof Error ? error.message : String(error);
-    contents.send(IPC_CHANNELS.connectionState, { phase: "disconnected", endpoint: "", detail });
+    contents.send(stateChannel, ...prefix, { phase: "disconnected", endpoint: "", detail });
     return;
   }
   const connection = new GatewayConnection({
     endpoint,
     onMessage: (text) => {
       if (!contents.isDestroyed()) {
-        contents.send(IPC_CHANNELS.message, text);
+        contents.send(messageChannel, ...prefix, text);
       }
     },
     onState: (state) => {
       if (!contents.isDestroyed()) {
-        contents.send(IPC_CHANNELS.connectionState, state);
+        contents.send(stateChannel, ...prefix, state);
       }
     },
-    startDaemon: startGatewayDaemon,
+    // 데몬은 `local` 접속이 시작한다.
+    ...(host ? { host } : { startDaemon: startGatewayDaemon }),
   });
-  connections.set(contents.id, connection);
+  if (host) {
+    remoteConnections.set(remoteKey(contents.id, host), connection);
+  } else {
+    connections.set(contents.id, connection);
+  }
   connection.start();
 }
 
@@ -134,6 +160,7 @@ function createWindow(): void {
   contents.once("destroyed", () => {
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
+    closeRemoteConnections(contentsId);
     terminals.closeAllOf(contentsId);
     browsers.close(contentsId);
   });
@@ -157,6 +184,25 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
 
 // renderer 가 상태 수신 함수를 등록한 뒤 보낸다. 화면을 다시 불러오면 다시 오고, 그때 접속을 새로 연다.
 ipcMain.on(IPC_CHANNELS.ready, (event) => attachGatewayConnection(event.sender));
+
+// 원격 호스트의 접속은 renderer 가 열라고 할 때만 연다 (plan 25 §3.3). 사용자가 켠 뒤에만 renderer 가 요청한다.
+ipcMain.on(IPC_CHANNELS.remoteOpen, (event, host: unknown) => {
+  if (isRemoteHostId(host)) {
+    attachGatewayConnection(event.sender, host);
+  }
+});
+ipcMain.on(IPC_CHANNELS.remoteClose, (event, host: unknown) => {
+  if (isRemoteHostId(host)) {
+    const key = remoteKey(event.sender.id, host);
+    remoteConnections.get(key)?.close();
+    remoteConnections.delete(key);
+  }
+});
+ipcMain.on(IPC_CHANNELS.remoteSend, (event, host: unknown, text: unknown) => {
+  if (isRemoteHostId(host) && typeof text === "string") {
+    remoteConnections.get(remoteKey(event.sender.id, host))?.send(text);
+  }
+});
 
 ipcMain.handle(IPC_CHANNELS.gitStatus, (_event, cwd: unknown) => readGitStatus(cwd));
 ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown) =>

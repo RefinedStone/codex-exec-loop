@@ -18,6 +18,11 @@ export const IPC_CHANNELS = {
   message: "akra:message",
   connectionState: "akra:connection-state",
   ready: "akra:ready",
+  remoteOpen: "akra:remote-open",
+  remoteClose: "akra:remote-close",
+  remoteSend: "akra:remote-send",
+  remoteMessage: "akra:remote-message",
+  remoteState: "akra:remote-state",
   chooseFolder: "akra:choose-folder",
   gitStatus: "akra:git-status",
   gitFileDiff: "akra:git-file-diff",
@@ -302,6 +307,23 @@ export interface GitCommitDiff {
   truncated: boolean;
 }
 
+/** Gateway 의 호스트 id 이다. `local` 은 원격 호스트가 아니다. */
+export function isRemoteHostId(host: unknown): host is string {
+  return typeof host === "string" && host !== "local" && /^[A-Za-z0-9_-]{1,64}$/.test(host);
+}
+
+/**
+ * `local` 이 아닌 Gateway 호스트(클라우드 에이전트, plan 25)의 접속이다. 호스트마다 접속이 하나이고, 메시지와 상태에
+ * 호스트 id 가 붙는다. main 은 `open` 을 받기 전에는 접속하지 않는다.
+ */
+export interface RemoteHostBridge {
+  open(host: string): void;
+  close(host: string): void;
+  send(host: string, text: string): void;
+  onMessage(listener: (host: string, text: string) => void): () => void;
+  onConnectionState(listener: (host: string, state: ConnectionState) => void): () => void;
+}
+
 /** preload 가 `window.akra` 로 노출하는 함수 전부이다. */
 export interface AkraBridge {
   /** JSON-RPC 메시지 한 개를 Gateway 로 보낸다. */
@@ -336,6 +358,7 @@ export interface AkraBridge {
   gitPush(cwd: string): Promise<GitPublishResult>;
   /** 현재 브랜치의 PR 을 gh 로 만든다. main 이 저장소, 브랜치, gh 계정을 보여 주고 사용자에게 확인한다. */
   gitCreatePullRequest(cwd: string, draft: PullRequestDraft): Promise<GitPublishResult>;
+  remote: RemoteHostBridge;
   terminal: TerminalBridge;
   browser: BrowserBridge;
   github: GitHubBridge;

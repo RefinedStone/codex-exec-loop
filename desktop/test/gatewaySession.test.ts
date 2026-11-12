@@ -5,7 +5,7 @@ import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { GatewayConnection } from "../src/main/gatewayConnection";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession, groupThreadsByCwd, startDesktopSession } from "../src/renderer/session/desktopSession";
-import { type DesktopState, mergeWorkspaceFolders, type SessionStore } from "../src/renderer/session/desktopStore";
+import { type DesktopState, mergeWorkspaceFolders, remoteHostKey, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Thread } from "../src/shared/protocol/generated/v2/Thread";
 import {
   APPROVAL_TURN_RECORDING,
@@ -40,7 +40,7 @@ async function gateway(endpoint = uniqueTestEndpoint()): Promise<FakeGateway> {
 }
 
 /** main 의 접속과 renderer 의 메시지 버스를 프로세스 안에서 잇는다 (preload 대신). */
-function connectBridge(endpoint: string, startDaemon?: () => void) {
+function connectBridge(endpoint: string, startDaemon?: () => void, host?: string) {
   const messageListeners = new Set<(text: string) => void>();
   const stateListeners = new Set<(state: ConnectionState) => void>();
   const states: ConnectionState[] = [];
@@ -52,6 +52,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
       stateListeners.forEach((listener) => listener(state));
     },
     ...(startDaemon ? { startDaemon } : {}),
+    ...(host ? { host } : {}),
     reconnectInitialMs: 50,
     reconnectMaxMs: 200,
   });
@@ -111,6 +112,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
       openExternal: () => undefined,
     },
     notion: { openExternal: () => undefined },
+    remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };
@@ -211,6 +213,43 @@ describe("desktop session over the fake gateway", () => {
     connection.start();
     await waitFor(() => states.at(-1)?.phase === "connected");
     expect(daemonStarts).toBe(1);
+  });
+});
+
+describe("a remote host over the fake gateway (plan 25)", () => {
+  it("selects the host with the request path and reads its threads without writing", async () => {
+    const fake = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, { hosts: ["cloud"] });
+    cleanups.push(() => fake.close());
+    const { connection, bridge } = connectBridge(fake.endpoint, undefined, "cloud");
+    const store = sessionStore();
+    const session = new DesktopSession(bridge, store, "test", undefined, true);
+    session.start();
+    cleanups.push(() => session.stop());
+    connection.start();
+
+    await waitFor(() => (store.snapshot.folders?.length ?? 0) > 0);
+    expect(fake.receivedMethods).toEqual([]);
+    expect(remoteHostKey({ gateway: store.snapshot.gateway ?? null })).toBe("cloud");
+    // 전체 검사로 목록을 한 번 더 읽지 않는다.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.remoteReceivedMethods.filter((method) => method === "thread/list")).toHaveLength(1);
+
+    await expect(session.sendMessage("hello")).rejects.toThrow("읽기 전용");
+    await expect(session.startThread("/work/example-app")).rejects.toThrow("읽기 전용");
+    await expect(session.interrupt()).rejects.toThrow("읽기 전용");
+    expect(fake.remoteReceivedMethods.some((method) => method.startsWith("turn/") || method === "thread/start")).toBe(false);
+  });
+
+  it("does not reconnect to a host that the gateway does not know", async () => {
+    const fake = await gateway();
+    const { connection, states } = connectBridge(fake.endpoint, undefined, "missing");
+    connection.start();
+
+    await waitFor(() => states.at(-1)?.phase === "disconnected");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(states.filter((state) => state.phase === "connecting")).toHaveLength(1);
+    expect(states.at(-1)?.retryInMs).toBeUndefined();
+    expect(states.at(-1)?.detail).toContain("missing");
   });
 });
 
