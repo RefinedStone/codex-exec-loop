@@ -249,6 +249,29 @@ describe("Git hunk actions", () => {
     expect(repo.text()).toBe("changed\n");
   });
 
+  it("refuses a file that is not UTF-8 instead of corrupting its bytes", async () => {
+    // Given a tracked Latin-1 file ("caf\xe9") that is deleted, and the same file with an edit.
+    const repo = repository();
+    const latin1 = (text: string) => Buffer.from(text, "latin1");
+    const path = join(repo.root, "a.txt");
+    writeFileSync(path, latin1("caf\xe9\nsecond\n"));
+    repo.git("add", "a.txt");
+    repo.git("commit", "-q", "-m", "latin1");
+
+    // When the file is deleted, restoring it through a hunk would re-encode the bytes.
+    rmSync(path);
+    const deleted = await readGitHunks(repo.root, "a.txt");
+    expect(deleted).toEqual({ hunks: [], message: "UTF-8 이 아닌 내용이 있습니다. 파일 전체 동작을 사용하십시오." });
+    expect((await planGitHunkAction(repo.root, "discard", "a.txt", "0".repeat(64))).ok).toBe(false);
+    expect(existsSync(path)).toBe(false);
+
+    // And when a non-UTF-8 line is only context of an edited hunk.
+    writeFileSync(path, latin1("caf\xe9\nchanged\n"));
+    expect((await readGitHunks(repo.root, "a.txt")).hunks).toEqual([]);
+    expect(readFileSync(path).equals(latin1("caf\xe9\nchanged\n"))).toBe(true);
+    expect(repo.git("status", "--porcelain").trim()).toBe("M a.txt");
+  });
+
   it("rejects an ID belonging to another file", async () => {
     const repo = repository("base\n");
     writeFileSync(join(repo.root, "b.txt"), "base\n");

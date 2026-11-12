@@ -149,13 +149,22 @@ describe("push and create a PR", () => {
     expect(planned).toEqual({ ok: true, plan: { repository: "sample/widgets", branch: "feat/x", base: "main", title: "Add x", body: "- one\n- two", draft: true, login: "sample-user" } });
     if (!planned.ok) return;
 
-    const calls: string[][] = [];
-    const run: GhRunner = async (args) => {
-      calls.push(args);
+    const calls: Array<{ args: string[]; stdin: string | undefined }> = [];
+    const run: GhRunner = async (args, stdin) => {
+      calls.push({ args, stdin });
       return "Creating pull request for feat/x into main in sample/widgets\n\nhttps://github.com/sample/widgets/pull/12\n";
     };
     expect(await executePullRequest(planned.plan, run)).toEqual({ ok: true, url: "https://github.com/sample/widgets/pull/12" });
-    expect(calls).toEqual([["pr", "create", "--repo", "sample/widgets", "--head=feat/x", "--base=main", "--title=Add x", "--body=- one\n- two", "--draft"]]);
+    expect(calls).toEqual([
+      { args: ["pr", "create", "--repo", "sample/widgets", "--head=feat/x", "--base=main", "--title=Add x", "--body-file", "-", "--draft"], stdin: "- one\n- two" },
+    ]);
+
+    // 긴 본문도 명령행에 들어가지 않는다. Windows 의 명령행 한도는 32,767자이다.
+    const long = await planPullRequest(root, { ...draft, body: "가".repeat(60_000) }, login);
+    if (!long.ok) throw new Error(long.message);
+    await executePullRequest(long.plan, run);
+    expect(calls[1]?.stdin).toHaveLength(60_000);
+    expect(calls[1]?.args.join(" ").length).toBeLessThan(200);
 
     const rejected: GhRunner = async () => {
       throw new Error("a pull request for branch feat/x already exists");
