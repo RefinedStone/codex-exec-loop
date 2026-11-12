@@ -13,6 +13,7 @@ import { spawn as spawnPty } from "node-pty";
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { readBranchSummary, readCommitDiff } from "./gitBranch";
+import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
 import { readGitHubSummary, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
@@ -162,26 +163,44 @@ ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, u
 );
 ipcMain.handle(IPC_CHANNELS.gitBranchSummary, (_event, cwd: unknown, fresh: unknown) => readBranchSummary(cwd, fresh));
 ipcMain.handle(IPC_CHANNELS.gitCommitDiff, (_event, cwd: unknown, sha: unknown) => readCommitDiff(cwd, sha));
+const CANCELLED = { ok: false as const, message: "취소했습니다.", cancelled: true };
+
+/** 사용자에게 확인 창을 띄운다. 실행 버튼을 눌렀을 때만 true 이다. 기본 버튼은 취소이다. */
+async function confirmAction(sender: WebContents, type: "warning" | "question", message: string, detail: string, action: string): Promise<boolean> {
+  const window = BrowserWindow.fromWebContents(sender);
+  const options = { type, message, detail, buttons: [action, "취소"], defaultId: 1, cancelId: 1 };
+  const answer = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  return answer.response === 0;
+}
+
 // 변경 버리기는 되돌릴 수 없다. 확인은 main 이 한다. renderer 가 확인을 건너뛸 수 없다.
 // main 이 git 에서 읽은 상태로 먼저 확인한다. 거절할 요청에는 확인 창을 띄우지 않고, 창에는 실제로 바뀌는 경로를 보여 준다.
 ipcMain.handle(IPC_CHANNELS.gitFileAction, async (event, cwd: unknown, action: unknown, path: unknown) => {
   const planned = await planGitFileAction(cwd, action, path);
   if (!planned.ok) return planned;
   if (action === "discard") {
-    const window = BrowserWindow.fromWebContents(event.sender);
     const restored = planned.plan.originalPath ? `\n이전 경로를 되살립니다: ${planned.plan.originalPath}` : "";
-    const options = {
-      type: "warning" as const,
-      message: "이 파일의 변경을 버립니까?",
-      detail: `${planned.plan.path}${restored}\n\n버린 변경은 되돌릴 수 없습니다. 새 파일은 지워집니다.`,
-      buttons: ["변경 버리기", "취소"],
-      defaultId: 1,
-      cancelId: 1,
-    };
-    const answer = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
-    if (answer.response !== 0) return { ok: false, message: "취소했습니다.", cancelled: true };
+    const detail = `${planned.plan.path}${restored}\n\n버린 변경은 되돌릴 수 없습니다. 새 파일은 지워집니다.`;
+    if (!(await confirmAction(event.sender, "warning", "이 파일의 변경을 버립니까?", detail, "변경 버리기"))) return CANCELLED;
   }
   return executeGitFilePlan(planned.plan);
+});
+// push 와 PR 만들기는 저장소 밖에 쓴다. main 이 확인하고, 창에 어디에 무엇을 쓰는지 보여 준다.
+ipcMain.handle(IPC_CHANNELS.gitPush, async (event, cwd: unknown) => {
+  const planned = await planPush(cwd);
+  if (!planned.ok) return planned;
+  const { branch, remoteUrl } = planned.plan;
+  const detail = `브랜치: ${branch}\n원격: ${remoteUrl}\n\n원격 저장소의 ${branch} 브랜치에 커밋을 올립니다. 강제로 덮어쓰지 않습니다.`;
+  if (!(await confirmAction(event.sender, "question", "이 브랜치를 push 합니까?", detail, "push"))) return CANCELLED;
+  return executePush(planned.plan);
+});
+ipcMain.handle(IPC_CHANNELS.gitCreatePullRequest, async (event, cwd: unknown, draft: unknown) => {
+  const planned = await planPullRequest(cwd, draft);
+  if (!planned.ok) return planned;
+  const { repository, branch, base, title, login } = planned.plan;
+  const detail = `저장소: ${repository}\n${branch} → ${base}\n제목: ${title}\ngh 계정: ${login}${planned.plan.draft ? "\n초안으로 만듭니다." : ""}`;
+  if (!(await confirmAction(event.sender, "question", "이 PR 을 만듭니까?", detail, "PR 만들기"))) return CANCELLED;
+  return executePullRequest(planned.plan);
 });
 // `shell.openPath` 는 쓰지 않는다. Windows 에서 `.js`, `.bat` 같은 파일을 실행한다. 에이전트가 만든 파일일 수 있다.
 // shortcut: 편집기는 VS Code 주소(`vscode://file/…`)로만 연다. 다른 편집기는 앱 안 편집(P-12)이나 설정이 생기면 더한다.

@@ -470,7 +470,9 @@ The Gateway records the external documents that a thread mentions, without a mod
   and refuses conflicted files, files with a content filter (LFS), and discarding a folder
   (`desktop/src/main/gitStatus.ts`). Below the files it lists the commits that the branch added after its base
   (the PR's base branch, else the branch of `origin/HEAD`), marks the ones that are not pushed, and shows the
-  branch's GitHub PR with its CI state through `gh` (`desktop/src/main/gitBranch.ts`); this part is read-only
+  branch's GitHub PR with its CI state through `gh` (`desktop/src/main/gitBranch.ts`). It can push the branch
+  to the remote branch of the same name (never a force push) and create a PR with `gh`; the main process asks
+  before both and shows the target (`desktop/src/main/gitPublish.ts`)
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

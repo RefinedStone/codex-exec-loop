@@ -245,6 +245,43 @@
   flex: none;
 }
 
+.publish {
+  padding: 4px 10px 8px;
+}
+
+.publish-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.publish-form {
+  margin-top: 8px;
+}
+
+.publish-form input:not([type="checkbox"]),
+.publish-form textarea {
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--text-m);
+}
+
+.publish-form textarea {
+  resize: vertical;
+}
+
+.publish-form .publish-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.publish-form .publish-buttons button {
+  align-self: auto;
+}
+
 .commit-files {
   padding: 0 8px 8px;
   border-top: 1px solid var(--line);

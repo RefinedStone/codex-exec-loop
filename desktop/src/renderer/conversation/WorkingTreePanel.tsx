@@ -7,18 +7,14 @@ import { isConflictStatus, stageState } from "../../shared/gitChange";
 import { Icon, type IconName } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { toast } from "../session/uiStore";
-import { BranchCommits, type BranchState } from "./BranchCommits";
+import { type ActionLock, BranchCommits, type BranchState } from "./BranchCommits";
 import { type DiffLine, diffFileFromChange, parseGitDiff } from "./diff";
 import { DiffCounts, DiffLines } from "./DiffView";
 
 /** 변경 패널이 쓰는 브리지 함수이다. 읽기와 파일별 동작이다. */
-type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff">;
+type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff" | "gitPush" | "gitCreatePullRequest">;
 
-/** 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다. git 은 저장소마다 한 번에 하나만 쓸 수 있다 (`index.lock`). */
-interface ActionLock {
-  busy: boolean;
-  setBusy(busy: boolean): void;
-}
+// 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다 (`ActionLock`). git 은 저장소마다 한 번에 하나만 쓸 수 있다 (`index.lock`).
 
 type PanelState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; result: GitStatusResult } | { phase: "failed"; message: string };
 
@@ -271,7 +267,7 @@ export function WorkingTreePanel({ tree, git, onOpenUrl }: { tree: WorkingTree; 
           ))}
         </div>
       )}
-      <BranchCommits cwd={cwd} state={tree.branch} git={git} onOpenUrl={onOpenUrl} />
+      <BranchCommits cwd={cwd} state={tree.branch} git={git} lock={{ busy, setBusy }} onChanged={() => tree.refresh()} onOpenUrl={onOpenUrl} />
     </section>
   );
 }

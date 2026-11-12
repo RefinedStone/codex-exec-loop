@@ -12,6 +12,8 @@ import {
   type GitActionResult,
   type GitBranchSummary,
   type GitCommitDiff,
+  type GitPublishResult,
+  type PullRequestDraft,
   type GitFileAction,
   type GitFileDiff,
   type GitStatusResult,
@@ -67,6 +69,12 @@ const bridge: AkraBridge = {
   },
   gitCommitDiff(cwd: string, sha: string): Promise<GitCommitDiff> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitCommitDiff, cwd, sha) as Promise<GitCommitDiff>;
+  },
+  gitPush(cwd: string): Promise<GitPublishResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.gitPush, cwd) as Promise<GitPublishResult>;
+  },
+  gitCreatePullRequest(cwd: string, draft: PullRequestDraft): Promise<GitPublishResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.gitCreatePullRequest, cwd, draft) as Promise<GitPublishResult>;
   },
   terminal: {
     open(request: TerminalOpenRequest): Promise<TerminalOpenResult> {

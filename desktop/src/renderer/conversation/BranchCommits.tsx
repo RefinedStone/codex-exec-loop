@@ -2,15 +2,104 @@
 // 커밋의 변경은 펼칠 때 하나씩 읽는다.
 import { useMemo, useState } from "react";
 
-import type { AkraBridge, GitBranchSummary, GitChecksState, GitCommit, GitPullRequest } from "../../shared/bridge";
+import type { AkraBridge, GitBranchSummary, GitChecksState, GitCommit, GitPublishResult, GitPullRequest } from "../../shared/bridge";
 import { Icon } from "../design/icons";
+import { toast } from "../session/uiStore";
 import { relativeAge } from "../sidebar/threadStatus";
+import { canCreatePullRequest, canPush, initialPullRequestDraft, type LoadedSummary } from "./branchPublish";
 import { parseGitDiff } from "./diff";
 import { DiffFileList } from "./DiffView";
 
 export type BranchState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; summary: GitBranchSummary } | { phase: "failed"; message: string };
 
 type CommitReader = Pick<AkraBridge, "gitCommitDiff">;
+type Publisher = Pick<AkraBridge, "gitPush" | "gitCreatePullRequest">;
+
+/** 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다. */
+export interface ActionLock {
+  busy: boolean;
+  setBusy(busy: boolean): void;
+}
+
+/** push 버튼과 PR 만들기 양식이다. 둘 다 main 이 확인 창을 띄운 뒤에 실행한다. */
+function PublishActions({ cwd, summary, git, lock, onChanged, onOpenUrl }: { cwd: string; summary: LoadedSummary; git: Publisher; lock: ActionLock; onChanged(): void; onOpenUrl(url: string): void }) {
+  const [form, setForm] = useState<{ title: string; body: string; base: string; draft: boolean } | null>(null);
+  const run = (label: string, action: Promise<GitPublishResult>, done: (url: string | null) => void) => {
+    lock.setBusy(true);
+    action
+      .then(
+        (result) => {
+          if (result.ok) {
+            done(result.url);
+            onChanged();
+          } else if (!result.cancelled) {
+            toast(`${label} 실패: ${result.message}`);
+          }
+        },
+        (error: unknown) => toast(`${label} 실패: ${error instanceof Error ? error.message : String(error)}`),
+      )
+      .finally(() => lock.setBusy(false));
+  };
+  const pushable = canPush(summary);
+  const creatable = canCreatePullRequest(summary);
+  if (!pushable && !creatable) return null;
+  return (
+    <div className="publish">
+      <div className="publish-buttons">
+        {pushable && (
+          <button type="button" className="button primary" disabled={lock.busy} onClick={() => run("push", git.gitPush(cwd), () => toast("push 했습니다"))} data-testid="branch-push">
+            push
+          </button>
+        )}
+        {creatable && !form && (
+          <button type="button" className="button primary" disabled={lock.busy} onClick={() => setForm({ ...initialPullRequestDraft(summary), draft: false })} data-testid="branch-pr-new">
+            <Icon name="pullRequest" size={13} />
+            PR 만들기
+          </button>
+        )}
+      </div>
+      {creatable && form && (
+        <form
+          className="work-form publish-form"
+          data-testid="branch-pr-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            run("PR 만들기", git.gitCreatePullRequest(cwd, form), (url) => {
+              setForm(null);
+              toast("PR 을 만들었습니다");
+              if (url) onOpenUrl(url);
+            });
+          }}
+        >
+          <label>
+            제목
+            <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} maxLength={256} required />
+          </label>
+          <label>
+            본문
+            <textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} rows={6} />
+          </label>
+          <label>
+            대상 브랜치
+            <input value={form.base} onChange={(event) => setForm({ ...form, base: event.target.value })} required />
+          </label>
+          <label className="publish-check">
+            <input type="checkbox" checked={form.draft} onChange={(event) => setForm({ ...form, draft: event.target.checked })} />
+            초안으로 만들기
+          </label>
+          <div className="publish-buttons">
+            <button type="submit" className="button primary" disabled={lock.busy || form.title.trim().length === 0 || form.base.trim().length === 0}>
+              PR 만들기
+            </button>
+            <button type="button" className="button" onClick={() => setForm(null)}>
+              취소
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
 
 type CommitState = { phase: "loading" } | { phase: "loaded"; text: string; truncated: boolean } | { phase: "failed"; message: string };
 
@@ -77,7 +166,22 @@ function CommitRow({ cwd, commit, git }: { cwd: string; commit: GitCommit; git: 
   );
 }
 
-export function BranchCommits({ cwd, state, git, onOpenUrl }: { cwd: string; state: BranchState; git: CommitReader; onOpenUrl(url: string): void }) {
+export function BranchCommits({
+  cwd,
+  state,
+  git,
+  lock,
+  onChanged,
+  onOpenUrl,
+}: {
+  cwd: string;
+  state: BranchState;
+  git: CommitReader & Publisher;
+  lock: ActionLock;
+  /** push 나 PR 만들기가 끝났다. 목록을 다시 읽는다. */
+  onChanged(): void;
+  onOpenUrl(url: string): void;
+}) {
   if (state.phase === "idle") {
     return null;
   }
@@ -109,6 +213,7 @@ export function BranchCommits({ cwd, state, git, onOpenUrl }: { cwd: string; sta
           {summary.pullRequestError ? `PR 을 읽지 못했습니다. ${summary.pullRequestError}` : summary.repository ? "이 브랜치의 PR 이 없습니다." : "GitHub 저장소가 아니어서 PR 을 찾지 않습니다."}
         </div>
       )}
+      <PublishActions cwd={cwd} summary={summary} git={git} lock={lock} onChanged={onChanged} onOpenUrl={onOpenUrl} />
       {summary.commits.length > 0 && (
         <div className="working-tree-files diff-file-list">
           {summary.commits.map((commit) => (
