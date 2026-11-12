@@ -1,4 +1,4 @@
-//! Akra 커널 응용 프로토콜 v0 (plan 18 K3-1). JSON-RPC `akra/kernel/*` 메서드의 직렬화 타입과, 그 타입과
+//! Akra 커널 응용 프로토콜 (plan 18 K3-1 의 v0, K4-1 부터 판 1). JSON-RPC `akra/kernel/*` 메서드의 직렬화 타입과, 그 타입과
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
@@ -35,12 +35,12 @@ pub use spec::{KernelSpec, describe};
 /// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
 pub const PROTOCOL_VERSION: u32 = 1;
 
-pub const METHOD_ATTACH: &str = "akra/kernel/attach";
-pub const METHOD_DESCRIBE: &str = "akra/kernel/describe";
-pub const METHOD_COMMAND: &str = "akra/kernel/command";
-pub const METHOD_QUERY: &str = "akra/kernel/query";
-pub const METHOD_EVENT: &str = "akra/kernel/event";
-pub const METHOD_DETACH: &str = "akra/kernel/detach";
+pub const METHOD_ATTACH: &str = KernelMethodKind::Attach.name();
+pub const METHOD_DESCRIBE: &str = KernelMethodKind::Describe.name();
+pub const METHOD_COMMAND: &str = KernelMethodKind::Command.name();
+pub const METHOD_QUERY: &str = KernelMethodKind::Query.name();
+pub const METHOD_EVENT: &str = KernelMethodKind::Event.name();
+pub const METHOD_DETACH: &str = KernelMethodKind::Detach.name();
 
 spec_names! {
     /// 프로토콜의 메서드이다.
@@ -62,6 +62,8 @@ spec_names! {
 
 /// JSON-RPC 의 잘못된 인자 오류 코드이다.
 pub const ERROR_INVALID_PARAMS: i64 = KernelErrorKind::InvalidParams.code();
+/// 이 판의 `akra/kernel/*` 메서드가 아니다.
+pub const ERROR_METHOD_NOT_FOUND: i64 = KernelErrorKind::MethodNotFound.code();
 /// 확인이 필요한 명령을 확인 없이 보냈다 (K-D1).
 pub const ERROR_CONFIRMATION_REQUIRED: i64 = KernelErrorKind::ConfirmationRequired.code();
 /// 이 접속은 아직 커널에 붙지 않았다. `akra/kernel/attach` 를 먼저 보낸다.
@@ -182,6 +184,7 @@ pub struct CommandRequest {
      * 기록이 없는 커널은 키가 있는 명령을 실행하지 않고 `ERROR_IDEMPOTENCY_UNAVAILABLE` 로 답한다.
      */
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
     pub idempotency_key: Option<String>,
 }
 
@@ -393,30 +396,10 @@ impl CommandResponse {
 
 impl CommandRejection {
     fn new(reason: CommandRejectionReason) -> Self {
-        let message = match reason {
-            CommandRejectionReason::SteerInFlight => {
-                "another steer for this turn is still in flight"
-            }
-            CommandRejectionReason::NoMatchingTurn => "the thread has no running turn with that id",
-            CommandRejectionReason::DecisionInFlight => {
-                "a decision for this approval is still in flight"
-            }
-            CommandRejectionReason::NoMatchingApproval => "no pending approval has that id",
-            CommandRejectionReason::Busy => "a turn is running or the thread is still busy",
-            CommandRejectionReason::PreparationActive => "another prompt is being prepared",
-            CommandRejectionReason::UnknownThread => {
-                "unknown thread; load_sessions lists the known threads"
-            }
-            CommandRejectionReason::ParallelMode => {
-                "parallel mode is on; the kernel starts no thread prompt until it is off"
-            }
-            CommandRejectionReason::ParallelModeUnknown => {
-                "the kernel does not know the parallel mode yet; try again"
-            }
-        };
+        // 설명은 이유의 표에서 온다. 스펙의 `reasons` 와 같은 글이다.
         Self {
             reason,
-            message: message.to_string(),
+            message: reason.summary().to_string(),
         }
     }
 }
@@ -425,28 +408,40 @@ impl CommandRejection {
  * v0 명령이다. 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (plan 18 §5.5). 원격 클라이언트는 보는
  * 자리를 바꾸지 않고 thread 나 승인 id 를 지정한다 (K3-3a). 프롬프트 제출은 준비와 제출을 하나로 한다 (K3-3b).
  */
+/// 빈 글자와 공백만 있는 글자를 받지 않는 필드의 규칙이다. `non_blank` 가 같은 것을 검사한다.
+const NON_BLANK: &str = r"\S";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 // 필드가 없는 명령도 `{}` 로 둔다. serde 는 unit variant 의 모르는 필드를 거절하지 못한다.
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelCommand {
     LoadSessions {},
     RenameSession {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         thread_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         name: String,
     },
     /// thread 에 프롬프트를 보낸다. 커널이 planning 조각을 붙여 준비한 뒤 턴을 제출한다.
     SubmitPrompt {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         thread_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         prompt: String,
     },
     SteerTurn {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         thread_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         expected_turn_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         prompt: String,
     },
     StopAll {},
     DecideApproval {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         approval_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         server_request_id: String,
         decision: ApprovalDecision,
     },

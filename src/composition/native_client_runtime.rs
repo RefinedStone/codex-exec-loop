@@ -1109,6 +1109,13 @@ impl NativeClientRuntime {
                     NativeClientDispatchOutcome::Parallel(_) => None,
                 };
                 if let Some(reason) = rejection {
+                    // 스펙의 표가 이 명령의 거절 이유를 모두 적어야 한다 (plan 18 K4-1). 시험과 시뮬레이션이 잡는다.
+                    debug_assert!(
+                        descriptor.command.spec().rejections.contains(&reason),
+                        "the spec of `{}` does not list the rejection `{}`",
+                        descriptor.command.name(),
+                        reason.name()
+                    );
                     self.reject_command(op_id, &descriptor.thread_id, reason);
                 }
                 Some(OperationReceipt {

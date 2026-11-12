@@ -277,7 +277,7 @@ the desktop app itself is not shipped yet.
   `akra/gateway/info` returns gateway and codex versions,
   start time, and upstream restarts). An upstream restart closes clients with WebSocket close `1012`;
   an unavailable upstream closes them with `1013`.
-- Kernel protocol (`akra/kernel/*`, plan 18 K3 protocol v0): a client sends `akra/kernel/attach`
+- Kernel protocol (`akra/kernel/*`, plan 18 K3, protocol version 1 since the kernel spec of K4-1): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
   kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep
   running. Worktrees of one repository share one kernel, which works in the primary checkout. An
@@ -288,8 +288,12 @@ the desktop app itself is not shipped yet.
   with `-32011`, and a kernel that does not answer in time fails with `-32013` (a command may still
   run). No event arrives after the `akra/kernel/detach` answer. `akra/kernel/describe` answers with the
   kernel spec (protocol version 1): `methods`, `commands` (scope, summary, effect, idempotency, possible
-  rejections, input and output JSON Schema), `queries`, `events`, `records`, `reasons`, `errors`, and the
-  shared type definitions in `$defs`. The same value is checked in as `schema/akra-kernel-spec.json`. The `planning` and `parallel` queries and events carry the planning
+  rejections, input and output JSON Schema), `queries`, `events`, `records`, `reasons`, `errors`, the meaning
+  of the scope, effect, and idempotency values (`terms`), and the shared type definitions in `$defs`
+  (JSON Schema 2020-12). The input schemas carry the rules the kernel checks (non-blank text, the
+  length of `idempotency_key`). Fields have no description in the spec yet. The same value is checked
+  in as `schema/akra-kernel-spec.json`. The `message` of a command rejection is the summary of its
+  reason in the spec. The `planning` and `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
   queue again. The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
   through the kernel decision log in record order and answers with `records` and `next_after`; send

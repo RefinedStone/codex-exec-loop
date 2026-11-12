@@ -4,7 +4,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::kernel_spec::{KernelCommandKind, KernelRecordKind, spec_names};
+pub use crate::domain::kernel_spec::CommandRejectionReason;
+use crate::domain::kernel_spec::{KernelCommandKind, KernelRecordKind};
 use crate::domain::planning::ManualPromptMainSessionHandoff;
 
 /*
@@ -117,33 +118,6 @@ pub struct PendingApproval {
     pub approval_id: String,
     pub request_kind: ApprovalRequestKind,
     pub summary: String,
-}
-
-spec_names! {
-    /// 커널이 명령을 바로 거절한 이유이다 (plan 18 K3, plan 19 Q3-6). 설명이 다음 행동을 알려 준다. 뒤의 다섯은 thread
-    /// 지정 프롬프트(`submit_prompt`)를 준비 전에 거절한 이유이고 `ThreadPromptRejection` 과 같은 값이다.
-    #[derive(Serialize, Deserialize, JsonSchema)]
-    #[serde(rename_all = "snake_case")]
-    pub enum CommandRejectionReason {
-        SteerInFlight => "steer_in_flight",
-            "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.";
-        NoMatchingTurn => "no_matching_turn",
-            "The thread has no running turn with `expected_turn_id`. Read `active_turn_id` from `thread_activity`.";
-        DecisionInFlight => "decision_in_flight",
-            "A decision for the same approval is still in flight.";
-        NoMatchingApproval => "no_matching_approval",
-            "No pending approval has that id. Read `approval` from `thread_activity`.";
-        Busy => "busy",
-            "A turn is running or the thread still has work. Send again with a new idempotency key when `thread_activity` is empty.";
-        PreparationActive => "preparation_active",
-            "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.";
-        UnknownThread => "unknown_thread",
-            "The kernel does not know the thread. Send `load_sessions` first.";
-        ParallelMode => "parallel_mode",
-            "Parallel mode is on. The kernel starts no thread prompt until it is off.";
-        ParallelModeUnknown => "parallel_mode_unknown",
-            "The kernel does not know the parallel mode yet. Send again with a new idempotency key shortly.";
-    }
 }
 
 /*

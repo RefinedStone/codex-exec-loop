@@ -1,8 +1,58 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "protocol_version": 1,
+  "terms": {
+    "scope": [
+      {
+        "name": "session",
+        "summary": "The session list and session names."
+      },
+      {
+        "name": "thread",
+        "summary": "The turns of a thread."
+      },
+      {
+        "name": "approval",
+        "summary": "Pending approval requests."
+      },
+      {
+        "name": "auto_follow",
+        "summary": "The automatic follow-up settings."
+      },
+      {
+        "name": "planning",
+        "summary": "The planning queue and directions."
+      }
+    ],
+    "effect": [
+      {
+        "name": "read",
+        "summary": "Changes no state. The command is not written to the decision log and has no operation receipt."
+      },
+      {
+        "name": "write",
+        "summary": "Changes state. The command is written to the decision log."
+      },
+      {
+        "name": "destructive",
+        "summary": "Deletes data. The command is written to the decision log and its input needs `confirm: true`."
+      }
+    ],
+    "idempotency": [
+      {
+        "name": "natural",
+        "summary": "The same input gives the same state. Sending it again is safe."
+      },
+      {
+        "name": "keyed",
+        "summary": "Sending it again runs it again. Send `idempotency_key` so that the kernel tells a resend apart."
+      }
+    ]
+  },
   "methods": [
     {
       "name": "akra/kernel/attach",
+      "kind": "request",
       "summary": "Attach this connection to the kernel of the repository that owns the workspace folder.",
       "params": {
         "$ref": "#/$defs/AttachRequest"
@@ -13,10 +63,12 @@
     },
     {
       "name": "akra/kernel/describe",
+      "kind": "request",
       "summary": "Return this specification."
     },
     {
       "name": "akra/kernel/command",
+      "kind": "request",
       "summary": "Send one command. The answer carries the rejection, if any, and the operation receipt.",
       "params": {
         "$ref": "#/$defs/CommandRequest"
@@ -27,6 +79,7 @@
     },
     {
       "name": "akra/kernel/query",
+      "kind": "request",
       "summary": "Read one current value or a page of the decision log.",
       "params": {
         "$ref": "#/$defs/QueryRequest"
@@ -37,6 +90,7 @@
     },
     {
       "name": "akra/kernel/event",
+      "kind": "notification",
       "summary": "Notification from the kernel to an attached client.",
       "params": {
         "$ref": "#/$defs/EventNotification"
@@ -44,6 +98,7 @@
     },
     {
       "name": "akra/kernel/detach",
+      "kind": "request",
       "summary": "Detach this connection. No event arrives after the answer."
     }
   ],
@@ -83,9 +138,13 @@
         "additionalProperties": false,
         "properties": {
           "name": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "thread_id": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "type": {
@@ -121,9 +180,13 @@
         "additionalProperties": false,
         "properties": {
           "prompt": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "thread_id": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "type": {
@@ -156,12 +219,18 @@
         "additionalProperties": false,
         "properties": {
           "expected_turn_id": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "prompt": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "thread_id": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "type": {
@@ -219,12 +288,16 @@
         "additionalProperties": false,
         "properties": {
           "approval_id": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "decision": {
             "$ref": "#/$defs/ApprovalDecision"
           },
           "server_request_id": {
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "type": {
@@ -1242,6 +1315,8 @@
           "$ref": "#/$defs/KernelCommand"
         },
         "idempotency_key": {
+          "maxLength": 128,
+          "minLength": 1,
           "type": [
             "string",
             "null"
@@ -1314,9 +1389,13 @@
           "additionalProperties": false,
           "properties": {
             "name": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "thread_id": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {
@@ -1335,9 +1414,13 @@
           "additionalProperties": false,
           "properties": {
             "prompt": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "thread_id": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {
@@ -1356,12 +1439,18 @@
           "additionalProperties": false,
           "properties": {
             "expected_turn_id": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "prompt": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "thread_id": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {
@@ -1394,12 +1483,16 @@
           "additionalProperties": false,
           "properties": {
             "approval_id": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "decision": {
               "$ref": "#/$defs/ApprovalDecision"
             },
             "server_request_id": {
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {

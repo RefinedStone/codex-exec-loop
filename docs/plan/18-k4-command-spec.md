@@ -413,16 +413,23 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 만든 것:
 
 - `schemars` 확인: 이 프로토콜의 모양(내부 tag enum 의 필드 variant, newtype variant, 빈 variant `{}`,
-  `deny_unknown_fields`, `skip_serializing_if`, 기본값 필드)에서 스키마가 실제 전송 모양과 같다. 손으로 쓴 스키마는
-  없다. 시험이 실제 값(명령, 조회와 그 답, 이벤트, 기록, 명령의 답)을 스키마로 검사한다. 검사기는 이 프로토콜이 쓰는
-  JSON Schema 의 부분만 아는 시험용 함수이다. 검증기 의존성은 더하지 않았다.
+  `deny_unknown_fields`, `skip_serializing_if`, 기본값 필드)에서 스키마가 실제 전송 값을 받는다. 손으로 쓴 스키마는
+  없다. 한 가지가 넓다: 없을 수 있는 필드(`Option`)는 스키마가 `null` 도 받는다. 커널은 그 필드를 `null` 로 보내지
+  않고 빼지만, 입력에서는 `null` 을 받는다.
+- 시험이 실제 값을 스키마로 검사한다: 모든 명령과 요청, 조회와 그 답, 값이 채워진 모든 이벤트, 모든 종류의 기록,
+  attach 의 요청과 답, 명령의 답. 검사기는 이 프로토콜이 쓰는 JSON Schema 의 부분만 아는 시험용 함수이다. 스펙에 그
+  함수가 모르는 키워드가 생기면 다른 시험이 먼저 실패한다. 검증기 의존성은 더하지 않았다.
+- 입력 스키마가 코드의 검사 규칙을 가진다: 빈 글자를 받지 않는 필드(`minLength`, `pattern`), 멱등 키의 길이.
 - 이름 목록은 매크로 `spec_names!` 한 곳에 적는다. 줄 하나가 값, 전송되는 이름, 한 문장 설명이다.
   - domain `kernel_spec`: `KernelCommandKind` 와 명령의 성질(`scope`, `effect`, `idempotency`, `rejections`),
     `KernelRecordKind`. 거절 이유 `CommandRejectionReason` 도 같은 매크로로 옮겼다.
-  - adapter `kernel_protocol`: 메서드, 조회, 이벤트, 오류의 표. 오류 코드 상수는 그 표에서 나온다.
+  - adapter `kernel_protocol`: 메서드, 조회, 이벤트, 오류의 표. 메서드 이름 상수와 오류 코드 상수는 그 표에서
+    나온다 (Gateway 의 `-32601` 포함).
+  - 거절의 설명 글(`rejection.message`)은 이유의 표에서 온다. 따로 적은 문장을 지웠다.
   - 손으로 적은 `METHODS`, `COMMANDS`, `QUERIES`, `EVENTS`, `KERNEL_EVENT_KINDS` 를 지웠다.
-- `describe` 가 스펙 전체(`KernelSpec`)를 답한다: 메서드, 명령, 조회, 이벤트, 기록, 이유, 오류, 그리고 타입 정의
-  (`$defs`). 프로토콜 판은 1 이다. 명령·조회·이벤트·기록의 전송 모양은 바뀌지 않았다.
+- `describe` 가 스펙 전체(`KernelSpec`)를 답한다: 스키마의 방언(`$schema`, 2020-12), 메서드(요청인가 알림인가),
+  명령, 조회, 이벤트, 기록, 이유, 오류, `scope`·`effect`·`idempotency` 값의 뜻(`terms`), 타입 정의(`$defs`).
+  프로토콜 판은 1 이다. 명령·조회·이벤트·기록의 전송 모양은 바뀌지 않았다. 바뀐 값은 거절의 `message` 글이다.
 - 조회의 답을 이벤트 enum 에서 나눴다 (`KernelQueryAnswer`). 전송 모양은 같다.
 - `KernelCommandDescriptor.command` 가 글자에서 `KernelCommandKind` 로 바뀌었다. 기록할지는 `effect` 에서 나온다
   (`read` 는 기록하지 않는다). 따로 적은 목록이 없다.
@@ -432,7 +439,10 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 설계와 다른 점:
 
 - 스펙의 `state` 와 `completion` 은 아직 없다. 읽는 코드가 생기는 조각(K4-8 의 보내는 곳, K4-4 의 연산의 끝)에서
-  더한다. `reasons` 에는 `next` 가 없다 (K4-3).
+  더한다. `reasons` 와 `errors` 에는 `next` 가 없다 (K4-3).
+- 명령의 성질 중 커널이 읽는 것은 "기록하는가"뿐이다. 나머지는 시험이 코드와 묶는다: `destructive` 명령은 입력에
+  `confirm` 이 있고 없이 보내면 `-32010` 이다. 커널이 낸 거절 이유는 그 명령의 `rejections` 에 있어야 한다 (debug
+  빌드의 검사. 시험과 시뮬레이션이 지난다). `scope` 와 `idempotency` 는 아직 선언이다 (K4-5).
 - 설명(`summary`)은 영어로 쓴다. 에이전트와 생성되는 skill 문서가 읽기 때문이다.
 - 스키마에는 필드의 설명이 없다. `schemars` 는 Rust 의 문서 주석을 설명으로 넣는데, 이 저장소의 주석은 개발자가
   읽는 글이라서 스키마에서 뺐다. 필드의 설명이 필요하면 skill 문서를 만들 때(K4-8) 표로 더한다.
@@ -442,5 +452,12 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
   시험이 지킨다: 표의 이름들과 전송 타입의 스키마가 가진 이름들이 같아야 한다.
 
 확인: domain 시험(이름이 겹치지 않음, 읽기 명령의 규칙, 모든 이유가 어느 명령에 속함), 프로토콜 시험(표와 전송
-타입의 이름 일치, 이유와 오류의 값, 명령 항목의 뜻과 입력, 실제 값의 스키마 검사, 스펙 파일 일치), Gateway 시험(실제
-커널의 `describe` 답), 구조 시험, 커널 시뮬레이션.
+타입의 이름 일치, 이유와 오류의 값, 명령 항목의 뜻과 입력, 입력 규칙, `destructive` 의 확인 규칙, 실제 값의 스키마
+검사, 검사기가 아는 키워드, 스펙 파일 일치), Gateway 시험(실제 커널의 `describe` 답), 구조 시험, 커널 시뮬레이션.
+
+남긴 것:
+
+- Desktop 의 시험 값은 아직 `protocol_version: 0` 으로 답한다. Desktop 은 이 값을 검사하지 않는다. Desktop 타입을
+  생성하는 조각(K4-6)에서 고친다.
+- 남긴 프롬프트(`thread_prompt_queued`)의 `handoff` 는 스펙에서만 감춘다. `recorded` 이벤트와 `history` 조회로는
+  그대로 전송된다 (이 변경 이전부터 그렇다). 프롬프트 글이 클라이언트에 가므로, 전송에서도 뺄지는 K4-4 에서 정한다.

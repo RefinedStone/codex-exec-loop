@@ -23,10 +23,10 @@ use tokio_tungstenite::tungstenite::Message;
 use super::recorder::{RecordDirection, SessionRecording};
 use crate::adapter::inbound::kernel_protocol::{
     AttachRequest, AttachResponse, CommandRequest, CommandResponse, ERROR_INVALID_PARAMS,
-    ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_NOT_ATTACHED, EventNotification,
-    KernelEvent, KernelProtocolError, METHOD_ATTACH, METHOD_COMMAND, METHOD_DESCRIBE,
-    METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION, ParallelSource, ParallelState,
-    PlanningState, QueryRequest, describe,
+    ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_METHOD_NOT_FOUND, ERROR_NOT_ATTACHED,
+    EventNotification, KernelEvent, KernelProtocolError, METHOD_ATTACH, METHOD_COMMAND,
+    METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION, ParallelSource,
+    ParallelState, PlanningState, QueryRequest, describe,
 };
 use crate::composition::kernel_host::{
     KernelCallError, KernelClientHandle, KernelCommandOutcome, KernelCommandSender,
@@ -35,7 +35,6 @@ use crate::composition::kernel_host::{
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
 pub(super) const KERNEL_METHOD_PREFIX: &str = "akra/kernel/";
-const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
 /// 이벤트 스레드가 멈춤 표시를 확인하는 간격이다. `detach` 는 커널이 이벤트 채널을 닫게 하므로 보통 더 빨리 끝난다.
 const EVENT_POLL: Duration = Duration::from_millis(200);
 /// 보내기 함이 찼을 때 이벤트 스레드가 다시 보내 보는 간격이다. 그 사이에 멈춤 표시를 확인한다.
@@ -166,7 +165,7 @@ impl KernelSession {
                 Ok(json!({}))
             }
             _ => Err(KernelProtocolError {
-                code: JSON_RPC_METHOD_NOT_FOUND,
+                code: ERROR_METHOD_NOT_FOUND,
                 message: format!("unknown kernel method `{method}`"),
             }),
         };
