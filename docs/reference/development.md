@@ -17,7 +17,9 @@ GitHub delivery workflow. `AGENTS.md` remains the compact instruction entrypoint
 - `src/adapter/inbound/{cli,admin_api,telegram_bot}/`: other operator adapters
 - `src/adapter/outbound/{app_server,db,filesystem,git,github,telegram}/`: concrete boundaries
 - `src/composition/`: production dependency wiring
-- `schema/`: checked-in app-server protocol snapshot and provenance
+- `schema/`: checked-in app-server protocol snapshot and provenance, and the exported Akra kernel spec
+  `akra-kernel-spec.json` (rewrite it with `bash scripts/refresh_akra_kernel_spec.sh` after a kernel
+  protocol change; a test fails when it is stale)
 - `templates/admin/`, `assets/admin/`: Admin UI templates and packaged assets
 - `npm/`: launcher, platform packages, and Node tests
 - `scripts/`: validation, packaging, GitHub identity, planning, and cleanup helpers

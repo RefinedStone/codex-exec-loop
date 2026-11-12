@@ -184,8 +184,14 @@ reported it. Approvals are records too: `approval_requested` (thread, turn, appr
 a summary of at most 200 characters; never the command, patch, or paths) and `approval_resolved` with
 `accepted`, `declined`, `timed_out`, `withdrawn` (gone without a decision), or `lost`. When a kernel
 attaches its log, it closes every approval the previous kernel left open as `lost`, because that
-request belonged to the previous kernel's app-server connection. `akra/kernel/describe` lists all
-record kinds in `records`. Client commands are records as well: before the runtime runs a command
+request belonged to the previous kernel's app-server connection. `akra/kernel/describe` answers with the
+kernel spec. Names and meaning are written once in `spec_names!` tables: command kinds with their
+scope, effect, idempotency, and rejections, record kinds, and rejection reasons in
+`domain::kernel_spec` and `domain::kernel_event`; methods, queries, events, and error codes in the
+inbound adapter `kernel_protocol`. Shapes are JSON Schema derived from the serde wire types with
+`schemars`; code comments are removed from the schemas. The exported value is
+`schema/akra-kernel-spec.json`, and a test fails when the file differs from the code
+(`scripts/refresh_akra_kernel_spec.sh` rewrites it). Client commands are records as well: before the runtime runs a command
 that came with a descriptor, it numbers a `command_received` record (command name, thread, a
 fingerprint of the content, the optional idempotency key) and hands it to the recorder; the
 sequence of that record is the operation id. The recorder writes on its own thread, so the command
