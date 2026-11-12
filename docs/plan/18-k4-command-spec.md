@@ -2,7 +2,8 @@
 
 ## 문서 상태
 
-- 상태: **Proposed design**. 구현은 없다. 현재 제품 동작을 설명하지 않는다. 2026-11-12 에 리뷰 세 개(독립 리뷰, 표준
+- 상태: **구현 중**. K4-1 을 구현했다 (2026-11-12, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+  `docs/reference/` 이다. 2026-11-12 에 리뷰 세 개(독립 리뷰, 표준
   축, 스펙 축)를 받아 고쳤다 (§7). 같은 날 사용자가 §6 의 질문을 작업자의 판단에 맡겼고, 기본값으로 정했다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.3, §4.4, §5.5, §5.6, §6 K4. 결정 KP-04,
   KP-05 (승인 2026-11-07). [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §5.4, Q4, 성질 P3.
@@ -326,7 +327,7 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 
 | 단계 | 내용 | 기존 동작 | 검증 |
 | --- | --- | --- | --- |
-| K4-1 | 스펙 뼈대. `schemars` 확인, `KernelCommandKind` 와 domain 의 표, adapter 의 표와 스키마, 조회의 답 타입을 이벤트에서 나눈다, `describe` 가 `KernelSpec` 을 답한다, `schema/akra-kernel-spec.json`, 프로토콜 판 1, 이름 규칙. 손으로 적은 이름 목록을 지운다 | 유지 (명령·조회·이벤트의 전송 모양은 같다. `describe` 의 답만 바뀐다) | 스펙 파일 시험, 빠짐 없음 시험, 스키마와 전송 모양 시험 |
+| K4-1 (완료 2026-11-12, §8) | 스펙 뼈대. `schemars` 확인, `KernelCommandKind` 와 domain 의 표, adapter 의 표와 스키마, 조회의 답 타입을 이벤트에서 나눈다, `describe` 가 `KernelSpec` 을 답한다, `schema/akra-kernel-spec.json`, 프로토콜 판 1, 이름 규칙. 손으로 적은 이름 목록을 지운다 | 유지 (명령·조회·이벤트의 전송 모양은 같다. `describe` 의 답만 바뀐다) | 스펙 파일 시험, 빠짐 없음 시험, 스키마와 전송 모양 시험 |
 | K4-2 | 병렬 상태 값을 타입으로 바꾼다 | 바뀜 (`state`, `phase` 의 값이 화면용 글자에서 정해진 값이 된다. Desktop 의 표시를 함께 고친다) | 프로토콜 시험, Desktop 시험 |
 | K4-3 | 이유 코드를 하나로 합치고 `next` 를 답에 싣는다. 버린 프롬프트를 `prompt_submission` 으로 알린다 | 유지 (글자는 같다. `next` 는 더한 필드이다) | domain 시험, 프로토콜 시험, 시뮬레이션의 거절 완전성 불변식 |
 | K4-4 | 연산의 끝. 기록에 `op_id`, 완료 기록, 재시작 때 열린 턴의 `lost`, `operation` 조회 | 유지 (기록에 필드와 종류를 더한다) | core 시험, 시뮬레이션의 연산 끝 불변식 (재시작 seed 포함) |
@@ -404,3 +405,42 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
   나오고, 빠짐은 컴파일러가 잡는다.
 - "기록의 payload 스키마는 필요 없다": Desktop 이 `recorded` 이벤트의 타입을 쓰려면 필요하다. 내부 값은 감춘다.
 - "CLI 이름을 `akra <그룹> <동작>` 으로": 지금의 사람용 명령과 부딪힌다. `akra describe --json` 만 그대로 둔다.
+
+## 8. 조각의 결과
+
+### K4-1 (2026-11-12)
+
+만든 것:
+
+- `schemars` 확인: 이 프로토콜의 모양(내부 tag enum 의 필드 variant, newtype variant, 빈 variant `{}`,
+  `deny_unknown_fields`, `skip_serializing_if`, 기본값 필드)에서 스키마가 실제 전송 모양과 같다. 손으로 쓴 스키마는
+  없다. 시험이 실제 값(명령, 조회와 그 답, 이벤트, 기록, 명령의 답)을 스키마로 검사한다. 검사기는 이 프로토콜이 쓰는
+  JSON Schema 의 부분만 아는 시험용 함수이다. 검증기 의존성은 더하지 않았다.
+- 이름 목록은 매크로 `spec_names!` 한 곳에 적는다. 줄 하나가 값, 전송되는 이름, 한 문장 설명이다.
+  - domain `kernel_spec`: `KernelCommandKind` 와 명령의 성질(`scope`, `effect`, `idempotency`, `rejections`),
+    `KernelRecordKind`. 거절 이유 `CommandRejectionReason` 도 같은 매크로로 옮겼다.
+  - adapter `kernel_protocol`: 메서드, 조회, 이벤트, 오류의 표. 오류 코드 상수는 그 표에서 나온다.
+  - 손으로 적은 `METHODS`, `COMMANDS`, `QUERIES`, `EVENTS`, `KERNEL_EVENT_KINDS` 를 지웠다.
+- `describe` 가 스펙 전체(`KernelSpec`)를 답한다: 메서드, 명령, 조회, 이벤트, 기록, 이유, 오류, 그리고 타입 정의
+  (`$defs`). 프로토콜 판은 1 이다. 명령·조회·이벤트·기록의 전송 모양은 바뀌지 않았다.
+- 조회의 답을 이벤트 enum 에서 나눴다 (`KernelQueryAnswer`). 전송 모양은 같다.
+- `KernelCommandDescriptor.command` 가 글자에서 `KernelCommandKind` 로 바뀌었다. 기록할지는 `effect` 에서 나온다
+  (`read` 는 기록하지 않는다). 따로 적은 목록이 없다.
+- `schema/akra-kernel-spec.json` 을 저장소에 두었다. 시험이 `describe` 의 답과 같은지 본다. 고치는 명령은
+  `bash scripts/refresh_akra_kernel_spec.sh` 이다.
+
+설계와 다른 점:
+
+- 스펙의 `state` 와 `completion` 은 아직 없다. 읽는 코드가 생기는 조각(K4-8 의 보내는 곳, K4-4 의 연산의 끝)에서
+  더한다. `reasons` 에는 `next` 가 없다 (K4-3).
+- 설명(`summary`)은 영어로 쓴다. 에이전트와 생성되는 skill 문서가 읽기 때문이다.
+- 스키마에는 필드의 설명이 없다. `schemars` 는 Rust 의 문서 주석을 설명으로 넣는데, 이 저장소의 주석은 개발자가
+  읽는 글이라서 스키마에서 뺐다. 필드의 설명이 필요하면 skill 문서를 만들 때(K4-8) 표로 더한다.
+- 이름 규칙(§3.2)은 새 타입에 썼다 (`KernelQueryAnswer`, 스키마의 `KernelRecord`). 이미 있는 타입의 이름은 바꾸지
+  않았다. Desktop 타입을 생성하는 조각(K4-6)에서 생성되는 이름을 보고 정한다.
+- 빠짐없는 `match` 는 명령과 기록에만 있다 (`KernelCommand::kind`, `KernelEvent::record_kind`). 조회와 이벤트는
+  시험이 지킨다: 표의 이름들과 전송 타입의 스키마가 가진 이름들이 같아야 한다.
+
+확인: domain 시험(이름이 겹치지 않음, 읽기 명령의 규칙, 모든 이유가 어느 명령에 속함), 프로토콜 시험(표와 전송
+타입의 이름 일치, 이유와 오류의 값, 명령 항목의 뜻과 입력, 실제 값의 스키마 검사, 스펙 파일 일치), Gateway 시험(실제
+커널의 `describe` 답), 구조 시험, 커널 시뮬레이션.

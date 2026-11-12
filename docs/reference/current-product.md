@@ -286,8 +286,10 @@ the desktop app itself is not shipped yet.
   repository, attach fails with `-32012`. After attach the client sends `akra/kernel/command` and
   `akra/kernel/query` and receives `akra/kernel/event` notifications; requests before attach fail
   with `-32011`, and a kernel that does not answer in time fails with `-32013` (a command may still
-  run). No event arrives after the `akra/kernel/detach` answer. `akra/kernel/describe` lists methods,
-  commands, queries, events, and the kinds of decision records (`records`). The `planning` and `parallel` queries and events carry the planning
+  run). No event arrives after the `akra/kernel/detach` answer. `akra/kernel/describe` answers with the
+  kernel spec (protocol version 1): `methods`, `commands` (scope, summary, effect, idempotency, possible
+  rejections, input and output JSON Schema), `queries`, `events`, `records`, `reasons`, `errors`, and the
+  shared type definitions in `$defs`. The same value is checked in as `schema/akra-kernel-spec.json`. The `planning` and `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
   queue again. The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
   through the kernel decision log in record order and answers with `records` and `next_after`; send

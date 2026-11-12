@@ -104,7 +104,7 @@ adapter `src/adapter/inbound/kernel_protocol/` 에 둔다. core 는 직렬화를
 | 메서드 | 종류 | 내용 |
 | --- | --- | --- |
 | `akra/kernel/attach` | 요청 | `{ workspace, client_name }` → `{ client_id, protocol_version, kernel }`. `kernel` 은 저장소 신원이다. 그 폴더가 속한 저장소의 커널에 붙는다 (없으면 만든다, §3.4) |
-| `akra/kernel/describe` | 요청 | 메서드, 명령, 이벤트 목록, 판단 사건 기록의 종류(`records`, plan 19 Q3-5)와 버전 (§4.3 자기 설명) |
+| `akra/kernel/describe` | 요청 | 커널 스펙 전체이다 (K4-1, 2026-11-12): 메서드, 명령, 조회, 이벤트, 기록, 이유, 오류와 타입 정의. 프로토콜 판은 1 이다 (§4.3 자기 설명, [K4 설계](18-k4-command-spec.md)) |
 | `akra/kernel/command` | 요청 | `{ command, idempotency_key? }` → `{ processed, rejection?, operation? }` (`operation` 과 키는 plan 19 Q3-6). 커널이 처리한 뒤 답한다. 바로 거절한 명령(`steer_turn`, `decide_approval`)은 `rejection` 에 이유 코드를 담는다. `submit_prompt` 의 진행과 거절은 `prompt_submission` 이벤트가 이유 코드와 함께 알린다 |
 | `akra/kernel/query` | 요청 | 세션 목록, 자동 후속 설정, thread 요약, planning 큐, 병렬 작업 상태(K3-6), 판단 사건 기록(`history`, plan 19 Q3-3). 보는 대화의 턴 상태는 TUI 화면용이라 보내지 않는다 (§3.2) |
 | `akra/kernel/event` | 알림 (서버→클라이언트) | `{ event }`. attach 뒤 자동으로 받는다. 대상 지정은 K6 (§1) |
