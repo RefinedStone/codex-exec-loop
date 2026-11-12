@@ -65,6 +65,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | [roadmap/R7-claude-backend.md](roadmap/R7-claude-backend.md) | Claude 백엔드 (대화 화면 + 하네스) |
 | [roadmap/R8-packaging-and-operations.md](roadmap/R8-packaging-and-operations.md) | 배포와 운영 |
 | [roadmap/R9-agent-browser-and-screenshots.md](roadmap/R9-agent-browser-and-screenshots.md) | 에이전트 브라우저 조작과 스크린샷 처리 |
+| [roadmap/R10-blueprint-port.md](roadmap/R10-blueprint-port.md) | 실제 앱을 UX 블루프린트 화면으로 옮기기 |
 | [scripts/](scripts/) | P0 재현 스크립트 (Python: macOS·Linux, Node: Windows 포함) |
 
 ## 결정 요약
@@ -110,6 +111,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | [R7](roadmap/R7-claude-backend.md) | Claude 백엔드 (대화 화면 + 하네스) | 계획 | P3 | 4~5주 |
 | [R8](roadmap/R8-packaging-and-operations.md) | 배포와 운영 | 계획 | P3 | 1~2주 |
 | [R9](roadmap/R9-agent-browser-and-screenshots.md) | 에이전트 브라우저 조작과 스크린샷 처리 | 계획 | R3 | 3~4주 |
+| [R10](roadmap/R10-blueprint-port.md) | 블루프린트 화면으로 옮기기 | 진행 중 (2026-11-12 계획) | P3, R1~R4 | 1~2주 |
 
 R 단계의 순서는 고정하지 않는다. 사용자가 실제로 불편을 느낀 순서대로 진행한다.
 
