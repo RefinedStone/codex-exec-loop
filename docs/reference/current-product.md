@@ -362,7 +362,8 @@ the desktop app itself is not shipped yet.
   One record can cover several changes. The record does not say who made the change, so commits by an
   Akra turn, by the user, and by an agent that Akra did not open look the same. The record has no thread
   (`thread_id` is empty in `history`). A new kernel starts from the last recorded state, so a change made
-  while no kernel ran is one record; the first observation in a log has no `previous_head`. Other
+  while no kernel ran is one record; the first observation in a log has no `previous_head`. The newest
+  `repository_changed` record is kept when old records are trimmed. Other
   worktrees of the repository, other branches, and uncommitted file changes are not observed. The TUI
   runtime does not observe.
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
