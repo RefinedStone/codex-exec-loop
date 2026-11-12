@@ -44,7 +44,7 @@ export const NO_HELPER_PROGRAMS = [
 ];
 
 /** git 을 셸 없이 실행하고 출력은 한도까지만 모은다. Windows 에서 콘솔 창을 띄우지 않는다. */
-export function runGit(cwd: string, args: string[], limit: number, options: { timeoutMs?: number; env?: Record<string, string> } = {}): Promise<GitOutput> {
+export function runGit(cwd: string, args: string[], limit: number, options: { timeoutMs?: number; env?: Record<string, string>; stdin?: string } = {}): Promise<GitOutput> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn("git", ["-c", "core.quotePath=false", ...NO_HELPER_PROGRAMS, ...args], {
       cwd,
@@ -81,6 +81,11 @@ export function runGit(cwd: string, args: string[], limit: number, options: { ti
       const stdout = Buffer.concat(chunks).subarray(0, limit).toString("utf8");
       resolvePromise({ stdout, code: truncated ? 0 : code, truncated, timedOut, stderr });
     });
+    // Git can close its input early when a patch is rejected. Its exit status reports the failure.
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
+    child.stdin.end(options.stdin);
   });
 }
 
@@ -205,7 +210,7 @@ interface RepositoryFile {
  * renderer 가 보낸 경로를 저장소 안의 파일로 확인한다.
  * status 의 경로는 cwd 가 아니라 저장소 루트 기준이다. cwd 가 하위 폴더여도 루트에서 찾는다.
  */
-async function repositoryFile(cwdInput: unknown, path: unknown): Promise<RepositoryFile> {
+export async function repositoryFile(cwdInput: unknown, path: unknown): Promise<RepositoryFile> {
   const cwd = await requireDirectory(cwdInput);
   const top = await runGit(cwd, ["rev-parse", "--show-toplevel"], 4096);
   if (top.code !== 0) {
@@ -272,7 +277,7 @@ async function currentChange(file: RepositoryFile): Promise<GitChangedFile | nul
  * 경로 중 하나라도 `filter` 속성(LFS 등)이 있는지 본다. 이 모듈은 git 이 필터 프로그램을 띄우지 않게 한다
  * (`NO_HELPER_PROGRAMS`). 그 상태로 스테이지하면 포인터가 아니라 원본이 들어가고, 되돌리면 포인터 파일이 작업 폴더에 써진다.
  */
-async function anyContentFilter(root: string, relativePaths: readonly string[]): Promise<boolean> {
+export async function anyContentFilter(root: string, relativePaths: readonly string[]): Promise<boolean> {
   for (let start = 0; start < relativePaths.length; start += ATTRIBUTE_BATCH) {
     // check-attr 는 경로 지정이 아니라 경로를 받는다. 그래서 루트에서 루트 기준 경로로 묻는다. 출력은 `경로 NUL 속성 NUL 값 NUL` 이다.
     const output = await runGit(root, ["check-attr", "-z", "filter", "--", ...relativePaths.slice(start, start + ATTRIBUTE_BATCH)], STATUS_OUTPUT_LIMIT);

@@ -75,6 +75,8 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
     gitCommitDiff: async () => ({ text: "", truncated: false }),
     gitPush: async () => ({ ok: true as const, url: null }),
     gitCreatePullRequest: async () => ({ ok: true as const, url: null }),
+    gitHunks: async () => ({ hunks: [], message: null }),
+    gitHunkAction: async () => ({ ok: true as const }),
     terminal: {
       open: async () => ({ ok: false, message: "not used" }),
       write: () => undefined,

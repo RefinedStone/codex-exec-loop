@@ -10,9 +10,10 @@ import { toast } from "../session/uiStore";
 import { type ActionLock, BranchCommits, type BranchState } from "./BranchCommits";
 import { type DiffLine, diffFileFromChange, parseGitDiff } from "./diff";
 import { DiffCounts, DiffLines } from "./DiffView";
+import { HunkChanges } from "./HunkChanges";
 
 /** 변경 패널이 쓰는 브리지 함수이다. 읽기와 파일별 동작이다. */
-type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff" | "gitPush" | "gitCreatePullRequest">;
+type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff" | "gitPush" | "gitCreatePullRequest" | "gitHunks" | "gitHunkAction">;
 
 // 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다 (`ActionLock`). git 은 저장소마다 한 번에 하나만 쓸 수 있다 (`index.lock`).
 
@@ -145,10 +146,10 @@ function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
       {open && state.phase === "loading" && <div className="muted diff-hint">읽는 중…</div>}
       {open && state.phase === "failed" && <div className="error diff-hint">{state.message}</div>}
       {open && state.phase === "loaded" && (
-        <>
+        <HunkChanges cwd={cwd} path={file.path} git={git} lock={lock} onChanged={onChanged}>
           {state.lines.length > 0 && <DiffLines lines={state.lines} />}
           {state.note && <div className="muted diff-hint">{state.note}</div>}
-        </>
+        </HunkChanges>
       )}
     </details>
   );

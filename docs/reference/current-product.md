@@ -468,7 +468,10 @@ The Gateway records the external documents that a thread mentions, without a mod
   The "변경" side panel lists the working-tree changes of the open thread's folder and can stage, unstage, discard,
   or open one file; the main process reads the file's state from git again before it acts, asks before a discard,
   and refuses conflicted files, files with a content filter (LFS), and discarding a folder
-  (`desktop/src/main/gitStatus.ts`). Below the files it lists the commits that the branch added after its base
+  (`desktop/src/main/gitStatus.ts`). Expanded tracked text files also show unstaged hunks with individual stage
+  and discard actions. Discard asks for confirmation and preserves staged content. Main reads the diff again
+  and rejects stale hunk IDs; unsupported files retain the whole-file actions (`desktop/src/main/gitHunks.ts`).
+  Below the files it lists the commits that the branch added after its base
   (the PR's base branch, else the branch of `origin/HEAD`), marks the ones that are not pushed, and shows the
   branch's GitHub PR with its CI state through `gh` (`desktop/src/main/gitBranch.ts`). It can push the branch
   to the remote branch of the same name (never a force push) and create a PR with `gh`; the main process asks
