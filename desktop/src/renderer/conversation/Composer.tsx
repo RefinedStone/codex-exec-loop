@@ -6,7 +6,7 @@ import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
-import { useUiStore } from "../session/uiStore";
+import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
 import { PlanList } from "./ConversationView";
 import { contextPercent, isTurnInProgress } from "./transcript";
 
@@ -54,7 +54,6 @@ function ContextRing({ percent }: { percent: number }) {
 }
 
 export function Composer({ actions, home = false, above }: { actions: ComposerActions; home?: boolean; above?: ReactNode }) {
-  const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -63,16 +62,11 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   const inProgress = isTurnInProgress(transcript);
   const livePlan = inProgress ? (transcript?.turns.at(-1)?.plan ?? null) : null;
   const percent = contextPercent(transcript);
-  const handOff = useUiStore((state) => state.handOff);
+  // 초안은 화면 저장소에 둔다. 보기를 바꾸거나 업무 패널이 글을 넘겨도 같은 값을 본다.
+  const draftKey = home ? HOME_DRAFT : (transcript?.threadId ?? "");
+  const draft = useUiStore((state) => state.drafts[draftKey] ?? "");
+  const setDraft = (text: string) => setDraftFor(draftKey, text);
   const disabled = !connected || (!home && !transcript) || sending;
-
-  // 업무 패널이 넘긴 글은 새 스레드 화면의 입력창에 채운다. 바로 보내지 않는다.
-  useEffect(() => {
-    if (home && handOff !== null) {
-      setDraft(handOff);
-      useUiStore.setState({ handOff: null });
-    }
-  }, [handOff, home]);
 
   useEffect(() => {
     if (!disabled) input.current?.focus();

@@ -6,6 +6,7 @@ import type { TerminalBridge } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { useUiStore } from "../session/uiStore";
+import { folderName } from "../sidebar/threadStatus";
 import { TerminalView } from "./TerminalView";
 
 interface TerminalTab {
@@ -13,10 +14,6 @@ interface TerminalTab {
   cwd: string | null;
   title: string;
   exited: boolean;
-}
-
-function folderName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
 export function TerminalDock({ bridge }: { bridge: TerminalBridge }) {

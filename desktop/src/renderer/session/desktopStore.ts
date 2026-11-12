@@ -66,6 +66,8 @@ export interface DesktopState {
   activeThreadIds: string[];
   /** 열려 있지 않은 동안 턴이 끝난 스레드 id 이다. 이 창의 메모리에만 있다. 스레드를 열면 빠진다. */
   unreadThreadIds: string[];
+  /** 열린 스레드의 대화가 화면에 있다. 새 스레드 화면이나 현황판을 보는 동안은 false 이다. */
+  threadVisible: boolean;
   openThreadId: string | null;
   transcript: Transcript | null;
   transcriptError: string | null;
@@ -75,6 +77,8 @@ export interface DesktopState {
   setSession(session: Pick<DesktopState, "gateway" | "versionCheck" | "folders">): void;
   setSessionError(message: string | null): void;
   setThreadActive(threadId: string, active: boolean): void;
+  /** `thread/status/changed` 의 `systemError` 여부를 사이드바의 스레드에 반영한다. */
+  setThreadFailed(threadId: string, failed: boolean): void;
   /** thread/list 의 상태로 진행 중 표시를 한 번에 채운다. */
   setActiveThreads(threadIds: string[]): void;
   setOpenThread(threadId: string | null): void;
@@ -107,6 +111,7 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   sessionError: null,
   activeThreadIds: [],
   unreadThreadIds: [],
+  threadVisible: true,
   openThreadId: null,
   transcript: null,
   transcriptError: null,
@@ -117,11 +122,18 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   setThreadActive: (threadId, active) =>
     set((state) => {
       const others = state.activeThreadIds.filter((id) => id !== threadId);
-      const finishedUnseen = !active && others.length < state.activeThreadIds.length && state.openThreadId !== threadId;
+      const watching = state.threadVisible && state.openThreadId === threadId;
+      const finishedUnseen = !active && others.length < state.activeThreadIds.length && !watching;
       const unread = state.unreadThreadIds.filter((id) => id !== threadId);
       return { activeThreadIds: active ? [...others, threadId] : others, unreadThreadIds: finishedUnseen ? [...unread, threadId] : unread };
     }),
   setActiveThreads: (activeThreadIds) => set({ activeThreadIds }),
+  setThreadFailed: (threadId, failed) =>
+    set((state) => {
+      const changed = state.folders.some((folder) => folder.threads.some((thread) => thread.id === threadId && thread.failed !== failed));
+      if (!changed) return {};
+      return { folders: state.folders.map((folder) => ({ ...folder, threads: folder.threads.map((thread) => (thread.id === threadId ? { ...thread, failed } : thread)) })) };
+    }),
   setOpenThread: (openThreadId) =>
     set((state) => ({ openThreadId, transcript: null, transcriptError: null, unreadThreadIds: state.unreadThreadIds.filter((id) => id !== openThreadId) })),
   setTranscript: (transcript, transcriptError = null) => set({ transcript, transcriptError }),
@@ -158,6 +170,7 @@ export type SessionStore = Pick<
   | "setSessionError"
   | "setThreadActive"
   | "setActiveThreads"
+  | "setThreadFailed"
   | "setOpenThread"
   | "setTranscript"
   | "updateTranscript"
@@ -178,6 +191,7 @@ export function desktopSessionStore(): SessionStore {
     setSessionError: state.setSessionError,
     setThreadActive: state.setThreadActive,
     setActiveThreads: state.setActiveThreads,
+    setThreadFailed: state.setThreadFailed,
     setOpenThread: state.setOpenThread,
     setTranscript: state.setTranscript,
     updateTranscript: state.updateTranscript,

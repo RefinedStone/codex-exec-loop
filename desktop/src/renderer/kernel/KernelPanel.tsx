@@ -5,10 +5,7 @@ import { useState } from "react";
 import { useDesktopStore } from "../session/desktopStore";
 import type { KernelView } from "./kernelConnection";
 import type { ParallelState, PlanningState, PlanningTask, ThreadActivity } from "./protocol";
-
-function folderName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
-}
+import { folderName } from "../sidebar/threadStatus";
 
 const PLANNING_STATUS: Record<PlanningState["status"], string> = {
   uninitialized: "planning 없음 (또는 아직 읽지 않음)",

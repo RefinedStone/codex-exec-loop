@@ -404,9 +404,11 @@ export class DesktopSession {
       return;
     }
     if (method === "thread/status/changed") {
-      const active = (params as { status: ThreadStatus }).status.type === "active";
+      const status = (params as { status: ThreadStatus }).status.type;
+      const active = status === "active";
       this.statusChangesWhileListing?.set(threadId, active);
       this.store.setThreadActive(threadId, active);
+      this.store.setThreadFailed(threadId, status === "systemError");
     }
     if (method === "serverRequest/resolved") {
       this.resolveApprovalElsewhere((params as { requestId: JsonRpcId }).requestId);

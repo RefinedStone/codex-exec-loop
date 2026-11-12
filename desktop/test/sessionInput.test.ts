@@ -70,6 +70,7 @@ function harness() {
     setSession: (session) => Object.assign(state, session),
     setSessionError: () => undefined,
     setThreadActive: () => undefined,
+    setThreadFailed: () => undefined,
     setActiveThreads: (threadIds) => Object.assign(state, { activeThreadIds: threadIds }),
     setOpenThread: (openThreadId) => Object.assign(state, { openThreadId, transcript: null }),
     setTranscript: (transcript) => Object.assign(state, { transcript }),

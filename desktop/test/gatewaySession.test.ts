@@ -125,6 +125,7 @@ function sessionStore() {
     setActiveThreads: (threadIds) => {
       snapshot.activeThreadIds = threadIds;
     },
+    setThreadFailed: () => undefined,
     setThreadActive: (threadId, active) => {
       const others = (snapshot.activeThreadIds ?? []).filter((id) => id !== threadId);
       snapshot.activeThreadIds = active ? [...others, threadId] : others;
