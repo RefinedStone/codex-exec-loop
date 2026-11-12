@@ -165,7 +165,8 @@ export interface WorkingTree {
   branch: BranchState;
   /** 다시 읽을 때마다 늘어난다. 파일 diff 도 새로 읽도록 목록 key 로 쓴다. */
   generation: number;
-  refresh(): void;
+  /** 다시 읽는다. `fresh` 가 false 이면 잠깐 저장해 둔 PR 을 쓴다 (파일 동작 뒤). 기본은 PR 도 다시 묻는다. */
+  refresh(fresh?: boolean): void;
 }
 
 /** 열린 스레드 폴더의 작업 트리를 읽는다. 폴더가 바뀔 때와 턴이 끝날 때 다시 읽는다. */
@@ -177,7 +178,7 @@ export function useWorkingTree(git: GitAccess): WorkingTree {
   /** 늦게 끝난 이전 요청이 새 결과를 덮지 않게 한다. */
   const requestCounter = useRef(0);
 
-  const refresh = (target: string) => {
+  const refresh = (target: string, fresh: boolean) => {
     const request = ++requestCounter.current;
     setPanel({ phase: "loading" });
     git.gitStatus(target).then(
@@ -192,7 +193,7 @@ export function useWorkingTree(git: GitAccess): WorkingTree {
     );
     // PR 을 읽는 gh 는 느릴 수 있다. 그동안 이전 커밋 목록을 그대로 보여 준다.
     setBranch((previous) => (previous.phase === "loaded" ? previous : { phase: "loading" }));
-    git.gitBranchSummary(target).then(
+    git.gitBranchSummary(target, fresh).then(
       (summary) => {
         if (request === requestCounter.current) setBranch({ phase: "loaded", summary });
       },
@@ -210,7 +211,7 @@ export function useWorkingTree(git: GitAccess): WorkingTree {
     setPanel({ phase: "idle" });
     setBranch({ phase: "idle" });
     if (cwd) {
-      refresh(cwd);
+      refresh(cwd, false);
     }
   }, [cwd]); // 폴더가 바뀔 때만 다시 읽는다.
 
@@ -219,12 +220,13 @@ export function useWorkingTree(git: GitAccess): WorkingTree {
   useEffect(() => {
     const finished = previousStatus.current === "inProgress" && lastTurnStatus !== "inProgress";
     previousStatus.current = lastTurnStatus;
+    // 에이전트가 턴 안에서 push 하거나 PR 을 만들었을 수 있다. PR 도 다시 묻는다.
     if (finished && cwd) {
-      refresh(cwd);
+      refresh(cwd, true);
     }
   }, [lastTurnStatus]); // 턴 상태가 바뀔 때만 본다.
 
-  return { cwd, panel, branch, generation: requestCounter.current, refresh: () => cwd && refresh(cwd) };
+  return { cwd, panel, branch, generation: requestCounter.current, refresh: (fresh = true) => cwd && refresh(cwd, fresh) };
 }
 
 /** 줄 수를 아는 파일의 더한 줄과 지운 줄의 합이다. 아직 읽지 못했으면 null 이다. */
@@ -252,7 +254,7 @@ export function WorkingTreePanel({ tree, git, onOpenUrl }: { tree: WorkingTree; 
           </span>
         )}
         <span className="bar-spacer" />
-        <button type="button" className="button" onClick={tree.refresh} disabled={panel.phase === "loading"}>
+        <button type="button" className="button" onClick={() => tree.refresh()} disabled={panel.phase === "loading"}>
           {panel.phase === "loading" ? "읽는 중…" : "새로 고침"}
         </button>
       </div>
@@ -265,7 +267,7 @@ export function WorkingTreePanel({ tree, git, onOpenUrl }: { tree: WorkingTree; 
       {files && files.length > 0 && (
         <div className="working-tree-files diff-file-list" key={tree.generation}>
           {files.map((file) => (
-            <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} lock={{ busy, setBusy }} onChanged={tree.refresh} />
+            <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} lock={{ busy, setBusy }} onChanged={() => tree.refresh(false)} />
           ))}
         </div>
       )}
