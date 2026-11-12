@@ -11,6 +11,19 @@ use crate::domain::conversation::{
 use crate::domain::planning::PostTurnRequest;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
+impl AppCommand {
+    /*
+     * 이 명령의 연산 id 를 넣는다 (plan 18 K4-4). 런타임이 명령을 기록한 뒤 부른다. 지금은 thread 지정 프롬프트만 연산
+     * id 를 가진다. 다른 명령의 끝은 아직 기록하지 않는다 (K4-4b).
+     */
+    pub fn with_operation(mut self, op_id: i64) -> Self {
+        if let Self::SubmitThreadPrompt(submission) = &mut self {
+            submission.op_id = Some(op_id);
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppCommand {
     /*

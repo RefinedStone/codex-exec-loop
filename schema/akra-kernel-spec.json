@@ -101,6 +101,50 @@
         "name": "failed",
         "summary": "The delivery failed or is blocked."
       }
+    ],
+    "completion": [
+      {
+        "name": "accepted",
+        "summary": "The command ends when the kernel accepts it. Its operation state is `done` at once."
+      },
+      {
+        "name": "records",
+        "summary": "The command ends with a later record that carries its `op_id`. Read the `operation` query."
+      },
+      {
+        "name": "unreported",
+        "summary": "The kernel does not report the end of this command yet. Its operation state stays `accepted`. Watch the events instead."
+      }
+    ],
+    "operation_state": [
+      {
+        "name": "accepted",
+        "summary": "The kernel accepted the command and no later record of it exists yet."
+      },
+      {
+        "name": "running",
+        "summary": "The command is in progress: a prompt is queued or its turn runs."
+      },
+      {
+        "name": "done",
+        "summary": "The command ended."
+      },
+      {
+        "name": "rejected",
+        "summary": "The kernel rejected the command at once. The reason is in the `command_rejected` record."
+      },
+      {
+        "name": "failed",
+        "summary": "The preparation or the turn of the command failed."
+      },
+      {
+        "name": "lost",
+        "summary": "The kernel was built again while the command was open. Its work did not continue."
+      },
+      {
+        "name": "unknown",
+        "summary": "No command record has this id. The id is wrong or the record is older than the retention limit."
+      }
     ]
   },
   "methods": [
@@ -164,6 +208,7 @@
       "effect": "read",
       "idempotency": "natural",
       "rejections": [],
+      "completion": "accepted",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -188,6 +233,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [],
+      "completion": "unreported",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -230,6 +276,7 @@
         "parallel_mode",
         "parallel_mode_unknown"
       ],
+      "completion": "records",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -269,6 +316,7 @@
         "steer_in_flight",
         "no_matching_turn"
       ],
+      "completion": "unreported",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -311,6 +359,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [],
+      "completion": "unreported",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -338,6 +387,7 @@
         "decision_in_flight",
         "no_matching_approval"
       ],
+      "completion": "unreported",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -378,6 +428,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [],
+      "completion": "accepted",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -408,6 +459,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [],
+      "completion": "accepted",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -432,6 +484,7 @@
       "effect": "destructive",
       "idempotency": "natural",
       "rejections": [],
+      "completion": "unreported",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -464,6 +517,7 @@
       "effect": "read",
       "idempotency": "natural",
       "rejections": [],
+      "completion": "accepted",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -685,6 +739,41 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "operation",
+      "summary": "The state of one operation and its records. `op_id` comes from the `operation` of a command answer.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "op_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "const": "operation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "op_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/OperationStatus",
+        "properties": {
+          "type": {
+            "const": "operation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
     }
   ],
   "events": [
@@ -857,6 +946,13 @@
             "const": "thread_prompt_settled",
             "type": "string"
           },
+          "op_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "settlement": {
             "$ref": "#/$defs/ThreadPromptSettlement"
           },
@@ -913,6 +1009,13 @@
             "const": "turn_submitted",
             "type": "string"
           },
+          "op_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "origin": {
             "$ref": "#/$defs/TurnOrigin"
           },
@@ -943,6 +1046,13 @@
             "const": "turn_started",
             "type": "string"
           },
+          "op_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "thread_id": {
             "type": "string"
           },
@@ -966,6 +1076,13 @@
           "kind": {
             "const": "turn_ended",
             "type": "string"
+          },
+          "op_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "outcome": {
             "anyOf": [
@@ -1129,6 +1246,45 @@
           "op_id",
           "thread_id",
           "reason"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "command_completed",
+      "summary": "A command ended without a turn record: its preparation failed, its work went to parallel slots, its turn submission closed before a turn started, or the kernel was built again.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "command_completed",
+            "type": "string"
+          },
+          "op_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/$defs/OperationEnd"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "op_id",
+          "thread_id",
+          "result"
         ],
         "type": "object"
       }
@@ -2061,6 +2217,24 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "op_id": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -2149,6 +2323,19 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "$ref": "#/$defs/OperationStatus",
+          "properties": {
+            "type": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -2172,6 +2359,13 @@
             "kind": {
               "const": "thread_prompt_settled",
               "type": "string"
+            },
+            "op_id": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "settlement": {
               "$ref": "#/$defs/ThreadPromptSettlement"
@@ -2221,6 +2415,13 @@
               "const": "turn_submitted",
               "type": "string"
             },
+            "op_id": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "origin": {
               "$ref": "#/$defs/TurnOrigin"
             },
@@ -2247,6 +2448,13 @@
               "const": "turn_started",
               "type": "string"
             },
+            "op_id": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "thread_id": {
               "type": "string"
             },
@@ -2266,6 +2474,13 @@
             "kind": {
               "const": "turn_ended",
               "type": "string"
+            },
+            "op_id": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "outcome": {
               "anyOf": [
@@ -2409,6 +2624,41 @@
             "op_id",
             "thread_id",
             "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "command_completed",
+              "type": "string"
+            },
+            "op_id": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasonCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {
+              "$ref": "#/$defs/OperationEnd"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "op_id",
+            "thread_id",
+            "result"
           ],
           "type": "object"
         }
@@ -2559,6 +2809,21 @@
       ],
       "type": "object"
     },
+    "OperationEnd": {
+      "oneOf": [
+        {
+          "enum": [
+            "done",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "lost",
+          "type": "string"
+        }
+      ]
+    },
     "OperationNext": {
       "properties": {
         "after": {
@@ -2576,16 +2841,39 @@
       "type": "object"
     },
     "OperationState": {
-      "oneOf": [
-        {
-          "const": "accepted",
-          "type": "string"
+      "enum": [
+        "accepted",
+        "running",
+        "done",
+        "rejected",
+        "failed",
+        "lost",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "OperationStatus": {
+      "properties": {
+        "op_id": {
+          "format": "int64",
+          "type": "integer"
         },
-        {
-          "const": "rejected",
-          "type": "string"
+        "records": {
+          "items": {
+            "$ref": "#/$defs/RecordedKernelEvent"
+          },
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
         }
-      ]
+      },
+      "required": [
+        "op_id",
+        "state",
+        "records"
+      ],
+      "type": "object"
     },
     "ParallelAgent": {
       "properties": {
@@ -3146,6 +3434,13 @@
     },
     "QueuedThreadPrompt": {
       "properties": {
+        "op_id": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "task_id": {
           "type": "string"
         },
@@ -3363,6 +3658,10 @@
         },
         {
           "const": "unknown",
+          "type": "string"
+        },
+        {
+          "const": "lost",
           "type": "string"
         }
       ]

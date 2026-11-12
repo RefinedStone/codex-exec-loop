@@ -657,9 +657,9 @@ fn check_kernel_records(
                     "I6: turn submission {submission} was recorded twice"
                 ));
             }
-            KernelEvent::TurnStarted { thread_id, turn_id }
-                if !started.insert(turn_key(thread_id, turn_id)) =>
-            {
+            KernelEvent::TurnStarted {
+                thread_id, turn_id, ..
+            } if !started.insert(turn_key(thread_id, turn_id)) => {
                 return Err(format!("I6: {turn_id} on {thread_id} started twice"));
             }
             KernelEvent::TurnEnded {
@@ -708,6 +708,35 @@ fn check_rejections_are_in_the_spec(records: &[KernelEvent]) -> Result<(), Strin
                 }
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+/*
+ * I11: 연산의 끝 (plan 18 K4-4, 설계 §3.9). 시나리오가 끝나고 커널이 일을 마치면, 클라이언트가 보낸 모든 thread 지정
+ * 프롬프트의 연산은 끝난 상태이다: `done`, `rejected`, `failed`, `lost` 중 하나이다. 상태는 기록에서만 계산한다.
+ * 열린 채로 남은 연산이 있으면 클라이언트는 그 명령이 끝났는지 알 수 없다.
+ */
+fn check_operations_ended(
+    recorded: &[RecordedKernelEvent],
+    operations: &[(i64, &str)],
+) -> Result<(), String> {
+    use crate::domain::kernel_event::operation_states;
+    let states = operation_states(recorded.iter().map(|record| &record.event));
+    for (op_id, prompt) in operations {
+        match states.get(op_id) {
+            Some(state) if state.is_end() => {}
+            other => {
+                let own = recorded
+                    .iter()
+                    .filter(|record| record.event.op_id() == Some(*op_id))
+                    .map(|record| record.event.kind())
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "I11: operation {op_id} ('{prompt}') did not end: state {other:?}, its records {own:?}"
+                ));
+            }
         }
     }
     Ok(())
@@ -825,7 +854,7 @@ impl Simulation {
         self.finish(result)
     }
 
-    /// 커널을 버리고 기록을 확인한다 (I6, I7, I8, I10). 성공하면 기록 전체를 돌려준다.
+    /// 커널을 버리고 기록을 확인한다 (I6, I7, I8, I10, I11). 성공하면 기록 전체를 돌려준다.
     fn finish(
         self,
         result: Result<(), Violation>,
@@ -835,9 +864,15 @@ impl Simulation {
             // 커널을 버려야 기록기가 남은 사건을 다 쓴다.
             drop(self.host);
             let records = self.kernel_log.0.lock().expect("kernel log should lock");
+            let operations = self
+                .sent_thread_prompts
+                .iter()
+                .map(|(_, prompt, op_id)| (*op_id, prompt.as_str()))
+                .collect::<Vec<_>>();
             check_kernel_records(&records, &self.lifetime_starts)
                 .and_then(|()| self.ledger.check_queued_prompt_records(&records))
                 .and_then(|()| self.ledger.check_approval_records(&records))
+                .and_then(|()| check_operations_ended(&records, &operations))
                 .map_err(|message| Violation { step, message })
         });
         match result {
@@ -1059,6 +1094,7 @@ impl Simulation {
                 workspace_directory: WORKSPACE.to_string(),
                 thread_id: thread_id.to_string(),
                 prompt: prompt.to_string(),
+                op_id: None,
             })),
             descriptor: Some(KernelCommandDescriptor {
                 command: crate::domain::kernel_spec::KernelCommandKind::SubmitPrompt,

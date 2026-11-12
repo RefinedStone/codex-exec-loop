@@ -4,8 +4,10 @@
 
 pub use crate::domain::kernel_event::ReasonCode;
 use crate::domain::kernel_event::{
-    KernelCommandDescriptor, KernelEventPage, OperationReceipt, RecordedKernelEvent,
+    KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus,
+    RecordedKernelEvent,
 };
+pub use crate::domain::kernel_spec::OperationState;
 use crate::domain::kernel_spec::{KernelCommandKind, spec_names};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -324,15 +326,6 @@ pub struct Operation {
     pub replayed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum OperationState {
-    /// 커널이 명령을 받아들였다. 결과는 이벤트와 기록으로 온다.
-    Accepted,
-    /// 커널이 명령을 바로 거절했다. 이유는 `rejection` 에 있다.
-    Rejected,
-}
-
 /// 영수증 뒤에 할 조회이다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct OperationNext {
@@ -521,6 +514,8 @@ impl KernelCommand {
                     workspace_directory: workspace_directory.to_string(),
                     thread_id: non_blank("thread_id", thread_id)?,
                     prompt: non_blank("prompt", prompt)?,
+                    // 런타임이 명령을 기록한 뒤 연산 id 를 넣는다 (plan 18 K4-4).
+                    op_id: None,
                 }))
             }
             Self::SteerTurn {
@@ -606,6 +601,13 @@ pub enum KernelQuery {
         #[serde(default)]
         limit: Option<u32>,
     },
+    /*
+     * 연산 하나의 상태와 그 연산의 기록이다 (plan 18 K4-4). `op_id` 는 명령의 답에 있는 `operation.op_id` 이다.
+     * 상태는 기록에서 계산한다. 명령이 언제 끝나는지는 스펙의 그 명령의 `completion` 이 알린다.
+     */
+    Operation {
+        op_id: i64,
+    },
 }
 
 /// 기록 조회의 한 쪽 기본 크기이다.
@@ -629,14 +631,23 @@ impl KernelQuery {
         }
     }
 
-    /// 조회의 답은 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다. 기록 조회는 호출자가
-    /// 읽은 `history` 쪽을 그대로 담는다.
+    /// 연산 조회이면 그 연산 id 이다. 연산도 스냅샷이 아니라 커널의 사건 기록에서 읽는다.
+    pub fn operation_id(&self) -> Option<i64> {
+        match self {
+            Self::Operation { op_id } => Some(*op_id),
+            _ => None,
+        }
+    }
+
+    /// 조회의 답은 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다. 기록 조회와 연산
+    /// 조회는 호출자가 기록에서 읽은 값(`history`, `operation`)을 그대로 담는다.
     pub fn answer(
         self,
         snapshot: &AppSnapshot,
         threads: &[ThreadActivitySummary],
         parallel: ParallelSource<'_>,
         history: Option<KernelEventPage>,
+        operation: Option<OperationStatus>,
     ) -> KernelQueryAnswer {
         match self {
             Self::Sessions {} => {
@@ -658,6 +669,13 @@ impl KernelQuery {
                     next_after: after.unwrap_or(0),
                 }))
             }
+            Self::Operation { op_id } => {
+                KernelQueryAnswer::Operation(operation.unwrap_or(OperationStatus {
+                    op_id,
+                    state: OperationState::Unknown,
+                    records: Vec::new(),
+                }))
+            }
         }
     }
 }
@@ -677,6 +695,8 @@ spec_names! {
             "The parallel mode state: pool, agents, merge queue, and pull request validation.";
         History => "history",
             "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`.";
+        Operation => "operation",
+            "The state of one operation and its records. `op_id` comes from the `operation` of a command answer.";
     }
 }
 
@@ -696,6 +716,8 @@ pub enum KernelQueryAnswer {
     Parallel(ParallelState),
     /// 사건 하나는 `sequence`, `recorded_at`, `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).
     History(KernelEventPage),
+    /// 연산 하나의 상태와 그 연산의 기록이다 (plan 18 K4-4).
+    Operation(OperationStatus),
 }
 
 // event -------------------------------------------------------------------------------------------

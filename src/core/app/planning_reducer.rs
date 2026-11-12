@@ -18,6 +18,15 @@ struct ActiveManualPromptPreparation {
     cancelled: bool,
     // thread 를 지정한 프롬프트이면 그 thread 이다 (plan 18 K3-3b). 준비가 끝나면 core 가 이 thread 에 제출한다.
     addressed_thread_id: Option<String>,
+    // 그 프롬프트를 낸 명령의 연산 id 이다 (plan 18 K4-4).
+    op_id: Option<i64>,
+}
+
+/// thread 를 지정한 프롬프트의 준비가 가리키는 곳이다: 제출할 thread 와 그 명령의 연산 id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AddressedThreadPrompt {
+    pub(super) thread_id: String,
+    pub(super) op_id: Option<i64>,
 }
 
 // 남긴 프롬프트는 사건 기록에도 쓰므로 domain 타입이다 (plan 19 Q3-1).
@@ -203,6 +212,7 @@ impl PlanningFeatureReducer {
             correlation: correlation.clone(),
             cancelled: false,
             addressed_thread_id: None,
+            op_id: None,
         });
         ManualPromptPreparationReduction {
             admission: ManualPromptPreparationAdmission::Accepted { correlation },
@@ -215,6 +225,7 @@ impl PlanningFeatureReducer {
         &mut self,
         intent: ManualPromptPreparationIntent,
         thread_id: String,
+        op_id: Option<i64>,
     ) -> ManualPromptPreparationReduction {
         let reduction = self.begin_manual_prompt_preparation(intent);
         if let (ManualPromptPreparationAdmission::Accepted { .. }, Some(active)) = (
@@ -222,6 +233,7 @@ impl PlanningFeatureReducer {
             self.in_flight_manual_prompt_preparation.as_mut(),
         ) {
             active.addressed_thread_id = Some(thread_id);
+            active.op_id = op_id;
         }
         reduction
     }
@@ -230,11 +242,15 @@ impl PlanningFeatureReducer {
     pub(super) fn manual_prompt_preparation_thread(
         &self,
         correlation: &ManualPromptCorrelation,
-    ) -> Option<String> {
-        self.in_flight_manual_prompt_preparation
+    ) -> Option<AddressedThreadPrompt> {
+        let active = self
+            .in_flight_manual_prompt_preparation
             .as_ref()
-            .filter(|active| &active.correlation == correlation)
-            .and_then(|active| active.addressed_thread_id.clone())
+            .filter(|active| &active.correlation == correlation)?;
+        Some(AddressedThreadPrompt {
+            thread_id: active.addressed_thread_id.clone()?,
+            op_id: active.op_id,
+        })
     }
 
     /*

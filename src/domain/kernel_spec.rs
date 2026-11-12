@@ -164,6 +164,49 @@ spec_names! {
     }
 }
 
+spec_names! {
+    /// 명령이 언제 끝나는가이다 (plan 18 K4-4, 설계 §3.4). `operation` 조회의 `state` 가 이 규칙으로 끝을 안다.
+    #[derive(Serialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CommandCompletion {
+        Accepted => "accepted",
+            "The command ends when the kernel accepts it. Its operation state is `done` at once.";
+        Records => "records",
+            "The command ends with a later record that carries its `op_id`. Read the `operation` query.";
+        Unreported => "unreported",
+            "The kernel does not report the end of this command yet. Its operation state stays `accepted`. Watch the events instead.";
+    }
+}
+
+spec_names! {
+    /// 연산의 상태이다 (plan 18 K4-4). 기록에서 계산한다. 따로 저장하지 않는다.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum OperationState {
+        Accepted => "accepted",
+            "The kernel accepted the command and no later record of it exists yet.";
+        Running => "running",
+            "The command is in progress: a prompt is queued or its turn runs.";
+        Done => "done",
+            "The command ended.";
+        Rejected => "rejected",
+            "The kernel rejected the command at once. The reason is in the `command_rejected` record.";
+        Failed => "failed",
+            "The preparation or the turn of the command failed.";
+        Lost => "lost",
+            "The kernel was built again while the command was open. Its work did not continue.";
+        Unknown => "unknown",
+            "No command record has this id. The id is wrong or the record is older than the retention limit.";
+    }
+}
+
+impl OperationState {
+    /// 더 바뀌지 않는 상태인가이다.
+    pub const fn is_end(self) -> bool {
+        !matches!(self, Self::Accepted | Self::Running)
+    }
+}
+
 /// 명령 하나의 성질이다. 종류마다 하나이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -172,6 +215,7 @@ pub struct CommandSpec {
     pub idempotency: CommandIdempotency,
     /// 커널이 이 명령을 바로 거절할 때 낼 수 있는 이유이다.
     pub rejections: &'static [ReasonCode],
+    pub completion: CommandCompletion,
 }
 
 impl KernelCommandKind {
@@ -179,6 +223,19 @@ impl KernelCommandKind {
         use CommandEffect::{Destructive, Read, Write};
         use CommandIdempotency::{Keyed, Natural};
         use ReasonCode as Reason;
+        // shortcut: 끝을 아직 알리지 않는 명령 다섯은 `Unreported` 이다. 완료 기록을 더하는 조각(K4-4b)에서 `Records` 로 바꾼다.
+        let completion = match self {
+            Self::LoadSessions
+            | Self::RefreshPlanning
+            | Self::SetAutoFollowMaxTurns
+            | Self::PauseAutoFollow => CommandCompletion::Accepted,
+            Self::SubmitPrompt => CommandCompletion::Records,
+            Self::RenameSession
+            | Self::SteerTurn
+            | Self::StopAll
+            | Self::DecideApproval
+            | Self::ResetPlanning => CommandCompletion::Unreported,
+        };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (CommandScope::Session, Read, Natural, &[]),
             Self::RenameSession => (CommandScope::Session, Write, Natural, &[]),
@@ -217,7 +274,13 @@ impl KernelCommandKind {
             effect,
             idempotency,
             rejections,
+            completion,
         }
+    }
+
+    /// 기록에 적힌 이름의 명령 종류이다. 이 binary 가 모르는 이름은 `None` 이다.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|kind| kind.name() == name)
     }
 
     /// 판단 사건 기록에 남는 명령인가이다. 읽기 명령은 남지 않는다.
@@ -251,6 +314,8 @@ spec_names! {
             "The kernel received a client command. `op_id` is the sequence of this record.";
         CommandRejected => "command_rejected",
             "The kernel rejected a received command at once.";
+        CommandCompleted => "command_completed",
+            "A command ended without a turn record: its preparation failed, its work went to parallel slots, its turn submission closed before a turn started, or the kernel was built again.";
     }
 }
 

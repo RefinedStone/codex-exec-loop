@@ -28,6 +28,8 @@ pub struct ThreadPromptSubmission {
     pub workspace_directory: String,
     pub thread_id: String,
     pub prompt: String,
+    /// 이 프롬프트를 낸 명령의 연산 id 이다 (plan 18 K4-4). 런타임이 명령을 기록한 뒤 넣는다. 기록이 없는 커널은 비운다.
+    pub op_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,4 +101,16 @@ pub enum ThreadPromptPreparationFailure {
     BootstrapReviewRequired { draft_name: String },
     // planning 이 프롬프트를 받지 않았거나 준비가 실패했다.
     PlanningRefused { reason: String },
+}
+
+impl ThreadPromptPreparationFailure {
+    /// 이 실패의 이유 코드이다. 기록과 `prompt_submission` 이벤트가 같은 값을 쓴다.
+    pub fn reason(&self) -> ReasonCode {
+        match self {
+            Self::Cancelled => ReasonCode::Cancelled,
+            Self::TextMismatch => ReasonCode::TextMismatch,
+            Self::BootstrapReviewRequired { .. } => ReasonCode::BootstrapReviewRequired,
+            Self::PlanningRefused { .. } => ReasonCode::PlanningRefused,
+        }
+    }
 }
