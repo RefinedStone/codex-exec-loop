@@ -149,6 +149,24 @@ fn acquire_instance_lock(run_dir: &Path) -> Result<File> {
     }
 }
 
+struct IdleNotification(tokio::sync::Notify);
+
+impl std::task::Wake for IdleNotification {
+    fn wake(self: Arc<Self>) {
+        self.0.notify_one();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.notify_one();
+    }
+}
+
+fn register_idle_notification(kernels: &RepositoryKernelRegistry) -> Arc<IdleNotification> {
+    let notification = Arc::new(IdleNotification(tokio::sync::Notify::new()));
+    kernels.notify_when_idle(std::task::Waker::from(notification.clone()));
+    notification
+}
+
 async fn serve(
     mut listener: GatewayListener,
     hosts: GatewayHosts,
@@ -157,6 +175,7 @@ async fn serve(
     work_context: Arc<dyn WorkContextPort>,
     recorder: Option<Arc<GatewayRecorder>>,
 ) {
+    let idle_notification = register_idle_notification(&kernels);
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     let mut idle_sweep = tokio::time::interval(KERNEL_IDLE_SWEEP_INTERVAL);
@@ -164,6 +183,9 @@ async fn serve(
     loop {
         tokio::select! {
             () = &mut shutdown => return,
+            () = idle_notification.0.notified() => {
+                unload_idle_kernels(kernels.clone());
+            }
             _ = idle_sweep.tick() => {
                 unload_idle_kernels(kernels.clone());
                 let mcp_hub = mcp_hub.clone();

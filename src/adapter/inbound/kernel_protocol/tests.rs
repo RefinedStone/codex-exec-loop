@@ -1,6 +1,17 @@
 use super::*;
 use serde_json::{Value, json};
 
+#[test]
+fn attach_defaults_to_durable_and_accepts_explicit_transient_clients() {
+    let mut params = json!({"workspace": "/repo", "client_name": "test"});
+    let durable: AttachRequest = serde_json::from_value(params.clone()).unwrap();
+    assert!(!durable.transient);
+    params["transient"] = json!(true);
+    let transient: AttachRequest = serde_json::from_value(params).unwrap();
+    assert!(transient.transient);
+    assert_eq!(serde_json::to_value(transient).unwrap()["transient"], true);
+}
+
 fn sample_commands() -> Vec<KernelCommand> {
     vec![
         KernelCommand::LoadSessions {},
@@ -1352,6 +1363,7 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
     assert_eq!(
         submit["rejections"],
         json!([
+            "kernel_not_running",
             "busy",
             "preparation_active",
             "unknown_thread",

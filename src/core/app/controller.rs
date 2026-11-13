@@ -125,7 +125,9 @@ impl CoreController {
     /// core 에 끝나지 않은 일이 있다 (plan 18 K3-5). 어느 thread 의 턴·승인·자동 후속·평가, 또는 planning 작업이다.
     /// 커널을 내려도 되는지 볼 때 쓴다. 스냅샷을 복사하지 않는다.
     pub(in crate::core) fn has_remaining_work(&self) -> bool {
-        self.conversation_turn.has_busy_session() || self.planning.has_work_in_flight()
+        self.conversation_turn.has_busy_session()
+            || self.planning.has_work_in_flight()
+            || self.session_feature.has_active_rename()
     }
 
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
@@ -10744,6 +10746,10 @@ mod tests {
         };
         let mut controller = CoreController::new();
         controller.handle_input(rename(7));
+        assert!(
+            controller.has_remaining_work(),
+            "rename must keep the kernel alive"
+        );
         // A second rename while the first runs is not started. It ends at once.
         controller.handle_input(rename(8));
         assert_eq!(
@@ -10761,6 +10767,10 @@ mod tests {
                 result: Ok(()),
             },
         ));
+        assert!(
+            !controller.has_remaining_work(),
+            "completed rename releases the kernel"
+        );
         assert_eq!(
             controller.take_kernel_records(),
             vec![KernelEvent::CommandCompleted {

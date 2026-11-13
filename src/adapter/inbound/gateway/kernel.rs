@@ -183,7 +183,13 @@ impl KernelSession {
         let workspace = request.workspace.clone();
         let attached = tokio::time::timeout(
             KERNEL_ATTACH_TIMEOUT,
-            blocking(move || kernels.attach(&workspace)),
+            blocking(move || {
+                if request.transient {
+                    kernels.attach_with_lifetime(&workspace, true)
+                } else {
+                    kernels.attach(&workspace)
+                }
+            }),
         )
         .await
         .map_err(|_| timed_out("attach", KERNEL_ATTACH_TIMEOUT))?;

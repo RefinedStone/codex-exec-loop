@@ -71,6 +71,9 @@ pub fn run() -> anyhow::Result<i32> {
     if invocation.is_help_only()
         || invocation.is_configuration_command()
         || invocation.is_mcp_hub_command()
+        || invocation.command_args.first().is_some_and(|command| {
+            command == std::ffi::OsStr::new("describe") || command == std::ffi::OsStr::new("kernel")
+        })
     {
         let mut stdout = io::stdout();
         return Ok(adapter::inbound::cli::run_with_args_with_config_overrides(

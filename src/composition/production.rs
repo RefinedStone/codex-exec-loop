@@ -99,6 +99,12 @@ use crate::domain::github_review::GithubPullRequestTarget;
 const APP_SERVER_CLIENT_NAME: &str = "codex-exec-loop-native";
 const AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR: &str = "AKRA_APP_SERVER_PROMPT_LOG";
 
+pub(crate) fn build_kernel_command_port(
+    workspace: &Path,
+) -> Result<Box<dyn crate::application::port::inbound::kernel_command_port::KernelCommandPort>> {
+    crate::composition::kernel_command_execution::build(workspace)
+}
+
 pub(crate) struct ProductionAdminApplication {
     pub(crate) facade: Arc<dyn PlanningAdminPort>,
     pub(crate) parallel_mode_admin_port: Arc<dyn ParallelModeAdminPort>,

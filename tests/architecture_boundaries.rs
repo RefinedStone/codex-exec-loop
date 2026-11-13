@@ -11260,7 +11260,7 @@ fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
     let kernel = fs::read_to_string("src/composition/repository_kernel.rs")
         .expect("repository kernel source should load");
     let lock = kernel
-        .find("production::acquire_repository_kernel_lock(workspace_dir)?")
+        .find("RepositoryKernelLockAdapter::acquire_for_owner(")
         .expect("the repository kernel must take the lock");
     let build = kernel
         .find("production::build_headless_kernel_runtime(workspace_dir, app_server)")

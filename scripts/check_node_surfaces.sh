@@ -26,6 +26,7 @@ for script_path in \
 done
 
 printf '\n==> shell script syntax\n'
+node scripts/generate-kernel-skill.mjs --check
 bash -n scripts/check_windows_portable.sh
 
 printf '\n==> CI, agent planning, and approval-package tests\n'

@@ -602,6 +602,52 @@ fn set_max_turns_command(id: &str, value: u32) -> Message {
     )
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn transient_detach_and_socket_close_wake_idle_unload() {
+    for close_socket in [false, true] {
+        let folder = KernelTestFolder::new(if close_socket {
+            "transient-close"
+        } else {
+            "transient-detach"
+        });
+        let kernels =
+            Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+        let idle_notification = super::register_idle_notification(&kernels);
+        let mut client = connect_kernel_client(kernels.clone()).await;
+        let attached = kernel_request(
+            &mut client,
+            "attach",
+            "akra/kernel/attach",
+            json!({"workspace": folder.workspace(), "client_name": "command-test", "transient": true}),
+        ).await;
+        let key = attached["result"]["kernel"]
+            .as_str()
+            .expect("attached")
+            .to_string();
+        let idle = idle_notification.0.notified();
+        tokio::pin!(idle);
+        idle.as_mut().enable();
+        if close_socket {
+            client.close(None).await.expect("close");
+        } else {
+            let detached =
+                kernel_request(&mut client, "detach", "akra/kernel/detach", json!({})).await;
+            assert_eq!(detached["result"], json!({}));
+        }
+        tokio::time::timeout(Duration::from_secs(10), idle)
+            .await
+            .expect("disconnect wakes the idle reaper");
+        assert_eq!(
+            kernels.unload_idle_kernels(std::time::Instant::now()),
+            vec![key]
+        );
+        assert!(
+            crate::composition::production::acquire_repository_kernel_lock(&folder.workspace())
+                .is_ok()
+        );
+    }
+}
+
 /// 조용한 시간이 올 때까지 받은 텍스트 메시지를 모은다.
 async fn texts_until_quiet(
     websocket: &mut WebSocketStream<DuplexStream>,

@@ -60,6 +60,7 @@ function Test-TuiLayering {
 }
 
 function Invoke-NodeAdminChecks {
+    Invoke-ExternalStep "kernel skill matches spec" "node" @("scripts/generate-kernel-skill.mjs", "--check")
     Write-Host "`n==> repository Node script syntax"
     $scriptPaths = @(
         "scripts/capture_admin_graphic.mjs",

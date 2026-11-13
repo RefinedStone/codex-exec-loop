@@ -19,8 +19,8 @@ use super::{
 };
 use crate::domain::kernel_event::KernelEvent as KernelRecord;
 use crate::domain::kernel_spec::{
-    CommandCompletion, CommandEffect, CommandIdempotency, CommandScope, KernelCommandKind,
-    KernelRecordKind, OperationState, ReasonCode,
+    CommandCompletion, CommandEffect, CommandIdempotency, CommandScope, CommandState,
+    KernelCommandKind, KernelRecordKind, OperationState, ReasonCode,
 };
 use crate::domain::parallel_mode::ParallelModeAgentRosterState;
 
@@ -53,6 +53,7 @@ pub struct KernelSpec {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Terms {
     pub scope: Vec<TermEntry>,
+    pub state: Vec<TermEntry>,
     pub effect: Vec<TermEntry>,
     pub idempotency: Vec<TermEntry>,
     /// 병렬 에이전트의 `state` 값이다 (plan 18 K4-2). 이름만으로 뜻을 알기 어려운 값이라서 설명을 싣는다.
@@ -87,6 +88,7 @@ pub struct MethodEntry {
 pub struct CommandEntry {
     pub name: &'static str,
     pub scope: CommandScope,
+    pub state: CommandState,
     pub summary: &'static str,
     pub effect: CommandEffect,
     pub idempotency: CommandIdempotency,
@@ -194,6 +196,10 @@ pub fn describe() -> KernelSpec {
         schema_dialect: SCHEMA_DIALECT,
         protocol_version: PROTOCOL_VERSION,
         terms: Terms {
+            state: CommandState::ALL
+                .iter()
+                .map(|state| term(state.name(), state.summary()))
+                .collect(),
             scope: CommandScope::ALL
                 .iter()
                 .map(|scope| term(scope.name(), scope.summary()))
@@ -227,6 +233,7 @@ pub fn describe() -> KernelSpec {
                 CommandEntry {
                     name: kind.name(),
                     scope: spec.scope,
+                    state: spec.state,
                     summary: kind.summary(),
                     effect: spec.effect,
                     idempotency: spec.idempotency,

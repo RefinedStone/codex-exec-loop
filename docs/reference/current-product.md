@@ -46,6 +46,33 @@ Global keys include `Ctrl+q` to exit, `Ctrl+t` to start a blank draft, and `Esc`
 the active inspection surface. A modal may override global keys while it owns focus; visible key
 copy must match the current controller path.
 
+## Kernel JSON CLI
+
+`akra describe --json` prints the embedded kernel specification without starting a kernel.
+`akra kernel <scope> <command> --field value --json` sends a command through the shared
+application command port. `--workspace <directory>` selects another workspace.
+Command names, scopes, and input fields come from the specification.
+
+`akra kernel query <name> --json` reads kernel state. `akra kernel history --after <sequence>
+--wait --json` waits for records. `akra kernel operation <op_id> --wait --json` waits for an
+operation to finish. Output is one JSON line. Exit codes are 0 for acceptance, 2 for rejection,
+and 1 for invalid input or an unavailable connection. Acceptance is not completion.
+
+Mutations accept `--idempotency-key`. An omitted key is random and lasts for one invocation.
+Callers that retry across invocations must supply the same key. Destructive commands require
+`--confirm true`.
+
+The Gateway path uses a transient attachment. A transient last client releases an idle kernel
+without the durable client's ten-minute grace. With no Gateway, stored commands run under a
+command-owned repository lock without starting app-server, schedulers, or prompt recovery.
+Runtime commands return `kernel_not_running`. The existing TUI-owned reset compatibility path
+remains until K6 and does not create kernel audit records.
+
+The generated `akra-kernel` skill is installed independently of MCP server registration and
+registered through `skills/extraRoots/set`. Its source is `schema/akra-kernel-spec.json`.
+`node scripts/generate-kernel-skill.mjs` prints the generated document; `--check` verifies the
+shipped asset.
+
 ## Shell Command Registry
 
 The source registry is `src/adapter/inbound/tui/app/inline_shell_commands.rs`.

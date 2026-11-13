@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
  * argument parsing과 process exit code는 edge에 남기고, 실제 작업은 application service와 outbound adapter로 위임한다.
  * 그래서 TUI, admin API, automation tool이 같은 planning/parallel-mode 계약을 공유한다.
  */
+mod kernel;
 mod mcp;
 mod reports;
 mod usage;
@@ -69,6 +70,12 @@ where
     // None 반환은 native TUI가 계속 booting해야 한다는 뜻이다. 처리된 subcommand는 모두 explicit exit code를 돌린다.
     match args.as_slice() {
         [] => Ok(None),
+        [command, rest @ ..] if command == OsStr::new("describe") => {
+            Ok(Some(kernel::describe(rest, stdout)?))
+        }
+        [command, rest @ ..] if command == OsStr::new("kernel") => {
+            Ok(Some(kernel::run(rest, stdout)?))
+        }
         [flag] if is_help_flag(flag) => {
             writeln!(stdout, "{ADMIN_SERVER_USAGE}")?;
             writeln!(stdout, "{ADMIN_SERVER_ALIAS_USAGE}")?;
@@ -82,6 +89,23 @@ where
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
             writeln!(stdout, "{CONFIG_USAGE}")?;
             writeln!(stdout, "{MCP_USAGE}")?;
+            writeln!(stdout, "Usage: akra describe --json")?;
+            writeln!(
+                stdout,
+                "Usage: akra kernel <scope> <command> [--field value] --json"
+            )?;
+            writeln!(
+                stdout,
+                "Usage: akra kernel query <name> [--field value] --json"
+            )?;
+            writeln!(
+                stdout,
+                "Usage: akra kernel history --after <n> [--wait] --json"
+            )?;
+            writeln!(
+                stdout,
+                "Usage: akra kernel operation <op_id> [--wait] --json"
+            )?;
             Ok(Some(0))
         }
         [command, rest @ ..] if command == OsStr::new("config") => {
