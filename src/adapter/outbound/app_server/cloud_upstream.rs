@@ -406,6 +406,121 @@ pub(crate) fn codex_auth_path() -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// 실계정 읽기 확인이다 (D-13 조회만, 모델 턴 없음). CI 는 네트워크·토큰이 없으므로 `#[ignore]` 이다.
+    /// 수동 실행: `cargo test --lib cloud_upstream::tests::live_cloud_reads -- --ignored --nocapture`.
+    /// `~/.codex/auth.json` 의 토큰으로 클라우드 WS 에 붙어 initialize, thread/list, 첫 스레드의 thread/read 와
+    /// thread/turns/list 를 보낸다. 토큰·스레드 내용은 찍지 않고 개수만 센다.
+    #[tokio::test]
+    #[ignore = "real OpenAI cloud account and network; run manually"]
+    async fn live_cloud_reads() {
+        ensure_crypto_provider();
+        let credentials = load_credentials(&codex_auth_path().expect("auth path")).expect("creds");
+        let request = build_cloud_request(&credentials, &default_user_agent()).expect("request");
+        let (mut cloud, _response) =
+            tokio_tungstenite::connect_async_with_config(request, Some(websocket_config()), false)
+                .await
+                .expect("the cloud handshake must succeed");
+
+        let init = live_rpc(
+            &mut cloud,
+            1,
+            "initialize",
+            serde_json::json!({
+                "clientInfo": { "name": "Codex Desktop", "title": "Codex Desktop", "version": DEFAULT_CLIENT_VERSION },
+                "experimentalApi": true,
+                "requestAttestation": true,
+            }),
+        )
+        .await;
+        assert!(init.get("result").is_some(), "initialize failed: {init}");
+        cloud
+            .send(Message::text(r#"{"jsonrpc":"2.0","method":"initialized"}"#))
+            .await
+            .expect("initialized");
+
+        let list = live_rpc(
+            &mut cloud,
+            2,
+            "thread/list",
+            serde_json::json!({ "limit": 20 }),
+        )
+        .await;
+        let threads = list["result"]["data"]
+            .as_array()
+            .expect("thread/list returns data");
+        eprintln!("live: thread/list returned {} threads", threads.len());
+        assert!(list.get("result").is_some(), "thread/list failed: {list}");
+
+        if let Some(first) = threads.first() {
+            let thread_id = first["id"].as_str().expect("thread id");
+            let read = live_rpc(
+                &mut cloud,
+                3,
+                "thread/read",
+                serde_json::json!({ "threadId": thread_id, "includeTurns": false }),
+            )
+            .await;
+            eprintln!(
+                "live: thread/read {} -> result={}",
+                thread_id,
+                read.get("result").is_some()
+            );
+            let turns = live_rpc(
+                &mut cloud,
+                4,
+                "thread/turns/list",
+                serde_json::json!({ "threadId": thread_id, "limit": 5, "sortDirection": "desc", "itemsView": "full" }),
+            )
+            .await;
+            eprintln!(
+                "live: thread/turns/list -> result={}, error={}",
+                turns.get("result").is_some(),
+                turns
+                    .get("error")
+                    .map(|error| error.to_string())
+                    .unwrap_or_default()
+            );
+            assert!(read.get("result").is_some(), "thread/read failed: {read}");
+            assert!(
+                turns.get("result").is_some(),
+                "thread/turns/list failed: {turns}"
+            );
+        }
+        let _ = cloud.close(None).await;
+    }
+
+    /// 요청 하나를 보내고 그 `id` 의 응답이 올 때까지 다른 프레임을 건너뛴다. 알림(`method` 있는 프레임)은 버린다.
+    async fn live_rpc<S>(
+        cloud: &mut tokio_tungstenite::WebSocketStream<S>,
+        id: i64,
+        method: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let request =
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        cloud
+            .send(Message::text(request.to_string()))
+            .await
+            .expect("send request");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let frame = tokio::time::timeout_at(deadline, cloud.next())
+                .await
+                .expect("the cloud must answer within 30s")
+                .expect("the stream stays open")
+                .expect("a readable frame");
+            if let Message::Text(text) = frame {
+                let value: serde_json::Value = serde_json::from_str(text.as_str()).expect("json");
+                if value.get("id").and_then(|value| value.as_i64()) == Some(id) {
+                    return value;
+                }
+            }
+        }
+    }
+
     fn token_with_claims(claims: &serde_json::Value) -> String {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
         let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).unwrap());

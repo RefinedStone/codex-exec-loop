@@ -106,7 +106,7 @@ kernel: 원격 thread 를 소유하지 않는다. 명령도 내지 않는다. �
 | S1a | 호스트 목록, 경로로 선택, info, 기록 제외 | `src/adapter/inbound/gateway/`, `src/composition/production.rs` | 가짜 두 번째 upstream 으로 Gateway 시험. `local` 회귀 없음 | - |
 | G0 | 공식 접속 경로 확인 (§1) | - | 공식 문서 또는 공식 CLI | 여기서 멈춘다 |
 | S1b | 원격 adapter, TLS, 설정 | `src/adapter/outbound/app_server/`, `Cargo.toml` | 로컬 TLS 가짜 서버 | - |
-| G1 | 읽기 전용 확인 | - | `initialize` 와 목록 읽기가 성공한다. 모델 턴 없음 | S2 이후를 하지 않는다 |
+| G1 | 읽기 전용 확인 | - | `initialize` 와 목록 읽기가 성공한다. 모델 턴 없음 (2026-11-14 통과) | S2 이후를 하지 않는다 |
 | S2 | Desktop 다중 접속, 원격 구역, 읽기 화면 | `desktop/src/main`, `desktop/src/renderer` | vitest, 가짜 Gateway e2e (숨긴 창), 실제 계정 확인 한 번 | - |
 | G2 | 쓰기 경로 확인 | - | 공개 프로토콜의 method 가 원격 thread 에서 동작한다 | 읽기 전용으로 끝낸다 |
 | S3 | 메시지 보내기 | renderer 입력창, main | 사용자가 허락한 턴 한 번 (D-13) | - |
