@@ -92,7 +92,7 @@ function errorMessage(error: unknown): string {
 }
 
 /** 패널이 직접 부를 수 있는 Gateway 메서드이다. app-server 메서드와 커널 명령은 이 길로 보내지 않는다. */
-const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/"];
+const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/"];
 /** 원격 호스트의 dot 목록이다 (D-19). dots 가 꺼진 Gateway 는 모르는 method 로 답한다. */
 const DOTS_LIST_METHOD = "akra/dots/list";
 

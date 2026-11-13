@@ -113,8 +113,12 @@
   `thread/read` 로 읽고, 사용자가 세션에서 한 번 허락하면 `thread/resume`·`turn/start`·`turn/steer` 로 보낸다.
 - 됨: dot 목록. Gateway `akra/dots/list` 가 `GET https://chatgpt.com/backend-api/tbo` 를 읽어 dot 의 이름·상태·
   현재 작업 thread 를 준다. Desktop 원격 구역이 dot 을 보이고, 누르면 그 작업 thread 를 연다.
-- 안 됨: 메시지 방(대화 읽기·보내기), 실시간 상태, 반응, dot 관리(D3), 클라우드 컴퓨터(D4), §3 의 요청 변환·
-  토큰 갱신·압축. dot 목록은 첫 페이지만 읽는다.
+- 됨: dot 과의 대화 읽기. Gateway `akra/dots/messages` 가 `GET /messaging/rooms/{id}` 와 `.../messages?limit=30`
+  을 읽어 메시지(보낸 쪽 이름, dot 여부, 글)를 준다. Desktop 은 dot 을 누르면 이 대화를 보이고, "작업 대화 열기"로
+  작업 thread 로 간다. 서비스는 모든 메시지의 `role` 을 `user` 로 주므로 dot 은 `member_profile_snapshots` 의 id 로
+  가린다 (계정 하나에서 본 규칙).
+- 안 됨: 메시지 방에 보내기(`POST .../messages`, 증명 요구 여부 미확인), 실시간 상태, 반응, dot 관리(D3),
+  클라우드 컴퓨터(D4), §3 의 요청 변환·토큰 갱신·압축. dot 목록은 첫 페이지만, 대화는 최근 30개만 읽는다 (`limit` 은 30 까지 통과, 40 부터 HTTP 422).
 - 확인 안 됨: 클라우드 WebSocket 이 공개 `turn/start` 를 받는지 (G2). 사용자가 처음 보낼 때 드러난다.
 - 확인됨 (2026-11-14, 실계정 읽기 1회, 턴 없음): 클라우드 WebSocket 이 `initialize`, `thread/list`(스레드 2개),
   `thread/read`, `thread/turns/list` 를 모두 받는다. 토큰·내용은 찍지 않고 개수만 셌다. 재현: `cargo test --lib

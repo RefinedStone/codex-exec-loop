@@ -1,7 +1,7 @@
 // 화면 틀의 상태이다: 어떤 보기와 패널이 열려 있는지. 대화 상태는 `desktopStore` 에 있다.
 import { create } from "zustand";
 
-export type View = "home" | "thread" | "fleet" | "remote";
+export type View = "home" | "thread" | "fleet" | "remote" | "dot";
 export type PanelId = "review" | "kernel" | "browser" | "work" | "docs";
 export type Theme = "light" | "dark";
 
@@ -28,8 +28,10 @@ export interface UiState {
   toasts: Toast[];
   /** 원격 호스트(클라우드 에이전트, plan 25)의 구역을 켰다. 기본값은 꺼짐이고, 꺼져 있으면 접속하지 않는다. */
   remoteAgents: boolean;
-  /** `remote` 보기가 보여 주는 호스트이다. */
+  /** `remote` 와 `dot` 보기가 보여 주는 호스트이다. */
   remoteHost: string | null;
+  /** `dot` 보기가 보여 주는 dot 이다. */
+  remoteDotId: string | null;
 }
 
 const REMOTE_AGENTS_KEY = "akra.remoteAgents";
@@ -59,6 +61,7 @@ export const useUiStore = create<UiState>(() => ({
   toasts: [],
   remoteAgents: storedRemoteAgents(),
   remoteHost: null,
+  remoteDotId: null,
 }));
 
 const set = useUiStore.setState;
@@ -120,6 +123,11 @@ export function toggleRemoteAgents(confirm: (message: string) => boolean = (mess
 /** 원격 호스트의 대화 화면을 연다. */
 export function showRemote(host: string): void {
   set({ view: "remote", remoteHost: host, paletteOpen: false });
+}
+
+/** 원격 호스트의 dot 과의 대화 화면을 연다 (D-19). */
+export function showDot(host: string, dotId: string): void {
+  set({ view: "dot", remoteHost: host, remoteDotId: dotId, paletteOpen: false });
 }
 
 export const DOTS_CLOUD_ENABLE_WARNING =

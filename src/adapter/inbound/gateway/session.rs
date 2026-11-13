@@ -183,7 +183,13 @@ where
                         } else if !is_local && method.starts_with(CONTEXT_METHOD_PREFIX) {
                             Some(remote_context_response(id))
                         } else if let Some(dots) = dots_for_method {
-                            spawn_dots_request(dots.clone(), id, method, outbox.clone());
+                            spawn_dots_request(
+                                dots.clone(),
+                                id,
+                                method,
+                                text.as_str().to_string(),
+                                outbox.clone(),
+                            );
                             None
                         } else if let Some(hub) = mcp_hub_for_method {
                             spawn_mcp_request(

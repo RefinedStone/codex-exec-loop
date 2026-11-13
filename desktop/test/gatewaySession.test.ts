@@ -246,7 +246,7 @@ describe("a remote host over the fake gateway (plan 25)", () => {
   });
 
   it("reads the dot list of a remote host once and keeps it empty when the gateway has none", async () => {
-    const dot = { id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "thread-1" };
+    const dot = { id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "thread-1", messagingRoomId: "room-1" };
     const withDots = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, { hosts: ["cloud"], dots: [dot] });
     cleanups.push(() => withDots.close());
     const first = connectBridge(withDots.endpoint, undefined, "cloud");

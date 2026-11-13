@@ -1,6 +1,6 @@
 // 화면 틀이다 (R10): 사이드바, 위 막대, 본문(새 스레드 · 현황판 · 대화와 입력창), 터미널, 오른쪽 패널.
 // 모양은 UX 블루프린트(`blueprint/`)를 따른다. 대화 상태는 `DesktopSession` 과 `desktopStore` 가 가진다.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
@@ -17,6 +17,7 @@ import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showRemote, showVi
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
+import { DotChat } from "./views/DotChat";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts } from "./views/Views";
 import { DocumentsPanel } from "./work/DocumentsPanel";
 import { GitHubPanel } from "./work/GitHubPanel";
@@ -295,9 +296,23 @@ export function App() {
   };
   // 원격 구역을 끄거나 그 호스트가 목록에서 빠지면 원격 대화 화면을 닫는다.
   const remoteVisible = remoteAgents && remoteHost !== null && remoteHosts.split(",").includes(remoteHost);
+  // dot 대화 화면이 보여 주는 dot 이다. 목록에서 빠지면 화면을 닫는다.
+  const remoteDotId = useUiStore((state) => state.remoteDotId);
+  const remoteDot = useSyncExternalStore(
+    useCallback((listener: () => void) => (remoteHost ? remoteHostStore(remoteHost).subscribe(listener) : () => undefined), [remoteHost]),
+    () => (remoteHost ? (remoteHostStore(remoteHost).getState().dots.find((dot) => dot.id === remoteDotId) ?? null) : null),
+  );
   useEffect(() => {
     if (view === "remote" && !remoteVisible) showView("home");
-  }, [view, remoteVisible]);
+    if (view === "dot" && (!remoteVisible || remoteDot === null)) showView("home");
+  }, [view, remoteVisible, remoteDot]);
+  const remoteGatewayRequest = useMemo<GatewayRequest>(
+    () => (method, params) => {
+      const current = remoteHost ? remoteSessions.current.get(remoteHost) : undefined;
+      return current ? current.requestGatewayService(method, params) : Promise.reject(new Error("원격 호스트에 연결되어 있지 않습니다."));
+    },
+    [remoteHost],
+  );
 
   const openRemoteThread = useCallback((host: string, threadId: string) => {
     showRemote(host);
@@ -418,6 +433,9 @@ export function App() {
                 <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
                 <Composer actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
               </>
+            )}
+            {view === "dot" && remoteHost && remoteVisible && remoteDot && (
+              <DotChat dot={remoteDot} request={remoteGatewayRequest} onOpenWorkThread={(threadId) => openRemoteThread(remoteHost, threadId)} />
             )}
             {view === "remote" && remoteHost && remoteVisible && (
               <ConversationStoreContext.Provider value={remoteHostStore(remoteHost)}>
