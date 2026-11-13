@@ -243,6 +243,25 @@ describe("a remote host over the fake gateway (plan 25)", () => {
     expect(fake.remoteReceivedMethods.some((method) => method.startsWith("turn/") || method === "thread/start")).toBe(false);
   });
 
+  it("opens a remote thread with thread/read and never resumes it", async () => {
+    const fake = await startFakeGateway(uniqueTestEndpoint(), APPROVAL_TURN_RECORDING, { hosts: ["cloud"] });
+    cleanups.push(() => fake.close());
+    const { connection, bridge } = connectBridge(fake.endpoint, undefined, "cloud");
+    const store = sessionStore();
+    const session = new DesktopSession(bridge, store, "test", undefined, true);
+    session.start();
+    cleanups.push(() => session.stop());
+    connection.start();
+    await waitFor(() => store.snapshot.gateway !== undefined || store.snapshot.sessionError !== undefined);
+
+    await session.openThread("01a1abfb-8f0a-7581-a8e4-c2953347f470");
+    expect(store.snapshot.transcript?.threadId).toBe("01a1abfb-8f0a-7581-a8e4-c2953347f470");
+    await session.openThread("another-thread");
+    expect(store.snapshot.transcriptError).toBeNull();
+    expect(fake.remoteReceivedMethods).toContain("thread/read");
+    expect(fake.remoteReceivedMethods.some((method) => method === "thread/resume" || method === "thread/unsubscribe")).toBe(false);
+  });
+
   it("does not reconnect to a host that the gateway does not know", async () => {
     const fake = await gateway();
     const { connection, states } = connectBridge(fake.endpoint, undefined, "missing");

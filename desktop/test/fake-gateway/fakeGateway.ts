@@ -316,7 +316,8 @@ export async function startFakeGateway(
         return;
       }
       if (message.id !== undefined && message.id !== null) {
-        const recorded = table.get(message.method) ?? {
+        // 원격 호스트는 `thread/read` 로 연다. 녹화에는 같은 모양의 `thread/resume` 응답만 있다.
+        const recorded = table.get(message.method) ?? (message.method === "thread/read" ? table.get("thread/resume") : undefined) ?? {
           error: { code: -32601, message: `fake gateway has no recording for ${message.method}` },
         };
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...recorded }));

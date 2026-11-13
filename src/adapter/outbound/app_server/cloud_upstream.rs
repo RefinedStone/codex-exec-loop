@@ -9,22 +9,27 @@
 //! 인증은 로컬 `~/.codex/auth.json` 의 access_token 하나이다(공식 앱과 같은 토큰). 하위 프로토콜
 //! `openai-bearer.<token>` 로 보낸다. 자격증명은 로그·스냅샷에 남기지 않는다.
 //!
-//! 범위(D1): 메시지는 양방향으로 바꾸지 않고 전달한다. 요청 변환(§2.4)·토큰 갱신·401 재연결은
-//! 뒤 단계에서 더한다. 실계정 쓰기(turn/*)는 클라이언트가 보내지 않는 한 일어나지 않는다.
+//! 범위(D1): 읽기 전용이다. 클라이언트의 요청은 [`READ_ONLY_METHODS`] 만 클라우드로 보내고 나머지는
+//! 다리가 거절한다. 그래서 실계정 쓰기(turn/*, thread/resume 등)는 어떤 클라이언트가 붙어도 일어나지
+//! 않는다 (D-19). 클라우드가 로그인을 거절하면(401/403) close 1008 로 닫아 클라이언트가 다시 시도하지
+//! 않게 한다 (plan 25 §7). 요청 변환(§3)·토큰 갱신은 쓰기 단계(D2)에서 더한다.
 
 use std::path::PathBuf;
 use std::sync::Once;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::watch;
+use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamSnapshot, GatewayUpstreamStream,
@@ -41,6 +46,32 @@ const DEFAULT_CLIENT_VERSION: &str = "26.1106.51428";
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 256 << 20;
 /// Gateway 세션과 다리 사이의 인메모리 버퍼이다.
 const DUPLEX_BUFFER_BYTES: usize = 1 << 20;
+/// 클라우드로 보내도 되는 읽기 method 이다. 여기 없는 요청은 다리가 거절한다. `thread/resume` 은 멈춘
+/// 에이전트를 다시 깨울 수 있어 쓰기로 본다. 쓰기는 사용자 허락을 받는 단계(D2)에서 연다 (D-19).
+const READ_ONLY_METHODS: &[&str] = &[
+    "initialize",
+    "initialized",
+    "thread/list",
+    "thread/read",
+    "thread/turns/list",
+    "thread/items/list",
+    "model/list",
+];
+/// 거절 응답의 JSON-RPC 코드이다. 원격 접속의 `akra/kernel/*` 거절과 같다 (method not found).
+const READ_ONLY_REFUSAL_CODE: i64 = -32601;
+/// 클라우드가 로그인을 거절했을 때의 close 이유이다. Desktop 이 이 글자로 안내문을 고른다.
+const LOGIN_REJECTED_REASON: &str = "cloud login rejected";
+/// 공식 앱과 같은 keepalive 이다: 10초마다 ping, 60초 동안 클라우드가 조용하면 끊는다.
+const KEEPALIVE: Keepalive = Keepalive {
+    ping_every: Duration::from_secs(10),
+    silence_limit: Duration::from_secs(60),
+};
+
+#[derive(Clone, Copy)]
+struct Keepalive {
+    ping_every: Duration,
+    silence_limit: Duration,
+}
 
 /// rustls 0.23 은 암호화 provider 를 자동으로 고르지 않는다. 첫 클라우드 접속 전에 ring 을 한 번 설치한다.
 fn ensure_crypto_provider() {
@@ -105,7 +136,7 @@ impl GatewayUpstreamPort for CloudGatewayUpstream {
 
 /// Gateway 의 안쪽 WS 를 server 로 받고, 클라우드 WS 에 client 로 붙어 양방향으로 중계한다.
 async fn run_bridge(bridge_side: tokio::io::DuplexStream, request: Request) {
-    let inner =
+    let mut inner =
         match tokio_tungstenite::accept_async_with_config(bridge_side, Some(websocket_config()))
             .await
         {
@@ -126,69 +157,136 @@ async fn run_bridge(bridge_side: tokio::io::DuplexStream, request: Request) {
         Err(error) => {
             // 토큰·신원은 로그에 넣지 않는다. 오류 자체(상태 코드 등)만 남긴다.
             tracing::warn!(error = %error, "dots cloud upstream connect failed");
-            let mut inner = inner;
-            let _ = inner.close(None).await;
+            let _ = inner.close(connect_failure_close(&error)).await;
             return;
         }
     };
-    relay(inner, cloud).await;
+    relay(inner, cloud, KEEPALIVE).await;
 }
 
-/// 두 WebSocket 사이에서 Text·Binary·Close 를 그대로 나른다. ping/pong 은 각 소켓이 읽을 때 처리한다.
+/// 로그인 거절(401/403)은 1008 로 닫는다. 클라이언트가 같은 토큰으로 클라우드를 다시 두드리지 않는다.
+/// 그 밖의 실패는 이유 없이 닫고, 클라이언트가 평소처럼 다시 붙는다.
+fn connect_failure_close(error: &WsError) -> Option<CloseFrame> {
+    let WsError::Http(response) = error else {
+        return None;
+    };
+    matches!(response.status().as_u16(), 401 | 403).then(|| CloseFrame {
+        code: CloseCode::Policy,
+        reason: LOGIN_REJECTED_REASON.into(),
+    })
+}
+
+/// 클라이언트가 보낸 글자 프레임을 어떻게 다룰지이다.
+#[derive(Debug, PartialEq, Eq)]
+enum ClientFrameRoute {
+    /// 클라우드로 그대로 보낸다.
+    Forward,
+    /// 클라우드로 보내지 않고 이 JSON-RPC 오류로 답한다.
+    Refuse(String),
+    /// 답할 id 가 없어 버린다.
+    Drop,
+}
+
+/// 읽기 요청과 오류 응답만 클라우드로 보낸다. `result` 응답은 클라우드의 요청(예: 승인)을 수락하는
+/// 쓰기이므로 버린다.
+fn route_client_frame(text: &str) -> ClientFrameRoute {
+    let Ok(serde_json::Value::Object(message)) = serde_json::from_str::<serde_json::Value>(text)
+    else {
+        return ClientFrameRoute::Drop;
+    };
+    let Some(method) = message.get("method").and_then(|method| method.as_str()) else {
+        return if message.contains_key("error") {
+            ClientFrameRoute::Forward
+        } else {
+            ClientFrameRoute::Drop
+        };
+    };
+    if READ_ONLY_METHODS.contains(&method) {
+        return ClientFrameRoute::Forward;
+    }
+    match message.get("id") {
+        Some(id) => ClientFrameRoute::Refuse(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": READ_ONLY_REFUSAL_CODE,
+                    "message": format!("the cloud host is read-only: {method} is not sent"),
+                },
+            })
+            .to_string(),
+        ),
+        None => ClientFrameRoute::Drop,
+    }
+}
+
+/// 두 WebSocket 사이를 중계한다. 클라이언트 쪽은 [`route_client_frame`] 을 거치고, 클라우드 쪽은 그대로
+/// 나른다. 클라우드에는 주기적으로 ping 을 보내고, 오래 조용하면 끊는다.
 async fn relay<I, C>(
     inner: tokio_tungstenite::WebSocketStream<I>,
     cloud: tokio_tungstenite::WebSocketStream<C>,
+    keepalive: Keepalive,
 ) where
     I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     C: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let (mut inner_sink, mut inner_source) = inner.split();
     let (mut cloud_sink, mut cloud_source) = cloud.split();
+    let mut ping = tokio::time::interval(keepalive.ping_every);
+    let mut cloud_heard_at = tokio::time::Instant::now();
 
-    let client_to_cloud = async {
-        while let Some(result) = inner_source.next().await {
-            let message = match result {
-                Ok(message) => message,
-                Err(_) => break,
-            };
-            match message {
-                Message::Text(_) | Message::Binary(_) => {
-                    if cloud_sink.send(message).await.is_err() {
+    loop {
+        tokio::select! {
+            message = inner_source.next() => {
+                let Some(Ok(message)) = message else { break };
+                match message {
+                    Message::Text(text) => match route_client_frame(text.as_str()) {
+                        ClientFrameRoute::Forward => {
+                            if cloud_sink.send(Message::Text(text)).await.is_err() {
+                                break;
+                            }
+                        }
+                        ClientFrameRoute::Refuse(response) => {
+                            if inner_sink.send(Message::text(response)).await.is_err() {
+                                break;
+                            }
+                        }
+                        ClientFrameRoute::Drop => {}
+                    },
+                    Message::Close(frame) => {
+                        let _ = cloud_sink.send(Message::Close(frame)).await;
                         break;
                     }
+                    // 압축을 협상하지 않으므로 클라이언트의 binary 는 없다. 있으면 검사할 수 없어 버린다.
+                    Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
                 }
-                Message::Close(frame) => {
-                    let _ = cloud_sink.send(Message::Close(frame)).await;
-                    break;
-                }
-                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
             }
-        }
-    };
-    let cloud_to_client = async {
-        while let Some(result) = cloud_source.next().await {
-            let message = match result {
-                Ok(message) => message,
-                Err(_) => break,
-            };
-            match message {
-                Message::Text(_) | Message::Binary(_) => {
-                    if inner_sink.send(message).await.is_err() {
+            message = cloud_source.next() => {
+                let Some(Ok(message)) = message else { break };
+                cloud_heard_at = tokio::time::Instant::now();
+                match message {
+                    Message::Text(_) | Message::Binary(_) => {
+                        if inner_sink.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Message::Close(frame) => {
+                        let _ = inner_sink.send(Message::Close(frame)).await;
                         break;
                     }
+                    Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
                 }
-                Message::Close(frame) => {
-                    let _ = inner_sink.send(Message::Close(frame)).await;
+            }
+            _ = ping.tick() => {
+                if cloud_heard_at.elapsed() > keepalive.silence_limit {
+                    tracing::warn!("dots cloud upstream is silent; closing the session");
                     break;
                 }
-                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+                if cloud_sink.send(Message::Ping(Default::default())).await.is_err() {
+                    break;
+                }
             }
         }
-    };
-
-    tokio::select! {
-        () = client_to_cloud => {}
-        () = cloud_to_client => {}
     }
 }
 
@@ -408,5 +506,139 @@ mod tests {
         let auth = TempAuthFile::write(&contents);
         let credentials = load_credentials(&auth.path).expect("credentials load");
         assert_eq!(credentials.account_id, "acc-nested");
+    }
+
+    #[test]
+    fn read_requests_and_error_responses_go_to_the_cloud() {
+        for text in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"thread/list","params":{}}"#,
+            r#"{"jsonrpc":"2.0","method":"initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"no"}}"#,
+        ] {
+            assert_eq!(
+                route_client_frame(text),
+                ClientFrameRoute::Forward,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_write_request_is_refused_with_its_id() {
+        for method in [
+            "turn/start",
+            "thread/resume",
+            "thread/start",
+            "getAuthStatus",
+        ] {
+            let text = format!(r#"{{"jsonrpc":"2.0","id":"a-1","method":"{method}"}}"#);
+            let ClientFrameRoute::Refuse(response) = route_client_frame(&text) else {
+                panic!("{method} must be refused");
+            };
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(response["id"], "a-1");
+            assert_eq!(response["error"]["code"], READ_ONLY_REFUSAL_CODE);
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(method)
+            );
+        }
+    }
+
+    #[test]
+    fn frames_that_cannot_be_refused_are_dropped() {
+        for text in [
+            // 쓰기 알림, 클라우드 요청을 수락하는 응답, JSON 이 아닌 글자.
+            r#"{"jsonrpc":"2.0","method":"turn/interrupt"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"result":{"decision":"accept"}}"#,
+            "not json",
+        ] {
+            assert_eq!(route_client_frame(text), ClientFrameRoute::Drop, "{text}");
+        }
+    }
+
+    #[test]
+    fn only_a_login_rejection_closes_with_policy() {
+        use tokio_tungstenite::tungstenite::http::Response;
+        let http = |status: u16| {
+            WsError::Http(Box::new(
+                Response::builder().status(status).body(None).unwrap(),
+            ))
+        };
+        for status in [401, 403] {
+            let frame = connect_failure_close(&http(status)).expect("login rejection");
+            assert_eq!(frame.code, CloseCode::Policy);
+            assert_eq!(frame.reason.as_str(), LOGIN_REJECTED_REASON);
+        }
+        assert!(connect_failure_close(&http(503)).is_none());
+        assert!(connect_failure_close(&WsError::ConnectionClosed).is_none());
+    }
+
+    type DuplexSocket = tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>;
+
+    /// 인메모리 WebSocket 한 쌍이다: (client, server).
+    async fn socket_pair() -> (DuplexSocket, DuplexSocket) {
+        let (client_io, server_io) = tokio::io::duplex(1 << 16);
+        let (client, server) = tokio::join!(
+            tokio_tungstenite::client_async("ws://localhost/", client_io),
+            tokio_tungstenite::accept_async(server_io),
+        );
+        (
+            client.expect("client handshake").0,
+            server.expect("server handshake"),
+        )
+    }
+
+    async fn next_json(socket: &mut DuplexSocket) -> serde_json::Value {
+        loop {
+            if let Message::Text(text) = socket.next().await.expect("frame").expect("read") {
+                return serde_json::from_str(text.as_str()).expect("json");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_relay_keeps_writes_away_from_the_cloud() {
+        let (mut client, inner) = socket_pair().await;
+        let (cloud, mut fake_cloud) = socket_pair().await;
+        let relay_task = tokio::spawn(relay(inner, cloud, KEEPALIVE));
+
+        let write = r#"{"jsonrpc":"2.0","id":1,"method":"turn/start","params":{}}"#;
+        let read = r#"{"jsonrpc":"2.0","id":2,"method":"thread/list","params":{}}"#;
+        client.send(Message::text(write)).await.unwrap();
+        client.send(Message::text(read)).await.unwrap();
+
+        // 클라우드가 처음 받는 글자는 읽기 요청이다. 쓰기 요청은 오지 않았다.
+        assert_eq!(next_json(&mut fake_cloud).await["method"], "thread/list");
+        fake_cloud
+            .send(Message::text(
+                r#"{"jsonrpc":"2.0","id":2,"result":{"data":[]}}"#,
+            ))
+            .await
+            .unwrap();
+
+        let refusal = next_json(&mut client).await;
+        assert_eq!(refusal["id"], 1);
+        assert_eq!(refusal["error"]["code"], READ_ONLY_REFUSAL_CODE);
+        assert_eq!(next_json(&mut client).await["id"], 2);
+
+        client.close(None).await.unwrap();
+        relay_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_relay_ends_when_the_cloud_stays_silent() {
+        let (_client, inner) = socket_pair().await;
+        // 가짜 클라우드는 읽지 않으므로 pong 도 보내지 않는다.
+        let (cloud, _fake_cloud) = socket_pair().await;
+        let keepalive = Keepalive {
+            ping_every: Duration::from_millis(10),
+            silence_limit: Duration::from_millis(50),
+        };
+        tokio::time::timeout(Duration::from_secs(5), relay(inner, cloud, keepalive))
+            .await
+            .expect("the relay must end by itself");
     }
 }
