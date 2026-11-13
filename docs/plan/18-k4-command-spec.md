@@ -338,7 +338,7 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 | K4-7 (구현 2026-11-12, §8) | Desktop 공통 명령 전송 함수가 변경 명령에 멱등 키를 붙인다. 현재 패널은 읽기 명령만 쓴다 | 유지 | vitest, e2e |
 | K4-8 (구현 2026-11-13, §8) | `akra kernel` CLI, `KernelCommandPort`, Gateway 클라이언트, 명령 전용 조립, 잠깐 붙는 접속, 잠금 파일의 쥔 쪽. skill 문서를 스펙에서 만들고 등록한다 | 확장 | CLI 시험, G2 시험, skill 파일 시험 |
 | K4-9a (구현 2026-11-13, §8) | 입구 이전: planning 초기화 | 유지 (같은 결과. 기록에 남는다) | 입구 경계 시험, CLI·Telegram·admin 시험 |
-| K4-9b | 입구 이전: 병렬 제어, 수동 배분, 프로필. admin, Telegram, `parallel-tick` 이 스케줄러를 시작하지 않는다 | 전환 (Gateway 의 커널이 병렬 상태의 주인이다) | K-D3 회귀 시험 (admin 의 정지가 커널에 닿는다), 시뮬레이션 |
+| K4-9b (설계: [18-K4-9b](18-k4-9b-parallel-control.md), 제안) | 입구 이전: 병렬 제어, 수동 배분, 프로필. admin, Telegram, `parallel-tick` 이 스케줄러를 시작하지 않는다 | 전환 (Gateway 의 커널이 병렬 상태의 주인이다) | K-D3 회귀 시험 (admin 의 정지가 커널에 닿는다), 시뮬레이션 |
 | K4-9c | 입구 이전: PR 검증 명령 | 유지 | admin 시험 |
 | K4-9d | 입구 이전: 작업·방향·초안·파일. `planning-tool` 도 `KernelCommandPort` 를 쓴다. 읽기 경로에서 프롬프트 기록 정리를 뺀다 | 전환 (고치기와 지우기에 revision 이 필수가 된다) | planning worker skill 시험 (모델 턴 없음), admin 시험, 입구 경계 시험 |
 | K4-10 | MCP 도구와 SDK 를 스펙에서 만든다 | 확장 | 쓰는 쪽이 생길 때 정한다 |
