@@ -61,7 +61,7 @@ Linear 는 화면과 사이클·트리아지 기능이 좋다. 그러나 별도 
 
 ## 범위 밖
 
-- Linear 패널. 필요하면 Jira 패널과 같은 구조로 따로 계획한다.
+- Linear 패널. 따로 계획한다: [R12](R12-linear-panel.md).
 - 쓰기 기능 (Status 변경, 이슈 생성, 담당자 지정). 처음에는 읽기만 한다.
 - Project 여러 개 동시 보기.
 - 데스크톱 알림.
@@ -169,4 +169,4 @@ query($owner: String!, $number: Int!, $cursor: String) {
 - Project 번호를 어디에 저장할지 정한다 (Desktop 설정 파일 또는 Akra 설정).
 - Status 외에 보여 줄 Project 필드가 있는지 정한다 (예: Iteration, Priority).
 - 쓰기 기능 (Status 변경)을 다음 단계로 할지 정한다.
-- Linear 패널이 필요한지 실제 사용 뒤에 다시 판단한다.
+- R11 과 [R12](R12-linear-panel.md) 중 무엇을 먼저 할지 정한다.
