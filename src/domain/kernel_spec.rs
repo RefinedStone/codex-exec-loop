@@ -350,6 +350,8 @@ impl KernelCommandKind {
 spec_names! {
     /// 판단 사건 기록의 종류이다. `KernelEvent::kind` 가 이 이름을 쓴다.
     pub enum KernelRecordKind {
+        AutoFollowConfigured => "auto_follow_configured",
+            "The repository auto-follow limit and pause state changed.";
         ThreadPromptQueued => "thread_prompt_queued",
             "The kernel kept a prepared prompt in its queue. It submits the prompt once when it is idle.";
         ThreadPromptSettled => "thread_prompt_settled",

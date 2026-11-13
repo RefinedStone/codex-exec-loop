@@ -1333,16 +1333,37 @@ impl NativeClientRuntime {
                 let approvals = log.load_kernel_events(workspace_dir, &APPROVAL_KINDS)?;
                 let commands = log.load_kernel_events(workspace_dir, &COMMAND_KINDS)?;
                 let operations = log.load_kernel_events(workspace_dir, &OPERATION_KINDS)?;
+                let configuration =
+                    log.load_kernel_events(workspace_dir, &["auto_follow_configured"])?;
                 Ok((
                     prompts,
                     approvals,
                     commands,
                     operations,
+                    configuration,
                     log.last_kernel_event_sequence(workspace_dir)?,
                 ))
             });
         let (open, lost_approvals, lost_work, last_sequence) = match read {
-            Ok((prompts, approvals, commands, operations, last_sequence)) => {
+            Ok((prompts, approvals, commands, operations, configuration, last_sequence)) => {
+                if let Some(KernelEvent::AutoFollowConfigured {
+                    max_auto_turns,
+                    continuation_paused,
+                }) = configuration.last()
+                {
+                    self.core
+                        .runtime
+                        .dispatch_command(AppCommand::SetAutoFollowMaxTurns {
+                            value: *max_auto_turns,
+                        });
+                    if *continuation_paused {
+                        self.core
+                            .runtime
+                            .dispatch_command(AppCommand::PausePostTurnContinuation);
+                    }
+                    // Restoring policy is not a new configuration change.
+                    self.core.runtime.take_kernel_records();
+                }
                 // 이전 커널이 받은 명령의 멱등 키를 되돌린다 (Q3-6). 재전송은 커널을 다시 켜도 한 번만 실행된다.
                 self.command_memory = CommandMemory::from_events(commands);
                 (

@@ -725,6 +725,57 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn auto_follow_configuration_survives_transient_unload_and_reattach() {
+        use crate::core::app::AppCommand;
+
+        struct IdleSignal(std::sync::mpsc::Sender<()>);
+        impl std::task::Wake for IdleSignal {
+            fn wake(self: Arc<Self>) {
+                self.0.send(()).expect("idle receiver");
+            }
+        }
+
+        let folder = temp_folder("auto-follow-configuration");
+        for (command, max_auto_turns, continuation_paused) in [
+            (AppCommand::SetAutoFollowMaxTurns { value: 3 }, 3, false),
+            (AppCommand::PausePostTurnContinuation, 3, true),
+            (AppCommand::SetAutoFollowMaxTurns { value: 0 }, 0, true),
+            (AppCommand::SetAutoFollowMaxTurns { value: 5 }, 5, false),
+        ] {
+            // A new registry also proves that the configuration is durable, not cached.
+            let registry = RepositoryKernelRegistry::default();
+            let (idle_sender, idle_receiver) = std::sync::mpsc::channel();
+            registry.notify_when_idle(std::task::Waker::from(Arc::new(IdleSignal(idle_sender))));
+            let (client, key) = registry
+                .attach_with_lifetime(&folder.path, true)
+                .expect("transient client");
+            assert!(client.send_command(command).is_some());
+            drop(client);
+            idle_receiver
+                .recv_timeout(Duration::from_secs(10))
+                .expect("last detach becomes idle");
+            assert_eq!(registry.unload_idle_kernels(Instant::now()), vec![key]);
+            assert!(
+                production::acquire_repository_kernel_lock(&folder.path).is_ok(),
+                "transient unload still releases the repository lock immediately"
+            );
+            let (again, _) = registry
+                .attach_with_lifetime(&folder.path, true)
+                .expect("reattach starts a fresh kernel");
+            let auto_follow = again
+                .query()
+                .expect("fresh kernel answers")
+                .snapshot
+                .conversation_runtime
+                .auto_follow;
+            assert_eq!(auto_follow.max_auto_turns, max_auto_turns);
+            assert_eq!(auto_follow.continuation_paused, continuation_paused);
+            drop(again);
+            drop(registry);
+        }
+    }
+
+    #[test]
     fn the_production_kernel_runs_without_a_screen() {
         // The host only ticks: no startup checks run, so no app-server starts.
         let folder = temp_folder("production");

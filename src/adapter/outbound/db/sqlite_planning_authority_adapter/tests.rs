@@ -141,6 +141,42 @@ fn numbered(
 }
 
 #[test]
+fn auto_follow_configuration_survives_kernel_event_retention() {
+    use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+    use crate::domain::kernel_event::{KernelEvent, RETAINED_KERNEL_EVENTS};
+
+    let workspace = temp_workspace("auto-follow-configuration");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let configured = |max_auto_turns| KernelEvent::AutoFollowConfigured {
+        max_auto_turns,
+        continuation_paused: true,
+    };
+    adapter
+        .append_kernel_events(&workspace, &numbered(1, &[configured(2), configured(3)]))
+        .expect("configuration records append");
+    adapter
+        .append_kernel_events(
+            &workspace,
+            &numbered(
+                RETAINED_KERNEL_EVENTS + 3,
+                &[KernelEvent::TurnStarted {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    op_id: None,
+                }],
+            ),
+        )
+        .expect("later records trim old events");
+    assert_eq!(
+        adapter
+            .load_kernel_events(&workspace, &["auto_follow_configured"])
+            .expect("configuration loads"),
+        vec![configured(3)],
+        "only the latest configuration survives beyond the retention window"
+    );
+}
+
+#[test]
 fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
     // plan 19 Q3-3: a page reads after a cursor; the queue kinds survive the trim.
     // plan 20 §4.1: the newest repository state also survives, so the next kernel can compare with it.

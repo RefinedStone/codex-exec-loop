@@ -1846,6 +1846,10 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         "File change requested.",
     );
     vec![
+        Record::AutoFollowConfigured {
+            max_auto_turns: 3,
+            continuation_paused: true,
+        },
         queued.settled(ThreadPromptSettlement::TaskFinished),
         Record::ThreadPromptQueued(queued),
         Record::ThreadPromptRejected {

@@ -3389,9 +3389,14 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
             .flat_map(|(_, calls, _)| calls)
             .filter(|(called, _)| called == required_reduction)
             .count();
+        let expected_count = if required_reduction == "has_active_rename" {
+            2 // Admission and kernel lifetime both consult the active rename.
+        } else {
+            1
+        };
         assert_eq!(
-            call_count, 1,
-            "CoreController must call session reducer operation {required_reduction} exactly once in production"
+            call_count, expected_count,
+            "CoreController must call session reducer operation {required_reduction} exactly {expected_count} times in production"
         );
     }
     let catalog_admission =

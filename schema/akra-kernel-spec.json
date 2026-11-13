@@ -956,6 +956,32 @@
   ],
   "records": [
     {
+      "name": "auto_follow_configured",
+      "summary": "The repository auto-follow limit and pause state changed.",
+      "payload": {
+        "properties": {
+          "continuation_paused": {
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "auto_follow_configured",
+            "type": "string"
+          },
+          "max_auto_turns": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "max_auto_turns",
+          "continuation_paused"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "thread_prompt_queued",
       "summary": "The kernel kept a prepared prompt in its queue. It submits the prompt once when it is idle.",
       "payload": {
@@ -2451,6 +2477,28 @@
     },
     "KernelRecord": {
       "oneOf": [
+        {
+          "properties": {
+            "continuation_paused": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "auto_follow_configured",
+              "type": "string"
+            },
+            "max_auto_turns": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "max_auto_turns",
+            "continuation_paused"
+          ],
+          "type": "object"
+        },
         {
           "$ref": "#/$defs/QueuedThreadPrompt",
           "properties": {

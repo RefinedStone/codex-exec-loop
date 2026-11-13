@@ -6,6 +6,7 @@ use crate::domain::kernel_event::{
     KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, REPOSITORY_KINDS, RETAINED_KERNEL_EVENTS,
     RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
 };
+use crate::domain::kernel_spec::KernelRecordKind;
 
 use super::{SqlitePlanningAuthorityAdapter, open_authority_connection};
 
@@ -62,18 +63,22 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
         }
         // 남김 종류는 복구에 필요하므로 지우지 않는다. 다른 사건은 최근 것만 남긴다 (plan 19 Q3-3).
         // 마지막 git 상태도 남긴다. 다음 커널이 그 상태와 견준다 (plan 20 §4.1). 그 앞의 git 사건은 지운다.
+        // 마지막 자동 후속 설정도 남긴다. 잠깐 붙는 클라이언트가 떠난 뒤의 다음 커널이 그 설정을 되돌린다 (plan 18 K4-8).
         transaction
             .execute(
                 "DELETE FROM kernel_events
                  WHERE kind NOT IN (?1, ?2)
                    AND sequence <= (SELECT MAX(sequence) FROM kernel_events) - ?3
                    AND sequence <> COALESCE(
-                       (SELECT MAX(sequence) FROM kernel_events WHERE kind = ?4), 0)",
+                       (SELECT MAX(sequence) FROM kernel_events WHERE kind = ?4), 0)
+                   AND sequence <> COALESCE(
+                       (SELECT MAX(sequence) FROM kernel_events WHERE kind = ?5), 0)",
                 params![
                     THREAD_PROMPT_QUEUE_KINDS[0],
                     THREAD_PROMPT_QUEUE_KINDS[1],
                     RETAINED_KERNEL_EVENTS,
-                    REPOSITORY_KINDS[0]
+                    REPOSITORY_KINDS[0],
+                    KernelRecordKind::AutoFollowConfigured.name()
                 ],
             )
             .context("failed to trim old kernel events")?;
