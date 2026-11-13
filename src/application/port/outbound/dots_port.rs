@@ -40,4 +40,7 @@ pub trait DotsPort: Send + Sync {
 
     /// 메시지 방의 최근 메시지이다. 오래된 것부터 놓는다. 읽기만 한다.
     fn room_messages(&self, room_id: &str) -> Result<Vec<DotMessage>>;
+
+    /// 메시지 방에 글 하나를 보낸다. 실계정 쓰기이다: dot 이 읽고 답한다. 사용자가 허락한 뒤에만 부른다 (D-19).
+    fn send_room_message(&self, room_id: &str, text: &str) -> Result<()>;
 }

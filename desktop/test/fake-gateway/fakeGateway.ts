@@ -289,6 +289,12 @@ export async function startFakeGateway(
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { messages: options.dotMessages } }));
         return;
       }
+      if (remote && hasId && options.dotMessages && message.method === "akra/dots/send") {
+        const params = (message as { params?: { text?: unknown } }).params;
+        options.dotMessages.push({ id: `sent-${options.dotMessages.length}`, createdAt: "2026-11-14T02:00:00Z", author: "Me", fromDot: false, text: String(params?.text ?? "") });
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { sent: true } }));
+        return;
+      }
       if (options.hosts && hasId && message.method === "akra/gateway/info") {
         const recorded = (table.get(message.method)?.result ?? {}) as object;
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { ...recorded, host, hosts: hostIds.map((id) => ({ id })) } }));

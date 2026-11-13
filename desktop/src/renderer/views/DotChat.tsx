@@ -1,25 +1,59 @@
-// dot 과의 대화 화면이다 (D-19). 메시지 방을 Gateway 의 `akra/dots/messages` 로 읽는다. 읽기 전용이다: 메시지를
-// 보내지 않는다. 주기적으로 묻지 않는다. 화면을 열 때와 "새로 고침"을 누를 때만 읽는다 (plan 25 §8).
-import { useEffect, useState } from "react";
+// dot 과의 대화 화면이다 (D-19). 메시지 방을 Gateway 의 `akra/dots/messages` 로 읽는다. 기본은 읽기 전용이다.
+// 사용자가 이 dot 에 보내기를 한 번 허락하면 입력창이 나타나고 `akra/dots/send` 로 보낸다 ("세션 한 번 허용").
+// 주기적으로 묻지 않는다. 화면을 열 때, 보낸 뒤, "새로 고침"을 누를 때만 읽는다 (plan 25 §8).
+import { type KeyboardEvent, useEffect, useState } from "react";
+
+import { Icon } from "../design/icons";
 
 import { Markdown } from "../conversation/Markdown";
 import type { DotMessage, DotSummary } from "../session/desktopStore";
 import type { GatewayRequest } from "../work/notionHub";
+import { allowDotSending, isDotSendingAllowed, messageTime } from "./dotSend";
 
 const DOTS_MESSAGES_METHOD = "akra/dots/messages";
+const DOTS_SEND_METHOD = "akra/dots/send";
 
 type ChatState = { phase: "loading" } | { phase: "loaded"; messages: DotMessage[] } | { phase: "failed"; message: string };
-
-/** 서비스의 시각 글자를 이 컴퓨터의 날짜와 시각으로 보인다. 읽을 수 없으면 그대로 보인다. */
-export function messageTime(createdAt: string): string {
-  const time = new Date(createdAt);
-  return Number.isNaN(time.getTime()) ? createdAt : time.toLocaleString();
-}
 
 export function DotChat({ dot, request, onOpenWorkThread }: { dot: DotSummary; request: GatewayRequest; onOpenWorkThread(threadId: string): void }) {
   const [state, setState] = useState<ChatState>({ phase: "loading" });
   const [refresh, setRefresh] = useState(0);
+  const [canSend, setCanSend] = useState(() => isDotSendingAllowed(dot.id));
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const roomId = dot.messagingRoomId;
+  useEffect(() => {
+    setCanSend(isDotSendingAllowed(dot.id));
+    setDraft("");
+    setSendError(null);
+  }, [dot.id]);
+
+  const send = () => {
+    const text = draft.trim();
+    if (roomId === null || text.length === 0 || sending) return;
+    setSending(true);
+    setSendError(null);
+    request<{ sent: boolean }>(DOTS_SEND_METHOD, { roomId, text }).then(
+      () => {
+        setDraft("");
+        setSending(false);
+        // 보낸 글을 보이려고 한 번 다시 읽는다. dot 의 답은 "새로 고침"으로 본다.
+        setRefresh((count) => count + 1);
+      },
+      (error: unknown) => {
+        // 실패하면 글을 입력창에 남긴다.
+        setSending(false);
+        setSendError(error instanceof Error ? error.message : String(error));
+      },
+    );
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      send();
+    }
+  };
   useEffect(() => {
     if (roomId === null) return;
     let current = true;
@@ -38,8 +72,13 @@ export function DotChat({ dot, request, onOpenWorkThread }: { dot: DotSummary; r
     <>
       <div className="banner" data-testid="dot-banner">
         <span>
-          클라우드 에이전트 · {dot.displayName} · 대화는 읽기 전용입니다.
+          클라우드 에이전트 · {dot.displayName} · {canSend ? "보내기 허용됨 (이 세션). 실계정에 메시지를 보냅니다." : "대화는 읽기 전용입니다."}
         </span>
+        {roomId !== null && !canSend && (
+          <button type="button" className="banner-action" onClick={() => setCanSend(allowDotSending(dot.id, (message) => window.confirm(message)))} data-testid="dot-allow-send">
+            이 세션에서 보내기 허용
+          </button>
+        )}
         {roomId !== null && (
           <button type="button" className="banner-action" onClick={() => setRefresh((count) => count + 1)} data-testid="dot-refresh">
             새로 고침
@@ -68,6 +107,30 @@ export function DotChat({ dot, request, onOpenWorkThread }: { dot: DotSummary; r
             ))}
         </section>
       </div>
+      {roomId !== null && canSend && (
+        <div className="composer-area">
+          <div className="column">
+            {sendError && <p className="error">{sendError}</p>}
+            <div className="composer">
+              <textarea
+                value={draft}
+                rows={1}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder={`${dot.displayName} 에게 메시지`}
+                disabled={sending}
+                data-testid="dot-composer-input"
+              />
+              <div className="composer-bar">
+                <span className="bar-spacer" />
+                <button type="button" className="round-button send" title="보내기" aria-label="보내기" onClick={send} disabled={sending || draft.trim().length === 0} data-testid="dot-composer-send">
+                  <Icon name="arrowUp" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

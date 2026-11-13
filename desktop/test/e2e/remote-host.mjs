@@ -60,7 +60,16 @@ try {
   await page.getByTestId("dot-message").nth(1).waitFor({ timeout: 10_000 });
   check("the dot chat shows the messages of the room", (await page.getByTestId("dot-message").count()) === 2 && (await page.getByTestId("dot-chat").innerText()).includes("green"));
   check("the dot chat is read over the remote connection", gateway.remoteReceivedMethods.includes("akra/dots/messages") && !gateway.receivedMethods.includes("akra/dots/messages"));
-  check("the dot chat has no composer", (await page.getByTestId("composer-input").count()) === 0);
+  check("the dot chat has no composer before the user permits sending", (await page.getByTestId("dot-composer-input").count()) === 0);
+  check("nothing was sent to the dot before the user permits it", !gateway.remoteReceivedMethods.includes("akra/dots/send"));
+  // "세션 한 번 허용": 경고를 확인하면 입력창이 나타난다. 보낸 글은 가짜 Gateway 의 방에 들어간다.
+  await page.getByTestId("dot-allow-send").click();
+  await page.getByTestId("dot-composer-input").fill("ship it");
+  await page.getByTestId("dot-composer-send").click();
+  await page.getByTestId("dot-message").nth(2).waitFor({ timeout: 10_000 });
+  check("permitting the dot shows a second warning", warnings.length === 2 && warnings[1].includes("실계정"));
+  check("the message goes to the dot once over the remote connection", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/send").length === 1 && !gateway.receivedMethods.includes("akra/dots/send"));
+  check("the sent message appears in the chat", (await page.getByTestId("dot-chat").innerText()).includes("ship it"));
   // "작업 대화 열기"는 그 dot 의 작업 thread 를 연다.
   await page.getByTestId("dot-open-work-thread").click();
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
