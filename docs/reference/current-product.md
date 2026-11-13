@@ -370,7 +370,8 @@ the desktop app itself is not shipped yet.
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more
-  Gateway connection per remote host on `/host/<id>` and the sidebar shows a section for that host with
+  Gateway connection per remote host on `/host/<id>` and the sidebar shows a section for that host,
+  above the local work folders, with
   its threads. A remote thread opens read-only with `thread/read` and `thread/turns/list`; Desktop sends
   no resume, no turn, and no approval answer until the user clicks "이 세션에서 보내기 허용" in the remote
   banner (plan 25 "세션 한 번 허용", D-19). After that, for that host's session, Desktop resumes the open
