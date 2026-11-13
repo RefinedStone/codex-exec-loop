@@ -11,6 +11,8 @@
  * - 이 mod.rs: port trait 구현체로서 TUI/application service가 호출하는 공개 메서드를 조립한다.
  */
 mod approval;
+// cloud_upstream.rs: dots 클라우드 app-server(`/host/cloud`) 로 잇는 두 번째 호스트 upstream (D-19).
+pub(crate) mod cloud_upstream;
 pub(crate) mod connection;
 mod execution_policy;
 mod kernel_skill;

@@ -29,10 +29,13 @@ serde_json = "1.0"
 sha2 = "0.10"
 signal-hook = "0.3"
 rusqlite = { version = "0.37", features = ["bundled"] }
+# dots 클라우드 TLS 의 암호화 provider 를 고정한다(ring). rustls 0.23 은 provider 를 자동 선택하지 않는다.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 # akra-gateway relays WebSocket frames between local IPC clients and `codex app-server proxy` children.
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
+# dots 클라우드 upstream(wss://)에 붙으려면 connect 와 TLS(webpki 루트, 순수 Rust)가 필요하다 (D-19).
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake", "connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-stream = "0.1"
 toml = "0.8"
