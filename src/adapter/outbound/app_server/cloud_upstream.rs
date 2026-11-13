@@ -303,12 +303,12 @@ async fn relay<I, C>(
 }
 
 /// 클라우드 접속에 쓰는 토큰과 계정 ID 이다. 둘 다 로그에 남기지 않는다.
-struct CloudCredentials {
-    access_token: String,
-    account_id: String,
+pub(super) struct CloudCredentials {
+    pub(super) access_token: String,
+    pub(super) account_id: String,
 }
 
-fn load_credentials(auth_path: &std::path::Path) -> Result<CloudCredentials> {
+pub(super) fn load_credentials(auth_path: &std::path::Path) -> Result<CloudCredentials> {
     let data = std::fs::read_to_string(auth_path)
         .with_context(|| format!("failed to read codex auth file `{}`", auth_path.display()))?;
     let document: serde_json::Value =
@@ -378,7 +378,7 @@ fn build_cloud_request(credentials: &CloudCredentials, user_agent: &str) -> Resu
     Ok(request)
 }
 
-fn default_user_agent() -> String {
+pub(super) fn default_user_agent() -> String {
     if let Ok(agent) = std::env::var("AKRA_DOTS_USER_AGENT")
         && !agent.is_empty()
     {

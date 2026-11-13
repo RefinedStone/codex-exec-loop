@@ -14,7 +14,10 @@ const electronPath = createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
 
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], { hosts: ["cloud"] });
+const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
+  hosts: ["cloud"],
+  dots: [{ id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "01a1abfb-8f0a-7581-a8e4-c2953347f470" }],
+});
 // 켜고 끄는 설정을 사용자의 실제 앱 데이터 폴더에 쓰지 않는다.
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-remote-"));
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
@@ -47,7 +50,9 @@ try {
   await toggleRemoteAgents();
   await page.getByTestId("remote-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 15_000 });
   check("turning it on shows a warning first", warnings.length === 1 && warnings[0].includes("약관"));
-  await page.getByTestId("remote-thread-entry").first().click();
+  check("the sidebar lists the dots of the remote host", (await page.getByTestId("remote-dot-entry").filter({ hasText: "Mika" }).count()) === 1);
+  // dot 을 누르면 그 dot 의 작업 대화가 열린다.
+  await page.getByTestId("remote-dot-entry").first().click();
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
   await page.getByTestId("turn").first().waitFor({ timeout: 15_000 });
   check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/read"));

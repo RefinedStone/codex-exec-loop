@@ -184,6 +184,8 @@ export async function startFakeGateway(
      * 닫는다. 원격 접속은 같은 녹화를 재생하고, `akra/kernel/*` 는 거절하고, `akra/context/*` 는 빈 목록으로 답한다.
      */
     hosts?: string[];
+    /** 원격 접속의 `akra/dots/list` 답이다 (D-19). 없으면 모르는 method 로 답한다. */
+    dots?: unknown[];
   } = {},
 ): Promise<FakeGateway> {
   // 작업 컨텍스트의 바뀜 상태이다: `스레드 id\n문서 키`. 읽은 문서는 같은 버전으로 다시 바뀜이 되지 않는다.
@@ -275,6 +277,10 @@ export async function startFakeGateway(
       }
       if (remote && hasId && message.method.startsWith("akra/context/")) {
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources: [] } }));
+        return;
+      }
+      if (remote && hasId && options.dots && message.method === "akra/dots/list") {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { dots: options.dots } }));
         return;
       }
       if (options.hosts && hasId && message.method === "akra/gateway/info") {

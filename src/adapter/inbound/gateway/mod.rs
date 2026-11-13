@@ -6,6 +6,7 @@
 //! 쓴다. Telegram 입구가 `TelegramBotPort` 를 쓰는 것과 같은 구조이다.
 
 mod context;
+mod dots;
 mod hosts;
 mod kernel;
 mod listener;
@@ -29,6 +30,7 @@ use self::listener::GatewayListener;
 pub(crate) use self::mcp::GatewayMcpHub;
 use self::recorder::GatewayRecorder;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
+use crate::application::port::outbound::dots_port::DotsPort;
 use crate::composition::production;
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
@@ -79,6 +81,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         kernels,
         mcp_hub,
         work_context,
+        dots,
     } = production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
     let _ = std::io::stdout().flush();
@@ -102,6 +105,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         kernels.clone(),
         mcp_hub.clone(),
         work_context,
+        dots,
         recorder,
     )
     .await;
@@ -180,6 +184,7 @@ async fn serve(
     kernels: Arc<RepositoryKernelRegistry>,
     mcp_hub: Arc<GatewayMcpHub>,
     work_context: Arc<dyn WorkContextPort>,
+    dots: Option<Arc<dyn DotsPort>>,
     recorder: Option<Arc<GatewayRecorder>>,
 ) {
     let idle_notification = register_idle_notification(&kernels);
@@ -205,6 +210,7 @@ async fn serve(
                     let services = session::GatewayServices {
                         mcp_hub: Some(mcp_hub.clone()),
                         work_context: Some(work_context.clone()),
+                        dots: dots.clone(),
                     };
                     let recorder = recorder.clone();
                     tokio::spawn(async move {

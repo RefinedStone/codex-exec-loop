@@ -108,6 +108,7 @@ function harness() {
     getOpenThreadId: () => state.openThreadId ?? null,
     getTranscript: () => state.transcript ?? null,
     setKernel: (kernel) => Object.assign(state, { kernel }),
+    setDots: (dots) => Object.assign(state, { dots }),
     getKernel: () => state.kernel ?? EMPTY_KERNEL_VIEW,
   };
   const session = new DesktopSession(bridge, store, "test", (callback) => callback());

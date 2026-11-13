@@ -99,6 +99,7 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
   const phase = useStore((state) => state.connection?.phase ?? "connecting");
   const problem = useStore((state) => (state.connection?.phase === "connected" ? state.sessionError : (state.connection?.detail ?? null)));
   const folders = useStore((state) => state.folders);
+  const dots = useStore((state) => state.dots);
   const openThreadId = useStore((state) => state.openThreadId);
   const showing = useUiStore((state) => state.view === "remote" && state.remoteHost === host);
   const threads = useMemo(() => folders.flatMap((folder) => folder.threads).sort((left, right) => right.updatedAt - left.updatedAt), [folders]);
@@ -117,6 +118,28 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
       </header>
       {open && problem && <p className="empty-row error">{problem}</p>}
       {open && !problem && phase === "connected" && threads.length === 0 && <p className="empty-row">대화가 없습니다.</p>}
+      {open && dots.length > 0 && (
+        <ul data-testid="remote-dots">
+          {dots.map((dot) => (
+            <li className="thread-row" key={dot.id}>
+              <button
+                type="button"
+                className={showing && dot.rootThreadId !== null && openThreadId === dot.rootThreadId ? "thread selected" : "thread"}
+                disabled={dot.rootThreadId === null}
+                title={dot.rootThreadId === null ? "이 에이전트에는 열 수 있는 작업 대화가 없습니다." : `${dot.displayName} 의 작업 대화를 엽니다.`}
+                onClick={() => dot.rootThreadId !== null && onOpenThread(host, dot.rootThreadId)}
+                data-testid="remote-dot-entry"
+              >
+                <StatusMark mark="idle" />
+                <span className="thread-text">
+                  <span className="thread-title">{dot.displayName}</span>
+                </span>
+                <span className="thread-age">{dot.paused ? "멈춤" : dot.status}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       {open && (
         <ul>
           {threads.map((thread) => (
