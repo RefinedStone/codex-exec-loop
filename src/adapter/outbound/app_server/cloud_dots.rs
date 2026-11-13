@@ -23,6 +23,8 @@ const ROOMS_URL: &str = "https://chatgpt.com/backend-api/messaging/rooms";
 // shortcut: 최근 30개만 읽는다. 더 오래된 대화가 필요해지면 `prev_cursor` 로 페이지를 넘긴다.
 const ROOM_MESSAGE_LIMIT: u32 = 30;
 const MAX_ROOM_ID_LENGTH: usize = 128;
+/// 보내는 글의 상한이다 (글자 수). 서비스의 상한은 모른다. 실수로 큰 글을 보내지 않게 하는 값이다.
+const MAX_MESSAGE_CHARS: usize = 8_000;
 const CONNECT_TIMEOUT_SECONDS: u32 = 10;
 const MAX_TIME_SECONDS: u32 = 20;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -59,17 +61,36 @@ impl DotsPort for CloudDotsRestAdapter {
         )?;
         parse_room_messages(&room, &messages)
     }
+
+    fn send_room_message(&self, room_id: &str, text: &str) -> Result<()> {
+        if !is_safe_room_id(room_id) {
+            bail!("the message room id is not valid");
+        }
+        let body = message_body(text)?;
+        // 답의 모양은 쓰지 않는다. HTTP 성공이면 보낸 것이다.
+        self.request(
+            &format!("{ROOMS_URL}/{room_id}/messages"),
+            Some(&body),
+            "dots send message",
+        )?;
+        Ok(())
+    }
 }
 
 impl CloudDotsRestAdapter {
     /// 인증된 GET 하나를 보내고 본문을 돌려준다. `label` 은 오류 글자에만 쓴다.
     fn get(&self, url: &str, label: &str) -> Result<String> {
+        self.request(url, None, label)
+    }
+
+    /// 인증된 요청 하나를 보내고 본문을 돌려준다. `json_body` 가 있으면 POST 이고 없으면 GET 이다.
+    fn request(&self, url: &str, json_body: Option<&str>, label: &str) -> Result<String> {
         let curl = match &self.curl {
             Ok(path) => path,
             Err(error) => bail!("trusted curl executable could not be pinned for dots: {error}"),
         };
         let credentials = load_credentials(&self.auth_path)?;
-        let config = build_curl_config(url, &credentials, &default_user_agent());
+        let config = build_curl_config(url, json_body, &credentials, &default_user_agent());
 
         let mut command = Command::new(curl);
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -98,6 +119,19 @@ impl CloudDotsRestAdapter {
     }
 }
 
+/// 보내는 메시지의 JSON 본문이다. 서비스의 모양은 `{"content": {"text": ...}}` 이다 (2026-11-14 에 검증 오류로
+/// 확인: `content.text` 필수 글자, `attachments`·`message_metadata`·`reply_to` 선택). 빈 글과 너무 긴 글은 거절한다.
+fn message_body(text: &str) -> Result<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("the message is empty");
+    }
+    if text.chars().count() > MAX_MESSAGE_CHARS {
+        bail!("the message is longer than {MAX_MESSAGE_CHARS} characters");
+    }
+    Ok(serde_json::json!({ "content": { "text": text } }).to_string())
+}
+
 /// 방 id 는 주소의 한 조각으로 들어간다. 글자·숫자·`-`·`_` 만 받는다. 다른 경로나 query 를 만들 수 없다.
 fn is_safe_room_id(room_id: &str) -> bool {
     !room_id.is_empty()
@@ -108,7 +142,12 @@ fn is_safe_room_id(room_id: &str) -> bool {
 }
 
 /// curl config 이다. stdin 으로만 넘긴다. 헤더는 클라우드 다리와 같은 공식 앱 신원이다.
-fn build_curl_config(url: &str, credentials: &CloudCredentials, user_agent: &str) -> String {
+fn build_curl_config(
+    url: &str,
+    json_body: Option<&str>,
+    credentials: &CloudCredentials,
+    user_agent: &str,
+) -> String {
     let header = |name: &str, value: &str| {
         format!(
             "header = \"{}: {}\"\n",
@@ -117,9 +156,14 @@ fn build_curl_config(url: &str, credentials: &CloudCredentials, user_agent: &str
         )
     };
     let mut config = format!(
-        "silent\nshow-error\nfail\nconnect-timeout = {CONNECT_TIMEOUT_SECONDS}\nmax-time = {MAX_TIME_SECONDS}\nrequest = \"GET\"\nurl = \"{}\"\n",
+        "silent\nshow-error\nfail\nconnect-timeout = {CONNECT_TIMEOUT_SECONDS}\nmax-time = {MAX_TIME_SECONDS}\nrequest = \"{}\"\nurl = \"{}\"\n",
+        if json_body.is_some() { "POST" } else { "GET" },
         escape_curl_config_value(url),
     );
+    if let Some(body) = json_body {
+        config.push_str(&header("Content-Type", "application/json"));
+        config.push_str(&format!("data = \"{}\"\n", escape_curl_config_value(body)));
+    }
     config.push_str(&header(
         "Authorization",
         &format!("Bearer {}", credentials.access_token),
@@ -323,9 +367,11 @@ mod tests {
     fn the_curl_config_carries_the_login_and_the_desktop_identity() {
         let config = build_curl_config(
             "https://example.test/tbo",
+            None,
             &credentials(),
             "Codex Desktop/1.2.3 (Windows; x86_64)",
         );
+        assert!(!config.contains("data ="));
         assert!(config.contains("request = \"GET\""));
         assert!(config.contains("url = \"https://example.test/tbo\""));
         // HTTP 오류를 종료 코드로 받는다.
@@ -340,7 +386,7 @@ mod tests {
     fn a_header_value_cannot_add_a_config_line() {
         let mut hostile = credentials();
         hostile.account_id = "acc\"\noutput = \"/tmp/x".to_string();
-        let config = build_curl_config("https://example.test/tbo", &hostile, "agent");
+        let config = build_curl_config("https://example.test/tbo", None, &hostile, "agent");
         assert!(!config.lines().any(|line| line.starts_with("output")));
     }
 
@@ -402,6 +448,39 @@ mod tests {
         assert_eq!(parsed[2].id, "m4");
         assert_eq!(parsed[2].author, "");
         assert!(!parsed[2].from_dot);
+    }
+
+    #[test]
+    fn a_message_becomes_a_post_with_a_json_body() {
+        let body = message_body("  hello \"dot\"\nline 2  ").expect("body");
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({ "content": { "text": "hello \"dot\"\nline 2" } })
+        );
+
+        let config = build_curl_config(
+            "https://example.test/rooms/r1/messages",
+            Some(&body),
+            &credentials(),
+            "agent",
+        );
+        assert!(config.contains("request = \"POST\""));
+        assert!(config.contains("header = \"Content-Type: application/json\""));
+        // 본문은 config 의 한 줄이다. 글 안의 따옴표와 줄바꿈이 다른 줄을 만들지 않는다.
+        let data_lines: Vec<&str> = config
+            .lines()
+            .filter(|line| line.starts_with("data = "))
+            .collect();
+        assert_eq!(data_lines.len(), 1);
+        assert!(!config.lines().any(|line| line.starts_with("line 2")));
+    }
+
+    #[test]
+    fn an_empty_or_huge_message_is_not_sent() {
+        assert!(message_body("   \n ").is_err());
+        assert!(message_body(&"가".repeat(MAX_MESSAGE_CHARS)).is_ok());
+        assert!(message_body(&"가".repeat(MAX_MESSAGE_CHARS + 1)).is_err());
     }
 
     #[test]

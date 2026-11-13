@@ -358,9 +358,13 @@ the desktop app itself is not shipped yet.
 - Dot chat (D-19): `akra/dots/messages` with `{ roomId }` answers `{ messages }`, the latest 30
   messages of that message room, oldest first, each with id, time, author name, a from-dot flag, and
   text; deleted messages are left out. The room id must be letters, digits, `-`, or `_`. Desktop opens
-  this chat when the user clicks a dot. The chat is read-only, has no composer, and reads only on open
-  and on "새로 고침". "작업 대화 열기" opens the dot's work thread, where sending follows the
-  per-session permission (`desktop/src/renderer/views/DotChat.tsx`).
+  this chat when the user clicks a dot. The chat is read-only until the user clicks "이 세션에서 보내기
+  허용" and confirms a warning; the permission holds for that dot until the app closes. Then a composer
+  appears and `akra/dots/send` with `{ roomId, text }` posts the trimmed text (1 to 8000 characters) to
+  the room and answers `{ sent: true }`. Desktop reads the room on open, after a send, and on
+  "새로 고침"; it does not poll, so the dot's reply appears after a refresh. A real send has not been
+  verified against the service. "작업 대화 열기" opens the dot's work thread
+  (`desktop/src/renderer/views/DotChat.tsx`, `desktop/src/renderer/views/dotSend.ts`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more

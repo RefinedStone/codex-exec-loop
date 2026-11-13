@@ -16,6 +16,9 @@ pub(super) const DOTS_METHOD_PREFIX: &str = "akra/dots/";
 const DOTS_LIST_METHOD: &str = "akra/dots/list";
 /// params `{ roomId }` -> result `{ messages: [DotMessage] }`. 오래된 것부터이다.
 const DOTS_MESSAGES_METHOD: &str = "akra/dots/messages";
+/// params `{ roomId, text }` -> result `{ sent: true }`. 실계정 쓰기이다. 클라이언트는 사용자가 허락한 뒤에만
+/// 보낸다 (D-19).
+const DOTS_SEND_METHOD: &str = "akra/dots/send";
 const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSON_RPC_INVALID_PARAMS: i64 = -32602;
 const DOTS_ERROR: i64 = -32000;
@@ -52,22 +55,40 @@ struct MessagesParams {
     room_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendParams {
+    room_id: String,
+    text: String,
+}
+
+fn params<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
+    let envelope = serde_json::from_str::<RequestEnvelope>(text).ok()?;
+    serde_json::from_value(envelope.params).ok()
+}
+
 fn respond(dots: &dyn DotsPort, id: Value, method: &str, text: &str) -> String {
     let result = match method {
         DOTS_LIST_METHOD => dots
             .list_dots()
             .and_then(|dots| Ok(json!({ "dots": serde_json::to_value(dots)? }))),
         DOTS_MESSAGES_METHOD => {
-            let params = serde_json::from_str::<RequestEnvelope>(text)
-                .ok()
-                .and_then(|envelope| {
-                    serde_json::from_value::<MessagesParams>(envelope.params).ok()
-                });
-            let Some(params) = params else {
+            let Some(params) = params::<MessagesParams>(text) else {
                 return error_response(id, JSON_RPC_INVALID_PARAMS, "`roomId` is required");
             };
             dots.room_messages(&params.room_id)
                 .and_then(|messages| Ok(json!({ "messages": serde_json::to_value(messages)? })))
+        }
+        DOTS_SEND_METHOD => {
+            let Some(params) = params::<SendParams>(text) else {
+                return error_response(
+                    id,
+                    JSON_RPC_INVALID_PARAMS,
+                    "`roomId` and `text` are required",
+                );
+            };
+            dots.send_room_message(&params.room_id, &params.text)
+                .map(|()| json!({ "sent": true }))
         }
         _ => {
             return error_response(
@@ -95,6 +116,8 @@ mod tests {
 
     struct FakeDots(bool);
 
+    static SENT: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
     impl DotsPort for FakeDots {
         fn list_dots(&self) -> Result<Vec<DotSummary>> {
             if !self.0 {
@@ -120,6 +143,48 @@ mod tests {
                 text: "hi".into(),
             }])
         }
+
+        fn send_room_message(&self, room_id: &str, text: &str) -> Result<()> {
+            SENT.lock().unwrap().push((room_id.into(), text.into()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_send_needs_a_room_and_a_text_and_reaches_the_port_once() {
+        let request = r#"{"jsonrpc":"2.0","id":6,"method":"akra/dots/send","params":{"roomId":"room-send","text":"hello"}}"#;
+        let response: Value = serde_json::from_str(&respond(
+            &FakeDots(true),
+            json!(6),
+            "akra/dots/send",
+            request,
+        ))
+        .unwrap();
+        assert_eq!(response["result"]["sent"], json!(true));
+        let sent: Vec<_> = SENT
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(room, _)| room == "room-send")
+            .cloned()
+            .collect();
+        assert_eq!(sent, vec![("room-send".to_string(), "hello".to_string())]);
+
+        let missing: Value = serde_json::from_str(&respond(
+            &FakeDots(true),
+            json!(7),
+            "akra/dots/send",
+            r#"{"jsonrpc":"2.0","id":7,"method":"akra/dots/send","params":{"roomId":"room-other"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(missing["error"]["code"], json!(JSON_RPC_INVALID_PARAMS));
+        assert!(
+            !SENT
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(room, _)| room == "room-other")
+        );
     }
 
     const LIST: &str = r#"{"jsonrpc":"2.0","id":1,"method":"akra/dots/list"}"#;
