@@ -337,11 +337,14 @@ the desktop app itself is not shipped yet.
   to a host other than `local`, `akra/kernel/*` is refused with `-32601`, `akra/context/*` answers
   with empty `resources` and does not read or write the ledger, `akra/mcp/*` is unchanged, and
   `AKRA_GATEWAY_RECORD` records nothing.
-- Cloud host (D-19, D1): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
-  `~/.codex/auth.json`. The bridge is read-only. It sends only `initialize`, `initialized`,
-  `thread/list`, `thread/read`, `thread/turns/list`, `thread/items/list`, `model/list`, and error
-  responses to the cloud. It answers every other request with `-32601` and drops other notifications,
-  result responses, and binary frames, so no client can start a turn or resume a cloud thread. When the
+- Cloud host (D-19): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
+  `~/.codex/auth.json`. The bridge forwards only the public-protocol methods it allows
+  (`initialize`, `initialized`, `thread/list`, `thread/read`, `thread/turns/list`,
+  `thread/items/list`, `model/list` for reading, and `thread/resume`, `thread/unsubscribe`,
+  `turn/start`, `turn/steer`, `turn/interrupt`, `thread/stop` for a conversation), plus error and
+  result responses. It answers every other request with `-32601` and drops other notifications and
+  binary frames. It never hand-writes a private method such as `turn/addUserMessage`. Writes only
+  flow after the user permits a remote conversation in Desktop ("세션 한 번 허용", below). When the
   cloud rejects the login (HTTP 401 or 403) the connection closes with `1008` and reason
   `cloud login rejected`. The bridge pings the cloud every 10 seconds and ends the session after 60
   seconds of silence (`src/adapter/outbound/app_server/cloud_upstream.rs`).
@@ -349,10 +352,12 @@ the desktop app itself is not shipped yet.
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more
   Gateway connection per remote host on `/host/<id>` and the sidebar shows a section for that host with
-  its threads. A remote thread opens read-only with `thread/read` and `thread/turns/list`: Desktop sends
-  no resume, no turn, no thread start, and no approval answer to a remote host, so an open remote thread
-  does not update live. The remote conversation does not use the kernel, changes, documents, or
-  terminal panels. Remote state stays in memory. A connection that the Gateway closes with `1008` is not
+  its threads. A remote thread opens read-only with `thread/read` and `thread/turns/list`; Desktop sends
+  no resume, no turn, and no approval answer until the user clicks "이 세션에서 보내기 허용" in the remote
+  banner (plan 25 "세션 한 번 허용", D-19). After that, for that host's session, Desktop resumes the open
+  thread with `thread/resume` to stream it live, shows a composer, and sends with `turn/start`/`turn/steer`
+  (the same public methods as local); it still never starts a new remote thread. The remote conversation
+  does not use the kernel, changes, documents, or terminal panels. Remote state stays in memory. A connection that the Gateway closes with `1008` is not
   retried; the section shows a login message when the reason is `cloud login rejected`. The command and
   the section appear only when the Gateway registers a remote host
   (`desktop/src/main/gatewayConnection.ts`, `desktop/src/renderer/session/`).

@@ -118,6 +118,11 @@ export class DesktopSession {
   /** initialize 가 thread/list 를 읽는 동안 받은 진행 상태 변경이다 (스레드 id → 진행 중). */
   private statusChangesWhileListing: Map<string, boolean> | null = null;
   private connected = false;
+  /**
+   * 원격 세션에서 사용자가 보내기를 허락했는지이다 (plan 25 G2, "세션 한 번 허용", D-19). 허락 전에는 읽기만
+   * 한다. 허락하면 열린 스레드를 thread/resume 으로 다시 구독해 실시간으로 받고, 턴을 보낼 수 있다.
+   */
+  private sendingAllowed = false;
   /** 접속마다 늘어난다. 이전 접속에서 늦게 끝난 전체 검사는 반영하지 않는다. */
   private listGeneration = 0;
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
@@ -130,7 +135,7 @@ export class DesktopSession {
     private readonly store: SessionStore,
     private readonly clientVersion: string,
     scheduler?: FrameScheduler,
-    /** 원격 호스트의 세션이다 (plan 25 G2 전). 읽기만 한다: 턴, 새 스레드, 승인 응답을 보내지 않는다. */
+    /** 원격 호스트의 세션이다 (plan 25). 기본은 읽기만 한다: 턴, 새 스레드, 승인 응답을 보내지 않는다. */
     private readonly readOnly = false,
   ) {
     this.client = new JsonRpcClient((text) => bridge.send(text));
@@ -241,14 +246,29 @@ export class DesktopSession {
     answer?.({ decision });
   }
 
+  /** 이 세션에서 지금 보낼 수 있는지이다. 로컬은 늘 보낼 수 있고, 원격은 사용자가 허락한 뒤에만 보낸다. */
+  canSend(): boolean {
+    return !this.readOnly || this.sendingAllowed;
+  }
+
+  /**
+   * 원격 세션에서 보내기를 허락한다 (plan 25 "세션 한 번 허용"). 열린 스레드를 thread/resume 으로 다시 구독해
+   * 실시간으로 받는다. 로컬 세션이나 이미 허락한 세션에서는 아무것도 하지 않는다.
+   */
+  async allowSending(): Promise<void> {
+    if (!this.readOnly || this.sendingAllowed) return;
+    this.sendingAllowed = true;
+    await this.resumeOpenThread();
+  }
+
   private assertWritable(): void {
-    if (this.readOnly) {
+    if (!this.canSend()) {
       throw new Error(READ_ONLY_ERROR);
     }
   }
 
   private handleServerRequest(method: string, params: unknown, id: JsonRpcId): Promise<unknown> {
-    const approval = this.readOnly ? null : toPendingApproval(method, params, id);
+    const approval = this.canSend() ? toPendingApproval(method, params, id) : null;
     if (!approval) {
       return Promise.reject(new JsonRpcError(-32601, `Akra Desktop does not handle ${method} yet`));
     }
@@ -276,7 +296,7 @@ export class DesktopSession {
   /** 스레드를 연다. 이전 스레드는 진행 중인 턴이 없으면 구독을 끝낸다. */
   async openThread(threadId: string): Promise<void> {
     const previousId = this.store.getOpenThreadId();
-    if (!this.readOnly && previousId && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
+    if (this.canSend() && previousId && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
       void this.client.request("thread/unsubscribe", { threadId: previousId }).catch(() => undefined);
     }
     this.batcher.clear();
@@ -366,10 +386,11 @@ export class DesktopSession {
     this.loading = loading;
     try {
       // 긴 스레드의 전체 resume 은 수십 MB 가 된다. 턴 없이 구독만 하고 최근 턴부터 페이지로 읽는다.
-      // 원격 호스트는 구독하지 않고 읽는다. resume 은 멈춘 클라우드 에이전트를 깨울 수 있어 다리가 거절한다 (D-19).
-      const response = this.readOnly
-        ? await this.client.request<ThreadReadResponse>("thread/read", { threadId, includeTurns: false })
-        : await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true });
+      // 허락 전 원격 호스트는 구독하지 않고 thread/read 로 한 번만 읽는다. 허락하면 로컬과 같이 thread/resume 으로
+      // 구독해 실시간으로 받는다 (plan 25 "세션 한 번 허용").
+      const response = this.canSend()
+        ? await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true })
+        : await this.client.request<ThreadReadResponse>("thread/read", { threadId, includeTurns: false });
       if (this.store.getOpenThreadId() !== threadId) {
         return;
       }

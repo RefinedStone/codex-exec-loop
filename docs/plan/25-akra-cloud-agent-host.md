@@ -108,8 +108,13 @@ kernel: 원격 thread 를 소유하지 않는다. 명령도 내지 않는다. �
 | S1b | 원격 adapter, TLS, 설정 | `src/adapter/outbound/app_server/`, `Cargo.toml` | 로컬 TLS 가짜 서버 | - |
 | G1 | 읽기 전용 확인 | - | `initialize` 와 목록 읽기가 성공한다. 모델 턴 없음 (2026-11-14 통과) | S2 이후를 하지 않는다 |
 | S2 | Desktop 다중 접속, 원격 구역, 읽기 화면 | `desktop/src/main`, `desktop/src/renderer` | vitest, 가짜 Gateway e2e (숨긴 창), 실제 계정 확인 한 번 | - |
-| G2 | 쓰기 경로 확인 | - | 공개 프로토콜의 method 가 원격 thread 에서 동작한다 | 읽기 전용으로 끝낸다 |
+| G2 | 쓰기 경로 확인 | - | 공개 프로토콜의 method 가 원격 thread 에서 동작한다 (사용자가 보낼 때 확인) | 읽기 전용으로 끝낸다 |
 | S3 | 메시지 보내기 | renderer 입력창, main | 사용자가 허락한 턴 한 번 (D-13) | - |
+
+- S3 (보내기)는 "세션 한 번 허용"으로 구현했다 (사용자 결정 2026-11-14): 원격 대화의 배너에서 "이 세션에서
+  보내기 허용"을 누르면 그 호스트 세션이 쓰기 가능해진다. 그 뒤 thread/resume 으로 구독하고 composer 로
+  turn/start·turn/steer 를 보낸다. Gateway cloud 다리는 공개 쓰기 method 만 허용한다(비공개 turn/addUserMessage
+  는 넣지 않는다). 실계정 턴은 사용자가 보낼 때만 일어난다. G2 는 그 전송으로 확인된다.
 
 - 규모 (코드 조사의 추정): S1a 1~2일, S1b 2~3일, S2 3~5일, S3 1~2일.
 - S1a 만 G0 과 무관하다. S1b 부터는 G0 이 충족된 뒤에 한다.
