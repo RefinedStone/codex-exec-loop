@@ -1109,6 +1109,11 @@ mod tests {
         assert_eq!(reset_exit, 0);
         assert!(reset_rendered.contains("target: queue"));
         assert!(reset_rendered.contains("status: planning workspace reset"));
+        // plan 18 K4-9a: the CLI did not run the reset. The repository kernel ran it as a command of this entrance.
+        assert_eq!(
+            crate::composition::production::recorded_commands_for_test(&workspace),
+            [("reset_planning".to_string(), Some("akra-cli".to_string()))]
+        );
 
         // directions/all 은 --confirm 없이 아무것도 바꾸지 않는다.
         let mut refused_output = Vec::new();
@@ -1123,6 +1128,11 @@ mod tests {
         assert_eq!(refused_exit, 1);
         assert!(refused_rendered.contains("Rerun with --confirm"));
         assert!(!refused_rendered.contains("status: planning workspace reset"));
+        assert_eq!(
+            crate::composition::production::recorded_commands_for_test(&workspace).len(),
+            1,
+            "an unconfirmed reset does not reach the kernel"
+        );
 
         let mut confirmed_output = Vec::new();
         let confirmed_exit = run_with_args(

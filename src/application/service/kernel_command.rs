@@ -14,6 +14,7 @@ use crate::domain::kernel_spec::{CommandState, KernelCommandKind};
 pub struct UnreachableAnswers {
     pub no_gateway: Value,
     pub held_elsewhere: Value,
+    pub gateway_too_old: Value,
 }
 
 /// The only routing policy shared by command clients. There are three ways (design §3.7): the
@@ -58,6 +59,9 @@ impl KernelCommandPort for KernelCommandService {
             (KernelGatewayReply::KernelHeldElsewhere, CommandState::Runtime) => {
                 Ok(self.unreachable.held_elsewhere.clone())
             }
+            (KernelGatewayReply::GatewayTooOld, CommandState::Runtime) => {
+                Ok(self.unreachable.gateway_too_old.clone())
+            }
         }
     }
 
@@ -67,9 +71,9 @@ impl KernelCommandPort for KernelCommandService {
             .request("akra/kernel/query", json!({ "query": input }), wait)?
         {
             KernelGatewayReply::Answer(answer) => Ok(answer),
-            KernelGatewayReply::NoGateway | KernelGatewayReply::KernelHeldElsewhere => {
-                self.command_only.query(input, wait)
-            }
+            KernelGatewayReply::NoGateway
+            | KernelGatewayReply::KernelHeldElsewhere
+            | KernelGatewayReply::GatewayTooOld => self.command_only.query(input, wait),
         }
     }
 }
@@ -85,6 +89,7 @@ mod tests {
         Answers,
         NoGateway,
         HeldElsewhere,
+        TooOld,
     }
 
     struct Gateway {
@@ -105,6 +110,7 @@ mod tests {
                 Reach::Answers => KernelGatewayReply::Answer(json!({"remote":true})),
                 Reach::NoGateway => KernelGatewayReply::NoGateway,
                 Reach::HeldElsewhere => KernelGatewayReply::KernelHeldElsewhere,
+                Reach::TooOld => KernelGatewayReply::GatewayTooOld,
             })
         }
     }
@@ -130,12 +136,13 @@ mod tests {
         UnreachableAnswers {
             no_gateway: json!({"rejection":"no gateway"}),
             held_elsewhere: json!({"rejection":"held elsewhere"}),
+            gateway_too_old: json!({"rejection":"too old"}),
         }
     }
 
     #[test]
     fn the_gateway_kernel_is_preferred_and_a_runtime_command_never_runs_locally() {
-        // Design §3.7: three ways. The answer to a runtime command names the true cause.
+        // Design §3.7: three ways, and an older Gateway. The answer to a runtime command names the true cause.
         for (reach, store_answer, runtime_answer) in [
             (
                 Reach::Answers,
@@ -151,6 +158,11 @@ mod tests {
                 Reach::HeldElsewhere,
                 json!({"local":true}),
                 json!({"rejection":"held elsewhere"}),
+            ),
+            (
+                Reach::TooOld,
+                json!({"local":true}),
+                json!({"rejection":"too old"}),
             ),
         ] {
             let local = Arc::new(Local::default());

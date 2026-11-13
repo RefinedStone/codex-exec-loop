@@ -229,6 +229,7 @@ impl CoreController {
                 .track_command_operation(effect, OpenCommandOperation { op_id, thread_id }),
             // 바로 거절한 명령은 런타임이 `command_rejected` 로 적는다.
             None if rejected => {}
+            // 받았지만 아무 요청도 시작하지 않았다. 명령을 보낸 쪽이 "바뀐 것이 없다"를 알도록 글을 적는다.
             None => self
                 .conversation_turn
                 .record_kernel_event(KernelEvent::CommandCompleted {
@@ -236,7 +237,7 @@ impl CoreController {
                     thread_id,
                     result: kernel_event::OperationEnd::Failed,
                     reason: None,
-                    detail: None,
+                    detail: Some(kernel_event::COMMAND_NOT_STARTED_DETAIL.to_string()),
                 }),
         }
         outcome
@@ -263,7 +264,7 @@ impl CoreController {
                 thread_id: operation.thread_id,
                 result,
                 reason: None,
-                detail: failure,
+                detail: failure.as_deref().map(kernel_event::command_failure_detail),
             });
     }
 
@@ -10766,7 +10767,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,
                 reason: None,
-                detail: None,
+                detail: Some(kernel_event::COMMAND_NOT_STARTED_DETAIL.to_string()),
             }]
         );
         controller.handle_input(CoreInput::EffectCompleted(

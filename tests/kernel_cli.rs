@@ -44,13 +44,17 @@ fn invalid_kernel_input_is_json_before_startup_configuration() {
  * plan 18 K4-9a: the `reset` entrance does not run the reset. It sends `reset_planning` to the repository kernel.
  * No Gateway runs under this home, so the command-only kernel runs it under the repository lock and records it.
  * The user sees the same text as before. No app-server starts and no model turn runs.
+ *
+ * Unix only: the Gateway socket is under `AKRA_HOME`, so the temporary home has no Gateway. The Windows pipe name
+ * belongs to the user, and this test must not reach the Gateway of a developer.
  */
+#[cfg(unix)]
 #[test]
 fn the_reset_entrance_sends_a_kernel_command_and_shows_the_cause_of_a_failure() {
     let root = std::env::temp_dir().join(format!("akra-kernel-cli-reset-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("test folder");
-    // The temporary folder is behind a link on macOS (`/var` -> `/private/var`). With the link path the planning
-    // store fails to open its database, so the test uses the real path.
+    // The temporary folder is behind a link on macOS (`/var` -> `/private/var`). The planning store opens its
+    // database without following links, so the test uses the real path.
     let root = root.canonicalize().expect("real path of the test folder");
     let home = root.join("home");
     // The folder has no planning workspace. The reset fails, and that failure is the thing to observe.

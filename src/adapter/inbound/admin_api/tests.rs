@@ -1112,6 +1112,12 @@ async fn admin_json_mutations_require_header_csrf_and_share_reset_guard() {
         accepted_body["rewritten_paths"].is_array(),
         "reset response should expose facade outcome JSON"
     );
+    // plan 18 K4-9a: the admin server did not run the reset. The repository kernel ran it as a command of
+    // this entrance, and the refused requests above did not reach the kernel.
+    assert_eq!(
+        crate::composition::production::recorded_commands_for_test(&workspace.path),
+        [("reset_planning".to_string(), Some("akra-admin".to_string()))]
+    );
 }
 
 #[tokio::test]

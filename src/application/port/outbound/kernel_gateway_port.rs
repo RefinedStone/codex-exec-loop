@@ -9,6 +9,9 @@ pub enum KernelGatewayReply {
     /// The Gateway answered, but it cannot attach to the kernel of this repository. Another
     /// process (a TUI) runs that kernel. The request did not run.
     KernelHeldElsewhere,
+    /// A Gateway answered, but it does not know the attach request of this client: it is an older
+    /// program. The request did not run. The Gateway keeps running until someone restarts it.
+    GatewayTooOld,
     Answer(Value),
 }
 

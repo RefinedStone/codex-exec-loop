@@ -13,25 +13,29 @@ use crate::adapter::inbound::kernel_protocol::{
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::{
-    FilesystemPlanningWorkspaceAdapter, RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
-    RepositoryKernelOwner,
+    FilesystemPlanningWorkspaceAdapter, RepositoryKernelLock, RepositoryKernelLockAdapter,
+    RepositoryKernelLockHeld, RepositoryKernelOwner,
 };
 use crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter;
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
-use crate::application::port::outbound::planning_reset_route_port::PlanningResetRoutePort;
+use crate::application::port::outbound::planning_reset_route_port::{
+    PlanningResetRouteOutcome, PlanningResetRoutePort,
+};
 use crate::application::service::kernel_command::{KernelCommandService, UnreachableAnswers};
 use crate::application::service::planning::PlanningBootstrapService;
 use crate::application::service::planning::repair::reset::PlanningResetService;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::domain::kernel_event::{
     COMMAND_KINDS, CommandMemory, CommandRecall, KernelEvent, MAX_KERNEL_EVENT_PAGE, OperationEnd,
-    OperationReceipt, OperationStatus, RecordedKernelEvent,
+    OperationReceipt, OperationStatus, RecordedKernelEvent, command_failure_detail,
 };
 use crate::domain::kernel_spec::{
     CommandEffect, KernelCallError, KernelCommandKind, OperationState, ReasonCode,
 };
-use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget, PriorityQueueService};
+use crate::domain::planning::{
+    PlanningAuthorityLocation, PlanningResetRequest, PlanningResetTarget, PriorityQueueService,
+};
 
 /// 커널 기록의 호출자 이름이다 (설계 §3.5). 입구마다 하나이다.
 pub(crate) const CALLER_CLI: &str = "akra-cli";
@@ -61,6 +65,9 @@ pub(crate) fn build(workspace: &Path, caller: &'static str) -> Result<Box<dyn Ke
             no_gateway: unreachable_answer("The Akra Gateway is not running. Start it.")?,
             held_elsewhere: unreachable_answer(
                 "Another process (a TUI) runs the kernel of this repository. Use that process, or close it.",
+            )?,
+            gateway_too_old: unreachable_answer(
+                "The running Akra Gateway is an older version than this program. Restart the Gateway.",
             )?,
         },
     )))
@@ -159,11 +166,7 @@ impl KernelCommandPort for CommandOnlyKernel {
         };
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&self.workspace)?;
-        let lock = match RepositoryKernelLockAdapter::acquire_for_owner(
-            location,
-            &self.workspace,
-            RepositoryKernelOwner::Command,
-        ) {
+        let lock = match acquire_command_lock(location, &self.workspace) {
             Ok(lock) => Some(lock),
             Err(error)
                 if error
@@ -236,7 +239,10 @@ impl KernelCommandPort for CommandOnlyKernel {
                         OperationEnd::Failed
                     },
                     reason: None,
-                    detail: result.as_ref().err().map(|error| format!("{error:#}")),
+                    detail: result
+                        .as_ref()
+                        .err()
+                        .map(|error| command_failure_detail(&error.to_string())),
                 },
             )],
         )?;
@@ -293,17 +299,42 @@ impl KernelRoutedPlanningReset {
 }
 
 impl PlanningResetRoutePort for KernelRoutedPlanningReset {
-    fn reset_workspace(&self, workspace_dir: &str, request: PlanningResetRequest) -> Result<()> {
+    fn reset_workspace(
+        &self,
+        workspace_dir: &str,
+        target: PlanningResetTarget,
+    ) -> Result<PlanningResetRouteOutcome> {
+        // 커널이 있을 수 없는 폴더(대표 checkout 이 없는 저장소, 병렬 slot worktree)는 이전처럼 직접 초기화한다.
+        if super::production::repository_kernel_target(workspace_dir).is_err() {
+            return Ok(PlanningResetRouteOutcome::NoRepositoryKernel);
+        }
         let port = build(Path::new(workspace_dir), self.caller)?;
-        reset_through_kernel(port.as_ref(), request.target)
+        reset_through_kernel(port.as_ref(), target, new_idempotency_key())?;
+        Ok(PlanningResetRouteOutcome::Done)
     }
+}
+
+/// 명령 하나의 멱등 키이다. 무작위 16바이트이다.
+fn new_idempotency_key() -> String {
+    use rand::RngCore;
+    let mut bytes = [0_u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /*
  * `reset_planning` 을 보내고 그 연산의 끝을 기다린다. 입구의 확인 규칙(큐는 확인이 없어도 된다)은 부른 쪽이 이미
  * 검사했다. 커널은 지우는 명령마다 `confirm: true` 를 요구하므로 여기서 붙인다.
+ *
+ * 멱등 키를 보내는 이유는 재전송이 아니다. 기록이 없는 Gateway 커널은 명령을 기록 없이 실행하고 영수증을 주지
+ * 않는다. 그러면 끝을 기다릴 수 없다. 키가 있으면 그 커널은 실행하지 않고 오류로 답한다 (`idempotency_unavailable`).
+ * 그래서 영수증이 없는 답은 TUI 가 커널을 쥔 저장소의 직접 초기화뿐이고, 그 길은 초기화가 끝난 뒤에 답한다.
  */
-fn reset_through_kernel(port: &dyn KernelCommandPort, target: PlanningResetTarget) -> Result<()> {
+fn reset_through_kernel(
+    port: &dyn KernelCommandPort,
+    target: PlanningResetTarget,
+    idempotency_key: String,
+) -> Result<()> {
     let command = KernelCommand::ResetPlanning {
         target: match target {
             PlanningResetTarget::Queue => ResetTarget::Queue,
@@ -312,11 +343,10 @@ fn reset_through_kernel(port: &dyn KernelCommandPort, target: PlanningResetTarge
         },
         confirm: true,
     };
-    // 초기화는 같은 입력이 같은 상태를 만든다 (`natural`). 멱등 키는 필요 없다.
     let answer: CommandResponse = serde_json::from_value(port.command(
         command.kind(),
         serde_json::to_value(&command)?,
-        None,
+        Some(idempotency_key),
     )?)
     .context("the kernel answered the reset with an unknown shape")?;
     if let Some(rejection) = answer.rejection {
@@ -325,7 +355,6 @@ fn reset_through_kernel(port: &dyn KernelCommandPort, target: PlanningResetTarge
     if !answer.processed {
         bail!("the repository kernel stopped before it took the reset; nothing was changed");
     }
-    // 기록이 없는 길(TUI 가 커널을 쥔 저장소의 직접 초기화)은 영수증이 없다. 그 길은 초기화가 끝난 뒤에 답한다.
     let Some(operation) = answer.operation else {
         return Ok(());
     };
@@ -343,6 +372,36 @@ fn reset_through_kernel(port: &dyn KernelCommandPort, target: PlanningResetTarge
     match status.state {
         OperationState::Done => Ok(()),
         state => Err(reset_failure(state, &status.records)),
+    }
+}
+
+/*
+ * 명령 전용 조립의 잠금이다. 다른 입구의 명령이 같은 잠금을 잠깐 쥐고 있으면 조금 기다린다. 이전의 직접 초기화는
+ * 저장소(DB)의 잠금에서 기다렸다. 커널(Gateway, TUI)이 쥔 잠금은 기다려도 풀리지 않으므로 바로 돌려준다.
+ */
+fn acquire_command_lock(
+    location: PlanningAuthorityLocation,
+    workspace: &str,
+) -> Result<RepositoryKernelLock> {
+    const ATTEMPTS: u32 = 50;
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+    let mut attempt = 1;
+    loop {
+        let acquired = RepositoryKernelLockAdapter::acquire_for_owner(
+            location.clone(),
+            workspace,
+            RepositoryKernelOwner::Command,
+        );
+        let held_by_a_command = acquired.as_ref().err().is_some_and(|error| {
+            error
+                .downcast_ref::<RepositoryKernelLockHeld>()
+                .is_some_and(|held| held.owner == Some(RepositoryKernelOwner::Command))
+        });
+        if !held_by_a_command || attempt == ATTEMPTS {
+            return acquired;
+        }
+        attempt += 1;
+        std::thread::sleep(DELAY);
     }
 }
 
@@ -453,7 +512,8 @@ mod tests {
             input: Value,
             key: Option<String>,
         ) -> Result<Value> {
-            assert_eq!(key, None, "a reset needs no idempotency key");
+            // With a key, a kernel without a decision log refuses instead of running without a receipt.
+            assert_eq!(key.as_deref(), Some("key"));
             self.sent.lock().unwrap().push(input);
             Ok(self.answer.clone())
         }
@@ -512,7 +572,8 @@ mod tests {
     fn a_routed_reset_waits_for_the_end_and_reports_the_cause_of_a_failure() {
         // plan 18 K4-9a: the Gateway kernel accepts the command first. The entrance returns after the end.
         let done = ScriptedKernel::new(accepted(5), Some(ended(5, OperationEnd::Done, None)));
-        reset_through_kernel(&done, PlanningResetTarget::Queue).expect("the reset ended");
+        reset_through_kernel(&done, PlanningResetTarget::Queue, "key".to_string())
+            .expect("the reset ended");
         assert_eq!(
             *done.sent.lock().unwrap(),
             [
@@ -531,7 +592,7 @@ mod tests {
             )),
         );
         assert_eq!(
-            reset_through_kernel(&failed, PlanningResetTarget::Directions)
+            reset_through_kernel(&failed, PlanningResetTarget::Directions, "key".to_string())
                 .unwrap_err()
                 .to_string(),
             "live tasks block the directions reset",
@@ -539,7 +600,7 @@ mod tests {
         );
 
         let lost = ScriptedKernel::new(accepted(5), Some(ended(5, OperationEnd::Lost, None)));
-        let error = reset_through_kernel(&lost, PlanningResetTarget::All)
+        let error = reset_through_kernel(&lost, PlanningResetTarget::All, "key".to_string())
             .unwrap_err()
             .to_string();
         assert!(error.contains("operation state: lost"), "{error}");
@@ -561,7 +622,7 @@ mod tests {
             None,
         );
         assert_eq!(
-            reset_through_kernel(&rejected, PlanningResetTarget::Queue)
+            reset_through_kernel(&rejected, PlanningResetTarget::Queue, "key".to_string())
                 .unwrap_err()
                 .to_string(),
             "the kernel refused"
@@ -570,11 +631,14 @@ mod tests {
 
         // A repository whose kernel a TUI holds: the direct reset ends before it answers, without a receipt.
         let direct = ScriptedKernel::new(CommandResponse::from_core(Some(&[])), None);
-        reset_through_kernel(&direct, PlanningResetTarget::Queue).expect("the direct reset ended");
+        reset_through_kernel(&direct, PlanningResetTarget::Queue, "key".to_string())
+            .expect("the direct reset ended");
         assert_eq!(direct.sent.lock().unwrap().len(), 1, "no operation query");
 
         let stopped = ScriptedKernel::new(CommandResponse::from_core(None), None);
-        assert!(reset_through_kernel(&stopped, PlanningResetTarget::Queue).is_err());
+        assert!(
+            reset_through_kernel(&stopped, PlanningResetTarget::Queue, "key".to_string()).is_err()
+        );
     }
 
     #[test]
@@ -582,7 +646,8 @@ mod tests {
         // The real command-only kernel: the reset of an entrance leaves `command_received` and `command_completed`.
         let (_directory, mut kernel) = fixture();
         kernel.caller = CALLER_ADMIN;
-        reset_through_kernel(&kernel, PlanningResetTarget::Queue).expect("the reset ended");
+        reset_through_kernel(&kernel, PlanningResetTarget::Queue, "key".to_string())
+            .expect("the reset ended");
         let log = super::super::production::kernel_event_log_port();
         let records = kernel.records(log.as_ref()).unwrap();
         assert!(matches!(
@@ -615,7 +680,7 @@ mod tests {
             workspace: path.to_string_lossy().into_owned(),
             caller: CALLER_TELEGRAM,
         };
-        let error = reset_through_kernel(&kernel, PlanningResetTarget::Queue)
+        let error = reset_through_kernel(&kernel, PlanningResetTarget::Queue, "key".to_string())
             .unwrap_err()
             .to_string();
         assert!(error.contains("initialize planning first"), "{error}");
