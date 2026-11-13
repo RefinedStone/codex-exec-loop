@@ -12,8 +12,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use super::cloud_dots_live::start_room_watch;
 use super::cloud_upstream::{CloudCredentials, default_user_agent, load_credentials};
-use crate::application::port::outbound::dots_port::{DotMessage, DotSummary, DotsPort};
+use crate::application::port::outbound::dots_port::{
+    DotLiveListener, DotMessage, DotRoomMessages, DotSummary, DotsPort,
+};
 use crate::subprocess;
 
 const DOTS_LIST_URL: &str = "https://chatgpt.com/backend-api/tbo";
@@ -32,6 +35,7 @@ const MAX_TIME_SECONDS: u32 = 20;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 64 * 1024;
 
+#[derive(Clone)]
 pub(crate) struct CloudDotsRestAdapter {
     auth_path: PathBuf,
     /// 믿을 수 있는 curl 의 절대 경로이다. 찾지 못했으면 그 이유이다.
@@ -52,7 +56,7 @@ impl DotsPort for CloudDotsRestAdapter {
         parse_dot_list(&self.get(DOTS_LIST_URL, "dots list")?)
     }
 
-    fn room_messages(&self, room_id: &str) -> Result<Vec<DotMessage>> {
+    fn room_messages(&self, room_id: &str) -> Result<DotRoomMessages> {
         if !is_safe_room_id(room_id) {
             bail!("the message room id is not valid");
         }
@@ -62,6 +66,17 @@ impl DotsPort for CloudDotsRestAdapter {
             "dots room messages",
         )?;
         parse_room_messages(&room, &messages)
+    }
+
+    fn watch_room(&self, room_id: &str, on_state: DotLiveListener) -> Result<Box<dyn Send>> {
+        if !is_safe_room_id(room_id) {
+            bail!("the message room id is not valid");
+        }
+        Ok(start_room_watch(
+            self.clone(),
+            room_id.to_string(),
+            on_state,
+        ))
     }
 
     fn send_room_message(&self, room_id: &str, text: &str) -> Result<()> {
@@ -80,8 +95,34 @@ impl DotsPort for CloudDotsRestAdapter {
 }
 
 impl CloudDotsRestAdapter {
+    /// 끝나지 않는 응답(SSE)을 받을 curl 명령과 그 stdin config 이다. 시간 제한과 상태 코드 출력이 없다. 실행과
+    /// 정리는 부르는 쪽이 한다.
+    pub(super) fn stream_command(&self, url: &str, json_body: &str) -> Result<(Command, String)> {
+        let curl = match &self.curl {
+            Ok(path) => path,
+            Err(error) => bail!("trusted curl executable could not be pinned for dots: {error}"),
+        };
+        let credentials = load_credentials(&self.auth_path)?;
+        let config = build_curl_config(
+            url,
+            Some(json_body),
+            &credentials,
+            &default_user_agent(),
+            CurlMode::Stream,
+        );
+        let mut command = Command::new(curl);
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        crate::trusted_executable::configure_credential_command_environment(
+            &mut command,
+            &cwd,
+            false,
+        )?;
+        command.args(["-q", "--config", "-"]);
+        Ok((command, config))
+    }
+
     /// 인증된 GET 하나를 보내고 본문을 돌려준다. `label` 은 오류 글자에만 쓴다.
-    fn get(&self, url: &str, label: &str) -> Result<String> {
+    pub(super) fn get(&self, url: &str, label: &str) -> Result<String> {
         self.request(url, None, label)
     }
 
@@ -92,7 +133,13 @@ impl CloudDotsRestAdapter {
             Err(error) => bail!("trusted curl executable could not be pinned for dots: {error}"),
         };
         let credentials = load_credentials(&self.auth_path)?;
-        let config = build_curl_config(url, json_body, &credentials, &default_user_agent());
+        let config = build_curl_config(
+            url,
+            json_body,
+            &credentials,
+            &default_user_agent(),
+            CurlMode::Request,
+        );
 
         let mut command = Command::new(curl);
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -187,11 +234,21 @@ fn is_safe_room_id(room_id: &str) -> bool {
 }
 
 /// curl config 이다. stdin 으로만 넘긴다. 헤더는 클라우드 다리와 같은 공식 앱 신원이다.
+/// curl 이 응답을 어떻게 받는지이다.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CurlMode {
+    /// 끝나는 요청이다. 시간 제한을 두고, 본문 뒤에 상태 코드를 한 줄로 받는다.
+    Request,
+    /// 끝나지 않는 스트림(SSE)이다. 시간 제한이 없고 버퍼를 쓰지 않는다. HTTP 오류는 종료 코드로 받는다.
+    Stream,
+}
+
 fn build_curl_config(
     url: &str,
     json_body: Option<&str>,
     credentials: &CloudCredentials,
     user_agent: &str,
+    mode: CurlMode,
 ) -> String {
     let header = |name: &str, value: &str| {
         format!(
@@ -200,11 +257,20 @@ fn build_curl_config(
             escape_curl_config_value(value)
         )
     };
+    let transfer = match mode {
+        CurlMode::Request => {
+            format!("write-out = \"\\n%{{http_code}}\"\nmax-time = {MAX_TIME_SECONDS}\n")
+        }
+        CurlMode::Stream => "fail\nno-buffer\n".to_string(),
+    };
     let mut config = format!(
-        "silent\nshow-error\nwrite-out = \"\\n%{{http_code}}\"\nconnect-timeout = {CONNECT_TIMEOUT_SECONDS}\nmax-time = {MAX_TIME_SECONDS}\nrequest = \"{}\"\nurl = \"{}\"\n",
+        "silent\nshow-error\n{transfer}connect-timeout = {CONNECT_TIMEOUT_SECONDS}\nrequest = \"{}\"\nurl = \"{}\"\n",
         if json_body.is_some() { "POST" } else { "GET" },
         escape_curl_config_value(url),
     );
+    if mode == CurlMode::Stream {
+        config.push_str(&header("Accept", "text/event-stream"));
+    }
     if let Some(body) = json_body {
         config.push_str(&header("Content-Type", "application/json"));
         config.push_str(&format!("data = \"{}\"\n", escape_curl_config_value(body)));
@@ -278,6 +344,15 @@ struct RoomResponse {
     members: Vec<RoomMemberResponse>,
     #[serde(default)]
     member_profile_snapshots: Vec<RoomProfileResponse>,
+    #[serde(default)]
+    read_receipts: Vec<RoomReadReceiptResponse>,
+}
+
+#[derive(Deserialize)]
+struct RoomReadReceiptResponse {
+    account_user_id: String,
+    #[serde(default)]
+    last_read_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -320,12 +395,23 @@ struct RoomMessageContentResponse {
 /// 방과 메시지 응답을 화면용 메시지로 옮긴다. 지운 메시지는 뺀다. 서비스는 모든 메시지의 `role` 을 `user` 로
 /// 주므로 보낸 쪽은 `account_user_id` 로 가린다. dot 의 id 는 `member_profile_snapshots` 에 있다 (2026-11-14 에
 /// 계정 하나에서 본 규칙이다. 틀리면 dot 의 메시지가 사람 쪽에 보인다).
-fn parse_room_messages(room_body: &str, messages_body: &str) -> Result<Vec<DotMessage>> {
+fn parse_room_messages(room_body: &str, messages_body: &str) -> Result<DotRoomMessages> {
     let room: RoomResponse =
         serde_json::from_str(room_body).context("failed to parse the dots room response")?;
     let messages: RoomMessagesResponse = serde_json::from_str(messages_body)
         .context("failed to parse the dots room messages response")?;
-    Ok(messages
+    // dot 의 읽음 표시이다. dot 은 `member_profile_snapshots` 의 id 이다.
+    let dot_read_at = room
+        .read_receipts
+        .iter()
+        .filter(|receipt| {
+            room.member_profile_snapshots
+                .iter()
+                .any(|profile| profile.account_user_id == receipt.account_user_id)
+        })
+        .filter_map(|receipt| receipt.last_read_at.clone())
+        .max();
+    let messages = messages
         .items
         .into_iter()
         .filter(|message| message.deleted_at.is_none())
@@ -350,7 +436,11 @@ fn parse_room_messages(room_body: &str, messages_body: &str) -> Result<Vec<DotMe
                     .unwrap_or_default(),
             }
         })
-        .collect())
+        .collect();
+    Ok(DotRoomMessages {
+        messages,
+        dot_read_at,
+    })
 }
 
 #[cfg(test)]
@@ -391,6 +481,11 @@ mod tests {
             .room_messages(&room_id)
             .expect("the room messages must load");
         eprintln!(
+            "live: dot read marker present: {}",
+            messages.dot_read_at.is_some()
+        );
+        let messages = messages.messages;
+        eprintln!(
             "live: {} messages, {} from the dot, {} without an author name",
             messages.len(),
             messages.iter().filter(|message| message.from_dot).count(),
@@ -415,6 +510,7 @@ mod tests {
             None,
             &credentials(),
             "Codex Desktop/1.2.3 (Windows; x86_64)",
+            CurlMode::Request,
         );
         assert!(!config.contains("data ="));
         assert!(config.contains("request = \"GET\""));
@@ -433,10 +529,33 @@ mod tests {
     }
 
     #[test]
+    fn a_stream_has_no_time_limit_and_no_buffer() {
+        let config = build_curl_config(
+            "https://example.test/rooms/r1/live",
+            Some("{}"),
+            &credentials(),
+            "agent",
+            CurlMode::Stream,
+        );
+        assert!(config.lines().any(|line| line == "no-buffer"));
+        assert!(config.lines().any(|line| line == "fail"));
+        assert!(!config.contains("max-time"));
+        assert!(!config.contains("write-out"));
+        assert!(config.contains("header = \"Accept: text/event-stream\""));
+        assert!(config.contains("request = \"POST\""));
+    }
+
+    #[test]
     fn a_header_value_cannot_add_a_config_line() {
         let mut hostile = credentials();
         hostile.account_id = "acc\"\noutput = \"/tmp/x".to_string();
-        let config = build_curl_config("https://example.test/tbo", None, &hostile, "agent");
+        let config = build_curl_config(
+            "https://example.test/tbo",
+            None,
+            &hostile,
+            "agent",
+            CurlMode::Request,
+        );
         assert!(!config.lines().any(|line| line.starts_with("output")));
     }
 
@@ -471,7 +590,11 @@ mod tests {
         let room = r#"{"members":[
             {"role":"user","account_user_id":"user-1","name":"Me"},
             {"role":"user","account_user_id":"calpico-9","name":"Mika"}
-        ],"member_profile_snapshots":[{"account_user_id":"calpico-9"}]}"#;
+        ],"member_profile_snapshots":[{"account_user_id":"calpico-9"}],
+        "read_receipts":[
+            {"account_user_id":"user-1","last_read_at":"2026-11-14T09:00:00Z"},
+            {"account_user_id":"calpico-9","last_read_at":"2026-11-14T01:00:03Z"}
+        ]}"#;
         let messages = r#"{"items":[
             {"id":"m1","created_at":"2026-11-14T01:00:00Z","role":"user","account_user_id":"user-1",
              "content":{"text":"hello","attachments":[]},"deleted_at":null},
@@ -480,7 +603,13 @@ mod tests {
             {"id":"m3","account_user_id":"user-1","content":{"text":"gone"},"deleted_at":"2026-11-14T02:00:00Z"},
             {"id":"m4","account_user_id":"stranger"}
         ],"prev_cursor":null,"next_cursor":null}"#;
-        let parsed = parse_room_messages(room, messages).expect("messages parse");
+        let room_messages = parse_room_messages(room, messages).expect("messages parse");
+        // 읽음 표시는 dot 의 것만 쓴다. 내 것은 쓰지 않는다.
+        assert_eq!(
+            room_messages.dot_read_at.as_deref(),
+            Some("2026-11-14T01:00:03Z")
+        );
+        let parsed = room_messages.messages;
         assert_eq!(
             parsed[0],
             DotMessage {
@@ -514,6 +643,7 @@ mod tests {
             Some(&body),
             &credentials(),
             "agent",
+            CurlMode::Request,
         );
         assert!(config.contains("request = \"POST\""));
         assert!(config.contains("header = \"Content-Type: application/json\""));

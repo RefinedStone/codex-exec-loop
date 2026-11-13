@@ -172,6 +172,7 @@ function sessionStore() {
     getTranscript: () => snapshot.transcript ?? null,
     setKernel: (kernel) => Object.assign(snapshot, { kernel }),
     setDots: (dots) => Object.assign(snapshot, { dots }),
+    applyDotLive: (live) => Object.assign(snapshot, { lastDotLive: live }),
     getKernel: () => snapshot.kernel ?? EMPTY_KERNEL_VIEW,
   };
   return store;
@@ -261,7 +262,7 @@ describe("a remote host over the fake gateway (plan 25)", () => {
 
   it("reads the dot list of a remote host once and keeps it empty when the gateway has none", async () => {
     const dot = { id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "thread-1", messagingRoomId: "room-1" };
-    const withDots = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, { hosts: ["cloud"], dots: [dot] });
+    const withDots = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, { hosts: ["cloud"], dots: [dot], dotMessages: [] });
     cleanups.push(() => withDots.close());
     const first = connectBridge(withDots.endpoint, undefined, "cloud");
     const store = sessionStore();
@@ -271,6 +272,10 @@ describe("a remote host over the fake gateway (plan 25)", () => {
     first.connection.start();
     await waitFor(() => (store.snapshot.dots?.length ?? 0) === 1);
     expect(store.snapshot.dots).toEqual([dot]);
+    // dot 의 방을 보기 시작하고, Gateway 가 미는 실시간 상태를 저장소에 넣는다.
+    await waitFor(() => (store.snapshot as { lastDotLive?: unknown }).lastDotLive !== undefined);
+    expect(withDots.remoteReceivedMethods.filter((method) => method === "akra/dots/watch")).toHaveLength(1);
+    expect((store.snapshot as { lastDotLive?: unknown }).lastDotLive).toEqual({ roomId: "room-1", connected: true, working: false, activityLabel: null, usingComputer: false });
     expect(withDots.remoteReceivedMethods.filter((method) => method === "akra/dots/list")).toHaveLength(1);
     // local 접속은 dot 목록을 묻지 않는다.
     expect(withDots.receivedMethods).not.toContain("akra/dots/list");

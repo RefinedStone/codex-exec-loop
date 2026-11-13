@@ -366,9 +366,23 @@ the desktop app itself is not shipped yet.
   허용" and confirms a warning; the permission holds for that dot until the app closes. Then a composer
   appears and `akra/dots/send` with `{ roomId, text }` posts the trimmed text (1 to 8000 characters) to
   the room with a fresh `request_id` and answers `{ sent: true }`. When the service answers HTTP 400 or
-  more, the error names the status and the service's short reason. Desktop reads the room on open and on "새로 고침". After a send it reads again every 2 seconds
-  until the newest message is a new one from the dot, for at most 45 seconds, and then stops; it does
-  not poll at other times. A real send was verified once on 2026-11-14. "작업 대화 열기" opens the dot's work thread
+  more, the error names the status and the service's short reason. Desktop reads the room on open, on "새로 고침", and when the dot finishes a reply (live state, below).
+  Only while the live channel is down, after a send it reads again every 2 seconds until the newest
+  message is a new one from the dot, for at most 45 seconds. The answer also carries `dotReadAt`, the
+  time the dot last read the room; the chat shows "읽음" under the user's newest message before it.
+- Dot live state (D-19): `akra/dots/watch` with `{ roomId }` starts a watch for that connection and
+  answers `{ watching: true }`; `akra/dots/unwatch` stops it; a connection watches at most 8 rooms and
+  its watches end with it. The Gateway then sends `akra/dots/live` notifications with `roomId`,
+  `connected`, `working`, `activityLabel`, and `usingComputer`. It reads them from the service: it
+  gets a signed WebSocket address from `GET /celsius/ws/user`, sends `connect` (presence `background`)
+  and `subscribe` to topic `calpico-room-live:<room>`, then holds `POST /messaging/rooms/{id}/live`
+  (SSE, through curl) open; the service pushes `calpico-room-live-state` on the WebSocket while that
+  stream is open. It reconnects after 5 to 60 seconds and reports `connected: false` in between.
+  Desktop watches the room of every dot. A room that goes from working to idle counts as a reply:
+  Desktop reads the chat again, marks the dot "새 답" in the sidebar until the user opens it, and shows
+  an OS notification without the message text when the user is not looking at that chat. While the
+  dot works, the chat shows a typing mark and the header shows the service's activity label
+  (`src/adapter/outbound/app_server/cloud_dots_live.rs`). A real send was verified once on 2026-11-14. "작업 대화 열기" opens the dot's work thread
   (`desktop/src/renderer/views/DotChat.tsx`, `desktop/src/renderer/views/dotSend.ts`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The

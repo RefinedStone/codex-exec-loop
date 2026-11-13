@@ -126,7 +126,21 @@
   - `request_id` 는 필수이다. 없으면 HTTP 422 `Messaging with the user's dot requires a stable send identifier` 이다
     (사용자의 첫 전송이 이 오류로 실패했다). `Idempotency-Key` 헤더는 대신하지 못한다. 답은 만든 메시지이고
     `request_id` 를 그대로 돌려준다. 기기 증명은 요구하지 않았다.
-- 안 됨: 실시간 상태, 반응, dot 관리(D3),
+- 됨 (2026-11-14 실계정 확인): 실시간 상태. Gateway `akra/dots/watch` 가 방의 상태를 `akra/dots/live` 알림으로
+  민다. 순서가 있다: `GET /celsius/ws/user` 의 `websocket_url`(서명 포함, `ws.chatgpt.com`)에 붙어 명령 묶음
+  `[{id, command:{type:"connect", presence:{type:"presence", state}}}, {id, command:{type:"subscribe", topic_id:
+  "calpico-room-live:<room>"}}]` 을 보내고, 구독 답 뒤에 `POST /messaging/rooms/{id}/live`(SSE)를 연다. SSE 는
+  `calpico-room-live-ready` 와 ping 만 주고, 상태는 WebSocket 으로 온다: `[{type:"message", topic_id, payload:{type:
+  "calpico-room-live", payload:{type:"calpico-room-live-state", room_id, threads:[{turn_status, is_active,
+  computer_status, activity_status:{status_type, status_label}}], revision}}}]`. 구독만 하고 SSE 를 열지 않으면
+  아무것도 오지 않는다. `connect` 없이 구독하면 `not_connected`, 배열이 아니면 `invalid_command_batch` 이다.
+  메시지를 보내면 0.1초 뒤 `turn_status: in_progress`, 답이 끝나면 `completed` 가 온다(실측 5.7초). 새 메시지 자체의
+  알림은 없다. 그래서 "일하는 중 -> 끝남"을 답으로 보고 대화를 다시 읽는다.
+  - 다른 주제도 있다: `app_notifications`, `conversations`, `tbo-tasks`, `resource-updates`. 구독은 되지만 시험한
+    40초 동안 아무것도 오지 않았다. 쓰지 않는다.
+- 됨: 읽음 표시(dot 이 읽은 시각). `GET /messaging/rooms/{id}` 의 `read_receipts` 에서 dot 의 `last_read_at` 을 쓴다.
+  내가 읽었다고 알리는 것(`.../read`)은 하지 않는다.
+- 안 됨: 반응, dot 관리(D3),
   클라우드 컴퓨터(D4), §3 의 요청 변환·토큰 갱신·압축. dot 목록은 첫 페이지만, 대화는 최근 30개만 읽는다 (`limit` 은 30 까지 통과, 40 부터 HTTP 422).
 - 확인됨 (2026-11-14, 실계정, 턴·쓰기 없음): 클라우드 WebSocket 이 공개 쓰기 method 를 안다. 없는 thread id 로
   보내면 `turn/start`·`turn/steer`·`turn/interrupt` 는 `-32602 unknown thread`, `thread/resume`·`thread/read` 는

@@ -89,6 +89,21 @@ function FolderSection({ folder, connected, onOpenThread }: { folder: WorkspaceF
   );
 }
 
+type DotRow = { paused: boolean; status: string; messagingRoomId: string | null };
+
+/** dot 줄의 표시이다: 답을 만드는 중이면 진행, 안 본 답이 있으면 안 읽음이다. */
+function dotRowMark(dot: DotRow, live: Record<string, { connected: boolean; working: boolean }>, unread: readonly string[]): ThreadMark {
+  const room = dot.messagingRoomId;
+  if (room !== null && live[room]?.connected && live[room].working) return "running";
+  return room !== null && unread.includes(room) ? "unread" : "idle";
+}
+
+function dotRowNote(dot: DotRow, live: Record<string, { connected: boolean; working: boolean }>, unread: readonly string[]): string {
+  if (dot.paused) return "멈춤";
+  const mark = dotRowMark(dot, live, unread);
+  return mark === "running" ? "답하는 중" : mark === "unread" ? "새 답" : dot.status;
+}
+
 function RemoteThreadRow({ thread, selected, onOpen, testId, title }: { thread: WorkspaceThread; selected: boolean; onOpen(): void; testId: string; title: string }) {
   return (
     <li className="thread-row">
@@ -114,6 +129,8 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
   const problem = useStore((state) => (state.connection?.phase === "connected" ? state.sessionError : (state.connection?.detail ?? null)));
   const folders = useStore((state) => state.folders);
   const dots = useStore((state) => state.dots);
+  const dotLive = useStore((state) => state.dotLive);
+  const dotUnreadRooms = useStore((state) => state.dotUnreadRooms);
   const openThreadId = useStore((state) => state.openThreadId);
   const showing = useUiStore((state) => state.view === "remote" && state.remoteHost === host);
   const shownDotId = useUiStore((state) => (state.view === "dot" && state.remoteHost === host ? state.remoteDotId : null));
@@ -148,11 +165,11 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
                   onClick={() => showDot(host, dot.id)}
                   data-testid="remote-dot-entry"
                 >
-                  <StatusMark mark="idle" />
+                  <StatusMark mark={dotRowMark(dot, dotLive, dotUnreadRooms)} />
                   <span className="thread-text">
                     <span className="thread-title">{dot.displayName}</span>
                   </span>
-                  <span className="thread-age">{dot.paused ? "멈춤" : dot.status}</span>
+                  <span className="thread-age">{dotRowNote(dot, dotLive, dotUnreadRooms)}</span>
                 </button>
               </li>
             ))}

@@ -213,6 +213,13 @@ export async function startFakeGateway(
   const resolvedRequestIds = new Set<string>();
   /** 서버 요청 id → 그 요청을 받은 접속들과 스레드 id */
   const openServerRequests = new Map<string, { threadId: string; sockets: Set<WebSocket> }>();
+  /** `akra/dots/watch` 로 방을 보는 접속이다. 그 접속에만 `akra/dots/live` 를 민다. */
+  const watchedRooms = new Map<WebSocket, string>();
+  const pushDotLive = (socket: WebSocket, working: boolean) => {
+    const roomId = watchedRooms.get(socket);
+    if (roomId === undefined || socket.readyState !== socket.OPEN) return;
+    socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/dots/live", params: { roomId, connected: true, working, activityLabel: working ? "Thinking" : null, usingComputer: false } }));
+  };
   sockets.on("connection", (socket, request) => {
     const path = request.url ?? "/";
     const host = path.startsWith("/host/") ? (path.slice("/host/".length).split("/")[0] ?? "") : "local";
@@ -286,15 +293,28 @@ export async function startFakeGateway(
         return;
       }
       if (remote && hasId && options.dotMessages && message.method === "akra/dots/messages") {
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { messages: options.dotMessages } }));
+        // dot 은 가장 새 내 글까지 읽었다고 답한다.
+        const mine = (options.dotMessages as Array<{ fromDot?: boolean; createdAt?: string }>).filter((item) => item.fromDot === false);
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { messages: options.dotMessages, dotReadAt: mine.at(-1)?.createdAt ?? null } }));
+        return;
+      }
+      if (remote && hasId && options.dotMessages && message.method === "akra/dots/watch") {
+        const roomId = String((message as { params?: { roomId?: unknown } }).params?.roomId ?? "");
+        watchedRooms.set(socket, roomId);
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { watching: true } }));
+        pushDotLive(socket, false);
         return;
       }
       if (remote && hasId && options.dotMessages && message.method === "akra/dots/send") {
         const params = (message as { params?: { text?: unknown } }).params;
         options.dotMessages.push({ id: `sent-${options.dotMessages.length}`, createdAt: "2026-11-14T02:00:00Z", author: "Me", fromDot: false, text: String(params?.text ?? "") });
-        // dot 은 조금 뒤에 답한다. 클라이언트가 다시 읽어야 보인다.
+        // dot 은 바로 답을 만들기 시작하고 조금 뒤에 답한다. 방을 보는 접속에는 실시간 상태를 민다.
         const messages = options.dotMessages;
-        setTimeout(() => messages.push({ id: `reply-${messages.length}`, createdAt: "2026-11-14T02:00:03Z", author: "Mika", fromDot: true, text: "On it." }), 1_000);
+        pushDotLive(socket, true);
+        setTimeout(() => {
+          messages.push({ id: `reply-${messages.length}`, createdAt: "2026-11-14T02:00:03Z", author: "Mika", fromDot: true, text: "On it." });
+          pushDotLive(socket, false);
+        }, 1_000);
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { sent: true } }));
         return;
       }

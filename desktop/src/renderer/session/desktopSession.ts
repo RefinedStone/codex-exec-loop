@@ -27,7 +27,7 @@ import { KernelConnection } from "../kernel/kernelConnection";
 import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
-import { type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
+import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
 /** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
@@ -110,6 +110,9 @@ function errorMessage(error: unknown): string {
 const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/"];
 /** 원격 호스트의 dot 목록이다 (D-19). dots 가 꺼진 Gateway 는 모르는 method 로 답한다. */
 const DOTS_LIST_METHOD = "akra/dots/list";
+/** 방의 실시간 상태를 보기 시작한다. 그 뒤 `akra/dots/live` 알림이 온다. */
+const DOTS_WATCH_METHOD = "akra/dots/watch";
+const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
 
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
 export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready">;
@@ -362,6 +365,13 @@ export class DesktopSession {
     try {
       const response = await this.client.request<{ dots: DotSummary[] }>(DOTS_LIST_METHOD);
       this.store.setDots(response.dots);
+      // dot 마다 방의 실시간 상태를 본다. 보는 화면이 없어도 본다: 답이 오면 알림과 안 읽음 표시를 만든다.
+      // 접속마다 다시 요청한다. 실패해도(이전 Gateway 등) 대화 읽기는 된다.
+      for (const dot of response.dots) {
+        if (dot.messagingRoomId !== null) {
+          void this.client.request(DOTS_WATCH_METHOD, { roomId: dot.messagingRoomId }).catch(() => undefined);
+        }
+      }
     } catch {
       this.store.setDots([]);
     }
@@ -479,6 +489,13 @@ export class DesktopSession {
   private handleNotification(method: string, params: unknown): void {
     if (method === KERNEL_METHOD.event) {
       this.kernel.handleEvent(params);
+      return;
+    }
+    if (method === DOTS_LIVE_NOTIFICATION) {
+      const state = params as Partial<DotLiveState> | null;
+      if (typeof state?.roomId === "string") {
+        this.store.applyDotLive({ roomId: state.roomId, connected: state.connected === true, working: state.working === true, activityLabel: state.activityLabel ?? null, usingComputer: state.usingComputer === true });
+      }
       return;
     }
     const threadId = notificationThreadId(params);

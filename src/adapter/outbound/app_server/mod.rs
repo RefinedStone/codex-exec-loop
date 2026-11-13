@@ -14,6 +14,8 @@ mod approval;
 // cloud_upstream.rs: dots 클라우드 app-server(`/host/cloud`) 로 잇는 두 번째 호스트 upstream (D-19).
 // cloud_dots.rs: dot 목록을 ChatGPT 백엔드 REST 로 읽는다 (D-19).
 pub(crate) mod cloud_dots;
+// cloud_dots_live.rs: dot 메시지 방의 실시간 상태(생각 중, 답 완료)를 본다 (D-19).
+mod cloud_dots_live;
 pub(crate) mod cloud_upstream;
 pub(crate) mod connection;
 mod execution_policy;
