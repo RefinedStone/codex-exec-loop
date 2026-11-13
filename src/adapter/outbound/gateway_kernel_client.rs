@@ -135,7 +135,19 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
         // while awaiting the response so a completion cannot be missed.
         recorded = false;
         send(socket, id, method, params.clone()).await?;
-        let value = answer(response(socket, id, &mut recorded).await?)?;
+        let reply = response(socket, id, &mut recorded).await?;
+        /*
+         * The caller checked the request against its own specification before it sent it. A Gateway that
+         * refuses the shape of that request does not know it: it is an older program. It refused before
+         * it ran anything, so the caller may run a stored command under the repository lock.
+         */
+        if matches!(
+            reply.pointer("/error/code").and_then(Value::as_i64),
+            Some(ERROR_INVALID_PARAMS | ERROR_METHOD_NOT_FOUND)
+        ) {
+            return Ok(KernelGatewayReply::GatewayTooOld);
+        }
+        let value = answer(reply)?;
         if !wait || query_finished(&value)? {
             // The kernel already answered. A failed detach must not turn that answer into an error:
             // the caller would send the command again. Closing the socket detaches too.
@@ -353,6 +365,23 @@ mod tests {
                 "{code}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_gateway_that_does_not_know_the_command_is_an_older_gateway() {
+        // plan 18 K4-9d: a Gateway of the last version attaches a transient client but refuses a new command.
+        let (mut client, mut server) = wire().await;
+        let serving = async {
+            serve(&mut server, "akra/kernel/attach", json!({"result":{}})).await;
+            serve(
+                &mut server,
+                "akra/kernel/command",
+                json!({"error":{"code":ERROR_INVALID_PARAMS,"message":"unknown variant `create_task`"}}),
+            )
+            .await;
+        };
+        let (reply, ()) = tokio::join!(command_over(&mut client), serving);
+        assert!(matches!(reply.unwrap(), KernelGatewayReply::GatewayTooOld));
     }
 
     #[tokio::test]

@@ -569,6 +569,189 @@
       "output": {
         "$ref": "#/$defs/CommandResponse"
       }
+    },
+    {
+      "name": "create_task",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Add a planning task as the operator. The answer carries the new task id and the new planning revision.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "task": {
+            "$ref": "#/$defs/TaskFields"
+          },
+          "type": {
+            "const": "create_task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "task_created",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task_id",
+          "planning_revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "update_task",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Replace the fields of a planning task as the operator. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "planning_revision_stale",
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task": {
+            "$ref": "#/$defs/TaskFields"
+          },
+          "task_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "update_task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task_id",
+          "task",
+          "expected_planning_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "task_updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task_id",
+          "planning_revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delete_task",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
+      "effect": "destructive",
+      "idempotency": "natural",
+      "rejections": [
+        "planning_revision_stale",
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected_planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "delete_task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task_id",
+          "expected_planning_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "task_deleted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task_id",
+          "planning_revision"
+        ],
+        "type": "object"
+      }
     }
   ],
   "queries": [
@@ -1621,6 +1804,32 @@
           "step": "stop"
         }
       ]
+    },
+    {
+      "name": "planning_revision_stale",
+      "summary": "The planning data changed after the sender read it: `expected_planning_revision` is not the current revision. Nothing was changed. `message` gives both revisions.",
+      "next": [
+        {
+          "step": "query",
+          "name": "planning"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "planning_locked",
+      "summary": "Another change or parallel work holds the planning data that the command needs. Nothing was changed. `message` names the holder.",
+      "next": [
+        {
+          "step": "wait",
+          "milliseconds": 1000
+        },
+        {
+          "step": "resend"
+        }
+      ]
     }
   ],
   "errors": [
@@ -1885,6 +2094,12 @@
     },
     "CommandResponse": {
       "properties": {
+        "failure": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "operation": {
           "anyOf": [
             {
@@ -1907,12 +2122,89 @@
               "type": "null"
             }
           ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "processed"
       ],
       "type": "object"
+    },
+    "CommandResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "task_created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id",
+            "planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "task_updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id",
+            "planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "task_deleted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id",
+            "planning_revision"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "EventNotification": {
       "properties": {
@@ -2126,6 +2418,79 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/TaskFields"
+            },
+            "type": {
+              "const": "create_task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskFields"
+            },
+            "task_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "update_task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id",
+            "task",
+            "expected_planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "confirm": {
+              "default": false,
+              "type": "boolean"
+            },
+            "expected_planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "task_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "delete_task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id",
+            "expected_planning_revision"
           ],
           "type": "object"
         }
@@ -3711,7 +4076,9 @@
         "bootstrap_review_required",
         "planning_refused",
         "task_finished",
-        "rejected_again"
+        "rejected_again",
+        "planning_revision_stale",
+        "planning_locked"
       ],
       "type": "string"
     },
@@ -3821,6 +4188,74 @@
         "title",
         "status",
         "reason"
+      ],
+      "type": "object"
+    },
+    "TaskFields": {
+      "additionalProperties": false,
+      "properties": {
+        "base_priority": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "blocked_by": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dynamic_priority_delta": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "priority_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanningTaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
       ],
       "type": "object"
     },

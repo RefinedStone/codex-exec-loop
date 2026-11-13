@@ -508,6 +508,8 @@ mod tests {
                 "planning_refused",
                 "task_finished",
                 "rejected_again",
+                "planning_revision_stale",
+                "planning_locked",
             ]
         );
         for reason in ReasonCode::ALL {

@@ -12,10 +12,10 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::{
-    AttachRequest, AttachResponse, CommandRequest, CommandResponse, EventNotification,
-    KernelCommand, KernelErrorKind, KernelEvent, KernelEventKind, KernelMethodKind, KernelQuery,
-    KernelQueryAnswer, KernelQueryKind, NextStep, PROTOCOL_VERSION, QueryRequest, error_next,
-    reason_next,
+    AttachRequest, AttachResponse, CommandRequest, CommandResponse, CommandResult,
+    EventNotification, KernelCommand, KernelErrorKind, KernelEvent, KernelEventKind,
+    KernelMethodKind, KernelQuery, KernelQueryAnswer, KernelQueryKind, NextStep, PROTOCOL_VERSION,
+    QueryRequest, error_next, reason_next,
 };
 use crate::domain::kernel_event::KernelEvent as KernelRecord;
 use crate::domain::kernel_spec::{
@@ -100,6 +100,9 @@ pub struct CommandEntry {
     pub input: Value,
     /// 모든 명령의 답은 같은 모양이다.
     pub output: Value,
+    /// 성공한 저장 명령이 답의 `result` 에 싣는 값이다 (plan 18 K4-9d). 결과가 없는 명령은 이 항목이 없다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -156,6 +159,7 @@ pub fn describe() -> KernelSpec {
     let mut schemas = Schemas::default();
     let commands = schemas.variants::<KernelCommand>("type");
     let command_output = schemas.reference::<CommandResponse>();
+    let command_results = schemas.variants::<CommandResult>("type");
     let query_inputs = schemas.variants::<KernelQuery>("type");
     let query_outputs = schemas.variants::<KernelQueryAnswer>("type");
     let events = schemas.variants::<KernelEvent>("type");
@@ -241,6 +245,8 @@ pub fn describe() -> KernelSpec {
                     completion: spec.completion,
                     input: schema_named(&commands, kind.name()),
                     output: command_output.clone(),
+                    result: CommandResult::name_for(*kind)
+                        .map(|name| schema_named(&command_results, name)),
                 }
             })
             .collect(),

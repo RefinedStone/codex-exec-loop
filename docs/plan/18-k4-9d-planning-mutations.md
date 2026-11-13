@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **제안**. 구현하지 않았다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
+- 상태: **구현 중**. 9d-1 을 구현했다 (2026-11-13, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
 - 상위 문서: [K4 명령 스펙](18-k4-command-spec.md) §2.2, §3.7 의 순서 4, §4 의 K4-9d. 같은 방법의 앞 조각은 §8 의
   K4-9a (planning 초기화)이다.
 - 이 문서를 따로 둔 이유: K4 설계는 K4-9d 를 한 줄로 적었다. 2026-11-13 의 코드 조사와 독립 리뷰(§7)에서 그 한 줄에 새
@@ -194,7 +194,7 @@ K4 설계는 `upsert_task` 처럼 "만들기와 고치기"를 한 명령으로 �
 
 | 조각 | 내용 | 동작 | 확인 |
 | --- | --- | --- | --- |
-| 9d-1 | 저장 명령의 실행기 (port 와 구현). 커널 입력을 "core 명령 또는 저장 명령"으로 넓힌다. 답의 `result` 와 스펙의 모양. 이유 코드 `planning_revision_stale`, `planning_locked` 와 서비스의 타입 오류. 명령 전용 조립의 `planning` 조회. 옛 Gateway 의 판별을 명령으로 넓힌다. 첫 명령 셋: `create_task`, `update_task`, `delete_task` | 확장 (`akra kernel planning create_task …` 가 된다. 입구는 그대로이다) | 실행기 시험 (다섯 갈래, 낡은 revision, guard, 결과), 프로토콜 시험, 명령 전용 조립 시험, Gateway 커널 시험 (실행 뒤와 거절 뒤의 `planning` 이벤트), 커널 시뮬레이션 (가짜 실행기. 기록과 거절의 불변식), 스펙·Desktop 타입·skill 일치 |
+| 9d-1 (구현 2026-11-13, §8) | 저장 명령의 실행기 (port 와 구현). 커널 입력을 "core 명령 또는 저장 명령"으로 넓힌다. 답의 `result` 와 스펙의 모양. 이유 코드 `planning_revision_stale`, `planning_locked` 와 서비스의 타입 오류. 명령 전용 조립의 `planning` 조회. 옛 Gateway 의 판별을 명령으로 넓힌다. 첫 명령 셋: `create_task`, `update_task`, `delete_task` | 확장 (`akra kernel planning create_task …` 가 된다. 입구는 그대로이다) | 실행기 시험 (다섯 갈래, 낡은 revision, guard, 결과), 프로토콜 시험, 명령 전용 조립 시험, Gateway 커널 시험 (실행 뒤와 거절 뒤의 `planning` 이벤트), 커널 시뮬레이션 (가짜 실행기. 기록과 거절의 불변식), 스펙·Desktop 타입·skill 일치 |
 | 9d-2 | admin 의 작업 변경이 커널 명령으로 간다. 지우기 폼에 revision. 처리기의 오류 타입, 409 와 원인의 글 | 전환 (지우기에 revision 이 필수가 된다) | 입구 시험 (기록의 호출자, 낡은 폼의 409), admin 시험 (JSON, HTML, HTMX) |
 | 9d-3 | 방향: 명령 셋과 admin | 전환 (고치기·지우기에 revision 이 필수가 된다) | 같다 |
 | 9d-4 | 파일 내보내기·적용: 명령 둘과 admin | 유지 | 같다. 작업 공간이 대표 checkout 과 다른 경우 |
@@ -245,3 +245,52 @@ K4 설계는 `upsert_task` 처럼 "만들기와 고치기"를 한 명령으로 �
 - 실행기를 port 로 두었다. 시뮬레이션이 가짜를 끼운다.
 - 상황의 표에 "저장소 커널이 있을 수 없는 폴더"와 "Gateway 가 이 명령을 모른다"를 더했다.
 - 호스트를 막는 시간의 한도(10초, 5초)를 위험에 적었다.
+
+## 8. 조각의 결과
+
+### 9d-1 (2026-11-13)
+
+만든 것:
+
+- 거절의 타입: domain `PlanningMutationRefusal` (낡은 revision, 잠김). 작업 서비스의 revision 검사, admin 의 문서
+  commit, 저장소의 두 변경 guard 가 글자 오류 대신 이 타입을 돌려준다. 글은 이전과 같다.
+- 실행기: inbound port `StoredCommandPort` 와 `StoredCommandService`. 사용자의 작업 만들기, 고치기, 지우기를 실행하고
+  결과(작업 id, 새 revision)를 돌려준다. 거절 타입은 이유 코드가 있는 거절이 되고, 그 밖의 오류는 실패이다. admin
+  facade 에 폼과 저장 명령이 함께 쓰는 함수를 두었다 (`apply_operator_task_command`, `delete_operator_task`).
+- 스펙: 명령 `create_task`, `update_task`, `delete_task` (`state: store`), 이유 코드 `planning_revision_stale`,
+  `planning_locked` 와 그 `next`. 명령 항목에 `result` (결과의 JSON Schema)를 더했다.
+- 답: `result` (타입이 있는 값)와 `failure` (실패의 원인 글). 저장 명령의 답은 `result`, `rejection`, `failure` 중
+  하나를 가진다.
+- 커널의 입력: 프로토콜의 `KernelCommand::into_input` 이 "core 명령 또는 저장 명령"을 돌려준다. 런타임의
+  `dispatch_client_command` 가 저장 명령을 받으면 실행기를 바로 부르고, 끝을 기록하고 (`command_completed`
+  또는 `command_rejected`), planning 을 다시 읽는다. Gateway 의 커널이 실행기를 붙인다.
+- 명령 전용 조립: 초기화와 저장 명령을 같은 길로 실행한다 (잠금, 받음 기록, 실행, 끝 기록). TUI 가 커널을 쥐
+  저장소에서는 직접 실행하고 기록하지 않는다. `planning` 조회를 저장소에서 답한다.
+- 옛 Gateway: 클라이언트는 요청에 대한 `-32602`, `-32601` 도 옛 판으로 본다 (attach 뿐이 아니다).
+- CLI: 실패한 저장 명령의 종료 코드는 1 이다. 객체 필드는 JSON 글로 준다
+  (`--task '{"title":"..."}'`).
+
+설계와 다른 점:
+
+- 답에 `failure` 를 더했다. 설계는 실패의 원인을 `command_completed.detail` 에만 두었다. 영수증의 `state` 는 받을
+  때의 결과(`accepted`, `rejected`)만 적는다. 그래서 답만 보고 실패를 알 수 없었다.
+- 실행기의 port 는 inbound port 이다. 쓰는 쪽(커널 런타임, 명령 전용 조립)이 부르는 use case 이기 때문이다.
+- 고치기의 "필드 전체"는 admin 의 폼과 같다: 이유와 참조는 없으면 비우고, 방향·설명·상태·우선순위는
+  없으면 그대로 둔다. 서비스의 고치기 입력이 그 필드들에서 "없음"을 "그대로"로 읽는다.
+- 커널 시뮬레이션에 저장 명령을 넣지 않았다. 런타임 시험이 가짜 실행기로 기록과 거절을 본다.
+
+확인: domain 시험 (거절을 오류 사슬에서 찾음, 이유 이름 고정), 프로토콜 시험 (명령의 왕복, 저장 명령의 종류와
+결과 모양, 지우는 명령의 확인 규칙, 스펙 파일 일치), 런타임 시험 (가짜 실행기: 끝남·거절·실패의 기록과 영수증,
+실행기가 없는 커널), 명령 전용 조립 시험 (실제 저장소: 만들기·고치기·지우기와 기록, 낡은 revision 의 거절,
+실패의 원인, TUI 가 쥐 때의 직접 실행, 저장소에서 읽는 `planning` 조회), Gateway 클라이언트 시험 (명령을 모르는
+Gateway), 끝에서 끝까지 (`tests/kernel_cli.rs`, unix: 실제 `akra kernel planning create_task`, 조회, 낡은 revision 의
+종료 코드 2, 확인 없는 지우기의 `-32010`), 구조 시험, 스펙·Desktop 타입·skill 일치. 모델 턴은 없다.
+
+남긴 것:
+
+- 실제 Gateway 커널에서 저장 명령을 보내는 시험은 없다. 런타임 시험은 가짜 실행기를 쓴다. 실행 뒤에 planning 을
+  다시 읽는 것(`planning` 이벤트)도 시험이 보지 않는다.
+- 입구는 아직 이 명령을 쓰지 않는다 (9d-2).
+- 옛 Gateway 가 그 저장소의 커널을 쥐고 있으면 명령 전용 조립은 잠금에서 멈추고 잠금의 오류를 돌려준다. "Gateway 를
+  다시 시작하라"는 글을 더하지 않았다.
+- 같은 멱등 키의 재전송은 `result` 를 받지 못한다 (설계 §3.2).

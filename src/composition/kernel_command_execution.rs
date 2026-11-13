@@ -8,8 +8,8 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::adapter::inbound::kernel_protocol::{
-    CommandRejection, CommandRequest, CommandResponse, KernelCommand, KernelProtocolError,
-    KernelQuery, KernelQueryAnswer, ResetTarget, reason_next,
+    CommandRejection, CommandRequest, CommandResponse, KernelCommand, KernelCommandInput,
+    KernelProtocolError, KernelQuery, KernelQueryAnswer, PlanningState, ResetTarget, reason_next,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::{
@@ -18,6 +18,9 @@ use crate::adapter::outbound::filesystem::{
 };
 use crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter;
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
+use crate::application::port::inbound::stored_command_port::{
+    StoredCommand, StoredCommandOutcome, StoredCommandRejection, StoredCommandResult,
+};
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::application::port::outbound::planning_reset_route_port::{
     PlanningResetRouteOutcome, PlanningResetRoutePort,
@@ -85,6 +88,8 @@ fn unreachable_answer(cause: &str) -> Result<Value> {
             next: reason_next(reason),
         }),
         operation: None,
+        result: None,
+        failure: None,
     })?)
 }
 
@@ -136,6 +141,37 @@ impl CommandOnlyKernel {
     }
 }
 
+/// 명령 전용 조립이 실행하는 일이다. 저장된 planning 데이터만 바꾼다.
+enum CommandOnlyWork {
+    Reset { target: ResetTarget, confirm: bool },
+    Stored(StoredCommand),
+}
+
+/// 그 일의 끝이다. 초기화는 결과 값이 없다.
+enum WorkEnd {
+    Done(Option<StoredCommandResult>),
+    Rejected(StoredCommandRejection),
+    Failed(anyhow::Error),
+}
+
+impl CommandOnlyKernel {
+    fn run(&self, work: CommandOnlyWork) -> WorkEnd {
+        match work {
+            CommandOnlyWork::Reset { target, confirm } => match self.reset(target, confirm) {
+                Ok(()) => WorkEnd::Done(None),
+                Err(error) => WorkEnd::Failed(error),
+            },
+            CommandOnlyWork::Stored(command) => {
+                match super::production::stored_command_port(&self.workspace).execute(command) {
+                    Ok(StoredCommandOutcome::Done(result)) => WorkEnd::Done(Some(result)),
+                    Ok(StoredCommandOutcome::Rejected(rejection)) => WorkEnd::Rejected(rejection),
+                    Err(error) => WorkEnd::Failed(error),
+                }
+            }
+        }
+    }
+}
+
 impl KernelCommandPort for CommandOnlyKernel {
     fn command(
         &self,
@@ -150,10 +186,10 @@ impl KernelCommandPort for CommandOnlyKernel {
         if request.command.kind() != kind {
             bail!("command kind does not match its input");
         }
-        request
+        let input = request
             .command
             .clone()
-            .into_core(&self.workspace)
+            .into_input(&self.workspace)
             .map_err(protocol_error)?;
         let descriptor = request.descriptor().map_err(protocol_error)?;
         if kind.spec().effect == CommandEffect::Destructive && !request.command.confirmed() {
@@ -161,8 +197,13 @@ impl KernelCommandPort for CommandOnlyKernel {
                 kind.name(),
             )));
         }
-        let KernelCommand::ResetPlanning { target, confirm } = request.command else {
-            bail!("the command-only kernel cannot execute {}", kind.name());
+        // 이 조립은 저장된 데이터만 바꾸는 명령을 실행한다. 도는 커널이 필요한 명령은 여기에 오지 않는다.
+        let work = match (input, request.command) {
+            (KernelCommandInput::Stored(command), _) => CommandOnlyWork::Stored(command),
+            (_, KernelCommand::ResetPlanning { target, confirm }) => {
+                CommandOnlyWork::Reset { target, confirm }
+            }
+            _ => bail!("the command-only kernel cannot execute {}", kind.name()),
         };
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&self.workspace)?;
@@ -177,11 +218,20 @@ impl KernelCommandPort for CommandOnlyKernel {
             }
             Err(error) => return Err(error),
         };
-        // K6 exception: only this pre-existing direct operation is available under a TUI owner.
+        // K6 까지의 예외이다: TUI 가 커널을 쥐 저장소에서는 직접 실행한다. 기록에 남지 않는다.
         if lock.is_none() {
-            self.reset(target, confirm)?;
-            return Ok(serde_json::to_value(CommandResponse::from_core(Some(&[])))?);
+            let response = CommandResponse::from_core(Some(&[]));
+            return Ok(serde_json::to_value(match self.run(work) {
+                WorkEnd::Done(result) => {
+                    response.with_stored(result.map(StoredCommandOutcome::Done))
+                }
+                WorkEnd::Rejected(rejection) => {
+                    response.with_stored(Some(StoredCommandOutcome::Rejected(rejection)))
+                }
+                WorkEnd::Failed(error) => return Err(error),
+            })?);
         }
+        let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
         let mut descriptor = descriptor.context("stored mutation must have a descriptor")?;
         descriptor.caller = Some(self.caller.to_string());
         let log = super::production::kernel_event_log_port();
@@ -225,35 +275,51 @@ impl KernelCommandPort for CommandOnlyKernel {
                 },
             )],
         )?;
-        let result = self.reset(target, confirm);
-        log.append_kernel_events(
-            &self.workspace,
-            &[record(
-                completed_sequence,
-                KernelEvent::CommandCompleted {
-                    op_id,
-                    thread_id: descriptor.thread_id,
-                    result: if result.is_ok() {
-                        OperationEnd::Done
-                    } else {
-                        OperationEnd::Failed
-                    },
-                    reason: None,
-                    detail: result
-                        .as_ref()
-                        .err()
-                        .map(|error| command_failure_detail(&error.to_string())),
-                },
-            )],
-        )?;
-        result?;
-        Ok(serde_json::to_value(
-            CommandResponse::from_core(Some(&[])).with_operation(Some(OperationReceipt {
+        let end = self.run(work);
+        // 끝을 적는다. 거절은 `command_rejected`, 성공과 실패는 `command_completed` 이다.
+        let closing = match &end {
+            WorkEnd::Rejected(rejection) => KernelEvent::CommandRejected {
                 op_id,
-                rejection: None,
+                thread_id: descriptor.thread_id,
+                reason: rejection.reason,
+            },
+            WorkEnd::Done(_) => KernelEvent::CommandCompleted {
+                op_id,
+                thread_id: descriptor.thread_id,
+                result: OperationEnd::Done,
+                reason: None,
+                detail: None,
+            },
+            WorkEnd::Failed(error) => KernelEvent::CommandCompleted {
+                op_id,
+                thread_id: descriptor.thread_id,
+                result: OperationEnd::Failed,
+                reason: None,
+                detail: Some(command_failure_detail(&error.to_string())),
+            },
+        };
+        log.append_kernel_events(&self.workspace, &[record(completed_sequence, closing)])?;
+        let receipt = |rejection| {
+            Some(OperationReceipt {
+                op_id,
+                rejection,
                 replayed: false,
-            })),
-        )?)
+            })
+        };
+        let response = CommandResponse::from_core(Some(&[]));
+        Ok(serde_json::to_value(match end {
+            WorkEnd::Done(result) => response
+                .with_operation(receipt(None))
+                .with_stored(result.map(StoredCommandOutcome::Done)),
+            WorkEnd::Rejected(rejection) => response
+                .with_operation(receipt(Some(rejection.reason)))
+                .with_stored(Some(StoredCommandOutcome::Rejected(rejection))),
+            // 초기화의 실패는 지금처럼 오류이다 (K4-9a 의 입구가 그 글을 보인다). 저장 명령의 실패는 답에 싣는다.
+            WorkEnd::Failed(error) if is_reset => return Err(error),
+            WorkEnd::Failed(error) => response
+                .with_operation(receipt(None))
+                .with_failed_stored_command(command_failure_detail(&error.to_string())),
+        })?)
     }
 
     fn query(&self, input: Value, wait: bool) -> Result<Value> {
@@ -277,6 +343,10 @@ impl KernelCommandPort for CommandOnlyKernel {
                 }
                 KernelQueryAnswer::Operation(status)
             }
+            // planning 은 저장된 데이터이다. 커널이 없어도 저장소에서 읽는다 (plan 18 K4-9d).
+            KernelQuery::Planning {} => KernelQueryAnswer::Planning(PlanningState::from_core(
+                &super::production::stored_planning_projection(&self.workspace),
+            )),
             _ => bail!("{UNREACHABLE_QUERY}: it cannot read live kernel state"),
         };
         Ok(serde_json::to_value(answer)?)
@@ -618,6 +688,8 @@ mod tests {
                     next: reason_next(reason),
                 }),
                 operation: None,
+                result: None,
+                failure: None,
             },
             None,
         );
@@ -813,6 +885,235 @@ mod tests {
         .unwrap();
         let answer = reset(&kernel, "legacy").unwrap();
         assert!(answer.get("operation").is_none());
+        assert!(kernel.records(log.as_ref()).unwrap().is_empty());
+    }
+
+    fn task(title: &str) -> Value {
+        json!({ "title": title })
+    }
+
+    fn stored(kernel: &CommandOnlyKernel, kind: KernelCommandKind, input: Value) -> Value {
+        kernel
+            .command(kind, input, None)
+            .unwrap_or_else(|error| panic!("{} should answer: {error:#}", kind.name()))
+    }
+
+    fn planning_revision(kernel: &CommandOnlyKernel) -> i64 {
+        kernel.query(json!({"type":"planning"}), false).unwrap()["revision"]
+            .as_i64()
+            .expect("the planning query answers the revision from the store")
+    }
+
+    #[test]
+    fn stored_task_commands_run_without_a_gateway_and_answer_with_their_result() {
+        // plan 18 K4-9d: create, update, and delete a task under the repository lock. No kernel runs.
+        let (_directory, kernel) = fixture();
+        let created = stored(
+            &kernel,
+            KernelCommandKind::CreateTask,
+            json!({"type":"create_task","task":task("Write the test")}),
+        );
+        assert_eq!(created["result"]["type"], "task_created");
+        let task_id = created["result"]["task_id"]
+            .as_str()
+            .expect("task id")
+            .to_string();
+        let revision = created["result"]["planning_revision"]
+            .as_i64()
+            .expect("revision");
+        // The client reads the same revision from the store. It needs it for the next change.
+        assert_eq!(planning_revision(&kernel), revision);
+        let queued = kernel.query(json!({"type":"planning"}), false).unwrap();
+        assert!(queued.to_string().contains(&task_id), "{queued}");
+
+        let updated = stored(
+            &kernel,
+            KernelCommandKind::UpdateTask,
+            json!({
+                "type":"update_task","task_id":task_id,"task":task("Write the test first"),
+                "expected_planning_revision":revision
+            }),
+        );
+        assert_eq!(updated["result"]["type"], "task_updated");
+        let revision = updated["result"]["planning_revision"]
+            .as_i64()
+            .expect("revision");
+        assert!(
+            kernel
+                .query(json!({"type":"planning"}), false)
+                .unwrap()
+                .to_string()
+                .contains("Write the test first")
+        );
+
+        let deleted = stored(
+            &kernel,
+            KernelCommandKind::DeleteTask,
+            json!({
+                "type":"delete_task","task_id":task_id,"expected_planning_revision":revision,
+                "confirm":true
+            }),
+        );
+        assert_eq!(deleted["result"]["type"], "task_deleted");
+        assert!(
+            !kernel
+                .query(json!({"type":"planning"}), false)
+                .unwrap()
+                .to_string()
+                .contains(&task_id)
+        );
+
+        // Every command left its receipt and its end in the decision log, with the caller.
+        let log = super::super::production::kernel_event_log_port();
+        let kinds = kernel
+            .records(log.as_ref())
+            .unwrap()
+            .into_iter()
+            .map(|record| match record.event {
+                KernelEvent::CommandReceived {
+                    command, caller, ..
+                } => format!("received {command} by {}", caller.unwrap_or_default()),
+                KernelEvent::CommandCompleted { result, .. } => format!("completed {result:?}"),
+                other => format!("{other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                "received create_task by akra-cli",
+                "completed Done",
+                "received update_task by akra-cli",
+                "completed Done",
+                "received delete_task by akra-cli",
+                "completed Done",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stale_revision_is_a_rejection_that_changes_nothing() {
+        let (_directory, kernel) = fixture();
+        let created = stored(
+            &kernel,
+            KernelCommandKind::CreateTask,
+            json!({"type":"create_task","task":task("Keep me")}),
+        );
+        let task_id = created["result"]["task_id"].as_str().unwrap().to_string();
+        let revision = created["result"]["planning_revision"].as_i64().unwrap();
+        for (kind, input) in [
+            (
+                KernelCommandKind::UpdateTask,
+                json!({
+                    "type":"update_task","task_id":task_id,"task":task("Changed"),
+                    "expected_planning_revision":revision - 1
+                }),
+            ),
+            (
+                KernelCommandKind::DeleteTask,
+                json!({
+                    "type":"delete_task","task_id":task_id,
+                    "expected_planning_revision":revision - 1,"confirm":true
+                }),
+            ),
+        ] {
+            let answer = stored(&kernel, kind, input);
+            assert_eq!(
+                answer["rejection"]["reason"], "planning_revision_stale",
+                "{answer}"
+            );
+            // The message of the rejection is the text of the service: it names both revisions.
+            assert!(
+                answer["rejection"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("reload")),
+                "{answer}"
+            );
+            assert_eq!(answer["rejection"]["next"][0]["step"], "query");
+            assert_eq!(answer["operation"]["state"], "rejected");
+            assert!(answer.get("result").is_none() && answer.get("failure").is_none());
+        }
+        assert_eq!(planning_revision(&kernel), revision, "nothing changed");
+        assert!(
+            kernel
+                .query(json!({"type":"planning"}), false)
+                .unwrap()
+                .to_string()
+                .contains("Keep me")
+        );
+        let log = super::super::production::kernel_event_log_port();
+        let rejected = kernel
+            .records(log.as_ref())
+            .unwrap()
+            .into_iter()
+            .filter(|record| {
+                matches!(
+                    record.event,
+                    KernelEvent::CommandRejected {
+                        reason: ReasonCode::PlanningRevisionStale,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(rejected, 2);
+
+        // A delete without `confirm` is refused before it is an operation (plan 18 K4-5).
+        let unconfirmed = kernel.command(
+            KernelCommandKind::DeleteTask,
+            json!({"type":"delete_task","task_id":task_id,"expected_planning_revision":revision}),
+            None,
+        );
+        assert!(unconfirmed.unwrap_err().to_string().contains("-32010"));
+    }
+
+    #[test]
+    fn a_failed_stored_command_answers_with_its_cause_and_records_it() {
+        let (_directory, kernel) = fixture();
+        let revision = planning_revision(&kernel);
+        let answer = stored(
+            &kernel,
+            KernelCommandKind::DeleteTask,
+            json!({
+                "type":"delete_task","task_id":"no-such-task",
+                "expected_planning_revision":revision,"confirm":true
+            }),
+        );
+        let failure = answer["failure"].as_str().expect("a failure text");
+        assert!(failure.contains("was not found"), "{failure}");
+        assert!(answer.get("result").is_none() && answer.get("rejection").is_none());
+        let log = super::super::production::kernel_event_log_port();
+        let records = kernel.records(log.as_ref()).unwrap();
+        assert!(matches!(
+            &records[1].event,
+            KernelEvent::CommandCompleted {
+                result: OperationEnd::Failed,
+                detail: Some(detail),
+                ..
+            } if detail == failure
+        ));
+    }
+
+    #[test]
+    fn a_stored_command_under_a_tui_runs_directly_without_records() {
+        // Until K6: the TUI holds the repository lock, so the command cannot be recorded by a kernel.
+        let (_directory, kernel) = fixture();
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&kernel.workspace)
+                .unwrap();
+        let _tui = RepositoryKernelLockAdapter::acquire_for_owner(
+            location,
+            &kernel.workspace,
+            RepositoryKernelOwner::Tui,
+        )
+        .unwrap();
+        let created = stored(
+            &kernel,
+            KernelCommandKind::CreateTask,
+            json!({"type":"create_task","task":task("Made beside a TUI")}),
+        );
+        assert_eq!(created["result"]["type"], "task_created");
+        assert!(created.get("operation").is_none());
+        let log = super::super::production::kernel_event_log_port();
         assert!(kernel.records(log.as_ref()).unwrap().is_empty());
     }
 

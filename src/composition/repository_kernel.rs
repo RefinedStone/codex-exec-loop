@@ -258,6 +258,11 @@ pub(crate) fn build_kernel_for_workspace(
     // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     runtime.attach_repository_observer(production::repository_state_port());
+    // 이 커널이 잠금을 쥐고 있으므로 저장 명령을 여기서 실행한다 (plan 18 K4-9d).
+    runtime.attach_stored_commands(
+        production::stored_command_port(workspace_dir),
+        workspace_dir,
+    );
     start_repository_kernel(lock, runtime, workspace_dir)
 }
 
