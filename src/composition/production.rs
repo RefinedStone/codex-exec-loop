@@ -447,10 +447,30 @@ fn build_other_hosts() -> Result<Vec<(String, Arc<dyn GatewayUpstreamPort>)>> {
     Ok(vec![("cloud".to_string(), cloud)])
 }
 
+/// dots 클라우드 호스트를 켜는 조건이다. 둘 중 하나면 켠다 (plan 25 §3.2, 기본값 꺼짐):
+/// - 환경 변수 `AKRA_DOTS_CLOUD` 가 `1`/`true`.
+/// - 플래그 파일 `$AKRA_HOME/dots/cloud-enabled` 가 있다. Desktop 이 설정에서 이 파일을 만들고 지운다. Gateway 는
+///   시작할 때 한 번 읽으므로, 설정을 바꾼 뒤에는 Gateway 를 다시 시작해야 적용된다.
 fn dots_cloud_enabled() -> bool {
-    std::env::var_os("AKRA_DOTS_CLOUD")
+    let from_env = std::env::var_os("AKRA_DOTS_CLOUD")
         .map(|value| value == "1" || value == "true")
-        .unwrap_or(false)
+        .unwrap_or(false);
+    from_env
+        || dots_cloud_flag_path()
+            .map(|path| path.exists())
+            .unwrap_or(false)
+}
+
+/// dots 클라우드 활성화 플래그 파일의 경로이다. Desktop 과 Gateway 가 같은 경로를 쓴다.
+pub(crate) fn dots_cloud_flag_path() -> Option<PathBuf> {
+    crate::configuration::akra_home_dir()
+        .ok()
+        .map(|home| dots_cloud_flag_in(&home))
+}
+
+/// `$AKRA_HOME/dots/cloud-enabled`. 경로 규칙만 담는 순수 함수이다. Desktop 의 `dotsSettings.ts` 와 같아야 한다.
+pub(crate) fn dots_cloud_flag_in(akra_home: &Path) -> PathBuf {
+    akra_home.join("dots").join("cloud-enabled")
 }
 
 pub(crate) fn build_telegram_bot_port(token: String) -> Arc<dyn TelegramBotPort> {
@@ -920,6 +940,17 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn the_dots_cloud_flag_lives_under_the_akra_home() {
+        let path = dots_cloud_flag_in(Path::new("/home/user/.akra"));
+        assert_eq!(
+            path,
+            Path::new("/home/user/.akra")
+                .join("dots")
+                .join("cloud-enabled")
+        );
+    }
 
     struct TempWorkspace {
         path: PathBuf,

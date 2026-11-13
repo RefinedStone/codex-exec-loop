@@ -12,6 +12,7 @@ import { spawn as spawnPty } from "node-pty";
 
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
+import { isDotsCloudEnabled, setDotsCloudEnabled } from "./dotsSettings";
 import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBranch";
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
 import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks";
@@ -302,6 +303,11 @@ ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.conn
 ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
 ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
 ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
+ipcMain.handle(IPC_CHANNELS.dotsGetEnabled, () => isDotsCloudEnabled());
+ipcMain.handle(IPC_CHANNELS.dotsSetEnabled, (_event, enabled: unknown) => {
+  setDotsCloudEnabled(enabled === true);
+  return isDotsCloudEnabled();
+});
 // renderer 가 보낸 주소는 github.com, Notion, 연결된 Jira 사이트의 티켓만 기본 브라우저로 연다.
 ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
   if (typeof url !== "string") return;

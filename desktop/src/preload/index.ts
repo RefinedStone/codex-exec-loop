@@ -176,6 +176,14 @@ const bridge: AkraBridge = {
       ipcRenderer.send(IPC_CHANNELS.openExternal, url);
     },
   },
+  dots: {
+    getEnabled(): Promise<boolean> {
+      return ipcRenderer.invoke(IPC_CHANNELS.dotsGetEnabled) as Promise<boolean>;
+    },
+    setEnabled(enabled: boolean): Promise<boolean> {
+      return ipcRenderer.invoke(IPC_CHANNELS.dotsSetEnabled, enabled) as Promise<boolean>;
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld("akra", bridge);
