@@ -57,6 +57,8 @@ export interface WorkspaceThread {
   branch: string | null;
   /** app-server 가 이 스레드를 `systemError` 상태로 알렸다. */
   failed: boolean;
+  /** 클라우드 에이전트(dot)가 만든 작업 스레드이다 (`threadSource` 가 `aeon` 으로 시작). 사용자가 만든 클라우드 스레드와 따로 보인다. */
+  agentThread?: boolean;
 }
 
 /** 안정 API 에는 `project/list` 가 없어서 스레드의 cwd 로 작업 폴더를 묶는다 (D-16). */

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { GatewayConnection } from "../src/main/gatewayConnection";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
-import { DesktopSession, groupThreadsByCwd, startDesktopSession } from "../src/renderer/session/desktopSession";
+import { DesktopSession, groupThreadsByCwd, startDesktopSession, isAgentThreadSource } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, remoteHostKey, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Thread } from "../src/shared/protocol/generated/v2/Thread";
 import {
@@ -218,6 +218,20 @@ describe("desktop session over the fake gateway", () => {
     connection.start();
     await waitFor(() => states.at(-1)?.phase === "connected");
     expect(daemonStarts).toBe(1);
+  });
+});
+
+describe("agent threads and cloud threads (D-19)", () => {
+  it("marks only the threads that a cloud agent made", () => {
+    expect(isAgentThreadSource("aeon_child")).toBe(true);
+    expect(isAgentThreadSource("aeon")).toBe(true);
+    expect(isAgentThreadSource("user")).toBe(false);
+    expect(isAgentThreadSource(null)).toBe(false);
+
+    const thread = (id: string, threadSource: string | null) => ({ id, cwd: "/work", name: id, preview: "", updatedAt: 1, status: { type: "idle" }, gitInfo: null, threadSource });
+    const folders = groupThreadsByCwd([thread("agent", "aeon_child"), thread("mine", "user"), thread("old", null)] as never);
+    const byId = Object.fromEntries(folders.flatMap((folder) => folder.threads).map((item) => [item.id, item.agentThread === true]));
+    expect(byId).toEqual({ agent: true, mine: false, old: false });
   });
 });
 

@@ -55,9 +55,24 @@ export function initializeParams(clientVersion: string): InitializeParams {
   };
 }
 
+/**
+ * 클라우드 에이전트(dot)가 만든 스레드인지이다. 2026-11-14 실계정에서 dot 의 작업 스레드는 `aeon_child`, 사용자가
+ * 만든 클라우드 스레드는 `user` 였다.
+ */
+export function isAgentThreadSource(threadSource: string | null | undefined): boolean {
+  return typeof threadSource === "string" && threadSource.startsWith("aeon");
+}
+
 /** 사이드바에 필요한 값만 고른다. */
 function workspaceThread(thread: Thread, title: string): WorkspaceThread {
-  return { id: thread.id, title, updatedAt: thread.updatedAt, branch: thread.gitInfo?.branch ?? null, failed: thread.status?.type === "systemError" };
+  return {
+    id: thread.id,
+    title,
+    updatedAt: thread.updatedAt,
+    branch: thread.gitInfo?.branch ?? null,
+    failed: thread.status?.type === "systemError",
+    ...(isAgentThreadSource(thread.threadSource) ? { agentThread: true } : {}),
+  };
 }
 
 export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[] {

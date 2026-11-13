@@ -89,6 +89,20 @@ function FolderSection({ folder, connected, onOpenThread }: { folder: WorkspaceF
   );
 }
 
+function RemoteThreadRow({ thread, selected, onOpen, testId, title }: { thread: WorkspaceThread; selected: boolean; onOpen(): void; testId: string; title: string }) {
+  return (
+    <li className="thread-row">
+      <button type="button" className={selected ? "thread selected" : "thread"} onClick={onOpen} title={title} data-testid={testId}>
+        <StatusMark mark="idle" />
+        <span className="thread-text">
+          <span className="thread-title">{thread.title}</span>
+        </span>
+        <span className="thread-age">{relativeAge(thread.updatedAt, Date.now())}</span>
+      </button>
+    </li>
+  );
+}
+
 /**
  * 원격 호스트(클라우드 에이전트, plan 25) 하나의 구역이다. 그 호스트의 저장소를 읽는다. 원격의 작업 폴더는 이 컴퓨터에
  * 없으므로 폴더로 묶지 않고 최근 대화부터 보인다.
@@ -104,13 +118,15 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
   const showing = useUiStore((state) => state.view === "remote" && state.remoteHost === host);
   const shownDotId = useUiStore((state) => (state.view === "dot" && state.remoteHost === host ? state.remoteDotId : null));
   const threads = useMemo(() => folders.flatMap((folder) => folder.threads).sort((left, right) => right.updatedAt - left.updatedAt), [folders]);
+  const agentThreads = useMemo(() => threads.filter((thread) => thread.agentThread === true), [threads]);
+  const cloudThreads = useMemo(() => threads.filter((thread) => thread.agentThread !== true), [threads]);
   return (
     <section className="project" data-testid="remote-host">
       <header className="project-header" title={`Gateway 호스트 ${host} (읽기 전용)`}>
         <button type="button" className="project-name" onClick={() => setOpen(!open)} aria-expanded={open}>
           <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
           <Icon name="globe" size={14} />
-          <span>{host}</span>
+          <span>{host === "cloud" ? "클라우드" : host}</span>
         </button>
         <span className="connection" title="이 호스트의 연결 상태">
           <span className={`connection-dot connection-${phase}`} />
@@ -118,42 +134,44 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
         </span>
       </header>
       {open && problem && <p className="empty-row error">{problem}</p>}
-      {open && !problem && phase === "connected" && threads.length === 0 && <p className="empty-row">대화가 없습니다.</p>}
-      {open && dots.length > 0 && (
-        <ul data-testid="remote-dots">
-          {dots.map((dot) => (
-            <li className="thread-row" key={dot.id}>
-              <button
-                type="button"
-                className={shownDotId === dot.id ? "thread selected" : "thread"}
-                title={`${dot.displayName} 과의 대화를 엽니다.`}
-                onClick={() => showDot(host, dot.id)}
-                data-testid="remote-dot-entry"
-              >
-                <StatusMark mark="idle" />
-                <span className="thread-text">
-                  <span className="thread-title">{dot.displayName}</span>
-                </span>
-                <span className="thread-age">{dot.paused ? "멈춤" : dot.status}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+      {/* 에이전트(dot)와 사용자가 만든 클라우드 스레드는 다른 것이다. 같은 호스트에 있어도 따로 보인다. */}
+      {open && (dots.length > 0 || agentThreads.length > 0) && (
+        <>
+          <p className="section-label empty-row">에이전트</p>
+          <ul data-testid="remote-dots">
+            {dots.map((dot) => (
+              <li className="thread-row" key={dot.id}>
+                <button
+                  type="button"
+                  className={shownDotId === dot.id ? "thread selected" : "thread"}
+                  title={`${dot.displayName} 과의 대화를 엽니다.`}
+                  onClick={() => showDot(host, dot.id)}
+                  data-testid="remote-dot-entry"
+                >
+                  <StatusMark mark="idle" />
+                  <span className="thread-text">
+                    <span className="thread-title">{dot.displayName}</span>
+                  </span>
+                  <span className="thread-age">{dot.paused ? "멈춤" : dot.status}</span>
+                </button>
+              </li>
+            ))}
+            {agentThreads.map((thread) => (
+              <RemoteThreadRow key={thread.id} thread={thread} selected={showing && openThreadId === thread.id} onOpen={() => onOpenThread(host, thread.id)} testId="remote-agent-thread-entry" title="에이전트가 만든 작업 대화" />
+            ))}
+          </ul>
+        </>
       )}
-      {open && (
-        <ul>
-          {threads.map((thread) => (
-            <li className="thread-row" key={thread.id}>
-              <button type="button" className={showing && openThreadId === thread.id ? "thread selected" : "thread"} onClick={() => onOpenThread(host, thread.id)} data-testid="remote-thread-entry">
-                <StatusMark mark="idle" />
-                <span className="thread-text">
-                  <span className="thread-title">{thread.title}</span>
-                </span>
-                <span className="thread-age">{relativeAge(thread.updatedAt, Date.now())}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+      {open && !problem && phase === "connected" && (
+        <>
+          <p className="section-label empty-row">클라우드 스레드</p>
+          {cloudThreads.length === 0 && <p className="empty-row">대화가 없습니다.</p>}
+          <ul>
+            {cloudThreads.map((thread) => (
+              <RemoteThreadRow key={thread.id} thread={thread} selected={showing && openThreadId === thread.id} onOpen={() => onOpenThread(host, thread.id)} testId="remote-thread-entry" title="사용자가 만든 클라우드 대화" />
+            ))}
+          </ul>
+        </>
       )}
     </section>
   );
