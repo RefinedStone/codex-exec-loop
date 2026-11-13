@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::adapter::inbound::kernel_protocol::{CommandRequest, KernelQuery};
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
 use crate::composition::production;
+use crate::domain::kernel_spec::KernelCallError;
 
 const SPEC: &str = include_str!("../../../../schema/akra-kernel-spec.json");
 
@@ -33,12 +34,29 @@ pub(super) fn describe(args: &[OsString], stdout: &mut impl Write) -> Result<i32
     } else {
         Err(anyhow::anyhow!("usage: akra describe --json"))
     };
-    render(result, stdout)
+    render(result, None, stdout)
 }
 
 pub(super) fn run(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
-    let result = parse(args).and_then(execute);
-    render(result, stdout)
+    run_with(args, execute, stdout)
+}
+
+fn run_with(
+    args: &[OsString],
+    execute: impl FnOnce(Invocation) -> Result<Value>,
+    stdout: &mut impl Write,
+) -> Result<i32> {
+    let invocation = parse(args);
+    // A command that fails after it was sent may have run. The output carries its key, so that the
+    // caller can send the same command again with that key and the kernel does not run it twice.
+    let sent_key = invocation
+        .as_ref()
+        .ok()
+        .and_then(|invocation| match &invocation.request {
+            Request::Command(request) => request.idempotency_key.clone(),
+            Request::Query(_) => None,
+        });
+    render(invocation.and_then(execute), sent_key.as_deref(), stdout)
 }
 
 fn execute(invocation: Invocation) -> Result<Value> {
@@ -57,7 +75,7 @@ fn execute_with_port(invocation: Invocation, port: &dyn KernelCommandPort) -> Re
     }
 }
 
-fn render(result: Result<Value>, stdout: &mut impl Write) -> Result<i32> {
+fn render(result: Result<Value>, sent_key: Option<&str>, stdout: &mut impl Write) -> Result<i32> {
     let (output, code) = match result {
         Ok(output) => {
             let code = if !output["rejection"].is_null()
@@ -72,7 +90,17 @@ fn render(result: Result<Value>, stdout: &mut impl Write) -> Result<i32> {
             };
             (output, code)
         }
-        Err(error) => (json!({"error": {"message": format!("{error:#}")}}), 1),
+        Err(error) => {
+            let mut output = json!({"error": {"message": format!("{error:#}")}});
+            // The code finds the entry in the `errors` list of the specification and its next steps.
+            if let Some(kernel_error) = error.downcast_ref::<KernelCallError>() {
+                output["error"]["code"] = json!(kernel_error.code);
+            }
+            if let Some(key) = sent_key {
+                output["idempotency_key"] = json!(key);
+            }
+            (output, 1)
+        }
     };
     serde_json::to_writer(&mut *stdout, &output)?;
     writeln!(stdout)?;
@@ -461,6 +489,38 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_command_prints_the_error_code_and_the_key_to_send_again() {
+        // The command may have run. The same key makes the second send safe.
+        let failing = |_: Invocation| -> Result<Value> {
+            Err(KernelCallError {
+                code: -32013,
+                message: "the kernel did not answer in time".to_string(),
+            }
+            .into())
+        };
+        let mut output = Vec::new();
+        let words = arguments(&["thread", "stop_all", "--idempotency-key", "caller-key"]);
+        assert_eq!(run_with(&words, failing, &mut output).unwrap(), 1);
+        let printed: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(printed["error"]["code"], -32013);
+        assert_eq!(printed["idempotency_key"], "caller-key");
+
+        // A generated key is printed too. A query has no key, and an error without a code prints none.
+        let mut output = Vec::new();
+        let words = arguments(&["thread", "stop_all"]);
+        assert_eq!(run_with(&words, failing, &mut output).unwrap(), 1);
+        let printed: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(printed["idempotency_key"].as_str().unwrap().len(), 32);
+        let mut output = Vec::new();
+        let lost = |_: Invocation| -> Result<Value> { bail!("connection lost") };
+        let words = arguments(&["query", "planning"]);
+        assert_eq!(run_with(&words, lost, &mut output).unwrap(), 1);
+        let printed: Value = serde_json::from_slice(&output).unwrap();
+        assert!(printed.get("idempotency_key").is_none());
+        assert!(printed["error"].get("code").is_none());
+    }
+
+    #[test]
     fn caller_keys_are_preserved_and_generated_keys_are_per_invocation() {
         let words = arguments(&[
             "session",
@@ -514,7 +574,10 @@ mod tests {
             (json!({"processed":false}), 1),
         ] {
             let mut output = Vec::new();
-            assert_eq!(render(Ok(value.clone()), &mut output).unwrap(), expected);
+            assert_eq!(
+                render(Ok(value.clone()), None, &mut output).unwrap(),
+                expected
+            );
             assert_eq!(serde_json::from_slice::<Value>(&output).unwrap(), value);
         }
     }
@@ -549,7 +612,7 @@ mod tests {
             .unwrap();
             let mut output = Vec::new();
             assert_eq!(
-                render(execute_with_port(invocation, &port), &mut output).unwrap(),
+                render(execute_with_port(invocation, &port), None, &mut output).unwrap(),
                 expected_code
             );
             assert_eq!(serde_json::from_slice::<Value>(&output).unwrap(), receipt);
@@ -573,7 +636,7 @@ mod tests {
         let invocation = parse(&arguments(&["operation", "7", "--wait"])).unwrap();
         let mut output = Vec::new();
         assert_eq!(
-            render(execute_with_port(invocation, &port), &mut output).unwrap(),
+            render(execute_with_port(invocation, &port), None, &mut output).unwrap(),
             0
         );
         assert_eq!(

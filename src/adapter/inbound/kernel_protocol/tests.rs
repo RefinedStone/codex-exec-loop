@@ -1363,7 +1363,7 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
     assert_eq!(
         submit["rejections"],
         json!([
-            "kernel_not_running",
+            "kernel_unreachable",
             "busy",
             "preparation_active",
             "unknown_thread",

@@ -11,6 +11,10 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 use crate::application::port::outbound::kernel_gateway_port::{
     KernelGatewayPort, KernelGatewayReply,
 };
+use crate::domain::kernel_spec::KernelCallError;
+
+/// The Gateway cannot attach to the kernel of the repository (`kernel_unavailable` in the spec).
+const ERROR_KERNEL_UNAVAILABLE: i64 = -32012;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
@@ -44,7 +48,7 @@ impl KernelGatewayPort for GatewayKernelClientAdapter {
             })
             .await;
             let Ok(Some((mut socket, _))) = connected else {
-                return Ok(KernelGatewayReply::Unavailable);
+                return Ok(KernelGatewayReply::NoGateway);
             };
             let result = tokio::time::timeout(
                 REQUEST_TIMEOUT,
@@ -85,9 +89,10 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
     .await?;
     let mut recorded = false;
     let attached = response(socket, 1, &mut recorded).await?;
-    // Attach failed before any command ran. The locked local path checks the owner.
-    if attached.pointer("/error/code").and_then(Value::as_i64) == Some(-32012) {
-        return Ok(KernelGatewayReply::Unavailable);
+    // Attach failed before any command ran: another process runs the kernel of this repository.
+    // The locked local path checks the owner.
+    if attached.pointer("/error/code").and_then(Value::as_i64) == Some(ERROR_KERNEL_UNAVAILABLE) {
+        return Ok(KernelGatewayReply::KernelHeldElsewhere);
     }
     answer(attached)?;
     let mut id = 2;
@@ -98,8 +103,14 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
         send(socket, id, method, params.clone()).await?;
         let value = answer(response(socket, id, &mut recorded).await?)?;
         if !wait || query_finished(&value)? {
-            send(socket, id + 1, "akra/kernel/detach", json!({})).await?;
-            answer(response(socket, id + 1, &mut recorded).await?)?;
+            // The kernel already answered. A failed detach must not turn that answer into an error:
+            // the caller would send the command again. Closing the socket detaches too.
+            if send(socket, id + 1, "akra/kernel/detach", json!({}))
+                .await
+                .is_ok()
+            {
+                let _ = response(socket, id + 1, &mut recorded).await;
+            }
             return Ok(KernelGatewayReply::Answer(value));
         }
         if !recorded {
@@ -173,7 +184,19 @@ async fn next_record<S: AsyncRead + AsyncWrite + Unpin>(
 
 fn answer(value: Value) -> Result<Value> {
     if let Some(error) = value.get("error") {
-        bail!("Gateway kernel error: {error}");
+        // Keep the code: the caller finds the next steps of the error in the specification.
+        return Err(KernelCallError {
+            code: error
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("the Gateway answered with an error")
+                .to_string(),
+        }
+        .into());
     }
     value
         .get("result")
@@ -222,6 +245,100 @@ mod tests {
             assert!(query_finished(&json!({"type":"operation","state":state})).unwrap());
         }
         assert!(query_finished(&json!({"type":"planning"})).is_err());
+    }
+
+    type Wire = WebSocketStream<tokio::io::DuplexStream>;
+
+    async fn wire() -> (Wire, Wire) {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+        let (client, server) = tokio::io::duplex(8192);
+        (
+            WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+            WebSocketStream::from_raw_socket(server, Role::Server, None).await,
+        )
+    }
+
+    async fn serve(server: &mut Wire, expected_method: &str, body: Value) {
+        let request = next_json(server).await.unwrap();
+        assert_eq!(request["method"], expected_method);
+        let mut message = json!({"jsonrpc":"2.0","id":request["id"]});
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(body.as_object().unwrap().clone());
+        server
+            .send(Message::text(message.to_string()))
+            .await
+            .unwrap();
+    }
+
+    async fn command_over(client: &mut Wire) -> Result<KernelGatewayReply> {
+        request_over_socket(
+            client,
+            "/workspace",
+            "test",
+            "akra/kernel/command",
+            json!({"command":{"type":"stop_all"}}),
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_kernel_that_another_process_runs_is_not_a_missing_gateway() {
+        // The Gateway is up. The caller must not be told to start it.
+        let (mut client, mut server) = wire().await;
+        let serving = serve(
+            &mut server,
+            "akra/kernel/attach",
+            json!({"error":{"code":ERROR_KERNEL_UNAVAILABLE,"message":"held"}}),
+        );
+        let (reply, ()) = tokio::join!(command_over(&mut client), serving);
+        assert!(matches!(
+            reply.unwrap(),
+            KernelGatewayReply::KernelHeldElsewhere
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_kernel_error_keeps_its_code_and_a_failed_detach_keeps_the_answer() {
+        let (mut client, mut server) = wire().await;
+        let serving = async {
+            serve(&mut server, "akra/kernel/attach", json!({"result":{}})).await;
+            serve(
+                &mut server,
+                "akra/kernel/command",
+                json!({"error":{"code":-32014,"message":"key reused"}}),
+            )
+            .await;
+        };
+        let (reply, ()) = tokio::join!(command_over(&mut client), serving);
+        let error = reply.err().expect("a kernel error");
+        assert_eq!(
+            error.downcast_ref::<KernelCallError>(),
+            Some(&KernelCallError {
+                code: -32014,
+                message: "key reused".to_string()
+            })
+        );
+
+        // The server answers the command and then closes without answering the detach.
+        let (mut client, mut server) = wire().await;
+        let serving = async {
+            serve(&mut server, "akra/kernel/attach", json!({"result":{}})).await;
+            serve(
+                &mut server,
+                "akra/kernel/command",
+                json!({"result":{"processed":true}}),
+            )
+            .await;
+            drop(server);
+        };
+        let (reply, ()) = tokio::join!(command_over(&mut client), serving);
+        let KernelGatewayReply::Answer(answer) = reply.unwrap() else {
+            panic!("the kernel answered");
+        };
+        assert_eq!(answer["processed"], true);
     }
 
     #[test]

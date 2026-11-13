@@ -9,23 +9,31 @@ use crate::application::port::outbound::kernel_gateway_port::{
 };
 use crate::domain::kernel_spec::{CommandState, KernelCommandKind};
 
-/// The only routing policy shared by command clients.
+/// The answers to a runtime command that no Gateway kernel can take. The transport adapter builds
+/// them, because the answer shape belongs to the protocol.
+pub struct UnreachableAnswers {
+    pub no_gateway: Value,
+    pub held_elsewhere: Value,
+}
+
+/// The only routing policy shared by command clients. There are three ways (design §3.7): the
+/// Gateway kernel, no Gateway, and a kernel that another process (a TUI) runs.
 pub struct KernelCommandService {
     gateway: Arc<dyn KernelGatewayPort>,
     command_only: Arc<dyn KernelCommandPort>,
-    not_running: Value,
+    unreachable: UnreachableAnswers,
 }
 
 impl KernelCommandService {
     pub fn new(
         gateway: Arc<dyn KernelGatewayPort>,
         command_only: Arc<dyn KernelCommandPort>,
-        not_running: Value,
+        unreachable: UnreachableAnswers,
     ) -> Self {
         Self {
             gateway,
             command_only,
-            not_running,
+            unreachable,
         }
     }
 }
@@ -38,12 +46,18 @@ impl KernelCommandPort for KernelCommandService {
         idempotency_key: Option<String>,
     ) -> Result<Value> {
         let params = json!({ "command": input, "idempotency_key": idempotency_key });
-        match self.gateway.request("akra/kernel/command", params, false)? {
-            KernelGatewayReply::Answer(answer) => Ok(answer),
-            KernelGatewayReply::Unavailable => match kind.spec().state {
-                CommandState::Store => self.command_only.command(kind, input, idempotency_key),
-                CommandState::Runtime => Ok(self.not_running.clone()),
-            },
+        let reply = self.gateway.request("akra/kernel/command", params, false)?;
+        // A store command runs under the repository lock without the Gateway kernel. The lock owner
+        // tells that path whether a TUI holds the kernel. A runtime command needs the Gateway kernel.
+        match (reply, kind.spec().state) {
+            (KernelGatewayReply::Answer(answer), _) => Ok(answer),
+            (_, CommandState::Store) => self.command_only.command(kind, input, idempotency_key),
+            (KernelGatewayReply::NoGateway, CommandState::Runtime) => {
+                Ok(self.unreachable.no_gateway.clone())
+            }
+            (KernelGatewayReply::KernelHeldElsewhere, CommandState::Runtime) => {
+                Ok(self.unreachable.held_elsewhere.clone())
+            }
         }
     }
 
@@ -53,7 +67,9 @@ impl KernelCommandPort for KernelCommandService {
             .request("akra/kernel/query", json!({ "query": input }), wait)?
         {
             KernelGatewayReply::Answer(answer) => Ok(answer),
-            KernelGatewayReply::Unavailable => self.command_only.query(input, wait),
+            KernelGatewayReply::NoGateway | KernelGatewayReply::KernelHeldElsewhere => {
+                self.command_only.query(input, wait)
+            }
         }
     }
 }
@@ -64,8 +80,15 @@ mod tests {
     use anyhow::bail;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[derive(Clone, Copy, PartialEq)]
+    enum Reach {
+        Answers,
+        NoGateway,
+        HeldElsewhere,
+    }
+
     struct Gateway {
-        available: bool,
+        reach: Reach,
         fails: bool,
     }
     impl KernelGatewayPort for Gateway {
@@ -78,10 +101,10 @@ mod tests {
             if self.fails {
                 bail!("connection lost after send");
             }
-            Ok(if self.available {
-                KernelGatewayReply::Answer(json!({"remote":true}))
-            } else {
-                KernelGatewayReply::Unavailable
+            Ok(match self.reach {
+                Reach::Answers => KernelGatewayReply::Answer(json!({"remote":true})),
+                Reach::NoGateway => KernelGatewayReply::NoGateway,
+                Reach::HeldElsewhere => KernelGatewayReply::KernelHeldElsewhere,
             })
         }
     }
@@ -103,41 +126,55 @@ mod tests {
         }
     }
 
+    fn answers() -> UnreachableAnswers {
+        UnreachableAnswers {
+            no_gateway: json!({"rejection":"no gateway"}),
+            held_elsewhere: json!({"rejection":"held elsewhere"}),
+        }
+    }
+
     #[test]
-    fn gateway_is_preferred_and_absent_runtime_is_rejected_without_local_execution() {
-        for available in [false, true] {
+    fn the_gateway_kernel_is_preferred_and_a_runtime_command_never_runs_locally() {
+        // Design §3.7: three ways. The answer to a runtime command names the true cause.
+        for (reach, store_answer, runtime_answer) in [
+            (
+                Reach::Answers,
+                json!({"remote":true}),
+                json!({"remote":true}),
+            ),
+            (
+                Reach::NoGateway,
+                json!({"local":true}),
+                json!({"rejection":"no gateway"}),
+            ),
+            (
+                Reach::HeldElsewhere,
+                json!({"local":true}),
+                json!({"rejection":"held elsewhere"}),
+            ),
+        ] {
             let local = Arc::new(Local::default());
             let service = KernelCommandService::new(
                 Arc::new(Gateway {
-                    available,
+                    reach,
                     fails: false,
                 }),
                 local.clone(),
-                json!({"rejection":{"reason":"kernel_not_running"}}),
+                answers(),
             );
             let store = service
                 .command(KernelCommandKind::ResetPlanning, json!({}), None)
                 .unwrap();
-            assert_eq!(
-                store,
-                if available {
-                    json!({"remote":true})
-                } else {
-                    json!({"local":true})
-                }
-            );
+            assert_eq!(store, store_answer);
             let runtime = service
                 .command(KernelCommandKind::SubmitPrompt, json!({}), None)
                 .unwrap();
+            assert_eq!(runtime, runtime_answer);
             assert_eq!(
-                runtime,
-                if available {
-                    json!({"remote":true})
-                } else {
-                    json!({"rejection":{"reason":"kernel_not_running"}})
-                }
+                local.0.load(Ordering::SeqCst),
+                usize::from(reach != Reach::Answers),
+                "only the store command may run locally"
             );
-            assert_eq!(local.0.load(Ordering::SeqCst), usize::from(!available));
         }
     }
 
@@ -146,11 +183,11 @@ mod tests {
         let local = Arc::new(Local::default());
         let service = KernelCommandService::new(
             Arc::new(Gateway {
-                available: true,
+                reach: Reach::Answers,
                 fails: true,
             }),
             local.clone(),
-            Value::Null,
+            answers(),
         );
         assert!(
             service

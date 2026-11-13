@@ -19,7 +19,7 @@ use crate::adapter::outbound::filesystem::{
 use crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter;
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
-use crate::application::service::kernel_command::KernelCommandService;
+use crate::application::service::kernel_command::{KernelCommandService, UnreachableAnswers};
 use crate::application::service::planning::PlanningBootstrapService;
 use crate::application::service::planning::repair::reset::PlanningResetService;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
@@ -27,7 +27,7 @@ use crate::domain::kernel_event::{
     COMMAND_KINDS, CommandMemory, CommandRecall, KernelEvent, MAX_KERNEL_EVENT_PAGE, OperationEnd,
     OperationReceipt, OperationStatus, RecordedKernelEvent,
 };
-use crate::domain::kernel_spec::{CommandEffect, KernelCommandKind, ReasonCode};
+use crate::domain::kernel_spec::{CommandEffect, KernelCallError, KernelCommandKind, ReasonCode};
 use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget, PriorityQueueService};
 
 pub(crate) fn build(workspace: &Path) -> Result<Box<dyn KernelCommandPort>> {
@@ -41,24 +41,34 @@ pub(crate) fn build(workspace: &Path) -> Result<Box<dyn KernelCommandPort>> {
     let local = Arc::new(CommandOnlyKernel {
         workspace: target.workspace_root,
     });
-    let reason = ReasonCode::KernelNotRunning;
-    let not_running = serde_json::to_value(CommandResponse {
-        processed: true,
-        rejection: Some(CommandRejection {
-            reason,
-            message: reason.summary().to_string(),
-            next: reason_next(reason),
-        }),
-        operation: None,
-    })?;
     Ok(Box::new(KernelCommandService::new(
         Arc::new(GatewayKernelClientAdapter::new(
             workspace.to_string_lossy().into_owned(),
             "akra-cli".to_string(),
         )),
         local,
-        not_running,
+        UnreachableAnswers {
+            no_gateway: unreachable_answer("The Akra Gateway is not running. Start it.")?,
+            held_elsewhere: unreachable_answer(
+                "Another process (a TUI) runs the kernel of this repository. Use that process, or close it.",
+            )?,
+        },
     )))
+}
+
+/// The rejection of a runtime command that no Gateway kernel can take. The reason is the same in
+/// both cases; `message` carries the cause, so that the caller is not told to start a Gateway that runs.
+fn unreachable_answer(cause: &str) -> Result<Value> {
+    let reason = ReasonCode::KernelUnreachable;
+    Ok(serde_json::to_value(CommandResponse {
+        processed: true,
+        rejection: Some(CommandRejection {
+            reason,
+            message: format!("{} Detail: {cause}", reason.summary()),
+            next: reason_next(reason),
+        }),
+        operation: None,
+    })?)
 }
 
 struct CommandOnlyKernel {
@@ -238,25 +248,32 @@ impl KernelCommandPort for CommandOnlyKernel {
                     .context("history query has no range")?;
                 let page = log.load_kernel_events_after(&self.workspace, after, limit)?;
                 if wait && page.records.is_empty() {
-                    bail!("kernel_not_running: start the Akra Gateway to wait for new records");
+                    bail!("{UNREACHABLE_QUERY}: it cannot wait for new records");
                 }
                 KernelQueryAnswer::History(page)
             }
             KernelQuery::Operation { op_id } => {
                 let status = OperationStatus::from_records(op_id, self.records(log.as_ref())?);
                 if wait && !status.state.is_end() {
-                    bail!("kernel_not_running: start the Akra Gateway to wait for this operation");
+                    bail!("{UNREACHABLE_QUERY}: it cannot wait for this operation");
                 }
                 KernelQueryAnswer::Operation(status)
             }
-            _ => bail!("kernel_not_running: start the Akra Gateway to query live kernel state"),
+            _ => bail!("{UNREACHABLE_QUERY}: it cannot read live kernel state"),
         };
         Ok(serde_json::to_value(answer)?)
     }
 }
 
+/// The start of the error of a query that only a running Gateway kernel can answer.
+const UNREACHABLE_QUERY: &str = "kernel_unreachable: no kernel that the Akra Gateway runs answers this query (the Gateway is not running, or a TUI runs the kernel)";
+
 fn protocol_error(error: KernelProtocolError) -> anyhow::Error {
-    anyhow::anyhow!("kernel protocol error {}: {}", error.code, error.message)
+    KernelCallError {
+        code: error.code,
+        message: error.message,
+    }
+    .into()
 }
 
 #[cfg(test)]

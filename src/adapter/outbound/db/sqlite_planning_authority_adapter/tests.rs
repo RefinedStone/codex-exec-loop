@@ -143,7 +143,9 @@ fn numbered(
 #[test]
 fn auto_follow_configuration_survives_kernel_event_retention() {
     use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
-    use crate::domain::kernel_event::{KernelEvent, RETAINED_KERNEL_EVENTS};
+    use crate::domain::kernel_event::{
+        AUTO_FOLLOW_KINDS, KernelEvent, REPOSITORY_KINDS, RETAINED_KERNEL_EVENTS,
+    };
 
     let workspace = temp_workspace("auto-follow-configuration");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -151,14 +153,32 @@ fn auto_follow_configuration_survives_kernel_event_retention() {
         max_auto_turns,
         continuation_paused: true,
     };
+    // The newest repository state is kept by the same trim. Both kinds are in one log here.
+    let repository = |head: &str| KernelEvent::RepositoryChanged {
+        head: head.to_string(),
+        branch: None,
+        previous_head: None,
+        previous_branch: None,
+    };
     adapter
-        .append_kernel_events(&workspace, &numbered(1, &[configured(2), configured(3)]))
+        .append_kernel_events(
+            &workspace,
+            &numbered(
+                1,
+                &[
+                    configured(2),
+                    repository("a"),
+                    configured(3),
+                    repository("b"),
+                ],
+            ),
+        )
         .expect("configuration records append");
     adapter
         .append_kernel_events(
             &workspace,
             &numbered(
-                RETAINED_KERNEL_EVENTS + 3,
+                RETAINED_KERNEL_EVENTS + 5,
                 &[KernelEvent::TurnStarted {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
@@ -169,10 +189,17 @@ fn auto_follow_configuration_survives_kernel_event_retention() {
         .expect("later records trim old events");
     assert_eq!(
         adapter
-            .load_kernel_events(&workspace, &["auto_follow_configured"])
+            .load_kernel_events(&workspace, &AUTO_FOLLOW_KINDS)
             .expect("configuration loads"),
         vec![configured(3)],
         "only the latest configuration survives beyond the retention window"
+    );
+    assert_eq!(
+        adapter
+            .load_kernel_events(&workspace, &REPOSITORY_KINDS)
+            .expect("repository state loads"),
+        vec![repository("b")],
+        "keeping the configuration does not drop the newest repository state"
     );
 }
 
