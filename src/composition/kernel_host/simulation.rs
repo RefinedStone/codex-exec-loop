@@ -1102,12 +1102,14 @@ impl Simulation {
     fn send_thread_prompt(&mut self, thread_id: &str, prompt: &str) -> KernelCommandOutcome {
         let (reply, answer) = mpsc::channel();
         self.send_host_input(KernelHostInput::Command {
-            command: AppCommand::SubmitThreadPrompt(Box::new(ThreadPromptSubmission {
-                workspace_directory: WORKSPACE.to_string(),
-                thread_id: thread_id.to_string(),
-                prompt: prompt.to_string(),
-                op_id: None,
-            })),
+            command: crate::composition::native_client_runtime::KernelClientCommand::Core(
+                AppCommand::SubmitThreadPrompt(Box::new(ThreadPromptSubmission {
+                    workspace_directory: WORKSPACE.to_string(),
+                    thread_id: thread_id.to_string(),
+                    prompt: prompt.to_string(),
+                    op_id: None,
+                })),
+            ),
             descriptor: Some(KernelCommandDescriptor {
                 command: crate::domain::kernel_spec::KernelCommandKind::SubmitPrompt,
                 thread_id: thread_id.to_string(),
@@ -1181,7 +1183,9 @@ impl Simulation {
     fn send_recorded_stop(&mut self) {
         let (reply, _answer) = mpsc::channel();
         self.send_host_input(KernelHostInput::Command {
-            command: AppCommand::RequestStopAllSessions,
+            command: crate::composition::native_client_runtime::KernelClientCommand::Core(
+                AppCommand::RequestStopAllSessions,
+            ),
             descriptor: Some(KernelCommandDescriptor {
                 command: crate::domain::kernel_spec::KernelCommandKind::StopAll,
                 thread_id: String::new(),
@@ -1198,7 +1202,7 @@ impl Simulation {
     fn send_command(&mut self, command: AppCommand) {
         let (reply, _answer) = mpsc::channel();
         self.send_host_input(KernelHostInput::Command {
-            command,
+            command: crate::composition::native_client_runtime::KernelClientCommand::Core(command),
             descriptor: None,
             reply,
         });

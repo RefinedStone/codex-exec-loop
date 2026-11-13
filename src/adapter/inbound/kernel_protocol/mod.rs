@@ -2,6 +2,9 @@
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
+use crate::application::port::inbound::stored_command_port::{
+    StoredCommand, StoredCommandOutcome, StoredCommandResult, StoredTaskFields,
+};
 pub use crate::domain::kernel_event::ReasonCode;
 use crate::domain::kernel_event::{
     KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus,
@@ -234,7 +237,10 @@ impl CommandRequest {
             | KernelCommand::SetAutoFollowMaxTurns { .. }
             | KernelCommand::PauseAutoFollow {}
             | KernelCommand::ResetPlanning { .. }
-            | KernelCommand::RefreshPlanning {} => String::new(),
+            | KernelCommand::RefreshPlanning {}
+            | KernelCommand::CreateTask { .. }
+            | KernelCommand::UpdateTask { .. }
+            | KernelCommand::DeleteTask { .. } => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
             KernelProtocolError::invalid_params(format!("command cannot be described: {error}"))
@@ -324,6 +330,85 @@ pub struct CommandResponse {
     /// 명령의 영수증이다 (plan 19 Q3-6). 읽기 명령과 기록이 없는 커널은 영수증이 없다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<Operation>,
+    /*
+     * 성공한 저장 명령의 결과이다 (plan 18 K4-9d). 저장 명령은 실행이 끝난 뒤에 답한다. 그래서 이 값이 있으면
+     * 그 연산은 이미 끝났다. 결과는 기록에 싣지 않는다: 같은 멱등 키로 다시 보낸 명령의 답에는 없다.
+     */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<CommandResult>,
+    /*
+     * 저장 명령이 실패로 끝났을 때의 원인이다 (plan 18 K4-9d). 사람이 읽는 글이고 그 연산의 완료 기록의 `detail` 과
+     * 같다. 저장 명령의 답은 셋 중 하나를 가진다: `result` (끝났다), `rejection` (거절되었다), `failure` (실패했다).
+     * 영수증의 `state` 는 받을 때의 결과만 적으므로 끝을 적지 않는다.
+     */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+/// 저장 명령의 결과이다. 명령마다 모양이 하나이고 스펙의 그 명령 항목이 `result` 로 적는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CommandResult {
+    TaskCreated {
+        task_id: String,
+        planning_revision: i64,
+    },
+    TaskUpdated {
+        task_id: String,
+        planning_revision: i64,
+    },
+    TaskDeleted {
+        task_id: String,
+        planning_revision: i64,
+    },
+}
+
+impl CommandResult {
+    fn from_stored(result: StoredCommandResult) -> Self {
+        match result {
+            StoredCommandResult::TaskCreated {
+                task_id,
+                planning_revision,
+            } => Self::TaskCreated {
+                task_id,
+                planning_revision,
+            },
+            StoredCommandResult::TaskUpdated {
+                task_id,
+                planning_revision,
+            } => Self::TaskUpdated {
+                task_id,
+                planning_revision,
+            },
+            StoredCommandResult::TaskDeleted {
+                task_id,
+                planning_revision,
+            } => Self::TaskDeleted {
+                task_id,
+                planning_revision,
+            },
+        }
+    }
+
+    /// 그 명령의 결과가 쓰는 `type` 값이다. 결과가 없는 명령은 `None` 이다. 스펙이 이 표로 명령 항목의
+    /// `result` 스키마를 고른다.
+    pub(crate) const fn name_for(kind: KernelCommandKind) -> Option<&'static str> {
+        match kind {
+            KernelCommandKind::CreateTask => Some("task_created"),
+            KernelCommandKind::UpdateTask => Some("task_updated"),
+            KernelCommandKind::DeleteTask => Some("task_deleted"),
+            KernelCommandKind::LoadSessions
+            | KernelCommandKind::RenameSession
+            | KernelCommandKind::SubmitPrompt
+            | KernelCommandKind::SteerTurn
+            | KernelCommandKind::StopAll
+            | KernelCommandKind::DecideApproval
+            | KernelCommandKind::SetAutoFollowMaxTurns
+            | KernelCommandKind::PauseAutoFollow
+            | KernelCommandKind::ResetPlanning
+            | KernelCommandKind::RefreshPlanning => None,
+        }
+    }
 }
 
 /*
@@ -396,6 +481,8 @@ impl CommandResponse {
                 processed: false,
                 rejection: None,
                 operation: None,
+                result: None,
+                failure: None,
             };
         };
         Self {
@@ -405,7 +492,36 @@ impl CommandResponse {
                 .find_map(AppEvent::command_rejection)
                 .map(CommandRejection::new),
             operation: None,
+            result: None,
+            failure: None,
         }
+    }
+
+    /*
+     * 저장 명령의 끝을 붙인다 (plan 18 K4-9d). 성공이면 결과이고, 거절이면 이유와 그 실행이 댄 글이다.
+     * 거절의 글은 이유의 설명이 아니라 실행기의 글이다: 두 revision 이나 데이터를 쥐 쪽을 적는다.
+     */
+    pub fn with_stored(mut self, outcome: Option<StoredCommandOutcome>) -> Self {
+        match outcome {
+            Some(StoredCommandOutcome::Done(result)) => {
+                self.result = Some(CommandResult::from_stored(result));
+            }
+            Some(StoredCommandOutcome::Rejected(rejection)) => {
+                self.rejection = Some(CommandRejection {
+                    reason: rejection.reason,
+                    message: rejection.message,
+                    next: reason_next(rejection.reason),
+                });
+            }
+            None => {}
+        }
+        self
+    }
+
+    /// 저장 명령이 실패로 끝났다. `detail` 은 그 연산의 완료 기록에 적은 원인과 같은 글이다.
+    pub fn with_failed_stored_command(mut self, detail: String) -> Self {
+        self.failure = Some(detail);
+        self
     }
 
     /// 커널이 준 영수증을 붙인다. 영수증이 없으면(읽기 명령, 기록이 없는 커널) 그대로이다.
@@ -420,6 +536,8 @@ impl CommandResponse {
             processed: true,
             rejection: receipt.rejection.map(CommandRejection::new),
             operation: Some(Operation::from_receipt(receipt)),
+            result: None,
+            failure: None,
         }
     }
 }
@@ -488,6 +606,76 @@ pub enum KernelCommand {
     },
     /// planning 큐를 다시 읽는다. 결과는 `planning` 이벤트로 온다.
     RefreshPlanning {},
+    /// 사용자의 작업 만들기이다 (plan 18 K4-9d). 저장 명령이다: 커널이 떠 있지 않아도 실행된다.
+    CreateTask {
+        task: TaskFields,
+    },
+    /// 사용자의 작업 고치기이다. 작업의 필드 전체를 바꾼다. 보낸 쪽이 읽은 revision 이 필수이다.
+    UpdateTask {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        task_id: String,
+        task: TaskFields,
+        expected_planning_revision: i64,
+    },
+    DeleteTask {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        task_id: String,
+        expected_planning_revision: i64,
+        /// 지우는 명령이라 `true` 가 아니면 거절한다 (K-D1).
+        #[serde(default)]
+        confirm: bool,
+    },
+}
+
+/*
+ * 작업의 필드이다 (plan 18 K4-9d). 만들기에서 없는 값은 기본값이다. 고치기는 필드 전체를 바꾼다: 이유와
+ * 참조는 없으면 비우고, 방향·설명·상태·우선순위는 없으면 그대로 둔다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_id: Option<String>,
+    #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<PlanningTaskStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_priority: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_priority_delta: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<String>,
+}
+
+impl TaskFields {
+    fn into_stored(self) -> Result<StoredTaskFields, KernelProtocolError> {
+        Ok(StoredTaskFields {
+            direction_id: self.direction_id,
+            title: non_blank("task.title", self.title)?,
+            description: self.description,
+            status: self.status.map(PlanningTaskStatus::into_core),
+            base_priority: self.base_priority,
+            dynamic_priority_delta: self.dynamic_priority_delta,
+            priority_reason: self.priority_reason,
+            depends_on: self.depends_on,
+            blocked_by: self.blocked_by,
+        })
+    }
+}
+
+/// 커널이 명령으로 받는 입력이다 (plan 18 K4-9d). core 가 처리하는 명령이거나, 저장소 잠금을 쥐 쪽이 바로
+/// 실행하는 저장 명령이다.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KernelCommandInput {
+    Core(AppCommand),
+    Stored(StoredCommand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -519,6 +707,9 @@ impl KernelCommand {
             Self::PauseAutoFollow {} => KernelCommandKind::PauseAutoFollow,
             Self::ResetPlanning { .. } => KernelCommandKind::ResetPlanning,
             Self::RefreshPlanning {} => KernelCommandKind::RefreshPlanning,
+            Self::CreateTask { .. } => KernelCommandKind::CreateTask,
+            Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
+            Self::DeleteTask { .. } => KernelCommandKind::DeleteTask,
         }
     }
 
@@ -526,7 +717,8 @@ impl KernelCommand {
     /// 스펙의 `effect` 로 명령을 받을지 정한다 (plan 18 K4-5). 이 adapter 는 검사하지 않는다.
     pub fn confirmed(&self) -> bool {
         match self {
-            Self::ResetPlanning { confirm, .. } => *confirm,
+            Self::ResetPlanning { confirm, .. } | Self::DeleteTask { confirm, .. } => *confirm,
+            Self::CreateTask { .. } | Self::UpdateTask { .. } => false,
             Self::LoadSessions {}
             | Self::RenameSession { .. }
             | Self::SubmitPrompt { .. }
@@ -539,8 +731,46 @@ impl KernelCommand {
         }
     }
 
-    /// 커널이 처리할 core 명령으로 바꾼다. 작업 공간은 attach 때 고른 커널의 것이다.
-    pub fn into_core(self, workspace_directory: &str) -> Result<AppCommand, KernelProtocolError> {
+    /*
+     * 커널이 받을 입력으로 바꾼다. 작업 공간은 attach 때 고른 커널의 것이다. 저장 명령은 작업 공간을 가지지
+     * 않는다: 실행기가 커널의 저장소에 묶여 있다.
+     */
+    pub fn into_input(
+        self,
+        workspace_directory: &str,
+    ) -> Result<KernelCommandInput, KernelProtocolError> {
+        let stored = match self {
+            Self::CreateTask { task } => StoredCommand::CreateTask {
+                task: task.into_stored()?,
+            },
+            Self::UpdateTask {
+                task_id,
+                task,
+                expected_planning_revision,
+            } => StoredCommand::UpdateTask {
+                task_id: non_blank("task_id", task_id)?,
+                task: task.into_stored()?,
+                expected_planning_revision,
+            },
+            Self::DeleteTask {
+                task_id,
+                expected_planning_revision,
+                confirm: _,
+            } => StoredCommand::DeleteTask {
+                task_id: non_blank("task_id", task_id)?,
+                expected_planning_revision,
+            },
+            core => {
+                return core
+                    .into_core(workspace_directory)
+                    .map(KernelCommandInput::Core);
+            }
+        };
+        Ok(KernelCommandInput::Stored(stored))
+    }
+
+    /// core 가 처리하는 명령을 core 명령으로 바꾼다. 저장 명령은 `into_input` 이 먼저 가른다.
+    fn into_core(self, workspace_directory: &str) -> Result<AppCommand, KernelProtocolError> {
         let command = match self {
             Self::LoadSessions {} => {
                 AppCommand::LoadSessionCatalog(SessionCatalogLoadIntent::ensure_loaded(
@@ -603,6 +833,11 @@ impl KernelCommand {
             Self::RefreshPlanning {} => AppCommand::RefreshPlanningRuntime {
                 workspace_directory: workspace_directory.to_string(),
             },
+            Self::CreateTask { .. } | Self::UpdateTask { .. } | Self::DeleteTask { .. } => {
+                return Err(KernelProtocolError::invalid_params(
+                    "a stored command is not a core command",
+                ));
+            }
         };
         Ok(command)
     }
@@ -1175,6 +1410,18 @@ pub enum PlanningTaskStatus {
 }
 
 impl PlanningTaskStatus {
+    fn into_core(self) -> TaskStatus {
+        match self {
+            Self::Ready => TaskStatus::Ready,
+            Self::Blocked => TaskStatus::Blocked,
+            Self::InProgress => TaskStatus::InProgress,
+            Self::Done => TaskStatus::Done,
+            Self::Cancelled => TaskStatus::Cancelled,
+            Self::AwaitingUser => TaskStatus::AwaitingUser,
+            Self::Proposed => TaskStatus::Proposed,
+        }
+    }
+
     fn from_core(status: TaskStatus) -> Self {
         match status {
             TaskStatus::Ready => Self::Ready,

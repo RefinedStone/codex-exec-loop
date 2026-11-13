@@ -78,6 +78,21 @@ between invocations, so `load_sessions` helps only while another client (Akra De
 kernel up. The automatic follow-up settings are kept: the kernel records them
 (`auto_follow_configured`) and the next Gateway kernel restores the last record.
 
+Stored commands change stored planning data only, so they run without a running kernel. Today
+they are `reset_planning`, `create_task`, `update_task`, and `delete_task` (`state: store` in the
+specification). The process that holds the repository lock runs them at once: the Gateway kernel,
+or the command-only kernel when no Gateway runs or the running Gateway is an older version that
+does not know the command. The answer of `create_task`, `update_task`, and `delete_task` comes
+after the change: `result` (the task id and the new planning revision), `rejection`, or `failure`
+(the cause, also in `command_completed.detail`); a failure exits with 1. `update_task` replaces
+the fields of the task and `delete_task` needs `confirm: true`; both need
+`expected_planning_revision`, and a different current revision rejects them with
+`planning_revision_stale` and changes nothing. `planning_locked` rejects a command while another
+change or parallel work holds the planning data. `akra kernel query planning` answers from the
+store when no kernel runs, so a client can read the current revision. An object field goes as
+JSON text: `akra kernel planning create_task --task '{"title":"..."}' --json`. No entrance uses
+the task commands yet; the admin forms still change tasks directly.
+
 The planning reset of the other entrances also goes to the repository kernel. `akra reset`, the
 admin reset (`/api/planning/reset`, `/admin/controls/reset`), and the Telegram `/reset` commands
 send `reset_planning` through the same command port and wait for the end of that operation. The

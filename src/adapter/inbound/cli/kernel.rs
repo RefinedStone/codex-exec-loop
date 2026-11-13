@@ -83,7 +83,8 @@ fn render(result: Result<Value>, sent_key: Option<&str>, stdout: &mut impl Write
                 || output["state"] == "rejected"
             {
                 2
-            } else if output["processed"] == false {
+            } else if output["processed"] == false || !output["failure"].is_null() {
+                // A stored command that ran and failed is not an acceptance (plan 18 K4-9d).
                 1
             } else {
                 0
@@ -222,7 +223,7 @@ fn parse(args: &[OsString]) -> Result<Invocation> {
         request
             .command
             .clone()
-            .into_core(&workspace.to_string_lossy())
+            .into_input(&workspace.to_string_lossy())
             .map_err(|error| anyhow::anyhow!(error.message))?;
         Request::Command(request)
     } else {
@@ -452,6 +453,37 @@ mod tests {
         }
     }
 
+    /// A value that the schema accepts: the first enum value, a text, a number, or an object with its required fields.
+    fn sample_value(schema: &Value, spec: &Value) -> Value {
+        let schema = resolve(schema, spec).unwrap();
+        if let Some(values) = schema["enum"].as_array() {
+            return values[0].clone();
+        }
+        let kind = match &schema["type"] {
+            Value::Array(kinds) => kinds[0].as_str().unwrap().to_string(),
+            kind => kind.as_str().unwrap_or("object").to_string(),
+        };
+        match kind.as_str() {
+            "string" => json!("test-value"),
+            "boolean" => json!(true),
+            "object" => Value::Object(
+                schema["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|name| {
+                        (
+                            name.to_string(),
+                            sample_value(&schema["properties"][name], spec),
+                        )
+                    })
+                    .collect(),
+            ),
+            _ => json!(1),
+        }
+    }
+
     #[test]
     fn schema_owns_the_command_names_and_scopes() {
         let spec: Value = serde_json::from_str(SPEC).unwrap();
@@ -467,13 +499,11 @@ mod tests {
                 .filter_map(Value::as_str)
                 .filter(|name| *name != "type")
             {
-                let property = resolve(&entry["input"]["properties"][name], &spec).unwrap();
-                let value = if let Some(values) = property["enum"].as_array() {
-                    values[0].as_str().unwrap().to_string()
-                } else if property["type"] == "string" {
-                    "test-value".into()
-                } else {
-                    "1".into()
+                let sample = sample_value(&entry["input"]["properties"][name], &spec);
+                // A string goes as it is. Every other value goes as JSON text.
+                let value = match sample.as_str() {
+                    Some(text) => text.to_string(),
+                    None => sample.to_string(),
                 };
                 words.extend([format!("--{name}"), value]);
             }
