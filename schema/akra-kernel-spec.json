@@ -1329,9 +1329,15 @@
     },
     {
       "name": "command_completed",
-      "summary": "A command ended without a turn record. For `submit_prompt`: its preparation failed, its work went to parallel slots, or its turn submission closed before a turn started. For the other commands: the request of the command returned (`done` or `failed`), or the command did nothing (`failed`). For every command: the kernel was built again (`lost`).",
+      "summary": "A command ended without a turn record. For `submit_prompt`: its preparation failed, its work went to parallel slots, or its turn submission closed before a turn started. For the other commands: the request of the command returned (`done` or `failed`), or the command did nothing (`failed`). For every command: the kernel was built again (`lost`). `detail` is the cause that a failed request gave, as text for a person.",
       "payload": {
         "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "kind": {
             "const": "command_completed",
             "type": "string"
@@ -2803,6 +2809,12 @@
         },
         {
           "properties": {
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "kind": {
               "const": "command_completed",
               "type": "string"

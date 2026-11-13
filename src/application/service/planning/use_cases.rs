@@ -14,7 +14,7 @@ use super::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
     PlanningRepairRetryReason,
 };
-use super::repair::reset::PlanningResetService;
+use super::repair::reset::{PlanningResetService, require_confirmed_reset, reset_result};
 use super::runtime::facade::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowPreview, PlanningRuntimeAutoFollowPreviewRequest,
@@ -52,6 +52,7 @@ use crate::application::port::inbound::planning_workspace_maintenance_port::{
     PlanningWorkspaceMaintenancePort, PlanningWorkspaceResetResult,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_reset_route_port::PlanningResetRoutePort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityMutationRecord;
 use crate::domain::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
@@ -223,6 +224,11 @@ pub struct PlanningWorkspaceUseCases {
     reset_service: PlanningResetService,
     doctor_service: PlanningDoctorService,
     directions_service: PlanningDirectionsService,
+    /*
+     * 입구의 조립만 이 값을 준다 (plan 18 K4-9a). 값이 있으면 초기화는 저장소 커널의 명령으로 간다. 커널의 조립은
+     * 값을 주지 않고 `reset_service` 를 직접 쓴다.
+     */
+    reset_route: Option<Arc<dyn PlanningResetRoutePort>>,
 }
 impl PlanningWorkspaceUseCases {
     pub(super) fn new(
@@ -236,8 +242,21 @@ impl PlanningWorkspaceUseCases {
             reset_service,
             doctor_service,
             directions_service,
+            reset_route: None,
         }
     }
+
+    /// 초기화를 저장소 커널에 맡기는 use case 묶음이다. 입구(CLI, admin, Telegram)의 조립이 쓴다.
+    pub fn with_reset_route(mut self, route: Arc<dyn PlanningResetRoutePort>) -> Self {
+        self.reset_route = Some(route);
+        self
+    }
+
+    /// 초기화가 저장소 커널의 명령으로 가는가이다.
+    pub fn routes_reset_to_kernel(&self) -> bool {
+        self.reset_route.is_some()
+    }
+
     pub fn has_planning_workspace(&self, workspace_dir: &str) -> anyhow::Result<bool> {
         self.init_service.has_planning_workspace(workspace_dir)
     }
@@ -258,7 +277,14 @@ impl PlanningWorkspaceUseCases {
         workspace_dir: &str,
         request: PlanningResetRequest,
     ) -> anyhow::Result<PlanningWorkspaceResetResult> {
-        self.reset_service.reset_workspace(workspace_dir, request)
+        let Some(route) = &self.reset_route else {
+            return self.reset_service.reset_workspace(workspace_dir, request);
+        };
+        // 확인하지 않은 요청은 커널에 보내지 않는다. 직접 실행할 때와 같은 규칙, 같은 글이다.
+        require_confirmed_reset(request)?;
+        // 커널이 초기화를 실행하고 기록한다. 바뀐 파일의 목록은 대상마다 정해져 있다.
+        route.reset_workspace(workspace_dir, request)?;
+        Ok(reset_result(request.target))
     }
     pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
         self.doctor_service.inspect_workspace(workspace_dir)
@@ -1930,6 +1956,91 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn a_routed_reset_goes_to_the_route_once_and_reports_the_fixed_paths_of_its_target() {
+        // plan 18 K4-9a: an entrance does not run the reset. The repository kernel runs it.
+        use crate::application::port::outbound::planning_reset_route_port::PlanningResetRoutePort;
+        use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
+
+        #[derive(Default)]
+        struct Route {
+            sent: Mutex<Vec<PlanningResetTarget>>,
+            failure: Option<&'static str>,
+        }
+        impl PlanningResetRoutePort for Route {
+            fn reset_workspace(
+                &self,
+                _: &str,
+                request: PlanningResetRequest,
+            ) -> anyhow::Result<()> {
+                self.sent.lock().unwrap().push(request.target);
+                match self.failure {
+                    Some(failure) => Err(anyhow::anyhow!(failure)),
+                    None => Ok(()),
+                }
+            }
+        }
+        // The workspace has no planning files. A direct reset would fail; the routed one does not touch it.
+        let workspace = TempPlanningWorkspace::new("planning-use-cases-routed-reset");
+        let direct = planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+        assert!(!direct.workspace.routes_reset_to_kernel());
+        let route = Arc::new(Route::default());
+        let routed = direct.workspace.clone().with_reset_route(route.clone());
+        assert!(routed.routes_reset_to_kernel());
+
+        // An unconfirmed destructive reset is refused before it reaches the kernel, with the direct text.
+        let refused = routed
+            .reset_workspace(
+                workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::All, false),
+            )
+            .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "reset all needs explicit confirmation; nothing was changed"
+        );
+        assert!(route.sent.lock().unwrap().is_empty());
+
+        // A queue reset needs no confirmation at an entrance.
+        let queue = routed
+            .reset_workspace(
+                workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::Queue, false),
+            )
+            .expect("the route ran the reset");
+        assert_eq!(queue.target, PlanningResetTarget::Queue);
+        assert!(queue.rewritten_paths.is_empty() && queue.removed_paths.is_empty());
+        let all = routed
+            .reset_workspace(
+                workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::All, true),
+            )
+            .expect("the route ran the reset");
+        assert_eq!(all, super::reset_result(PlanningResetTarget::All));
+        assert_eq!(all.rewritten_paths.len(), 2);
+        assert!(!all.removed_paths.is_empty());
+        assert_eq!(
+            *route.sent.lock().unwrap(),
+            [PlanningResetTarget::Queue, PlanningResetTarget::All]
+        );
+
+        // The cause that the kernel gave is the error of the entrance.
+        let failing = direct.workspace.clone().with_reset_route(Arc::new(Route {
+            failure: Some("live tasks block the reset"),
+            ..Route::default()
+        }));
+        assert_eq!(
+            failing
+                .reset_workspace(
+                    workspace.path_str(),
+                    PlanningResetRequest::new(PlanningResetTarget::Queue, false),
+                )
+                .unwrap_err()
+                .to_string(),
+            "live tasks block the reset"
+        );
     }
 
     #[test]

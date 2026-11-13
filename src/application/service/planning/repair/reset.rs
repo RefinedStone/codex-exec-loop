@@ -91,13 +91,7 @@ impl PlanningResetService {
         workspace_dir: &str,
         request: PlanningResetRequest,
     ) -> Result<PlanningWorkspaceResetResult> {
-        // 확인 규칙은 모든 입구가 공유한다 (plan 18 K-D1). 어느 입구가 확인을 빠뜨려도 아무것도 지우지 않는다.
-        if !request.is_allowed() {
-            return Err(anyhow!(
-                "reset {} needs explicit confirmation; nothing was changed",
-                request.target.label()
-            ));
-        }
+        require_confirmed_reset(request)?;
         let target = request.target;
         let bootstrap = self
             .planning_bootstrap_service
@@ -158,11 +152,7 @@ impl PlanningResetService {
             &[],
             authority_mutation_owner_token,
         )?;
-        Ok(PlanningWorkspaceResetResult {
-            target: PlanningResetTarget::Queue,
-            rewritten_paths: Vec::new(),
-            removed_paths: Vec::new(),
-        })
+        Ok(reset_result(PlanningResetTarget::Queue))
     }
 
     /*
@@ -250,11 +240,7 @@ impl PlanningResetService {
             },
             authority_mutation_owner_token,
         )?;
-        Ok(PlanningWorkspaceResetResult {
-            target: PlanningResetTarget::Directions,
-            rewritten_paths: vec![DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()],
-            removed_paths: removed_path_strings(RESET_DIRECTIONS_REMOVED_PATHS),
-        })
+        Ok(reset_result(PlanningResetTarget::Directions))
     }
 
     /*
@@ -294,14 +280,7 @@ impl PlanningResetService {
             },
             authority_mutation_owner_token,
         )?;
-        Ok(PlanningWorkspaceResetResult {
-            target: PlanningResetTarget::All,
-            rewritten_paths: vec![
-                RESULT_OUTPUT_FILE_PATH.to_string(),
-                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
-            ],
-            removed_paths: reset_all_removed_path_strings(),
-        })
+        Ok(reset_result(PlanningResetTarget::All))
     }
 
     // 새 bootstrap 상태를 쓰기 전에 generated 산출물을 지워 오래된 draft/rejection이 되살아나지 않게 한다.
@@ -595,6 +574,46 @@ fn reset_active_document_mutations<'a>(
         );
     }
     mutations
+}
+
+/*
+ * 확인 규칙은 모든 입구가 공유한다 (plan 18 K-D1). 어느 입구가 확인을 빠뜨려도 아무것도 지우지 않는다. 초기화를
+ * 커널에 맡기는 입구도 보내기 전에 이 규칙을 쓴다 (plan 18 K4-9a).
+ */
+pub(crate) fn require_confirmed_reset(request: PlanningResetRequest) -> Result<()> {
+    if request.is_allowed() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "reset {} needs explicit confirmation; nothing was changed",
+        request.target.label()
+    ))
+}
+
+/*
+ * 초기화가 다시 쓰는 파일과 지우는 항목이다. 대상마다 정해져 있다. 그래서 초기화를 커널에 맡긴 입구도 커널의 답
+ * 없이 같은 목록을 보인다 (plan 18 K4-9a). 목록을 적는 곳은 여기 하나이다.
+ */
+pub(crate) fn reset_result(target: PlanningResetTarget) -> PlanningWorkspaceResetResult {
+    let (rewritten_paths, removed_paths) = match target {
+        PlanningResetTarget::Queue => (Vec::new(), Vec::new()),
+        PlanningResetTarget::Directions => (
+            vec![DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()],
+            removed_path_strings(RESET_DIRECTIONS_REMOVED_PATHS),
+        ),
+        PlanningResetTarget::All => (
+            vec![
+                RESULT_OUTPUT_FILE_PATH.to_string(),
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
+            ],
+            reset_all_removed_path_strings(),
+        ),
+    };
+    PlanningWorkspaceResetResult {
+        target,
+        rewritten_paths,
+        removed_paths,
+    }
 }
 
 // full-reset report에 쓰려고 direction-side 제거 목록과 generated-artifact 제거 목록을 합친다.

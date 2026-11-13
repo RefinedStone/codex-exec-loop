@@ -1905,6 +1905,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             thread_id: "thread-1".to_string(),
             result: crate::domain::kernel_event::OperationEnd::Failed,
             reason: Some(ReasonCode::PlanningRefused),
+            detail: Some("the request gave this cause".to_string()),
         },
         Record::RepositoryChanged {
             head: "b".repeat(40),

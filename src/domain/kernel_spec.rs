@@ -393,7 +393,7 @@ spec_names! {
         CommandRejected => "command_rejected",
             "The kernel rejected a received command at once.";
         CommandCompleted => "command_completed",
-            "A command ended without a turn record. For `submit_prompt`: its preparation failed, its work went to parallel slots, or its turn submission closed before a turn started. For the other commands: the request of the command returned (`done` or `failed`), or the command did nothing (`failed`). For every command: the kernel was built again (`lost`).";
+            "A command ended without a turn record. For `submit_prompt`: its preparation failed, its work went to parallel slots, or its turn submission closed before a turn started. For the other commands: the request of the command returned (`done` or `failed`), or the command did nothing (`failed`). For every command: the kernel was built again (`lost`). `detail` is the cause that a failed request gave, as text for a person.";
         RepositoryChanged => "repository_changed",
             "The checked-out commit or branch of the workspace differs from the last observation. The kernel looks periodically, so one record can cover several changes. It does not say who made the change. Without `previous_head`, this is the first observation in this log. This record has no thread: `thread_id` is empty in history.";
     }

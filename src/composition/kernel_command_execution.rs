@@ -19,6 +19,7 @@ use crate::adapter::outbound::filesystem::{
 use crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter;
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+use crate::application::port::outbound::planning_reset_route_port::PlanningResetRoutePort;
 use crate::application::service::kernel_command::{KernelCommandService, UnreachableAnswers};
 use crate::application::service::planning::PlanningBootstrapService;
 use crate::application::service::planning::repair::reset::PlanningResetService;
@@ -27,10 +28,18 @@ use crate::domain::kernel_event::{
     COMMAND_KINDS, CommandMemory, CommandRecall, KernelEvent, MAX_KERNEL_EVENT_PAGE, OperationEnd,
     OperationReceipt, OperationStatus, RecordedKernelEvent,
 };
-use crate::domain::kernel_spec::{CommandEffect, KernelCallError, KernelCommandKind, ReasonCode};
+use crate::domain::kernel_spec::{
+    CommandEffect, KernelCallError, KernelCommandKind, OperationState, ReasonCode,
+};
 use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget, PriorityQueueService};
 
-pub(crate) fn build(workspace: &Path) -> Result<Box<dyn KernelCommandPort>> {
+/// 커널 기록의 호출자 이름이다 (설계 §3.5). 입구마다 하나이다.
+pub(crate) const CALLER_CLI: &str = "akra-cli";
+pub(crate) const CALLER_ADMIN: &str = "akra-admin";
+pub(crate) const CALLER_TELEGRAM: &str = "akra-telegram";
+
+/// `workspace` 가 속한 저장소의 커널에 명령을 보내는 port 이다. `caller` 는 그 명령의 기록에 남는 입구의 이름이다.
+pub(crate) fn build(workspace: &Path, caller: &'static str) -> Result<Box<dyn KernelCommandPort>> {
     let workspace = workspace
         .canonicalize()
         .with_context(|| format!("cannot select workspace `{}`", workspace.display()))?;
@@ -40,11 +49,12 @@ pub(crate) fn build(workspace: &Path) -> Result<Box<dyn KernelCommandPort>> {
     let target = super::production::repository_kernel_target(&workspace.to_string_lossy())?;
     let local = Arc::new(CommandOnlyKernel {
         workspace: target.workspace_root,
+        caller,
     });
     Ok(Box::new(KernelCommandService::new(
         Arc::new(GatewayKernelClientAdapter::new(
             workspace.to_string_lossy().into_owned(),
-            "akra-cli".to_string(),
+            caller.to_string(),
         )),
         local,
         UnreachableAnswers {
@@ -73,6 +83,7 @@ fn unreachable_answer(cause: &str) -> Result<Value> {
 
 struct CommandOnlyKernel {
     workspace: String,
+    caller: &'static str,
 }
 
 impl CommandOnlyKernel {
@@ -169,7 +180,7 @@ impl KernelCommandPort for CommandOnlyKernel {
             return Ok(serde_json::to_value(CommandResponse::from_core(Some(&[])))?);
         }
         let mut descriptor = descriptor.context("stored mutation must have a descriptor")?;
-        descriptor.caller = Some("akra-cli".to_string());
+        descriptor.caller = Some(self.caller.to_string());
         let log = super::production::kernel_event_log_port();
         let memory =
             CommandMemory::from_events(log.load_kernel_events(&self.workspace, &COMMAND_KINDS)?);
@@ -225,6 +236,7 @@ impl KernelCommandPort for CommandOnlyKernel {
                         OperationEnd::Failed
                     },
                     reason: None,
+                    detail: result.as_ref().err().map(|error| format!("{error:#}")),
                 },
             )],
         )?;
@@ -262,6 +274,90 @@ impl KernelCommandPort for CommandOnlyKernel {
             _ => bail!("{UNREACHABLE_QUERY}: it cannot read live kernel state"),
         };
         Ok(serde_json::to_value(answer)?)
+    }
+}
+
+/*
+ * 입구의 planning 초기화를 저장소 커널의 명령으로 보낸다 (plan 18 K4-9a). 입구마다 하나를 만든다. 명령은 Gateway 의
+ * 커널, 명령 전용 조립, 또는 TUI 가 커널을 쥔 저장소의 직접 경로 중 하나로 간다 (설계 §3.7). 어느 길이든 이 값은
+ * 초기화가 끝난 뒤에 돌아온다.
+ */
+pub(crate) struct KernelRoutedPlanningReset {
+    caller: &'static str,
+}
+
+impl KernelRoutedPlanningReset {
+    pub(crate) fn new(caller: &'static str) -> Self {
+        Self { caller }
+    }
+}
+
+impl PlanningResetRoutePort for KernelRoutedPlanningReset {
+    fn reset_workspace(&self, workspace_dir: &str, request: PlanningResetRequest) -> Result<()> {
+        let port = build(Path::new(workspace_dir), self.caller)?;
+        reset_through_kernel(port.as_ref(), request.target)
+    }
+}
+
+/*
+ * `reset_planning` 을 보내고 그 연산의 끝을 기다린다. 입구의 확인 규칙(큐는 확인이 없어도 된다)은 부른 쪽이 이미
+ * 검사했다. 커널은 지우는 명령마다 `confirm: true` 를 요구하므로 여기서 붙인다.
+ */
+fn reset_through_kernel(port: &dyn KernelCommandPort, target: PlanningResetTarget) -> Result<()> {
+    let command = KernelCommand::ResetPlanning {
+        target: match target {
+            PlanningResetTarget::Queue => ResetTarget::Queue,
+            PlanningResetTarget::Directions => ResetTarget::Directions,
+            PlanningResetTarget::All => ResetTarget::All,
+        },
+        confirm: true,
+    };
+    // 초기화는 같은 입력이 같은 상태를 만든다 (`natural`). 멱등 키는 필요 없다.
+    let answer: CommandResponse = serde_json::from_value(port.command(
+        command.kind(),
+        serde_json::to_value(&command)?,
+        None,
+    )?)
+    .context("the kernel answered the reset with an unknown shape")?;
+    if let Some(rejection) = answer.rejection {
+        bail!("{}", rejection.message);
+    }
+    if !answer.processed {
+        bail!("the repository kernel stopped before it took the reset; nothing was changed");
+    }
+    // 기록이 없는 길(TUI 가 커널을 쥔 저장소의 직접 초기화)은 영수증이 없다. 그 길은 초기화가 끝난 뒤에 답한다.
+    let Some(operation) = answer.operation else {
+        return Ok(());
+    };
+    let status = port.query(
+        serde_json::to_value(KernelQuery::Operation {
+            op_id: operation.op_id,
+        })?,
+        true,
+    )?;
+    let KernelQueryAnswer::Operation(status) = serde_json::from_value(status)
+        .context("the kernel answered the operation query with an unknown shape")?
+    else {
+        bail!("the kernel did not answer the operation query with an operation");
+    };
+    match status.state {
+        OperationState::Done => Ok(()),
+        state => Err(reset_failure(state, &status.records)),
+    }
+}
+
+/// 끝난 초기화가 성공이 아닐 때의 오류이다. 커널이 댄 원인(`command_completed` 의 `detail`)이 있으면 그 글이다.
+fn reset_failure(state: OperationState, records: &[RecordedKernelEvent]) -> anyhow::Error {
+    let detail = records.iter().find_map(|record| match &record.event {
+        KernelEvent::CommandCompleted { detail, .. } => detail.clone(),
+        _ => None,
+    });
+    match detail {
+        Some(detail) => anyhow::anyhow!(detail),
+        None => anyhow::anyhow!(
+            "the planning reset did not finish (operation state: {}); read the planning state before sending it again",
+            state.name()
+        ),
     }
 }
 
@@ -320,7 +416,221 @@ mod tests {
             .workspace
             .initialize_simple_workspace(&workspace)
             .unwrap();
-        (Workspace(path), CommandOnlyKernel { workspace })
+        (
+            Workspace(path),
+            CommandOnlyKernel {
+                workspace,
+                caller: CALLER_CLI,
+            },
+        )
+    }
+
+    /// A port that answers with prepared values. It stands for the Gateway kernel.
+    struct ScriptedKernel {
+        answer: Value,
+        operation: Value,
+        sent: std::sync::Mutex<Vec<Value>>,
+    }
+
+    impl ScriptedKernel {
+        fn new(answer: CommandResponse, operation: Option<OperationStatus>) -> Self {
+            Self {
+                answer: serde_json::to_value(answer).unwrap(),
+                operation: operation
+                    .map(|status| {
+                        serde_json::to_value(KernelQueryAnswer::Operation(status)).unwrap()
+                    })
+                    .unwrap_or(Value::Null),
+                sent: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl KernelCommandPort for ScriptedKernel {
+        fn command(
+            &self,
+            _: KernelCommandKind,
+            input: Value,
+            key: Option<String>,
+        ) -> Result<Value> {
+            assert_eq!(key, None, "a reset needs no idempotency key");
+            self.sent.lock().unwrap().push(input);
+            Ok(self.answer.clone())
+        }
+
+        fn query(&self, input: Value, wait: bool) -> Result<Value> {
+            assert!(wait, "the entrance waits for the end of the reset");
+            self.sent.lock().unwrap().push(input);
+            Ok(self.operation.clone())
+        }
+    }
+
+    fn accepted(op_id: i64) -> CommandResponse {
+        CommandResponse::from_core(Some(&[])).with_operation(Some(OperationReceipt {
+            op_id,
+            rejection: None,
+            replayed: false,
+        }))
+    }
+
+    fn ended(op_id: i64, result: OperationEnd, detail: Option<&str>) -> OperationStatus {
+        let record = |sequence, event| RecordedKernelEvent {
+            sequence,
+            recorded_at: "now".to_string(),
+            event,
+        };
+        OperationStatus::from_records(
+            op_id,
+            [
+                record(
+                    op_id,
+                    KernelEvent::CommandReceived {
+                        op_id,
+                        command: KernelCommandKind::ResetPlanning.name().to_string(),
+                        thread_id: String::new(),
+                        fingerprint: "fingerprint".to_string(),
+                        idempotency_key: None,
+                        completion: Some(KernelCommandKind::ResetPlanning.spec().completion),
+                        caller: Some(CALLER_CLI.to_string()),
+                    },
+                ),
+                record(
+                    op_id + 1,
+                    KernelEvent::CommandCompleted {
+                        op_id,
+                        thread_id: String::new(),
+                        result,
+                        reason: None,
+                        detail: detail.map(str::to_string),
+                    },
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_routed_reset_waits_for_the_end_and_reports_the_cause_of_a_failure() {
+        // plan 18 K4-9a: the Gateway kernel accepts the command first. The entrance returns after the end.
+        let done = ScriptedKernel::new(accepted(5), Some(ended(5, OperationEnd::Done, None)));
+        reset_through_kernel(&done, PlanningResetTarget::Queue).expect("the reset ended");
+        assert_eq!(
+            *done.sent.lock().unwrap(),
+            [
+                // The entrance rule lets a queue reset pass without a confirmation. The kernel rule needs one.
+                json!({"type":"reset_planning","target":"queue","confirm":true}),
+                json!({"type":"operation","op_id":5}),
+            ]
+        );
+
+        let failed = ScriptedKernel::new(
+            accepted(5),
+            Some(ended(
+                5,
+                OperationEnd::Failed,
+                Some("live tasks block the directions reset"),
+            )),
+        );
+        assert_eq!(
+            reset_through_kernel(&failed, PlanningResetTarget::Directions)
+                .unwrap_err()
+                .to_string(),
+            "live tasks block the directions reset",
+            "the entrance shows the cause that the kernel recorded"
+        );
+
+        let lost = ScriptedKernel::new(accepted(5), Some(ended(5, OperationEnd::Lost, None)));
+        let error = reset_through_kernel(&lost, PlanningResetTarget::All)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("operation state: lost"), "{error}");
+    }
+
+    #[test]
+    fn a_routed_reset_reports_a_rejection_and_accepts_the_path_without_records() {
+        let reason = ReasonCode::KernelUnreachable;
+        let rejected = ScriptedKernel::new(
+            CommandResponse {
+                processed: true,
+                rejection: Some(CommandRejection {
+                    reason,
+                    message: "the kernel refused".to_string(),
+                    next: reason_next(reason),
+                }),
+                operation: None,
+            },
+            None,
+        );
+        assert_eq!(
+            reset_through_kernel(&rejected, PlanningResetTarget::Queue)
+                .unwrap_err()
+                .to_string(),
+            "the kernel refused"
+        );
+        assert_eq!(rejected.sent.lock().unwrap().len(), 1, "no operation query");
+
+        // A repository whose kernel a TUI holds: the direct reset ends before it answers, without a receipt.
+        let direct = ScriptedKernel::new(CommandResponse::from_core(Some(&[])), None);
+        reset_through_kernel(&direct, PlanningResetTarget::Queue).expect("the direct reset ended");
+        assert_eq!(direct.sent.lock().unwrap().len(), 1, "no operation query");
+
+        let stopped = ScriptedKernel::new(CommandResponse::from_core(None), None);
+        assert!(reset_through_kernel(&stopped, PlanningResetTarget::Queue).is_err());
+    }
+
+    #[test]
+    fn an_entrance_reset_without_a_gateway_is_recorded_with_its_caller() {
+        // The real command-only kernel: the reset of an entrance leaves `command_received` and `command_completed`.
+        let (_directory, mut kernel) = fixture();
+        kernel.caller = CALLER_ADMIN;
+        reset_through_kernel(&kernel, PlanningResetTarget::Queue).expect("the reset ended");
+        let log = super::super::production::kernel_event_log_port();
+        let records = kernel.records(log.as_ref()).unwrap();
+        assert!(matches!(
+            &records[0].event,
+            KernelEvent::CommandReceived { command, caller, .. }
+                if command == "reset_planning" && caller.as_deref() == Some("akra-admin")
+        ));
+        assert!(matches!(
+            records[1].event,
+            KernelEvent::CommandCompleted {
+                result: OperationEnd::Done,
+                detail: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_failed_reset_without_a_gateway_keeps_its_cause_in_the_record_and_in_the_error() {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        // No planning workspace was initialized here. The reset service refuses.
+        let path = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "kernel-command-empty-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let _directory = Workspace(path.clone());
+        let kernel = CommandOnlyKernel {
+            workspace: path.to_string_lossy().into_owned(),
+            caller: CALLER_TELEGRAM,
+        };
+        let error = reset_through_kernel(&kernel, PlanningResetTarget::Queue)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("initialize planning first"), "{error}");
+        let log = super::super::production::kernel_event_log_port();
+        let records = kernel.records(log.as_ref()).unwrap();
+        let KernelEvent::CommandCompleted { result, detail, .. } = &records[1].event else {
+            panic!("the second record is the end of the command: {records:?}");
+        };
+        assert_eq!(*result, OperationEnd::Failed);
+        assert!(
+            detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("initialize planning first")),
+            "{detail:?}"
+        );
     }
 
     fn reset(kernel: &CommandOnlyKernel, key: &str) -> Result<Value> {

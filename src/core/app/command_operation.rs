@@ -44,8 +44,8 @@ impl CommandEffectKey {
         })
     }
 
-    /// 이 입력이 명령의 효과의 완료이면 그 효과와, 효과가 성공했는가이다.
-    pub(super) fn of_completion(input: &CoreInput) -> Option<(Self, bool)> {
+    /// 이 입력이 명령의 효과의 완료이면 그 효과와, 효과가 실패했을 때 댄 원인이다 (성공이면 `None`).
+    pub(super) fn of_completion(input: &CoreInput) -> Option<(Self, Option<String>)> {
         let CoreInput::EffectCompleted(completion) = input else {
             return None;
         };
@@ -53,27 +53,35 @@ impl CommandEffectKey {
             CoreEffectCompletion::SessionRenamed {
                 correlation,
                 result,
-            } => Some((Self::Rename(correlation.clone()), result.is_ok())),
+            } => Some((Self::Rename(correlation.clone()), failure_of(result))),
             CoreEffectCompletion::PlanningWorkspaceResetCompleted {
                 correlation,
                 result,
-            } => Some((Self::Reset(correlation.clone()), result.is_ok())),
+            } => Some((Self::Reset(correlation.clone()), failure_of(result))),
             CoreEffectCompletion::StopRequestAttemptCompleted {
                 correlation,
                 attempt: StopRequestAttempt::Initial,
                 result,
-            } => Some((Self::Stop(*correlation), result.is_ok())),
+            } => Some((Self::Stop(*correlation), failure_of(result))),
             CoreEffectCompletion::TurnSteered {
                 correlation,
                 result,
-            } => Some((Self::Steer(*correlation), result.is_ok())),
+            } => Some((Self::Steer(*correlation), failure_of(result))),
             CoreEffectCompletion::ApprovalDecisionSubmitted {
                 correlation,
                 result,
-            } => Some((Self::ApprovalDecision(correlation.clone()), result.is_ok())),
+            } => Some((
+                Self::ApprovalDecision(correlation.clone()),
+                failure_of(result),
+            )),
             _ => None,
         }
     }
+}
+
+/// 효과의 결과에서 실패의 원인만 꺼낸다. 완료 기록의 `detail` 이 된다 (plan 18 K4-9a).
+fn failure_of<T>(result: &Result<T, String>) -> Option<String> {
+    result.as_ref().err().cloned()
 }
 
 /// 효과의 완료를 기다리는 명령 하나이다.
@@ -129,14 +137,14 @@ mod tests {
         };
         assert_eq!(
             CommandEffectKey::of_completion(&completion(StopRequestAttempt::Initial, Ok(()))),
-            Some((key.clone(), true))
+            Some((key.clone(), None))
         );
         assert_eq!(
             CommandEffectKey::of_completion(&completion(
                 StopRequestAttempt::Initial,
                 Err("no app-server".to_string())
             )),
-            Some((key, false))
+            Some((key, Some("no app-server".to_string())))
         );
         // The kernel sends the stop again after the turn started. That is not the end of the command.
         assert_eq!(
