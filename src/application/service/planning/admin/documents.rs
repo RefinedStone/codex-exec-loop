@@ -13,6 +13,7 @@ use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
+use crate::domain::planning::PlanningMutationRefusal;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningWorkspaceFiles,
     PriorityQueueProjection, TaskAuthorityDocument,
@@ -188,9 +189,10 @@ impl PlanningAdminFacadeService {
                 observed_planning_revision,
                 current_planning_revision,
             } => {
-                bail!(
+                return Err(PlanningMutationRefusal::revision_stale(format!(
                     "planning db changed while editing (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
-                );
+                ))
+                .into());
             }
         };
         let workspace_reload = self
