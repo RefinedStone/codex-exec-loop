@@ -354,8 +354,10 @@ the desktop app itself is not shipped yet.
   display name, status, kind, paused flag, and current work thread of each cloud agent. The Gateway
   reads them with `GET https://chatgpt.com/backend-api/tbo` through `curl -q --config -`, so the token
   stays out of argv, disk, and logs; it reads the first page only. When the cloud host is off the
-  method is unknown (`-32601`). Desktop asks once per remote connection and shows the dots at the top
-  of the remote section (`src/adapter/outbound/app_server/cloud_dots.rs`,
+  method is unknown (`-32601`). Desktop asks once per remote connection. The remote section has two
+  groups: "에이전트" holds the dots and the work threads that an agent made (`threadSource` starts with
+  `aeon`), and "클라우드 스레드" holds the cloud threads that the user made. The section header for
+  host `cloud` reads "클라우드" (`src/adapter/outbound/app_server/cloud_dots.rs`,
   `src/adapter/inbound/gateway/dots.rs`).
 - Dot chat (D-19): `akra/dots/messages` with `{ roomId }` answers `{ messages }`, the latest 30
   messages of that message room, oldest first, each with id, time, author name, a from-dot flag, and
