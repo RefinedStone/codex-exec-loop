@@ -501,6 +501,155 @@ mod tests {
         let _ = cloud.close(None).await;
     }
 
+    /// Akra Desktop 이 실제로 보내는 요청 모양을 실계정으로 확인한다 (G2 의 일부). 모델 턴과 쓰기는 없다.
+    /// 1. Desktop 의 `initialize`(clientInfo `akra-desktop`)와 `thread/list`(limit 100, useStateDbOnly) 를 보낸다.
+    /// 2. 쓰기 method 는 없는 thread id 로 보낸다. 서버가 "모르는 method"(-32601)로 답하면 지원하지 않는 것이고,
+    ///    thread 를 찾지 못했다는 오류로 답하면 method 는 있는 것이다. 없는 thread 이므로 아무것도 바뀌지 않는다.
+    ///
+    /// 수동 실행: `cargo test --lib cloud_upstream::tests::live_desktop_requests -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "real OpenAI cloud account and network; run manually"]
+    async fn live_desktop_requests() {
+        const MISSING_THREAD: &str = "00000000-0000-4000-8000-000000000000";
+        ensure_crypto_provider();
+        let credentials = load_credentials(&codex_auth_path().expect("auth path")).expect("creds");
+        let request = build_cloud_request(&credentials, &default_user_agent()).expect("request");
+        let (mut cloud, _response) =
+            tokio_tungstenite::connect_async_with_config(request, Some(websocket_config()), false)
+                .await
+                .expect("the cloud handshake must succeed");
+
+        let init = live_rpc(
+            &mut cloud,
+            1,
+            "initialize",
+            serde_json::json!({
+                "clientInfo": { "name": "akra-desktop", "title": "Akra Desktop", "version": "0.0.0" },
+                "capabilities": { "experimentalApi": false, "requestAttestation": false },
+            }),
+        )
+        .await;
+        eprintln!("live: initialize(akra-desktop) -> {}", outcome(&init));
+        cloud
+            .send(Message::text(r#"{"jsonrpc":"2.0","method":"initialized"}"#))
+            .await
+            .expect("initialized");
+
+        let list = live_rpc(
+            &mut cloud,
+            2,
+            "thread/list",
+            serde_json::json!({ "limit": 100, "useStateDbOnly": true }),
+        )
+        .await;
+        eprintln!(
+            "live: thread/list(limit 100, useStateDbOnly) -> {} ({} threads)",
+            outcome(&list),
+            list["result"]["data"].as_array().map_or(0, Vec::len)
+        );
+
+        let probes = [
+            (
+                "thread/read",
+                serde_json::json!({ "threadId": MISSING_THREAD, "includeTurns": false }),
+            ),
+            (
+                "thread/resume",
+                serde_json::json!({ "threadId": MISSING_THREAD, "excludeTurns": true }),
+            ),
+            (
+                "turn/start",
+                serde_json::json!({ "threadId": MISSING_THREAD, "input": [] }),
+            ),
+            (
+                "turn/steer",
+                serde_json::json!({ "threadId": MISSING_THREAD, "input": [], "expectedTurnId": MISSING_THREAD }),
+            ),
+            (
+                "turn/interrupt",
+                serde_json::json!({ "threadId": MISSING_THREAD, "turnId": MISSING_THREAD }),
+            ),
+            (
+                "thread/unsubscribe",
+                serde_json::json!({ "threadId": MISSING_THREAD }),
+            ),
+        ];
+        for (index, (method, params)) in probes.into_iter().enumerate() {
+            let response = live_rpc(&mut cloud, 10 + index as i64, method, params).await;
+            eprintln!("live: {method}(missing thread) -> {}", outcome(&response));
+        }
+        let _ = cloud.close(None).await;
+    }
+
+    /// 다리 전체를 실계정으로 확인한다: `open_session` -> 안쪽 WS -> 가드와 중계 -> 클라우드. Gateway 세션이 하는
+    /// 것과 같은 길이다. 읽기는 클라우드까지 가고, 허용 목록 밖 method 는 다리가 거절한다. 모델 턴과 쓰기는 없다.
+    ///
+    /// 수동 실행: `cargo test --lib cloud_upstream::tests::live_bridge_session -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "real OpenAI cloud account and network; run manually"]
+    async fn live_bridge_session() {
+        let upstream = CloudGatewayUpstream::new(codex_auth_path().expect("auth path"));
+        let stream = upstream.open_session().expect("the bridge session opens");
+        let (mut client, _response) = tokio_tungstenite::client_async("ws://localhost/rpc", stream)
+            .await
+            .expect("the inner handshake must succeed");
+
+        let init = live_rpc(
+            &mut client,
+            1,
+            "initialize",
+            serde_json::json!({
+                "clientInfo": { "name": "akra-desktop", "title": "Akra Desktop", "version": "0.0.0" },
+                "capabilities": { "experimentalApi": false, "requestAttestation": false },
+            }),
+        )
+        .await;
+        eprintln!("live: bridge initialize -> {}", outcome(&init));
+        assert!(init.get("result").is_some(), "initialize failed: {init}");
+        client
+            .send(Message::text(r#"{"jsonrpc":"2.0","method":"initialized"}"#))
+            .await
+            .expect("initialized");
+
+        let list = live_rpc(
+            &mut client,
+            2,
+            "thread/list",
+            serde_json::json!({ "limit": 100, "useStateDbOnly": true }),
+        )
+        .await;
+        eprintln!(
+            "live: bridge thread/list -> {} ({} threads)",
+            outcome(&list),
+            list["result"]["data"].as_array().map_or(0, Vec::len)
+        );
+        assert!(list.get("result").is_some(), "thread/list failed: {list}");
+
+        // 허용 목록 밖 method 는 다리가 답한다. 클라우드의 답이 아니라 다리의 글자인지 본다.
+        let refused = live_rpc(&mut client, 3, "turn/addUserMessage", serde_json::json!({})).await;
+        eprintln!("live: bridge turn/addUserMessage -> {}", outcome(&refused));
+        assert_eq!(refused["error"]["code"], READ_ONLY_REFUSAL_CODE);
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("the cloud host does not allow")
+        );
+        let _ = client.close(None).await;
+    }
+
+    /// 응답을 한 줄로 줄인다: `ok` 또는 오류의 코드와 서버가 준 글자이다. 결과 내용은 찍지 않는다.
+    fn outcome(response: &serde_json::Value) -> String {
+        match response.get("error") {
+            Some(error) => format!(
+                "error {} {}",
+                error["code"],
+                error["message"].as_str().unwrap_or_default()
+            ),
+            None => "ok".to_string(),
+        }
+    }
+
     /// 요청 하나를 보내고 그 `id` 의 응답이 올 때까지 다른 프레임을 건너뛴다. 알림(`method` 있는 프레임)은 버린다.
     async fn live_rpc<S>(
         cloud: &mut tokio_tungstenite::WebSocketStream<S>,
