@@ -16,6 +16,7 @@ use crate::domain::conversation::{
     ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
+use crate::domain::kernel_event::KernelEvent;
 use crate::domain::planning::{PostTurnContinuationGate, PostTurnExecution, PostTurnRequest};
 
 #[derive(Debug, Clone)]
@@ -1511,6 +1512,11 @@ impl ConversationTurnFeatureReducer {
                 .conversation_runtime
                 .set_auto_follow_max_turns(value);
         });
+        let auto_follow = &self.runtime_snapshot().auto_follow;
+        self.record_kernel_event(KernelEvent::AutoFollowConfigured {
+            max_auto_turns: auto_follow.max_auto_turns,
+            continuation_paused: auto_follow.continuation_paused,
+        });
     }
 
     pub(super) fn pause_post_turn_continuation(&mut self) {
@@ -1520,6 +1526,10 @@ impl ConversationTurnFeatureReducer {
                 .session
                 .conversation_runtime
                 .pause_post_turn_continuation();
+        });
+        self.record_kernel_event(KernelEvent::AutoFollowConfigured {
+            max_auto_turns: self.runtime_snapshot().auto_follow.max_auto_turns,
+            continuation_paused: true,
         });
     }
 

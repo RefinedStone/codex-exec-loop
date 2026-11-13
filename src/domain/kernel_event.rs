@@ -172,6 +172,11 @@ pub struct OperationReceipt {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[schemars(rename = "KernelRecord")]
 pub enum KernelEvent {
+    /// Repository runtime configuration survives an idle kernel unload.
+    AutoFollowConfigured {
+        max_auto_turns: usize,
+        continuation_paused: bool,
+    },
     /// 커널이 프롬프트를 남겼다. 쉴 때 한 번 다시 낸다.
     ThreadPromptQueued(QueuedThreadPrompt),
     /// 남긴 프롬프트가 끝났다. 작업 id 로 남김과 짝을 맞춘다.
@@ -458,6 +463,7 @@ impl KernelEvent {
     /// 이 사건의 종류이다. 종류의 이름과 설명은 `KernelRecordKind` 가 가진다 (plan 18 K4-1).
     pub fn record_kind(&self) -> KernelRecordKind {
         match self {
+            Self::AutoFollowConfigured { .. } => KernelRecordKind::AutoFollowConfigured,
             Self::ThreadPromptQueued(_) => KernelRecordKind::ThreadPromptQueued,
             Self::ThreadPromptSettled { .. } => KernelRecordKind::ThreadPromptSettled,
             Self::ThreadPromptRejected { .. } => KernelRecordKind::ThreadPromptRejected,
@@ -477,7 +483,7 @@ impl KernelEvent {
     /// 이 사건의 대화이다. 대화가 없는 사건은 비어 있다.
     pub fn thread_id(&self) -> &str {
         match self {
-            Self::RepositoryChanged { .. } => "",
+            Self::RepositoryChanged { .. } | Self::AutoFollowConfigured { .. } => "",
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
             Self::ApprovalRequested(approval) => &approval.thread_id,
             Self::ApprovalResolved { thread_id, .. }
@@ -507,6 +513,7 @@ impl KernelEvent {
             | Self::TurnStarted { op_id, .. }
             | Self::TurnEnded { op_id, .. } => *op_id,
             Self::ThreadPromptRejected { .. }
+            | Self::AutoFollowConfigured { .. }
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
             | Self::ApprovalResolved { .. }
@@ -550,6 +557,7 @@ impl KernelEvent {
                 OperationEnd::Lost => OperationState::Lost,
             },
             Self::ThreadPromptRejected { .. }
+            | Self::AutoFollowConfigured { .. }
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
             | Self::ApprovalResolved { .. }
