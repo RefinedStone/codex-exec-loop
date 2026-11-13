@@ -1,0 +1,114 @@
+# reference: dots 통합 설계
+
+상태: Proposed · 기준일: 2026-11-13 · 근거 앱: 공식 Codex 데스크톱 `26.1106.51428`
+
+이 문서는 [D-19](../03-decisions.md#d-19-dots-를-단일-공개-저장소에서-구현-d-03-반전)의 설계 근거이다.
+"Akra 에서 dots 를 쓰려면 무엇을 만드나"에 답한다. 비공개 API 는 공개 문서가 없어 공식 앱 역분석으로 얻었다.
+자격증명(토큰)·사용자 개인 정보는 이 문서에 넣지 않는다.
+
+## 1. 구조 요약
+
+- dots 는 OpenAI 클라우드에서 실행된다. 공식 앱은 클라이언트일 뿐이다. 로컬 codex 실행 파일에는 dots 전용
+  메서드가 없다.
+- dot 과의 대화는 REST 메시지 방이다. app-server 스레드는 dot 의 "작업 화면"이다.
+- 인증은 ChatGPT 로그인 토큰 하나이다. 로컬 app-server `getAuthStatus {includeToken:true}` 또는 같은 값이 든
+  `~/.codex/auth.json` 의 access_token 으로 얻는다. account-id 는 토큰 JWT claim 이다.
+- 클라이언트에는 인증서 고정·요청 서명이 없다. 막힐 수 있는 지점은 서버 검사(기기 증명, 클라이언트 신원, 권한)이다.
+
+### 통로 다섯
+
+| 통로 | 주소 | 쓰임 |
+| --- | --- | --- |
+| app-server JSON-RPC / WebSocket | `wss://codex-cloud-backend.chatgpt.com/` (호스트 ID `durable`) | dot 의 작업 스레드: resume, 턴, 큐, 정지 |
+| REST (같은 호스트) | `https://codex-cloud-backend.chatgpt.com/` | 스레드·턴·아이템 조회, 모델 목록. `POST /grpc` 로 JSON gRPC |
+| REST (ChatGPT 백엔드) | `/tbo/*`, `/messaging/rooms/*`, `/aeon-messaging/*`, `/cloud-aeons/*` | dot 목록·생성·관리, dot 과의 대화(메시지 방), 채널 |
+| 실시간 상태 | `GET /celsius/ws/user` → WS, `POST /messaging/rooms/{id}/live` (SSE) | "작업 중" 표시 |
+| 클라우드 컴퓨터 화면 | `https://realtime.chatgpt.com/v1/cua` (WebRTC) | dot 의 클라우드 PC 화면 보기·조작 |
+
+## 2. D0 확인 결과 (2026-11-13, 실행함)
+
+사용자 허락 아래 읽기 전용 1회. 토큰은 출력하지 않았다.
+
+- 연결: `wss://codex-cloud-backend.chatgpt.com/`, 하위 프로토콜 `codex-app-server`, `codex-client.desktop`,
+  `openai-bearer.<access_token>`. 헤더 `X-OpenAI-Product-Sku: codex`, `ChatGPT-Account-Id`, `originator: Codex Desktop`,
+  `User-Agent: Codex Desktop/<버전> (Mac OS; <arch>)`.
+- 결과:
+  - WebSocket 핸드셰이크 101 성공(서버는 하위 프로토콜을 되돌려주지 않지만 연결 유지).
+  - `initialize` 가 **기기 증명 없이** 성공. 서버가 `attestation/generate` 를 보내지도 않았다.
+  - 읽기 전용 `thread/list` 성공(실제 스레드 반환).
+- 결론: 서버는 서명 안 된 "Codex Desktop" 신원의 클라이언트를 initialize 에서 받고, 인증 읽기까지 된다.
+- 미결: 메시지 방 POST 의 `app_attest_challenge` 강제 여부(쓰기 경로), `/tbo` 의 정확한 기준 호스트,
+  증명 생략이 계정 신호로 남는지.
+
+## 3. 연결 계층 (main/Gateway)
+
+| 항목 | 내용 |
+| --- | --- |
+| WebSocket | `ws`, JSON-RPC 텍스트. permessage-deflate 끔. 핸드셰이크 15초, 10초마다 ping, 60초 pong 없으면 끊음 |
+| 토큰 전달 | 하위 프로토콜 `openai-bearer.<token>`. Authorization 헤더는 안 보냄 |
+| 압축(선택) | 요청 헤더 `x-codex-app-server-compression: zstd-stream-v1`. 서버가 같은 값을 돌려주면 모든 프레임이 binary zstd (레벨 −7, windowLog 20), 16 MiB 분할, 메시지당 100 MiB |
+| 재연결 | 1초→2배→20초. 클라우드는 min(기본,10초)+무작위. 로그인 필요 중엔 재연결 안 함 |
+| 401 | 연결 중 401 이면 새 토큰으로 1회 재연결. 계정·사용자 ID 가 같아야 함 |
+| initialize | `clientInfo{name/title:"Codex Desktop", version}`, `experimentalApi:true`, `requestAttestation:true`(macOS/Windows) |
+
+### 요청 변환(main 이 클라우드로 보내기 전)
+
+- 로컬에서 답함: `config/read`(메모리 설정), `config/batchWrite`, `permissionProfile/list`(빈 목록).
+- 로컬 app-server 로 보냄: `account/read`, `getAuthStatus`, `configRequirements/read`.
+- WebSocket 대신 REST: `thread/read`(turns 제외), `model/list`, `collaborationMode/list`, `account/rateLimits/read`,
+  `thread/turns/list`, `thread/items/list`. turns·items 는 10초 무응답 시 WebSocket 재시도.
+- 고치는 필드: 시작·재개·턴에서 `personality` 삭제, `serviceTier priority→fast`, `threadAccess`/`executorAccess`
+  주입, 시작·재개에 `config["features.mcp_app_ui"]=true`. `thread/queue/add → turn/addUserMessage + mode:"queue"`.
+  `thread/start` 에 `pluginsMcp:{productSku:"codex"}`. `thread/resume` 에서 `baseInstructions`,
+  `developerInstructions`, `pluginsMcp` 삭제. 환경 ID 가 `managed`/`ccarenv_` 면 `deferredEnvironment`.
+
+## 4. 화면 계층 (dot 고유)
+
+- dot 판별: `threadStartKind=="aeon"` 또는 `threadSource=="aeon"`, 스레드 mode `durable`. 종류는 프로필 `aeon_kind`
+  (`orbit`=dot, `aeon`=메시지 방 없는 에이전트).
+- 작업 스레드: `thread/resume`(dot 이면 `approvalPolicy:"on-request"`, `approvalsReviewer:"auto_review"` 등 주입),
+  `turn/addUserMessage`(필드 `clientUserMessageId` 필수, aeon 은 `messageThreadId` 필수, 응답 `admissionOutcome` =
+  `started`/`steered`/`duplicate`), `thread/stop`(그 뒤 `needs_resume`), `thread/queue/*`.
+- dot 의 반응: 알림이 아니라 도구 호출(`react_to_user_message`, 인자 `{message_id, emoji, label}`)로 온다.
+- dot → 로컬 위임: 전용 필드 없이 사용자 메시지 글자 안에 `<codex_delegation>…</codex_delegation>` XML 로 온다.
+  Akra 는 이 XML 이 든 평범한 사용자 턴을 받으면 되므로 로컬 쪽 변경이 작다.
+
+### REST: dot 관리·대화
+
+- 관리: `GET /tbo`(목록, cursor), `POST /tbo`(생성), `PATCH/DELETE /tbo/{id}`, `/tbo/{id}/runtime/{pause,resume}`,
+  `GET /tbo/{id}/threads`.
+- 대화(메시지 방): `GET/POST /messaging/rooms/{room_id}/messages`(POST 는 쓰기 — 허락 필요), 반응
+  `.../messages/{id}/reactions`, `/read`, `/responding_heartbeat`, `/elicitation`.
+- 실시간: `GET /celsius/ws/user` → WS, `POST /messaging/rooms/{id}/live`(SSE). 이벤트
+  `calpico-room-live-state` 에 `threads[]{thread_id, turn_status, computer_status, activity_status}`.
+
+## 5. Akra 매핑 (단일 공개 저장소, D-19)
+
+| 층 | 만들 것 | 위치 |
+| --- | --- | --- |
+| 토큰 | Gateway `akra/*` 에 토큰 획득(로컬 app-server `getAuthStatus` 또는 auth.json) | Gateway |
+| 클라우드 upstream | 두 번째 upstream WS(하위 프로토콜·헤더·ping·재연결·401·요청 변환). 접속마다 `hostId` 로 분기 | Gateway. 얇은 Gateway(D-11)를 넓힘 |
+| REST 대행 | `/tbo/*`, `/messaging/*`, 실시간 상태(SSE/WS), 클라우드 호스트 REST·`/grpc` | Gateway `akra/dots/*` 또는 Electron main |
+| 화면 | dot 목록, 메시지 방 대화창, 작업 화면, 상태 배지, 반응 표시 | renderer. 대화창 하나, 종류별 정책만 다르게 |
+| 클라우드 컴퓨터 | WebRTC 보기·조작 | renderer (R9 와 별도) |
+| 위임 받기 | `<codex_delegation>` 사용자 턴을 "dot 이 보냄"으로 표시 | renderer. 로컬 app-server 그대로 |
+
+## 6. 단계와 경계
+
+| 단계 | 내용 | 쓰기? |
+| --- | --- | --- |
+| D1 | dot 목록, 메시지 방 읽기, 실시간 상태, 반응 표시 | 읽기 (보내기는 허락 뒤) |
+| D2 | 작업 화면: resume, `turn/addUserMessage`, 큐, 정지, 요청 변환 | 쓰기 — 허락 |
+| D3 | 관리: 생성·이름·멈춤·재시작·지우기, 채널 | 쓰기 — 허락 |
+| D4 | 클라우드 컴퓨터 WebRTC 보기·조작 | 쓰기 — 허락 |
+
+- 경계(D-19): 실계정 쓰기는 매번 허락 뒤에. 토큰은 로그·커밋·화면에 안 남긴다. 검증은 턴 없이(빌드,
+  initialize, `thread/list`) 한다([D-13](../03-decisions.md) Codex 사용량 최소화).
+- 유지보수: 경로가 자주 바뀐다(이번에도 대화 경로·생성 경로가 바뀌었다). 버전 올라갈 때 재확인.
+
+## 7. 위험
+
+- 약관·계정 제재: 공식 앱 신원과 비공개 API 를 흉내 낸다. D0 통과로 줄지 않았고, 증명 생략이 신호가 될 수 있다.
+- 안정성: 서버가 증명·신원 검사를 강화하면 바로 막힌다.
+- 공식 허용 경로: 공개 codex CLI 로 ChatGPT 로그인 후 로컬 app-server. dots 와 같은 방향(상주 루프가 대화를
+  관찰하고 먼저 말 걸기)은 로컬에서 [plan 20](../../20-akra-observe-and-offer.md)으로도 만든다.
