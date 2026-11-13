@@ -13,7 +13,7 @@ import { Icon, type IconName } from "./design/icons";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showRemote, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -253,6 +253,10 @@ export function App() {
     created.start();
     session.current = created;
     return () => created.stop();
+  }, []);
+
+  useEffect(() => {
+    void showRemoteAgentsWhenDotsAreOn().catch(() => undefined);
   }, []);
 
   // 원격 호스트(plan 25)마다 읽기 전용 세션을 하나 둔다. 사용자가 켰고 Gateway 가 그 호스트를 알릴 때만 접속한다.

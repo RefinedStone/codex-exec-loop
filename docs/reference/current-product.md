@@ -331,7 +331,8 @@ the desktop app itself is not shipped yet.
   `cloud` only when `AKRA_DOTS_CLOUD` is `1`/`true` or the flag file `$AKRA_HOME/dots/cloud-enabled`
   exists; the Gateway reads this once at startup. Desktop's command "dots 클라우드 켜기 / 끄기" writes or
   removes that flag (`desktop/src/main/dotsSettings.ts`) and turns the sidebar's remote section on or
-  off with it, so the user enables dots in one step. The cloud host appears on the next Gateway start,
+  off with it, so the user enables dots in one step. At startup Desktop also turns the section on when
+  the flag exists and the user never chose a value for the section. The cloud host appears on the next Gateway start,
   without dropping local sessions.
   An unknown id is closed with `1008`. `akra/gateway/info` also returns `host` (the host of this
   connection) and `hosts` (id, codex version, start time, and restarts of each host). On a connection
