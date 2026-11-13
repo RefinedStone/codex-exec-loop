@@ -9,7 +9,9 @@ Generated from schema/akra-kernel-spec.json. Do not edit by hand.
 
 Run `akra describe --json` to inspect input schemas, reasons, and next actions.
 Run commands from the target repository.
-Each invocation prints one JSON line. Exit codes: 0 accepted, 2 rejected, 1 invalid input or unavailable.
+Each invocation prints one JSON line. Exit codes: 0 accepted, 2 rejected, 1 invalid input, unavailable, or failed.
+A stored command (`state: store` in `describe`) answers after it ran: `result` (done), `rejection`, or `failure` (the cause).
+Pass an object field as JSON text, for example `--task '{"title":"..."}'`.
 Use `--idempotency-key` for mutations that may be retried across separate invocations.
 An omitted key is generated for this invocation only. Preserve an explicit key when retrying.
 When a command ends with an error, the output carries `idempotency_key` and, for a kernel error, `error.code`.
@@ -36,6 +38,9 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel auto_follow pause_auto_follow --json` | write | Pause automatic follow-up turns. |
 | `akra kernel planning reset_planning --json` | destructive | Delete planning data (the queue, the directions, or all of it). |
 | `akra kernel planning refresh_planning --json` | read | Read the planning queue again. The result arrives as the `planning` event. |
+| `akra kernel planning create_task --json` | write | Add a planning task as the operator. The answer carries the new task id and the new planning revision. |
+| `akra kernel planning update_task --json` | write | Replace the fields of a planning task as the operator. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
+| `akra kernel planning delete_task --json` | destructive | Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.
 

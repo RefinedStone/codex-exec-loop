@@ -17,9 +17,18 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskMutationRequest,
     PlanningTaskMutationSource, PlanningTaskUpdateInput,
 };
-use crate::domain::planning::{OriginSessionKind, TaskMutationProvenance, TaskStatus};
+use crate::domain::planning::{
+    OriginSessionKind, PlanningMutationRefusal, TaskMutationProvenance, TaskStatus,
+};
 
 const ADMIN_NEW_TASK_MUTATION_SCOPE: &str = "__admin-new-task__";
+
+/// 사용자의 작업 변경 하나의 결과이다: 바뀐 작업과 변경 뒤의 planning revision 이다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningOperatorTaskChange {
+    pub task_id: String,
+    pub planning_revision: i64,
+}
 
 /*
  * admin CRUD는 operator-facing mutation bridge다. direction 변경은 direction catalog와 task cascade를 함께
@@ -102,14 +111,48 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminCrudOutcome> {
         // task form submit은 document를 직접 고치지 않고 common mutation service로 들어간다. admin/operator 입력도
         // worker/runtime/model command와 같은 priority 계산과 queue projection commit 규칙을 공유해야 하기 때문이다.
-        self.ensure_default_authority()?;
         let updated = !request.id.trim().is_empty();
-        let guarded_task_ids = vec![if updated {
-            request.id.trim().to_string()
-        } else {
-            ADMIN_NEW_TASK_MUTATION_SCOPE.to_string()
-        }];
         let command = task_command_from_request(request)?;
+        let PlanningOperatorTaskChange { task_id, .. } =
+            self.apply_operator_task_command(command)?;
+        let management = self.load_management_view()?;
+        Ok(PlanningAdminCrudOutcome {
+            notice: if updated {
+                format!("task `{task_id}` updated")
+            } else {
+                format!("task `{task_id}` added")
+            },
+            management,
+        })
+    }
+    pub fn delete_task(
+        &self,
+        request: PlanningAdminTaskDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        let task_id = normalized_required_id(&request.id, "task id")?;
+        self.delete_operator_task(task_id, None)?;
+        let management = self.load_management_view()?;
+        Ok(PlanningAdminCrudOutcome {
+            notice: format!("task `{task_id}` deleted"),
+            management,
+        })
+    }
+
+    /*
+     * 사용자의 작업 만들기 또는 고치기 하나를 실행한다. admin 의 폼과 저장 명령(`create_task`, `update_task`,
+     * plan 18 K4-9d)이 같은 길을 쓴다. 화면의 값을 만들지 않고 변경의 결과만 돌려준다.
+     */
+    pub fn apply_operator_task_command(
+        &self,
+        command: PlanningTaskMutationCommand,
+    ) -> Result<PlanningOperatorTaskChange> {
+        // task form submit은 document를 직접 고치지 않고 common mutation service로 들어간다. admin/operator 입력도
+        // worker/runtime/model command와 같은 priority 계산과 queue projection commit 규칙을 공유해야 하기 때문이다.
+        self.ensure_default_authority()?;
+        let guarded_task_ids = vec![match &command {
+            PlanningTaskMutationCommand::UpdateTask(input) => input.task_id.trim().to_string(),
+            _ => ADMIN_NEW_TASK_MUTATION_SCOPE.to_string(),
+        }];
         let commit = self.with_admin_task_mutation_guard(&guarded_task_ids, || {
             self.task_mutation_service
                 .apply_commands(PlanningTaskMutationRequest {
@@ -125,26 +168,37 @@ impl PlanningAdminFacadeService {
         let task_id = commit.committed_task_ids.first().cloned().ok_or_else(|| {
             anyhow!("planning task mutation completed without returning a task id")
         })?;
-        let management = self.load_management_view()?;
-        Ok(PlanningAdminCrudOutcome {
-            notice: if updated {
-                format!("task `{task_id}` updated")
-            } else {
-                format!("task `{task_id}` added")
-            },
-            management,
+        Ok(PlanningOperatorTaskChange {
+            task_id,
+            planning_revision: commit.committed_planning_revision,
         })
     }
-    pub fn delete_task(
+
+    /*
+     * 작업 하나를 지운다. `expected_planning_revision` 이 있으면 지금의 revision 과 견주고, 다르면 아무것도 지우지
+     * 않는다 (저장 명령 `delete_task`, plan 18 K4-9d). 없는 호출은 admin 의 지금 폼이다. 지운 뒤의 revision 을
+     * 돌려준다.
+     */
+    pub fn delete_operator_task(
         &self,
-        request: PlanningAdminTaskDeleteRequest,
-    ) -> Result<PlanningAdminCrudOutcome> {
+        task_id: &str,
+        expected_planning_revision: Option<i64>,
+    ) -> Result<i64> {
         // admin delete는 명시적 operator maintenance action이다. worker/runtime task command는 여전히 task를 삭제할 수
         // 없고 `cancelled`로 이동해야 한다. 그래서 delete만 shared mutation service 바깥의 admin-only path로 남긴다.
         self.ensure_default_authority()?;
-        let task_id = normalized_required_id(&request.id, "task id")?;
+        let task_id = normalized_required_id(task_id, "task id")?;
         self.with_admin_task_mutation_guard(&[task_id.to_string()], || {
             let mut documents = self.load_operator_planning_documents()?;
+            if let (Some(expected), Some(current)) =
+                (expected_planning_revision, documents.observed_planning_revision)
+                && expected != current
+            {
+                return Err(PlanningMutationRefusal::revision_stale(format!(
+                    "planning changed after task `{task_id}` was opened (revision {expected} -> {current}); reload it and retry"
+                ))
+                .into());
+            }
             let original_count = documents.task_authority.tasks.len();
             // 직접 삭제는 이 operator path로 제한된다. 삭제 후 dangling dependency/blocker reference를 남기면 queue
             // validation과 rank reason이 없는 task를 가리키게 되므로 commit 전에 graph reference를 함께 정리한다.
@@ -159,12 +213,11 @@ impl PlanningAdminFacadeService {
                 &mut documents.task_authority,
                 &BTreeSet::from([task_id.to_string()]),
             );
-            self.commit_operator_planning_documents(documents)
-        })?;
-        let management = self.load_management_view()?;
-        Ok(PlanningAdminCrudOutcome {
-            notice: format!("task `{task_id}` deleted"),
-            management,
+            self.commit_operator_planning_documents(documents)?;
+            // 저장소가 정한 새 revision 이다. guard 안에서 읽으므로 이 변경의 값이다.
+            self.load_operator_planning_documents()?
+                .observed_planning_revision
+                .ok_or_else(|| anyhow!("planning revision is unavailable after the task delete"))
         })
     }
 

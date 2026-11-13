@@ -104,6 +104,12 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         ReasonCode::Cancelled | ReasonCode::TextMismatch => vec![Step::Stop],
         ReasonCode::BootstrapReviewRequired | ReasonCode::PlanningRefused => vec![Step::AskUser],
         ReasonCode::TaskFinished | ReasonCode::RejectedAgain => vec![Step::Stop],
+        // 바뀐 내용을 다시 읽는다. 같은 변경을 다시 보내도 되는지는 그 내용을 본 사람이 정한다.
+        ReasonCode::PlanningRevisionStale => {
+            vec![Step::query(KernelQueryKind::Planning), Step::AskUser]
+        }
+        // 다른 변경이나 병렬 작업이 끝나는 것을 알리는 이벤트는 없다.
+        ReasonCode::PlanningLocked => vec![Step::short_wait(), Step::Resend],
     }
 }
 

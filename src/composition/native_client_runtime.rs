@@ -2,6 +2,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
+use crate::application::port::inbound::stored_command_port::{
+    StoredCommand, StoredCommandOutcome, StoredCommandPort,
+};
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 #[cfg(test)]
 use crate::application::port::outbound::conversation_thread_turn_options_port::NoopConversationThreadTurnOptionsPort;
@@ -53,20 +56,40 @@ use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
     APPROVAL_KINDS, AUTO_FOLLOW_KINDS, ApprovalResolution, CALLER_NAME_MAX_CHARS, COMMAND_KINDS,
     CommandMemory, CommandRecall, KernelCommandDescriptor, KernelEvent, KernelEventPage,
-    MAX_KERNEL_EVENT_PAGE, OPERATION_KINDS, OperationReceipt, OperationStatus, REPOSITORY_KINDS,
-    ReasonCode, RecordedKernelEvent, RepositoryState, THREAD_PROMPT_QUEUE_KINDS,
-    last_repository_state, open_approvals, open_queued_thread_prompts, restart_closures,
+    MAX_KERNEL_EVENT_PAGE, OPERATION_KINDS, OperationEnd, OperationReceipt, OperationStatus,
+    REPOSITORY_KINDS, ReasonCode, RecordedKernelEvent, RepositoryState, THREAD_PROMPT_QUEUE_KINDS,
+    command_failure_detail, last_repository_state, open_approvals, open_queued_thread_prompts,
+    restart_closures,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::planning::PostTurnContinuationAction;
 
+/*
+ * 클라이언트가 커널에 낸 명령이다 (plan 18 K4-9d). core 가 처리하는 명령이거나, 저장된 planning 데이터만 바꾸는
+ * 저장 명령이다. 저장 명령은 core 를 지나지 않는다. 런타임이 실행기를 바로 부른다.
+ */
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum KernelClientCommand {
+    Core(AppCommand),
+    Stored(StoredCommand),
+}
+
+/// 저장 명령의 끝이다. 실패는 원인의 글을 가진다. 그 글은 완료 기록의 `detail` 과 같다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StoredCommandEnd {
+    Finished(StoredCommandOutcome),
+    Failed(String),
+}
+
 /// 클라이언트의 명령 하나를 처리한 결과이다 (plan 19 Q3-6).
 pub(crate) enum ClientCommandDispatch {
     /// 명령을 실행했다. `operation` 은 기록한 명령의 영수증이다. 기록이 없는 커널과 설명이 없는 명령은 없다.
+    /// `stored` 는 저장 명령의 끝이다. core 명령은 없다.
     Ran {
         outcome: NativeClientDispatchOutcome,
         operation: Option<OperationReceipt>,
+        stored: Option<StoredCommandEnd>,
     },
     /// 같은 멱등 키의 같은 명령을 전에 받았다. 실행하지 않았다.
     Replayed(OperationReceipt),
@@ -116,6 +139,8 @@ pub(crate) struct NativeClientRuntime {
     kernel_events: Option<KernelEventRecorder>,
     // 판단 사건 기록과 그 작업 공간이다 (plan 19 Q3-3). 클라이언트의 기록 조회가 읽는다.
     kernel_event_log: Option<(Arc<dyn KernelEventLogPort>, String)>,
+    // 저장 명령의 실행기와 그 작업 공간이다 (plan 18 K4-9d). 저장소 커널만 붙인다. 없으면 저장 명령은 실패한다.
+    stored_commands: Option<(Arc<dyn StoredCommandPort>, String)>,
     // 마지막으로 정한 기록 sequence 이다 (plan 19 Q3-3b). 저장소 커널은 잠금으로 하나뿐이라 커널이 정한다.
     last_kernel_sequence: i64,
     // 작업 공간의 git 관찰자와 마지막으로 기록한 상태이다 (plan 20 §4.1). 기록이 붙은 커널만 관찰한다.
@@ -591,6 +616,7 @@ impl NativeClientRuntime {
             core_parallel_mode: None,
             kernel_events: None,
             kernel_event_log: None,
+            stored_commands: None,
             last_kernel_sequence: 0,
             repository_observer: None,
             repository_state: None,
@@ -1127,7 +1153,7 @@ impl NativeClientRuntime {
      */
     pub(crate) fn dispatch_client_command(
         &mut self,
-        command: AppCommand,
+        command: KernelClientCommand,
         descriptor: Option<&KernelCommandDescriptor>,
     ) -> ClientCommandDispatch {
         /*
@@ -1150,6 +1176,12 @@ impl NativeClientRuntime {
             Some(CommandAdmission::KeyUnavailable) => return ClientCommandDispatch::KeyUnavailable,
             Some(CommandAdmission::Recorded(_) | CommandAdmission::Unrecorded) | None => {}
         }
+        let command = match command {
+            KernelClientCommand::Core(command) => command,
+            KernelClientCommand::Stored(stored) => {
+                return self.dispatch_stored_command(stored, admission);
+            }
+        };
         // 기록한 명령은 연산 id 를 가진다. core 가 그 명령이 만든 기록에 같은 id 를 싣는다 (plan 18 K4-4).
         let command = match admission {
             Some(CommandAdmission::Recorded(op_id)) => command.with_operation(op_id),
@@ -1184,7 +1216,115 @@ impl NativeClientRuntime {
             }
             _ => None,
         };
-        ClientCommandDispatch::Ran { outcome, operation }
+        ClientCommandDispatch::Ran {
+            outcome,
+            operation,
+            stored: None,
+        }
+    }
+
+    /*
+     * 저장 명령 하나를 실행한다 (plan 18 K4-9d). 이 커널이 저장소 잠금을 쥐고 있으므로 실행기를 바로 부른다. 실행은
+     * 동기이다: 돌아올 때 변경은 저장되어 있고 그 끝도 기록되어 있다. 성공과 실패는 `command_completed`, 거절은
+     * `command_rejected` 이다.
+     *
+     * 끝난 뒤에는 성공이든 거절이든 planning 을 다시 읽는다. 성공이면 클라이언트가 바뀐 큐를 보고, 거절
+     * (낡은 revision)이면 다음 `planning` 조회가 지금의 revision 을 답한다.
+     */
+    fn dispatch_stored_command(
+        &mut self,
+        command: StoredCommand,
+        admission: Option<CommandAdmission>,
+    ) -> ClientCommandDispatch {
+        let kind = command.kind();
+        let op_id = match admission {
+            Some(CommandAdmission::Recorded(op_id)) => Some(op_id),
+            _ => None,
+        };
+        let (end, workspace_directory) = match &self.stored_commands {
+            Some((port, workspace_directory)) => (
+                match port.execute(command) {
+                    Ok(outcome) => StoredCommandEnd::Finished(outcome),
+                    Err(error) => {
+                        StoredCommandEnd::Failed(command_failure_detail(&error.to_string()))
+                    }
+                },
+                Some(workspace_directory.clone()),
+            ),
+            None => (
+                StoredCommandEnd::Failed(
+                    "this kernel has no stored command executor; nothing was changed".to_string(),
+                ),
+                None,
+            ),
+        };
+        let rejection = match &end {
+            StoredCommandEnd::Finished(StoredCommandOutcome::Rejected(rejection)) => {
+                // 스펙의 표가 이 명령의 거절 이유를 모두 적어야 한다 (plan 18 K4-1).
+                debug_assert!(
+                    kind.spec().rejections.contains(&rejection.reason),
+                    "the spec of `{}` does not list the rejection `{}`",
+                    kind.name(),
+                    rejection.reason.name()
+                );
+                Some(rejection.reason)
+            }
+            _ => None,
+        };
+        if let Some(op_id) = op_id {
+            match (&end, rejection) {
+                (_, Some(reason)) => self.reject_command(op_id, "", reason),
+                (StoredCommandEnd::Failed(detail), None) => {
+                    self.record_kernel_events(vec![KernelEvent::CommandCompleted {
+                        op_id,
+                        thread_id: String::new(),
+                        result: OperationEnd::Failed,
+                        reason: None,
+                        detail: Some(detail.clone()),
+                    }]);
+                }
+                (StoredCommandEnd::Finished(_), None) => {
+                    self.record_kernel_events(vec![KernelEvent::CommandCompleted {
+                        op_id,
+                        thread_id: String::new(),
+                        result: OperationEnd::Done,
+                        reason: None,
+                        detail: None,
+                    }]);
+                }
+            }
+        }
+        let outcome = match workspace_directory {
+            Some(workspace_directory) => self.dispatch_client_event(NativeClientEvent::core(
+                CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                    workspace_directory,
+                }),
+            )),
+            None => NativeClientDispatchOutcome::Parallel(
+                NativeParallelDispatchOutcome::from_events(Vec::new()),
+            ),
+        };
+        ClientCommandDispatch::Ran {
+            outcome,
+            operation: op_id.map(|op_id| OperationReceipt {
+                op_id,
+                rejection,
+                replayed: false,
+            }),
+            stored: Some(end),
+        }
+    }
+
+    /*
+     * 저장 명령의 실행기를 붙인다 (plan 18 K4-9d). 저장소 잠금을 쥐 커널(Gateway 의 커널)이 붙인다. `workspace_dir`
+     * 은 실행 뒤에 planning 을 다시 읽을 작업 공간이다.
+     */
+    pub(crate) fn attach_stored_commands(
+        &mut self,
+        port: Arc<dyn StoredCommandPort>,
+        workspace_dir: &str,
+    ) {
+        self.stored_commands = Some((port, workspace_dir.to_string()));
     }
 
     /*
@@ -2910,12 +3050,17 @@ pub(crate) mod tests {
             CommandAdmission::KeyUnavailable
         );
         assert!(matches!(
-            runtime
-                .dispatch_client_command(AppCommand::Noop, Some(&described(Some("key-1"), "fp-1"))),
+            runtime.dispatch_client_command(
+                KernelClientCommand::Core(AppCommand::Noop),
+                Some(&described(Some("key-1"), "fp-1"))
+            ),
             ClientCommandDispatch::KeyUnavailable
         ));
         assert!(matches!(
-            runtime.dispatch_client_command(AppCommand::Noop, Some(&described(None, "fp-1"))),
+            runtime.dispatch_client_command(
+                KernelClientCommand::Core(AppCommand::Noop),
+                Some(&described(None, "fp-1"))
+            ),
             ClientCommandDispatch::Ran {
                 operation: None,
                 ..
@@ -2998,6 +3143,154 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_stored_command_runs_on_the_kernel_that_holds_the_lock_and_records_its_end() {
+        // plan 18 K4-9d: the runtime calls the executor at once. The command does not pass the core.
+        use crate::application::port::inbound::stored_command_port::{
+            StoredCommandRejection, StoredCommandResult, StoredTaskFields,
+        };
+        use crate::domain::kernel_event::{KernelCommandDescriptor, KernelEvent};
+        use crate::domain::kernel_spec::KernelCommandKind;
+
+        // The executor answers with prepared ends, in order, and keeps what it was asked to run.
+        struct Scripted {
+            ends: std::sync::Mutex<Vec<anyhow::Result<StoredCommandOutcome>>>,
+            ran: std::sync::Mutex<Vec<KernelCommandKind>>,
+        }
+        impl StoredCommandPort for Scripted {
+            fn execute(&self, command: StoredCommand) -> anyhow::Result<StoredCommandOutcome> {
+                self.ran.lock().unwrap().push(command.kind());
+                self.ends.lock().unwrap().remove(0)
+            }
+        }
+        let update = || {
+            KernelClientCommand::Stored(StoredCommand::UpdateTask {
+                task_id: "task-1".to_string(),
+                task: StoredTaskFields {
+                    direction_id: None,
+                    title: "Title".to_string(),
+                    description: None,
+                    status: None,
+                    base_priority: None,
+                    dynamic_priority_delta: None,
+                    priority_reason: None,
+                    depends_on: Vec::new(),
+                    blocked_by: Vec::new(),
+                },
+                expected_planning_revision: 7,
+            })
+        };
+        let described = KernelCommandDescriptor {
+            command: KernelCommandKind::UpdateTask,
+            thread_id: String::new(),
+            fingerprint: "fp".to_string(),
+            idempotency_key: None,
+            confirmed: false,
+            caller: Some("akra-admin".to_string()),
+        };
+        let done = StoredCommandOutcome::Done(StoredCommandResult::TaskUpdated {
+            task_id: "task-1".to_string(),
+            planning_revision: 8,
+        });
+        let stale = StoredCommandOutcome::Rejected(StoredCommandRejection {
+            reason: ReasonCode::PlanningRevisionStale,
+            message: "planning changed; reload and retry".to_string(),
+        });
+        let executor = Arc::new(Scripted {
+            ends: std::sync::Mutex::new(vec![
+                Ok(done.clone()),
+                Ok(stale.clone()),
+                Err(anyhow::anyhow!("the store is not writable")),
+            ]),
+            ran: std::sync::Mutex::default(),
+        });
+        let log = Arc::new(MemoryKernelEventLog::default());
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(log.clone(), "/workspace");
+
+        // A kernel without an executor does not run the command. It says so, and the end is recorded.
+        let ClientCommandDispatch::Ran {
+            stored: Some(StoredCommandEnd::Failed(cause)),
+            ..
+        } = runtime.dispatch_client_command(update(), Some(&described))
+        else {
+            panic!("a kernel without an executor fails the stored command");
+        };
+        assert!(cause.contains("no stored command executor"), "{cause}");
+        runtime.take_published_kernel_records();
+
+        runtime.attach_stored_commands(executor.clone(), "/workspace");
+        let mut ends = Vec::new();
+        for _ in 0..3 {
+            let ClientCommandDispatch::Ran {
+                operation, stored, ..
+            } = runtime.dispatch_client_command(update(), Some(&described))
+            else {
+                panic!("the stored command should run");
+            };
+            let records = runtime
+                .take_published_kernel_records()
+                .into_iter()
+                .map(|record| record.event)
+                .collect::<Vec<_>>();
+            ends.push((
+                operation.expect("a receipt"),
+                stored.expect("an end"),
+                records,
+            ));
+        }
+        assert_eq!(executor.ran.lock().unwrap().len(), 3);
+
+        let (receipt, end, records) = &ends[0];
+        assert_eq!(*end, StoredCommandEnd::Finished(done));
+        assert_eq!(receipt.rejection, None);
+        assert!(matches!(
+            records.as_slice(),
+            [
+                KernelEvent::CommandReceived { command, caller, .. },
+                KernelEvent::CommandCompleted {
+                    result: OperationEnd::Done,
+                    detail: None,
+                    ..
+                },
+            ] if command == "update_task" && caller.as_deref() == Some("akra-admin")
+        ));
+
+        // A refusal of the executor is a rejection of the command: the receipt and the record name the reason.
+        let (receipt, end, records) = &ends[1];
+        assert_eq!(*end, StoredCommandEnd::Finished(stale));
+        assert_eq!(receipt.rejection, Some(ReasonCode::PlanningRevisionStale));
+        assert!(matches!(
+            records.as_slice(),
+            [
+                KernelEvent::CommandReceived { .. },
+                KernelEvent::CommandRejected {
+                    reason: ReasonCode::PlanningRevisionStale,
+                    ..
+                },
+            ]
+        ));
+
+        // Another error is a failure. The cause is in the end and in the record.
+        let (receipt, end, records) = &ends[2];
+        assert_eq!(
+            *end,
+            StoredCommandEnd::Failed("the store is not writable".to_string())
+        );
+        assert_eq!(receipt.rejection, None);
+        assert!(matches!(
+            records.as_slice(),
+            [
+                KernelEvent::CommandReceived { .. },
+                KernelEvent::CommandCompleted {
+                    result: OperationEnd::Failed,
+                    detail: Some(detail),
+                    ..
+                },
+            ] if detail == "the store is not writable"
+        ));
+    }
+
+    #[test]
     fn the_kernel_refuses_a_destructive_command_without_confirmation_and_records_the_caller() {
         // plan 18 K4-5: the kernel checks the effect of the spec. The inbound adapters do not.
         use crate::domain::kernel_event::{
@@ -3016,7 +3309,10 @@ pub(crate) mod tests {
         let (mut runtime, _turns) = recording_runtime_for_test();
         runtime.attach_kernel_event_log(log.clone(), "/workspace");
         assert!(matches!(
-            runtime.dispatch_client_command(AppCommand::Noop, Some(&described(false, None))),
+            runtime.dispatch_client_command(
+                KernelClientCommand::Core(AppCommand::Noop),
+                Some(&described(false, None))
+            ),
             ClientCommandDispatch::ConfirmationRequired
         ));
         assert!(
@@ -3026,8 +3322,10 @@ pub(crate) mod tests {
 
         let long_name = "x".repeat(CALLER_NAME_MAX_CHARS + 20);
         assert!(matches!(
-            runtime
-                .dispatch_client_command(AppCommand::Noop, Some(&described(true, Some(long_name)))),
+            runtime.dispatch_client_command(
+                KernelClientCommand::Core(AppCommand::Noop),
+                Some(&described(true, Some(long_name)))
+            ),
             ClientCommandDispatch::Ran {
                 operation: Some(_),
                 ..

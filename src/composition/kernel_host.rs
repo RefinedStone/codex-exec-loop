@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::composition::native_client_runtime::{ClientCommandDispatch, NativeClientRuntime};
+use crate::composition::native_client_runtime::{
+    ClientCommandDispatch, KernelClientCommand, NativeClientRuntime, StoredCommandEnd,
+};
 use crate::core::app::{AppCommand, AppEvent, AppSnapshot, CoreInput, ThreadActivitySummary};
 use crate::core::native_client_port::{
     NativeClientDispatchOutcome, NativeClientEvent, ParallelModeControlPlaneCommand,
@@ -49,6 +51,8 @@ pub(crate) enum KernelCommandOutcome {
     Handled {
         events: Vec<AppEvent>,
         operation: Option<OperationReceipt>,
+        /// 저장 명령의 끝이다 (plan 18 K4-9d). core 명령은 없다.
+        stored: Option<StoredCommandEnd>,
     },
     /// 같은 멱등 키의 같은 명령을 전에 받았다. 실행하지 않았다.
     Replayed(OperationReceipt),
@@ -178,7 +182,7 @@ enum KernelHostInput {
         reply: Sender<(KernelClientId, Receiver<KernelHostEvent>)>,
     },
     Command {
-        command: AppCommand,
+        command: KernelClientCommand,
         /// 기록과 멱등에 쓰는 설명이다 (plan 19 Q3-6). 없으면 기록하지 않고 영수증도 없다.
         descriptor: Option<KernelCommandDescriptor>,
         reply: Sender<KernelCommandOutcome>,
@@ -349,7 +353,7 @@ impl KernelCommandSender {
         command: AppCommand,
         timeout: Duration,
     ) -> Result<Vec<AppEvent>, KernelCallError> {
-        self.send_described_command(command, None, timeout)
+        self.send_described_command(KernelClientCommand::Core(command), None, timeout)
             .map(|outcome| match outcome {
                 KernelCommandOutcome::Handled { events, .. } => events,
                 KernelCommandOutcome::Replayed(_)
@@ -365,7 +369,7 @@ impl KernelCommandSender {
      */
     pub(crate) fn send_described_command(
         &self,
-        command: AppCommand,
+        command: KernelClientCommand,
         descriptor: Option<KernelCommandDescriptor>,
         timeout: Duration,
     ) -> Result<KernelCommandOutcome, KernelCallError> {
@@ -670,7 +674,7 @@ impl KernelHostLoop {
     /// 클라이언트의 명령을 처리한다. 런타임이 명령을 기록하고 멱등 키로 재전송을 가린다 (plan 19 Q3-6).
     fn handle_command(
         &mut self,
-        command: AppCommand,
+        command: KernelClientCommand,
         descriptor: Option<&KernelCommandDescriptor>,
     ) -> KernelCommandOutcome {
         match self.runtime.dispatch_client_command(command, descriptor) {
@@ -680,11 +684,19 @@ impl KernelHostLoop {
             ClientCommandDispatch::ConfirmationRequired => {
                 KernelCommandOutcome::ConfirmationRequired
             }
-            ClientCommandDispatch::Ran { outcome, operation } => {
+            ClientCommandDispatch::Ran {
+                outcome,
+                operation,
+                stored,
+            } => {
                 let events = core_events(&outcome).to_vec();
                 self.publish(outcome);
                 self.sync_parallel_mode();
-                KernelCommandOutcome::Handled { events, operation }
+                KernelCommandOutcome::Handled {
+                    events,
+                    operation,
+                    stored,
+                }
             }
         }
     }
@@ -1368,12 +1380,19 @@ mod tests {
         };
         let send = |fingerprint: &str| {
             commands
-                .send_described_command(steer(), described(fingerprint), TEST_REPLY_TIMEOUT)
+                .send_described_command(
+                    KernelClientCommand::Core(steer()),
+                    described(fingerprint),
+                    TEST_REPLY_TIMEOUT,
+                )
                 .expect("the host should answer")
         };
         let rejected = Some(ReasonCode::NoMatchingTurn);
 
-        let KernelCommandOutcome::Handled { events, operation } = send("fp-1") else {
+        let KernelCommandOutcome::Handled {
+            events, operation, ..
+        } = send("fp-1")
+        else {
             panic!("the first command should run");
         };
         assert_eq!(
