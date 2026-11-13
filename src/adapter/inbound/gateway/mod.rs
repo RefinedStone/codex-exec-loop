@@ -75,6 +75,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
     let listener = GatewayListener::bind(&run_dir)?;
     let production::GatewayBackend {
         upstream,
+        other_hosts,
         kernels,
         mcp_hub,
         work_context,
@@ -87,8 +88,14 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         "akra_gateway_started"
     );
 
-    // 지금은 `local` 하나이다. 원격 호스트는 공식 접속 경로가 생긴 뒤에 더한다 (plan 25 G0).
-    let hosts = GatewayHosts::new(upstream, Vec::new());
+    // `local` 과, 켜졌으면 dots `cloud` 호스트이다 (plan 25 G0, D-19).
+    if !other_hosts.is_empty() {
+        tracing::info!(
+            hosts = ?other_hosts.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            "akra_gateway_extra_hosts"
+        );
+    }
+    let hosts = GatewayHosts::new(upstream, other_hosts);
     serve(
         listener,
         hosts.clone(),

@@ -8,6 +8,7 @@ use crate::composition::repository_kernel::RepositoryKernelRegistry;
 use anyhow::Result;
 
 use crate::adapter::inbound::gateway::GatewayMcpHub;
+use crate::adapter::outbound::app_server::cloud_upstream::{CloudGatewayUpstream, codex_auth_path};
 use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
 use crate::adapter::outbound::app_server::thread_transcript::AppServerThreadTranscript;
 use crate::adapter::outbound::app_server::{
@@ -399,6 +400,8 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
 /// Gateway 가 쓰는 upstream app-server 와 저장소 커널 목록이다. 커널은 같은 upstream 에 붙는다 (K3-5).
 pub(crate) struct GatewayBackend {
     pub(crate) upstream: Arc<dyn GatewayUpstreamPort>,
+    /// `local` 외의 호스트이다. 지금은 `AKRA_DOTS_CLOUD` 이 켜졌을 때의 `cloud`(dots) 하나이다 (D-19).
+    pub(crate) other_hosts: Vec<(String, Arc<dyn GatewayUpstreamPort>)>,
     pub(crate) kernels: Arc<RepositoryKernelRegistry>,
     pub(crate) mcp_hub: Arc<GatewayMcpHub>,
     pub(crate) work_context: Arc<dyn WorkContextPort>,
@@ -426,10 +429,28 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
     );
     Ok(GatewayBackend {
         upstream,
+        other_hosts: build_other_hosts()?,
         kernels,
         mcp_hub,
         work_context,
     })
+}
+
+/// `local` 외의 호스트를 만든다. dots 클라우드 호스트는 `AKRA_DOTS_CLOUD` 이 켜졌을 때만 켠다 (D-19). 호스트를
+/// 만들어도 클라이언트가 `/host/cloud` 로 붙기 전에는 클라우드에 접속하지 않는다.
+fn build_other_hosts() -> Result<Vec<(String, Arc<dyn GatewayUpstreamPort>)>> {
+    if !dots_cloud_enabled() {
+        return Ok(Vec::new());
+    }
+    let auth_path = codex_auth_path()?;
+    let cloud: Arc<dyn GatewayUpstreamPort> = Arc::new(CloudGatewayUpstream::new(auth_path));
+    Ok(vec![("cloud".to_string(), cloud)])
+}
+
+fn dots_cloud_enabled() -> bool {
+    std::env::var_os("AKRA_DOTS_CLOUD")
+        .map(|value| value == "1" || value == "true")
+        .unwrap_or(false)
 }
 
 pub(crate) fn build_telegram_bot_port(token: String) -> Arc<dyn TelegramBotPort> {
