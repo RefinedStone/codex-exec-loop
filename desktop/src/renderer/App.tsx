@@ -13,11 +13,12 @@ import { Icon, type IconName } from "./design/icons";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { DotChat } from "./views/DotChat";
+import { notifyDotReply } from "./views/dotNotify";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts } from "./views/Views";
 import { DocumentsPanel } from "./work/DocumentsPanel";
 import { GitHubPanel } from "./work/GitHubPanel";
@@ -310,6 +311,37 @@ export function App() {
     if (view === "remote" && !remoteVisible) showView("home");
     if (view === "dot" && (!remoteVisible || remoteDot === null)) showView("home");
   }, [view, remoteVisible, remoteDot]);
+  // dot 대화가 쓰는 실시간 상태이다. 방의 상태와 답 횟수가 바뀌면 다시 그린다.
+  const remoteDotRoom = remoteDot?.messagingRoomId ?? null;
+  const remoteDotLive = useSyncExternalStore(
+    useCallback((listener: () => void) => (remoteHost ? remoteHostStore(remoteHost).subscribe(listener) : () => undefined), [remoteHost]),
+    () => (remoteHost && remoteDotRoom ? remoteHostStore(remoteHost).getState().dotLive[remoteDotRoom] : undefined),
+  );
+  const remoteDotReplies = useSyncExternalStore(
+    useCallback((listener: () => void) => (remoteHost ? remoteHostStore(remoteHost).subscribe(listener) : () => undefined), [remoteHost]),
+    () => (remoteHost && remoteDotRoom ? (remoteHostStore(remoteHost).getState().dotReplies[remoteDotRoom] ?? 0) : 0),
+  );
+  // dot 이 답을 끝냈는데 사용자가 그 대화를 보고 있지 않으면 운영체제 알림을 보인다. 누르면 그 대화로 간다.
+  useEffect(() => {
+    if (!remoteAgents || !remoteHosts) return;
+    const stops = remoteHosts.split(",").map((host) => {
+      const store = remoteHostStore(host);
+      let seen = store.getState().dotReplies;
+      return store.subscribe((state) => {
+        if (state.dotReplies === seen) return;
+        const previous = seen;
+        seen = state.dotReplies;
+        for (const dot of state.dots) {
+          const room = dot.messagingRoomId;
+          if (room === null || (state.dotReplies[room] ?? 0) === (previous[room] ?? 0)) continue;
+          const ui = useUiStore.getState();
+          const watching = !document.hidden && ui.view === "dot" && ui.remoteHost === host && ui.remoteDotId === dot.id;
+          if (!watching) notifyDotReply(dot.displayName, () => showDot(host, dot.id));
+        }
+      });
+    });
+    return () => stops.forEach((stop) => stop());
+  }, [remoteAgents, remoteHosts]);
   const remoteGatewayRequest = useMemo<GatewayRequest>(
     () => (method, params) => {
       const current = remoteHost ? remoteSessions.current.get(remoteHost) : undefined;
@@ -439,7 +471,14 @@ export function App() {
               </>
             )}
             {view === "dot" && remoteHost && remoteVisible && remoteDot && (
-              <DotChat dot={remoteDot} request={remoteGatewayRequest} onOpenWorkThread={(threadId) => openRemoteThread(remoteHost, threadId)} />
+              <DotChat
+                dot={remoteDot}
+                live={remoteDotLive}
+                replies={remoteDotReplies}
+                request={remoteGatewayRequest}
+                onOpenWorkThread={(threadId) => openRemoteThread(remoteHost, threadId)}
+                onSeen={() => remoteDotRoom && remoteHostStore(remoteHost).getState().markDotRoomRead(remoteDotRoom)}
+              />
             )}
             {view === "remote" && remoteHost && remoteVisible && (
               <ConversationStoreContext.Provider value={remoteHostStore(remoteHost)}>

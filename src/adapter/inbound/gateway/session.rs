@@ -20,7 +20,7 @@ use super::context::{
     CONTEXT_METHOD_PREFIX, remote_host_response as remote_context_response,
     spawn_request as spawn_context_request,
 };
-use super::dots::{DOTS_METHOD_PREFIX, spawn_request as spawn_dots_request};
+use super::dots::{DOTS_METHOD_PREFIX, DotWatches, spawn_request as spawn_dots_request};
 use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
@@ -143,6 +143,8 @@ where
         is_local.then(|| KernelRequests::start(kernels, outbox.clone(), recording.clone()));
 
     let client_to_upstream = async {
+        // 이 접속이 보는 dot 방들이다. 접속이 끝나면 함께 멈춘다.
+        let mut dot_watches = DotWatches::default();
         while let Some(result) = client_stream.next().await {
             let message = match result {
                 Ok(message) => message,
@@ -182,6 +184,10 @@ where
                             }
                         } else if !is_local && method.starts_with(CONTEXT_METHOD_PREFIX) {
                             Some(remote_context_response(id))
+                        } else if let Some(response) = dots_for_method.and_then(|dots| {
+                            dot_watches.handle(dots.as_ref(), &id, &method, text.as_str(), &outbox)
+                        }) {
+                            Some(response)
                         } else if let Some(dots) = dots_for_method {
                             spawn_dots_request(
                                 dots.clone(),

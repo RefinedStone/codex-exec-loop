@@ -30,6 +30,42 @@ export interface DotSummary {
   messagingRoomId: string | null;
 }
 
+/** 메시지 방의 실시간 상태이다. Gateway 의 `akra/dots/live` 알림이 준다. */
+export interface DotLiveState {
+  roomId: string;
+  /** 실시간 통로가 붙어 있다. false 이면 나머지 값은 믿을 수 없다. */
+  connected: boolean;
+  /** dot 이 지금 답을 만들고 있다. */
+  working: boolean;
+  activityLabel: string | null;
+  usingComputer: boolean;
+}
+
+export type DotLive = Omit<DotLiveState, "roomId">;
+
+export interface DotLiveSlice {
+  /** 방 id → 실시간 상태 */
+  dotLive: Record<string, DotLive>;
+  /** 방 id → dot 이 답을 끝낸 횟수. 늘면 그 방의 대화를 다시 읽는다. */
+  dotReplies: Record<string, number>;
+  /** 사용자가 아직 보지 않은 답이 있는 방 id */
+  dotUnreadRooms: string[];
+}
+
+/**
+ * 실시간 상태 하나를 반영한다. "일하는 중"이던 방이 "끝남"이 되면 dot 이 답을 끝낸 것이다: 횟수를 늘리고 그 방을
+ * 안 읽음으로 둔다. 통로가 끊겼다는 알림은 답이 아니다.
+ */
+export function reduceDotLive(previous: DotLiveSlice, next: DotLiveState): DotLiveSlice {
+  const { roomId, ...live } = next;
+  const finished = previous.dotLive[roomId]?.working === true && live.connected && !live.working;
+  return {
+    dotLive: { ...previous.dotLive, [roomId]: live },
+    dotReplies: finished ? { ...previous.dotReplies, [roomId]: (previous.dotReplies[roomId] ?? 0) + 1 } : previous.dotReplies,
+    dotUnreadRooms: finished && !previous.dotUnreadRooms.includes(roomId) ? [...previous.dotUnreadRooms, roomId] : previous.dotUnreadRooms,
+  };
+}
+
 /** 메시지 방의 메시지 하나이다. Gateway 의 `akra/dots/messages` 가 준다. */
 export interface DotMessage {
   id: string;
@@ -133,6 +169,12 @@ export interface DesktopState {
   /** 원격 호스트의 dot 목록이다. `local` 과 dots 가 없는 호스트에서는 비어 있다. */
   dots: DotSummary[];
   setDots(dots: DotSummary[]): void;
+  dotLive: DotLiveSlice["dotLive"];
+  dotReplies: DotLiveSlice["dotReplies"];
+  dotUnreadRooms: DotLiveSlice["dotUnreadRooms"];
+  applyDotLive(state: DotLiveState): void;
+  /** 사용자가 그 방의 대화를 봤다. */
+  markDotRoomRead(roomId: string): void;
 }
 
 /** 열린 스레드의 작업 폴더이다. 사이드바 목록에서 찾으므로 기록을 다시 읽는 동안에도 바뀌지 않는다. */
@@ -202,6 +244,11 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   setKernel: (kernel) => set({ kernel }),
   dots: [],
   setDots: (dots) => set({ dots }),
+  dotLive: {},
+  dotReplies: {},
+  dotUnreadRooms: [],
+  applyDotLive: (next) => set((state) => reduceDotLive(state, next)),
+  markDotRoomRead: (roomId) => set((state) => (state.dotUnreadRooms.includes(roomId) ? { dotUnreadRooms: state.dotUnreadRooms.filter((id) => id !== roomId) } : {})),
 }));
 
 /** `local` 호스트의 상태이다. */
@@ -245,6 +292,7 @@ export type SessionStore = Pick<
   | "mergeFolders"
   | "setKernel"
   | "setDots"
+  | "applyDotLive"
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
@@ -267,6 +315,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     mergeFolders: state.mergeFolders,
     setKernel: state.setKernel,
     setDots: state.setDots,
+    applyDotLive: state.applyDotLive,
     getKernel: () => store.getState().kernel,
     getOpenThreadId: () => store.getState().openThreadId,
     getTranscript: () => store.getState().transcript,

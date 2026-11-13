@@ -75,10 +75,16 @@ try {
   check("permitting the dot shows a second warning", warnings.length === 2 && warnings[1].includes("실계정"));
   check("the message goes to the dot once over the remote connection", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/send").length === 1 && !gateway.receivedMethods.includes("akra/dots/send"));
   check("the sent message appears in the chat", (await page.getByTestId("dot-chat").innerText()).includes("ship it"));
-  // 보낸 뒤에는 "새로 고침"을 누르지 않아도 dot 의 답이 나타나고, 그 뒤에는 다시 읽지 않는다.
+  // 보낸 뒤에는 dot 이 답을 만드는 동안 표시가 보이고, "새로 고침"을 누르지 않아도 답이 나타난다. 그 뒤에는 다시
+  // 읽지 않는다. 실시간 상태는 Gateway 가 민다.
+  await page.getByTestId("dot-typing").waitFor({ timeout: 5_000 });
+  check("the chat shows that the dot is working", (await page.getByTestId("dot-status").innerText()).includes("Thinking"));
   await page.getByTestId("dot-message").nth(3).waitFor({ timeout: 15_000 });
   check("the reply of the dot appears without a manual refresh", (await page.getByTestId("dot-chat").innerText()).includes("On it."));
-  await page.getByTestId("dot-waiting").waitFor({ state: "detached", timeout: 5_000 });
+  await page.getByTestId("dot-typing").waitFor({ state: "detached", timeout: 5_000 });
+  check("my message that the dot has read shows the read mark", (await page.getByTestId("dot-read").count()) === 1);
+  check("the room was watched once over the remote connection", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/watch").length === 1);
+  await page.waitForTimeout(3_000);
   const readsAfterReply = gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length;
   await page.waitForTimeout(5_000);
   check("the chat stops reading after the reply", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length === readsAfterReply);

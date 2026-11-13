@@ -85,7 +85,7 @@ struct Keepalive {
 }
 
 /// rustls 0.23 은 암호화 provider 를 자동으로 고르지 않는다. 첫 클라우드 접속 전에 ring 을 한 번 설치한다.
-fn ensure_crypto_provider() {
+pub(super) fn ensure_crypto_provider() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();

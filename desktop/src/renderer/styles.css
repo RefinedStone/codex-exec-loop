@@ -523,3 +523,220 @@
 .checks-expected {
   color: var(--warn);
 }
+
+/* ---- dot 과의 대화 (D-19). 비서와 나누는 대화처럼 보인다. 값은 design/tokens.css 의 토큰만 쓴다. ---- */
+
+.dot-chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dot-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.dot-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.dot-avatar-gap {
+  flex: none;
+  width: 28px;
+}
+
+.dot-identity {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dot-name {
+  font-size: var(--text-l);
+  font-weight: 600;
+}
+
+.dot-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: var(--text-s);
+}
+
+.dot-status-mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.dot-status-idle .dot-status-mark {
+  background: var(--ok);
+}
+
+.dot-status-working {
+  color: var(--accent);
+}
+
+.dot-status-working .dot-status-mark {
+  background: var(--accent);
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+
+.dot-messages .column {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.dot-day {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-2) 0;
+}
+
+.dot-day span {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.dot-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.dot-row-me {
+  justify-content: flex-end;
+}
+
+.dot-row-grouped {
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.dot-bubble-column {
+  display: grid;
+  gap: 3px;
+  max-width: 78%;
+}
+
+.dot-row-me .dot-bubble-column {
+  justify-items: end;
+}
+
+.dot-bubble {
+  padding: 9px 14px;
+  border-radius: var(--radius-l);
+  font-size: var(--text-l);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.dot-bubble p {
+  white-space: pre-wrap;
+}
+
+.dot-bubble-me {
+  border-bottom-right-radius: 4px;
+  background: var(--bg-active);
+}
+
+.dot-bubble-agent {
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 4px;
+  background: var(--bg-elevated);
+}
+
+.dot-meta {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.dot-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.dot-typing-marks {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.dot-typing-marks i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: dot-bounce 1.2s ease-in-out infinite;
+}
+
+.dot-typing-marks i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.dot-typing-marks i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.dot-consent {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+@keyframes dot-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-typing-marks i,
+  .dot-status-working .dot-status-mark {
+    animation: none;
+  }
+}

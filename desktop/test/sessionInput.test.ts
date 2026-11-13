@@ -109,6 +109,7 @@ function harness() {
     getTranscript: () => state.transcript ?? null,
     setKernel: (kernel) => Object.assign(state, { kernel }),
     setDots: (dots) => Object.assign(state, { dots }),
+    applyDotLive: (live) => Object.assign(state, { lastDotLive: live }),
     getKernel: () => state.kernel ?? EMPTY_KERNEL_VIEW,
   };
   const session = new DesktopSession(bridge, store, "test", (callback) => callback());
