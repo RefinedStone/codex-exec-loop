@@ -119,7 +119,14 @@
   가린다 (계정 하나에서 본 규칙).
 - 안 됨: 메시지 방에 보내기(`POST .../messages`, 증명 요구 여부 미확인), 실시간 상태, 반응, dot 관리(D3),
   클라우드 컴퓨터(D4), §3 의 요청 변환·토큰 갱신·압축. dot 목록은 첫 페이지만, 대화는 최근 30개만 읽는다 (`limit` 은 30 까지 통과, 40 부터 HTTP 422).
-- 확인 안 됨: 클라우드 WebSocket 이 공개 `turn/start` 를 받는지 (G2). 사용자가 처음 보낼 때 드러난다.
+- 확인됨 (2026-11-14, 실계정, 턴·쓰기 없음): 클라우드 WebSocket 이 공개 쓰기 method 를 안다. 없는 thread id 로
+  보내면 `turn/start`·`turn/steer`·`turn/interrupt` 는 `-32602 unknown thread`, `thread/resume`·`thread/read` 는
+  `-32600 thread not found` 로 답한다 ("모르는 method" 가 아니다). Desktop 이 실제로 보내는 `initialize`
+  (clientInfo `akra-desktop`, experimentalApi false)와 `thread/list {limit:100, useStateDbOnly:true}` 도 통과한다.
+  다리 전체(`open_session` -> 가드 -> 중계 -> 클라우드)도 통과한다. 재현: `cargo test --lib
+  cloud_upstream::tests::live_desktop_requests -- --ignored`, `...::live_bridge_session -- --ignored`.
+- 확인 안 됨: 실제 턴이 끝까지 성공하는지 (G2 의 나머지). method 가 있다는 것까지만 봤다. 실제 입력을 서버가
+  받는지는 사용자가 허락한 전송 1회로 확인한다.
 - 확인됨 (2026-11-14, 실계정 읽기 1회, 턴 없음): 클라우드 WebSocket 이 `initialize`, `thread/list`(스레드 2개),
   `thread/read`, `thread/turns/list` 를 모두 받는다. 토큰·내용은 찍지 않고 개수만 셌다. 재현: `cargo test --lib
   cloud_upstream::tests::live_cloud_reads -- --ignored`.
