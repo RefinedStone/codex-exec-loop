@@ -5,10 +5,10 @@
 - 상태: **제안**. 구현하지 않았다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
 - 상위 문서: [K4 명령 스펙](18-k4-command-spec.md) §2.2, §3.7 의 순서 2, §4 의 K4-9b. 결함 K-D3, K-D5 는
   [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.6 에 있다.
-- 이 문서를 따로 둔 이유: K4 설계는 K4-9b 를 한 줄로 적었다. 2026-11-13 의 코드 조사에서 그 한 줄이 전환 네 개와
-  제품 결정 세 개를 담고 있다는 것을 알았다. 그래서 구현 전에 조각과 결정을 여기에 적는다.
-- 사용자가 정할 것은 §5 에 있다. 기본값을 적었고, 답이 없으면 기본값으로 간다. 답과 관계없는 조각(§4 의 9b-1,
-  9b-2)은 먼저 구현한다.
+- 이 문서를 따로 둔 이유: K4 설계는 K4-9b 를 한 줄로 적었다. 2026-11-13 의 코드 조사와 독립 리뷰(§7)에서 그 한 줄이
+  제품 동작의 전환 여러 개를 담고 있고, K6 (TUI 가 Gateway 의 커널에 붙는다)과 묶여 있다는 것을 알았다.
+- **결론 (§4): 병렬 제어의 전환은 사용자의 결정(§5) 없이 시작하지 않는다.** 가장 작은 조각(커널에 병렬 명령을 더하는
+  것)도 동작을 바꾼다. 결정과 관계없는 조각은 프로필 저장 하나이다.
 
 ## 1. 목표
 
@@ -16,9 +16,9 @@
 | --- | --- | --- |
 | P1 | 병렬 상태의 주인은 저장소마다 하나이다. 그 저장소의 커널이다 | Gateway 의 커널이 도는 저장소에서 admin 의 정지가 그 커널의 제어부에 닿는다 (K-D3 회귀 시험) |
 | P2 | 입구는 스케줄러를 시작하지 않는다 | admin, Telegram, `parallel-tick` 의 조립이 PR 검증 스케줄러 스레드를 만들지 않는다 (K-D5) |
-| P3 | 병렬 제어가 커널 명령이다. 기록에 남고 스펙에 있다 | `set_parallel_mode`, `dispatch_parallel`, `refresh_parallel`, `save_parallel_agent_profiles` 가 스펙에 있고 `command_received` 에 호출자가 남는다 |
+| P3 | 병렬 제어가 커널 명령이다. 기록에 남고 스펙에 있다 | 병렬 명령이 스펙에 있고 `command_received` 에 호출자가 남는다 |
 
-## 2. 현재 상태 (2026-11-13 코드 조사)
+## 2. 현재 상태 (2026-11-13 코드 조사, 독립 리뷰로 확인)
 
 ### 2.1 입구
 
@@ -27,132 +27,159 @@
 | admin `/api/admin/akra/control` | `enable`, `dispatch`, `refresh`, `disable` | `ParallelModeAdminPort::execute_control` (`application/service/parallel_mode/admin.rs`) | 켜짐, 진행 중인 효과, 현재 epoch, 배분을 미룬 이유, 마지막 명령, 한국어 글 |
 | admin `/admin/controls/agent-profiles` | 병렬 에이전트 프로필 저장 | `ParallelAgentProfilePort::save_config` | 알림과 함께 다시 보냄 |
 | Telegram `/parallel`, `/parallel_status` | 읽기만 | `ParallelModeControlPort::load_status` | 한국어 글 |
-| CLI `akra parallel-tick` | 배분 한 번. 병렬 모드를 켜지 않는다 | `run_manual_orchestrator_tick` (epoch 를 열고 tick 을 실행하고 끝까지 기다린다) | 알림 글 또는 `queue-idle`. 막히면 종료 코드 1 |
+| CLI `akra parallel-tick` | 통합 큐의 머리를 한 번 처리한다 (`RunOrchestratorTick`). 병렬 모드를 켜지 않는다. 작업을 slot 에 넣는 배분이 아니다 | `run_manual_orchestrator_tick` (epoch 를 열고 tick 을 실행하고 끝까지 기다린다) | 알림 글 또는 `queue-idle`. 막히면 종료 코드 1 |
 | TUI | 켜기, 끄기, 새로 고침, 배분 | 자기 런타임의 `NativeClientEvent::ParallelCommand` | 화면 |
 
-- admin 의 `dispatch` 는 병렬 모드가 꺼져 있으면 배분하지 않고 켠다 (`EnabledInsteadOfDispatch`).
+- admin 의 `dispatch` 는 작업을 slot 에 넣는 wake(`RequestDispatch`)이다. 병렬 모드가 꺼져 있으면 배분하지 않고 켠다
+  (`EnabledInsteadOfDispatch`). `parallel-tick` 과 다른 일이다.
+- admin 의 제어부는 HTTP 요청이 올 때만 나아간다. 요청이 제어부의 이벤트를 비운다.
 - TUI 의 켜기와 끄기는 다른 일도 함께 한다: 턴 뒤 이어 가기 값(`SetParallelPostTurnRearm`)을 바꾸고, 끌 때 배분을 미룬
-  이유를 지운다. admin 은 하지 않는다.
+  이유를 지운다. 끄기는 epoch 의 작업 공간을 쓴다. admin 은 이 일들을 하지 않는다.
 - 프로필을 저장하는 입구는 admin 뿐이다. 파일은 `<작업 공간>/.akra/parallel-agent-profiles.json` 이다. 커널은 쓸 때마다
-  그 파일을 다시 읽는다.
+  그 파일을 다시 읽는다. Unix 만 된다. Windows 에서는 저장이 실패한다.
+- admin 의 화면과 Telegram 의 읽기 값(준비 상태, 큐의 깊이, 감독 스냅샷)은 저장소와 git 에서 계산한다. 커널의 메모리에만
+  있는 값은 제어 상태 네 개이다: 켜짐, 진행 중인 효과, 현재 epoch, 배분을 미룬 이유.
 
 ### 2.2 병렬 제어부
 
 - 병렬 모드의 켜짐과 epoch 는 프로세스 메모리에만 있다 (`ParallelModeControlPlaneRuntimeStore`,
   `ParallelModeAutomationGuard`). 저장하지 않는다. 그래서 admin 의 정지는 admin 프로세스의 제어부만 바꾼다 (K-D3).
-- 제어부를 조립하면 PR 검증 스케줄러 스레드가 시작한다 (`parallel_mode_control_plane_from_service` →
-  `build_pr_validation_scheduler_runtime`). 기본 방식은 `observe` 이다: GitHub 의 검증 결과를 읽어 기록하고, planning 큐에
-  작업을 넣지 않는다. admin 과 Telegram 은 프로세스가 사는 동안, `parallel-tick` 은 한 번 실행하는 동안 이 스레드를
-  돌린다 (K-D5).
+- 제어부는 스스로 병렬 모드를 끈다: 켜기의 준비 확인이 실패할 때와 wake 를 처리할 때이다.
+- 제어부를 조립하면 PR 검증 스케줄러 스레드가 시작한다. 예외: 방식이 `off` 이거나, git 저장소가 아니거나, 설정이 틀린
+  경우이다. 방식은 git local 설정 `akra.prValidationMode` 이고 기본값은 `observe` 이다.
+  - `observe`: 1초마다 저장소에서 기한이 된 PR 기록을 찾고, 확인 lease 를 저장소에 쓰고, GitHub 의 검증 결과를 읽어
+    기록한다. planning 큐에 작업을 넣지 않는다.
+  - `remediate`: 고치는 작업을 큐에 넣을 수 있다.
+  - admin 과 Telegram 은 프로세스가 사는 동안, `parallel-tick` 은 한 번 실행하는 동안 이 스레드를 돌린다 (K-D5).
 
 ### 2.3 커널
 
 - 커널의 런타임(`NativeClientRuntime`)은 제어부 하나를 가진다. 병렬 명령은 core 명령(`AppCommand`)이 아니다. 런타임의
   `dispatch_client_event` 가 받는다. 커널 호스트의 명령 길(`KernelHostInput::Command`, `dispatch_client_command`)은
   `AppCommand` 만 받는다.
-- core 는 병렬 모드 값을 비춰 보기만 한다 (`AppCommand::SetParallelModeEnabled`, 호스트만 보낸다).
 - **Gateway 의 커널에서 병렬 모드를 켜는 길이 없다.** 시험 밖에서 `Enable` 을 보내는 쪽은 TUI 와 admin 뿐이다. Gateway
   의 커널은 감독 스냅샷을 읽어 `parallel` 이벤트로 보내기만 한다.
-- 커널은 병렬 제어부에 남은 일이 있으면 내려가지 않는다 (`NativeClientRuntime::has_remaining_work`). 그래서 병렬 모드가
-  켜져 epoch 가 열린 Gateway 커널은 저장소 잠금을 계속 쥔다. 그 동안 그 저장소에서 TUI 를 시작할 수 없다 (K6 전).
+- 커널은 병렬 제어부에 남은 일이 있으면 내려가지 않는다. 남은 일은 넷 중 하나이다: 병렬 모드가 켜져 있다, epoch 가
+  열려 있다, 진행 중인 효과가 있다, 작업 스레드가 돈다. **병렬 모드가 켜져 있기만 해도 커널은 저장소 잠금을 계속
+  쥔다.** 그 동안 그 저장소에서 TUI 를 시작할 수 없다 (K6 전).
+- 입구의 요청 하나는 붙기, 요청, 떠나기이다 (잠깐 붙는 접속). 붙을 때 커널이 없으면 Gateway 가 커널을 조립한다. 병렬
+  모드가 꺼져 있으면 입구가 떠난 뒤 커널이 바로 내려간다. 그래서 "명령을 보낸 뒤 조회로 결과를 읽는다"는 성립하지
+  않는다: 조회는 새 커널에 닿고, 그 커널은 앞 명령의 결과(스냅샷, 미룬 이유)를 모른다.
+- 기한이 된 PR 기록은 커널의 "남은 일"이 아니다. 클라이언트가 없으면 커널이 내려가고 관찰이 멈춘다.
 
 ### 2.4 이 사실에서 나오는 것
 
 | 사실 | 결과 |
 | --- | --- |
-| 병렬 명령이 `AppCommand` 가 아니다 | 커널 호스트에 병렬 명령의 길이 필요하다. 영수증과 기록은 같은 길(`command_received`)을 쓴다 |
-| Gateway 커널에 켜는 길이 없다 | 명령을 더하는 것만으로 새 기능이다 (Desktop 과 `akra kernel` 이 Gateway 커널의 병렬 모드를 켠다) |
-| 켜짐을 저장하지 않는다 | Gateway 를 다시 시작하면 병렬 모드가 꺼진다. `auto_follow_configured` 와 같은 기록이 필요한지 정한다 (§5 의 Q-9b-3) |
-| 병렬 모드가 켜진 Gateway 커널은 잠금을 쥔다 | admin 이 Gateway 커널로 병렬 모드를 켜면 그 저장소에서 TUI 를 시작할 수 없다. 지금은 시작할 수 있다 (§5 의 Q-9b-1) |
-| admin 은 Gateway 도 TUI 도 없이 병렬 작업을 돌릴 수 있다 | `runtime` 명령은 Gateway 가 없으면 거절된다. 그 규칙을 그대로 쓰면 admin 만으로 병렬을 돌리는 방법이 없어진다 (§5 의 Q-9b-1) |
-| 입구가 스케줄러를 돌린다 | 입구가 멈추면 PR 검증 관찰은 커널이 떠 있는 동안에만 돈다 (§5 의 Q-9b-2) |
-| 입구가 보이는 값이 명령의 답에 없다 | 입구는 명령을 보낸 뒤 `parallel` 조회로 값을 읽는다. `parallel` 상태에 없는 값은 더한다 (§3.3) |
+| 병렬 모드가 켜지면 커널이 잠금을 쥔다 | **커널에 켜는 명령을 더하는 것만으로 동작이 바뀐다.** Desktop 이나 `akra kernel` 이 Gateway 커널의 병렬 모드를 켜면 그 저장소에서 TUI 를 시작할 수 없다. 지금은 admin 으로 켜도 TUI 를 시작할 수 있다 (제어부가 둘이다, K-D3) |
+| admin 은 Gateway 도 TUI 도 없이 병렬 작업을 돌릴 수 있다 | `runtime` 명령은 Gateway 가 없으면 거절된다. 그 규칙을 그대로 쓰면 admin 만으로 병렬을 돌리는 방법이 없어진다 |
+| 잠깐 붙는 접속 뒤에 커널이 내려간다 | admin 의 제어 상태(1.5초마다 읽는다)를 커널 조회로 옮기면 1.5초마다 커널을 조립한다. admin 은 오래 붙는 접속이 필요하다. 그러면 admin 이 열려 있는 동안 커널이 잠금을 쥔다 |
+| 입구가 스케줄러를 돌린다 | 입구가 멈추면 PR 검증 관찰과 자동 수정은 커널이 떠 있는 동안에만 돈다 |
+| 켜짐을 저장하지 않고, 제어부가 스스로 끄기도 한다 | "켜져 있다"는 커널이 사는 동안의 값이다. 기록으로 되돌릴지 정해야 한다 |
+| `parallel-tick` 은 통합 큐의 처리이다 | 배분 명령으로 옮길 수 없다. 별도 명령이거나 이 조각의 범위 밖이다 |
+| 병렬 명령이 `AppCommand` 가 아니다 | 커널 호스트에 병렬 명령의 길이 필요하다 (§3.2) |
 
-## 3. 설계
+묶어서 말하면: P1 ("주인은 커널 하나")은 그 저장소의 모든 클라이언트가 같은 커널에 붙을 때 성립한다. TUI 는 K6 전까지
+자기 커널을 쥔다. 그래서 K6 전의 K4-9b 는 "Gateway 의 커널이 도는 저장소에서만" 닫히고, 그 저장소에서는 TUI 를 쓸 수
+없게 된다.
+
+## 3. 설계 (결정 뒤에 확정한다)
 
 ### 3.1 커널 명령
 
 | 명령 | 입력 | `scope` | `effect` | `state` | `idempotency` | 끝 | 바로 거절 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `set_parallel_mode` | `enabled` | `parallel` | write | runtime | natural | 받아들이면 끝이다 | `kernel_unreachable` |
-| `dispatch_parallel` | 없음 | `parallel` | write | runtime | keyed | 받아들이면 끝이다. 배분의 결과는 `parallel` 이벤트이다 | `kernel_unreachable`, `parallel_mode_off` |
+| `set_parallel_mode` | `enabled` | `parallel` | write | runtime | natural | 켜기는 준비 확인의 끝이다 (`command_completed`: `done` 또는 실패와 그 이유). 끄기는 받아들이면 끝이다 | `kernel_unreachable` |
+| `dispatch_parallel` | 없음 | `parallel` | write | runtime | keyed | 받아들이면 끝이다. 배분의 결과는 `parallel` 이벤트이다 | `kernel_unreachable`, 병렬 모드가 꺼져 있음 |
 | `refresh_parallel` | 없음 | `parallel` | write | runtime | natural | 받아들이면 끝이다 | `kernel_unreachable` |
 | `save_parallel_agent_profiles` | 프로필 목록 | `parallel` | write | store | natural | 저장의 완료 (`command_completed`) | 없음 |
 
-- `refresh_parallel` 이 `read` 가 아닌 이유: 병렬 모드가 켜져 있으면 worktree pool 을 맞춘다 (`reconcile_pool`).
-- `dispatch_parallel` 은 병렬 모드가 꺼져 있으면 `parallel_mode_off` 로 거절한다 (`next`: `set_parallel_mode`, 다시
-  보냄). 커널이 대신 켜지 않는다. admin 의 "꺼져 있으면 켠다"는 admin 의 규칙으로 남긴다 (§3.4).
-- `set_parallel_mode` 가 하는 일은 TUI 의 켜기·끄기와 같게 한다: 턴 뒤 이어 가기 값과 미룬 이유의 정리를 포함한다. 그
-  묶음을 런타임의 함수 하나로 모으고 TUI 도 그 함수를 쓴다. 그래야 "켠다"의 뜻이 입구마다 다르지 않다.
+- `set_parallel_mode` 의 켜기를 "받아들이면 끝"으로 두면 `done` 이 "켜졌다"가 아니게 된다. 준비 확인은 실패할 수 있고
+  그 이유는 커널의 메모리에만 있다. 그래서 켜기의 끝은 완료 기록이다. 실패의 이유는 `detail` 에 싣는다 (K4-9a).
+- "병렬 모드가 꺼져 있음"의 이유 코드는 새 이름이 필요하다. 이미 있는 `parallel_mode` 는 "병렬 모드가 켜져 있어서
+  thread 프롬프트를 받지 않는다"이다. 제어부의 `RequestDispatch` 는 모드를 보지 않으므로 런타임이 먼저 검사한다.
+- `refresh_parallel` 이 `read` 가 아닌 이유: 병렬 모드가 켜져 있으면 worktree pool 을 맞춘다.
+- `set_parallel_mode` 가 하는 일은 TUI 의 켜기·끄기와 같게 한다 (턴 뒤 이어 가기 값, 미룬 이유의 정리, 끌 때 epoch 의
+  작업 공간). 그 묶음을 런타임의 한 곳으로 모은다.
 - 작업 공간은 명령의 입력이 아니다. 커널의 대표 checkout 을 쓴다. 클라이언트가 붙은 폴더를 쓰면 제어부가 "다른 작업
   공간의 명령"으로 보고 버린다.
+- `parallel-tick` (통합 큐의 처리)은 이 표에 없다. 옮긴다면 별도 명령이다 (§5 의 Q-9b-4).
 
-### 3.2 커널 호스트의 길
+### 3.2 커널 호스트의 길과 그 장애물
 
-- 프로토콜 adapter 의 `KernelCommand::into_core` 가 `AppCommand` 만 돌려준다. 이것을 커널이 받는 입력으로 넓힌다:
-  core 명령이거나 병렬 명령이다.
-- 런타임의 `dispatch_client_command` 는 지금처럼 명령을 받아 적고(`command_received`, 멱등 키), 병렬 명령이면 제어부로
-  보낸다. core 를 지나지 않으므로 core 가 "효과 없는 명령"으로 보고 실패로 적는 일이 없다.
-- 세 `runtime` 명령의 끝은 "받아들임"이라서 완료 기록이 없다. 결과는 `parallel` 이벤트로 온다.
-- `save_parallel_agent_profiles` 는 `store` 명령이다. Gateway 의 커널이 없으면 명령 전용 조립이 실행한다
-  (`reset_planning` 과 같은 길). 명령 전용 조립이 실행할 수 있는 명령을 표로 만든다. 지금은 `reset_planning` 하나를
-  코드에 적었다.
+프로토콜 adapter 의 `KernelCommand::into_core` 가 `AppCommand` 만 돌려준다. 이것을 "core 명령 또는 병렬 명령"으로
+넓힌다. 구현할 때 풀어야 하는 것:
 
-### 3.3 `parallel` 상태에 더하는 값
+- `into_core` 를 부르는 곳은 셋이다: Gateway, CLI 의 입력 검사, 명령 전용 조립.
+- 답의 `rejection` 은 core 이벤트에서만 만든다. 병렬 명령의 거절은 런타임이 직접 만들어야 한다. 스펙의 거절 목록을
+  보는 검사와 `command_rejected` 기록도 core 길에만 있다.
+- 런타임의 공개 메서드는 구조 시험이 봉인한다. 새 길은 목록을 고치거나 `NativeClientEvent` 로 넣는다.
+- 커널 시뮬레이션에는 병렬 작업 공간이 없다. 병렬 모드를 켜면 "커널이 가라앉는다"(I4)가 깨진다. 시뮬레이션은 병렬
+  명령의 기록과 거절만 본다.
+- 프로필 저장은 제어부의 명령이 아니다. Gateway 의 커널에서는 같은 넓힌 길을 쓰고, Gateway 가 없으면 명령 전용 조립이
+  실행한다. 명령 전용 조립이 실행할 수 있는 명령을 표로 만든다. TUI 가 커널을 쥔 저장소의 직접 예외는 지금 초기화
+  하나이다. 프로필 저장을 더한다.
 
-입구가 지금 보이는 값 중 `parallel` 조회의 답에 없는 것을 더한다. 더하는 필드는 선택 필드이다.
+### 3.3 입구의 전환 (결정에 따라 달라진다)
 
-| 값 | 쓰는 입구 |
-| --- | --- |
-| 진행 중인 제어 효과가 있는가, 현재 epoch, 배분을 미룬 이유 | admin |
-| 준비 상태 글, 큐의 깊이 | Telegram |
-| 마지막 배분의 알림 글 | `parallel-tick` |
+- admin 의 제어: 조립이 제어를 커널 명령으로 보낸다 (K4-9a 와 같은 방법). admin 은 Gateway 에 오래 붙어 `parallel`
+  이벤트로 제어 상태 네 개를 받는다. 그 값들을 `parallel` 상태에 더한다 (선택 필드).
+- admin 의 화면과 Telegram 의 읽기: 옮기지 않는다. 저장소와 git 에서 계산하는 값이다. 바꾸는 것은 하나이다: 읽기 전용
+  조립이 스케줄러를 시작하지 않는다.
+- 섞임의 방지: admin 이 자기 제어부로 병렬 작업을 돌리는 중에 Gateway 의 커널이 생기면, 정지는 커널로 가고 admin 의
+  작업은 계속 돈다. 그래서 "admin 의 제어부에 남은 일이 있으면 admin 의 제어부로 보낸다"는 규칙이 필요하다.
 
-### 3.4 입구의 전환
+### 3.4 하지 않는 것
 
-| 입구 | 바꾸는 것 |
-| --- | --- |
-| admin 의 제어 | `ParallelModeAdminPort::execute_control` 이 `KernelCommandPort` 로 명령을 보낸다. 그 뒤 `parallel` 조회로 답을 만든다. "꺼져 있으면 켠다"는 admin 서비스가 조회한 값으로 정한다 |
-| admin 의 프로필 저장 | K4-9a 와 같은 방법이다. 조립이 저장을 커널 명령으로 보낸다 |
-| admin 과 Telegram 의 읽기 | 제어부를 조립하지 않는다. 읽기 전용 조립을 쓴다 (스케줄러를 시작하지 않는다). 커널이 돌면 `parallel` 조회를 쓰고, 돌지 않으면 저장된 감독 스냅샷을 읽는다 |
-| CLI `parallel-tick` | `dispatch_parallel` 을 보내고 `parallel` 이벤트로 끝을 기다린다. 종료 코드는 지금과 같게 한다 |
+- PR 검증 명령 5개는 K4-9c 이다. 같은 호스트의 길을 쓰고, 같은 결정(§5)에 묶인다.
+- TUI 가 Gateway 의 커널에 붙는 일은 K6 이다.
+- 병렬 제어부를 core 안으로 옮기는 일은 plan 19 의 Q5 이다.
 
-### 3.5 하지 않는 것
+## 4. 조각과 순서
 
-- PR 검증 명령 5개는 K4-9c 이다. 같은 호스트의 길을 쓴다.
-- TUI 가 Gateway 의 커널에 붙는 일은 K6 이다. 그 전까지 TUI 가 커널을 쥔 저장소는 §5 의 Q-9b-1 의 답을 따른다.
-- 병렬 제어부를 core 안으로 옮기는 일은 plan 19 의 Q5 이다. 여기서는 길만 만든다.
-
-## 4. 조각 (PR 단위)
-
-| 조각 | 내용 | 동작 | 확인 |
+| 조각 | 내용 | 동작 | §5 의 결정이 필요한가 |
 | --- | --- | --- | --- |
-| 9b-1 | 커널의 병렬 명령 세 개 (`set_parallel_mode`, `dispatch_parallel`, `refresh_parallel`): 스펙, 호스트의 길, 이유 코드 `parallel_mode_off`, `scope` 값 `parallel`. 켜기·끄기의 묶음을 런타임의 함수 하나로 모은다 | 확장 (Desktop 과 `akra kernel parallel …` 이 Gateway 커널의 병렬 모드를 켜고 끈다. 입구는 그대로이다) | 프로토콜 시험, 런타임 시험 (기록, 작업 공간, 꺼진 때의 거절), 시뮬레이션, 스펙·Desktop 타입·skill 일치 |
-| 9b-2 | `save_parallel_agent_profiles` (store 명령). 명령 전용 조립의 명령 표. admin 의 프로필 저장이 커널 명령으로 간다 | 유지 (같은 결과. 기록에 남는다) | 입구 시험 (K4-9a 와 같은 모양), 명령 전용 조립 시험 |
-| 9b-3 | `parallel` 상태에 §3.3 의 값을 더한다 | 확장 | 프로토콜 시험, Desktop 타입 |
-| 9b-4 | 읽기만 하는 입구(Telegram, admin 의 화면)가 스케줄러를 시작하지 않는다 | 전환 (§5 의 Q-9b-2) | 조립 시험 (스레드가 없다), Telegram·admin 시험 |
-| 9b-5 | admin 의 제어와 `parallel-tick` 이 커널 명령으로 간다 | 전환 (§5 의 Q-9b-1) | K-D3 회귀 시험, admin 시험, CLI 시험 |
+| 9b-A | `save_parallel_agent_profiles` (store 명령). 명령 전용 조립의 명령 표. admin 의 프로필 저장이 커널 명령으로 간다 | 유지 (같은 결과. 기록에 남는다) | 아니다. Gateway 의 커널에서 실행하려면 §3.2 의 넓힌 길이 필요하다. 그 길은 9b-B 와 함께 만든다. 9b-A 만 먼저 하면 Gateway 의 커널은 이 명령을 모르고, 명령 전용 조립과 TUI 가 쥔 때의 직접 경로만 쓴다 |
+| 9b-B | 커널의 병렬 명령 세 개와 호스트의 길 | **전환** (병렬 모드를 켠 Gateway 커널이 잠금을 쥔다) | 필요하다 (Q-9b-1, Q-9b-3) |
+| 9b-C | 읽기만 하는 조립(Telegram, admin 의 화면)이 스케줄러를 시작하지 않는다 | 전환 | 필요하다 (Q-9b-2) |
+| 9b-D | admin 의 제어가 커널 명령으로 간다. admin 의 오래 붙는 접속. `parallel` 상태에 제어 상태를 더한다 | 전환 | 필요하다 (Q-9b-1) |
+| 9b-E | `parallel-tick` | 전환 또는 범위 밖 | 필요하다 (Q-9b-4) |
 
-- 9b-1, 9b-2, 9b-3 은 §5 의 답과 관계없다. 먼저 한다.
-- 9b-4, 9b-5 는 §5 의 답에 따라 모양이 달라진다.
+권하는 순서: **K6 을 먼저 하거나 K6 과 함께 한다 (Q-9b-1 의 (c)).** 이유는 §2.4 의 마지막 문단이다. K6 전에 9b-B 와
+9b-D 를 하면 얻는 것은 "Desktop 만 쓰는 저장소에서 병렬 제어가 커널 하나로 간다"이고, 잃는 것은 "그 저장소에서 TUI 를
+쓸 수 없다"이다. K4-9d (작업·방향·초안·파일의 store 명령)는 이 문제와 관계없다. 먼저 할 수 있다.
 
 ## 5. 사용자가 정할 것
 
-| 번호 | 질문 | 기본값 | 다른 선택 |
+| 번호 | 질문 | 권하는 답 | 다른 선택 |
 | --- | --- | --- | --- |
-| Q-9b-1 | admin 의 병렬 제어가 Gateway 의 커널로 갈 때, Gateway 가 없거나 TUI 가 커널을 쥔 저장소에서는 어떻게 하는가 | (a) 지금처럼 admin 프로세스의 제어부로 직접 실행한다. K6 까지 남긴다. Gateway 의 커널이 도는 저장소에서만 커널로 간다. K-D3 은 그 저장소에서만 닫힌다 | (b) Gateway 가 없으면 `kernel_unreachable` 로 거절한다. admin 만으로 병렬을 돌리는 방법이 없어진다. (c) K6 (TUI 가 Gateway 커널에 붙는다)을 먼저 한다 |
-| Q-9b-2 | admin 과 Telegram 이 PR 검증 스케줄러를 시작하지 않으면, PR 검증 관찰은 커널(TUI 또는 Gateway 의 커널)이 떠 있는 동안에만 돈다. 받아들이는가 | (a) 받아들인다. 관찰은 커널의 일이다. Gateway 의 커널은 클라이언트가 붙어 있거나 일이 남은 동안 돈다 | (b) admin 만 스케줄러를 남긴다 (K-D5 가 admin 에 남는다) |
-| Q-9b-3 | Gateway 커널의 병렬 모드 켜짐을 기록에 남겨 다음 커널이 되돌리는가 | (a) 남기지 않는다. 병렬 모드는 켠 커널이 사는 동안의 값이다. 켜져 있으면 커널이 내려가지 않으므로, 꺼지는 경우는 Gateway 를 다시 시작한 때뿐이다 | (b) `auto_follow_configured` 처럼 기록하고 되돌린다. 그러면 Gateway 를 다시 시작한 뒤 클라이언트가 붙을 때 병렬 작업이 스스로 다시 시작한다 |
-
-Q-9b-1 의 배경: 병렬 모드가 켜진 Gateway 커널은 저장소 잠금을 쥔다 (§2.3). (b)나 (c)를 고르면 admin 으로 병렬 모드를 켠
-저장소에서 TUI 를 시작할 수 없다 (K6 전). 지금은 admin 과 TUI 를 함께 쓸 수 있다. 그 대신 제어부가 둘이다 (K-D3).
+| Q-9b-1 | 병렬 제어의 전환(9b-B, 9b-D)을 언제 하는가 | (c) K6 뒤에 한다. 그때는 TUI 도 Gateway 의 커널에 붙으므로 잠금 문제가 없고, 직접 경로와 섞임의 규칙이 필요 없다. 그 전에 K4-9d 를 한다 | (a) 지금 한다. Gateway 의 커널이 도는 저장소에서만 커널로 가고, Gateway 가 없거나 TUI 가 커널을 쥔 저장소는 지금처럼 admin 의 제어부로 직접 실행한다. 병렬 모드를 켠 저장소에서 TUI 를 쓸 수 없다. 섞임의 규칙(§3.3)이 필요하다. (b) 지금 하고, Gateway 가 없으면 거절한다. admin 만으로 병렬을 돌리는 방법이 없어진다 |
+| Q-9b-2 | admin 과 Telegram 이 PR 검증 스케줄러를 시작하지 않으면, PR 검증의 관찰(`observe`)과 자동 수정(`remediate`)은 커널이 떠 있는 동안에만 돈다. 받아들이는가 | (c) K6 과 함께 정한다. 그 전에는 지금대로 둔다. 커널이 "기한이 된 PR 기록"을 남은 일로 보게 하는 것이 먼저이다 | (a) 지금 멈춘다. admin 만 켜 둔 동안 관찰이 멈춘다. (b) admin 만 스케줄러를 남긴다 (K-D5 가 admin 에 남는다) |
+| Q-9b-3 | Gateway 커널의 병렬 모드 켜짐을 기록에 남겨 다음 커널이 되돌리는가 | (a) 남기지 않는다. 켜져 있으면 커널이 내려가지 않는다. 꺼지는 경우는 사용자가 끈 때, 제어부가 스스로 끈 때, Gateway 를 다시 시작한 때이다 | (b) `auto_follow_configured` 처럼 기록하고 되돌린다. 그러면 Gateway 를 다시 시작한 뒤 클라이언트가 붙을 때 병렬 작업이 스스로 다시 시작한다 |
+| Q-9b-4 | `parallel-tick` (통합 큐를 한 번 처리한다)을 커널 명령으로 옮기는가 | (a) 옮기지 않는다. K6 까지 지금대로 둔다. 병렬 모드가 꺼진 채로 쓰는 수동 도구이다 | (b) 별도 명령 `run_parallel_integration` 으로 옮긴다 |
 
 ## 6. 위험
 
 | 위험 | 대응 |
 | --- | --- |
-| `dispatch_parallel` 을 같은 서명으로 다시 보내면 제어부가 조용히 건너뛴다 | 명령마다 새 서명을 쓴다 (연산 id). 건너뛴 경우를 `parallel` 상태의 알림으로 보인다 |
-| `parallel-tick` 이 끝을 기다리다가 멈춘다 (진행 중인 효과가 있으면 tick 이 실행되지 않는다) | 기다림에 시간 한도를 두고, 실행되지 않은 이유를 출력한다 |
+| 9b-B 만 먼저 넣으면 Desktop 사용자가 병렬 모드를 켠 뒤 TUI 를 시작하지 못한다 | Q-9b-1 의 답 전에는 9b-B 를 넣지 않는다 |
+| admin 의 제어부와 Gateway 의 커널이 같은 저장소에서 함께 병렬 작업을 돌린다 | §3.3 의 섞임의 규칙. K6 뒤에는 생기지 않는다 |
 | 프로필의 저장 위치가 바뀐다 (admin 의 작업 공간과 커널의 대표 checkout 이 다를 때) | 저장 위치를 커널의 대표 checkout 으로 정하고, 다른 경우를 시험한다 |
-| 실제 조립을 지나는 시험이 실제 Gateway 에 붙는다 | 시험 빌드의 Gateway 주소는 아무도 듣지 않는 이름이다 (K4-9a). 새 시험도 이 규칙 안에 있다 |
-| 병렬 제어부는 실제 스레드를 쓴다. 시뮬레이션이 결정적이지 않다 | 시뮬레이션은 명령의 기록과 거절만 본다. 제어부의 동작은 제어부 시험이 본다 |
+| Windows 에서 프로필 저장이 실패한다 | 지금도 실패한다. 명령의 실패(`command_completed` 의 `failed` 와 `detail`)로 알린다 |
+| 실제 조립을 지나는 시험이 실제 Gateway 에 붙는다 | 시험 빌드의 Gateway 주소는 아무도 듣지 않는 이름이다 (K4-9a) |
+| 병렬 제어부는 실제 스레드를 쓴다. 시뮬레이션이 결정적이지 않다 | 시뮬레이션은 명령의 기록과 거절만 본다 |
+
+## 7. 리뷰 반영 (2026-11-13)
+
+독립 리뷰가 첫 판의 사실 10개를 코드와 견주었다. 참 6개, 부분 4개였다. 고친 것:
+
+- `parallel-tick` 은 배분이 아니다. 통합 큐의 처리이다. 첫 판은 `dispatch_parallel` 로 옮긴다고 적었다. 그러면 다른
+  일을 하게 된다.
+- 커널을 붙잡는 조건은 "켜져 있고 epoch 가 열림"이 아니다. 켜져 있기만 해도 붙잡는다.
+- 제어부는 스스로 병렬 모드를 끈다. 첫 판의 "꺼지는 경우는 Gateway 를 다시 시작한 때뿐"은 틀렸다.
+- 스케줄러는 "항상" 시작하지 않는다 (`off`, git 저장소가 아님, 틀린 설정).
+- "명령 뒤에 `parallel` 조회로 답을 만든다"는 잠깐 붙는 접속에서 성립하지 않는다.
+- 첫 판은 "커널의 병렬 명령을 더하는 조각은 결정과 관계없다"고 적었다. 틀렸다. 그 조각이 잠금의 동작을 바꾼다.
+- admin 의 화면과 Telegram 의 읽기는 옮길 필요가 없다. 저장소와 git 에서 계산한다.
+- 켜기의 끝을 "받아들임"에서 완료 기록으로 바꿨다.
+- §3.2 에 구현의 장애물을 적었다.
