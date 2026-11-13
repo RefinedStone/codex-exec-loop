@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { checksRollup, clearPullRequestCache, parseCommitLog, parseGitHubRemote, parsePullRequest, readBranchSummary, readCommitDiff } from "../src/main/gitBranch";
+import { checksRollup, clearPullRequestCache, parseCommitLog, parseGitHubRemote, parsePullRequest, readBranchSummary, readCommitDiff, readGitHubRepository } from "../src/main/gitBranch";
 import type { GhRunner } from "../src/main/githubService";
 
 describe("branch summary parsing", () => {
@@ -191,5 +191,27 @@ describe("branch summary in a real repository", () => {
     } finally {
       rmSync(plain, { recursive: true, force: true });
     }
+  });
+});
+
+describe("GitHub repository of a folder", () => {
+  it("reads owner/name from origin, and null without a GitHub origin or a repository", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "akra-origin-"));
+    try {
+      const git = (...args: string[]) => execFileSync("git", ["-c", "core.fsmonitor=false", ...args], { cwd: folder, encoding: "utf8" });
+      expect(await readGitHubRepository(folder)).toBeNull();
+      git("init", "-q");
+      expect(await readGitHubRepository(folder)).toBeNull();
+      git("remote", "add", "origin", "git@github.com:Sample/Widgets.git");
+      expect(await readGitHubRepository(folder)).toBe("Sample/Widgets");
+      git("remote", "set-url", "origin", "https://gitlab.com/sample/widgets.git");
+      expect(await readGitHubRepository(folder)).toBeNull();
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a relative path", async () => {
+    await expect(readGitHubRepository("relative/path")).rejects.toThrow("절대 경로");
   });
 });

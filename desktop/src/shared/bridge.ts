@@ -50,6 +50,9 @@ export const IPC_CHANNELS = {
   browserSaveSettings: "akra:browser-save-settings",
   githubSummary: "akra:github-summary",
   githubReviewPrompt: "akra:github-review-prompt",
+  githubProject: "akra:github-project",
+  githubIssuePrompt: "akra:github-issue-prompt",
+  githubRepository: "akra:github-repository",
   openExternal: "akra:open-external",
   jiraStatus: "akra:jira-status",
   jiraConnect: "akra:jira-connect",
@@ -81,11 +84,41 @@ export interface GitHubSummary {
   reviewRequests: GitHubPullRequest[];
 }
 
+/** GitHub Project 의 항목 하나이다 (R11). 초안(draft issue)은 저장소, 번호, 주소가 없다. */
+export interface GitHubProjectItem {
+  kind: "issue" | "pullRequest" | "draft";
+  title: string;
+  /** github.com 주소이다. 초안이면 null 이다. */
+  url: string | null;
+  /** owner/name 이다. 초안이면 null 이다. */
+  repository: string | null;
+  number: number | null;
+  /** Project 의 Status 필드 값이다. 없으면 null 이다. */
+  status: string | null;
+}
+
+export interface GitHubProject {
+  title: string;
+  url: string;
+  /** 열린 이슈·PR 과 초안이다. Project 에 들어 있는 순서이다. */
+  items: GitHubProjectItem[];
+  /** 닫혔거나 머지되어 뺀 항목 수이다. */
+  closedCount: number;
+  /** 읽는 한도를 넘어서 뒤의 항목을 읽지 않았다. */
+  truncated: boolean;
+}
+
 /** GitHub 업무 패널이다 (R4). main 이 공식 CLI `gh` 로 읽는다. */
 export interface GitHubBridge {
   summary(): Promise<GitHubSummary>;
   /** PR 의 해결되지 않은 리뷰 코멘트로 만든 첫 메시지이다. */
   reviewPrompt(url: string): Promise<string>;
+  /** Project 하나의 항목을 읽는다 (R11). `project` 는 `owner/번호` 또는 Project 주소이다. */
+  project(project: string): Promise<GitHubProject>;
+  /** 이슈의 본문과 최근 댓글로 만든 첫 메시지이다. */
+  issuePrompt(url: string): Promise<string>;
+  /** 폴더의 `origin` 이 가리키는 GitHub `owner/name` 이다. git 저장소가 아니거나 GitHub 가 아니면 null 이다. */
+  repository(cwd: string): Promise<string | null>;
   /** github.com 주소를 기본 브라우저로 연다. */
   openExternal(url: string): void;
 }

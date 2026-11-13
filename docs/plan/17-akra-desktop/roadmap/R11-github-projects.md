@@ -1,6 +1,6 @@
 # R11. GitHub Projects 패널
 
-상태: 제안 (proposed) · 기준일: 2026-11-13 · 선행: R4 (GitHub 패널) · 규모: 약 1주
+상태: 완료 · 기준일: 2026-11-13 · 선행: R4 (GitHub 패널) · 규모: 약 1주
 
 ## 목표
 
@@ -44,7 +44,7 @@ Akra 작업을 GitHub Issues 와 GitHub Projects 로 관리한다. Desktop 은 P
 - 보고서가 단순하다. 번다운, 속도, SLA, 시간 기록이 약하거나 없다. 스토리 포인트는 숫자 필드로 만든다.
 - 사용자 정의 필드 수와 항목 수에 상한이 있다.
 - 필드 변경은 알림을 거의 보내지 않는다.
-- API 는 주로 GraphQL (`ProjectV2`) 이다. `gh` 토큰에 `project` 권한이 필요하다.
+- API 는 주로 GraphQL (`ProjectV2`) 이다. `gh` 토큰에 `read:project` 권한(쓰기는 `project`)이 필요하다.
 - 모든 참여자에게 GitHub 계정이 필요하다. 비개발 인원에게는 맞지 않는다.
 
 Linear 는 화면과 사이클·트리아지 기능이 좋다. 그러나 별도 도구이고 GitHub 과 동기화가 필요하다. 지금 범위에서
@@ -57,7 +57,7 @@ Linear 는 화면과 사이클·트리아지 기능이 좋다. 그러나 별도 
 | Project 항목 보기 | 설정한 Project 하나의 이슈·PR 항목. 제목, 번호, 저장소, 상태(열림/닫힘), Project 의 Status 값 |
 | 저장소 필터 | "현재 저장소 / 전체 / 저장소별". 기본값은 현재 스레드의 저장소 |
 | 스레드로 넘기기 | 이슈의 제목, 본문, 댓글로 새 스레드의 첫 메시지를 채운다. 자동으로 보내지 않는다 |
-| 설정 | Project 소유자와 번호 (예: `RefinedStone/1`) |
+| 설정 | Project 소유자와 번호 (예: `RefinedStone/1`) 또는 Project 주소 |
 
 ## 범위 밖
 
@@ -110,7 +110,8 @@ query($owner: String!, $number: Int!, $cursor: String) {
 - 한 번 읽으면 필터를 바꿀 때 다시 호출하지 않는다. 열 때와 "새로 고침" 때만 읽는다 (R4 와 같다).
 - 100개보다 많으면 `endCursor` 로 다음 페이지를 읽는다. 상한을 둔다 (예: 500개).
 - `content` 가 없는 항목(draft issue)은 "초안"으로 보여 주고 넘기기 버튼을 두지 않는다.
-- 조직 소유 Project 는 `user` 대신 `organization` 으로 읽는다. 설정에 소유자 종류를 둔다.
+- 소유자 종류는 설정하지 않는다. `repositoryOwner(login:)` 에 `... on ProjectV2Owner` 로 읽으면 User 와
+  Organization 이 같은 쿼리로 된다 (실제 gh 로 확인, 2026-11-13).
 
 검토한 다른 방법: 검색 API (`project:RefinedStone/1 repo:<owner/name>`). 필요한 항목만 받는다. 그러나 Status 를
 읽으려면 항목마다 `projectItems` 를 따로 조회해야 하고, 검색 색인이 늦을 수 있다. 그래서 고르지 않았다.
@@ -132,17 +133,20 @@ query($owner: String!, $number: Int!, $cursor: String) {
 ### 권한과 자격 증명
 
 - `gh` 로그인만 쓴다. 앱은 토큰을 읽거나 저장하지 않는다 (D-14, R4 와 같다).
-- `project` 권한이 없으면 GraphQL 이 실패한다. 패널은 `gh auth refresh -s project` 안내를 보여 준다.
+- 읽기에는 `read:project` 권한이 필요하다. 없으면 GraphQL 이 실패하고, 패널은 `gh auth refresh -s read:project`
+  안내를 보여 준다.
 - 회사 계정의 Project 는 다루지 않는다 (D-14).
 
 ## 화면
 
-- 자리: 오른쪽 패널 `업무` 탭 > GitHub > 새 구분 버튼 "Projects" (기존 "PR" 옆).
-- 위: Project 이름, 저장소 필터 선택, "새로 고침".
-- 목록: Status 별 묶음. 각 줄은 저장소 이름(짧게), `#번호`, 제목, 상태.
+- 자리: 오른쪽 패널 `업무` 탭의 구분 버튼 "Projects" (GitHub 과 Jira 사이).
+- 위: Project 이름, "새로 고침", "변경" (Project 다시 설정). 그 아래 저장소 필터 ("전체", 저장소별, 현재 저장소는
+  "(현재)" 표시).
+- 목록: Status 별 묶음 (Project 에 나온 순서, "Status 없음" 은 마지막). 각 줄은 제목, `owner/name#번호`, 종류
+  (이슈, PR, 초안). 닫히거나 머지된 항목은 숨기고 수만 보여 준다.
 - 제목을 누르면 github.com 주소만 기본 브라우저로 연다 (R4 와 같다).
 - 열린 이슈에 "스레드로 넘기기" 버튼.
-- Project 를 설정하지 않았으면 설정 화면을 보여 준다.
+- Project 를 설정하지 않았으면 설정 화면을 보여 준다. 설정은 renderer 의 local storage 에 둔다 (비밀이 아니다).
 
 ## 검증
 
@@ -166,7 +170,30 @@ query($owner: String!, $number: Int!, $cursor: String) {
 
 ## 미결
 
-- Project 번호를 어디에 저장할지 정한다 (Desktop 설정 파일 또는 Akra 설정).
 - Status 외에 보여 줄 Project 필드가 있는지 정한다 (예: Iteration, Priority).
 - 쓰기 기능 (Status 변경)을 다음 단계로 할지 정한다.
 - R11 과 [R12](R12-linear-panel.md) 중 무엇을 먼저 할지 정한다.
+
+## 진행 기록
+
+### 2026-11-13: 구현 (PR 1)
+
+- main: `githubService.ts` 의 `readProject` (페이지마다 100개, 최대 5페이지), `readIssuePrompt` (본문, 최근 댓글
+  10개, `Closes owner/name#N` 요청). `gitBranch.ts` 의 `readGitHubRepository` (폴더의 `origin` → `owner/name`).
+  IPC 채널 3개 (`akra:github-project`, `akra:github-issue-prompt`, `akra:github-repository`).
+- renderer: `GitHubProjectPanel.tsx`, 규칙은 `githubProjects.ts` (필터, Status 묶음, 폴더 찾기).
+- 폴더 연결: 넘기기는 열린 스레드의 폴더부터 사이드바의 작업 폴더(최대 20개)까지 `origin` 을 비교해서 처음 맞는
+  폴더를 고른다. 없으면 고르지 않고, 보낼 때 폴더 선택 창이 열린다. 연결은 저장하지 않는다.
+- 시험: 단위 시험 (`githubService.test.ts`, `githubProjects.test.ts`, `gitBranch.test.ts`), 화면 시험
+  `test/e2e/github-projects.mjs` (가짜 IPC 응답, 11개 확인. 현재 저장소 필터, 묶음, 전체, 넘기기와 폴더 선택,
+  다른 저장소 이슈는 폴더를 고르지 않음, 턴 없음).
+- 실제 gh 확인 (읽기만): 쿼리 모양을 공개 Project (`github/4247`) 로 확인했다. `RefinedStone` 계정에는 아직
+  Project 가 없어서 실제 Project 로는 확인하지 않았다.
+- 독립 리뷰 반영: `origin` 의 대소문자가 GitHub 이름과 다르면 선택 상자가 "전체" 로 보이던 문제를 고쳤다 (화면
+  시험에 대소문자가 다른 원격을 넣었다).
+- 알려진 한계: (1) GraphQL 응답에 일부 오류가 있으면 (예: SAML 을 요구하는 조직의 항목) gh 가 실패로 끝나서 패널
+  전체가 오류를 보인다. (2) 이름을 바꾼 저장소의 옛 `origin` 은 새 이름과 맞지 않아서 기본 필터가 빈 목록이다.
+  사용자가 필터를 바꾸면 된다.
+- 같은 시기의 기존 실패 (이 변경과 관계없음, 변경 전 `origin/prerelease` 에서도 실패): `kernel-panel.mjs` 는 모든
+  확인이 통과한 뒤 앱 종료에서 시간 초과로 끝난다. `gitStatus.test.ts` 의 경로 비교 시험 하나가 macOS 의
+  `/private/var` 와 `/var` 차이로 실패한다.

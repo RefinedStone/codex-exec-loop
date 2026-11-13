@@ -553,6 +553,13 @@ The Gateway records the external documents that a thread mentions, without a mod
   The "Notion" view of the "업무" side panel reads the `notion` server of the
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
   only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).
+  The "Projects" view reads one GitHub Project (`owner/number` or its address, kept in the renderer's local
+  storage) with `gh api graphql` (`ProjectV2`, `read:project` scope, at most 500 items). It shows the open
+  issues, pull requests, and drafts grouped by the Status field and counts the closed ones. The repository
+  filter starts at the `origin` of the open thread's folder. Hand-off of an issue fills the composer with the
+  issue body, the 10 newest comments, and a `Closes owner/name#N` request, and picks the first workspace folder
+  whose `origin` is the issue's repository; without one, sending asks for a folder
+  (`desktop/src/main/githubService.ts`, `desktop/src/renderer/work/GitHubProjectPanel.tsx`).
   The "변경" side panel lists the working-tree changes of the open thread's folder and can stage, unstage, discard,
   or open one file; the main process reads the file's state from git again before it acts, asks before a discard,
   and refuses conflicted files, files with a content filter (LFS), and discarding a folder

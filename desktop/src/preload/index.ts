@@ -9,6 +9,7 @@ import {
   type BrowserSettings,
   type BrowserState,
   type ConnectionState,
+  type GitHubProject,
   type GitHubSummary,
   type GitActionResult,
   type GitBranchSummary,
@@ -136,6 +137,15 @@ const bridge: AkraBridge = {
     },
     reviewPrompt(url: string): Promise<string> {
       return ipcRenderer.invoke(IPC_CHANNELS.githubReviewPrompt, url) as Promise<string>;
+    },
+    project(project: string): Promise<GitHubProject> {
+      return ipcRenderer.invoke(IPC_CHANNELS.githubProject, project) as Promise<GitHubProject>;
+    },
+    issuePrompt(url: string): Promise<string> {
+      return ipcRenderer.invoke(IPC_CHANNELS.githubIssuePrompt, url) as Promise<string>;
+    },
+    repository(cwd: string): Promise<string | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.githubRepository, cwd) as Promise<string | null>;
     },
     openExternal(url: string): void {
       ipcRenderer.send(IPC_CHANNELS.openExternal, url);

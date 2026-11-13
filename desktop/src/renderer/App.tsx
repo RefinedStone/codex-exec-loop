@@ -20,6 +20,8 @@ import { TerminalDock } from "./terminal/TerminalDock";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts } from "./views/Views";
 import { DocumentsPanel } from "./work/DocumentsPanel";
 import { GitHubPanel } from "./work/GitHubPanel";
+import { GitHubProjectPanel } from "./work/GitHubProjectPanel";
+import { findFolderForRepository } from "./work/githubProjects";
 import { JiraPanel } from "./work/JiraPanel";
 import type { GatewayRequest } from "./work/notionHub";
 import { NotionPanel } from "./work/NotionPanel";
@@ -166,11 +168,44 @@ function RightPanel({ panel, children }: { panel: PanelId; children: React.React
   );
 }
 
-const WORK_SOURCES = ["GitHub", "Jira", "Notion"] as const;
+const WORK_SOURCES = ["GitHub", "Projects", "Jira", "Notion"] as const;
 type WorkSource = (typeof WORK_SOURCES)[number];
+
+/** 폴더의 GitHub 저장소(`owner/name`)이다. 폴더가 없거나 GitHub 가 아니면 null 이다. */
+function useGitHubRepository(cwd: string | null): string | null {
+  const [repository, setRepository] = useState<string | null>(null);
+  useEffect(() => {
+    setRepository(null);
+    if (!cwd) return;
+    let current = true;
+    window.akra.github.repository(cwd).then(
+      (found) => current && setRepository(found),
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [cwd]);
+  return repository;
+}
+
+/**
+ * 이슈 내용을 새 스레드의 입력창에 채운다 (R11). 폴더는 열린 스레드의 폴더부터 사이드바의 작업 폴더까지 `origin` 이 같은
+ * 것을 고른다. 없으면 고르지 않고, 보낼 때 폴더 선택 창이 열린다.
+ */
+async function handOffIssue(url: string, repository: string): Promise<void> {
+  const text = await window.akra.github.issuePrompt(url);
+  const state = useDesktopStore.getState();
+  const openCwd = openThreadCwd(state);
+  const folders = [...(openCwd ? [openCwd] : []), ...state.folders.map((folder) => folder.cwd)];
+  const cwd = await findFolderForRepository(repository, folders, (folder) => window.akra.github.repository(folder));
+  useUiStore.setState({ homeCwd: cwd });
+  handOffToNewThread(text);
+}
 
 function WorkTab({ request, onHandOff }: { request: GatewayRequest; onHandOff(text: string): Promise<void> }) {
   const [source, setSource] = useState<WorkSource>("GitHub");
+  const currentRepository = useGitHubRepository(useDesktopStore(openThreadCwd));
   return (
     <div className="work-tab">
       <div className="segmented">
@@ -181,6 +216,15 @@ function WorkTab({ request, onHandOff }: { request: GatewayRequest; onHandOff(te
         ))}
       </div>
       {source === "GitHub" && <GitHubPanel github={window.akra.github} onHandOff={async (pull) => onHandOff(await window.akra.github.reviewPrompt(pull.url))} />}
+      {source === "Projects" && (
+        <GitHubProjectPanel
+          github={window.akra.github}
+          currentRepository={currentRepository}
+          onHandOff={async (item) => {
+            if (item.url && item.repository) await handOffIssue(item.url, item.repository);
+          }}
+        />
+      )}
       {source === "Jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => onHandOff(await window.akra.jira.issuePrompt(issue.key))} />}
       {source === "Notion" && <NotionPanel request={request} notion={window.akra.notion} onHandOff={onHandOff} />}
     </div>
