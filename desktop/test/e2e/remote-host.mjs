@@ -16,7 +16,11 @@ const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fake
 const endpoint = fake.uniqueTestEndpoint();
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   hosts: ["cloud"],
-  dots: [{ id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "01a1abfb-8f0a-7581-a8e4-c2953347f470" }],
+  dots: [{ id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "01a1abfb-8f0a-7581-a8e4-c2953347f470", messagingRoomId: "room-1" }],
+  dotMessages: [
+    { id: "m1", createdAt: "2026-11-14T01:00:00Z", author: "Me", fromDot: false, text: "status?" },
+    { id: "m2", createdAt: "2026-11-14T01:00:05Z", author: "Mika", fromDot: true, text: "All **green**." },
+  ],
 });
 // 켜고 끄는 설정을 사용자의 실제 앱 데이터 폴더에 쓰지 않는다.
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-remote-"));
@@ -51,8 +55,14 @@ try {
   await page.getByTestId("remote-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 15_000 });
   check("turning it on shows a warning first", warnings.length === 1 && warnings[0].includes("약관"));
   check("the sidebar lists the dots of the remote host", (await page.getByTestId("remote-dot-entry").filter({ hasText: "Mika" }).count()) === 1);
-  // dot 을 누르면 그 dot 의 작업 대화가 열린다.
+  // dot 을 누르면 그 dot 과의 대화(메시지 방)가 열린다. 읽기 전용이고 입력창이 없다.
   await page.getByTestId("remote-dot-entry").first().click();
+  await page.getByTestId("dot-message").nth(1).waitFor({ timeout: 10_000 });
+  check("the dot chat shows the messages of the room", (await page.getByTestId("dot-message").count()) === 2 && (await page.getByTestId("dot-chat").innerText()).includes("green"));
+  check("the dot chat is read over the remote connection", gateway.remoteReceivedMethods.includes("akra/dots/messages") && !gateway.receivedMethods.includes("akra/dots/messages"));
+  check("the dot chat has no composer", (await page.getByTestId("composer-input").count()) === 0);
+  // "작업 대화 열기"는 그 dot 의 작업 thread 를 연다.
+  await page.getByTestId("dot-open-work-thread").click();
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
   await page.getByTestId("turn").first().waitFor({ timeout: 15_000 });
   check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/read"));

@@ -186,6 +186,8 @@ export async function startFakeGateway(
     hosts?: string[];
     /** 원격 접속의 `akra/dots/list` 답이다 (D-19). 없으면 모르는 method 로 답한다. */
     dots?: unknown[];
+    /** 원격 접속의 `akra/dots/messages` 답이다. 방 id 는 보지 않는다. */
+    dotMessages?: unknown[];
   } = {},
 ): Promise<FakeGateway> {
   // 작업 컨텍스트의 바뀜 상태이다: `스레드 id\n문서 키`. 읽은 문서는 같은 버전으로 다시 바뀜이 되지 않는다.
@@ -281,6 +283,10 @@ export async function startFakeGateway(
       }
       if (remote && hasId && options.dots && message.method === "akra/dots/list") {
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { dots: options.dots } }));
+        return;
+      }
+      if (remote && hasId && options.dotMessages && message.method === "akra/dots/messages") {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { messages: options.dotMessages } }));
         return;
       }
       if (options.hosts && hasId && message.method === "akra/gateway/info") {

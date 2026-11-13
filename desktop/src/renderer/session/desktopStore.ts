@@ -26,6 +26,18 @@ export interface DotSummary {
   paused: boolean;
   /** dot 의 현재 작업 thread 이다. 없으면 열 수 없다. */
   rootThreadId: string | null;
+  /** dot 과 대화하는 메시지 방이다. 없으면 대화를 읽을 수 없다. */
+  messagingRoomId: string | null;
+}
+
+/** 메시지 방의 메시지 하나이다. Gateway 의 `akra/dots/messages` 가 준다. */
+export interface DotMessage {
+  id: string;
+  createdAt: string;
+  /** 보낸 쪽의 이름이다. 모르면 빈 글자이다. */
+  author: string;
+  fromDot: boolean;
+  text: string;
 }
 
 /** `local` 이 아닌 호스트 id 를 쉼표로 이은 값이다. 문자열이므로 목록을 다시 읽어도 값이 같으면 화면이 다시 그리지 않는다. */

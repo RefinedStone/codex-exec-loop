@@ -353,8 +353,14 @@ the desktop app itself is not shipped yet.
   reads them with `GET https://chatgpt.com/backend-api/tbo` through `curl -q --config -`, so the token
   stays out of argv, disk, and logs; it reads the first page only. When the cloud host is off the
   method is unknown (`-32601`). Desktop asks once per remote connection and shows the dots at the top
-  of the remote section; a dot opens its work thread
-  (`src/adapter/outbound/app_server/cloud_dots.rs`, `src/adapter/inbound/gateway/dots.rs`).
+  of the remote section (`src/adapter/outbound/app_server/cloud_dots.rs`,
+  `src/adapter/inbound/gateway/dots.rs`).
+- Dot chat (D-19): `akra/dots/messages` with `{ roomId }` answers `{ messages }`, the latest 30
+  messages of that message room, oldest first, each with id, time, author name, a from-dot flag, and
+  text; deleted messages are left out. The room id must be letters, digits, `-`, or `_`. Desktop opens
+  this chat when the user clicks a dot. The chat is read-only, has no composer, and reads only on open
+  and on "새로 고침". "작업 대화 열기" opens the dot's work thread, where sending follows the
+  per-session permission (`desktop/src/renderer/views/DotChat.tsx`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more

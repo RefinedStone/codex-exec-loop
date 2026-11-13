@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
-import { MOD_KEY, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
+import { MOD_KEY, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
 const PHASE_LABEL: Record<ConnectionState["phase"], string> = {
@@ -102,6 +102,7 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
   const dots = useStore((state) => state.dots);
   const openThreadId = useStore((state) => state.openThreadId);
   const showing = useUiStore((state) => state.view === "remote" && state.remoteHost === host);
+  const shownDotId = useUiStore((state) => (state.view === "dot" && state.remoteHost === host ? state.remoteDotId : null));
   const threads = useMemo(() => folders.flatMap((folder) => folder.threads).sort((left, right) => right.updatedAt - left.updatedAt), [folders]);
   return (
     <section className="project" data-testid="remote-host">
@@ -124,10 +125,9 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
             <li className="thread-row" key={dot.id}>
               <button
                 type="button"
-                className={showing && dot.rootThreadId !== null && openThreadId === dot.rootThreadId ? "thread selected" : "thread"}
-                disabled={dot.rootThreadId === null}
-                title={dot.rootThreadId === null ? "이 에이전트에는 열 수 있는 작업 대화가 없습니다." : `${dot.displayName} 의 작업 대화를 엽니다.`}
-                onClick={() => dot.rootThreadId !== null && onOpenThread(host, dot.rootThreadId)}
+                className={shownDotId === dot.id ? "thread selected" : "thread"}
+                title={`${dot.displayName} 과의 대화를 엽니다.`}
+                onClick={() => showDot(host, dot.id)}
                 data-testid="remote-dot-entry"
               >
                 <StatusMark mark="idle" />
