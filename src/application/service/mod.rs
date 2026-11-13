@@ -4,6 +4,7 @@
  */
 pub mod admin_debug_harness;
 pub mod app_server_prompt_log_query;
+pub mod kernel_command;
 // conversation_service는 사용자 turn과 app-server 스트림을 대화 단위로 조율한다.
 pub mod conversation_service;
 // github_review_poller_service는 GitHub review thread 상태를 polling 유스케이스로 묶는다.

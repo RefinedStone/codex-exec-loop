@@ -72,6 +72,7 @@ impl NextStep {
 pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
     use NextStep as Step;
     match reason {
+        ReasonCode::KernelNotRunning => vec![Step::AskUser],
         // 진행 중인 steer 의 끝을 알리는 이벤트는 없다.
         ReasonCode::SteerInFlight => vec![Step::short_wait(), Step::Resend],
         ReasonCode::NoMatchingTurn => vec![Step::query(KernelQueryKind::ThreadActivity)],

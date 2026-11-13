@@ -1087,21 +1087,37 @@ impl NativeClientRuntime {
     }
 
     /*
-     * `after` 뒤의 판단 사건을 읽는다 (plan 19 Q3-3). 기록이 없는 커널은 빈 쪽을 돌려준다. 기록기는 따로 쓰므로 방금 낸
-     * 사건은 아직 없을 수 있다.
+     * `after` 뒤의 판단 사건을 읽는다 (plan 19 Q3-3). 기록이 없는 커널은 빈 쪽을 돌려준다.
+     * 방금 발행한 사건은 기록기보다 먼저 보일 수 있으므로 연산 조회와 같은 최근 기록을 합친다.
      */
     pub(crate) fn kernel_event_history(
         &self,
         after: i64,
         limit: usize,
     ) -> anyhow::Result<KernelEventPage> {
-        match &self.kernel_event_log {
-            Some((log, workspace_dir)) => log.load_kernel_events_after(workspace_dir, after, limit),
-            None => Ok(KernelEventPage {
+        let Some((log, workspace_dir)) = &self.kernel_event_log else {
+            return Ok(KernelEventPage {
                 records: Vec::new(),
                 next_after: after,
-            }),
+            });
+        };
+        let limit = limit.clamp(1, MAX_KERNEL_EVENT_PAGE);
+        // Read the durable boundary first. A writer completing between these reads cannot
+        // make the query lose the recent records that woke an event waiter.
+        let stored_end = log.last_kernel_event_sequence(workspace_dir)?;
+        let mut page = log.load_kernel_events_after(workspace_dir, after, limit)?;
+        if page.next_after >= stored_end {
+            for record in &self.recent_kernel_records {
+                if page.records.len() == limit {
+                    break;
+                }
+                if record.sequence > page.next_after {
+                    page.next_after = record.sequence;
+                    page.records.push(record.clone());
+                }
+            }
         }
+        Ok(page)
     }
 
     /*
@@ -2596,6 +2612,57 @@ pub(crate) mod tests {
         assert_eq!(
             changes(&mut restarted),
             [(3, "c".to_string(), Some("b".to_string()))]
+        );
+    }
+
+    #[test]
+    fn history_query_sees_published_records_before_the_async_writer() {
+        use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+        use crate::domain::kernel_event::{KernelCommandDescriptor, KernelEvent};
+        use crate::domain::kernel_spec::KernelCommandKind;
+
+        // The writer never exposes its batches to reads. No thread timing can make
+        // this test pass without the recent-record overlay.
+        struct DelayedLog;
+        impl KernelEventLogPort for DelayedLog {
+            fn append_kernel_events(
+                &self,
+                _: &str,
+                _: &[RecordedKernelEvent],
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn load_kernel_events(&self, _: &str, _: &[&str]) -> anyhow::Result<Vec<KernelEvent>> {
+                Ok(Vec::new())
+            }
+        }
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(Arc::new(DelayedLog), "/workspace");
+        for command in [
+            KernelCommandKind::PauseAutoFollow,
+            KernelCommandKind::SetAutoFollowMaxTurns,
+        ] {
+            runtime.admit_command(&KernelCommandDescriptor {
+                command,
+                thread_id: String::new(),
+                fingerprint: command.name().to_string(),
+                idempotency_key: None,
+                caller: None,
+                confirmed: false,
+            });
+        }
+        let first = runtime.kernel_event_history(0, 1).unwrap();
+        assert_eq!(first.records.len(), 1);
+        assert_eq!(first.next_after, 1);
+        let second = runtime.kernel_event_history(first.next_after, 1).unwrap();
+        assert_eq!(second.records.len(), 1);
+        assert_eq!(second.next_after, 2);
+        assert!(
+            runtime
+                .kernel_event_history(second.next_after, 1)
+                .unwrap()
+                .records
+                .is_empty()
         );
     }
 

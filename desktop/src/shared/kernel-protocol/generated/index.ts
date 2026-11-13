@@ -43,7 +43,7 @@ export type ApprovalRequestKind = ("command_execution" | "file_change" | "permis
 
 export type ApprovalResolution = (("accepted" | "declined") | "timed_out" | "withdrawn" | "lost");
 
-export type AttachRequest = { readonly "client_name": string; readonly "workspace": string; };
+export type AttachRequest = { readonly "client_name": string; readonly "transient"?: boolean; readonly "workspace": string; };
 
 export type AttachResponse = { readonly "client_id": string; readonly "kernel": string; readonly "protocol_version": number; };
 
@@ -127,7 +127,7 @@ export type QueryRequest = { readonly "query": KernelQuery; };
 
 export type QueuedThreadPrompt = { readonly "op_id"?: (number | null); readonly "task_id": string; readonly "thread_id": string; readonly "workspace_directory": string; };
 
-export type ReasonCode = ("steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again");
+export type ReasonCode = ("kernel_not_running" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again");
 
 export type RecordedKernelEvent = { readonly "event": KernelRecord; readonly "recorded_at": string; readonly "sequence": number; };
 

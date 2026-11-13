@@ -314,6 +314,10 @@ impl AppServerConnectionConfig {
         config.api_key_auth = configured_api_key_auth();
         // MCP hub 에 서버가 있을 때만 hub skill 이 생긴다. 없으면 세션 컨텍스트가 늘지 않는다.
         config.extra_skill_roots = crate::adapter::outbound::mcp_hub::agent_skill_roots();
+        match super::kernel_skill::agent_skill_root() {
+            Ok(root) => config.extra_skill_roots.push(root),
+            Err(error) => tracing::warn!(%error, "failed to install the kernel skill"),
+        }
         match crate::trusted_executable::pinned_codex_command() {
             Ok(command) => {
                 config.executable = command.program;

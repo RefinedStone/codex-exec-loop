@@ -172,6 +172,9 @@ pub struct AttachRequest {
     pub workspace: String,
     /// 진단용 클라이언트 이름이다 (예: `akra-desktop`).
     pub client_name: String,
+    /// Command clients release an idle kernel without the durable-client grace period.
+    #[serde(default)]
+    pub transient: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -9,6 +9,7 @@ pub mod clipboard;
 pub mod db;
 // filesystem은 planning workspace와 로컬 파일 배치를 port 계약에 맞게 읽고 쓴다.
 pub mod filesystem;
+pub(crate) mod gateway_kernel_client;
 // git은 worktree, branch, merge 같은 로컬 Git 런타임 조작을 캡슐화한다.
 pub mod git;
 // MCP hub backend 는 hub 전용 codex app-server 로 MCP 서버에 필요할 때만 연결한다.

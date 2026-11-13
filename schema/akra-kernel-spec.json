@@ -24,6 +24,16 @@
         "summary": "The planning queue and directions."
       }
     ],
+    "state": [
+      {
+        "name": "store",
+        "summary": "Stored planning data. A command-only kernel can execute this command."
+      },
+      {
+        "name": "runtime",
+        "summary": "Live kernel state. Start the Gateway before sending this command."
+      }
+    ],
     "effect": [
       {
         "name": "read",
@@ -204,10 +214,13 @@
     {
       "name": "load_sessions",
       "scope": "session",
+      "state": "runtime",
       "summary": "Load the session list of the workspace. The result arrives as the `sessions` event.",
       "effect": "read",
       "idempotency": "natural",
-      "rejections": [],
+      "rejections": [
+        "kernel_not_running"
+      ],
       "completion": "accepted",
       "input": {
         "additionalProperties": false,
@@ -229,10 +242,13 @@
     {
       "name": "rename_session",
       "scope": "session",
+      "state": "runtime",
       "summary": "Rename a session (thread).",
       "effect": "write",
       "idempotency": "natural",
-      "rejections": [],
+      "rejections": [
+        "kernel_not_running"
+      ],
       "completion": "records",
       "input": {
         "additionalProperties": false,
@@ -266,10 +282,12 @@
     {
       "name": "submit_prompt",
       "scope": "thread",
+      "state": "runtime",
       "summary": "Send a prompt to a thread. The kernel prepares it with planning context and submits a turn. Progress arrives as `prompt_submission` events.",
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
+        "kernel_not_running",
         "busy",
         "preparation_active",
         "unknown_thread",
@@ -309,10 +327,12 @@
     {
       "name": "steer_turn",
       "scope": "thread",
+      "state": "runtime",
       "summary": "Add a prompt to the turn that is running on a thread.",
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
+        "kernel_not_running",
         "steer_in_flight",
         "no_matching_turn"
       ],
@@ -355,10 +375,13 @@
     {
       "name": "stop_all",
       "scope": "thread",
+      "state": "runtime",
       "summary": "Request a stop of every running turn.",
       "effect": "write",
       "idempotency": "natural",
-      "rejections": [],
+      "rejections": [
+        "kernel_not_running"
+      ],
       "completion": "records",
       "input": {
         "additionalProperties": false,
@@ -380,10 +403,12 @@
     {
       "name": "decide_approval",
       "scope": "approval",
+      "state": "runtime",
       "summary": "Accept or decline a pending approval request.",
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
+        "kernel_not_running",
         "decision_in_flight",
         "no_matching_approval"
       ],
@@ -424,10 +449,13 @@
     {
       "name": "set_auto_follow_max_turns",
       "scope": "auto_follow",
+      "state": "runtime",
       "summary": "Set how many automatic follow-up turns may run after a manual turn.",
       "effect": "write",
       "idempotency": "natural",
-      "rejections": [],
+      "rejections": [
+        "kernel_not_running"
+      ],
       "completion": "accepted",
       "input": {
         "additionalProperties": false,
@@ -455,10 +483,13 @@
     {
       "name": "pause_auto_follow",
       "scope": "auto_follow",
+      "state": "runtime",
       "summary": "Pause automatic follow-up turns.",
       "effect": "write",
       "idempotency": "natural",
-      "rejections": [],
+      "rejections": [
+        "kernel_not_running"
+      ],
       "completion": "accepted",
       "input": {
         "additionalProperties": false,
@@ -480,6 +511,7 @@
     {
       "name": "reset_planning",
       "scope": "planning",
+      "state": "store",
       "summary": "Delete planning data (the queue, the directions, or all of it).",
       "effect": "destructive",
       "idempotency": "natural",
@@ -513,10 +545,13 @@
     {
       "name": "refresh_planning",
       "scope": "planning",
+      "state": "runtime",
       "summary": "Read the planning queue again. The result arrives as the `planning` event.",
       "effect": "read",
       "idempotency": "natural",
-      "rejections": [],
+      "rejections": [
+        "kernel_not_running"
+      ],
       "completion": "accepted",
       "input": {
         "additionalProperties": false,
@@ -1346,6 +1381,15 @@
   ],
   "reasons": [
     {
+      "name": "kernel_not_running",
+      "summary": "The repository kernel is not running. Start the Akra Gateway and send the command again.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
       "name": "steer_in_flight",
       "summary": "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.",
       "next": [
@@ -1704,6 +1748,10 @@
       "properties": {
         "client_name": {
           "type": "string"
+        },
+        "transient": {
+          "default": false,
+          "type": "boolean"
         },
         "workspace": {
           "type": "string"
@@ -3584,6 +3632,7 @@
     },
     "ReasonCode": {
       "enum": [
+        "kernel_not_running",
         "steer_in_flight",
         "no_matching_turn",
         "decision_in_flight",

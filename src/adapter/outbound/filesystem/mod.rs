@@ -10,6 +10,7 @@ pub(crate) mod kernel_lock;
 // re-export를 두면 composition/wiring code가 파일명 세부 구조를 몰라도 adapter를 직접 주입할 수 있다.
 pub(crate) use self::kernel_lock::{
     RepositoryKernelLock, RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
+    RepositoryKernelOwner,
 };
 pub use self::parallel_agent_profile::FilesystemParallelAgentProfileRepositoryAdapter;
 pub use self::planning_workspace::FilesystemPlanningWorkspaceAdapter;

@@ -16,9 +16,26 @@ use anyhow::{Context, Result};
 use crate::domain::planning::PlanningAuthorityLocation;
 
 const KERNEL_LOCK_FILE_NAME: &str = "kernel.lock";
-/// 진단 기록을 읽을 최대 크기이다. 기록은 세 줄이라 이것으로 충분하다.
+/// Maximum size of a holder record.
 const HOLDER_RECORD_MAX_BYTES: u64 = 4096;
 const HOLDER_RECORD_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepositoryKernelOwner {
+    Tui,
+    Gateway,
+    Command,
+}
+
+impl RepositoryKernelOwner {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Gateway => "gateway",
+            Self::Command => "command",
+        }
+    }
+}
 
 /// 저장소 하나의 커널 잠금이다. 버리면 잠금이 풀린다.
 #[derive(Debug)]
@@ -40,6 +57,8 @@ pub(crate) struct RepositoryKernelLockHeld {
     pub(crate) repository_root: String,
     pub(crate) lock_path: PathBuf,
     pub(crate) holder: Option<String>,
+    /// Missing for old kernels or unreadable holder metadata. Never infer a TUI from this value.
+    pub(crate) owner: Option<RepositoryKernelOwner>,
 }
 
 impl fmt::Display for RepositoryKernelLockHeld {
@@ -73,14 +92,24 @@ impl RepositoryKernelLockAdapter {
         location: PlanningAuthorityLocation,
         workspace_dir: &str,
     ) -> Result<RepositoryKernelLock> {
+        Self::acquire_for_owner(location, workspace_dir, RepositoryKernelOwner::Tui)
+    }
+
+    pub(crate) fn acquire_for_owner(
+        location: PlanningAuthorityLocation,
+        workspace_dir: &str,
+        owner: RepositoryKernelOwner,
+    ) -> Result<RepositoryKernelLock> {
         let lock_path = Path::new(&location.runtime_dir).join(KERNEL_LOCK_FILE_NAME);
         let mut file = open_lock_file(&lock_path)?;
         match file.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
+                let record = read_holder_record(&lock_path);
                 return Err(RepositoryKernelLockHeld {
                     repository_root: location.canonical_repo_root,
-                    holder: read_holder_record(&lock_path),
+                    holder: record.as_deref().and_then(describe_holder_record),
+                    owner: record.as_deref().and_then(holder_owner),
                     lock_path,
                 }
                 .into());
@@ -90,9 +119,17 @@ impl RepositoryKernelLockAdapter {
                     .with_context(|| format!("failed to lock `{}`", lock_path.display()));
             }
         }
-        if let Err(error) = write_holder_record(&mut file, workspace_dir) {
+        if let Err(error) = write_holder_record(&mut file, workspace_dir, owner) {
             // 기록은 진단용이다. 쓰지 못해도 잠금은 유효하다.
             tracing::warn!(error = %error, "kernel lock holder record write failed");
+        }
+        // Windows denies reads of an OS-locked file. Keep the same diagnostic record outside the
+        // locked byte range. Read it only after the OS confirms that a kernel holds the lock.
+        let owner_path = lock_path.with_extension("owner");
+        if let Err(error) = open_lock_file(&owner_path).and_then(|mut record| {
+            write_holder_record(&mut record, workspace_dir, owner).map_err(Into::into)
+        }) {
+            tracing::warn!(error = %error, "kernel lock owner record write failed");
         }
         Ok(RepositoryKernelLock {
             _file: file,
@@ -114,24 +151,38 @@ fn open_lock_file(path: &Path) -> Result<File> {
         .with_context(|| format!("failed to open `{}`", path.display()))
 }
 
-fn write_holder_record(file: &mut File, workspace_dir: &str) -> std::io::Result<()> {
+fn write_holder_record(
+    file: &mut File,
+    workspace_dir: &str,
+    owner: RepositoryKernelOwner,
+) -> std::io::Result<()> {
     let record = format!(
-        "pid={}\nstarted_at={}\nworkspace={workspace_dir}\n",
+        "pid={}\nstarted_at={}\nowner={}\nworkspace={workspace_dir}\n",
         std::process::id(),
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        owner.name(),
     );
     file.set_len(0)?;
     file.write_all(record.as_bytes())?;
     file.flush()
 }
 
-/// 쥔 프로세스의 기록을 읽어 한 줄로 만든다. Windows 는 잠긴 파일을 다른 핸들에서 읽지 못하므로 `None` 이다.
+/// Read the locked record first. On Windows, use the readable owner record.
 fn read_holder_record(path: &Path) -> Option<String> {
     // 쥔 쪽이 기록을 비우고 다시 쓰는 사이에 읽으면 비어 있다. 잠깐 뒤 한 번 더 읽는다.
-    read_holder_record_once(path).or_else(|| {
-        std::thread::sleep(HOLDER_RECORD_RETRY_DELAY);
-        read_holder_record_once(path)
-    })
+    read_holder_record_once(path)
+        .or_else(|| {
+            std::thread::sleep(HOLDER_RECORD_RETRY_DELAY);
+            read_holder_record_once(path)
+        })
+        .or_else(|| {
+            let owner_path = path.with_extension("owner");
+            let lock_modified = std::fs::metadata(path).ok()?.modified().ok()?;
+            let owner_modified = std::fs::metadata(&owner_path).ok()?.modified().ok()?;
+            (owner_modified >= lock_modified)
+                .then(|| read_holder_record_once(&owner_path))
+                .flatten()
+        })
 }
 
 fn read_holder_record_once(path: &Path) -> Option<String> {
@@ -141,16 +192,31 @@ fn read_holder_record_once(path: &Path) -> Option<String> {
         .take(HOLDER_RECORD_MAX_BYTES)
         .read_to_string(&mut body)
         .ok()?;
-    describe_holder_record(&body)
+    if describe_holder_record(&body).is_some() {
+        Some(body)
+    } else {
+        None
+    }
+}
+
+fn holder_owner(body: &str) -> Option<RepositoryKernelOwner> {
+    match holder_field(body, "owner")? {
+        "tui" => Some(RepositoryKernelOwner::Tui),
+        "gateway" => Some(RepositoryKernelOwner::Gateway),
+        "command" => Some(RepositoryKernelOwner::Command),
+        _ => None,
+    }
+}
+
+fn holder_field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
+    body.lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn describe_holder_record(body: &str) -> Option<String> {
-    let field = |name: &str| {
-        body.lines()
-            .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    };
+    let field = |name: &str| holder_field(body, name);
     let pid = field("pid")?;
     let mut description = format!("held by pid {pid}");
     if let Some(workspace) = field("workspace") {
@@ -158,6 +224,9 @@ fn describe_holder_record(body: &str) -> Option<String> {
     }
     if let Some(started_at) = field("started_at") {
         description.push_str(&format!(" since {started_at}"));
+    }
+    if let Some(owner) = holder_owner(body) {
+        description.push_str(&format!(" ({})", owner.name()));
     }
     Some(description)
 }
@@ -265,7 +334,7 @@ mod tests {
         assert_eq!(
             refused.holder,
             Some(format!(
-                "held by pid {} in `{checkout}` since {}",
+                "held by pid {} in `{checkout}` since {} (tui)",
                 std::process::id(),
                 std::fs::read_to_string(&refused.lock_path)
                     .expect("holder record should be readable")
@@ -334,11 +403,79 @@ mod tests {
     }
 
     #[test]
+    fn owner_metadata_accepts_known_owners_and_preserves_legacy_unknowns() {
+        for owner in [
+            RepositoryKernelOwner::Tui,
+            RepositoryKernelOwner::Gateway,
+            RepositoryKernelOwner::Command,
+        ] {
+            assert_eq!(
+                holder_owner(&format!("pid=7\nowner={}\n", owner.name())),
+                Some(owner)
+            );
+        }
+        assert_eq!(holder_owner("pid=7\nworkspace=/repo\n"), None);
+        assert_eq!(holder_owner("pid=7\nowner=future-owner\n"), None);
+    }
+
+    #[test]
+    fn a_live_lock_exposes_its_owner_and_a_released_lock_does_not() {
+        for owner in [
+            RepositoryKernelOwner::Tui,
+            RepositoryKernelOwner::Gateway,
+            RepositoryKernelOwner::Command,
+        ] {
+            let folder = temp_root(owner.name());
+            let workspace = folder.0.display().to_string();
+            let location = crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(
+                &workspace,
+            ).expect("runtime directory");
+            let lock =
+                RepositoryKernelLockAdapter::acquire_for_owner(location.clone(), &workspace, owner)
+                    .expect("first lock");
+            assert_eq!(held_error(acquire(&workspace)).owner, Some(owner));
+            drop(lock);
+            acquire(&workspace).expect("released lock can be acquired again");
+        }
+    }
+
+    #[test]
+    fn legacy_locks_do_not_inherit_a_stale_sidecar_owner() {
+        let folder = temp_root("legacy-owner");
+        let workspace = folder.0.display().to_string();
+        let location = crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(
+            &workspace,
+        ).expect("runtime directory");
+        let lock_path = Path::new(&location.runtime_dir).join(KERNEL_LOCK_FILE_NAME);
+        let owner_path = lock_path.with_extension("owner");
+        std::fs::write(&owner_path, "pid=7\nowner=tui\n").expect("old owner");
+        std::fs::write(&lock_path, "pid=8\nworkspace=/legacy\n").expect("legacy holder");
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let new = old + std::time::Duration::from_secs(100);
+        File::options()
+            .write(true)
+            .open(&owner_path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(new))
+            .unwrap();
+        file.try_lock().expect("legacy lock");
+        assert_eq!(held_error(acquire(&workspace)).owner, None);
+    }
+
+    #[test]
     fn held_error_names_the_repository_holder_and_lock_path() {
         let error = RepositoryKernelLockHeld {
             repository_root: "/repo".to_string(),
             lock_path: PathBuf::from("/akra/projects/repo-1/runtime/kernel.lock"),
             holder: Some("held by pid 7".to_string()),
+            owner: None,
         };
 
         assert_eq!(

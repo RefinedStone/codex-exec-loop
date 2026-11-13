@@ -10,7 +10,7 @@
 //! 작업 스레드를 멈추고, 호스트 스레드를 끝내고, 잠금을 푼다. 접속이 목록을 아직 쥐고 있어도 같다.
 //!
 //! 커널 내리기: 붙은 클라이언트가 없고 남은 일이 없는 채로 `KERNEL_IDLE_UNLOAD_AFTER` 가 지난 커널은
-//! `unload_idle_kernels` 가 같은 순서로 멈추고 잠금을 푼다. 그래야 같은 저장소의 TUI 가 시작할 수 있다. 다음 붙기가
+//! `unload_idle_kernels` 가 같은 순서로 멈추고 잠금을 푼다. 마지막 접속이 transient 였으면 대기 없이 내린다. 그래야 같은 저장소의 TUI 가 시작할 수 있다. 다음 붙기가
 //! 커널을 다시 만든다. 남은 일은 `NativeClientRuntime::has_remaining_work` 가 정한다.
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::adapter::outbound::app_server::GatewayUpstreamSocket;
 
-use crate::adapter::outbound::filesystem::RepositoryKernelLock;
+use crate::adapter::outbound::filesystem::{RepositoryKernelLock, RepositoryKernelOwner};
 use crate::composition::kernel_host::{KernelCallError, KernelClientHandle, KernelHost};
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::production;
@@ -57,10 +57,18 @@ impl RepositoryKernel {
         self.host.attach()
     }
 
+    fn attach_with_lifetime(&self, transient: bool) -> Result<KernelClientHandle, KernelCallError> {
+        if transient {
+            self.host.attach_with_lifetime(true)
+        } else {
+            self.attach()
+        }
+    }
+
     fn idle_long_enough(&self, now: Instant) -> bool {
         self.host
             .idle_for(now)
-            .is_some_and(|idle| idle >= KERNEL_IDLE_UNLOAD_AFTER)
+            .is_some_and(|idle| self.host.idle_is_transient() || idle >= KERNEL_IDLE_UNLOAD_AFTER)
     }
 }
 
@@ -109,9 +117,17 @@ pub(crate) struct RepositoryKernelRegistry {
     stopped: AtomicBool,
     /// 커널이 붙을 app-server 이다. 없으면 커널마다 자기 app-server 를 띄운다 (시험).
     app_server: Option<GatewayUpstreamSocket>,
+    idle_notification: Mutex<Option<std::task::Waker>>,
 }
 
 impl RepositoryKernelRegistry {
+    pub(crate) fn notify_when_idle(&self, notification: std::task::Waker) {
+        *self
+            .idle_notification
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(notification);
+    }
+
     /// 커널들이 Gateway upstream app-server 를 Desktop 과 함께 쓴다 (K3-5, Q-K3-6).
     pub(crate) fn sharing_app_server(app_server: GatewayUpstreamSocket) -> Self {
         Self {
@@ -124,13 +140,21 @@ impl RepositoryKernelRegistry {
     /// 저장소의 커널이 없으면 만든다. 같은 저장소의 다른 worktree 는 같은 커널에 붙는다. 다른 프로세스가 그
     /// 저장소의 커널을 돌리면 `RepositoryKernelLockHeld` 오류이다.
     pub(crate) fn attach(&self, workspace_dir: &str) -> Result<(KernelClientHandle, String)> {
+        self.attach_with_lifetime(workspace_dir, false)
+    }
+
+    pub(crate) fn attach_with_lifetime(
+        &self,
+        workspace_dir: &str,
+        transient: bool,
+    ) -> Result<(KernelClientHandle, String)> {
         let target = production::repository_kernel_target(workspace_dir)?;
         let entry = self.entry(&target.repository_key)?;
         let mut kernel = entry.lock();
         // 멈춤은 자리마다 잠근 뒤 커널을 버린다. 그래서 자리 잠금 안에서 확인하면 멈춘 뒤 새 커널을 만들지 않는다.
         self.ensure_running()?;
         if let Some(running) = kernel.as_ref() {
-            match running.attach() {
+            match running.attach_with_lifetime(transient) {
                 Ok(client) => return Ok((client, target.repository_key)),
                 Err(KernelCallError::TimedOut) => {
                     bail!("the repository kernel did not answer the attach request in time")
@@ -142,8 +166,16 @@ impl RepositoryKernelRegistry {
         *kernel = None;
         let built = build_kernel_for_workspace(&target.workspace_root, self.app_server.clone())?;
         let client = built
-            .attach()
+            .attach_with_lifetime(transient)
             .context("the new kernel stopped before a client attached")?;
+        if let Some(notification) = self
+            .idle_notification
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+        {
+            built.host.notify_when_idle(notification);
+        }
         let repository_key = built.repository_key().to_string();
         tracing::info!(
             workspace = built.workspace_root(),
@@ -162,7 +194,7 @@ impl RepositoryKernelRegistry {
         }
     }
 
-    /// 클라이언트도 남은 일도 없이 `KERNEL_IDLE_UNLOAD_AFTER` 가 지난 커널을 내린다. 순서는 `shutdown` 과 같다.
+    /// Unload idle kernels. Durable last clients keep their grace; transient last clients do not.
     /// 내린 커널의 저장소 신원을 돌려준다.
     pub(crate) fn unload_idle_kernels(&self, now: Instant) -> Vec<String> {
         self.keyed_entries()
@@ -215,7 +247,13 @@ pub(crate) fn build_kernel_for_workspace(
     app_server: Option<GatewayUpstreamSocket>,
 ) -> Result<RepositoryKernel> {
     // 잠금을 먼저 잡는다. 런타임 조립이 PR 검증 스케줄러 스레드를 시작하기 때문이다.
-    let lock = production::acquire_repository_kernel_lock(workspace_dir)?;
+    let location = crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+    let lock =
+        crate::adapter::outbound::filesystem::RepositoryKernelLockAdapter::acquire_for_owner(
+            location,
+            workspace_dir,
+            RepositoryKernelOwner::Gateway,
+        )?;
     let mut runtime = production::build_headless_kernel_runtime(workspace_dir, app_server);
     // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
@@ -621,6 +659,69 @@ pub(crate) mod tests {
             .attach(&folder.path)
             .expect("the next attach starts the kernel again");
         assert!(again.query().is_some());
+    }
+
+    #[test]
+    fn the_last_disconnect_controls_transient_unload_and_durable_grace() {
+        struct IdleSignal(std::sync::mpsc::Sender<()>);
+        impl std::task::Wake for IdleSignal {
+            fn wake(self: Arc<Self>) {
+                self.0.send(()).expect("idle receiver");
+            }
+        }
+        for transient_last in [true, false] {
+            let folder = temp_folder("attachment-lifetime");
+            let registry = RepositoryKernelRegistry::default();
+            let lock = production::acquire_repository_kernel_lock(&folder.path).expect("lock");
+            let key = lock.repository_key().to_string();
+            let (runtime, _turns) = recording_runtime_for_test();
+            let kernel = start_repository_kernel(lock, runtime, &folder.path).expect("kernel");
+            *registry.entry(&key).expect("entry").lock() = Some(kernel);
+            let (durable, _) = registry.attach(&folder.path).expect("durable client");
+            let (transient, _) = registry
+                .attach_with_lifetime(&folder.path, true)
+                .expect("transient client");
+            let (idle_sender, idle_receiver) = std::sync::mpsc::channel();
+            registry
+                .entry(&key)
+                .expect("entry")
+                .lock()
+                .as_ref()
+                .expect("kernel")
+                .host
+                .notify_when_idle(std::task::Waker::from(Arc::new(IdleSignal(idle_sender))));
+            let (first, last) = if transient_last {
+                (durable, transient)
+            } else {
+                (transient, durable)
+            };
+            drop(first);
+            assert!(last.query().is_some(), "the remaining client still works");
+            assert!(
+                registry
+                    .unload_idle_kernels(Instant::now() + KERNEL_IDLE_UNLOAD_AFTER)
+                    .is_empty()
+            );
+
+            drop(last);
+            idle_receiver
+                .recv_timeout(Duration::from_secs(10))
+                .expect("last detach becomes idle");
+            let now = Instant::now();
+            if !transient_last {
+                assert!(
+                    registry.unload_idle_kernels(now).is_empty(),
+                    "durable clients keep their grace"
+                );
+            }
+            let unload_at = if transient_last {
+                now
+            } else {
+                now + KERNEL_IDLE_UNLOAD_AFTER
+            };
+            assert_eq!(registry.unload_idle_kernels(unload_at), vec![key]);
+            assert!(production::acquire_repository_kernel_lock(&folder.path).is_ok());
+        }
     }
 
     #[test]

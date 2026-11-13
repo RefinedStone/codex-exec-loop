@@ -49,6 +49,16 @@ macro_rules! spec_names {
 pub(crate) use spec_names;
 
 spec_names! {
+    /// The state that must be available to execute the command.
+    #[derive(Serialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CommandState {
+        Store => "store", "Stored planning data. A command-only kernel can execute this command.";
+        Runtime => "runtime", "Live kernel state. Start the Gateway before sending this command.";
+    }
+}
+
+spec_names! {
     /// 클라이언트가 커널에 보내는 명령의 종류이다. 전송 enum `KernelCommand` 가 이 값으로 바뀐다.
     pub enum KernelCommandKind {
         LoadSessions => "load_sessions",
@@ -123,6 +133,8 @@ spec_names! {
     #[derive(Serialize, Deserialize, JsonSchema)]
     #[serde(rename_all = "snake_case")]
     pub enum ReasonCode {
+        KernelNotRunning => "kernel_not_running",
+            "The repository kernel is not running. Start the Akra Gateway and send the command again.";
         SteerInFlight => "steer_in_flight",
             "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.";
         NoMatchingTurn => "no_matching_turn",
@@ -211,6 +223,7 @@ impl OperationState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandSpec {
     pub scope: CommandScope,
+    pub state: CommandState,
     pub effect: CommandEffect,
     pub idempotency: CommandIdempotency,
     /// 커널이 이 명령을 바로 거절할 때 낼 수 있는 이유이다.
@@ -236,13 +249,24 @@ impl KernelCommandKind {
             | Self::ResetPlanning => CommandCompletion::Records,
         };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
-            Self::LoadSessions => (CommandScope::Session, Read, Natural, &[]),
-            Self::RenameSession => (CommandScope::Session, Write, Natural, &[]),
+            Self::LoadSessions => (
+                CommandScope::Session,
+                Read,
+                Natural,
+                &[Reason::KernelNotRunning],
+            ),
+            Self::RenameSession => (
+                CommandScope::Session,
+                Write,
+                Natural,
+                &[Reason::KernelNotRunning],
+            ),
             Self::SubmitPrompt => (
                 CommandScope::Thread,
                 Write,
                 Keyed,
                 &[
+                    Reason::KernelNotRunning,
                     Reason::Busy,
                     Reason::PreparationActive,
                     Reason::UnknownThread,
@@ -254,22 +278,62 @@ impl KernelCommandKind {
                 CommandScope::Thread,
                 Write,
                 Keyed,
-                &[Reason::SteerInFlight, Reason::NoMatchingTurn],
+                &[
+                    Reason::KernelNotRunning,
+                    Reason::SteerInFlight,
+                    Reason::NoMatchingTurn,
+                ],
             ),
-            Self::StopAll => (CommandScope::Thread, Write, Natural, &[]),
+            Self::StopAll => (
+                CommandScope::Thread,
+                Write,
+                Natural,
+                &[Reason::KernelNotRunning],
+            ),
             Self::DecideApproval => (
                 CommandScope::Approval,
                 Write,
                 Keyed,
-                &[Reason::DecisionInFlight, Reason::NoMatchingApproval],
+                &[
+                    Reason::KernelNotRunning,
+                    Reason::DecisionInFlight,
+                    Reason::NoMatchingApproval,
+                ],
             ),
-            Self::SetAutoFollowMaxTurns => (CommandScope::AutoFollow, Write, Natural, &[]),
-            Self::PauseAutoFollow => (CommandScope::AutoFollow, Write, Natural, &[]),
+            Self::SetAutoFollowMaxTurns => (
+                CommandScope::AutoFollow,
+                Write,
+                Natural,
+                &[Reason::KernelNotRunning],
+            ),
+            Self::PauseAutoFollow => (
+                CommandScope::AutoFollow,
+                Write,
+                Natural,
+                &[Reason::KernelNotRunning],
+            ),
             Self::ResetPlanning => (CommandScope::Planning, Destructive, Natural, &[]),
-            Self::RefreshPlanning => (CommandScope::Planning, Read, Natural, &[]),
+            Self::RefreshPlanning => (
+                CommandScope::Planning,
+                Read,
+                Natural,
+                &[Reason::KernelNotRunning],
+            ),
         };
         CommandSpec {
             scope,
+            state: match self {
+                Self::ResetPlanning => CommandState::Store,
+                Self::LoadSessions
+                | Self::RenameSession
+                | Self::SubmitPrompt
+                | Self::SteerTurn
+                | Self::StopAll
+                | Self::DecideApproval
+                | Self::SetAutoFollowMaxTurns
+                | Self::PauseAutoFollow
+                | Self::RefreshPlanning => CommandState::Runtime,
+            },
             effect,
             idempotency,
             rejections,
@@ -339,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn read_commands_are_not_recorded_and_carry_no_rejection() {
+    fn read_commands_are_not_recorded_and_only_reject_when_offline() {
         // The recording rule is derived from the effect. It is not a second list.
         let unrecorded = KernelCommandKind::ALL
             .iter()
@@ -349,7 +413,12 @@ mod tests {
         assert_eq!(unrecorded, ["load_sessions", "refresh_planning"]);
         for kind in KernelCommandKind::ALL {
             if !kind.is_recorded() {
-                assert!(kind.spec().rejections.is_empty(), "{}", kind.name());
+                assert_eq!(
+                    kind.spec().rejections,
+                    &[ReasonCode::KernelNotRunning],
+                    "{}",
+                    kind.name()
+                );
             }
         }
     }
@@ -365,6 +434,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "kernel_not_running",
                 "steer_in_flight",
                 "no_matching_turn",
                 "decision_in_flight",

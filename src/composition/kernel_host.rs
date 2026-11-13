@@ -174,6 +174,9 @@ enum KernelHostInput {
     Attach {
         reply: Sender<(KernelClientId, Receiver<KernelHostEvent>)>,
     },
+    AttachTransient {
+        reply: Sender<(KernelClientId, Receiver<KernelHostEvent>)>,
+    },
     Command {
         command: AppCommand,
         /// 기록과 멱등에 쓰는 설명이다 (plan 19 Q3-6). 없으면 기록하지 않고 영수증도 없다.
@@ -205,7 +208,14 @@ enum KernelHostInput {
 /// 커널이 한가해진 시각이다 (plan 18 K3-5). 클라이언트도 남은 일도 없으면 정해지고, 클라이언트가 붙거나 일이
 /// 생기면 지워진다. 커널 스레드가 쓰고, 커널 목록이 커널을 내릴지 정할 때 읽는다.
 #[derive(Clone, Default)]
-struct KernelIdleClock(Arc<Mutex<Option<Instant>>>);
+struct KernelIdleClock(Arc<Mutex<KernelIdleState>>);
+
+#[derive(Default)]
+struct KernelIdleState {
+    since: Option<Instant>,
+    transient: bool,
+    notification: Option<std::task::Waker>,
+}
 
 impl KernelIdleClock {
     fn record(&self, busy: bool, now: Instant) {
@@ -214,17 +224,20 @@ impl KernelIdleClock {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if busy {
-            *idle_since = None;
-        } else if idle_since.is_none() {
-            *idle_since = Some(now);
+            idle_since.since = None;
+        } else if idle_since.since.is_none() {
+            idle_since.since = Some(now);
+            if let Some(notification) = &idle_since.notification {
+                notification.wake_by_ref();
+            }
         }
     }
 
     fn idle_since(&self) -> Option<Instant> {
-        *self
-            .0
+        self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .since
     }
 }
 
@@ -263,9 +276,20 @@ impl KernelHost {
     /// 클라이언트 하나를 붙인다. 커널 스레드가 끝났으면 `Stopped`, 답이 늦으면 `TimedOut` 이다. 늦은 붙기는 커널이
     /// 답을 보내지 못하므로 스스로 지운다.
     pub(crate) fn attach(&self) -> Result<KernelClientHandle, KernelCallError> {
+        self.attach_with_lifetime(false)
+    }
+
+    pub(crate) fn attach_with_lifetime(
+        &self,
+        transient: bool,
+    ) -> Result<KernelClientHandle, KernelCallError> {
         let (reply, answer) = mpsc::channel();
         self.inbox
-            .send(KernelHostInput::Attach { reply })
+            .send(if transient {
+                KernelHostInput::AttachTransient { reply }
+            } else {
+                KernelHostInput::Attach { reply }
+            })
             .map_err(|_| KernelCallError::Stopped)?;
         let (client_id, events) = wait_reply(&answer, ATTACH_REPLY_TIMEOUT)?;
         Ok(KernelClientHandle {
@@ -273,6 +297,22 @@ impl KernelHost {
             inbox: self.inbox.clone(),
             events,
         })
+    }
+
+    pub(crate) fn notify_when_idle(&self, notification: std::task::Waker) {
+        self.idle
+            .0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .notification = Some(notification);
+    }
+
+    pub(crate) fn idle_is_transient(&self) -> bool {
+        self.idle
+            .0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .transient
     }
 }
 
@@ -442,6 +482,7 @@ impl Drop for KernelClientHandle {
 struct ClientSink {
     events: SyncSender<KernelHostEvent>,
     resync_pending: bool,
+    transient: bool,
 }
 
 struct KernelHostLoop {
@@ -555,8 +596,9 @@ impl KernelHostLoop {
     }
 
     fn handle_input(&mut self, input: KernelHostInput) {
+        let transient = matches!(&input, KernelHostInput::AttachTransient { .. });
         match input {
-            KernelHostInput::Attach { reply } => {
+            KernelHostInput::Attach { reply } | KernelHostInput::AttachTransient { reply } => {
                 let client_id = self.next_client_id;
                 self.next_client_id += 1;
                 let (events, receiver) = mpsc::sync_channel(CLIENT_EVENT_CAPACITY);
@@ -566,6 +608,7 @@ impl KernelHostLoop {
                     ClientSink {
                         events,
                         resync_pending: false,
+                        transient,
                     },
                 );
                 if first_client {
@@ -741,13 +784,40 @@ impl KernelHostLoop {
     }
 
     fn broadcast(&mut self, event: KernelHostEvent) {
-        self.clients
-            .retain(|_, client| deliver(client, event.clone()));
+        self.retain_clients(|client| deliver(client, event.clone()));
+    }
+
+    fn retain_clients(&mut self, mut retain: impl FnMut(&mut ClientSink) -> bool) {
+        let mut last_removed = None;
+        self.clients.retain(|_, client| {
+            let retained = retain(client);
+            if !retained {
+                last_removed = Some(client.transient);
+            }
+            retained
+        });
+        if self.clients.is_empty()
+            && let Some(transient) = last_removed
+        {
+            self.idle
+                .0
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .transient = transient;
+        }
         self.stop_supervisor_view_without_clients();
     }
 
     fn remove_client(&mut self, client_id: KernelClientId) {
-        self.clients.remove(&client_id);
+        if let Some(client) = self.clients.remove(&client_id)
+            && self.clients.is_empty()
+        {
+            self.idle
+                .0
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .transient = client.transient;
+        }
         self.stop_supervisor_view_without_clients();
     }
 
@@ -811,8 +881,7 @@ impl KernelHostLoop {
 
     /// 이벤트를 버린 클라이언트에 `Resync` 를 보낸다. 새 이벤트가 없어도 다음 주기에 알린다.
     fn flush_pending_resyncs(&mut self) {
-        self.clients.retain(|_, client| flush_resync(client));
-        self.stop_supervisor_view_without_clients();
+        self.retain_clients(flush_resync);
     }
 }
 
@@ -1396,6 +1465,7 @@ mod tests {
         let mut client = ClientSink {
             events: sender,
             resync_pending: false,
+            transient: false,
         };
         let event = KernelHostEvent::Core(Box::new(AppEvent::ThreadActivityChanged(Vec::new())));
         assert!(deliver(&mut client, event.clone()));
@@ -1431,6 +1501,7 @@ mod tests {
             ClientSink {
                 events: sender,
                 resync_pending: false,
+                transient: false,
             },
         );
         (host, receiver)
@@ -1635,6 +1706,7 @@ mod tests {
         let mut client = ClientSink {
             events: sender,
             resync_pending: false,
+            transient: false,
         };
         let event = KernelHostEvent::Core(Box::new(AppEvent::ThreadActivityChanged(Vec::new())));
         assert!(deliver(&mut client, event.clone()));
@@ -1716,6 +1788,44 @@ mod tests {
             !idle_after_record(runtime),
             "an open parallel automation epoch is remaining work"
         );
+    }
+
+    #[test]
+    fn transient_disconnect_does_not_mark_pending_work_idle() {
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.begin_test_turn_submission();
+        let (_sender, inputs) = mpsc::channel();
+        let idle = KernelIdleClock::default();
+        let mut host = KernelHostLoop::new(runtime, inputs, idle.clone());
+        let (reply, answer) = mpsc::channel();
+        host.handle_input(KernelHostInput::AttachTransient { reply });
+        let (client_id, _events) = answer.recv().expect("attached");
+        host.handle_input(KernelHostInput::Detach { client_id });
+        host.record_idle(Instant::now());
+        assert!(idle.0.lock().unwrap().transient);
+        assert_eq!(
+            idle.idle_since(),
+            None,
+            "pending work prevents transient unload"
+        );
+    }
+
+    #[test]
+    fn dropped_transient_event_receivers_keep_the_disconnect_policy() {
+        for resync in [true, false] {
+            let (mut host, receiver) = host_loop_with_client();
+            host.clients.get_mut(&1).unwrap().transient = true;
+            drop(receiver);
+            if resync {
+                host.clients.get_mut(&1).unwrap().resync_pending = true;
+                host.flush_pending_resyncs();
+            } else {
+                host.broadcast(KernelHostEvent::Resync);
+            }
+            host.record_idle(Instant::now());
+            assert!(host.idle.0.lock().unwrap().transient);
+            assert!(host.idle.idle_since().is_some());
+        }
     }
 
     #[test]
