@@ -127,3 +127,105 @@ fn the_reset_entrance_sends_a_kernel_command_and_shows_the_cause_of_a_failure() 
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/*
+ * plan 18 K4-9d: a stored task command runs without a Gateway and without a kernel. The command-only kernel runs it
+ * under the repository lock, answers with the result, and records it. The planning query reads the store.
+ * Unix only, for the same reason as the reset test above.
+ */
+#[cfg(unix)]
+#[test]
+fn a_stored_task_command_runs_without_a_gateway_and_a_stale_revision_is_rejected() {
+    let root = std::env::temp_dir().join(format!("akra-kernel-cli-task-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("test folder");
+    let root = root.canonicalize().expect("real path of the test folder");
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace folder");
+    let workspace_text = workspace.to_str().expect("utf-8 path").to_string();
+    let akra = |arguments: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_akra"))
+            .args(arguments)
+            .args(["--workspace", &workspace_text, "--json"])
+            .env("AKRA_HOME", &home)
+            .output()
+            .expect("run CLI");
+        let answer: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("one JSON line");
+        (output.status.code(), answer)
+    };
+
+    let (code, created) = akra(&[
+        "kernel",
+        "planning",
+        "create_task",
+        "--task",
+        r#"{"title":"Write the test"}"#,
+    ]);
+    assert_eq!(code, Some(0), "{created}");
+    assert_eq!(created["result"]["type"], "task_created");
+    let task_id = created["result"]["task_id"].as_str().expect("task id");
+    let revision = created["result"]["planning_revision"]
+        .as_i64()
+        .expect("revision");
+
+    // The planning query needs no kernel. It answers the revision that the next change must send.
+    let (code, planning) = akra(&["kernel", "query", "planning"]);
+    assert_eq!(code, Some(0), "{planning}");
+    assert_eq!(planning["revision"], revision);
+    assert_eq!(planning["active_tasks"][0]["task_id"], task_id);
+
+    // A stale revision: exit 2, nothing changed, and the next steps are data.
+    let stale = (revision - 1).to_string();
+    let (code, rejected) = akra(&[
+        "kernel",
+        "planning",
+        "update_task",
+        "--task-id",
+        task_id,
+        "--task",
+        r#"{"title":"Changed"}"#,
+        "--expected-planning-revision",
+        &stale,
+    ]);
+    assert_eq!(code, Some(2), "{rejected}");
+    assert_eq!(rejected["rejection"]["reason"], "planning_revision_stale");
+    assert_eq!(rejected["rejection"]["next"][0]["step"], "query");
+    assert_eq!(rejected["rejection"]["next"][0]["name"], "planning");
+
+    // A delete needs the confirmation and the current revision.
+    let current = revision.to_string();
+    let (code, unconfirmed) = akra(&[
+        "kernel",
+        "planning",
+        "delete_task",
+        "--task-id",
+        task_id,
+        "--expected-planning-revision",
+        &current,
+    ]);
+    assert_eq!(code, Some(1), "{unconfirmed}");
+    assert_eq!(unconfirmed["error"]["code"], -32010);
+    let (code, deleted) = akra(&[
+        "kernel",
+        "planning",
+        "delete_task",
+        "--task-id",
+        task_id,
+        "--expected-planning-revision",
+        &current,
+        "--confirm",
+        "true",
+    ]);
+    assert_eq!(code, Some(0), "{deleted}");
+    assert_eq!(deleted["result"]["type"], "task_deleted");
+    let (_, planning) = akra(&["kernel", "query", "planning"]);
+    assert!(
+        planning["active_tasks"]
+            .as_array()
+            .is_none_or(|tasks| tasks.is_empty()),
+        "{planning}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

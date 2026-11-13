@@ -32,7 +32,10 @@ export const KERNEL_COMMAND_EFFECT = {
   "set_auto_follow_max_turns": "write",
   "pause_auto_follow": "write",
   "reset_planning": "destructive",
-  "refresh_planning": "read"
+  "refresh_planning": "read",
+  "create_task": "write",
+  "update_task": "write",
+  "delete_task": "destructive"
 } as const satisfies Record<KernelCommand["type"], string>;
 
 export type ApprovalDecision = ("accept" | "decline");
@@ -55,11 +58,13 @@ export type CommandRejection = { readonly "message": string; readonly "next": Ar
 
 export type CommandRequest = { readonly "command": KernelCommand; readonly "idempotency_key"?: (string | null); };
 
-export type CommandResponse = { readonly "operation"?: (Operation | null); readonly "processed": boolean; readonly "rejection"?: (CommandRejection | null); };
+export type CommandResponse = { readonly "failure"?: (string | null); readonly "operation"?: (Operation | null); readonly "processed": boolean; readonly "rejection"?: (CommandRejection | null); readonly "result"?: (CommandResult | null); };
+
+export type CommandResult = ({ readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_created"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_updated"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_deleted"; });
 
 export type EventNotification = { readonly "event": KernelEvent; };
 
-export type KernelCommand = ({ readonly "type": "load_sessions"; } | { readonly "name": string; readonly "thread_id": string; readonly "type": "rename_session"; } | { readonly "prompt": string; readonly "thread_id": string; readonly "type": "submit_prompt"; } | { readonly "expected_turn_id": string; readonly "prompt": string; readonly "thread_id": string; readonly "type": "steer_turn"; } | { readonly "type": "stop_all"; } | { readonly "approval_id": string; readonly "decision": ApprovalDecision; readonly "server_request_id": string; readonly "type": "decide_approval"; } | { readonly "type": "set_auto_follow_max_turns"; readonly "value": number; } | { readonly "type": "pause_auto_follow"; } | { readonly "confirm"?: boolean; readonly "target": ResetTarget; readonly "type": "reset_planning"; } | { readonly "type": "refresh_planning"; });
+export type KernelCommand = ({ readonly "type": "load_sessions"; } | { readonly "name": string; readonly "thread_id": string; readonly "type": "rename_session"; } | { readonly "prompt": string; readonly "thread_id": string; readonly "type": "submit_prompt"; } | { readonly "expected_turn_id": string; readonly "prompt": string; readonly "thread_id": string; readonly "type": "steer_turn"; } | { readonly "type": "stop_all"; } | { readonly "approval_id": string; readonly "decision": ApprovalDecision; readonly "server_request_id": string; readonly "type": "decide_approval"; } | { readonly "type": "set_auto_follow_max_turns"; readonly "value": number; } | { readonly "type": "pause_auto_follow"; } | { readonly "confirm"?: boolean; readonly "target": ResetTarget; readonly "type": "reset_planning"; } | { readonly "type": "refresh_planning"; } | { readonly "task": TaskFields; readonly "type": "create_task"; } | { readonly "expected_planning_revision": number; readonly "task": TaskFields; readonly "task_id": string; readonly "type": "update_task"; } | { readonly "confirm"?: boolean; readonly "expected_planning_revision": number; readonly "task_id": string; readonly "type": "delete_task"; });
 
 export type KernelEvent = (SessionsState & { readonly "type": "sessions"; } | AutoFollowSettings & { readonly "type": "auto_follow"; } | { readonly "threads": Array<ThreadActivity>; readonly "type": "thread_activity"; } | PromptSubmissionState & { readonly "type": "prompt_submission"; } | PlanningState & { readonly "type": "planning"; } | ParallelState & { readonly "type": "parallel"; } | { readonly "type": "resync"; } | RecordedKernelEvent & { readonly "type": "recorded"; });
 
@@ -127,7 +132,7 @@ export type QueryRequest = { readonly "query": KernelQuery; };
 
 export type QueuedThreadPrompt = { readonly "op_id"?: (number | null); readonly "task_id": string; readonly "thread_id": string; readonly "workspace_directory": string; };
 
-export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again");
+export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again" | "planning_revision_stale" | "planning_locked");
 
 export type RecordedKernelEvent = { readonly "event": KernelRecord; readonly "recorded_at": string; readonly "sequence": number; };
 
@@ -140,6 +145,8 @@ export type SessionsState = { readonly "message"?: (string | null); readonly "se
 export type SessionsStatus = ("idle" | "loading" | "ready" | "unavailable" | "failed");
 
 export type SkippedPlanningTask = { readonly "reason": string; readonly "status": PlanningTaskStatus; readonly "task_id": string; readonly "title": string; };
+
+export type TaskFields = { readonly "base_priority"?: (number | null); readonly "blocked_by"?: Array<string>; readonly "depends_on"?: Array<string>; readonly "description"?: (string | null); readonly "direction_id"?: (string | null); readonly "dynamic_priority_delta"?: (number | null); readonly "priority_reason"?: (string | null); readonly "status"?: (PlanningTaskStatus | null); readonly "title": string; };
 
 export type ThreadActivity = { readonly "active_turn_id"?: (string | null); readonly "approval"?: (ApprovalRequest | null); readonly "auto_follow_active": boolean; readonly "running": boolean; readonly "thread_id": string; };
 

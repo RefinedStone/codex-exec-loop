@@ -24,14 +24,15 @@ use super::recorder::{RecordDirection, SessionRecording};
 use crate::adapter::inbound::kernel_protocol::{
     AttachRequest, AttachResponse, CommandRequest, CommandResponse, ERROR_INVALID_PARAMS,
     ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_METHOD_NOT_FOUND, ERROR_NOT_ATTACHED,
-    EventNotification, KernelEvent, KernelProtocolError, METHOD_ATTACH, METHOD_COMMAND,
-    METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION, ParallelSource,
-    ParallelState, PlanningState, QueryRequest, describe,
+    EventNotification, KernelCommandInput, KernelEvent, KernelProtocolError, METHOD_ATTACH,
+    METHOD_COMMAND, METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION,
+    ParallelSource, ParallelState, PlanningState, QueryRequest, describe,
 };
 use crate::composition::kernel_host::{
     KernelCallError, KernelClientHandle, KernelCommandOutcome, KernelCommandSender,
     KernelHostEvent, ParallelHostView,
 };
+use crate::composition::native_client_runtime::{KernelClientCommand, StoredCommandEnd};
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 use crate::domain::kernel_event::KernelCommandDescriptor;
 
@@ -234,15 +235,31 @@ impl KernelSession {
                 caller,
                 ..descriptor
             });
-        let command = request.command.into_core(&attached.workspace)?;
+        let command = match request.command.into_input(&attached.workspace)? {
+            KernelCommandInput::Core(command) => KernelClientCommand::Core(command),
+            KernelCommandInput::Stored(command) => KernelClientCommand::Stored(command),
+        };
         let commands = attached.commands.clone();
         let sent = blocking(move || {
             commands.send_described_command(command, descriptor, KERNEL_CALL_TIMEOUT)
         })
         .await?;
         let response = match sent {
-            Ok(KernelCommandOutcome::Handled { events, operation }) => {
-                CommandResponse::from_core(Some(&events)).with_operation(operation)
+            Ok(KernelCommandOutcome::Handled {
+                events,
+                operation,
+                stored,
+            }) => {
+                let response = CommandResponse::from_core(Some(&events)).with_operation(operation);
+                match stored {
+                    Some(StoredCommandEnd::Finished(outcome)) => {
+                        response.with_stored(Some(outcome))
+                    }
+                    Some(StoredCommandEnd::Failed(detail)) => {
+                        response.with_failed_stored_command(detail)
+                    }
+                    None => response,
+                }
             }
             Ok(KernelCommandOutcome::Replayed(receipt)) => CommandResponse::replayed(receipt),
             Ok(KernelCommandOutcome::KeyReused) => {

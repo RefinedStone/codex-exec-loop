@@ -41,7 +41,34 @@ fn sample_commands() -> Vec<KernelCommand> {
             confirm: true,
         },
         KernelCommand::RefreshPlanning {},
+        KernelCommand::CreateTask {
+            task: sample_task_fields(),
+        },
+        KernelCommand::UpdateTask {
+            task_id: "task-1".to_string(),
+            task: sample_task_fields(),
+            expected_planning_revision: 7,
+        },
+        KernelCommand::DeleteTask {
+            task_id: "task-1".to_string(),
+            expected_planning_revision: 7,
+            confirm: true,
+        },
     ]
+}
+
+fn sample_task_fields() -> TaskFields {
+    TaskFields {
+        direction_id: Some("direction-1".to_string()),
+        title: "Fix the failing test".to_string(),
+        description: Some("The test fails on macOS.".to_string()),
+        status: Some(PlanningTaskStatus::Ready),
+        base_priority: Some(3),
+        dynamic_priority_delta: None,
+        priority_reason: None,
+        depends_on: vec!["task-0".to_string()],
+        blocked_by: Vec::new(),
+    }
 }
 
 fn no_parallel() -> ParallelSource<'static> {
@@ -49,6 +76,30 @@ fn no_parallel() -> ParallelSource<'static> {
         enabled: false,
         supervisor: None,
         status: None,
+    }
+}
+
+/*
+ * The places where the spec carries the schema keyword `description`. schemars writes Rust doc comments there.
+ * A key directly under `properties` is a field name (a task has a field `description`), not the keyword.
+ */
+fn code_comment_keys(value: &Value, under_properties: bool) -> Vec<String> {
+    match value {
+        Value::Object(fields) => fields
+            .iter()
+            .flat_map(|(key, child)| {
+                let mut found = code_comment_keys(child, key == "properties");
+                if key == "description" && !under_properties {
+                    found.push(child.to_string());
+                }
+                found
+            })
+            .collect(),
+        Value::Array(items) => items
+            .iter()
+            .flat_map(|item| code_comment_keys(item, false))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -71,13 +122,21 @@ fn every_command_round_trips_and_is_described() {
 fn every_command_maps_to_one_core_command() {
     for command in sample_commands() {
         let label = format!("{command:?}");
-        let core = command
-            .into_core("/workspace")
+        let kind = command.kind();
+        let input = command
+            .into_input("/workspace")
             .unwrap_or_else(|error| panic!("{label} should map: {error:?}"));
-        assert!(
-            !matches!(core, AppCommand::Noop),
-            "{label} must not map to Noop"
-        );
+        match input {
+            KernelCommandInput::Core(core) => assert!(
+                !matches!(core, AppCommand::Noop),
+                "{label} must not map to Noop"
+            ),
+            // plan 18 K4-9d: a stored command does not pass the core. It keeps its kind and has a result shape.
+            KernelCommandInput::Stored(stored) => {
+                assert_eq!(stored.kind(), kind, "{label}");
+                assert!(CommandResult::name_for(kind).is_some(), "{label}");
+            }
+        }
     }
     assert_eq!(
         KernelCommand::SteerTurn {
@@ -604,6 +663,8 @@ fn command_response_names_why_the_kernel_refused_a_command() {
             processed: false,
             rejection: None,
             operation: None,
+            result: None,
+            failure: None,
         }
     );
     assert_eq!(
@@ -612,6 +673,8 @@ fn command_response_names_why_the_kernel_refused_a_command() {
             processed: true,
             rejection: None,
             operation: None,
+            result: None,
+            failure: None,
         }
     );
     let refused = CommandResponse::from_core(Some(&[AppEvent::TurnSteerAdmissionResolved(
@@ -1375,9 +1438,9 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
     assert!(spec["$defs"]["QueuedThreadPrompt"]["properties"]["handoff"].is_null());
     // Code comments are for developers. The spec carries only the summaries of its tables, but it keeps
     // a field that is named `title`.
-    let text = serde_json::to_string(&spec).expect("the spec should serialize");
-    assert!(
-        !text.contains("\"description\""),
+    assert_eq!(
+        code_comment_keys(&spec, false),
+        Vec::<String>::new(),
         "a code comment reached the spec"
     );
     assert!(spec["$defs"]["PlanningTask"]["properties"]["title"].is_object());
@@ -1815,8 +1878,8 @@ fn a_destructive_command_needs_confirm_in_the_schema_and_in_the_code() {
         assert!(confirmed.confirmed(), "{name}");
     }
     assert_eq!(
-        destructive, 1,
-        "reset_planning is the destructive command today"
+        destructive, 2,
+        "reset_planning and delete_task are the destructive commands today"
     );
 }
 

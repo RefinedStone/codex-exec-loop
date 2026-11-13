@@ -47,6 +47,7 @@ use crate::application::port::inbound::pr_validation_command_port::PrValidationC
 use crate::application::port::inbound::pr_validation_query_port::PrValidationQueryPort;
 use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceQueryPort;
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
+use crate::application::port::inbound::stored_command_port::StoredCommandPort;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
@@ -91,6 +92,7 @@ use crate::application::service::pr_validation_rollout_evidence_query::PrValidat
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::application::service::stored_command::StoredCommandService;
 use crate::application::service::work_context::WorkContextService;
 use crate::composition::native_client_runtime::{
     NativeClientRuntime, NativeTuiApplicationComposition,
@@ -544,6 +546,73 @@ pub(crate) fn recorded_commands_for_test(workspace_dir: &str) -> Vec<(String, Op
             _ => None,
         })
         .collect()
+}
+
+/*
+ * 저장 명령의 실행기이다 (plan 18 K4-9d). 커널의 조립이다: 변경을 직접 실행한다. 입구의 조립을 쓰면 명령이
+ * 자기에게 돌아온다. 저장소와 파일만 쓴다. app-server 를 시작하지 않고 planning worker 를 부르지 않는다.
+ */
+pub(crate) fn stored_command_port(workspace_dir: &str) -> Arc<dyn StoredCommandPort> {
+    struct NoPlanningWorker;
+    impl PlanningWorkerPort for NoPlanningWorker {
+        fn run_planning_session(
+            &self,
+            _request: crate::application::port::outbound::planning_worker_port::PlanningWorkerRequest,
+        ) -> Result<crate::application::port::outbound::planning_worker_port::PlanningWorkerResponse>
+        {
+            anyhow::bail!("a stored command does not run a planning worker")
+        }
+    }
+    let (planning, workspace, store) = store_planning_services(Arc::new(NoPlanningWorker));
+    Arc::new(StoredCommandService::new(
+        PlanningAdminFacadeService::from_planning_with_authority(
+            workspace_dir,
+            planning,
+            workspace,
+            store.clone(),
+            store,
+        ),
+    ))
+}
+
+/// 저장소와 파일만 쓰는 planning 서비스이다. app-server 를 시작하지 않는다.
+fn store_planning_services(
+    worker: Arc<dyn PlanningWorkerPort>,
+) -> (
+    PlanningServices,
+    Arc<dyn PlanningWorkspacePort>,
+    Arc<SqlitePlanningAuthorityAdapter>,
+) {
+    let store = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let workspace: Arc<dyn PlanningWorkspacePort> = Arc::new(
+        FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(store.clone()),
+    );
+    let planning =
+        PlanningServices::from_ports(workspace.clone(), store.clone(), store.clone(), worker);
+    (planning, workspace, store)
+}
+
+/*
+ * 저장소에서 읽은 지금의 planning 상태이다 (plan 18 K4-9d). 커널이 떠 있지 않을 때 명령 전용 조립이 `planning` 조회에
+ * 이 값으로 답한다. 낡은 revision 으로 거절된 클라이언트가 지금의 revision 을 읽을 수 있어야 하기 때문이다.
+ */
+pub(crate) fn stored_planning_projection(
+    workspace_dir: &str,
+) -> crate::domain::planning::RuntimeProjection {
+    struct NoPlanningWorker;
+    impl PlanningWorkerPort for NoPlanningWorker {
+        fn run_planning_session(
+            &self,
+            _request: crate::application::port::outbound::planning_worker_port::PlanningWorkerRequest,
+        ) -> Result<crate::application::port::outbound::planning_worker_port::PlanningWorkerResponse>
+        {
+            anyhow::bail!("a planning query does not run a planning worker")
+        }
+    }
+    let (planning, _, _) = store_planning_services(Arc::new(NoPlanningWorker));
+    planning
+        .runtime
+        .load_runtime_projection_or_invalid(workspace_dir)
 }
 
 /// 커널이 관찰하는 작업 공간의 git 상태이다 (plan 20 §4.1).
