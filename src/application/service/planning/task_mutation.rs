@@ -4,6 +4,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskRepositoryPort, load_consistent_planning_authority_snapshots,
 };
 
+use crate::domain::planning::PlanningMutationRefusal;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningActiveDirectionPolicy,
     PlanningTaskIdPolicy, PlanningTaskMutationPolicy, PlanningTaskReferencePolicy,
@@ -907,10 +908,11 @@ fn ensure_expected_planning_revision(
             && let Some(expected) = input.expected_planning_revision
             && expected != current_planning_revision
         {
-            bail!(
+            return Err(PlanningMutationRefusal::revision_stale(format!(
                 "planning changed after task `{}` was opened (revision {expected} -> {current_planning_revision}); reload it and retry",
                 input.task_id.trim()
-            );
+            ))
+            .into());
         }
     }
     Ok(())

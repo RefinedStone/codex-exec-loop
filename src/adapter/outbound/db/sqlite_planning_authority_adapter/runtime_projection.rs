@@ -12,6 +12,8 @@ use chrono::{DateTime, Utc};
 // `OptionalExtension`은 "행 없음"을 오류가 아닌 Option으로 바꿔 클레임 부재를 표현한다.
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::domain::planning::PlanningMutationRefusal;
+
 // application port의 record/status/snapshot 타입을 그대로 반환해,
 // SQLite 세부 구조가 application layer로 새지 않도록 어댑터 내부에서 매핑을 끝낸다.
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
@@ -230,9 +232,10 @@ pub(super) fn ensure_no_admin_authority_mutation_guard(
     if let Some(owner) = authority_mutation_owner
         && permitted_owner_token != Some(owner.as_str())
     {
-        anyhow::bail!(
+        return Err(PlanningMutationRefusal::locked(format!(
             "refusing to persist {projection_kind} while admin authority mutation guard `{owner}` is active"
-        );
+        ))
+        .into());
     }
     Ok(())
 }
@@ -321,22 +324,24 @@ impl SqlitePlanningAuthorityAdapter {
             .values()
             .find(|lease| task_ids.contains(lease.task_id.trim()))
         {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "planning task `{}` cannot be edited while slot `{}` is {}",
                 lease.task_id,
                 lease.slot_id,
                 lease.state.label()
-            );
+            ))
+            .into());
         }
         if let Some(record) = snapshot.distributor_queue_records.iter().find(|record| {
             task_ids.contains(record.task_id.trim()) && record.queue_state.is_active()
         }) {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "planning task `{}` cannot be edited while distributor item `{}` is {}",
                 record.task_id,
                 record.queue_item_id,
                 record.queue_state.label()
-            );
+            ))
+            .into());
         }
         if let Some(detail) = snapshot.session_details.iter().find(|detail| {
             task_ids.contains(detail.task_id.trim())
@@ -345,19 +350,19 @@ impl SqlitePlanningAuthorityAdapter {
                     "cleaned" | "failed" | "aborted"
                 )
         }) {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "planning task `{}` cannot be edited while session `{}` is {}",
-                detail.task_id,
-                detail.session_key,
-                detail.completion_state_label
-            );
+                detail.task_id, detail.session_key, detail.completion_state_label
+            ))
+            .into());
         }
         if let Some((claim_kind, scope_key, claim_owner)) =
             active_runtime_claim_for_kinds(&transaction, &[OFFICIAL_REFRESH_CLAIM_KIND])?
         {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "planning task edit is blocked while runtime claim {claim_kind}:{scope_key} is owned by `{claim_owner}`"
-            );
+            ))
+            .into());
         }
         for task_id in &task_ids {
             clear_stale_runtime_claim(&transaction, ADMIN_TASK_MUTATION_CLAIM_KIND, task_id)?;
@@ -425,24 +430,26 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to open admin authority mutation guard transaction")?;
         let snapshot = load_runtime_projection_snapshot(&transaction)?;
         if let Some(lease) = snapshot.slot_leases.values().next() {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "{action} is blocked while parallel work is active: slot {} is {} for task {}",
                 lease.slot_id,
                 lease.state.label(),
                 lease.task_id
-            );
+            ))
+            .into());
         }
         if let Some(record) = snapshot
             .distributor_queue_records
             .iter()
             .find(|record| record.queue_state.is_active())
         {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "{action} is blocked while parallel work is active: distributor item {} is {} for task {}",
                 record.queue_item_id,
                 record.queue_state.label(),
                 record.task_id
-            );
+            ))
+            .into());
         }
         if let Some(detail) = snapshot.session_details.iter().find(|detail| {
             !matches!(
@@ -450,23 +457,23 @@ impl SqlitePlanningAuthorityAdapter {
                 "cleaned" | "failed" | "aborted"
             )
         }) {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "{action} is blocked while parallel work is active: session {} is {} for task {}",
-                detail.session_key,
-                detail.completion_state_label,
-                detail.task_id
-            );
+                detail.session_key, detail.completion_state_label, detail.task_id
+            ))
+            .into());
         }
         if let Some(command) = snapshot
             .dispatch_commands
             .iter()
             .find(|command| !command.is_terminal())
         {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "{action} is blocked while parallel work is active: dispatch command {} is {}",
                 command.command_id,
                 command.state.label()
-            );
+            ))
+            .into());
         }
         if let Some((claim_kind, scope_key, claim_owner)) = active_runtime_claim_for_kinds(
             &transaction,
@@ -476,9 +483,10 @@ impl SqlitePlanningAuthorityAdapter {
                 OFFICIAL_REFRESH_SCOPE_KEY,
             ],
         )? {
-            anyhow::bail!(
+            return Err(PlanningMutationRefusal::locked(format!(
                 "{action} is blocked while runtime claim {claim_kind}:{scope_key} is owned by `{claim_owner}`"
-            );
+            ))
+            .into());
         }
         clear_stale_runtime_claim(
             &transaction,
