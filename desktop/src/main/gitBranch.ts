@@ -22,6 +22,12 @@ export function parseGitHubRemote(url: string): string | null {
   return match ? `${match[1]}/${match[2]}` : null;
 }
 
+/** 폴더의 `origin` 이 가리키는 GitHub `owner/name` 이다 (R11). git 저장소가 아니거나 GitHub 가 아니면 null 이다. */
+export async function readGitHubRepository(cwdInput: unknown): Promise<string | null> {
+  const output = await runGit(await requireDirectory(cwdInput), ["remote", "get-url", "origin"], 4096);
+  return output.code === 0 ? parseGitHubRemote(output.stdout) : null;
+}
+
 /** `git log -z` 출력(위 형식)을 커밋 목록으로 바꾼다. push 여부는 부르는 쪽이 채운다. */
 export function parseCommitLog(output: string): Omit<GitCommit, "pushed">[] {
   const fields = output.split("\0");

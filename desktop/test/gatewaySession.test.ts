@@ -101,6 +101,9 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     github: {
       summary: async () => ({ login: "", myPullRequests: [], reviewRequests: [] }),
       reviewPrompt: async () => "",
+      project: async () => ({ title: "", url: "", items: [], closedCount: 0, truncated: false }),
+      issuePrompt: async () => "",
+      repository: async () => null,
       openExternal: () => undefined,
     },
     jira: {

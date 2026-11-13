@@ -12,11 +12,11 @@ import { spawn as spawnPty } from "node-pty";
 
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
-import { readBranchSummary, readCommitDiff } from "./gitBranch";
+import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBranch";
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
 import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks";
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
-import { readGitHubSummary, readReviewPrompt } from "./githubService";
+import { readGitHubSummary, readIssuePrompt, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { TerminalService } from "./terminalService";
 
@@ -294,6 +294,9 @@ ipcMain.handle(IPC_CHANNELS.browserSaveSettings, (_event, settings: unknown) => 
 
 ipcMain.handle(IPC_CHANNELS.githubSummary, () => readGitHubSummary());
 ipcMain.handle(IPC_CHANNELS.githubReviewPrompt, (_event, url: unknown) => readReviewPrompt(url));
+ipcMain.handle(IPC_CHANNELS.githubProject, (_event, project: unknown) => readProject(project));
+ipcMain.handle(IPC_CHANNELS.githubIssuePrompt, (_event, url: unknown) => readIssuePrompt(url));
+ipcMain.handle(IPC_CHANNELS.githubRepository, (_event, cwd: unknown) => readGitHubRepository(cwd));
 ipcMain.handle(IPC_CHANNELS.jiraStatus, () => jira.status());
 ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.connect(request));
 ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
