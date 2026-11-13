@@ -9,6 +9,8 @@ pub mod conversation_thread_turn_options_port;
 // kernel event log port 는 커널의 판단 사건을 저장소별 추가 전용 기록에 쓰고 읽는다 (plan 19 Q3).
 pub mod kernel_event_log_port;
 pub mod kernel_gateway_port;
+// planning reset route port 는 입구의 planning 초기화를 저장소 커널의 명령으로 보낸다 (plan 18 K4-9a).
+pub mod planning_reset_route_port;
 pub mod repository_state_port;
 // gateway upstream port는 akra-gateway 세션마다 codex app-server 와 이어진 바이트 스트림을 연다.
 pub mod gateway_upstream_port;

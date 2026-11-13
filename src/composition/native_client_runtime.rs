@@ -2757,6 +2757,7 @@ pub(crate) mod tests {
             thread_id: "thread-1".to_string(),
             result: OperationEnd::Lost,
             reason: None,
+            detail: None,
         };
         assert_eq!(
             restarted

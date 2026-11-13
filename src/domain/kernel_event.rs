@@ -266,6 +266,10 @@ pub enum KernelEvent {
         result: OperationEnd,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<ReasonCode>,
+        /// 실패한 요청이 댄 원인이다 (plan 18 K4-9a). 사람이 읽는 글이다. 입구가 사용자에게 그대로 보인다.
+        /// 성공한 명령과 이유 코드로 끝난 명령에는 없다.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     /*
      * 저장소의 git 상태가 지난 관찰과 다르다 (plan 20 §4.1). 커널은 주기적으로 본다. 그래서 관찰 사이의 변화
@@ -635,6 +639,7 @@ pub fn restart_closures(events: &[KernelEvent]) -> Vec<KernelEvent> {
                 thread_id: thread_id.clone(),
                 result: OperationEnd::Lost,
                 reason: None,
+                detail: None,
             });
         }
     }
@@ -717,6 +722,7 @@ pub fn turn_events_between(before: &[ThreadTurn], after: &[ThreadTurn]) -> Vec<K
             thread_id: turn.thread_id.clone(),
             result: OperationEnd::Failed,
             reason: None,
+            detail: None,
         });
     ended
         .into_iter()
@@ -986,6 +992,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Lost,
                 reason: None,
+                detail: None,
             }],
             "only the command of this kernel generation is closed"
         );
@@ -1039,6 +1046,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,
                 reason: None,
+                detail: None,
             }]
         );
         // A turn that no command submitted (a TUI turn, automatic follow-up) closes without an operation record.
@@ -1105,6 +1113,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     result: OperationEnd::Failed,
                     reason: Some(ReasonCode::PlanningRefused),
+                    detail: None,
                 },
                 OperationState::Failed,
             ),
@@ -1149,6 +1158,7 @@ mod tests {
                         thread_id: "thread-1".to_string(),
                         result: OperationEnd::Done,
                         reason: None,
+                        detail: None,
                     },
                 ]
             ),
@@ -1187,6 +1197,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     result: OperationEnd::Lost,
                     reason: None,
+                    detail: None,
                 },
             ]
         );
@@ -1332,6 +1343,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,
                 reason: Some(ReasonCode::PlanningRefused),
+                detail: None,
             },
             repository("b", Some("main"))
                 .change_from(Some(&repository("a", None)))

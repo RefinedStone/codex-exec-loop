@@ -35,6 +35,27 @@ impl GatewayKernelClientAdapter {
 
 impl KernelGatewayPort for GatewayKernelClientAdapter {
     fn request(&self, method: &str, params: Value, wait: bool) -> Result<KernelGatewayReply> {
+        /*
+         * The request runs on its own thread with its own runtime. An entrance may call this port from
+         * inside an async runtime (the admin server handles a reset in an async handler), and a runtime
+         * cannot be started on a thread that already drives one. The caller still waits for the answer.
+         */
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| self.request_on_this_thread(method, params, wait))
+                .join()
+                .unwrap_or_else(|_| bail!("the Gateway request thread panicked"))
+        })
+    }
+}
+
+impl GatewayKernelClientAdapter {
+    fn request_on_this_thread(
+        &self,
+        method: &str,
+        params: Value,
+        wait: bool,
+    ) -> Result<KernelGatewayReply> {
         let endpoint = crate::gateway_endpoint::client_endpoint()?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

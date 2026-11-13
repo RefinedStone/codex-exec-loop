@@ -77,6 +77,17 @@ between invocations, so `load_sessions` helps only while another client (Akra De
 kernel up. The automatic follow-up settings are kept: the kernel records them
 (`auto_follow_configured`) and the next Gateway kernel restores the last record.
 
+The planning reset of the other entrances also goes to the repository kernel. `akra reset`, the
+admin reset (`/api/planning/reset`, `/admin/controls/reset`), and the Telegram `/reset` commands
+send `reset_planning` through the same command port and wait for the end of that operation. The
+record of the command names the entrance in `caller` (`akra-cli`, `akra-admin`, `akra-telegram`).
+The text that each entrance shows did not change: the files that a reset rewrites and removes are
+fixed for each target, and a failed reset shows the cause that the kernel recorded
+(`command_completed.detail`). The confirmation rule of the entrances did not change either: a queue
+reset needs no confirmation, `directions` and `all` need one, and an unconfirmed request is refused
+before it reaches the kernel. Under a TUI that runs the kernel, the reset still runs directly and
+leaves no record (until K6).
+
 The generated `akra-kernel` skill is installed independently of MCP server registration and
 registered through `skills/extraRoots/set`. Its source is `schema/akra-kernel-spec.json`.
 `node scripts/generate-kernel-skill.mjs` prints the generated document; `--check` verifies the
@@ -386,7 +397,8 @@ the desktop app itself is not shipped yet.
   `reset_planning`), or `unreported` (no command of this version; it is the rule of commands that an
   older kernel received, and their state stays `accepted`). `rename_session`, `steer_turn`,
   `stop_all`, `decide_approval`, and `reset_planning` end with `command_completed` when the request
-  of the command returns: `done` if it succeeded and `failed` if it did not. `stop_all` ends with its
+  of the command returns: `done` if it succeeded and `failed` if it did not. A failed request
+  writes its cause into `command_completed.detail` as text for a person. `stop_all` ends with its
   first stop request; the kernel may send the stop again after a turn starts. A command that the
   kernel accepts but that does nothing (a rename while the session list loads, a stop while another
   stop is in flight, a reset while a planning operation runs) ends as `failed` at once. A

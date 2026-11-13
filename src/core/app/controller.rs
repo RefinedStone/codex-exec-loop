@@ -138,8 +138,8 @@ impl CoreController {
         let completed_effect = super::command_operation::CommandEffectKey::of_completion(&input);
         let outcome = self.handle_input_inner(input);
         let mut outcome = self.with_conversation_runtime_authority(outcome);
-        if let Some((effect, succeeded)) = completed_effect {
-            self.record_command_end(&effect, succeeded);
+        if let Some((effect, failure)) = completed_effect {
+            self.record_command_end(&effect, failure);
         }
         self.record_turn_submissions(&outcome.effects);
         if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
@@ -236,6 +236,7 @@ impl CoreController {
                     thread_id,
                     result: kernel_event::OperationEnd::Failed,
                     reason: None,
+                    detail: None,
                 }),
         }
         outcome
@@ -245,22 +246,24 @@ impl CoreController {
     fn record_command_end(
         &mut self,
         effect: &super::command_operation::CommandEffectKey,
-        succeeded: bool,
+        failure: Option<String>,
     ) {
         let Some(operation) = self.conversation_turn.complete_command_operation(effect) else {
             return;
         };
-        let result = if succeeded {
+        let result = if failure.is_none() {
             kernel_event::OperationEnd::Done
         } else {
             kernel_event::OperationEnd::Failed
         };
+        // 실패의 원인을 기록에 싣는다. 명령을 보낸 입구가 그 글을 사용자에게 보인다 (plan 18 K4-9a).
         self.conversation_turn
             .record_kernel_event(KernelEvent::CommandCompleted {
                 op_id: operation.op_id,
                 thread_id: operation.thread_id,
                 result,
                 reason: None,
+                detail: failure,
             });
     }
 
@@ -2325,6 +2328,7 @@ fn command_completed(
         thread_id: thread_id.to_string(),
         result,
         reason: Some(reason),
+        detail: None,
     })
 }
 
@@ -10547,6 +10551,7 @@ mod tests {
                 thread_id: "thread-beta".to_string(),
                 result: kernel_event::OperationEnd::Failed,
                 reason: None,
+                detail: None,
             }]
         );
         assert_eq!(state, OperationState::Failed);
@@ -10575,6 +10580,7 @@ mod tests {
                 thread_id: "thread-beta".to_string(),
                 result: OperationEnd::Failed,
                 reason: Some(ReasonCode::PlanningRefused),
+                detail: None,
             }]
         );
         assert_eq!(state, OperationState::Failed);
@@ -10591,6 +10597,7 @@ mod tests {
                 thread_id: "thread-beta".to_string(),
                 result: OperationEnd::Done,
                 reason: Some(ReasonCode::ParallelModeStarted),
+                detail: None,
             }]
         );
         assert_eq!(state, OperationState::Done);
@@ -10759,6 +10766,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,
                 reason: None,
+                detail: None,
             }]
         );
         controller.handle_input(CoreInput::EffectCompleted(
@@ -10778,6 +10786,34 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Done,
                 reason: None,
+                detail: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failed_request_records_its_cause_at_the_end_of_the_command() {
+        // plan 18 K4-9a: the entrance that sent the command shows this text to the user.
+        use kernel_event::OperationEnd;
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(
+            AppCommand::RenameSession(SessionRenameRequest::new("thread-1", "Renamed"))
+                .with_operation(7),
+        ));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: session_rename_correlation(1, "thread-1", "Renamed"),
+                result: Err("the app-server refused the name".to_string()),
+            },
+        ));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![KernelEvent::CommandCompleted {
+                op_id: 7,
+                thread_id: "thread-1".to_string(),
+                result: OperationEnd::Failed,
+                reason: None,
+                detail: Some("the app-server refused the name".to_string()),
             }]
         );
     }

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::composition::clipboard_image_probe::CompositionClipboardImageProbeTrigger;
+use crate::composition::kernel_command_execution;
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
 use anyhow::Result;
@@ -102,7 +103,7 @@ const AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR: &str = "AKRA_APP_SERVER_PROMPT_LOG";
 pub(crate) fn build_kernel_command_port(
     workspace: &Path,
 ) -> Result<Box<dyn crate::application::port::inbound::kernel_command_port::KernelCommandPort>> {
-    crate::composition::kernel_command_execution::build(workspace)
+    kernel_command_execution::build(workspace, kernel_command_execution::CALLER_CLI)
 }
 
 pub(crate) struct ProductionAdminApplication {
@@ -151,11 +152,29 @@ pub(crate) fn build_planning_services() -> PlanningServices {
     planning_services_from_ports(&ports)
 }
 
+/// CLI 명령이 쓰는 planning 서비스이다. 초기화는 저장소 커널의 명령으로 간다 (plan 18 K4-9a).
 pub(crate) fn build_planning_services_for_workspace(workspace_dir: &str) -> PlanningServices {
     let capture_enabled = app_server_prompt_logging_enabled();
     maintain_prompt_logs_best_effort(workspace_dir, capture_enabled);
     let ports = build_shared_ports_for_prompt_logging(capture_enabled);
-    planning_services_from_ports(&ports)
+    entrance_planning_services(&ports, kernel_command_execution::CALLER_CLI)
+}
+
+/*
+ * 입구(CLI, admin, Telegram)의 planning 서비스이다 (plan 18 K4-9a). 커널의 조립과 다른 점은 하나이다: 초기화를 직접
+ * 실행하지 않고 저장소 커널의 명령 `reset_planning` 으로 보낸다. 그래서 초기화가 판단 사건 기록에 `caller` 와 함께
+ * 남고, Gateway 의 커널이 도는 저장소에서는 그 커널이 실행한다. 커널의 조립(`planning_services_from_ports`)은 이
+ * 함수를 쓰지 않는다. 쓰면 명령이 자기에게 돌아온다.
+ */
+fn entrance_planning_services(
+    ports: &ProductionSharedPorts,
+    caller: &'static str,
+) -> PlanningServices {
+    let mut planning = planning_services_from_ports(ports);
+    planning.workspace = planning.workspace.with_reset_route(Arc::new(
+        kernel_command_execution::KernelRoutedPlanningReset::new(caller),
+    ));
+    planning
 }
 
 pub(crate) fn build_planning_control_service(workspace_dir: String) -> PlanningControlService {
@@ -323,7 +342,8 @@ pub(crate) fn build_admin_application_with_debug_harness(
     let facade: Arc<dyn PlanningAdminPort> =
         Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
             workspace_dir,
-            planning,
+            // 입구의 초기화는 저장소 커널의 명령으로 간다 (plan 18 K4-9a).
+            entrance_planning_services(&ports, kernel_command_execution::CALLER_ADMIN),
             ports.planning_workspace_port,
             ports.planning_authority_port,
             ports.planning_task_repository_port,
@@ -353,7 +373,8 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
     );
     let control_service = PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
         workspace_dir.clone(),
-        planning.clone(),
+        // 입구의 초기화는 저장소 커널의 명령으로 간다 (plan 18 K4-9a).
+        entrance_planning_services(&ports, kernel_command_execution::CALLER_TELEGRAM),
     )));
     let parallel_mode_control_port = Arc::new(parallel_mode_control_plane_from_parts(
         &workspace_dir,
@@ -1372,6 +1393,30 @@ mod tests {
             )
             .expect("workspace planning prompt count should load");
         assert_eq!(retained_count, 0);
+    }
+
+    #[test]
+    fn only_the_entrances_send_a_planning_reset_to_the_repository_kernel() {
+        // plan 18 K4-9a: CLI, admin, and Telegram route the reset. A kernel runs it; a routed kernel would
+        // send the command back to itself.
+        let ports = build_shared_ports_for_prompt_logging(false);
+        for caller in [
+            kernel_command_execution::CALLER_CLI,
+            kernel_command_execution::CALLER_ADMIN,
+            kernel_command_execution::CALLER_TELEGRAM,
+        ] {
+            assert!(
+                entrance_planning_services(&ports, caller)
+                    .workspace
+                    .routes_reset_to_kernel(),
+                "{caller}"
+            );
+        }
+        assert!(
+            !planning_services_from_ports(&ports)
+                .workspace
+                .routes_reset_to_kernel()
+        );
     }
 
     #[test]
