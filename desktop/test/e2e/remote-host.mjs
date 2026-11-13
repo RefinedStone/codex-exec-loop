@@ -51,7 +51,13 @@ try {
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
   await page.getByTestId("turn").first().waitFor({ timeout: 15_000 });
   check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/read"));
-  check("the remote conversation has no composer", (await page.getByTestId("composer-input").count()) === 0);
+  check("the remote conversation has no composer before the user permits it", (await page.getByTestId("composer-input").count()) === 0);
+
+  // "세션 한 번 허용": 보내기를 허락하면 thread/resume 으로 구독하고 composer 가 나타난다 (plan 25).
+  await page.getByTestId("remote-allow-send").click();
+  await page.getByTestId("composer-input").waitFor({ timeout: 10_000 });
+  check("permitting sending subscribes with thread/resume", gateway.remoteReceivedMethods.includes("thread/resume"));
+  check("the composer appears after the user permits sending", (await page.getByTestId("composer-input").count()) === 1);
 
   console.log("--- remote conversation text ---");
   console.log(await page.getByTestId("remote-banner").innerText());

@@ -263,6 +263,33 @@ describe("a remote host over the fake gateway (plan 25)", () => {
     expect(fake.remoteReceivedMethods.some((method) => method === "thread/resume" || method === "thread/unsubscribe")).toBe(false);
   });
 
+  it("allows sending after the user permits it, resuming the thread and sending a turn", async () => {
+    const fake = await startFakeGateway(uniqueTestEndpoint(), APPROVAL_TURN_RECORDING, { hosts: ["cloud"] });
+    cleanups.push(() => fake.close());
+    const { connection, bridge } = connectBridge(fake.endpoint, undefined, "cloud");
+    const store = sessionStore();
+    const session = new DesktopSession(bridge, store, "test", undefined, true);
+    session.start();
+    cleanups.push(() => session.stop());
+    connection.start();
+    await waitFor(() => store.snapshot.gateway !== undefined || store.snapshot.sessionError !== undefined);
+
+    await session.openThread("01a1abfb-8f0a-7581-a8e4-c2953347f470");
+    expect(fake.remoteReceivedMethods).toContain("thread/read");
+    expect(session.canSend()).toBe(false);
+
+    // 사용자가 허락하면 thread/resume 으로 다시 구독하고, 턴을 보낼 수 있다.
+    await session.allowSending();
+    expect(session.canSend()).toBe(true);
+    expect(fake.remoteReceivedMethods).toContain("thread/resume");
+
+    // 가짜 Gateway 는 turn 응답을 녹화하지 않아 거절할 수 있다. 쓰기 method 가 Gateway 로 갔는지만 본다.
+    await session.sendMessage("hello").catch(() => undefined);
+    expect(fake.remoteReceivedMethods.some((method) => method === "turn/start" || method === "turn/steer")).toBe(true);
+    // 허락해도 새 스레드는 만들지 않는다 (plan 25 §2).
+    expect(fake.remoteReceivedMethods).not.toContain("thread/start");
+  });
+
   it("does not reconnect to a host that the gateway does not know", async () => {
     const fake = await gateway();
     const { connection, states } = connectBridge(fake.endpoint, undefined, "missing");

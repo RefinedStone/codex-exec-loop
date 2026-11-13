@@ -9,10 +9,11 @@
 //! 인증은 로컬 `~/.codex/auth.json` 의 access_token 하나이다(공식 앱과 같은 토큰). 하위 프로토콜
 //! `openai-bearer.<token>` 로 보낸다. 자격증명은 로그·스냅샷에 남기지 않는다.
 //!
-//! 범위(D1): 읽기 전용이다. 클라이언트의 요청은 [`READ_ONLY_METHODS`] 만 클라우드로 보내고 나머지는
-//! 다리가 거절한다. 그래서 실계정 쓰기(turn/*, thread/resume 등)는 어떤 클라이언트가 붙어도 일어나지
-//! 않는다 (D-19). 클라우드가 로그인을 거절하면(401/403) close 1008 로 닫아 클라이언트가 다시 시도하지
-//! 않게 한다 (plan 25 §7). 요청 변환(§3)·토큰 갱신은 쓰기 단계(D2)에서 더한다.
+//! 범위: 클라이언트의 요청은 [`ALLOWED_CLIENT_METHODS`](공개 프로토콜의 읽기와 대화 쓰기, plan 25 §6)만
+//! 클라우드로 보내고 나머지는 다리가 거절한다. 쓰기(`turn/*`, `thread/resume` 등)는 사용자가 대화별로 한 번
+//! 허락한 뒤에만 Desktop 이 보낸다 (D-19, "세션 한 번 허용"). 비공개 method(`turn/addUserMessage` 등)는 넣지
+//! 않는다. 클라우드가 로그인을 거절하면(401/403) close 1008 로 닫아 클라이언트가 다시 시도하지 않게 한다
+//! (plan 25 §7). 요청 변환(§3)·토큰 갱신은 뒤 단계에서 더한다.
 
 use std::path::PathBuf;
 use std::sync::Once;
@@ -46,9 +47,12 @@ const DEFAULT_CLIENT_VERSION: &str = "26.1106.51428";
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 256 << 20;
 /// Gateway 세션과 다리 사이의 인메모리 버퍼이다.
 const DUPLEX_BUFFER_BYTES: usize = 1 << 20;
-/// 클라우드로 보내도 되는 읽기 method 이다. 여기 없는 요청은 다리가 거절한다. `thread/resume` 은 멈춘
-/// 에이전트를 다시 깨울 수 있어 쓰기로 본다. 쓰기는 사용자 허락을 받는 단계(D2)에서 연다 (D-19).
-const READ_ONLY_METHODS: &[&str] = &[
+/// 클라우드로 보내도 되는 method 이다. 여기 없는 요청은 다리가 거절한다. 공개 프로토콜(plan 25 §6)의 읽기와
+/// 대화 쓰기만 있다. 쓰기는 사용자가 대화별로 한 번 허락한 뒤에만 Desktop 이 보낸다 (D-19, "세션 한 번 허용").
+/// Gateway 는 비공개 method 를 손으로 넣지 않으므로 `turn/addUserMessage` 같은 dots 전용 method 는 없다. 보내기는
+/// `turn/start`/`turn/steer` 로 한다. 클라우드가 이들을 받는지는 사용자가 보낼 때 확인된다 (G2).
+const ALLOWED_CLIENT_METHODS: &[&str] = &[
+    // 읽기
     "initialize",
     "initialized",
     "thread/list",
@@ -56,6 +60,13 @@ const READ_ONLY_METHODS: &[&str] = &[
     "thread/turns/list",
     "thread/items/list",
     "model/list",
+    // 대화 쓰기 (사용자 허락 뒤)
+    "thread/resume",
+    "thread/unsubscribe",
+    "turn/start",
+    "turn/steer",
+    "turn/interrupt",
+    "thread/stop",
 ];
 /// 거절 응답의 JSON-RPC 코드이다. 원격 접속의 `akra/kernel/*` 거절과 같다 (method not found).
 const READ_ONLY_REFUSAL_CODE: i64 = -32601;
@@ -187,21 +198,22 @@ enum ClientFrameRoute {
     Drop,
 }
 
-/// 읽기 요청과 오류 응답만 클라우드로 보낸다. `result` 응답은 클라우드의 요청(예: 승인)을 수락하는
-/// 쓰기이므로 버린다.
+/// 허용 method 의 요청과, 응답(오류·result)을 클라우드로 보낸다. result 응답은 클라우드의 서버 요청(예: 승인)에
+/// 대한 답이다. 사용자가 대화를 허락했을 때만 Desktop 이 보내므로 전달한다. 허용 목록에 없는 요청은 거절한다.
 fn route_client_frame(text: &str) -> ClientFrameRoute {
     let Ok(serde_json::Value::Object(message)) = serde_json::from_str::<serde_json::Value>(text)
     else {
         return ClientFrameRoute::Drop;
     };
     let Some(method) = message.get("method").and_then(|method| method.as_str()) else {
-        return if message.contains_key("error") {
+        // method 가 없으면 응답이다. 오류·result 응답은 전달하고, 그 밖(둘 다 없음)은 버린다.
+        return if message.contains_key("error") || message.contains_key("result") {
             ClientFrameRoute::Forward
         } else {
             ClientFrameRoute::Drop
         };
     };
-    if READ_ONLY_METHODS.contains(&method) {
+    if ALLOWED_CLIENT_METHODS.contains(&method) {
         return ClientFrameRoute::Forward;
     }
     match message.get("id") {
@@ -211,7 +223,7 @@ fn route_client_frame(text: &str) -> ClientFrameRoute {
                 "id": id,
                 "error": {
                     "code": READ_ONLY_REFUSAL_CODE,
-                    "message": format!("the cloud host is read-only: {method} is not sent"),
+                    "message": format!("the cloud host does not allow `{method}`"),
                 },
             })
             .to_string(),
@@ -624,11 +636,18 @@ mod tests {
     }
 
     #[test]
-    fn read_requests_and_error_responses_go_to_the_cloud() {
+    fn allowed_requests_and_responses_go_to_the_cloud() {
         for text in [
+            // 읽기
             r#"{"jsonrpc":"2.0","id":1,"method":"thread/list","params":{}}"#,
             r#"{"jsonrpc":"2.0","method":"initialized"}"#,
+            // 대화 쓰기 (사용자 허락 뒤)
+            r#"{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"turn/steer","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"thread/resume","params":{}}"#,
+            // 응답: 오류와, 클라우드 서버 요청(승인)에 대한 result
             r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"no"}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"result":{"decision":"accept"}}"#,
         ] {
             assert_eq!(
                 route_client_frame(text),
@@ -639,13 +658,9 @@ mod tests {
     }
 
     #[test]
-    fn a_write_request_is_refused_with_its_id() {
-        for method in [
-            "turn/start",
-            "thread/resume",
-            "thread/start",
-            "getAuthStatus",
-        ] {
+    fn a_method_outside_the_allowlist_is_refused_with_its_id() {
+        // 공개 프로토콜에 없거나 대화에 필요 없는 method 이다.
+        for method in ["turn/addUserMessage", "thread/start", "getAuthStatus"] {
             let text = format!(r#"{{"jsonrpc":"2.0","id":"a-1","method":"{method}"}}"#);
             let ClientFrameRoute::Refuse(response) = route_client_frame(&text) else {
                 panic!("{method} must be refused");
@@ -665,9 +680,9 @@ mod tests {
     #[test]
     fn frames_that_cannot_be_refused_are_dropped() {
         for text in [
-            // 쓰기 알림, 클라우드 요청을 수락하는 응답, JSON 이 아닌 글자.
-            r#"{"jsonrpc":"2.0","method":"turn/interrupt"}"#,
-            r#"{"jsonrpc":"2.0","id":3,"result":{"decision":"accept"}}"#,
+            // 허용 목록에 없는 알림(답할 id 없음), method·result·error 가 모두 없는 프레임, JSON 아닌 글자.
+            r#"{"jsonrpc":"2.0","method":"turn/addUserMessage"}"#,
+            r#"{"jsonrpc":"2.0","id":3}"#,
             "not json",
         ] {
             assert_eq!(route_client_frame(text), ClientFrameRoute::Drop, "{text}");
@@ -715,22 +730,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_relay_keeps_writes_away_from_the_cloud() {
+    async fn the_relay_forwards_allowed_writes_and_refuses_the_rest() {
         let (mut client, inner) = socket_pair().await;
         let (cloud, mut fake_cloud) = socket_pair().await;
         let relay_task = tokio::spawn(relay(inner, cloud, KEEPALIVE));
 
-        let write = r#"{"jsonrpc":"2.0","id":1,"method":"turn/start","params":{}}"#;
-        let read = r#"{"jsonrpc":"2.0","id":2,"method":"thread/list","params":{}}"#;
-        client.send(Message::text(write)).await.unwrap();
-        client.send(Message::text(read)).await.unwrap();
+        // 허용 밖(비공개 method): 클라우드로 가지 않고 거절된다.
+        let refused = r#"{"jsonrpc":"2.0","id":1,"method":"turn/addUserMessage","params":{}}"#;
+        // 허용된 대화 쓰기: 클라우드로 전달된다.
+        let allowed = r#"{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{}}"#;
+        client.send(Message::text(refused)).await.unwrap();
+        client.send(Message::text(allowed)).await.unwrap();
 
-        // 클라우드가 처음 받는 글자는 읽기 요청이다. 쓰기 요청은 오지 않았다.
-        assert_eq!(next_json(&mut fake_cloud).await["method"], "thread/list");
+        // 클라우드가 처음 받는 글자는 허용된 turn/start 이다. 거절된 요청은 오지 않았다.
+        assert_eq!(next_json(&mut fake_cloud).await["method"], "turn/start");
         fake_cloud
-            .send(Message::text(
-                r#"{"jsonrpc":"2.0","id":2,"result":{"data":[]}}"#,
-            ))
+            .send(Message::text(r#"{"jsonrpc":"2.0","id":2,"result":{}}"#))
             .await
             .unwrap();
 
