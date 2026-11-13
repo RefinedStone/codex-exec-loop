@@ -1285,6 +1285,10 @@ mod tests {
     #[test]
     fn every_kind_matches_its_json_tag() {
         let events = [
+            KernelEvent::AutoFollowConfigured {
+                max_auto_turns: 3,
+                continuation_paused: true,
+            },
             KernelEvent::ThreadPromptQueued(queued("task-1")),
             settled("task-1"),
             KernelEvent::ThreadPromptRejected {
