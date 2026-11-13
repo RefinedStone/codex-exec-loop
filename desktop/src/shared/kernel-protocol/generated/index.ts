@@ -127,7 +127,7 @@ export type QueryRequest = { readonly "query": KernelQuery; };
 
 export type QueuedThreadPrompt = { readonly "op_id"?: (number | null); readonly "task_id": string; readonly "thread_id": string; readonly "workspace_directory": string; };
 
-export type ReasonCode = ("kernel_not_running" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again");
+export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again");
 
 export type RecordedKernelEvent = { readonly "event": KernelRecord; readonly "recorded_at": string; readonly "sequence": number; };
 

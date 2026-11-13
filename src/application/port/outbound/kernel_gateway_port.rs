@@ -1,9 +1,14 @@
 use anyhow::Result;
 use serde_json::Value;
 
-/// A missing Gateway is distinct from a failed request. Failed requests must not execute locally.
+/// What the Gateway did with one request. A failed request is an error, not a reply: it must not
+/// run locally, because the Gateway kernel may have taken it.
 pub enum KernelGatewayReply {
-    Unavailable,
+    /// No Gateway answers on the endpoint. Nothing was sent.
+    NoGateway,
+    /// The Gateway answered, but it cannot attach to the kernel of this repository. Another
+    /// process (a TUI) runs that kernel. The request did not run.
+    KernelHeldElsewhere,
     Answer(Value),
 }
 

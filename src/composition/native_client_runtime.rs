@@ -51,11 +51,11 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
-    APPROVAL_KINDS, ApprovalResolution, CALLER_NAME_MAX_CHARS, COMMAND_KINDS, CommandMemory,
-    CommandRecall, KernelCommandDescriptor, KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE,
-    OPERATION_KINDS, OperationReceipt, OperationStatus, REPOSITORY_KINDS, ReasonCode,
-    RecordedKernelEvent, RepositoryState, THREAD_PROMPT_QUEUE_KINDS, last_repository_state,
-    open_approvals, open_queued_thread_prompts, restart_closures,
+    APPROVAL_KINDS, AUTO_FOLLOW_KINDS, ApprovalResolution, CALLER_NAME_MAX_CHARS, COMMAND_KINDS,
+    CommandMemory, CommandRecall, KernelCommandDescriptor, KernelEvent, KernelEventPage,
+    MAX_KERNEL_EVENT_PAGE, OPERATION_KINDS, OperationReceipt, OperationStatus, REPOSITORY_KINDS,
+    ReasonCode, RecordedKernelEvent, RepositoryState, THREAD_PROMPT_QUEUE_KINDS,
+    last_repository_state, open_approvals, open_queued_thread_prompts, restart_closures,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -1333,8 +1333,7 @@ impl NativeClientRuntime {
                 let approvals = log.load_kernel_events(workspace_dir, &APPROVAL_KINDS)?;
                 let commands = log.load_kernel_events(workspace_dir, &COMMAND_KINDS)?;
                 let operations = log.load_kernel_events(workspace_dir, &OPERATION_KINDS)?;
-                let configuration =
-                    log.load_kernel_events(workspace_dir, &["auto_follow_configured"])?;
+                let configuration = log.load_kernel_events(workspace_dir, &AUTO_FOLLOW_KINDS)?;
                 Ok((
                     prompts,
                     approvals,

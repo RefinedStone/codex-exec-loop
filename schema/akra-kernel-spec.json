@@ -219,7 +219,7 @@
       "effect": "read",
       "idempotency": "natural",
       "rejections": [
-        "kernel_not_running"
+        "kernel_unreachable"
       ],
       "completion": "accepted",
       "input": {
@@ -247,7 +247,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [
-        "kernel_not_running"
+        "kernel_unreachable"
       ],
       "completion": "records",
       "input": {
@@ -287,7 +287,7 @@
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
-        "kernel_not_running",
+        "kernel_unreachable",
         "busy",
         "preparation_active",
         "unknown_thread",
@@ -332,7 +332,7 @@
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
-        "kernel_not_running",
+        "kernel_unreachable",
         "steer_in_flight",
         "no_matching_turn"
       ],
@@ -380,7 +380,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [
-        "kernel_not_running"
+        "kernel_unreachable"
       ],
       "completion": "records",
       "input": {
@@ -408,7 +408,7 @@
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
-        "kernel_not_running",
+        "kernel_unreachable",
         "decision_in_flight",
         "no_matching_approval"
       ],
@@ -454,7 +454,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [
-        "kernel_not_running"
+        "kernel_unreachable"
       ],
       "completion": "accepted",
       "input": {
@@ -488,7 +488,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [
-        "kernel_not_running"
+        "kernel_unreachable"
       ],
       "completion": "accepted",
       "input": {
@@ -550,7 +550,7 @@
       "effect": "read",
       "idempotency": "natural",
       "rejections": [
-        "kernel_not_running"
+        "kernel_unreachable"
       ],
       "completion": "accepted",
       "input": {
@@ -1407,8 +1407,8 @@
   ],
   "reasons": [
     {
-      "name": "kernel_not_running",
-      "summary": "The repository kernel is not running. Start the Akra Gateway and send the command again.",
+      "name": "kernel_unreachable",
+      "summary": "No kernel that the Akra Gateway runs can take the command. `message` gives the cause: the Gateway is not running, or another process (a TUI) runs the kernel of this repository.",
       "next": [
         {
           "step": "ask_user"
@@ -3680,7 +3680,7 @@
     },
     "ReasonCode": {
       "enum": [
-        "kernel_not_running",
+        "kernel_unreachable",
         "steer_in_flight",
         "no_matching_turn",
         "decision_in_flight",

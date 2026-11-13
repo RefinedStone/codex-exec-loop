@@ -4,7 +4,8 @@
 //! 잠금의 단위는 planning 기준 데이터와 같은 저장소이다. 한 저장소의 모든 worktree 는 같은
 //! `$AKRA_HOME/projects/<namespace>/runtime/` 에 닿으므로 같은 잠금 파일을 쓴다. git 이 아닌 폴더는 planning 이 그
 //! 폴더에 쓰는 관리 디렉터리의 `runtime/` 을 쓴다. 폴더 안에는 아무것도 만들지 않는다. 잠금은 OS 파일 잠금이라
-//! 프로세스가 끝나면 OS 가 푼다. 파일 안의 pid, 시작 시각, 폴더는 진단용이다.
+//! 프로세스가 끝나면 OS 가 푼다. 파일 안의 pid, 시작 시각, 폴더는 진단용이다. 쥔 쪽의 종류(`owner`)는 진단용이 아니다:
+//! 명령 전용 경로가 이 값으로 TUI 가 쥔 저장소를 가린다 (plan 18 K4-8).
 
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};

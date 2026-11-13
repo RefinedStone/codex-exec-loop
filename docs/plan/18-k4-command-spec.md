@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. K4-1, K4-2, K4-3, K4-4 (K4-4a, K4-4b), K4-5 를 구현했다 (2026-11-12, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. K4-1 ~ K4-8 을 구현했다 (K4-1 ~ K4-7 은 2026-11-12, K4-8 은 2026-11-13, §8). 나머지 조각(K4-9, K4-10)은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다. 2026-11-12 에 리뷰 세 개(독립 리뷰, 표준
   축, 스펙 축)를 받아 고쳤다 (§7). 같은 날 사용자가 §6 의 질문을 작업자의 판단에 맡겼고, 기본값으로 정했다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.3, §4.4, §5.5, §5.6, §6 K4. 결정 KP-04,
@@ -291,7 +291,7 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 | 상황 | 보내는 곳 | 비고 |
 | --- | --- | --- |
 | Gateway 가 떠 있고 그 저장소의 커널을 쓸 수 있다 | Gateway 의 커널. 잠깐 붙는 접속(`transient`)으로 붙는다 | 마지막 접속이 잠깐 붙는 접속이었고 남은 일이 없으면 커널을 바로 내린다. 10분 대기는 Desktop 처럼 오래 붙는 클라이언트에만 쓴다. 그렇지 않으면 `akra` 명령 한 번이 TUI 를 10분 막는다 |
-| Gateway 가 없다 | `state: store` 명령은 명령 전용 조립으로 실행한다. `state: runtime` 명령은 이유 코드 `kernel_not_running` 으로 거절한다 (`next`: Gateway 를 시작한다) | 명령 전용 조립은 저장소 잠금을 잡고, 기록을 붙이고(되돌리기와 `lost` 닫기는 하지 않는다), 명령 하나를 처리하고, 기록을 다 쓰고, 잠금을 푼다. app-server, 스케줄러, 병렬 tick, 남긴 프롬프트의 되돌림은 시작하지 않는다. 그래서 모델 턴이 없다 |
+| Gateway 가 없다 | `state: store` 명령은 명령 전용 조립으로 실행한다. `state: runtime` 명령은 이유 코드 `kernel_unreachable` 로 거절한다 (`next`: `ask_user`. 구현에서 이름과 단계가 바뀌었다, §8 K4-8) | 명령 전용 조립은 저장소 잠금을 잡고, 기록을 붙이고(되돌리기와 `lost` 닫기는 하지 않는다), 명령 하나를 처리하고, 기록을 다 쓰고, 잠금을 푼다. app-server, 스케줄러, 병렬 tick, 남긴 프롬프트의 되돌림은 시작하지 않는다. 그래서 모델 턴이 없다 |
 | TUI 가 그 저장소의 커널을 쥐고 있다 | K6 전까지 지금의 직접 경로 (기본값, 미결 Q-K4-3) | 잠금 파일에 쥔 쪽의 종류(`tui`, `gateway`, `command`)를 적어서 가린다. 이 경로의 명령은 기록에 남지 않는다. K-D3 과 K-D5 는 TUI 를 쓰는 동안 남는다. K6 에서 지운다 |
 
 - 커널이 띄운 planning worker 의 `planning-tool` 도 이 길을 탄다. TUI 의 worker 는 셋째 갈래를 타므로 K6 까지 revision
@@ -336,7 +336,7 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 | K4-5 (완료 2026-11-12, §8. 전제 조건 검사는 넣지 않았다) | 호출자 기록. 효과 등급과 전제 조건을 커널이 검사한다 | 유지 (`destructive` 의 확인 규칙은 `reset_planning` 과 같다. 검사하는 곳만 커널로 옮겼다) | core 시험, 프로토콜 시험, 시뮬레이션 |
 | K4-6 (구현 2026-11-12, §8) | Desktop 타입을 스펙에서 만든다. `protocol.ts` 의 손 복사를 지운다 | 유지 | `npm run check`, vitest (생성 결과 시험), e2e |
 | K4-7 (구현 2026-11-12, §8) | Desktop 공통 명령 전송 함수가 변경 명령에 멱등 키를 붙인다. 현재 패널은 읽기 명령만 쓴다 | 유지 | vitest, e2e |
-| K4-8 (구현 2026-11-12, 로컬 변경) | `akra kernel` CLI, `KernelCommandPort`, Gateway 클라이언트, 명령 전용 조립, 잠깐 붙는 접속, 잠금 파일의 쥔 쪽. skill 문서를 스펙에서 만들고 등록한다 | 확장 | CLI 시험, G2 시험, skill 파일 시험 |
+| K4-8 (구현 2026-11-13, §8) | `akra kernel` CLI, `KernelCommandPort`, Gateway 클라이언트, 명령 전용 조립, 잠깐 붙는 접속, 잠금 파일의 쥔 쪽. skill 문서를 스펙에서 만들고 등록한다 | 확장 | CLI 시험, G2 시험, skill 파일 시험 |
 | K4-9a | 입구 이전: planning 초기화 | 유지 (같은 결과. 기록에 남는다) | 입구 경계 시험, CLI·Telegram·admin 시험 |
 | K4-9b | 입구 이전: 병렬 제어, 수동 배분, 프로필. admin, Telegram, `parallel-tick` 이 스케줄러를 시작하지 않는다 | 전환 (Gateway 의 커널이 병렬 상태의 주인이다) | K-D3 회귀 시험 (admin 의 정지가 커널에 닿는다), 시뮬레이션 |
 | K4-9c | 입구 이전: PR 검증 명령 | 유지 | admin 시험 |
@@ -705,3 +705,65 @@ K4-4 를 둘로 나눴다 (§5 의 대응: 기록 종류마다 나눈다). K4-4a
   연결 종료 후 재전송하지 않음을 확인한다. 커널 패널 E2E는 읽기 경로의 회귀 검증이다.
   변경 명령 버튼이 없으므로 화면을 통한 변경 명령 전송까지 검증했다고 보지 않는다.
 - 커널 연결 시험과 커널 패널 E2E는 고정 시간 대기 대신 요청과 상태 변화 신호를 사용한다.
+
+### K4-8 (2026-11-13)
+
+만든 것:
+
+- CLI: `akra describe --json` 은 내장한 스펙을 출력한다 (커널을 시작하지 않는다). `akra kernel <scope> <command>
+  --field value --json` 은 명령을 보낸다. `akra kernel query <name>`, `akra kernel history --after <n> [--wait]`,
+  `akra kernel operation <op_id> [--wait]` 는 조회이다. 명령 이름, 묶음, 입력 필드는 스펙에서 읽는다. 출력은 JSON
+  한 줄이다. 종료 코드는 0 (받아들임), 2 (커널이 거절함), 1 (잘못된 입력 또는 닿지 못함)이다.
+- 보내는 곳: inbound port `KernelCommandPort`, 서비스 `KernelCommandService`, outbound port `KernelGatewayPort`
+  (Gateway 클라이언트 `GatewayKernelClientAdapter`). 서비스가 §3.7 의 세 갈래를 정한다.
+  - Gateway 의 커널이 답한다: 그 답을 쓴다. 접속은 잠깐 붙는 접속(`transient: true`)이다.
+  - Gateway 가 없다: `store` 명령은 명령 전용 조립으로 실행하고, `runtime` 명령은 `kernel_unreachable` 로 거절한다.
+  - Gateway 는 있지만 다른 프로세스(TUI)가 그 저장소의 커널을 돌린다 (attach 가 `-32012`): `store` 명령은 명령 전용
+    경로로 가고(잠금의 쥔 쪽이 `tui` 이면 K6 까지 지금의 직접 초기화를 쓴다), `runtime` 명령은 `kernel_unreachable`
+    로 거절한다.
+- 명령 전용 조립 (`composition/kernel_command_execution.rs`): 저장소 잠금을 `command` 로 잡고, 멱등 키를 기록에서
+  확인하고, `command_received` 를 쓰고, 초기화를 실행하고, `command_completed` 를 쓰고, 잠금을 푼다. 런타임,
+  app-server, 스케줄러, 남긴 프롬프트의 되돌림, `lost` 닫기는 없다. 지금 `store` 명령은 `reset_planning` 하나이다.
+- 스펙의 명령 항목에 `state` (`store` | `runtime`)를 더했다.
+- 잠깐 붙는 접속: 마지막으로 떠난 클라이언트가 잠깐 붙는 접속이었고 남은 일이 없으면 커널을 바로 내린다. 이름
+  바꾸기가 진행 중이면 남은 일이다.
+- 잠금 파일에 쥔 쪽의 종류(`tui`, `gateway`, `command`)를 적는다.
+- 자동 후속 설정의 기록 `auto_follow_configured` (최대 턴 수, 멈춤). 다음 Gateway 커널이 마지막 기록을 되돌린다.
+  기록 정리는 이 종류의 마지막 기록을 남긴다 (`repository_changed` 의 마지막 기록과 같은 규칙이다). TUI 의 커널은
+  기록을 붙이지 않으므로 되돌리지 않는다.
+- skill: `scripts/generate-kernel-skill.mjs` 가 스펙에서 `assets/app-server/hub-skills/akra-kernel/SKILL.md` 를
+  만든다. 검사(`--check`)는 Node 검사 스크립트가 돌린다. app-server 접속이 이 skill 폴더를 등록한다.
+- 오류의 출력: 명령이 오류로 끝나면 CLI 는 `idempotency_key` 를 함께 출력한다. 커널이 JSON-RPC 오류로 답했으면
+  `error.code` 도 출력한다 (스펙의 `errors` 에서 `next` 를 찾는 값이다).
+
+설계와 다른 점:
+
+- 이유 코드의 이름은 `kernel_not_running` 이 아니라 `kernel_unreachable` 이다. TUI 가 커널을 돌릴 때도 같은 이유를
+  쓰는데, 그때 커널은 돌고 있기 때문이다. 원인은 `message` 가 적는다 (Gateway 가 없다 / 다른 프로세스가 쥐고 있다).
+  `next` 는 `ask_user` 이다. "Gateway 를 시작한다"와 "TUI 를 닫는다"는 단계로 적을 수 없다.
+- CLI 는 접속이 끊겼을 때 스스로 다시 보내지 않는다. 대신 오류 출력에 키를 싣고, 부르는 쪽이 같은 키로 다시 보낸다.
+  설계의 "이 실행 안의 다시 보내기"는 만들지 않았다.
+- 명령의 답을 받은 뒤 detach 가 실패해도 답을 쓴다. 소켓을 닫으면 Gateway 가 접속을 정리한다.
+
+확인: 서비스 시험 (세 갈래, 실패한 요청은 로컬에서 실행하지 않음), Gateway 클라이언트 시험 (가짜 선: 이벤트가 답보다
+먼저 와도 놓치지 않음, 다른 프로세스가 쥔 커널, 오류 코드 보존, detach 실패), CLI 시험 (스펙의 모든 명령을 읽음,
+잘못된 입력, 종료 코드, 오류의 키와 코드), `tests/kernel_cli.rs`, Gateway 시험 (잠깐 붙는 접속이 떠나면 커널을
+내림), 기록 정리 시험 (두 종류의 마지막 기록이 함께 남음), 커널 시뮬레이션, 구조 시험, 스펙·skill·Desktop 타입의
+일치 검사. 모델 턴은 없다.
+
+남긴 것:
+
+- G2 시험(`kernel_command_execution/g2_tests.rs`)의 서버 쪽은 대본이다. 클라이언트 쪽은 `describe` 만 읽고 명령과
+  조회를 찾고 `next` 를 따른다. 실제 커널을 바쁘게 만들어 같은 클라이언트를 돌리는 시험은 없다 (§3.9 의 G2 는 부분).
+- CLI 에서 가짜 Gateway 소켓까지 잇는 시험은 없다 (endpoint 를 주입할 수 없다). 소켓 위의 전송은 가짜 선 시험이 본다.
+- CLI 만 쓰면 세션 목록이 남지 않는다. `load_sessions` 뒤에 CLI 가 떠나면 커널이 내려가고, 다음 커널은 목록을
+  모른다. 그래서 `unknown_thread` 의 `next` (`load_sessions`, 다시 보냄)는 Desktop 같은 오래 붙는 클라이언트가 커널을
+  띄워 둘 때만 풀린다. 후보: 잠깐 붙는 접속 뒤의 짧은 유예, 또는 `submit_prompt` 가 모르는 thread 를 app-server 에
+  물어보는 것.
+- `stop_all` 도 멈춤을 기록한다. 다음 Gateway 커널은 멈춘 상태로 시작한다. 새 수동 프롬프트가 멈춤을 푼다.
+- 잠금을 잡은 뒤 쥔 쪽 기록을 쓰기 전의 짧은 사이에 다른 프로세스가 이전 기록(`tui`)을 읽을 수 있다. 그러면 직접
+  초기화가 Gateway 커널 옆에서 돈다. K6 에서 직접 경로를 지우면 없어진다.
+- skill 은 모든 app-server 접속에 등록된다 (TUI, 병렬 slot 의 세션 포함). TUI 안의 에이전트가 `runtime` 명령을 내면
+  `kernel_unreachable` 을 받는다.
+- 이 조각의 처음 구현은 다른 기기의 세션이 만들었다 (PR #2262). 2026-11-13 에 최신 `prerelease` 위로 다시 올리고
+  독립 리뷰의 결함(P2 5건 중 3건)을 고쳤다. 나머지 2건은 위의 "남긴 것"이다.

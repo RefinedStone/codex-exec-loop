@@ -72,7 +72,8 @@ impl NextStep {
 pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
     use NextStep as Step;
     match reason {
-        ReasonCode::KernelNotRunning => vec![Step::AskUser],
+        // Gateway 를 시작하거나 커널을 쥔 쪽(TUI)을 닫는 일은 단계로 적을 수 없다. 사람이 정한다.
+        ReasonCode::KernelUnreachable => vec![Step::AskUser],
         // 진행 중인 steer 의 끝을 알리는 이벤트는 없다.
         ReasonCode::SteerInFlight => vec![Step::short_wait(), Step::Resend],
         ReasonCode::NoMatchingTurn => vec![Step::query(KernelQueryKind::ThreadActivity)],

@@ -406,6 +406,8 @@ pub const APPROVAL_KINDS: [&str; 2] = [
 
 /// 마지막 git 상태를 찾을 때 읽는 사건 종류이다 (plan 20 §4.1).
 pub const REPOSITORY_KINDS: [&str; 1] = [KernelRecordKind::RepositoryChanged.name()];
+/// 자동 후속 설정의 기록 종류이다 (plan 18 K4-8). 다음 커널이 마지막 설정을 되돌린다.
+pub const AUTO_FOLLOW_KINDS: [&str; 1] = [KernelRecordKind::AutoFollowConfigured.name()];
 
 /// 기록에 남기는 승인 설명의 최대 길이이다. 기록은 대화의 사본이 아니다.
 const APPROVAL_SUMMARY_MAX_CHARS: usize = 200;

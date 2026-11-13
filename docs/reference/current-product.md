@@ -60,13 +60,22 @@ and 1 for invalid input or an unavailable connection. Acceptance is not completi
 
 Mutations accept `--idempotency-key`. An omitted key is random and lasts for one invocation.
 Callers that retry across invocations must supply the same key. Destructive commands require
-`--confirm true`.
+`--confirm true`. When a command ends with an error, the output carries `idempotency_key`, and
+`error.code` when the kernel answered with a JSON-RPC error. The caller sends the same command
+again with that key; the kernel does not run it twice.
 
 The Gateway path uses a transient attachment. A transient last client releases an idle kernel
 without the durable client's ten-minute grace. With no Gateway, stored commands run under a
 command-owned repository lock without starting app-server, schedulers, or prompt recovery.
-Runtime commands return `kernel_not_running`. The existing TUI-owned reset compatibility path
-remains until K6 and does not create kernel audit records.
+Runtime commands are rejected with `kernel_unreachable` in two cases, and `message` names the
+case: no Gateway runs, or the Gateway runs but another process (a TUI) runs the kernel of that
+repository. The existing TUI-owned reset compatibility path remains until K6 and does not create
+kernel audit records.
+
+A kernel that only this CLI started stops when the command ends. The session list is not kept
+between invocations, so `load_sessions` helps only while another client (Akra Desktop) keeps the
+kernel up. The automatic follow-up settings are kept: the kernel records them
+(`auto_follow_configured`) and the next Gateway kernel restores the last record.
 
 The generated `akra-kernel` skill is installed independently of MCP server registration and
 registered through `skills/extraRoots/set`. Its source is `schema/akra-kernel-spec.json`.

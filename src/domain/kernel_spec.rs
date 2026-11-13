@@ -133,8 +133,8 @@ spec_names! {
     #[derive(Serialize, Deserialize, JsonSchema)]
     #[serde(rename_all = "snake_case")]
     pub enum ReasonCode {
-        KernelNotRunning => "kernel_not_running",
-            "The repository kernel is not running. Start the Akra Gateway and send the command again.";
+        KernelUnreachable => "kernel_unreachable",
+            "No kernel that the Akra Gateway runs can take the command. `message` gives the cause: the Gateway is not running, or another process (a TUI) runs the kernel of this repository.";
         SteerInFlight => "steer_in_flight",
             "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.";
         NoMatchingTurn => "no_matching_turn",
@@ -219,6 +219,24 @@ impl OperationState {
     }
 }
 
+/*
+ * 커널이 요청에 JSON-RPC 오류로 답했다 (plan 18 K4-8). `code` 로 스펙의 `errors` 항목을 찾고, 그 항목이 다음 행동을
+ * 가진다. 커널에 요청을 보내는 쪽(Gateway 클라이언트, 명령 전용 조립)이 만들고, 입구(CLI)가 출력에 싣는다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelCallError {
+    pub code: i64,
+    pub message: String,
+}
+
+impl std::fmt::Display for KernelCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "kernel error {}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for KernelCallError {}
+
 /// 명령 하나의 성질이다. 종류마다 하나이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -253,20 +271,20 @@ impl KernelCommandKind {
                 CommandScope::Session,
                 Read,
                 Natural,
-                &[Reason::KernelNotRunning],
+                &[Reason::KernelUnreachable],
             ),
             Self::RenameSession => (
                 CommandScope::Session,
                 Write,
                 Natural,
-                &[Reason::KernelNotRunning],
+                &[Reason::KernelUnreachable],
             ),
             Self::SubmitPrompt => (
                 CommandScope::Thread,
                 Write,
                 Keyed,
                 &[
-                    Reason::KernelNotRunning,
+                    Reason::KernelUnreachable,
                     Reason::Busy,
                     Reason::PreparationActive,
                     Reason::UnknownThread,
@@ -279,7 +297,7 @@ impl KernelCommandKind {
                 Write,
                 Keyed,
                 &[
-                    Reason::KernelNotRunning,
+                    Reason::KernelUnreachable,
                     Reason::SteerInFlight,
                     Reason::NoMatchingTurn,
                 ],
@@ -288,14 +306,14 @@ impl KernelCommandKind {
                 CommandScope::Thread,
                 Write,
                 Natural,
-                &[Reason::KernelNotRunning],
+                &[Reason::KernelUnreachable],
             ),
             Self::DecideApproval => (
                 CommandScope::Approval,
                 Write,
                 Keyed,
                 &[
-                    Reason::KernelNotRunning,
+                    Reason::KernelUnreachable,
                     Reason::DecisionInFlight,
                     Reason::NoMatchingApproval,
                 ],
@@ -304,20 +322,20 @@ impl KernelCommandKind {
                 CommandScope::AutoFollow,
                 Write,
                 Natural,
-                &[Reason::KernelNotRunning],
+                &[Reason::KernelUnreachable],
             ),
             Self::PauseAutoFollow => (
                 CommandScope::AutoFollow,
                 Write,
                 Natural,
-                &[Reason::KernelNotRunning],
+                &[Reason::KernelUnreachable],
             ),
             Self::ResetPlanning => (CommandScope::Planning, Destructive, Natural, &[]),
             Self::RefreshPlanning => (
                 CommandScope::Planning,
                 Read,
                 Natural,
-                &[Reason::KernelNotRunning],
+                &[Reason::KernelUnreachable],
             ),
         };
         CommandSpec {
@@ -417,7 +435,7 @@ mod tests {
             if !kind.is_recorded() {
                 assert_eq!(
                     kind.spec().rejections,
-                    &[ReasonCode::KernelNotRunning],
+                    &[ReasonCode::KernelUnreachable],
                     "{}",
                     kind.name()
                 );
@@ -436,7 +454,7 @@ mod tests {
         assert_eq!(
             names,
             [
-                "kernel_not_running",
+                "kernel_unreachable",
                 "steer_in_flight",
                 "no_matching_turn",
                 "decision_in_flight",

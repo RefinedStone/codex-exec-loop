@@ -3,10 +3,9 @@ use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::domain::kernel_event::{
-    KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, REPOSITORY_KINDS, RETAINED_KERNEL_EVENTS,
-    RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
+    AUTO_FOLLOW_KINDS, KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, REPOSITORY_KINDS,
+    RETAINED_KERNEL_EVENTS, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
 };
-use crate::domain::kernel_spec::KernelRecordKind;
 
 use super::{SqlitePlanningAuthorityAdapter, open_authority_connection};
 
@@ -78,7 +77,7 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
                     THREAD_PROMPT_QUEUE_KINDS[1],
                     RETAINED_KERNEL_EVENTS,
                     REPOSITORY_KINDS[0],
-                    KernelRecordKind::AutoFollowConfigured.name()
+                    AUTO_FOLLOW_KINDS[0]
                 ],
             )
             .context("failed to trim old kernel events")?;
