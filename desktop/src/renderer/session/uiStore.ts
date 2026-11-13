@@ -112,6 +112,10 @@ export const REMOTE_AGENTS_WARNING =
 export function toggleRemoteAgents(confirm: (message: string) => boolean = (message) => window.confirm(message)): void {
   const enable = !useUiStore.getState().remoteAgents;
   if (enable && !confirm(REMOTE_AGENTS_WARNING)) return;
+  setRemoteAgents(enable);
+}
+
+function setRemoteAgents(enable: boolean): void {
   try {
     window.localStorage.setItem(REMOTE_AGENTS_KEY, enable ? "1" : "0");
   } catch {
@@ -133,7 +137,10 @@ export function showDot(host: string, dotId: string): void {
 export const DOTS_CLOUD_ENABLE_WARNING =
   "dots 클라우드 호스트를 켜거나 끕니다. OpenAI 의 비공개 백엔드에 공식 앱 신원으로 붙습니다. 약관과 계정 위험을 확인하세요. 설정은 Gateway 를 다시 시작해야 적용됩니다. 계속합니까?";
 
-/** dots 클라우드 활성화 플래그를 켜고 끈다 (plan 25 §3.2). Gateway 재시작 전에는 적용되지 않는다. */
+/**
+ * dots 클라우드 활성화 플래그와 사이드바의 원격 구역을 함께 켜고 끈다 (plan 25 §3.2). 클라우드 호스트는 Gateway 를
+ * 다시 시작해야 생긴다. 그 전에는 구역을 켜도 보일 호스트가 없다.
+ */
 export async function toggleDotsCloud(
   confirm: (message: string) => boolean = (message) => window.confirm(message),
   notify: (message: string) => void = (message) => window.alert(message),
@@ -142,10 +149,12 @@ export async function toggleDotsCloud(
   const current = await window.akra.dots.getEnabled();
   if (!confirm(DOTS_CLOUD_ENABLE_WARNING)) return;
   const enabled = await window.akra.dots.setEnabled(!current);
+  // 사이드바의 원격 구역도 같이 켜고 끈다. 경고는 위에서 이미 확인했다. 두 번 켜게 하지 않는다.
+  setRemoteAgents(enabled);
   notify(
     enabled
-      ? "dots 클라우드를 켰습니다. Gateway 를 다시 시작하면 사이드바에 원격 구역이 나타납니다."
-      : "dots 클라우드를 껐습니다. Gateway 를 다시 시작하면 원격 구역이 사라집니다.",
+      ? "dots 클라우드를 켰습니다. Gateway 를 다시 시작하면 사이드바에 클라우드 에이전트 구역이 나타납니다."
+      : "dots 클라우드를 껐습니다. 사이드바의 구역은 바로 사라집니다. Gateway 는 다시 시작할 때 클라우드 호스트를 내립니다.",
   );
 }
 
