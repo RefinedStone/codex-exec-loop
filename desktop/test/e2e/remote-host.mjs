@@ -55,6 +55,10 @@ try {
   await toggleRemoteAgents();
   await page.getByTestId("remote-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 15_000 });
   check("turning it on shows a warning first", warnings.length === 1 && warnings[0].includes("약관"));
+  // 원격 구역은 로컬 작업 폴더보다 위에 있다. 스크롤하지 않아도 보인다.
+  const remoteTop = (await page.getByTestId("remote-host").boundingBox())?.y ?? Infinity;
+  const firstLocalTop = (await page.getByTestId("thread-entry").first().boundingBox())?.y ?? -Infinity;
+  check("the remote section is above the local threads", remoteTop < firstLocalTop);
   check("the sidebar lists the dots of the remote host", (await page.getByTestId("remote-dot-entry").filter({ hasText: "Mika" }).count()) === 1);
   // dot 을 누르면 그 dot 과의 대화(메시지 방)가 열린다. 읽기 전용이고 입력창이 없다.
   await page.getByTestId("remote-dot-entry").first().click();

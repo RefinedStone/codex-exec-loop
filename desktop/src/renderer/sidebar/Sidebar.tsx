@@ -193,11 +193,12 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(thr
         </button>
       </div>
       <div className="sidebar-scroll">
+        {/* 원격 구역은 맨 위에 둔다. 로컬 스레드가 많으면 아래에 둔 구역은 스크롤해야 보여서 없는 것처럼 보인다. */}
+        {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <RemoteSection key={host} host={host} onOpenThread={onOpenRemoteThread} />)}
         {folders.length === 0 && <p className="empty-row">아직 스레드가 없습니다. 새 스레드에서 작업 폴더를 고르세요.</p>}
         {folders.map((folder) => (
           <FolderSection key={folder.cwd} folder={folder} connected={phase === "connected"} onOpenThread={onOpenThread} />
         ))}
-        {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <RemoteSection key={host} host={host} onOpenThread={onOpenRemoteThread} />)}
       </div>
       <footer className="sidebar-footer">
         <span className="connection" title="Gateway 연결 상태">
