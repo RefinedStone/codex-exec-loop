@@ -7,6 +7,7 @@ import type { AkraBridge, RemoteHostBridge } from "../../shared/bridge";
 import type { InitializeParams } from "../../shared/protocol/generated/InitializeParams";
 import type { Thread } from "../../shared/protocol/generated/v2/Thread";
 import type { ThreadListResponse } from "../../shared/protocol/generated/v2/ThreadListResponse";
+import type { ThreadReadResponse } from "../../shared/protocol/generated/v2/ThreadReadResponse";
 import type { ThreadResumeResponse } from "../../shared/protocol/generated/v2/ThreadResumeResponse";
 import type { ThreadStartResponse } from "../../shared/protocol/generated/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../shared/protocol/generated/v2/ThreadStatus";
@@ -20,7 +21,6 @@ import {
   isTurnInProgress,
   notificationThreadId,
   prependOlderTurns,
-  transcriptFromResume,
   transcriptFromThread,
 } from "../conversation/transcript";
 import { KernelConnection } from "../kernel/kernelConnection";
@@ -276,7 +276,7 @@ export class DesktopSession {
   /** 스레드를 연다. 이전 스레드는 진행 중인 턴이 없으면 구독을 끝낸다. */
   async openThread(threadId: string): Promise<void> {
     const previousId = this.store.getOpenThreadId();
-    if (previousId && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
+    if (!this.readOnly && previousId && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
       void this.client.request("thread/unsubscribe", { threadId: previousId }).catch(() => undefined);
     }
     this.batcher.clear();
@@ -366,11 +366,14 @@ export class DesktopSession {
     this.loading = loading;
     try {
       // 긴 스레드의 전체 resume 은 수십 MB 가 된다. 턴 없이 구독만 하고 최근 턴부터 페이지로 읽는다.
-      const response = await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true });
+      // 원격 호스트는 구독하지 않고 읽는다. resume 은 멈춘 클라우드 에이전트를 깨울 수 있어 다리가 거절한다 (D-19).
+      const response = this.readOnly
+        ? await this.client.request<ThreadReadResponse>("thread/read", { threadId, includeTurns: false })
+        : await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true });
       if (this.store.getOpenThreadId() !== threadId) {
         return;
       }
-      let transcript = transcriptFromResume(response);
+      let transcript = transcriptFromThread(response.thread);
       // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
       if (transcript.turns.length === 0) {
         const page = await this.readTurnPage(threadId, null);

@@ -327,22 +327,32 @@ the desktop app itself is not shipped yet.
   start time, and upstream restarts). An upstream restart closes clients with WebSocket close `1012`;
   an unavailable upstream closes them with `1013`.
 - Hosts (plan 25 S1a): a connection selects its upstream host with the WebSocket request path
-  `/host/<id>`; any other path means `local`. Production registers only `local`, the app-server above.
+  `/host/<id>`; any other path means `local`. Production registers `local`, the app-server above, and
+  `cloud` only when `AKRA_DOTS_CLOUD` is `1` or `true`.
   An unknown id is closed with `1008`. `akra/gateway/info` also returns `host` (the host of this
   connection) and `hosts` (id, codex version, start time, and restarts of each host). On a connection
   to a host other than `local`, `akra/kernel/*` is refused with `-32601`, `akra/context/*` answers
   with empty `resources` and does not read or write the ledger, `akra/mcp/*` is unchanged, and
   `AKRA_GATEWAY_RECORD` records nothing.
+- Cloud host (D-19, D1): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
+  `~/.codex/auth.json`. The bridge is read-only. It sends only `initialize`, `initialized`,
+  `thread/list`, `thread/read`, `thread/turns/list`, `thread/items/list`, `model/list`, and error
+  responses to the cloud. It answers every other request with `-32601` and drops other notifications,
+  result responses, and binary frames, so no client can start a turn or resume a cloud thread. When the
+  cloud rejects the login (HTTP 401 or 403) the connection closes with `1008` and reason
+  `cloud login rejected`. The bridge pings the cloud every 10 seconds and ends the session after 60
+  seconds of silence (`src/adapter/outbound/app_server/cloud_upstream.rs`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more
   Gateway connection per remote host on `/host/<id>` and the sidebar shows a section for that host with
-  its threads. A remote thread opens read-only: Desktop sends no turn, no thread start, and no approval
-  answer to a remote host, and the remote conversation does not use the kernel, changes, documents, or
+  its threads. A remote thread opens read-only with `thread/read` and `thread/turns/list`: Desktop sends
+  no resume, no turn, no thread start, and no approval answer to a remote host, so an open remote thread
+  does not update live. The remote conversation does not use the kernel, changes, documents, or
   terminal panels. Remote state stays in memory. A connection that the Gateway closes with `1008` is not
-  retried. Production registers only `local`, so the command and the section do not appear there; no
-  remote upstream adapter exists yet (`desktop/src/main/gatewayConnection.ts`,
-  `desktop/src/renderer/session/`).
+  retried; the section shows a login message when the reason is `cloud login rejected`. The command and
+  the section appear only when the Gateway registers a remote host
+  (`desktop/src/main/gatewayConnection.ts`, `desktop/src/renderer/session/`).
 - Kernel protocol (`akra/kernel/*`, plan 18 K3, protocol version 1 since the kernel spec of K4-1): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
   kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep

@@ -106,6 +106,13 @@
   initialize, `thread/list`) 한다([D-13](../03-decisions.md) Codex 사용량 최소화).
 - 유지보수: 경로가 자주 바뀐다(이번에도 대화 경로·생성 경로가 바뀌었다). 버전 올라갈 때 재확인.
 
+### 구현 상태 (2026-11-13)
+
+- 됨: Gateway `cloud` 호스트(`AKRA_DOTS_CLOUD`), 읽기 전용 가드(읽기 method 만 클라우드로 전달), 로그인 거절 시
+  close 1008, keepalive(10초 ping, 60초 무응답 끊음). Desktop 원격 구역은 `thread/read` 로 연다.
+- 안 됨: D1 의 REST 부분(dot 목록 `/tbo`, 메시지 방, 실시간 상태, 반응), §3 의 요청 변환·토큰 갱신·압축, D2 이후.
+- 확인 안 됨: 클라우드 WebSocket 이 `thread/read`, `thread/turns/list` 를 받는지. 실계정 읽기 확인이 필요하다.
+
 ## 7. 위험
 
 - 약관·계정 제재: 공식 앱 신원과 비공개 API 를 흉내 낸다. D0 통과로 줄지 않았고, 증명 생략이 신호가 될 수 있다.

@@ -13,8 +13,13 @@ const RECONNECT_MAX_MS = 30_000;
 const DAEMON_START_COOLDOWN_MS = 10_000;
 /** Gateway 의 한도와 같다. 긴 스레드의 `thread/resume` 응답은 ws 기본값(100 MiB)을 넘을 수 있다. */
 const MAX_MESSAGE_BYTES = 256 * 1024 * 1024;
-/** Gateway 는 모르는 호스트의 접속을 이 코드로 닫는다 (plan 25 §3.1). 다시 접속해도 같으므로 다시 접속하지 않는다. */
+/**
+ * Gateway 는 모르는 호스트의 접속과, 클라우드가 로그인을 거절한 접속을 이 코드로 닫는다 (plan 25 §3.1, §7).
+ * 다시 접속해도 같으므로 다시 접속하지 않는다.
+ */
 const CLOSE_UNKNOWN_HOST = 1008;
+/** 클라우드 다리(`cloud_upstream.rs`)가 로그인 거절에 쓰는 close 이유이다. */
+const LOGIN_REJECTED_REASON = "cloud login rejected";
 
 export interface GatewayConnectionOptions {
   endpoint: string;
@@ -93,12 +98,16 @@ export class GatewayConnection {
     socket.on("error", (error: NodeJS.ErrnoException) => {
       failure = error.code ?? error.message;
     });
-    socket.on("close", (code) => {
+    socket.on("close", (code, reason) => {
       if (this.socket === socket) {
         this.socket = undefined;
       }
       if (code === CLOSE_UNKNOWN_HOST) {
-        this.options.onState({ phase: "disconnected", endpoint, detail: `Gateway 에 호스트 ${host ?? "local"} 가 없습니다.` });
+        const detail =
+          reason.toString() === LOGIN_REJECTED_REASON
+            ? "클라우드가 로그인을 거절했습니다. codex 로 다시 로그인한 뒤 클라우드 에이전트를 껐다 켜세요."
+            : `Gateway 에 호스트 ${host ?? "local"} 가 없습니다.`;
+        this.options.onState({ phase: "disconnected", endpoint, detail });
         return;
       }
       if (!opened) {

@@ -50,7 +50,7 @@ try {
   await page.getByTestId("remote-thread-entry").first().click();
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
   await page.getByTestId("turn").first().waitFor({ timeout: 15_000 });
-  check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/resume"));
+  check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/read"));
   check("the remote conversation has no composer", (await page.getByTestId("composer-input").count()) === 0);
 
   console.log("--- remote conversation text ---");
