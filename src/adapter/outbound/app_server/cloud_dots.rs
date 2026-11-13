@@ -25,6 +25,8 @@ const ROOM_MESSAGE_LIMIT: u32 = 30;
 const MAX_ROOM_ID_LENGTH: usize = 128;
 /// 보내는 글의 상한이다 (글자 수). 서비스의 상한은 모른다. 실수로 큰 글을 보내지 않게 하는 값이다.
 const MAX_MESSAGE_CHARS: usize = 8_000;
+/// 오류 글자에 넣는 서비스의 이유 글자 상한이다.
+const MAX_ERROR_DETAIL_CHARS: usize = 200;
 const CONNECT_TIMEOUT_SECONDS: u32 = 10;
 const MAX_TIME_SECONDS: u32 = 20;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -66,7 +68,7 @@ impl DotsPort for CloudDotsRestAdapter {
         if !is_safe_room_id(room_id) {
             bail!("the message room id is not valid");
         }
-        let body = message_body(text)?;
+        let body = message_body(text, &new_request_id())?;
         // 답의 모양은 쓰지 않는다. HTTP 성공이면 보낸 것이다.
         self.request(
             &format!("{ROOMS_URL}/{room_id}/messages"),
@@ -111,17 +113,60 @@ impl CloudDotsRestAdapter {
         )
         .with_context(|| format!("failed to wait for curl during the {label} request"))?;
         if !output.status.success() {
-            // curl 22 는 HTTP 400 이상이다 (`fail`). 본문과 stderr 는 넣지 않는다.
+            // 연결·시간 초과 같은 curl 자체의 실패이다. stderr 는 넣지 않는다.
             bail!("the {label} request failed ({})", output.status);
         }
-        String::from_utf8(output.stdout)
-            .with_context(|| format!("the {label} response was not utf-8"))
+        let stdout = String::from_utf8(output.stdout)
+            .with_context(|| format!("the {label} response was not utf-8"))?;
+        let (status, body) = split_http_response(&stdout)
+            .with_context(|| format!("the {label} response had no HTTP status"))?;
+        if status >= 400 {
+            bail!("{}", http_error(label, status, body));
+        }
+        Ok(body.to_string())
     }
 }
 
-/// 보내는 메시지의 JSON 본문이다. 서비스의 모양은 `{"content": {"text": ...}}` 이다 (2026-11-14 에 검증 오류로
-/// 확인: `content.text` 필수 글자, `attachments`·`message_metadata`·`reply_to` 선택). 빈 글과 너무 긴 글은 거절한다.
-fn message_body(text: &str) -> Result<String> {
+/// curl 의 출력은 `본문 + 줄바꿈 + 상태 코드` 이다 (`write-out`). 마지막 줄에서 상태 코드를 뗀다.
+fn split_http_response(stdout: &str) -> Option<(u16, &str)> {
+    let (body, status) = stdout.rsplit_once('\n')?;
+    Some((status.trim().parse().ok()?, body))
+}
+
+/// HTTP 오류의 글자이다. 서비스가 준 짧은 이유(`detail` 글자)만 넣는다. 그 밖의 본문은 넣지 않는다. 이유는 서비스의
+/// 글이고 자격증명이 아니다. 예: `422 Messaging with the user's dot requires a stable send identifier`.
+fn http_error(label: &str, status: u16, body: &str) -> String {
+    let detail = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("detail")?.as_str().map(str::to_string));
+    match detail {
+        Some(detail) => {
+            let detail: String = detail.chars().take(MAX_ERROR_DETAIL_CHARS).collect();
+            format!("the {label} request failed (HTTP {status}): {detail}")
+        }
+        None => format!("the {label} request failed (HTTP {status})"),
+    }
+}
+
+/// 보내는 요청의 식별자이다 (UUID v4 모양). 서비스는 dot 에게 보내는 메시지마다 `request_id` 를 요구한다.
+fn new_request_id() -> String {
+    let bits = (rand::random::<u128>() & !(0xf << 76) & !(0x3 << 62)) | (0x4 << 76) | (0x2 << 62);
+    let hex = format!("{bits:032x}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// 보내는 메시지의 JSON 본문이다. 서비스의 모양은 `{"content": {"text": ...}, "request_id": ...}` 이다.
+/// `content.text` 는 필수 글자이고 `attachments`·`message_metadata`·`reply_to` 는 선택이다 (2026-11-14 에 검증
+/// 오류로 확인). `request_id` 가 없으면 서비스가 HTTP 422 "requires a stable send identifier" 로 거절한다
+/// (같은 날 실제 전송으로 확인: `request_id` 를 넣으면 HTTP 200). 빈 글과 너무 긴 글은 거절한다.
+fn message_body(text: &str, request_id: &str) -> Result<String> {
     let text = text.trim();
     if text.is_empty() {
         bail!("the message is empty");
@@ -129,7 +174,7 @@ fn message_body(text: &str) -> Result<String> {
     if text.chars().count() > MAX_MESSAGE_CHARS {
         bail!("the message is longer than {MAX_MESSAGE_CHARS} characters");
     }
-    Ok(serde_json::json!({ "content": { "text": text } }).to_string())
+    Ok(serde_json::json!({ "content": { "text": text }, "request_id": request_id }).to_string())
 }
 
 /// 방 id 는 주소의 한 조각으로 들어간다. 글자·숫자·`-`·`_` 만 받는다. 다른 경로나 query 를 만들 수 없다.
@@ -156,7 +201,7 @@ fn build_curl_config(
         )
     };
     let mut config = format!(
-        "silent\nshow-error\nfail\nconnect-timeout = {CONNECT_TIMEOUT_SECONDS}\nmax-time = {MAX_TIME_SECONDS}\nrequest = \"{}\"\nurl = \"{}\"\n",
+        "silent\nshow-error\nwrite-out = \"\\n%{{http_code}}\"\nconnect-timeout = {CONNECT_TIMEOUT_SECONDS}\nmax-time = {MAX_TIME_SECONDS}\nrequest = \"{}\"\nurl = \"{}\"\n",
         if json_body.is_some() { "POST" } else { "GET" },
         escape_curl_config_value(url),
     );
@@ -374,8 +419,13 @@ mod tests {
         assert!(!config.contains("data ="));
         assert!(config.contains("request = \"GET\""));
         assert!(config.contains("url = \"https://example.test/tbo\""));
-        // HTTP 오류를 종료 코드로 받는다.
-        assert!(config.lines().any(|line| line == "fail"));
+        // 상태 코드를 본문 뒤의 한 줄로 받는다. HTTP 오류의 본문도 읽어야 하므로 `fail` 은 쓰지 않는다.
+        assert!(
+            config
+                .lines()
+                .any(|line| line == r#"write-out = "\n%{http_code}""#)
+        );
+        assert!(!config.lines().any(|line| line == "fail"));
         assert!(config.contains("header = \"Authorization: Bearer header.payload.signature\""));
         assert!(config.contains("header = \"ChatGPT-Account-Id: acc-1\""));
         assert!(config.contains("header = \"originator: Codex Desktop\""));
@@ -452,11 +502,11 @@ mod tests {
 
     #[test]
     fn a_message_becomes_a_post_with_a_json_body() {
-        let body = message_body("  hello \"dot\"\nline 2  ").expect("body");
+        let body = message_body("  hello \"dot\"\nline 2  ", "req-1").expect("body");
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(
             parsed,
-            serde_json::json!({ "content": { "text": "hello \"dot\"\nline 2" } })
+            serde_json::json!({ "content": { "text": "hello \"dot\"\nline 2" }, "request_id": "req-1" })
         );
 
         let config = build_curl_config(
@@ -478,9 +528,63 @@ mod tests {
 
     #[test]
     fn an_empty_or_huge_message_is_not_sent() {
-        assert!(message_body("   \n ").is_err());
-        assert!(message_body(&"가".repeat(MAX_MESSAGE_CHARS)).is_ok());
-        assert!(message_body(&"가".repeat(MAX_MESSAGE_CHARS + 1)).is_err());
+        assert!(message_body("   \n ", "req-1").is_err());
+        assert!(message_body(&"가".repeat(MAX_MESSAGE_CHARS), "req-1").is_ok());
+        assert!(message_body(&"가".repeat(MAX_MESSAGE_CHARS + 1), "req-1").is_err());
+    }
+
+    #[test]
+    fn every_send_has_its_own_uuid_shaped_request_id() {
+        let first = new_request_id();
+        let second = new_request_id();
+        assert_ne!(first, second);
+        let parts: Vec<&str> = first.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|part| part.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
+        );
+        assert!(first.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
+        // UUID v4 의 버전과 변형 자리이다.
+        assert!(parts[2].starts_with('4'));
+        assert!(matches!(parts[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'));
+    }
+
+    #[test]
+    fn the_http_status_is_the_last_line_and_an_error_keeps_only_the_reason() {
+        assert_eq!(
+            split_http_response("{\"items\":[]}\n200"),
+            Some((200, "{\"items\":[]}"))
+        );
+        // 본문에 줄바꿈이 있어도 마지막 줄만 상태 코드이다.
+        assert_eq!(split_http_response("a\nb\n404"), Some((404, "a\nb")));
+        assert_eq!(split_http_response("no status"), None);
+
+        let reason = http_error(
+            "dots send message",
+            422,
+            r#"{"detail":"Messaging with the user's dot requires a stable send identifier"}"#,
+        );
+        assert_eq!(
+            reason,
+            "the dots send message request failed (HTTP 422): Messaging with the user's dot requires a stable send identifier"
+        );
+        // 이유가 글자가 아니면(검증 오류 목록 등) 상태 코드만 남긴다. 그 밖의 본문은 넣지 않는다.
+        let list = http_error(
+            "dots send message",
+            422,
+            r#"{"detail":[{"msg":"x"}],"other":"secret"}"#,
+        );
+        assert_eq!(list, "the dots send message request failed (HTTP 422)");
+        assert_eq!(
+            http_error("dots list", 502, "<html>secret page</html>"),
+            "the dots list request failed (HTTP 502)"
+        );
+        let long = http_error(
+            "dots list",
+            400,
+            &format!(r#"{{"detail":"{}"}}"#, "x".repeat(500)),
+        );
+        assert!(long.len() < 300);
     }
 
     #[test]

@@ -363,9 +363,9 @@ the desktop app itself is not shipped yet.
   this chat when the user clicks a dot. The chat is read-only until the user clicks "이 세션에서 보내기
   허용" and confirms a warning; the permission holds for that dot until the app closes. Then a composer
   appears and `akra/dots/send` with `{ roomId, text }` posts the trimmed text (1 to 8000 characters) to
-  the room and answers `{ sent: true }`. Desktop reads the room on open, after a send, and on
-  "새로 고침"; it does not poll, so the dot's reply appears after a refresh. A real send has not been
-  verified against the service. "작업 대화 열기" opens the dot's work thread
+  the room with a fresh `request_id` and answers `{ sent: true }`. When the service answers HTTP 400 or
+  more, the error names the status and the service's short reason. Desktop reads the room on open, after a send, and on
+  "새로 고침"; it does not poll, so the dot's reply appears after a refresh. A real send was verified once on 2026-11-14. "작업 대화 열기" opens the dot's work thread
   (`desktop/src/renderer/views/DotChat.tsx`, `desktop/src/renderer/views/dotSend.ts`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The

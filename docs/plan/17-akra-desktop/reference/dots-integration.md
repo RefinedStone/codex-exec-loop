@@ -117,14 +117,15 @@
   을 읽어 메시지(보낸 쪽 이름, dot 여부, 글)를 준다. Desktop 은 dot 을 누르면 이 대화를 보이고, "작업 대화 열기"로
   작업 thread 로 간다. 서비스는 모든 메시지의 `role` 을 `user` 로 주므로 dot 은 `member_profile_snapshots` 의 id 로
   가린다 (계정 하나에서 본 규칙).
-- 됨 (코드와 가짜 Gateway 시험까지): 메시지 방에 보내기. Gateway `akra/dots/send { roomId, text }` 가
-  `POST /messaging/rooms/{id}/messages` 에 `{"content": {"text": ...}}` 를 보낸다. Desktop 은 dot 대화의 배너에서
+- 됨 (2026-11-14 실제 전송 1회로 확인, HTTP 200): 메시지 방에 보내기. Gateway `akra/dots/send { roomId, text }` 가
+  `POST /messaging/rooms/{id}/messages` 에 `{"content": {"text": ...}, "request_id": "<uuid>"}` 를 보낸다. Desktop 은 dot 대화의 배너에서
   "이 세션에서 보내기 허용"을 누르고 경고를 확인한 뒤에만 입력창을 보인다 ("세션 한 번 허용").
   - 본문 모양은 2026-11-14 에 검증 오류로 확인했다 (타입이 틀린 본문만 보냈고 메시지는 만들어지지 않았다):
     `content.text` 필수 글자, `content.attachments` 선택 목록, `message_metadata`·`reply_to` 선택 객체
     (`message_metadata` 는 모르는 필드를 거절한다).
-  - 확인 안 됨: 올바른 본문이 실제로 받아들여지는지. 서버가 기기 증명(`app_attest_challenge`)을 요구하면 실패한다.
-    사용자의 첫 전송에서 드러난다.
+  - `request_id` 는 필수이다. 없으면 HTTP 422 `Messaging with the user's dot requires a stable send identifier` 이다
+    (사용자의 첫 전송이 이 오류로 실패했다). `Idempotency-Key` 헤더는 대신하지 못한다. 답은 만든 메시지이고
+    `request_id` 를 그대로 돌려준다. 기기 증명은 요구하지 않았다.
 - 안 됨: 실시간 상태, 반응, dot 관리(D3),
   클라우드 컴퓨터(D4), §3 의 요청 변환·토큰 갱신·압축. dot 목록은 첫 페이지만, 대화는 최근 30개만 읽는다 (`limit` 은 30 까지 통과, 40 부터 HTTP 422).
 - 확인됨 (2026-11-14, 실계정, 턴·쓰기 없음): 클라우드 WebSocket 이 공개 쓰기 method 를 안다. 없는 thread id 로
