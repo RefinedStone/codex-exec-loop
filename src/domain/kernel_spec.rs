@@ -81,6 +81,12 @@ spec_names! {
             "Delete planning data (the queue, the directions, or all of it).";
         RefreshPlanning => "refresh_planning",
             "Read the planning queue again. The result arrives as the `planning` event.";
+        CreateTask => "create_task",
+            "Add a planning task as the operator. The answer carries the new task id and the new planning revision.";
+        UpdateTask => "update_task",
+            "Replace the fields of a planning task as the operator. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+        DeleteTask => "delete_task",
+            "Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
     }
 }
 
@@ -173,6 +179,10 @@ spec_names! {
             "The kernel dropped the queued prompt because its planning task is already done or cancelled.";
         RejectedAgain => "rejected_again",
             "The kernel sent the queued prompt once more and the thread rejected it again. The kernel does not send it again. The planning task stays queued.";
+        PlanningRevisionStale => "planning_revision_stale",
+            "The planning data changed after the sender read it: `expected_planning_revision` is not the current revision. Nothing was changed. `message` gives both revisions.";
+        PlanningLocked => "planning_locked",
+            "Another change or parallel work holds the planning data that the command needs. Nothing was changed. `message` names the holder.";
     }
 }
 
@@ -264,7 +274,10 @@ impl KernelCommandKind {
             | Self::SteerTurn
             | Self::StopAll
             | Self::DecideApproval
-            | Self::ResetPlanning => CommandCompletion::Records,
+            | Self::ResetPlanning
+            | Self::CreateTask
+            | Self::UpdateTask
+            | Self::DeleteTask => CommandCompletion::Records,
         };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (
@@ -337,11 +350,32 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::KernelUnreachable],
             ),
+            // 저장 명령이다 (plan 18 K4-9d). 커널이 없어도 실행되므로 `kernel_unreachable` 이 없다.
+            Self::CreateTask => (
+                CommandScope::Planning,
+                Write,
+                Keyed,
+                &[Reason::PlanningLocked],
+            ),
+            Self::UpdateTask => (
+                CommandScope::Planning,
+                Write,
+                Natural,
+                &[Reason::PlanningRevisionStale, Reason::PlanningLocked],
+            ),
+            Self::DeleteTask => (
+                CommandScope::Planning,
+                Destructive,
+                Natural,
+                &[Reason::PlanningRevisionStale, Reason::PlanningLocked],
+            ),
         };
         CommandSpec {
             scope,
             state: match self {
-                Self::ResetPlanning => CommandState::Store,
+                Self::ResetPlanning | Self::CreateTask | Self::UpdateTask | Self::DeleteTask => {
+                    CommandState::Store
+                }
                 Self::LoadSessions
                 | Self::RenameSession
                 | Self::SubmitPrompt
