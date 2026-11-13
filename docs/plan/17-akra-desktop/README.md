@@ -78,7 +78,8 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | --- | --- | --- |
 | D-01 | 출발점은 Akra + Electron. 코드 전체를 직접 소유한다 | 승인 |
 | D-02 | 엔진은 Codex 먼저. Claude 는 앱 완성 후 확장한다 | 승인 |
-| D-03 | 클라우드 에이전트(OpenAI dots) 비공개 백엔드 연결은 하지 않는다 | 제외 |
+| D-03 | 클라우드 에이전트(OpenAI dots) 비공개 백엔드 연결은 하지 않는다 | 대체됨 (→ D-19) |
+| D-19 | dots 를 단일 공개 저장소에서 구현한다 (D-03 반전) | 승인 |
 | D-04 | 저장소는 Akra 저장소 안의 `desktop/` (모노레포) | 승인 |
 | D-05 | 기준 데이터 A+: 원본 대화는 Codex, 파생 데이터만 Akra | 승인 |
 | D-06 | Gateway 는 항상 실행되는 데몬이다 | 승인 |

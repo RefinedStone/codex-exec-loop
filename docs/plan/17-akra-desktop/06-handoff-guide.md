@@ -87,8 +87,8 @@ bash scripts/gh-akra.sh auth write-status   # RefinedStone 이어야 한다
 
 ## 7. 금지 사항
 
-- 클라우드 에이전트(OpenAI dots 등)의 비공개 백엔드에 연결하지 않는다 (D-03).
-- 공식 Codex 앱, Claude 앱의 코드를 복사하지 않는다. 구조만 참고한다.
+- 공식 Codex 앱, Claude 앱의 코드를 복사하지 않는다. 구조만 참고한다. (dots 비공개 백엔드 연결은 D-19 로
+  범위 안으로 들어왔다. 단 실계정 쓰기는 매번 허락 뒤에 한다.)
 - AGPL-3.0, SUL-1.0 코드를 차용하지 않는다 ([alternatives.md](reference/alternatives.md) §1).
 - 자격 증명을 출력하거나 커밋하지 않는다.
 - 녹화 파일, 실제 대화 내용, 회사 정보를 커밋하지 않는다.

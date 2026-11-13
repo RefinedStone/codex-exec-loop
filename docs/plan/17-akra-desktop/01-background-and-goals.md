@@ -27,7 +27,7 @@
 | 항목 | 이유 | 다시 볼 시점 |
 | --- | --- | --- |
 | Claude 연결 | 앱 완성 후 확장한다 (D-02) | [R7](roadmap/R7-claude-backend.md) |
-| 클라우드 에이전트(OpenAI dots) 연결 | 비공개 백엔드이다 (D-03) | 하지 않음 |
+| 클라우드 에이전트(OpenAI dots) 연결 | D-19 로 범위 안으로 (D-03 반전) | 함 ([reference/dots-integration.md](reference/dots-integration.md)) |
 | 자체 엔진(L2) 구현 | 공식 엔진 품질 유지가 목표이다 | 하지 않음 |
 | 공식 Codex 앱 UI 복제 | 비공개 코드이다. 구조만 참고한다 | 하지 않음 |
 | 여러 사람에게 배포 | 개인 도구이다 | [R8](roadmap/R8-packaging-and-operations.md) 이후 |
