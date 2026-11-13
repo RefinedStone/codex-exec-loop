@@ -106,15 +106,23 @@
   initialize, `thread/list`) 한다([D-13](../03-decisions.md) Codex 사용량 최소화).
 - 유지보수: 경로가 자주 바뀐다(이번에도 대화 경로·생성 경로가 바뀌었다). 버전 올라갈 때 재확인.
 
-### 구현 상태 (2026-11-13)
+### 구현 상태 (2026-11-14)
 
-- 됨: Gateway `cloud` 호스트(`AKRA_DOTS_CLOUD`), 읽기 전용 가드(읽기 method 만 클라우드로 전달), 로그인 거절 시
-  close 1008, keepalive(10초 ping, 60초 무응답 끊음). Desktop 원격 구역은 `thread/read` 로 연다.
-- 안 됨: D1 의 REST 부분(dot 목록 `/tbo`, 메시지 방, 실시간 상태, 반응), §3 의 요청 변환·토큰 갱신·압축, D2 이후.
+- 됨: Gateway `cloud` 호스트(환경 변수 또는 플래그 파일로 켬), method 허용 목록(공개 프로토콜의 읽기와 대화 쓰기),
+  로그인 거절 시 close 1008, keepalive(10초 ping, 60초 무응답 끊음). Desktop 은 설정으로 켜고, 원격 구역에서
+  `thread/read` 로 읽고, 사용자가 세션에서 한 번 허락하면 `thread/resume`·`turn/start`·`turn/steer` 로 보낸다.
+- 됨: dot 목록. Gateway `akra/dots/list` 가 `GET https://chatgpt.com/backend-api/tbo` 를 읽어 dot 의 이름·상태·
+  현재 작업 thread 를 준다. Desktop 원격 구역이 dot 을 보이고, 누르면 그 작업 thread 를 연다.
+- 안 됨: 메시지 방(대화 읽기·보내기), 실시간 상태, 반응, dot 관리(D3), 클라우드 컴퓨터(D4), §3 의 요청 변환·
+  토큰 갱신·압축. dot 목록은 첫 페이지만 읽는다.
+- 확인 안 됨: 클라우드 WebSocket 이 공개 `turn/start` 를 받는지 (G2). 사용자가 처음 보낼 때 드러난다.
 - 확인됨 (2026-11-14, 실계정 읽기 1회, 턴 없음): 클라우드 WebSocket 이 `initialize`, `thread/list`(스레드 2개),
   `thread/read`, `thread/turns/list` 를 모두 받는다. 토큰·내용은 찍지 않고 개수만 셌다. 재현: `cargo test --lib
   cloud_upstream::tests::live_cloud_reads -- --ignored`.
-- 안 확인됨: `/tbo` 등 REST 의 기준 호스트. dot 목록은 app-server WS 가 아니라 ChatGPT 백엔드 REST 이다(§1).
+- 확인됨 (2026-11-14, 실계정 읽기): REST 의 기준 호스트는 `https://chatgpt.com/backend-api` 이다. `GET /tbo` 가
+  `{items, cursor}` 를, `GET /tbo/{id}/threads` 가 `{items[{thread_id, parent_thread_id, is_user_visible,
+  is_dot_managed, attached_at}], cursor}` 를, `GET /tbo/{id}/root-thread` 가 `{root_thread_id}` 를 준다.
+  `codex-cloud-backend` 호스트의 `/tbo` 는 404 이다.
 
 ## 7. 위험
 

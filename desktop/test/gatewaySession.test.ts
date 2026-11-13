@@ -171,6 +171,7 @@ function sessionStore() {
     getOpenThreadId: () => snapshot.openThreadId ?? null,
     getTranscript: () => snapshot.transcript ?? null,
     setKernel: (kernel) => Object.assign(snapshot, { kernel }),
+    setDots: (dots) => Object.assign(snapshot, { dots }),
     getKernel: () => snapshot.kernel ?? EMPTY_KERNEL_VIEW,
   };
   return store;
@@ -242,6 +243,35 @@ describe("a remote host over the fake gateway (plan 25)", () => {
     await expect(session.startThread("/work/example-app")).rejects.toThrow("읽기 전용");
     await expect(session.interrupt()).rejects.toThrow("읽기 전용");
     expect(fake.remoteReceivedMethods.some((method) => method.startsWith("turn/") || method === "thread/start")).toBe(false);
+  });
+
+  it("reads the dot list of a remote host once and keeps it empty when the gateway has none", async () => {
+    const dot = { id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "thread-1" };
+    const withDots = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, { hosts: ["cloud"], dots: [dot] });
+    cleanups.push(() => withDots.close());
+    const first = connectBridge(withDots.endpoint, undefined, "cloud");
+    const store = sessionStore();
+    const session = new DesktopSession(first.bridge, store, "test", undefined, true);
+    session.start();
+    cleanups.push(() => session.stop());
+    first.connection.start();
+    await waitFor(() => (store.snapshot.dots?.length ?? 0) === 1);
+    expect(store.snapshot.dots).toEqual([dot]);
+    expect(withDots.remoteReceivedMethods.filter((method) => method === "akra/dots/list")).toHaveLength(1);
+    // local 접속은 dot 목록을 묻지 않는다.
+    expect(withDots.receivedMethods).not.toContain("akra/dots/list");
+
+    const withoutDots = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, { hosts: ["cloud"] });
+    cleanups.push(() => withoutDots.close());
+    const second = connectBridge(withoutDots.endpoint, undefined, "cloud");
+    const emptyStore = sessionStore();
+    const emptySession = new DesktopSession(second.bridge, emptyStore, "test", undefined, true);
+    emptySession.start();
+    cleanups.push(() => emptySession.stop());
+    second.connection.start();
+    await waitFor(() => emptyStore.snapshot.dots !== undefined);
+    expect(emptyStore.snapshot.dots).toEqual([]);
+    expect(emptyStore.snapshot.sessionError ?? null).toBeNull();
   });
 
   it("opens a remote thread with thread/read and never resumes it", async () => {

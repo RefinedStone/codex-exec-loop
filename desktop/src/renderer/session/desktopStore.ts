@@ -17,6 +17,17 @@ export interface GatewayInfo {
   hosts?: { id: string }[];
 }
 
+/** 클라우드 에이전트(dot) 하나이다. Gateway 의 `akra/dots/list` 가 준다 (D-19). */
+export interface DotSummary {
+  id: string;
+  displayName: string;
+  status: string;
+  kind: string;
+  paused: boolean;
+  /** dot 의 현재 작업 thread 이다. 없으면 열 수 없다. */
+  rootThreadId: string | null;
+}
+
 /** `local` 이 아닌 호스트 id 를 쉼표로 이은 값이다. 문자열이므로 목록을 다시 읽어도 값이 같으면 화면이 다시 그리지 않는다. */
 export function remoteHostKey(state: Pick<DesktopState, "gateway">): string {
   return (state.gateway?.hosts ?? [])
@@ -105,6 +116,9 @@ export interface DesktopState {
   /** 커널 패널이 보는 저장소 커널의 상태이다 (plan 18 K3-6). */
   kernel: KernelView;
   setKernel(kernel: KernelView): void;
+  /** 원격 호스트의 dot 목록이다. `local` 과 dots 가 없는 호스트에서는 비어 있다. */
+  dots: DotSummary[];
+  setDots(dots: DotSummary[]): void;
 }
 
 /** 열린 스레드의 작업 폴더이다. 사이드바 목록에서 찾으므로 기록을 다시 읽는 동안에도 바뀌지 않는다. */
@@ -172,6 +186,8 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   mergeFolders: (folders) => set((state) => ({ folders: mergeWorkspaceFolders(state.folders, folders) })),
   kernel: EMPTY_KERNEL_VIEW,
   setKernel: (kernel) => set({ kernel }),
+  dots: [],
+  setDots: (dots) => set({ dots }),
 }));
 
 /** `local` 호스트의 상태이다. */
@@ -214,6 +230,7 @@ export type SessionStore = Pick<
   | "addThreadToFolder"
   | "mergeFolders"
   | "setKernel"
+  | "setDots"
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
@@ -235,6 +252,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     addThreadToFolder: state.addThreadToFolder,
     mergeFolders: state.mergeFolders,
     setKernel: state.setKernel,
+    setDots: state.setDots,
     getKernel: () => store.getState().kernel,
     getOpenThreadId: () => store.getState().openThreadId,
     getTranscript: () => store.getState().transcript,

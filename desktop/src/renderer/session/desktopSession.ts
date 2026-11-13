@@ -27,7 +27,7 @@ import { KernelConnection } from "../kernel/kernelConnection";
 import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
-import { type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
+import { type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
 /** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
@@ -93,6 +93,8 @@ function errorMessage(error: unknown): string {
 
 /** 패널이 직접 부를 수 있는 Gateway 메서드이다. app-server 메서드와 커널 명령은 이 길로 보내지 않는다. */
 const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/"];
+/** 원격 호스트의 dot 목록이다 (D-19). dots 가 꺼진 Gateway 는 모르는 method 로 답한다. */
+const DOTS_LIST_METHOD = "akra/dots/list";
 
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
 export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready">;
@@ -329,12 +331,24 @@ export class DesktopSession {
       // 원격 호스트는 목록을 한 번만 읽는다 (plan 25 §8).
       if (!this.readOnly) {
         void this.addThreadsFromRolloutScan(generation);
+      } else {
+        void this.loadDots();
       }
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
       }
     } catch (error) {
       this.store.setSessionError(errorMessage(error));
+    }
+  }
+
+  /** 원격 호스트의 dot 목록을 한 번 읽는다. 실패하면(dots 가 없는 호스트 등) 목록을 비운다. 대화 목록은 그대로 보인다. */
+  private async loadDots(): Promise<void> {
+    try {
+      const response = await this.client.request<{ dots: DotSummary[] }>(DOTS_LIST_METHOD);
+      this.store.setDots(response.dots);
+    } catch {
+      this.store.setDots([]);
     }
   }
 

@@ -8,6 +8,7 @@ use crate::composition::repository_kernel::RepositoryKernelRegistry;
 use anyhow::Result;
 
 use crate::adapter::inbound::gateway::GatewayMcpHub;
+use crate::adapter::outbound::app_server::cloud_dots::CloudDotsRestAdapter;
 use crate::adapter::outbound::app_server::cloud_upstream::{CloudGatewayUpstream, codex_auth_path};
 use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
 use crate::adapter::outbound::app_server::thread_transcript::AppServerThreadTranscript;
@@ -54,6 +55,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     NoopAppServerPromptLogPort,
 };
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
+use crate::application::port::outbound::dots_port::DotsPort;
 use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPort;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationPort;
@@ -405,6 +407,8 @@ pub(crate) struct GatewayBackend {
     pub(crate) kernels: Arc<RepositoryKernelRegistry>,
     pub(crate) mcp_hub: Arc<GatewayMcpHub>,
     pub(crate) work_context: Arc<dyn WorkContextPort>,
+    /// dot 목록이다. dots 클라우드가 켜졌을 때만 있다 (D-19).
+    pub(crate) dots: Option<Arc<dyn DotsPort>>,
 }
 
 pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
@@ -433,6 +437,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         kernels,
         mcp_hub,
         work_context,
+        dots: build_dots()?,
     })
 }
 
@@ -445,6 +450,15 @@ fn build_other_hosts() -> Result<Vec<(String, Arc<dyn GatewayUpstreamPort>)>> {
     let auth_path = codex_auth_path()?;
     let cloud: Arc<dyn GatewayUpstreamPort> = Arc::new(CloudGatewayUpstream::new(auth_path));
     Ok(vec![("cloud".to_string(), cloud)])
+}
+
+/// dot 목록 adapter 이다. 클라우드 호스트와 같은 조건으로 켠다. 만들어도 요청 전에는 서비스에 붙지 않는다.
+fn build_dots() -> Result<Option<Arc<dyn DotsPort>>> {
+    if !dots_cloud_enabled() {
+        return Ok(None);
+    }
+    let dots: Arc<dyn DotsPort> = Arc::new(CloudDotsRestAdapter::new(codex_auth_path()?));
+    Ok(Some(dots))
 }
 
 /// dots 클라우드 호스트를 켜는 조건이다. 둘 중 하나면 켠다 (plan 25 §3.2, 기본값 꺼짐):

@@ -13,6 +13,7 @@ pub mod kernel_gateway_port;
 pub mod planning_reset_route_port;
 pub mod repository_state_port;
 // gateway upstream port는 akra-gateway 세션마다 codex app-server 와 이어진 바이트 스트림을 연다.
+pub mod dots_port;
 pub mod gateway_upstream_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
 pub mod github_automation_port;

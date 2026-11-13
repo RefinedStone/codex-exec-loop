@@ -348,6 +348,13 @@ the desktop app itself is not shipped yet.
   cloud rejects the login (HTTP 401 or 403) the connection closes with `1008` and reason
   `cloud login rejected`. The bridge pings the cloud every 10 seconds and ends the session after 60
   seconds of silence (`src/adapter/outbound/app_server/cloud_upstream.rs`).
+- Dot list (D-19): while the cloud host is enabled, `akra/dots/list` answers `{ dots }` with the id,
+  display name, status, kind, paused flag, and current work thread of each cloud agent. The Gateway
+  reads them with `GET https://chatgpt.com/backend-api/tbo` through `curl -q --config -`, so the token
+  stays out of argv, disk, and logs; it reads the first page only. When the cloud host is off the
+  method is unknown (`-32601`). Desktop asks once per remote connection and shows the dots at the top
+  of the remote section; a dot opens its work thread
+  (`src/adapter/outbound/app_server/cloud_dots.rs`, `src/adapter/inbound/gateway/dots.rs`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more

@@ -20,6 +20,7 @@ use super::context::{
     CONTEXT_METHOD_PREFIX, remote_host_response as remote_context_response,
     spawn_request as spawn_context_request,
 };
+use super::dots::{DOTS_METHOD_PREFIX, spawn_request as spawn_dots_request};
 use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
@@ -28,6 +29,7 @@ use super::router::{
     ClientTextRoute, refuse_kernel_on_remote_host, respond_to_akra_request, route_client_text,
 };
 use crate::application::port::inbound::work_context_port::WorkContextPort;
+use crate::application::port::outbound::dots_port::DotsPort;
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamStream,
 };
@@ -54,6 +56,8 @@ pub(super) fn websocket_config() -> WebSocketConfig {
 pub(super) struct GatewayServices {
     pub(super) mcp_hub: Option<Arc<GatewayMcpHub>>,
     pub(super) work_context: Option<Arc<dyn WorkContextPort>>,
+    /// dots 가 켜졌을 때만 있다 (D-19). 없으면 `akra/dots/*` 는 모르는 method 이다.
+    pub(super) dots: Option<Arc<dyn DotsPort>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +169,10 @@ where
                             .work_context
                             .as_ref()
                             .filter(|_| method.starts_with(CONTEXT_METHOD_PREFIX));
+                        let dots_for_method = services
+                            .dots
+                            .as_ref()
+                            .filter(|_| method.starts_with(DOTS_METHOD_PREFIX));
                         let immediate = if method.starts_with(KERNEL_METHOD_PREFIX) {
                             match &kernel_requests {
                                 Some(kernel_requests) => kernel_requests
@@ -174,6 +182,9 @@ where
                             }
                         } else if !is_local && method.starts_with(CONTEXT_METHOD_PREFIX) {
                             Some(remote_context_response(id))
+                        } else if let Some(dots) = dots_for_method {
+                            spawn_dots_request(dots.clone(), id, method, outbox.clone());
+                            None
                         } else if let Some(hub) = mcp_hub_for_method {
                             spawn_mcp_request(
                                 hub.clone(),
