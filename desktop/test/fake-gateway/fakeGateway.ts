@@ -292,6 +292,9 @@ export async function startFakeGateway(
       if (remote && hasId && options.dotMessages && message.method === "akra/dots/send") {
         const params = (message as { params?: { text?: unknown } }).params;
         options.dotMessages.push({ id: `sent-${options.dotMessages.length}`, createdAt: "2026-11-14T02:00:00Z", author: "Me", fromDot: false, text: String(params?.text ?? "") });
+        // dot 은 조금 뒤에 답한다. 클라이언트가 다시 읽어야 보인다.
+        const messages = options.dotMessages;
+        setTimeout(() => messages.push({ id: `reply-${messages.length}`, createdAt: "2026-11-14T02:00:03Z", author: "Mika", fromDot: true, text: "On it." }), 1_000);
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { sent: true } }));
         return;
       }

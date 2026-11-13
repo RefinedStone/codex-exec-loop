@@ -75,6 +75,13 @@ try {
   check("permitting the dot shows a second warning", warnings.length === 2 && warnings[1].includes("실계정"));
   check("the message goes to the dot once over the remote connection", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/send").length === 1 && !gateway.receivedMethods.includes("akra/dots/send"));
   check("the sent message appears in the chat", (await page.getByTestId("dot-chat").innerText()).includes("ship it"));
+  // 보낸 뒤에는 "새로 고침"을 누르지 않아도 dot 의 답이 나타나고, 그 뒤에는 다시 읽지 않는다.
+  await page.getByTestId("dot-message").nth(3).waitFor({ timeout: 15_000 });
+  check("the reply of the dot appears without a manual refresh", (await page.getByTestId("dot-chat").innerText()).includes("On it."));
+  await page.getByTestId("dot-waiting").waitFor({ state: "detached", timeout: 5_000 });
+  const readsAfterReply = gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length;
+  await page.waitForTimeout(5_000);
+  check("the chat stops reading after the reply", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length === readsAfterReply);
   // "작업 대화 열기"는 그 dot 의 작업 thread 를 연다.
   await page.getByTestId("dot-open-work-thread").click();
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });

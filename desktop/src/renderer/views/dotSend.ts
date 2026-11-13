@@ -28,3 +28,17 @@ export function messageTime(createdAt: string): string {
   const time = new Date(createdAt);
   return Number.isNaN(time.getTime()) ? createdAt : time.toLocaleString();
 }
+
+/** 보낸 뒤 dot 의 답을 기다리며 다시 읽는 간격이다. */
+export const REPLY_POLL_MS = 2_000;
+/** 답을 기다리는 가장 긴 시간이다. 지나면 멈추고, 사용자가 "새로 고침"으로 읽는다. 2026-11-14 실측한 답은 3~9초였다. */
+export const REPLY_WAIT_LIMIT_MS = 45_000;
+
+/**
+ * 보낸 뒤에 dot 이 답했는지이다. 가장 새 메시지가 dot 의 것이고, 보내기 직전의 가장 새 메시지와 다르면 답이다.
+ * 보낸 직후의 읽기는 내 글이 아직 없을 수 있다. 그때 가장 새 메시지는 보내기 전의 것이므로 답으로 보지 않는다.
+ */
+export function hasDotRepliedSince(messages: readonly { id: string; fromDot: boolean }[], newestIdBeforeSend: string | null): boolean {
+  const newest = messages.at(-1);
+  return newest !== undefined && newest.fromDot && newest.id !== newestIdBeforeSend;
+}
