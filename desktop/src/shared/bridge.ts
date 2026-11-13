@@ -59,6 +59,8 @@ export const IPC_CHANNELS = {
   jiraDisconnect: "akra:jira-disconnect",
   jiraSummary: "akra:jira-summary",
   jiraIssuePrompt: "akra:jira-issue-prompt",
+  dotsGetEnabled: "akra:dots-get-enabled",
+  dotsSetEnabled: "akra:dots-set-enabled",
 } as const;
 
 export interface GitHubPullRequest {
@@ -397,4 +399,12 @@ export interface AkraBridge {
   github: GitHubBridge;
   jira: JiraBridge;
   notion: NotionBridge;
+  dots: DotsBridge;
+}
+
+/** dots 클라우드 호스트의 활성화 설정이다 (plan 25 §3.2). Gateway 를 다시 시작해야 적용된다. */
+export interface DotsBridge {
+  getEnabled(): Promise<boolean>;
+  /** 플래그를 바꾸고 새 상태를 돌려준다. Gateway 재시작 전에는 적용되지 않는다. */
+  setEnabled(enabled: boolean): Promise<boolean>;
 }

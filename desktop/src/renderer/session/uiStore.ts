@@ -122,6 +122,25 @@ export function showRemote(host: string): void {
   set({ view: "remote", remoteHost: host, paletteOpen: false });
 }
 
+export const DOTS_CLOUD_ENABLE_WARNING =
+  "dots 클라우드 호스트를 켜거나 끕니다. OpenAI 의 비공개 백엔드에 공식 앱 신원으로 붙습니다. 약관과 계정 위험을 확인하세요. 설정은 Gateway 를 다시 시작해야 적용됩니다. 계속합니까?";
+
+/** dots 클라우드 활성화 플래그를 켜고 끈다 (plan 25 §3.2). Gateway 재시작 전에는 적용되지 않는다. */
+export async function toggleDotsCloud(
+  confirm: (message: string) => boolean = (message) => window.confirm(message),
+  notify: (message: string) => void = (message) => window.alert(message),
+): Promise<void> {
+  set({ paletteOpen: false });
+  const current = await window.akra.dots.getEnabled();
+  if (!confirm(DOTS_CLOUD_ENABLE_WARNING)) return;
+  const enabled = await window.akra.dots.setEnabled(!current);
+  notify(
+    enabled
+      ? "dots 클라우드를 켰습니다. Gateway 를 다시 시작하면 사이드바에 원격 구역이 나타납니다."
+      : "dots 클라우드를 껐습니다. Gateway 를 다시 시작하면 원격 구역이 사라집니다.",
+  );
+}
+
 export function toggleTheme(): void {
   set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" }));
 }
