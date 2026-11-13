@@ -1518,6 +1518,11 @@ pub(crate) fn configure_credential_command_environment(
     command.env_clear();
     let inherited_path = std::env::var_os("PATH").context("PATH is unavailable")?;
     command.env("PATH", sanitized_path(&inherited_path, cwd)?);
+    // Windows 의 Winsock 은 `SystemRoot` 가 없으면 이름을 풀지 못한다 (curl 종료 코드 6). git 과 clipboard 도 넘긴다.
+    #[cfg(windows)]
+    if let Some(value) = std::env::var_os("SystemRoot").filter(|value| !value.is_empty()) {
+        command.env("SystemRoot", value);
+    }
 
     for name in ["LANG", "LC_ALL", "LC_CTYPE"] {
         if let Some(value) = std::env::var_os(name).filter(safe_plain_value) {
