@@ -67,9 +67,10 @@ again with that key; the kernel does not run it twice.
 The Gateway path uses a transient attachment. A transient last client releases an idle kernel
 without the durable client's ten-minute grace. With no Gateway, stored commands run under a
 command-owned repository lock without starting app-server, schedulers, or prompt recovery.
-Runtime commands are rejected with `kernel_unreachable` in two cases, and `message` names the
-case: no Gateway runs, or the Gateway runs but another process (a TUI) runs the kernel of that
-repository. The existing TUI-owned reset compatibility path remains until K6 and does not create
+Runtime commands are rejected with `kernel_unreachable` in three cases, and `message` names the
+case: no Gateway runs, the Gateway runs but another process (a TUI) runs the kernel of that
+repository, or the running Gateway is an older version than the CLI (it refuses the attach
+request; restart the Gateway). In all three cases a stored command runs under the repository lock. The existing TUI-owned reset compatibility path remains until K6 and does not create
 kernel audit records.
 
 A kernel that only this CLI started stops when the command ends. The session list is not kept
@@ -83,7 +84,8 @@ send `reset_planning` through the same command port and wait for the end of that
 record of the command names the entrance in `caller` (`akra-cli`, `akra-admin`, `akra-telegram`).
 The text that each entrance shows did not change: the files that a reset rewrites and removes are
 fixed for each target, and a failed reset shows the cause that the kernel recorded
-(`command_completed.detail`). The confirmation rule of the entrances did not change either: a queue
+(`command_completed.detail`, at most 300 characters). A folder that cannot have a repository
+kernel (a repository without a primary checkout, a parallel slot worktree) still resets directly. The confirmation rule of the entrances did not change either: a queue
 reset needs no confirmation, `directions` and `all` need one, and an unconfirmed request is refused
 before it reaches the kernel. Under a TUI that runs the kernel, the reset still runs directly and
 leaves no record (until K6).

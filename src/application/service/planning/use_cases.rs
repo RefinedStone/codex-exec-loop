@@ -52,7 +52,9 @@ use crate::application::port::inbound::planning_workspace_maintenance_port::{
     PlanningWorkspaceMaintenancePort, PlanningWorkspaceResetResult,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-use crate::application::port::outbound::planning_reset_route_port::PlanningResetRoutePort;
+use crate::application::port::outbound::planning_reset_route_port::{
+    PlanningResetRouteOutcome, PlanningResetRoutePort,
+};
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityMutationRecord;
 use crate::domain::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
@@ -282,9 +284,14 @@ impl PlanningWorkspaceUseCases {
         };
         // 확인하지 않은 요청은 커널에 보내지 않는다. 직접 실행할 때와 같은 규칙, 같은 글이다.
         require_confirmed_reset(request)?;
-        // 커널이 초기화를 실행하고 기록한다. 바뀐 파일의 목록은 대상마다 정해져 있다.
-        route.reset_workspace(workspace_dir, request)?;
-        Ok(reset_result(request.target))
+        match route.reset_workspace(workspace_dir, request.target)? {
+            // 커널이 초기화를 실행하고 기록했다. 바뀐 파일의 목록은 대상마다 정해져 있다.
+            PlanningResetRouteOutcome::Done => Ok(reset_result(request.target)),
+            // 저장소 커널이 있을 수 없는 폴더이다. 이전처럼 직접 초기화한다.
+            PlanningResetRouteOutcome::NoRepositoryKernel => {
+                self.reset_service.reset_workspace(workspace_dir, request)
+            }
+        }
     }
     pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
         self.doctor_service.inspect_workspace(workspace_dir)
@@ -1961,25 +1968,31 @@ mod tests {
     #[test]
     fn a_routed_reset_goes_to_the_route_once_and_reports_the_fixed_paths_of_its_target() {
         // plan 18 K4-9a: an entrance does not run the reset. The repository kernel runs it.
-        use crate::application::port::outbound::planning_reset_route_port::PlanningResetRoutePort;
+        use crate::application::port::outbound::planning_reset_route_port::{
+            PlanningResetRouteOutcome, PlanningResetRoutePort,
+        };
         use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
 
-        #[derive(Default)]
         struct Route {
             sent: Mutex<Vec<PlanningResetTarget>>,
-            failure: Option<&'static str>,
+            answer: Result<PlanningResetRouteOutcome, &'static str>,
+        }
+        impl Default for Route {
+            fn default() -> Self {
+                Self {
+                    sent: Mutex::default(),
+                    answer: Ok(PlanningResetRouteOutcome::Done),
+                }
+            }
         }
         impl PlanningResetRoutePort for Route {
             fn reset_workspace(
                 &self,
                 _: &str,
-                request: PlanningResetRequest,
-            ) -> anyhow::Result<()> {
-                self.sent.lock().unwrap().push(request.target);
-                match self.failure {
-                    Some(failure) => Err(anyhow::anyhow!(failure)),
-                    None => Ok(()),
-                }
+                target: PlanningResetTarget,
+            ) -> anyhow::Result<PlanningResetRouteOutcome> {
+                self.sent.lock().unwrap().push(target);
+                self.answer.map_err(|failure| anyhow::anyhow!(failure))
             }
         }
         // The workspace has no planning files. A direct reset would fail; the routed one does not touch it.
@@ -2028,7 +2041,7 @@ mod tests {
 
         // The cause that the kernel gave is the error of the entrance.
         let failing = direct.workspace.clone().with_reset_route(Arc::new(Route {
-            failure: Some("live tasks block the reset"),
+            answer: Err("live tasks block the reset"),
             ..Route::default()
         }));
         assert_eq!(
@@ -2040,6 +2053,24 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "live tasks block the reset"
+        );
+
+        // A folder that cannot have a repository kernel: the reset runs directly, as before the route.
+        // This folder has no planning files, so the direct reset answers with its own error.
+        let no_kernel = direct.workspace.clone().with_reset_route(Arc::new(Route {
+            answer: Ok(PlanningResetRouteOutcome::NoRepositoryKernel),
+            ..Route::default()
+        }));
+        let direct_error = no_kernel
+            .reset_workspace(
+                workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::Queue, false),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            direct_error.contains("initialize planning first"),
+            "{direct_error}"
         );
     }
 

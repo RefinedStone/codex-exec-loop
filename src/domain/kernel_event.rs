@@ -416,6 +416,18 @@ pub const AUTO_FOLLOW_KINDS: [&str; 1] = [KernelRecordKind::AutoFollowConfigured
 /// 기록에 남기는 승인 설명의 최대 길이이다. 기록은 대화의 사본이 아니다.
 const APPROVAL_SUMMARY_MAX_CHARS: usize = 200;
 
+/// 완료 기록의 `detail` 의 최대 길이이다 (plan 18 K4-9a). 요청이 댄 원인은 바깥(app-server, 저장소)의 글이라서 길이를
+/// 막는다. 승인 요약과 같은 이유이다.
+const COMMAND_DETAIL_MAX_CHARS: usize = 300;
+
+/// 커널이 명령을 받았지만 요청을 시작하지 않았을 때의 `detail` 이다. 같은 종류의 요청이 이미 진행 중인 경우이다.
+pub const COMMAND_NOT_STARTED_DETAIL: &str = "the kernel did not start this request because a request of the same kind is in progress; nothing was changed";
+
+/// 실패한 요청이 댄 원인을 완료 기록에 실을 글로 줄인다.
+pub fn command_failure_detail(cause: &str) -> String {
+    cause.chars().take(COMMAND_DETAIL_MAX_CHARS).collect()
+}
+
 impl QueuedThreadPrompt {
     /// 이 남김이 끝났다는 사건이다.
     pub fn settled(&self, settlement: ThreadPromptSettlement) -> KernelEvent {

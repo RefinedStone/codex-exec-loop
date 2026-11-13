@@ -529,6 +529,23 @@ pub(crate) fn kernel_event_log_port() -> Arc<dyn KernelEventLogPort> {
     Arc::new(SqlitePlanningAuthorityAdapter::new())
 }
 
+/// 그 작업 공간의 커널 기록에 남은 명령과 그 명령을 보낸 입구이다. 입구의 시험이 "커널을 거쳤다"를 볼 때 쓴다.
+#[cfg(test)]
+pub(crate) fn recorded_commands_for_test(workspace_dir: &str) -> Vec<(String, Option<String>)> {
+    use crate::domain::kernel_event::{COMMAND_KINDS, KernelEvent};
+    kernel_event_log_port()
+        .load_kernel_events(workspace_dir, &COMMAND_KINDS)
+        .expect("the kernel log of the test workspace should load")
+        .into_iter()
+        .filter_map(|event| match event {
+            KernelEvent::CommandReceived {
+                command, caller, ..
+            } => Some((command, caller)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// 커널이 관찰하는 작업 공간의 git 상태이다 (plan 20 §4.1).
 pub(crate) fn repository_state_port() -> Arc<dyn RepositoryStatePort> {
     Arc::new(GitRepositoryStateAdapter)

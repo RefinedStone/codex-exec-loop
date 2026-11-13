@@ -15,6 +15,9 @@ use crate::domain::kernel_spec::KernelCallError;
 
 /// The Gateway cannot attach to the kernel of the repository (`kernel_unavailable` in the spec).
 const ERROR_KERNEL_UNAVAILABLE: i64 = -32012;
+/// JSON-RPC: the Gateway does not know the method, or it does not accept the fields of the request.
+const ERROR_METHOD_NOT_FOUND: i64 = -32601;
+const ERROR_INVALID_PARAMS: i64 = -32602;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
@@ -114,6 +117,16 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
     // The locked local path checks the owner.
     if attached.pointer("/error/code").and_then(Value::as_i64) == Some(ERROR_KERNEL_UNAVAILABLE) {
         return Ok(KernelGatewayReply::KernelHeldElsewhere);
+    }
+    /*
+     * The attach of this client is valid for a Gateway of the same version. A Gateway that refuses its
+     * shape is an older program (it does not know `transient`, or it has no kernel methods). Nothing ran.
+     */
+    if matches!(
+        attached.pointer("/error/code").and_then(Value::as_i64),
+        Some(ERROR_INVALID_PARAMS | ERROR_METHOD_NOT_FOUND)
+    ) {
+        return Ok(KernelGatewayReply::GatewayTooOld);
     }
     answer(attached)?;
     let mut id = 2;
@@ -319,6 +332,27 @@ mod tests {
             reply.unwrap(),
             KernelGatewayReply::KernelHeldElsewhere
         ));
+    }
+
+    #[tokio::test]
+    async fn a_gateway_that_refuses_the_attach_shape_is_an_older_gateway() {
+        // An older Gateway keeps running after an upgrade of the CLI. It must not look like a broken request.
+        for (code, message) in [
+            (ERROR_INVALID_PARAMS, "unknown field `transient`"),
+            (ERROR_METHOD_NOT_FOUND, "unknown method"),
+        ] {
+            let (mut client, mut server) = wire().await;
+            let serving = serve(
+                &mut server,
+                "akra/kernel/attach",
+                json!({"error":{"code":code,"message":message}}),
+            );
+            let (reply, ()) = tokio::join!(command_over(&mut client), serving);
+            assert!(
+                matches!(reply.unwrap(), KernelGatewayReply::GatewayTooOld),
+                "{code}"
+            );
+        }
     }
 
     #[tokio::test]
