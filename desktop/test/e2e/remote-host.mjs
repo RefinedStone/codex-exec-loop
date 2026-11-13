@@ -24,7 +24,8 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
 });
 // 켜고 끄는 설정을 사용자의 실제 앱 데이터 폴더에 쓰지 않는다.
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-remote-"));
-const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
+// AKRA_HOME 도 임시 폴더로 둔다. 이 컴퓨터의 dots 플래그(`~/.akra/dots/cloud-enabled`)가 시험의 기본값을 바꾸지 않는다.
+const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData, AKRA_HOME: userData };
 delete env.ELECTRON_RUN_AS_NODE;
 
 const failures = [];

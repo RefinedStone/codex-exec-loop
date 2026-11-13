@@ -158,6 +158,22 @@ export async function toggleDotsCloud(
   );
 }
 
+/**
+ * dots 클라우드는 켜져 있는데 원격 구역을 켜거나 끈 적이 없으면 구역을 켠다. 구역이 플래그와 따로 켜지던 때에
+ * dots 를 켠 사용자는 구역이 꺼진 채로 남았다. 사용자가 구역을 직접 끈 적이 있으면 그 선택을 따른다.
+ */
+export async function showRemoteAgentsWhenDotsAreOn(): Promise<void> {
+  let chosen: string | null = null;
+  try {
+    chosen = window.localStorage.getItem(REMOTE_AGENTS_KEY);
+  } catch {
+    return;
+  }
+  if (chosen === null && (await window.akra.dots.getEnabled())) {
+    setRemoteAgents(true);
+  }
+}
+
 export function toggleTheme(): void {
   set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" }));
 }
