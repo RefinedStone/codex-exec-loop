@@ -111,7 +111,10 @@
 - 됨: Gateway `cloud` 호스트(`AKRA_DOTS_CLOUD`), 읽기 전용 가드(읽기 method 만 클라우드로 전달), 로그인 거절 시
   close 1008, keepalive(10초 ping, 60초 무응답 끊음). Desktop 원격 구역은 `thread/read` 로 연다.
 - 안 됨: D1 의 REST 부분(dot 목록 `/tbo`, 메시지 방, 실시간 상태, 반응), §3 의 요청 변환·토큰 갱신·압축, D2 이후.
-- 확인 안 됨: 클라우드 WebSocket 이 `thread/read`, `thread/turns/list` 를 받는지. 실계정 읽기 확인이 필요하다.
+- 확인됨 (2026-11-14, 실계정 읽기 1회, 턴 없음): 클라우드 WebSocket 이 `initialize`, `thread/list`(스레드 2개),
+  `thread/read`, `thread/turns/list` 를 모두 받는다. 토큰·내용은 찍지 않고 개수만 셌다. 재현: `cargo test --lib
+  cloud_upstream::tests::live_cloud_reads -- --ignored`.
+- 안 확인됨: `/tbo` 등 REST 의 기준 호스트. dot 목록은 app-server WS 가 아니라 ChatGPT 백엔드 REST 이다(§1).
 
 ## 7. 위험
 
