@@ -345,8 +345,9 @@ the desktop app itself is not shipped yet.
   `thread/items/list`, `model/list` for reading, and `thread/resume`, `thread/unsubscribe`,
   `turn/start`, `turn/steer`, `turn/interrupt`, `thread/stop` for a conversation), plus error and
   result responses. It answers every other request with `-32601` and drops other notifications and
-  binary frames. It never hand-writes a private method such as `turn/addUserMessage`. Writes only
-  flow after the user permits a remote conversation in Desktop ("세션 한 번 허용", below). When the
+  binary frames. It never hand-writes a private method such as `turn/addUserMessage`. The bridge
+  allows those write methods, but Desktop has no control that sends them: cloud threads are read-only
+  in the UI. When the
   cloud rejects the login (HTTP 401 or 403) the connection closes with `1008` and reason
   `cloud login rejected`. The bridge pings the cloud every 10 seconds and ends the session after 60
   seconds of silence (`src/adapter/outbound/app_server/cloud_upstream.rs`).
@@ -354,10 +355,10 @@ the desktop app itself is not shipped yet.
   display name, status, kind, paused flag, and current work thread of each cloud agent. The Gateway
   reads them with `GET https://chatgpt.com/backend-api/tbo` through `curl -q --config -`, so the token
   stays out of argv, disk, and logs; it reads the first page only. When the cloud host is off the
-  method is unknown (`-32601`). Desktop asks once per remote connection. The remote section has two
-  groups: "에이전트" holds the dots and the work threads that an agent made (`threadSource` starts with
-  `aeon`), and "클라우드 스레드" holds the cloud threads that the user made. The section header for
-  host `cloud` reads "클라우드" (`src/adapter/outbound/app_server/cloud_dots.rs`,
+  method is unknown (`-32601`). Desktop asks once per remote connection. The sidebar shows two
+  sections for the host, above the local folders: "Dots" holds the dots and, folded under "작업 대화",
+  the work threads that an agent made (`threadSource` starts with `aeon`); "클라우드 · 읽기 전용" holds
+  the cloud threads that the user made (`src/adapter/outbound/app_server/cloud_dots.rs`,
   `src/adapter/inbound/gateway/dots.rs`).
 - Dot chat (D-19): `akra/dots/messages` with `{ roomId }` answers `{ messages }`, the latest 30
   messages of that message room, oldest first, each with id, time, author name, a from-dot flag, and
@@ -384,16 +385,19 @@ the desktop app itself is not shipped yet.
   dot works, the chat shows a typing mark and the header shows the service's activity label
   (`src/adapter/outbound/app_server/cloud_dots_live.rs`). A real send was verified once on 2026-11-14. "작업 대화 열기" opens the dot's work thread
   (`desktop/src/renderer/views/DotChat.tsx`, `desktop/src/renderer/views/dotSend.ts`).
+- Dot window (D-19): the chat header's "작은 창으로 따로 열기" opens a 440 by 680 window that shows only
+  the chat with that dot. The main process keeps one window per dot and focuses it when asked again.
+  The window loads the same renderer with `?dotWindow=<host>&dot=<id>`, opens its own remote Gateway
+  connection, does not connect to `local`, follows the OS light or dark setting, and asks for the send
+  permission by itself (`desktop/src/renderer/views/DotWindow.tsx`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
   the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more
   Gateway connection per remote host on `/host/<id>` and the sidebar shows a section for that host,
   above the local work folders, with
-  its threads. A remote thread opens read-only with `thread/read` and `thread/turns/list`; Desktop sends
-  no resume, no turn, and no approval answer until the user clicks "이 세션에서 보내기 허용" in the remote
-  banner (plan 25 "세션 한 번 허용", D-19). After that, for that host's session, Desktop resumes the open
-  thread with `thread/resume` to stream it live, shows a composer, and sends with `turn/start`/`turn/steer`
-  (the same public methods as local); it still never starts a new remote thread. The remote conversation
+  its threads. A remote thread opens read-only with `thread/read` and `thread/turns/list`. Desktop has no
+  control that sends a turn, a resume, or an approval answer to a cloud thread; the user talks to a dot
+  in the dot chat instead. The remote conversation
   does not use the kernel, changes, documents, or terminal panels. Remote state stays in memory. A connection that the Gateway closes with `1008` is not
   retried; the section shows a login message when the reason is `cloud login rejected`. The command and
   the section appear only when the Gateway registers a remote host

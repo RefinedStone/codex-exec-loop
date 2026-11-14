@@ -27,9 +27,12 @@ export interface DotChatProps {
   /** dot 이 답을 끝낸 횟수이다. 늘면 대화를 다시 읽는다. */
   replies: number;
   request: GatewayRequest;
-  onOpenWorkThread(threadId: string): void;
+  /** 작업 대화를 여는 곳이 있을 때만 준다. dot 창에는 없다. */
+  onOpenWorkThread?(threadId: string): void;
   /** 사용자가 이 대화의 새 메시지를 봤다. */
   onSeen(): void;
+  /** 이 대화를 작은 창으로 따로 연다. 이미 그 창이면 없다. */
+  onPopOut?(): void;
 }
 
 export function DotAvatar({ name, size = 28 }: { name: string; size?: number }) {
@@ -40,7 +43,7 @@ export function DotAvatar({ name, size = 28 }: { name: string; size?: number }) 
   );
 }
 
-export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen }: DotChatProps) {
+export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen, onPopOut }: DotChatProps) {
   const [state, setState] = useState<ChatState>({ phase: "loading" });
   const [refresh, setRefresh] = useState(0);
   const [canSend, setCanSend] = useState(() => isDotSendingAllowed(dot.id));
@@ -159,7 +162,12 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen 
             <Icon name="undo" />
           </button>
         )}
-        {rootThreadId !== null && (
+        {onPopOut && (
+          <button type="button" className="icon-button" title="작은 창으로 따로 열기" aria-label="작은 창으로 따로 열기" onClick={onPopOut} data-testid="dot-pop-out">
+            <Icon name="panel" />
+          </button>
+        )}
+        {rootThreadId !== null && onOpenWorkThread && (
           <button type="button" className="chip-button" title="이 에이전트의 작업 대화를 엽니다 (읽기 전용)" onClick={() => onOpenWorkThread(rootThreadId)} data-testid="dot-open-work-thread">
             <Icon name="stack" size={14} />
             작업 대화

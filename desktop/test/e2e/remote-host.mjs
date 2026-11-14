@@ -60,6 +60,10 @@ try {
   const firstLocalTop = (await page.getByTestId("thread-entry").first().boundingBox())?.y ?? -Infinity;
   check("the remote section is above the local threads", remoteTop < firstLocalTop);
   check("the sidebar lists the dots of the remote host", (await page.getByTestId("remote-dot-entry").filter({ hasText: "Mika" }).count()) === 1);
+  // Dots 는 클라우드 구역과 다른 구역이고, 그 위에 있다.
+  const dotsTop = (await page.getByTestId("dots-section").boundingBox())?.y ?? Infinity;
+  const cloudTop = (await page.getByTestId("remote-host").boundingBox())?.y ?? -Infinity;
+  check("the dots have their own section above the cloud section", dotsTop < cloudTop && (await page.getByTestId("remote-host").getByTestId("remote-dot-entry").count()) === 0);
   // dot 을 누르면 그 dot 과의 대화(메시지 방)가 열린다. 읽기 전용이고 입력창이 없다.
   await page.getByTestId("remote-dot-entry").first().click();
   await page.getByTestId("dot-message").nth(1).waitFor({ timeout: 10_000 });
@@ -88,18 +92,21 @@ try {
   const readsAfterReply = gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length;
   await page.waitForTimeout(5_000);
   check("the chat stops reading after the reply", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length === readsAfterReply);
+  // 작은 창으로 따로 연다. 그 창은 dot 의 대화만 보이고 자기 접속으로 읽는다.
+  const [dotWindow] = await Promise.all([app.waitForEvent("window"), page.getByTestId("dot-pop-out").click()]);
+  await dotWindow.getByTestId("dot-message").nth(1).waitFor({ timeout: 15_000 });
+  check("the dot window shows only the chat with the dot", (await dotWindow.getByTestId("dot-window").count()) === 1 && (await dotWindow.getByTestId("thread-entry").count()) === 0 && (await dotWindow.getByTestId("dot-open-work-thread").count()) === 0);
+  check("the dot window has no composer before the user permits sending", (await dotWindow.getByTestId("dot-composer-input").count()) === 0);
+  await dotWindow.close();
   // "작업 대화 열기"는 그 dot 의 작업 thread 를 연다.
   await page.getByTestId("dot-open-work-thread").click();
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
   await page.getByTestId("turn").first().waitFor({ timeout: 15_000 });
   check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/read"));
-  check("the remote conversation has no composer before the user permits it", (await page.getByTestId("composer-input").count()) === 0);
-
-  // "세션 한 번 허용": 보내기를 허락하면 thread/resume 으로 구독하고 composer 가 나타난다 (plan 25).
-  await page.getByTestId("remote-allow-send").click();
-  await page.getByTestId("composer-input").waitFor({ timeout: 10_000 });
-  check("permitting sending subscribes with thread/resume", gateway.remoteReceivedMethods.includes("thread/resume"));
-  check("the composer appears after the user permits sending", (await page.getByTestId("composer-input").count()) === 1);
+  // 클라우드 스레드는 읽기 전용이다. 입력창도, 보내기를 여는 단추도 없다.
+  check("the cloud conversation has no composer", (await page.getByTestId("composer-input").count()) === 0);
+  check("the cloud conversation cannot be opened for sending", (await page.getByTestId("remote-allow-send").count()) === 0);
+  check("the cloud conversation was read without a resume", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume"));
 
   console.log("--- remote conversation text ---");
   console.log(await page.getByTestId("remote-banner").innerText());

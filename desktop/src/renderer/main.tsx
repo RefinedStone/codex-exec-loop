@@ -1,7 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { App } from "./App";
+import { isDotId, isRemoteHostId } from "../shared/bridge";
+import { App, CLIENT_VERSION } from "./App";
+import { DotWindow } from "./views/DotWindow";
 import "./design/tokens.css";
 import "./design/app.css";
 import "./styles.css";
@@ -14,8 +16,8 @@ if (!container) {
 if (navigator.userAgent.includes("Mac")) {
   document.documentElement.classList.add("inset-title-bar");
 }
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+// main 이 `?dotWindow=<호스트>&dot=<dot id>` 로 연 창은 그 dot 의 대화만 그린다.
+const query = new URLSearchParams(window.location.search);
+const dotHost = query.get("dotWindow");
+const dotId = query.get("dot");
+createRoot(container).render(<StrictMode>{isRemoteHostId(dotHost) && isDotId(dotId) ? <DotWindow host={dotHost} dotId={dotId} clientVersion={CLIENT_VERSION} /> : <App />}</StrictMode>);

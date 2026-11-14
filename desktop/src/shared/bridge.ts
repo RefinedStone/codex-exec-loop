@@ -61,6 +61,7 @@ export const IPC_CHANNELS = {
   jiraIssuePrompt: "akra:jira-issue-prompt",
   dotsGetEnabled: "akra:dots-get-enabled",
   dotsSetEnabled: "akra:dots-set-enabled",
+  dotsOpenWindow: "akra:dots-open-window",
 } as const;
 
 export interface GitHubPullRequest {
@@ -407,4 +408,11 @@ export interface DotsBridge {
   getEnabled(): Promise<boolean>;
   /** 플래그를 바꾸고 새 상태를 돌려준다. Gateway 재시작 전에는 적용되지 않는다. */
   setEnabled(enabled: boolean): Promise<boolean>;
+  /** 그 dot 과의 대화만 보이는 작은 창을 연다. 이미 열려 있으면 그 창을 앞으로 가져온다. */
+  openWindow(host: string, dotId: string): void;
+}
+
+/** dot 창의 주소에 넣는 dot id 이다. 주소와 파일 이름에 안전한 글자만 받는다. */
+export function isDotId(dotId: unknown): dotId is string {
+  return typeof dotId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(dotId);
 }

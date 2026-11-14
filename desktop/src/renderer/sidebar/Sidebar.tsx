@@ -5,6 +5,7 @@ import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
 import { MOD_KEY, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
+import { DotAvatar } from "../views/DotChat";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
 const PHASE_LABEL: Record<ConnectionState["phase"], string> = {
@@ -98,10 +99,10 @@ function dotRowMark(dot: DotRow, live: Record<string, { connected: boolean; work
   return room !== null && unread.includes(room) ? "unread" : "idle";
 }
 
-function dotRowNote(dot: DotRow, live: Record<string, { connected: boolean; working: boolean }>, unread: readonly string[]): string {
+/** dot 줄 오른쪽의 짧은 글이다. 평소에는 비운다: 이름만 보이는 편이 깔끔하다. */
+function dotRowNote(dot: DotRow, mark: ThreadMark): string {
   if (dot.paused) return "멈춤";
-  const mark = dotRowMark(dot, live, unread);
-  return mark === "running" ? "답하는 중" : mark === "unread" ? "새 답" : dot.status;
+  return mark === "running" ? "답하는 중…" : "";
 }
 
 function RemoteThreadRow({ thread, selected, onOpen, testId, title }: { thread: WorkspaceThread; selected: boolean; onOpen(): void; testId: string; title: string }) {
@@ -118,24 +119,87 @@ function RemoteThreadRow({ thread, selected, onOpen, testId, title }: { thread: 
   );
 }
 
-/**
- * 원격 호스트(클라우드 에이전트, plan 25) 하나의 구역이다. 그 호스트의 저장소를 읽는다. 원격의 작업 폴더는 이 컴퓨터에
- * 없으므로 폴더로 묶지 않고 최근 대화부터 보인다.
- */
-function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host: string, threadId: string): void }) {
+/** 원격 호스트의 저장소에서 사이드바의 두 구역이 쓰는 값을 읽는다. */
+function useRemoteHost(host: string) {
   const useStore = remoteHostStore(host);
-  const [open, setOpen] = useState(true);
   const phase = useStore((state) => state.connection?.phase ?? "connecting");
   const problem = useStore((state) => (state.connection?.phase === "connected" ? state.sessionError : (state.connection?.detail ?? null)));
   const folders = useStore((state) => state.folders);
+  const openThreadId = useStore((state) => state.openThreadId);
+  const showing = useUiStore((state) => state.view === "remote" && state.remoteHost === host);
+  const threads = useMemo(() => folders.flatMap((folder) => folder.threads).sort((left, right) => right.updatedAt - left.updatedAt), [folders]);
+  return { useStore, phase, problem, threads, openThreadId, showing };
+}
+
+/**
+ * Dots 구역이다 (D-19). dot 은 사용자의 비서이다: 누르면 대화가 열린다. 사용자가 만든 클라우드 스레드와는 다른
+ * 것이므로 구역을 따로 둔다. dot 이 만든 작업 대화는 접어 둔다.
+ */
+function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: string, threadId: string): void }) {
+  const { useStore, phase, threads, openThreadId, showing } = useRemoteHost(host);
+  const [open, setOpen] = useState(true);
+  const [workOpen, setWorkOpen] = useState(false);
   const dots = useStore((state) => state.dots);
   const dotLive = useStore((state) => state.dotLive);
   const dotUnreadRooms = useStore((state) => state.dotUnreadRooms);
-  const openThreadId = useStore((state) => state.openThreadId);
-  const showing = useUiStore((state) => state.view === "remote" && state.remoteHost === host);
   const shownDotId = useUiStore((state) => (state.view === "dot" && state.remoteHost === host ? state.remoteDotId : null));
-  const threads = useMemo(() => folders.flatMap((folder) => folder.threads).sort((left, right) => right.updatedAt - left.updatedAt), [folders]);
   const agentThreads = useMemo(() => threads.filter((thread) => thread.agentThread === true), [threads]);
+  if (dots.length === 0 && agentThreads.length === 0) return null;
+  return (
+    <section className="project" data-testid="dots-section">
+      <header className="project-header" title="내 클라우드 에이전트">
+        <button type="button" className="project-name" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
+          <Icon name="sparkle" size={14} />
+          <span>Dots</span>
+        </button>
+        {phase !== "connected" && <span className="connection">{PHASE_LABEL[phase]}</span>}
+      </header>
+      {open && (
+        <ul data-testid="remote-dots">
+          {dots.map((dot) => {
+            const mark = dotRowMark(dot, dotLive, dotUnreadRooms);
+            return (
+              <li className="thread-row" key={dot.id}>
+                <button type="button" className={shownDotId === dot.id ? "thread selected dot-entry" : "thread dot-entry"} title={`${dot.displayName} 과의 대화를 엽니다.`} onClick={() => showDot(host, dot.id)} data-testid="remote-dot-entry">
+                  <DotAvatar name={dot.displayName} size={22} />
+                  <span className="thread-text">
+                    <span className="thread-title">{dot.displayName}</span>
+                  </span>
+                  {mark === "unread" && <span className="badge badge-warn" data-testid="dot-unread">새 답</span>}
+                  {mark !== "unread" && <span className="thread-age">{dotRowNote(dot, mark)}</span>}
+                </button>
+              </li>
+            );
+          })}
+          {agentThreads.length > 0 && (
+            <li className="thread-row">
+              <button type="button" className="thread" onClick={() => setWorkOpen(!workOpen)} aria-expanded={workOpen} title="에이전트가 만든 작업 대화이다. 읽기 전용이다." data-testid="dot-work-toggle">
+                <Icon name={workOpen ? "chevronDown" : "chevronRight"} size={12} />
+                <span className="thread-text">
+                  <span className="thread-title muted">작업 대화</span>
+                </span>
+                <span className="thread-age">{agentThreads.length}</span>
+              </button>
+            </li>
+          )}
+          {workOpen &&
+            agentThreads.map((thread) => (
+              <RemoteThreadRow key={thread.id} thread={thread} selected={showing && openThreadId === thread.id} onOpen={() => onOpenThread(host, thread.id)} testId="remote-agent-thread-entry" title="에이전트가 만든 작업 대화 (읽기 전용)" />
+            ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * 원격 호스트(plan 25)의 클라우드 스레드 구역이다. 사용자가 만든 클라우드 스레드를 최근 것부터 보인다. 읽기 전용이다.
+ * 원격의 작업 폴더는 이 컴퓨터에 없으므로 폴더로 묶지 않는다.
+ */
+function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host: string, threadId: string): void }) {
+  const { phase, problem, threads, openThreadId, showing } = useRemoteHost(host);
+  const [open, setOpen] = useState(true);
   const cloudThreads = useMemo(() => threads.filter((thread) => thread.agentThread !== true), [threads]);
   return (
     <section className="project" data-testid="remote-host">
@@ -143,7 +207,8 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
         <button type="button" className="project-name" onClick={() => setOpen(!open)} aria-expanded={open}>
           <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
           <Icon name="globe" size={14} />
-          <span>{host === "cloud" ? "클라우드" : host}</span>
+          <span className="project-fixed">{host === "cloud" ? "클라우드" : host}</span>
+          <span className="project-note">읽기 전용</span>
         </button>
         <span className="connection" title="이 호스트의 연결 상태">
           <span className={`connection-dot connection-${phase}`} />
@@ -151,44 +216,13 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
         </span>
       </header>
       {open && problem && <p className="empty-row error">{problem}</p>}
-      {/* 에이전트(dot)와 사용자가 만든 클라우드 스레드는 다른 것이다. 같은 호스트에 있어도 따로 보인다. */}
-      {open && (dots.length > 0 || agentThreads.length > 0) && (
-        <>
-          <p className="section-label empty-row">에이전트</p>
-          <ul data-testid="remote-dots">
-            {dots.map((dot) => (
-              <li className="thread-row" key={dot.id}>
-                <button
-                  type="button"
-                  className={shownDotId === dot.id ? "thread selected" : "thread"}
-                  title={`${dot.displayName} 과의 대화를 엽니다.`}
-                  onClick={() => showDot(host, dot.id)}
-                  data-testid="remote-dot-entry"
-                >
-                  <StatusMark mark={dotRowMark(dot, dotLive, dotUnreadRooms)} />
-                  <span className="thread-text">
-                    <span className="thread-title">{dot.displayName}</span>
-                  </span>
-                  <span className="thread-age">{dotRowNote(dot, dotLive, dotUnreadRooms)}</span>
-                </button>
-              </li>
-            ))}
-            {agentThreads.map((thread) => (
-              <RemoteThreadRow key={thread.id} thread={thread} selected={showing && openThreadId === thread.id} onOpen={() => onOpenThread(host, thread.id)} testId="remote-agent-thread-entry" title="에이전트가 만든 작업 대화" />
-            ))}
-          </ul>
-        </>
-      )}
-      {open && !problem && phase === "connected" && (
-        <>
-          <p className="section-label empty-row">클라우드 스레드</p>
-          {cloudThreads.length === 0 && <p className="empty-row">대화가 없습니다.</p>}
-          <ul>
-            {cloudThreads.map((thread) => (
-              <RemoteThreadRow key={thread.id} thread={thread} selected={showing && openThreadId === thread.id} onOpen={() => onOpenThread(host, thread.id)} testId="remote-thread-entry" title="사용자가 만든 클라우드 대화" />
-            ))}
-          </ul>
-        </>
+      {open && !problem && phase === "connected" && cloudThreads.length === 0 && <p className="empty-row">대화가 없습니다.</p>}
+      {open && (
+        <ul>
+          {cloudThreads.map((thread) => (
+            <RemoteThreadRow key={thread.id} thread={thread} selected={showing && openThreadId === thread.id} onOpen={() => onOpenThread(host, thread.id)} testId="remote-thread-entry" title="사용자가 만든 클라우드 대화 (읽기 전용)" />
+          ))}
+        </ul>
       )}
     </section>
   );
@@ -229,6 +263,7 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(thr
       </div>
       <div className="sidebar-scroll">
         {/* 원격 구역은 맨 위에 둔다. 로컬 스레드가 많으면 아래에 둔 구역은 스크롤해야 보여서 없는 것처럼 보인다. */}
+        {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <DotsSection key={`dots:${host}`} host={host} onOpenThread={onOpenRemoteThread} />)}
         {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <RemoteSection key={host} host={host} onOpenThread={onOpenRemoteThread} />)}
         {folders.length === 0 && <p className="empty-row">아직 스레드가 없습니다. 새 스레드에서 작업 폴더를 고르세요.</p>}
         {folders.map((folder) => (
