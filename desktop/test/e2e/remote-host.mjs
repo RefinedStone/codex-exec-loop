@@ -130,6 +130,13 @@ try {
   await page.getByTestId("dot-dock").waitFor({ timeout: 10_000 });
   check("the dot window moves the chat back beside the main window", app.windows().length === 1 && (await page.getByTestId("dot-composer-input").count()) === 1);
   check("the draft moves back with the chat", (await page.getByTestId("dot-composer-input").inputValue()) === "from the window");
+  // 창으로 옮긴 글의 사본은 옆 칸에 남지 않는다. 창을 그냥 닫고 옆 칸을 다시 열면 입력창이 비어 있다.
+  const [secondWindow] = await Promise.all([app.waitForEvent("window"), page.getByTestId("dot-pop-out").click()]);
+  await secondWindow.getByTestId("dot-composer-input").waitFor({ timeout: 15_000 });
+  await Promise.all([secondWindow.waitForEvent("close"), secondWindow.close()]);
+  await page.getByTestId("remote-dot-entry").first().click();
+  await page.getByTestId("dot-composer-input").waitFor({ timeout: 10_000 });
+  check("the side chat keeps no copy of a draft that moved to a window", (await page.getByTestId("dot-composer-input").inputValue()) === "");
   // 좁은 창에서는 단축키로 연 패널도 옆 칸과 함께 있지 않는다.
   await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Backslash`);
   await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
