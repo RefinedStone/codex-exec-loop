@@ -150,7 +150,7 @@ function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: 
       return;
     }
     window.akra.dots.hasWindow(host, dotId).then(
-      (inWindow) => (inWindow ? window.akra.dots.openWindow(host, dotId) : showDot(host, dotId)),
+      (inWindow) => (inWindow ? void window.akra.dots.openWindow(host, dotId) : showDot(host, dotId)),
       () => showDot(host, dotId),
     );
   };

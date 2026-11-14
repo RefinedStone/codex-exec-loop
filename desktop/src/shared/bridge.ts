@@ -418,9 +418,10 @@ export interface DotsBridge {
   setEnabled(enabled: boolean): Promise<boolean>;
   /**
    * 그 dot 과의 대화만 보이는 작은 창을 연다. 이미 열려 있으면 그 창을 앞으로 가져온다. `draft` 는 옆 칸에서 쓰던
-   * 글이다: 새로 여는 창이 `takeDraft` 로 받는다.
+   * 글이다: 새로 여는 창이 `takeDraft` 로 받는다. 답은 창을 새로 열었는지이다. 이미 있던 창은 `draft` 를 받지
+   * 않으므로 false 이다: 부른 쪽이 자기 글을 지우면 안 된다.
    */
-  openWindow(host: string, dotId: string, draft?: string): void;
+  openWindow(host: string, dotId: string, draft?: string): Promise<boolean>;
   /** dot 창이 부른다: 이 창을 열 때 넘겨받은 쓰던 글을 한 번 가져간다. 없으면 null 이다. */
   takeDraft(host: string, dotId: string): Promise<string | null>;
   /** 그 dot 의 창이 열려 있는지이다. */

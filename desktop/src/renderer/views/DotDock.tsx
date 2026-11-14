@@ -33,10 +33,17 @@ export function DotDock({ host, dotId, request }: { host: string; dotId: string;
         request={request}
         onSeen={() => room && useStore.getState().markDotRoomRead(room)}
         onPopOut={() => {
-          // 쓰던 글도 창으로 옮긴다. 창은 다른 renderer 이므로 이 창의 초안을 보지 못한다. 여기의 사본은 지운다:
-          // 창에서 보낸 글이 나중에 옆 칸에 초안으로 다시 나타나지 않는다.
-          window.akra.dots.openWindow(host, dot.id, useUiStore.getState().drafts[dotDraftKey(dot.id)] ?? "");
-          setDraft(dotDraftKey(dot.id), "");
+          // 쓰던 글도 창으로 옮긴다. 창은 다른 renderer 이므로 이 창의 초안을 보지 못한다. 새 창이 글을 받았을 때만
+          // 여기의 사본을 지운다: 창에서 보낸 글이 나중에 옆 칸에 초안으로 다시 나타나지 않는다. 다른 본 창이 이미
+          // 그 dot 의 창을 열어 뒀으면 그 창은 글을 받지 않는다. 그때는 글을 여기에 남긴다.
+          const key = dotDraftKey(dot.id);
+          const moved = useUiStore.getState().drafts[key] ?? "";
+          void window.akra.dots.openWindow(host, dot.id, moved).then(
+            (opened) => {
+              if (opened && (useUiStore.getState().drafts[key] ?? "") === moved) setDraft(key, "");
+            },
+            () => undefined,
+          );
           closeDot();
         }}
         onClose={closeDot}

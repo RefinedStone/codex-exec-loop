@@ -183,8 +183,8 @@ const bridge: AkraBridge = {
     setEnabled(enabled: boolean): Promise<boolean> {
       return ipcRenderer.invoke(IPC_CHANNELS.dotsSetEnabled, enabled) as Promise<boolean>;
     },
-    openWindow(host: string, dotId: string, draft?: string): void {
-      ipcRenderer.send(IPC_CHANNELS.dotsOpenWindow, host, dotId, draft);
+    openWindow(host: string, dotId: string, draft?: string): Promise<boolean> {
+      return ipcRenderer.invoke(IPC_CHANNELS.dotsOpenWindow, host, dotId, draft) as Promise<boolean>;
     },
     takeDraft(host: string, dotId: string): Promise<string | null> {
       return ipcRenderer.invoke(IPC_CHANNELS.dotsTakeDraft, host, dotId) as Promise<string | null>;
