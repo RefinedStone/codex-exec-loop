@@ -32,6 +32,11 @@ export interface UiState {
   remoteHost: string | null;
   /** `dot` 보기가 보여 주는 dot 이다. */
   remoteDotId: string | null;
+  /**
+   * 전송 답을 기다리는 dot 의 id 이다. 화면 밖에 둔다: 답을 기다리는 사이 다른 화면을 보고 와도 "전송 중"이 남는다.
+   * 쓰던 글도 화면 밖에 남으므로, 이것이 없으면 같은 글을 한 번 더 보낼 수 있다.
+   */
+  sendingDotIds: string[];
 }
 
 const REMOTE_AGENTS_KEY = "akra.remoteAgents";
@@ -62,6 +67,7 @@ export const useUiStore = create<UiState>(() => ({
   remoteAgents: storedRemoteAgents(),
   remoteHost: null,
   remoteDotId: null,
+  sendingDotIds: [],
 }));
 
 const set = useUiStore.setState;
@@ -87,6 +93,14 @@ export function showHome(cwd?: string): void {
 
 /** 새 스레드 화면 입력창의 초안 키이다. */
 export const HOME_DRAFT = "home";
+
+/** dot 에 보내는 중인지를 적는다. 답이나 오류가 오면 끈다. */
+export function setDotSending(dotId: string, sending: boolean): void {
+  set((state) => {
+    const others = state.sendingDotIds.filter((id) => id !== dotId);
+    return { sendingDotIds: sending ? [...others, dotId] : others };
+  });
+}
 
 export function setDraft(key: string, text: string): void {
   set((state) => ({ drafts: { ...state.drafts, [key]: text } }));
