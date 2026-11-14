@@ -135,6 +135,15 @@ function isNarrowWindow(): boolean {
   return window.innerWidth < TWO_SIDE_COLUMNS_MIN_WIDTH;
 }
 
+/**
+ * 창이 좁아졌다. 오른쪽 패널과 dot 옆 칸이 둘 다 열려 있으면 옆 칸을 닫는다. 옆 칸은 다시 열기 쉽고, 쓰던 글과
+ * 보내기 허락이 남는다.
+ */
+export function fitSideColumns(): void {
+  const state = useUiStore.getState();
+  if (state.panel !== null && state.dotDock !== null && isNarrowWindow()) set({ dotDock: null });
+}
+
 /** 오른쪽 패널을 연다. 패널을 여는 곳은 모두 이것을 쓴다: 좁은 창에서는 dot 옆 칸을 닫아 자리를 만든다. */
 export function openPanel(panel: PanelId): void {
   set((state) => ({ panel, paletteOpen: false, dotDock: isNarrowWindow() ? null : state.dotDock }));

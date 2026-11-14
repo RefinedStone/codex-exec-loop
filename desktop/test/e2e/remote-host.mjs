@@ -141,6 +141,16 @@ try {
   await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Backslash`);
   await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
   check("the panel shortcut does not crowd a narrow window", (await page.getByTestId("dot-dock").count()) === 0);
+  // 넓은 창에서는 둘이 함께 있다. 창을 줄이면 옆 칸이 닫힌다.
+  const mainWindow = await app.browserWindow(page);
+  await mainWindow.evaluate((window) => window.setSize(1600, 800));
+  await page.waitForFunction(() => window.innerWidth >= 1400, null, { timeout: 5_000 });
+  await page.getByTestId("remote-dot-entry").first().click();
+  await page.getByTestId("dot-dock").waitFor({ timeout: 5_000 });
+  check("a wide window holds the panel and the side chat together", (await page.getByTestId("review-toggle").getAttribute("aria-pressed")) === "true");
+  await mainWindow.evaluate((window) => window.setSize(1200, 800));
+  await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
+  check("shrinking the window closes the side chat beside an open panel", (await page.getByTestId("dot-dock").count()) === 0);
   await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Backslash`);
   check("the cloud conversation was read without a resume", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume"));
 
