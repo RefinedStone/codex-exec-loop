@@ -93,3 +93,11 @@ export function dotStatusLine(
   if (live?.connected) return { text: "대기 중 · 실시간 연결됨", tone: "idle" };
   return { text: dot.status ? `${dot.status} · 실시간 연결 없음` : "실시간 연결 없음", tone: "muted" };
 }
+
+/**
+ * 저장된 초안이 방금 보낸 글과 같은지이다. 같을 때만 전송 뒤에 초안을 지운다. 전송 답을 기다리는 사이 사용자가 쓴
+ * 다른 글은 보낸 글이 아니므로 남긴다.
+ */
+export function isSentDraft(storedDraft: string | undefined, sentText: string): boolean {
+  return (storedDraft ?? "").trim() === sentText;
+}
