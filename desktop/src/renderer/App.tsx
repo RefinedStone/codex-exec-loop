@@ -14,7 +14,7 @@ import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { closeDot, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { closeDot, dotDraftKey, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -279,7 +279,15 @@ export function App() {
     if (dotDock !== null && !dotDockVisible) closeDot();
   }, [dotDock, dotDockVisible]);
   // dot 창이 대화를 본 창으로 되돌리면 옆 칸에 연다.
-  useEffect(() => window.akra.dots.onDock((host, dotId) => showDot(host, dotId)), []);
+  // 그 창에서 쓰던 글이 가장 새 글이다: 옆 칸의 초안으로 둔다.
+  useEffect(
+    () =>
+      window.akra.dots.onDock((host, dotId, draft) => {
+        setDraft(dotDraftKey(dotId), draft);
+        showDot(host, dotId);
+      }),
+    [],
+  );
   // dot 이 답을 끝냈는데 사용자가 그 대화를 보고 있지 않으면 운영체제 알림을 보인다. 누르면 그 대화가 옆 칸에 열린다.
   // 그 dot 의 창이 열려 있으면 그 창이 알린다: 본 창은 알리지 않고 안 읽음 표시도 남기지 않는다.
   useEffect(() => {

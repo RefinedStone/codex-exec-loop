@@ -4,7 +4,7 @@ import { useEffect } from "react";
 
 import { useResizableWidth } from "../design/useResizableWidth";
 import { remoteHostStore } from "../session/desktopStore";
-import { closeDot } from "../session/uiStore";
+import { closeDot, dotDraftKey, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
 import { DotChat } from "./DotChat";
 
@@ -33,7 +33,8 @@ export function DotDock({ host, dotId, request }: { host: string; dotId: string;
         request={request}
         onSeen={() => room && useStore.getState().markDotRoomRead(room)}
         onPopOut={() => {
-          window.akra.dots.openWindow(host, dot.id);
+          // 쓰던 글도 창으로 옮긴다. 창은 다른 renderer 이므로 이 창의 초안을 보지 못한다.
+          window.akra.dots.openWindow(host, dot.id, useUiStore.getState().drafts[dotDraftKey(dot.id)] ?? "");
           closeDot();
         }}
         onClose={closeDot}

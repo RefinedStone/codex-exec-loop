@@ -183,17 +183,20 @@ const bridge: AkraBridge = {
     setEnabled(enabled: boolean): Promise<boolean> {
       return ipcRenderer.invoke(IPC_CHANNELS.dotsSetEnabled, enabled) as Promise<boolean>;
     },
-    openWindow(host: string, dotId: string): void {
-      ipcRenderer.send(IPC_CHANNELS.dotsOpenWindow, host, dotId);
+    openWindow(host: string, dotId: string, draft?: string): void {
+      ipcRenderer.send(IPC_CHANNELS.dotsOpenWindow, host, dotId, draft);
+    },
+    takeDraft(host: string, dotId: string): Promise<string | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.dotsTakeDraft, host, dotId) as Promise<string | null>;
     },
     hasWindow(host: string, dotId: string): Promise<boolean> {
       return ipcRenderer.invoke(IPC_CHANNELS.dotsHasWindow, host, dotId) as Promise<boolean>;
     },
-    dock(host: string, dotId: string): void {
-      ipcRenderer.send(IPC_CHANNELS.dotsDock, host, dotId);
+    dock(host: string, dotId: string, draft: string): void {
+      ipcRenderer.send(IPC_CHANNELS.dotsDock, host, dotId, draft);
     },
-    onDock(listener: (host: string, dotId: string) => void): () => void {
-      const handler = (_event: IpcRendererEvent, host: string, dotId: string) => listener(host, dotId);
+    onDock(listener: (host: string, dotId: string, draft: string) => void): () => void {
+      const handler = (_event: IpcRendererEvent, host: string, dotId: string, draft: string) => listener(host, dotId, draft);
       ipcRenderer.on(IPC_CHANNELS.dotsDocked, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.dotsDocked, handler);
     },

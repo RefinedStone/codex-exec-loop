@@ -5,7 +5,7 @@ import { Composer, type ComposerActions } from "../conversation/Composer";
 import { Icon, type IconName } from "../design/icons";
 import { Picker } from "../design/Picker";
 import { useDesktopStore } from "../session/desktopStore";
-import { MOD_KEY, showHome, showView, togglePanel, toggleDotsCloud, toggleTerminal, toggleTheme, useUiStore } from "../session/uiStore";
+import { MOD_KEY, openPanel, showHome, showView, togglePanel, toggleDotsCloud, toggleTerminal, toggleTheme, useUiStore } from "../session/uiStore";
 import { StatusMark, useThreadMarks } from "../sidebar/Sidebar";
 import { allThreads, folderName, type ListedThread, relativeAge, threadMark, type ThreadMark } from "../sidebar/threadStatus";
 
@@ -268,7 +268,7 @@ export function useShortcuts(): void {
         KeyB: () => useUiStore.setState((state) => ({ sidebarOpen: !state.sidebarOpen })),
         KeyJ: toggleTerminal,
         Backquote: toggleTerminal,
-        Backslash: () => useUiStore.setState((state) => ({ panel: state.panel ? null : "review" })),
+        Backslash: () => (useUiStore.getState().panel ? useUiStore.setState({ panel: null }) : openPanel("review")),
       };
       const action = actions[event.code];
       if (action) {

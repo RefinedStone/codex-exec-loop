@@ -67,6 +67,7 @@ export const IPC_CHANNELS = {
   dotsDocked: "akra:dots-docked",
   dotsSendAllowed: "akra:dots-send-allowed",
   dotsAllowSend: "akra:dots-allow-send",
+  dotsTakeDraft: "akra:dots-take-draft",
 } as const;
 
 export interface GitHubPullRequest {
@@ -413,19 +414,27 @@ export interface DotsBridge {
   getEnabled(): Promise<boolean>;
   /** 플래그를 바꾸고 새 상태를 돌려준다. Gateway 재시작 전에는 적용되지 않는다. */
   setEnabled(enabled: boolean): Promise<boolean>;
-  /** 그 dot 과의 대화만 보이는 작은 창을 연다. 이미 열려 있으면 그 창을 앞으로 가져온다. */
-  openWindow(host: string, dotId: string): void;
+  /**
+   * 그 dot 과의 대화만 보이는 작은 창을 연다. 이미 열려 있으면 그 창을 앞으로 가져온다. `draft` 는 옆 칸에서 쓰던
+   * 글이다: 새로 여는 창이 `takeDraft` 로 받는다.
+   */
+  openWindow(host: string, dotId: string, draft?: string): void;
+  /** dot 창이 부른다: 이 창을 열 때 넘겨받은 쓰던 글을 한 번 가져간다. 없으면 null 이다. */
+  takeDraft(host: string, dotId: string): Promise<string | null>;
   /** 그 dot 의 창이 열려 있는지이다. */
   hasWindow(host: string, dotId: string): Promise<boolean>;
-  /** dot 창이 부른다: 대화를 그 창을 연 본 창의 옆 칸으로 옮기고 dot 창을 닫는다. */
-  dock(host: string, dotId: string): void;
-  /** 본 창이 듣는다: dot 창이 대화를 옆 칸으로 옮겼다. */
-  onDock(listener: (host: string, dotId: string) => void): () => void;
+  /** dot 창이 부른다: 대화와 쓰던 글을 그 창을 연 본 창의 옆 칸으로 옮기고 dot 창을 닫는다. */
+  dock(host: string, dotId: string, draft: string): void;
+  /** 본 창이 듣는다: dot 창이 대화를 옆 칸으로 옮겼다. `draft` 는 그 창에서 쓰던 글이다. */
+  onDock(listener: (host: string, dotId: string, draft: string) => void): () => void;
   /** 이 앱을 켠 동안 사용자가 그 dot 에 보내기를 허락했는지이다. 본 창과 dot 창이 같은 답을 받는다. */
   isSendAllowed(dotId: string): Promise<boolean>;
   /** 사용자가 그 dot 에 보내기를 허락했다고 적는다. 앱을 끄면 사라진다. */
   allowSend(dotId: string): void;
 }
+
+/** 창 사이로 옮기는 쓰던 글의 가장 긴 길이이다. 서비스가 받는 메시지보다 넉넉하다. */
+export const DOT_DRAFT_MAX_LENGTH = 20_000;
 
 /** dot 창의 주소에 넣는 dot id 이다. 주소와 파일 이름에 안전한 글자만 받는다. */
 export function isDotId(dotId: unknown): dotId is string {

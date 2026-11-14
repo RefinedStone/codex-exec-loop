@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { DesktopSession, remoteHostBridge } from "../session/desktopSession";
 import { desktopSessionStore, remoteHostStore } from "../session/desktopStore";
-import { chosenTheme, useUiStore } from "../session/uiStore";
+import { chosenTheme, dotDraftKey, setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
 import { DotChat } from "./DotChat";
 import { notifyDotReply } from "./dotNotify";
@@ -23,6 +23,16 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
       window.akra.remote.close(host);
     };
   }, [host, clientVersion, useStore]);
+  // 옆 칸에서 쓰던 글을 이어받는다. main 이 한 번만 준다: 창을 다시 읽어도 옛 글이 돌아오지 않는다.
+  useEffect(() => {
+    window.akra.dots.takeDraft(host, dotId).then(
+      (draft) => {
+        // 그 사이 이 창에서 쓰기 시작했으면 그 글을 남긴다.
+        if (draft && !useUiStore.getState().drafts[dotDraftKey(dotId)]) setDraft(dotDraftKey(dotId), draft);
+      },
+      () => undefined,
+    );
+  }, [host, dotId]);
   // 이 창은 본 창과 같은 밝기를 쓴다. 본 창이 밝기를 바꾸면 저장소 이벤트로 따라간다.
   const theme = useUiStore((state) => state.theme);
   useEffect(() => {
@@ -67,7 +77,7 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
   }
   return (
     <div className="dot-window" data-testid="dot-window">
-      <DotChat dot={dot} live={live} replies={replies} request={request} onSeen={() => room && useStore.getState().markDotRoomRead(room)} onDock={() => window.akra.dots.dock(host, dotId)} />
+      <DotChat dot={dot} live={live} replies={replies} request={request} onSeen={() => room && useStore.getState().markDotRoomRead(room)} onDock={() => window.akra.dots.dock(host, dotId, useUiStore.getState().drafts[dotDraftKey(dotId)] ?? "")} />
     </div>
   );
 }

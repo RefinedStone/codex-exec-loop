@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type WebContents } from "electron";
 
-import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
+import { type BrowserBounds, DOT_DRAFT_MAX_LENGTH, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
@@ -127,7 +127,12 @@ const BLUEPRINT = process.env.AKRA_DESKTOP_BLUEPRINT === "1";
 const RENDERER_PAGE = BLUEPRINT ? "blueprint.html" : "index.html";
 
 /** dot 창이다. 키는 `호스트:dot id` 이다. dot 하나에 창 하나만 둔다. `opener` 는 그 창을 연 본 창이다. */
-const dotWindows = new Map<string, { window: BrowserWindow; opener: BrowserWindow | null }>();
+const dotWindows = new Map<string, { window: BrowserWindow; opener: BrowserWindow | null; draft: string | null }>();
+
+/** 창 사이로 옮기는 쓰던 글이다. 글이 아니거나 너무 길면 빈 글로 본다. */
+function dotDraftOf(value: unknown): string {
+  return typeof value === "string" && value.length <= DOT_DRAFT_MAX_LENGTH ? value : "";
+}
 
 /** 이 앱을 켠 동안 사용자가 보내기를 허락한 dot 이다 ("세션 한 번 허용"). 본 창과 dot 창이 함께 쓴다. */
 const dotSendAllowed = new Set<string>();
@@ -138,7 +143,7 @@ function openDotWindowOf(host: string, dotId: string): BrowserWindow | null {
 }
 
 /** dot 하나와의 대화만 보이는 작은 창을 연다 (D-19). 같은 renderer 를 `?dotWindow=` 로 연다. */
-function openDotWindow(host: string, dotId: string, opener: BrowserWindow | null): void {
+function openDotWindow(host: string, dotId: string, opener: BrowserWindow | null, draft: string): void {
   const key = `${host}:${dotId}`;
   const existing = openDotWindowOf(host, dotId);
   if (existing) {
@@ -147,7 +152,8 @@ function openDotWindow(host: string, dotId: string, opener: BrowserWindow | null
     return;
   }
   const window = createWindow({ dotWindow: host, dot: dotId });
-  dotWindows.set(key, { window, opener });
+  // 쓰던 글은 새 창이 한 번 가져간다 (`dotsTakeDraft`).
+  dotWindows.set(key, { window, opener, draft });
   window.once("closed", () => dotWindows.delete(key));
 }
 
@@ -155,13 +161,13 @@ function openDotWindow(host: string, dotId: string, opener: BrowserWindow | null
  * dot 창의 대화를 본 창의 옆 칸으로 옮긴다. 그 창을 연 본 창으로 보낸다. 그 창이 닫혔으면 다른 본 창으로 보낸다.
  * 본 창이 없으면 아무것도 하지 않는다: dot 창이 그대로 남는다.
  */
-function dockDotWindow(host: string, dotId: string, sender: BrowserWindow | null): void {
+function dockDotWindow(host: string, dotId: string, sender: BrowserWindow | null, draft: string): void {
   const entry = dotWindows.get(`${host}:${dotId}`);
   if (!entry || entry.window !== sender) return;
   const isDotWindow = (candidate: BrowserWindow) => [...dotWindows.values()].some((other) => other.window === candidate);
   const target = entry.opener && !entry.opener.isDestroyed() ? entry.opener : (BrowserWindow.getAllWindows().find((candidate) => !isDotWindow(candidate)) ?? null);
   if (!target) return;
-  target.webContents.send(IPC_CHANNELS.dotsDocked, host, dotId);
+  target.webContents.send(IPC_CHANNELS.dotsDocked, host, dotId, draft);
   if (target.isMinimized()) target.restore();
   target.focus();
   entry.window.close();
@@ -348,15 +354,23 @@ ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.conn
 ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
 ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
 ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
-ipcMain.on(IPC_CHANNELS.dotsOpenWindow, (event, host: unknown, dotId: unknown) => {
+ipcMain.on(IPC_CHANNELS.dotsOpenWindow, (event, host: unknown, dotId: unknown, draft: unknown) => {
   if (isRemoteHostId(host) && isDotId(dotId)) {
-    openDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender));
+    openDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender), dotDraftOf(draft));
   }
 });
+ipcMain.handle(IPC_CHANNELS.dotsTakeDraft, (event, host: unknown, dotId: unknown) => {
+  if (!isRemoteHostId(host) || !isDotId(dotId)) return null;
+  const entry = dotWindows.get(`${host}:${dotId}`);
+  if (!entry || entry.window !== BrowserWindow.fromWebContents(event.sender)) return null;
+  const draft = entry.draft;
+  entry.draft = null;
+  return draft;
+});
 ipcMain.handle(IPC_CHANNELS.dotsHasWindow, (_event, host: unknown, dotId: unknown) => isRemoteHostId(host) && isDotId(dotId) && openDotWindowOf(host, dotId) !== null);
-ipcMain.on(IPC_CHANNELS.dotsDock, (event, host: unknown, dotId: unknown) => {
+ipcMain.on(IPC_CHANNELS.dotsDock, (event, host: unknown, dotId: unknown, draft: unknown) => {
   if (isRemoteHostId(host) && isDotId(dotId)) {
-    dockDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender));
+    dockDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender), dotDraftOf(draft));
   }
 });
 ipcMain.handle(IPC_CHANNELS.dotsSendAllowed, (_event, dotId: unknown) => isDotId(dotId) && dotSendAllowed.has(dotId));
