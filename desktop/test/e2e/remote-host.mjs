@@ -162,6 +162,14 @@ try {
   await mainWindow.evaluate((window) => window.setSize(1200, 800));
   await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
   check("shrinking the window closes the side chat beside an open panel", (await page.getByTestId("dot-dock").count()) === 0);
+  // 좁은 창에서 칸 하나를 열어도 그 칸이 창 밖으로 나가지 않는다.
+  await mainWindow.evaluate((window) => window.setSize(800, 800));
+  await page.waitForFunction(() => window.innerWidth <= 800, null, { timeout: 5_000 });
+  await page.getByTestId("remote-dot-entry").first().click();
+  await page.getByTestId("dot-dock").waitFor({ timeout: 5_000 });
+  const narrowDock = await page.getByTestId("dot-dock").boundingBox();
+  check("the side chat stays inside a narrow window", narrowDock.x + narrowDock.width <= (await page.evaluate(() => window.innerWidth)) + 1);
+  await mainWindow.evaluate((window) => window.setSize(1200, 800));
   await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Backslash`);
   check("the cloud conversation was read without a resume", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume"));
 

@@ -821,7 +821,6 @@
   display: flex;
   flex: 0 1 auto;
   flex-direction: column;
-  min-width: 320px;
   max-width: 60%;
   border-left: 1px solid var(--line);
   /* 사이드바와 같은 바탕이다. 가운데의 작업 화면과 다른 면으로 보인다. */
@@ -840,12 +839,20 @@
 }
 
 /* 오른쪽의 두 칸을 넓혀도 본문이 사라지거나 칸이 창 밖으로 나가지 않게 한다. 본문은 최소 폭을 지키고, 칸들은
-   자기 최소 폭까지 줄어든다. 최소 폭은 손잡이의 최소 폭과 같다. */
-.workspace-body > .main {
-  min-width: 280px;
-}
+   자기 최소 폭까지 줄어든다. 최소 폭은 손잡이의 최소 폭과 같다. 두 칸이 함께 있을 수 있는 넓은 창에만 건다
+   (`uiStore.ts` 의 TWO_SIDE_COLUMNS_MIN_WIDTH): 사이드바까지 더한 최소 폭의 합이 그 폭 안에 든다. 더 좁은 창에
+   최소 폭을 걸면 칸 하나만 열어도 합이 창을 넘는다. */
+@media (min-width: 1400px) {
+  .workspace-body > .main {
+    min-width: 280px;
+  }
 
-.workspace-body > .right-panel {
-  flex: 0 1 auto;
-  min-width: 360px;
+  .workspace-body > .right-panel {
+    flex: 0 1 auto;
+    min-width: 360px;
+  }
+
+  .dot-dock {
+    min-width: 320px;
+  }
 }
