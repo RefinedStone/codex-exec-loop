@@ -10,7 +10,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import type { DotLive, DotMessage, DotSummary } from "../session/desktopStore";
-import { setDraft, useUiStore } from "../session/uiStore";
+import { setDotSending, setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
 import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
 
@@ -51,7 +51,8 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
   // 쓰던 글은 dot 마다 화면 밖에 둔다. 다른 dot 이나 작업 대화를 보고 돌아와도 남는다. 보내면 지운다.
   const draftKey = `dot:${dot.id}`;
   const draft = useUiStore((ui) => ui.drafts[draftKey] ?? "");
-  const [sending, setSending] = useState(false);
+  // 전송 중인지도 dot 마다 화면 밖에 둔다. 답을 기다리는 사이 다른 화면을 보고 와도 다시 보낼 수 없다.
+  const sending = useUiStore((ui) => ui.sendingDotIds.includes(dot.id));
   const [sendError, setSendError] = useState<string | null>(null);
   /** 보낸 뒤 답을 기다리기 시작한 시각이다. null 이면 기다리지 않는다. 실시간 통로가 없을 때만 쓴다. */
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
@@ -170,21 +171,23 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
 
   const send = () => {
     const text = draft.trim();
-    if (roomId === null || text.length === 0 || sending) return;
-    setSending(true);
+    // 저장소의 지금 값도 본다. 그려진 값은 한 박자 늦을 수 있다.
+    if (roomId === null || text.length === 0 || sending || useUiStore.getState().sendingDotIds.includes(dot.id)) return;
+    const dotId = dot.id;
+    setDotSending(dotId, true);
     setSendError(null);
     newestIdBeforeSend.current = state.phase === "loaded" ? (state.messages.at(-1)?.id ?? null) : null;
     request<{ sent: boolean }>(DOTS_SEND_METHOD, { roomId, text }).then(
       () => {
         // 보낸 글이 아직 초안으로 남아 있을 때만 지운다. 답을 기다리는 사이 다른 화면을 보고 와서 쓴 새 글은 남긴다.
         if (isSentDraft(useUiStore.getState().drafts[draftKey], text)) setDraft(draftKey, "");
-        setSending(false);
+        setDotSending(dotId, false);
         setRefresh((count) => count + 1);
         setWaitingSince(Date.now());
       },
       (error: unknown) => {
         // 실패하면 글을 입력창에 남긴다.
-        setSending(false);
+        setDotSending(dotId, false);
         setSendError(error instanceof Error ? error.message : String(error));
       },
     );
