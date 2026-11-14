@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Composer, type ComposerActions } from "../conversation/Composer";
 import { Icon, type IconName } from "../design/icons";
 import { Picker } from "../design/Picker";
-import { remoteHostKey, useDesktopStore } from "../session/desktopStore";
-import { MOD_KEY, showHome, showView, togglePanel, toggleDotsCloud, toggleRemoteAgents, toggleTerminal, toggleTheme, useUiStore } from "../session/uiStore";
+import { useDesktopStore } from "../session/desktopStore";
+import { MOD_KEY, showHome, showView, togglePanel, toggleDotsCloud, toggleTerminal, toggleTheme, useUiStore } from "../session/uiStore";
 import { StatusMark, useThreadMarks } from "../sidebar/Sidebar";
 import { allThreads, folderName, type ListedThread, relativeAge, threadMark, type ThreadMark } from "../sidebar/threadStatus";
 
@@ -140,17 +140,14 @@ function paletteCommands(): PaletteEntry[] {
 
 export function CommandPalette({ onOpenThread }: { onOpenThread(threadId: string): void }) {
   const folders = useDesktopStore((state) => state.folders);
-  // Gateway 에 원격 호스트가 있을 때만 켜고 끄는 명령을 보인다.
-  const remoteAvailable = useDesktopStore((state) => remoteHostKey(state) !== "");
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const entries = useMemo(() => {
-    const remote: PaletteEntry[] = remoteAvailable ? [{ id: "remote-agents", icon: "globe", label: "클라우드 에이전트 켜기 / 끄기", hint: "", run: () => toggleRemoteAgents() }] : [];
-    const dots: PaletteEntry[] = [{ id: "dots-cloud", icon: "globe", label: "dots 클라우드 켜기 / 끄기 (Gateway 재시작 후 적용)", hint: "", run: () => void toggleDotsCloud() }];
+    const dots: PaletteEntry[] = [{ id: "dots-cloud", icon: "sparkle", label: "Dots 켜기 / 끄기", hint: "", run: () => void toggleDotsCloud() }];
     const threads = allThreads(folders).map<PaletteEntry>((thread) => ({ id: thread.id, icon: "message", label: thread.title, hint: folderName(thread.cwd), run: () => onOpenThread(thread.id) }));
     const needle = query.trim().toLowerCase();
-    return [...paletteCommands(), ...dots, ...remote, ...threads].filter((entry) => entry.label.toLowerCase().includes(needle)).slice(0, PALETTE_LIMIT);
-  }, [folders, query, onOpenThread, remoteAvailable]);
+    return [...paletteCommands(), ...dots, ...threads].filter((entry) => entry.label.toLowerCase().includes(needle)).slice(0, PALETTE_LIMIT);
+  }, [folders, query, onOpenThread]);
   const close = () => useUiStore.setState({ paletteOpen: false });
   const run = (entry: PaletteEntry | undefined) => {
     if (!entry) return;

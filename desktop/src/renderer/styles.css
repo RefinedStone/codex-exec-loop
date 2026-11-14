@@ -768,13 +768,16 @@
 }
 
 .dot-window .dot-messages,
-.dot-window .composer-area {
+.dot-window .composer-area,
+.dot-dock .dot-messages,
+.dot-dock .composer-area {
   padding-right: var(--space-3);
   padding-left: var(--space-3);
 }
 
-/* 작은 창은 폭이 좁다. 말풍선이 폭을 더 쓰게 한다. */
-.dot-window .dot-bubble-column {
+/* 작은 창과 옆 칸은 폭이 좁다. 말풍선이 폭을 더 쓰게 한다. */
+.dot-window .dot-bubble-column,
+.dot-dock .dot-bubble-column {
   max-width: 86%;
 }
 
@@ -810,4 +813,27 @@
   position: relative;
   flex: none;
   margin-left: auto;
+}
+
+/* dot 옆 칸: 본 창의 오른쪽 끝에 있다. 보기와 오른쪽 패널과 따로 열고 닫는다. */
+.dot-dock {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  max-width: 60%;
+  border-left: 1px solid var(--line);
+  /* 사이드바와 같은 바탕이다. 가운데의 작업 화면과 다른 면으로 보인다. */
+  background: var(--bg-sidebar);
+}
+
+/* dot 대화의 스크롤 막대는 가늘게 둔다. 좁은 칸에서 굵은 막대가 말풍선보다 눈에 띄지 않게 한다. */
+.dot-chat {
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.dot-chat .dot-messages,
+.dot-chat pre,
+.dot-chat table {
+  scrollbar-width: thin;
 }

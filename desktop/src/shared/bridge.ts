@@ -62,6 +62,11 @@ export const IPC_CHANNELS = {
   dotsGetEnabled: "akra:dots-get-enabled",
   dotsSetEnabled: "akra:dots-set-enabled",
   dotsOpenWindow: "akra:dots-open-window",
+  dotsHasWindow: "akra:dots-has-window",
+  dotsDock: "akra:dots-dock",
+  dotsDocked: "akra:dots-docked",
+  dotsSendAllowed: "akra:dots-send-allowed",
+  dotsAllowSend: "akra:dots-allow-send",
 } as const;
 
 export interface GitHubPullRequest {
@@ -410,6 +415,16 @@ export interface DotsBridge {
   setEnabled(enabled: boolean): Promise<boolean>;
   /** 그 dot 과의 대화만 보이는 작은 창을 연다. 이미 열려 있으면 그 창을 앞으로 가져온다. */
   openWindow(host: string, dotId: string): void;
+  /** 그 dot 의 창이 열려 있는지이다. */
+  hasWindow(host: string, dotId: string): Promise<boolean>;
+  /** dot 창이 부른다: 대화를 그 창을 연 본 창의 옆 칸으로 옮기고 dot 창을 닫는다. */
+  dock(host: string, dotId: string): void;
+  /** 본 창이 듣는다: dot 창이 대화를 옆 칸으로 옮겼다. */
+  onDock(listener: (host: string, dotId: string) => void): () => void;
+  /** 이 앱을 켠 동안 사용자가 그 dot 에 보내기를 허락했는지이다. 본 창과 dot 창이 같은 답을 받는다. */
+  isSendAllowed(dotId: string): Promise<boolean>;
+  /** 사용자가 그 dot 에 보내기를 허락했다고 적는다. 앱을 끄면 사라진다. */
+  allowSend(dotId: string): void;
 }
 
 /** dot 창의 주소에 넣는 dot id 이다. 주소와 파일 이름에 안전한 글자만 받는다. */
