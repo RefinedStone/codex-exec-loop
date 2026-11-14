@@ -530,6 +530,11 @@ mod tests {
         )
         .await;
         eprintln!("live: initialize(akra-desktop) -> {}", outcome(&init));
+        assert!(
+            init.get("result").is_some(),
+            "initialize failed: {}",
+            outcome(&init)
+        );
         cloud
             .send(Message::text(r#"{"jsonrpc":"2.0","method":"initialized"}"#))
             .await
@@ -546,6 +551,11 @@ mod tests {
             "live: thread/list(limit 100, useStateDbOnly) -> {} ({} threads)",
             outcome(&list),
             list["result"]["data"].as_array().map_or(0, Vec::len)
+        );
+        assert!(
+            list.get("result").is_some(),
+            "thread/list failed: {}",
+            outcome(&list)
         );
 
         let probes = [
@@ -577,6 +587,14 @@ mod tests {
         for (index, (method, params)) in probes.into_iter().enumerate() {
             let response = live_rpc(&mut cloud, 10 + index as i64, method, params).await;
             eprintln!("live: {method}(missing thread) -> {}", outcome(&response));
+            // 서버가 method 를 알면 "thread 없음"으로 답하거나 성공한다. "모르는 method"(-32601)이면 이 시험이
+            // 확인하려는 지원이 사라진 것이다.
+            assert_ne!(
+                response["error"]["code"],
+                serde_json::json!(-32601),
+                "the cloud no longer knows {method}: {}",
+                outcome(&response)
+            );
         }
         let _ = cloud.close(None).await;
     }
