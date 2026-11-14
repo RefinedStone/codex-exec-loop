@@ -740,3 +740,35 @@
     animation: none;
   }
 }
+
+/* dot 창: dot 하나와의 대화만 보인다. 창 전체를 대화가 채운다. */
+.dot-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.dot-window .dot-messages,
+.dot-window .composer-area {
+  padding-right: var(--space-3);
+  padding-left: var(--space-3);
+}
+
+/* 사이드바의 dot 줄: 아바타가 상태 표시 자리를 대신한다. */
+.dot-entry {
+  gap: var(--space-2);
+}
+
+.project-fixed,
+.project-note {
+  flex: none;
+  white-space: nowrap;
+}
+
+.project-note {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}

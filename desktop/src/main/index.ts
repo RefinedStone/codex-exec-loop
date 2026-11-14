@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type WebContents } from "electron";
 
-import { type BrowserBounds, IPC_CHANNELS, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
+import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
@@ -126,10 +126,29 @@ const HIDDEN_WINDOWS = process.env.AKRA_DESKTOP_HIDDEN === "1";
 const BLUEPRINT = process.env.AKRA_DESKTOP_BLUEPRINT === "1";
 const RENDERER_PAGE = BLUEPRINT ? "blueprint.html" : "index.html";
 
-function createWindow(): void {
+/** dot 창이다. 키는 `호스트:dot id` 이다. dot 하나에 창 하나만 둔다. */
+const dotWindows = new Map<string, BrowserWindow>();
+
+/** dot 하나와의 대화만 보이는 작은 창을 연다 (D-19). 같은 renderer 를 `?dotWindow=` 로 연다. */
+function openDotWindow(host: string, dotId: string): void {
+  const key = `${host}:${dotId}`;
+  const existing = dotWindows.get(key);
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return;
+  }
+  const window = createWindow({ dotWindow: host, dot: dotId });
+  dotWindows.set(key, window);
+  window.once("closed", () => dotWindows.delete(key));
+}
+
+/** `dotQuery` 가 있으면 dot 창이다: 작고, renderer 가 그 dot 의 대화만 그린다. */
+function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWindow {
   const window = new BrowserWindow({
-    width: BLUEPRINT ? 1440 : 1200,
-    height: BLUEPRINT ? 900 : 800,
+    width: dotQuery ? 440 : BLUEPRINT ? 1440 : 1200,
+    height: dotQuery ? 680 : BLUEPRINT ? 900 : 800,
+    ...(dotQuery ? { minWidth: 340, minHeight: 420 } : {}),
     title: BLUEPRINT ? "Akra Desktop Blueprint" : "Akra Desktop",
     show: false,
     // 블루프린트는 창 제목 막대를 화면 위 막대와 합친다 (macOS).
@@ -171,10 +190,12 @@ function createWindow(): void {
 
   const devServer = process.env.ELECTRON_RENDERER_URL;
   if (devServer) {
-    void window.loadURL(`${devServer}/${RENDERER_PAGE}`);
+    const query = dotQuery ? `?${new URLSearchParams(dotQuery).toString()}` : "";
+    void window.loadURL(`${devServer}/${RENDERER_PAGE}${query}`);
   } else {
-    void window.loadFile(join(__dirname, "../renderer", RENDERER_PAGE));
+    void window.loadFile(join(__dirname, "../renderer", RENDERER_PAGE), dotQuery ? { query: dotQuery } : undefined);
   }
+  return window;
 }
 
 ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
@@ -303,6 +324,11 @@ ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.conn
 ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
 ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
 ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
+ipcMain.on(IPC_CHANNELS.dotsOpenWindow, (_event, host: unknown, dotId: unknown) => {
+  if (isRemoteHostId(host) && isDotId(dotId)) {
+    openDotWindow(host, dotId);
+  }
+});
 ipcMain.handle(IPC_CHANNELS.dotsGetEnabled, () => isDotsCloudEnabled());
 ipcMain.handle(IPC_CHANNELS.dotsSetEnabled, (_event, enabled: unknown) => {
   setDotsCloudEnabled(enabled === true);

@@ -29,7 +29,7 @@ import type { GatewayRequest } from "./work/notionHub";
 import { NotionPanel } from "./work/NotionPanel";
 import { changedCount, fetchThreadDocuments, markThreadDocumentRead, refreshThreadDocuments, type ThreadDocument, type ThreadDocumentsState } from "./work/threadDocuments";
 
-const CLIENT_VERSION = "0.0.0-development";
+export const CLIENT_VERSION = "0.0.0-development";
 
 const PANELS: { id: PanelId; label: string; icon: IconName; testId: string }[] = [
   { id: "review", label: "변경", icon: "diff", testId: "review-toggle" },
@@ -280,25 +280,8 @@ export function App() {
         sessions.delete(host);
         window.akra.remote.close(host);
       }
-      setRemoteSendHosts(new Set());
     };
   }, [remoteAgents, remoteHosts]);
-  // 사용자가 보내기를 허락한 원격 호스트이다 (plan 25 "세션 한 번 허용"). 허락 전에는 읽기 전용이다.
-  const [remoteSendHosts, setRemoteSendHosts] = useState<ReadonlySet<string>>(new Set());
-  const allowRemoteSending = useCallback(async (host: string) => {
-    await remoteSessions.current.get(host)?.allowSending();
-    setRemoteSendHosts((prev) => new Set(prev).add(host));
-  }, []);
-  const remoteComposerActions: ComposerActions = {
-    sendMessage: async (text) => {
-      if (remoteHost) await remoteSessions.current.get(remoteHost)?.sendMessage(text);
-    },
-    interrupt: async () => {
-      if (remoteHost) await remoteSessions.current.get(remoteHost)?.interrupt();
-    },
-    // 원격 호스트에서 새 스레드는 만들지 않는다 (plan 25 §2: 보내기 한 종류만).
-    startThread: async () => false,
-  };
   // 원격 구역을 끄거나 그 호스트가 목록에서 빠지면 원격 대화 화면을 닫는다.
   const remoteVisible = remoteAgents && remoteHost !== null && remoteHosts.split(",").includes(remoteHost);
   // dot 대화 화면이 보여 주는 dot 이다. 목록에서 빠지면 화면을 닫는다.
@@ -478,29 +461,16 @@ export function App() {
                 request={remoteGatewayRequest}
                 onOpenWorkThread={(threadId) => openRemoteThread(remoteHost, threadId)}
                 onSeen={() => remoteDotRoom && remoteHostStore(remoteHost).getState().markDotRoomRead(remoteDotRoom)}
+                onPopOut={() => window.akra.dots.openWindow(remoteHost, remoteDot.id)}
               />
             )}
             {view === "remote" && remoteHost && remoteVisible && (
               <ConversationStoreContext.Provider value={remoteHostStore(remoteHost)}>
-                {remoteSendHosts.has(remoteHost) ? (
-                  <>
-                    <div className="banner" data-testid="remote-banner">
-                      <span>클라우드 에이전트 · {remoteHost} · 보내기 허용됨 (이 세션). 실계정에 메시지를 보냅니다.</span>
-                    </div>
-                    <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
-                    <Composer actions={remoteComposerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => remoteSessions.current.get(remoteHost)?.answerApproval(requestId, decision)} />} />
-                  </>
-                ) : (
-                  <>
-                    <div className="banner" data-testid="remote-banner">
-                      <span>클라우드 에이전트 · {remoteHost} · 읽기 전용입니다.</span>
-                      <button type="button" className="banner-action" data-testid="remote-allow-send" onClick={() => void allowRemoteSending(remoteHost)}>
-                        이 세션에서 보내기 허용
-                      </button>
-                    </div>
-                    <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
-                  </>
-                )}
+                {/* 클라우드 스레드는 읽기만 한다. 말을 거는 곳은 dot 의 대화이다. */}
+                <div className="banner" data-testid="remote-banner">
+                  <span>클라우드 · 읽기 전용입니다. 메시지를 보내지 않습니다.</span>
+                </div>
+                <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
               </ConversationStoreContext.Provider>
             )}
             <TerminalDock bridge={window.akra.terminal} />

@@ -115,7 +115,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
       openExternal: () => undefined,
     },
     notion: { openExternal: () => undefined },
-    dots: { getEnabled: () => Promise.resolve(false), setEnabled: () => Promise.resolve(false) },
+    dots: { getEnabled: () => Promise.resolve(false), setEnabled: () => Promise.resolve(false), openWindow: () => undefined },
     remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
   };
   cleanups.push(() => connection.close());
