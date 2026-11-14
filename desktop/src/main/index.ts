@@ -126,21 +126,45 @@ const HIDDEN_WINDOWS = process.env.AKRA_DESKTOP_HIDDEN === "1";
 const BLUEPRINT = process.env.AKRA_DESKTOP_BLUEPRINT === "1";
 const RENDERER_PAGE = BLUEPRINT ? "blueprint.html" : "index.html";
 
-/** dot 창이다. 키는 `호스트:dot id` 이다. dot 하나에 창 하나만 둔다. */
-const dotWindows = new Map<string, BrowserWindow>();
+/** dot 창이다. 키는 `호스트:dot id` 이다. dot 하나에 창 하나만 둔다. `opener` 는 그 창을 연 본 창이다. */
+const dotWindows = new Map<string, { window: BrowserWindow; opener: BrowserWindow | null }>();
+
+/** 이 앱을 켠 동안 사용자가 보내기를 허락한 dot 이다 ("세션 한 번 허용"). 본 창과 dot 창이 함께 쓴다. */
+const dotSendAllowed = new Set<string>();
+
+function openDotWindowOf(host: string, dotId: string): BrowserWindow | null {
+  const entry = dotWindows.get(`${host}:${dotId}`);
+  return entry && !entry.window.isDestroyed() ? entry.window : null;
+}
 
 /** dot 하나와의 대화만 보이는 작은 창을 연다 (D-19). 같은 renderer 를 `?dotWindow=` 로 연다. */
-function openDotWindow(host: string, dotId: string): void {
+function openDotWindow(host: string, dotId: string, opener: BrowserWindow | null): void {
   const key = `${host}:${dotId}`;
-  const existing = dotWindows.get(key);
-  if (existing && !existing.isDestroyed()) {
+  const existing = openDotWindowOf(host, dotId);
+  if (existing) {
     if (existing.isMinimized()) existing.restore();
     existing.focus();
     return;
   }
   const window = createWindow({ dotWindow: host, dot: dotId });
-  dotWindows.set(key, window);
+  dotWindows.set(key, { window, opener });
   window.once("closed", () => dotWindows.delete(key));
+}
+
+/**
+ * dot 창의 대화를 본 창의 옆 칸으로 옮긴다. 그 창을 연 본 창으로 보낸다. 그 창이 닫혔으면 다른 본 창으로 보낸다.
+ * 본 창이 없으면 아무것도 하지 않는다: dot 창이 그대로 남는다.
+ */
+function dockDotWindow(host: string, dotId: string, sender: BrowserWindow | null): void {
+  const entry = dotWindows.get(`${host}:${dotId}`);
+  if (!entry || entry.window !== sender) return;
+  const isDotWindow = (candidate: BrowserWindow) => [...dotWindows.values()].some((other) => other.window === candidate);
+  const target = entry.opener && !entry.opener.isDestroyed() ? entry.opener : (BrowserWindow.getAllWindows().find((candidate) => !isDotWindow(candidate)) ?? null);
+  if (!target) return;
+  target.webContents.send(IPC_CHANNELS.dotsDocked, host, dotId);
+  if (target.isMinimized()) target.restore();
+  target.focus();
+  entry.window.close();
 }
 
 /** `dotQuery` 가 있으면 dot 창이다: 작고, renderer 가 그 dot 의 대화만 그린다. */
@@ -324,9 +348,21 @@ ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.conn
 ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
 ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
 ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
-ipcMain.on(IPC_CHANNELS.dotsOpenWindow, (_event, host: unknown, dotId: unknown) => {
+ipcMain.on(IPC_CHANNELS.dotsOpenWindow, (event, host: unknown, dotId: unknown) => {
   if (isRemoteHostId(host) && isDotId(dotId)) {
-    openDotWindow(host, dotId);
+    openDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender));
+  }
+});
+ipcMain.handle(IPC_CHANNELS.dotsHasWindow, (_event, host: unknown, dotId: unknown) => isRemoteHostId(host) && isDotId(dotId) && openDotWindowOf(host, dotId) !== null);
+ipcMain.on(IPC_CHANNELS.dotsDock, (event, host: unknown, dotId: unknown) => {
+  if (isRemoteHostId(host) && isDotId(dotId)) {
+    dockDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender));
+  }
+});
+ipcMain.handle(IPC_CHANNELS.dotsSendAllowed, (_event, dotId: unknown) => isDotId(dotId) && dotSendAllowed.has(dotId));
+ipcMain.on(IPC_CHANNELS.dotsAllowSend, (_event, dotId: unknown) => {
+  if (isDotId(dotId)) {
+    dotSendAllowed.add(dotId);
   }
 });
 ipcMain.handle(IPC_CHANNELS.dotsGetEnabled, () => isDotsCloudEnabled());

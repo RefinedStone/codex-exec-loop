@@ -329,7 +329,7 @@ the desktop app itself is not shipped yet.
 - Hosts (plan 25 S1a): a connection selects its upstream host with the WebSocket request path
   `/host/<id>`; any other path means `local`. Production registers `local`, the app-server above, and
   `cloud` only when `AKRA_DOTS_CLOUD` is `1`/`true` or the flag file `$AKRA_HOME/dots/cloud-enabled`
-  exists; the Gateway reads this once at startup. Desktop's command "dots 클라우드 켜기 / 끄기" writes or
+  exists; the Gateway reads this once at startup. Desktop's command "Dots 켜기 / 끄기" writes or
   removes that flag (`desktop/src/main/dotsSettings.ts`) and turns the sidebar's remote section on or
   off with it, so the user enables dots in one step. At startup Desktop also turns the section on when
   the flag exists and the user never chose a value for the section. The cloud host appears on the next Gateway start,
@@ -386,15 +386,25 @@ the desktop app itself is not shipped yet.
   Desktop reads the chat again, marks the dot "새 답" in the sidebar until the user opens it, and shows
   an OS notification without the message text when the user is not looking at that chat. While the
   dot works, the chat shows a typing mark and the header shows the service's activity label
-  (`src/adapter/outbound/app_server/cloud_dots_live.rs`). A real send was verified once on 2026-11-14. "작업 대화 열기" opens the dot's work thread
+  (`src/adapter/outbound/app_server/cloud_dots_live.rs`). A real send was verified once on 2026-11-14.
+  The header shows "새로 고침" only while the live channel is down
   (`desktop/src/renderer/views/DotChat.tsx`, `desktop/src/renderer/views/dotSend.ts`).
-- Dot window (D-19): the chat header's "작은 창으로 따로 열기" opens a 440 by 680 window that shows only
-  the chat with that dot. The main process keeps one window per dot and focuses it when asked again.
-  The window loads the same renderer with `?dotWindow=<host>&dot=<id>`, opens its own remote Gateway
-  connection, does not connect to `local`, follows the OS light or dark setting, and asks for the send
-  permission by itself (`desktop/src/renderer/views/DotWindow.tsx`).
-- Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
-  the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
+- Dot side chat (D-19): the chat with a dot is not a main view. A click on the dot in the sidebar opens
+  it in a resizable column at the right edge of the main window, beside the thread, home, or fleet
+  view; a second click or the header's close button closes it. Below a window width of 1400 px the
+  side chat and the right panel do not fit together, and the one opened last stays
+  (`desktop/src/renderer/views/DotDock.tsx`, `desktop/src/renderer/session/uiStore.ts`).
+- Dot window (D-19): the side chat's "따로 뜬 창으로 옮기기" moves the chat to a 440 by 680 window that
+  shows only that dot, and closes the side chat. The window's "본 창의 옆 칸으로 옮기기" moves it back
+  to the main window that opened it and closes the window. The main process keeps one window per dot;
+  a click on that dot in the sidebar focuses the window. The window loads the same renderer with
+  `?dotWindow=<host>&dot=<id>`, opens its own remote Gateway connection, does not connect to `local`,
+  and uses the main window's light or dark choice (stored in `localStorage`). The main process holds
+  the send permission per dot while the app runs, so the side chat and the window ask once. While a
+  dot's window is open, that window shows the reply notification and the main window does not
+  (`desktop/src/renderer/views/DotWindow.tsx`, `desktop/src/main/index.ts`).
+- Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. The
+  command palette has one command for the remote section, "Dots 켜기 / 끄기" (above). The
   default is off, and turning it on shows a warning first. While it is on, each window opens one more
   Gateway connection per remote host on `/host/<id>` and the sidebar shows a section for that host,
   above the local work folders, with

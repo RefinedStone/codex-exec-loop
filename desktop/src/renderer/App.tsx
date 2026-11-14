@@ -1,6 +1,6 @@
 // 화면 틀이다 (R10): 사이드바, 위 막대, 본문(새 스레드 · 현황판 · 대화와 입력창), 터미널, 오른쪽 패널.
 // 모양은 UX 블루프린트(`blueprint/`)를 따른다. 대화 상태는 `DesktopSession` 과 `desktopStore` 가 가진다.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
@@ -10,14 +10,15 @@ import { ConversationView } from "./conversation/ConversationView";
 import { isTurnInProgress } from "./conversation/transcript";
 import { useWorkingTree, type WorkingTree, workingTreeCounts, WorkingTreePanel } from "./conversation/WorkingTreePanel";
 import { Icon, type IconName } from "./design/icons";
+import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { closeDot, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
-import { DotChat } from "./views/DotChat";
+import { DotDock } from "./views/DotDock";
 import { notifyDotReply } from "./views/dotNotify";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts } from "./views/Views";
 import { DocumentsPanel } from "./work/DocumentsPanel";
@@ -133,23 +134,7 @@ const MIN_PANEL_WIDTH = 360;
 const MAX_PANEL_WIDTH = 900;
 
 function RightPanel({ panel, children }: { panel: PanelId; children: React.ReactNode }) {
-  const [width, setWidth] = useState(520);
-  const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    // 포인터를 손잡이에 잡아 둔다. 브라우저 페이지 위로 끌어도 이동과 놓기 이벤트를 여기서 받는다.
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startWidth = width;
-    const onMove = (move: PointerEvent) => setWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, startWidth + startX - move.clientX)));
-    const onUp = () => {
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
-      handle.removeEventListener("pointercancel", onUp);
-    };
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
-    handle.addEventListener("pointercancel", onUp);
-  };
+  const [width, startResize] = useResizableWidth(520, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
   return (
     <aside className="right-panel" style={{ width }}>
       <div className="resize-handle" onPointerDown={startResize} />
@@ -284,27 +269,19 @@ export function App() {
   }, [remoteAgents, remoteHosts]);
   // 원격 구역을 끄거나 그 호스트가 목록에서 빠지면 원격 대화 화면을 닫는다.
   const remoteVisible = remoteAgents && remoteHost !== null && remoteHosts.split(",").includes(remoteHost);
-  // dot 대화 화면이 보여 주는 dot 이다. 목록에서 빠지면 화면을 닫는다.
-  const remoteDotId = useUiStore((state) => state.remoteDotId);
-  const remoteDot = useSyncExternalStore(
-    useCallback((listener: () => void) => (remoteHost ? remoteHostStore(remoteHost).subscribe(listener) : () => undefined), [remoteHost]),
-    () => (remoteHost ? (remoteHostStore(remoteHost).getState().dots.find((dot) => dot.id === remoteDotId) ?? null) : null),
-  );
   useEffect(() => {
     if (view === "remote" && !remoteVisible) showView("home");
-    if (view === "dot" && (!remoteVisible || remoteDot === null)) showView("home");
-  }, [view, remoteVisible, remoteDot]);
-  // dot 대화가 쓰는 실시간 상태이다. 방의 상태와 답 횟수가 바뀌면 다시 그린다.
-  const remoteDotRoom = remoteDot?.messagingRoomId ?? null;
-  const remoteDotLive = useSyncExternalStore(
-    useCallback((listener: () => void) => (remoteHost ? remoteHostStore(remoteHost).subscribe(listener) : () => undefined), [remoteHost]),
-    () => (remoteHost && remoteDotRoom ? remoteHostStore(remoteHost).getState().dotLive[remoteDotRoom] : undefined),
-  );
-  const remoteDotReplies = useSyncExternalStore(
-    useCallback((listener: () => void) => (remoteHost ? remoteHostStore(remoteHost).subscribe(listener) : () => undefined), [remoteHost]),
-    () => (remoteHost && remoteDotRoom ? (remoteHostStore(remoteHost).getState().dotRefreshes[remoteDotRoom] ?? 0) : 0),
-  );
-  // dot 이 답을 끝냈는데 사용자가 그 대화를 보고 있지 않으면 운영체제 알림을 보인다. 누르면 그 대화로 간다.
+  }, [view, remoteVisible]);
+  // dot 과의 대화는 보기와 따로 옆 칸에 있다. 원격 구역을 끄거나 그 호스트가 목록에서 빠지면 옆 칸을 닫는다.
+  const dotDock = useUiStore((state) => state.dotDock);
+  const dotDockVisible = dotDock !== null && remoteAgents && remoteHosts.split(",").includes(dotDock.host);
+  useEffect(() => {
+    if (dotDock !== null && !dotDockVisible) closeDot();
+  }, [dotDock, dotDockVisible]);
+  // dot 창이 대화를 본 창으로 되돌리면 옆 칸에 연다.
+  useEffect(() => window.akra.dots.onDock((host, dotId) => showDot(host, dotId)), []);
+  // dot 이 답을 끝냈는데 사용자가 그 대화를 보고 있지 않으면 운영체제 알림을 보인다. 누르면 그 대화가 옆 칸에 열린다.
+  // 그 dot 의 창이 열려 있으면 그 창이 알린다: 본 창은 알리지 않고 안 읽음 표시도 남기지 않는다.
   useEffect(() => {
     if (!remoteAgents || !remoteHosts) return;
     const stops = remoteHosts.split(",").map((host) => {
@@ -317,20 +294,24 @@ export function App() {
         for (const dot of state.dots) {
           const room = dot.messagingRoomId;
           if (room === null || (state.dotReplies[room] ?? 0) === (previous[room] ?? 0)) continue;
-          const ui = useUiStore.getState();
-          const watching = !document.hidden && ui.view === "dot" && ui.remoteHost === host && ui.remoteDotId === dot.id;
-          if (!watching) notifyDotReply(dot.displayName, () => showDot(host, dot.id));
+          const docked = useUiStore.getState().dotDock;
+          if (!document.hidden && docked?.host === host && docked.dotId === dot.id) continue;
+          window.akra.dots.hasWindow(host, dot.id).then(
+            (inWindow) => (inWindow ? store.getState().markDotRoomRead(room) : notifyDotReply(dot.displayName, () => showDot(host, dot.id))),
+            () => undefined,
+          );
         }
       });
     });
     return () => stops.forEach((stop) => stop());
   }, [remoteAgents, remoteHosts]);
-  const remoteGatewayRequest = useMemo<GatewayRequest>(
+  const dotDockHost = dotDock?.host ?? null;
+  const dotGatewayRequest = useMemo<GatewayRequest>(
     () => (method, params) => {
-      const current = remoteHost ? remoteSessions.current.get(remoteHost) : undefined;
+      const current = dotDockHost ? remoteSessions.current.get(dotDockHost) : undefined;
       return current ? current.requestGatewayService(method, params) : Promise.reject(new Error("원격 호스트에 연결되어 있지 않습니다."));
     },
-    [remoteHost],
+    [dotDockHost],
   );
 
   const openRemoteThread = useCallback((host: string, threadId: string) => {
@@ -453,20 +434,9 @@ export function App() {
                 <Composer actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
               </>
             )}
-            {view === "dot" && remoteHost && remoteVisible && remoteDot && (
-              <DotChat
-                dot={remoteDot}
-                live={remoteDotLive}
-                replies={remoteDotReplies}
-                request={remoteGatewayRequest}
-                onOpenWorkThread={(threadId) => openRemoteThread(remoteHost, threadId)}
-                onSeen={() => remoteDotRoom && remoteHostStore(remoteHost).getState().markDotRoomRead(remoteDotRoom)}
-                onPopOut={() => window.akra.dots.openWindow(remoteHost, remoteDot.id)}
-              />
-            )}
             {view === "remote" && remoteHost && remoteVisible && (
               <ConversationStoreContext.Provider value={remoteHostStore(remoteHost)}>
-                {/* 클라우드 스레드는 읽기만 한다. 말을 거는 곳은 dot 의 대화이다. */}
+                {/* 클라우드 스레드는 읽기만 한다. 말을 거는 곳은 dot 의 대화(옆 칸)이다. */}
                 <div className="banner" data-testid="remote-banner">
                   <span>클라우드 · 읽기 전용입니다. 메시지를 보내지 않습니다.</span>
                 </div>
@@ -484,6 +454,7 @@ export function App() {
               {panel === "docs" && <DocumentsPanel state={documents} onRefresh={() => setDocumentsRefresh((count) => count + 1)} onOpenChanged={markDocumentRead} />}
             </RightPanel>
           )}
+          {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} />}
         </div>
       </div>
       {paletteOpen && <CommandPalette onOpenThread={openThread} />}

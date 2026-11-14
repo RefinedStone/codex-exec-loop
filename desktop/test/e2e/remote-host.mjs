@@ -44,7 +44,7 @@ try {
   });
   const toggleRemoteAgents = async () => {
     await page.getByRole("button", { name: "검색과 명령" }).click();
-    await page.getByTestId("palette").getByText("클라우드 에이전트 켜기 / 끄기").click();
+    await page.getByTestId("palette").getByText("Dots 켜기 / 끄기").click();
   };
 
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
@@ -64,9 +64,13 @@ try {
   const dotsTop = (await page.getByTestId("dots-section").boundingBox())?.y ?? Infinity;
   const cloudTop = (await page.getByTestId("remote-host").boundingBox())?.y ?? -Infinity;
   check("the dots have their own section above the cloud section", dotsTop < cloudTop && (await page.getByTestId("remote-host").getByTestId("remote-dot-entry").count()) === 0);
-  // dot 을 누르면 그 dot 과의 대화(메시지 방)가 열린다. 읽기 전용이고 입력창이 없다.
+  // dot 을 누르면 그 dot 과의 대화(메시지 방)가 옆 칸에 열린다. 보던 화면은 그대로 남는다. 읽기 전용이고 입력창이 없다.
+  await page.getByTestId("thread-entry").first().click();
+  await page.getByTestId("composer-input").waitFor({ timeout: 10_000 });
   await page.getByTestId("remote-dot-entry").first().click();
   await page.getByTestId("dot-message").nth(1).waitFor({ timeout: 10_000 });
+  check("the dot chat opens beside the open thread", (await page.getByTestId("dot-dock").count()) === 1 && (await page.getByTestId("composer-input").count()) === 1);
+  check("the chat has no refresh button while the live channel is up", (await page.getByTestId("dot-refresh").count()) === 0);
   check("the dot chat shows the messages of the room", (await page.getByTestId("dot-message").count()) === 2 && (await page.getByTestId("dot-chat").innerText()).includes("green"));
   check("the dot chat is read over the remote connection", gateway.remoteReceivedMethods.includes("akra/dots/messages") && !gateway.receivedMethods.includes("akra/dots/messages"));
   check("the dot chat has no composer before the user permits sending", (await page.getByTestId("dot-composer-input").count()) === 0);
@@ -74,12 +78,22 @@ try {
   // "세션 한 번 허용": 경고를 확인하면 입력창이 나타난다. 보낸 글은 가짜 Gateway 의 방에 들어간다.
   await page.getByTestId("dot-allow-send").click();
   await page.getByTestId("dot-composer-input").fill("ship it");
-  // 쓰던 글은 다른 대화를 보고 돌아와도 남는다.
+  // 다른 대화를 열어도 옆 칸은 남는다. 클라우드 스레드는 읽기 전용이다.
   await page.getByTestId("remote-thread-entry").first().click();
   await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
+  await page.getByTestId("turn").first().waitFor({ timeout: 15_000 });
+  check("the dot chat stays beside another conversation", (await page.getByTestId("dot-dock").count()) === 1);
+  check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/read"));
+  // 클라우드 스레드에는 입력창도, 보내기를 여는 단추도 없다. 입력창은 옆 칸의 dot 것 하나뿐이다.
+  check("the cloud conversation has no composer", (await page.getByTestId("composer-input").count()) === 0);
+  check("the cloud conversation cannot be opened for sending", (await page.getByTestId("remote-allow-send").count()) === 0);
+  // 옆 칸을 닫았다 열어도 쓰던 글과 보내기 허락이 남는다. dot 줄을 다시 누르면 닫힌다.
+  await page.getByTestId("remote-dot-entry").first().click();
+  await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 10_000 });
+  check("closing the dot chat leaves the conversation in view", (await page.getByTestId("remote-banner").count()) === 1);
   await page.getByTestId("remote-dot-entry").first().click();
   await page.getByTestId("dot-composer-input").waitFor({ timeout: 10_000 });
-  check("the draft for the dot survives a visit to another conversation", (await page.getByTestId("dot-composer-input").inputValue()) === "ship it");
+  check("the draft for the dot survives closing the chat", (await page.getByTestId("dot-composer-input").inputValue()) === "ship it");
   await page.getByTestId("dot-message").nth(1).waitFor({ timeout: 10_000 });
   await page.getByTestId("dot-composer-send").click();
   await page.getByTestId("dot-message").nth(2).waitFor({ timeout: 10_000 });
@@ -99,20 +113,18 @@ try {
   const readsAfterReply = gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length;
   await page.waitForTimeout(5_000);
   check("the chat stops reading after the reply", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length === readsAfterReply);
-  // 작은 창으로 따로 연다. 그 창은 dot 의 대화만 보이고 자기 접속으로 읽는다.
+  // 따로 뜬 창으로 옮긴다. 옆 칸은 닫힌다. 그 창은 dot 의 대화만 보이고 자기 접속으로 읽는다.
   const [dotWindow] = await Promise.all([app.waitForEvent("window"), page.getByTestId("dot-pop-out").click()]);
   await dotWindow.getByTestId("dot-message").nth(1).waitFor({ timeout: 15_000 });
-  check("the dot window shows only the chat with the dot", (await dotWindow.getByTestId("dot-window").count()) === 1 && (await dotWindow.getByTestId("thread-entry").count()) === 0 && (await dotWindow.getByTestId("dot-open-work-thread").count()) === 0);
-  check("the dot window has no composer before the user permits sending", (await dotWindow.getByTestId("dot-composer-input").count()) === 0);
-  await dotWindow.close();
-  // "작업 대화 열기"는 그 dot 의 작업 thread 를 연다.
-  await page.getByTestId("dot-open-work-thread").click();
-  await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
-  await page.getByTestId("turn").first().waitFor({ timeout: 15_000 });
-  check("the remote thread is read over the remote connection", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume") && !gateway.receivedMethods.includes("thread/read"));
-  // 클라우드 스레드는 읽기 전용이다. 입력창도, 보내기를 여는 단추도 없다.
-  check("the cloud conversation has no composer", (await page.getByTestId("composer-input").count()) === 0);
-  check("the cloud conversation cannot be opened for sending", (await page.getByTestId("remote-allow-send").count()) === 0);
+  check("moving the chat to a window closes the side chat", (await page.getByTestId("dot-dock").count()) === 0);
+  check("the dot window shows only the chat with the dot", (await dotWindow.getByTestId("dot-window").count()) === 1 && (await dotWindow.getByTestId("thread-entry").count()) === 0 && (await dotWindow.getByTestId("dot-pop-out").count()) === 0);
+  // 보내기 허락은 앱을 켠 동안 하나이다. 창을 옮겨도 다시 묻지 않는다.
+  await dotWindow.getByTestId("dot-composer-input").waitFor({ timeout: 10_000 });
+  check("the dot window keeps the permission to send", warnings.length === 2);
+  // 창의 단추로 본 창의 옆 칸으로 되돌린다. 창은 닫힌다.
+  await Promise.all([dotWindow.waitForEvent("close"), dotWindow.getByTestId("dot-dock-back").click()]);
+  await page.getByTestId("dot-dock").waitFor({ timeout: 10_000 });
+  check("the dot window moves the chat back beside the main window", app.windows().length === 1 && (await page.getByTestId("dot-composer-input").count()) === 1);
   check("the cloud conversation was read without a resume", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume"));
 
   console.log("--- remote conversation text ---");

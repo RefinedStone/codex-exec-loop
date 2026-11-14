@@ -1,5 +1,5 @@
 // dot 과의 대화 화면이다 (D-19). 비서와 나누는 대화처럼 보인다: 머리줄에 이름과 지금 상태, 날짜로 나눈 말풍선,
-// dot 이 답을 만드는 동안의 표시, 내 글의 "읽음".
+// dot 이 답을 만드는 동안의 표시, 내 글의 "읽음". 본 창의 옆 칸(`DotDock`)과 dot 창(`DotWindow`)이 함께 쓴다.
 //
 // 읽기: 메시지 방을 Gateway 의 `akra/dots/messages` 로 읽는다. 화면을 열 때, "새로 고침"을 누를 때, dot 이 답을
 // 끝냈을 때(`replies` 가 늘 때) 읽는다. 실시간 통로가 끊겨 있을 때만, 보낸 뒤 답이 올 때까지 짧은 간격으로 읽는다.
@@ -12,7 +12,7 @@ import { Icon } from "../design/icons";
 import type { DotLive, DotMessage, DotSummary } from "../session/desktopStore";
 import { setDotSending, setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
-import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
+import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, markDotSendingAllowed, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
 
 const DOTS_MESSAGES_METHOD = "akra/dots/messages";
 const DOTS_SEND_METHOD = "akra/dots/send";
@@ -28,12 +28,14 @@ export interface DotChatProps {
   /** 대화를 다시 읽어야 하는 횟수이다 (`dotRefreshes`): 답이 끝났거나 실시간 통로가 다시 붙었다. 늘면 읽는다. */
   replies: number;
   request: GatewayRequest;
-  /** 작업 대화를 여는 곳이 있을 때만 준다. dot 창에는 없다. */
-  onOpenWorkThread?(threadId: string): void;
   /** 사용자가 이 대화의 새 메시지를 봤다. */
   onSeen(): void;
-  /** 이 대화를 작은 창으로 따로 연다. 이미 그 창이면 없다. */
+  /** 이 대화를 작은 창으로 옮긴다. 옆 칸에만 있다. */
   onPopOut?(): void;
+  /** 이 대화를 본 창의 옆 칸으로 옮긴다. dot 창에만 있다. */
+  onDock?(): void;
+  /** 옆 칸을 닫는다. 옆 칸에만 있다. dot 창은 창의 닫기 단추를 쓴다. */
+  onClose?(): void;
 }
 
 export function DotAvatar({ name, size = 28 }: { name: string; size?: number }) {
@@ -44,7 +46,7 @@ export function DotAvatar({ name, size = 28 }: { name: string; size?: number }) 
   );
 }
 
-export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen, onPopOut }: DotChatProps) {
+export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock, onClose }: DotChatProps) {
   const [state, setState] = useState<ChatState>({ phase: "loading" });
   const [refresh, setRefresh] = useState(0);
   const [canSend, setCanSend] = useState(() => isDotSendingAllowed(dot.id));
@@ -68,7 +70,25 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
     setSendError(null);
     setWaitingSince(null);
     setState({ phase: "loading" });
+    // 다른 창(본 창이나 dot 창)에서 이미 허락했으면 다시 묻지 않는다. 허락은 main 이 앱을 켠 동안 가진다.
+    let current = true;
+    window.akra.dots.isSendAllowed(dot.id).then(
+      (allowed) => {
+        if (!allowed) return;
+        markDotSendingAllowed(dot.id);
+        if (current) setCanSend(true);
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
   }, [dot.id]);
+  const allowSending = () => {
+    const allowed = allowDotSending(dot.id, (message) => window.confirm(message));
+    if (allowed) window.akra.dots.allowSend(dot.id);
+    setCanSend(allowed);
+  };
 
   // dot 이 답을 끝냈다. 바로 읽고, 조금 뒤에 한 번 더 읽는다.
   useEffect(() => {
@@ -200,7 +220,6 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
     }
   };
 
-  const rootThreadId = dot.rootThreadId;
   const messages = state.phase === "loaded" ? state.messages : [];
   const readId = state.phase === "loaded" ? lastReadMessageId(messages, state.dotReadAt) : null;
   const status = dotStatusLine(dot, live);
@@ -216,20 +235,25 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
           </span>
         </div>
         <span className="bar-spacer" />
-        {roomId !== null && (
+        {/* 실시간으로 받는 동안에는 새로 고침이 필요 없다. 통로가 끊겼을 때만 보인다. */}
+        {roomId !== null && !liveConnected && (
           <button type="button" className="icon-button" title="새로 고침" aria-label="새로 고침" onClick={() => setRefresh((count) => count + 1)} data-testid="dot-refresh">
             <Icon name="refresh" />
           </button>
         )}
         {onPopOut && (
-          <button type="button" className="icon-button" title="작은 창으로 따로 열기" aria-label="작은 창으로 따로 열기" onClick={onPopOut} data-testid="dot-pop-out">
+          <button type="button" className="icon-button" title="따로 뜬 창으로 옮기기" aria-label="따로 뜬 창으로 옮기기" onClick={onPopOut} data-testid="dot-pop-out">
             <Icon name="popOut" />
           </button>
         )}
-        {rootThreadId !== null && onOpenWorkThread && (
-          <button type="button" className="chip-button" title="이 에이전트의 작업 대화를 엽니다 (읽기 전용)" onClick={() => onOpenWorkThread(rootThreadId)} data-testid="dot-open-work-thread">
-            <Icon name="stack" size={14} />
-            작업 대화
+        {onDock && (
+          <button type="button" className="icon-button" title="본 창의 옆 칸으로 옮기기" aria-label="본 창의 옆 칸으로 옮기기" onClick={onDock} data-testid="dot-dock-back">
+            <Icon name="panel" />
+          </button>
+        )}
+        {onClose && (
+          <button type="button" className="icon-button" title="닫기" aria-label="닫기" onClick={onClose} data-testid="dot-close">
+            <Icon name="close" />
           </button>
         )}
       </header>
@@ -284,7 +308,7 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
       {roomId !== null && !canSend && (
         <div className="dot-consent" data-testid="dot-consent">
           <span>읽기 전용입니다. {dot.displayName} 에게 말을 걸려면 보내기를 허용하세요.</span>
-          <button type="button" className="chip-button selected" onClick={() => setCanSend(allowDotSending(dot.id, (message) => window.confirm(message)))} data-testid="dot-allow-send">
+          <button type="button" className="chip-button selected" onClick={allowSending} data-testid="dot-allow-send">
             보내기 허용
           </button>
         </div>

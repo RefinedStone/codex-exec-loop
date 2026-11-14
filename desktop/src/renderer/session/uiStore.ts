@@ -1,7 +1,7 @@
 // 화면 틀의 상태이다: 어떤 보기와 패널이 열려 있는지. 대화 상태는 `desktopStore` 에 있다.
 import { create } from "zustand";
 
-export type View = "home" | "thread" | "fleet" | "remote" | "dot";
+export type View = "home" | "thread" | "fleet" | "remote";
 export type PanelId = "review" | "kernel" | "browser" | "work" | "docs";
 export type Theme = "light" | "dark";
 
@@ -28,10 +28,13 @@ export interface UiState {
   toasts: Toast[];
   /** 원격 호스트(클라우드 에이전트, plan 25)의 구역을 켰다. 기본값은 꺼짐이고, 꺼져 있으면 접속하지 않는다. */
   remoteAgents: boolean;
-  /** `remote` 와 `dot` 보기가 보여 주는 호스트이다. */
+  /** `remote` 보기가 보여 주는 호스트이다. */
   remoteHost: string | null;
-  /** `dot` 보기가 보여 주는 dot 이다. */
-  remoteDotId: string | null;
+  /**
+   * 옆 칸에 열어 둔 dot 과의 대화이다 (D-19). 보기(`view`)와 따로 있다: 스레드로 일하는 동안 옆에 남는다.
+   * null 이면 옆 칸이 없다.
+   */
+  dotDock: { host: string; dotId: string } | null;
   /**
    * 전송 답을 기다리는 dot 의 id 이다. 화면 밖에 둔다: 답을 기다리는 사이 다른 화면을 보고 와도 "전송 중"이 남는다.
    * 쓰던 글도 화면 밖에 남으므로, 이것이 없으면 같은 글을 한 번 더 보낼 수 있다.
@@ -49,12 +52,21 @@ function storedRemoteAgents(): boolean {
   }
 }
 
-function initialTheme(): Theme {
+const THEME_KEY = "akra.theme";
+
+/** 사용자가 고른 밝기이다. 고른 적이 없으면 운영체제의 설정을 따른다. dot 창도 같은 값을 읽는다. */
+export function chosenTheme(): Theme {
+  try {
+    const stored = window.localStorage.getItem(THEME_KEY);
+    if (stored === "dark" || stored === "light") return stored;
+  } catch {
+    // 저장소를 읽지 못하면 운영체제의 설정을 따른다.
+  }
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 export const useUiStore = create<UiState>(() => ({
-  theme: initialTheme(),
+  theme: chosenTheme(),
   view: "home",
   sidebarOpen: true,
   panel: null,
@@ -66,7 +78,7 @@ export const useUiStore = create<UiState>(() => ({
   toasts: [],
   remoteAgents: storedRemoteAgents(),
   remoteHost: null,
-  remoteDotId: null,
+  dotDock: null,
   sendingDotIds: [],
 }));
 
@@ -111,22 +123,22 @@ export function handOffToNewThread(text: string): void {
   set((state) => ({ view: "home", paletteOpen: false, drafts: { ...state.drafts, [HOME_DRAFT]: text } }));
 }
 
+/** 이 폭보다 좁은 창에는 오른쪽 패널과 dot 옆 칸을 함께 둘 자리가 없다. 나중에 연 것만 남긴다. */
+const TWO_SIDE_COLUMNS_MIN_WIDTH = 1400;
+
+function isNarrowWindow(): boolean {
+  return window.innerWidth < TWO_SIDE_COLUMNS_MIN_WIDTH;
+}
+
 export function togglePanel(panel: PanelId): void {
-  set((state) => ({ panel: state.panel === panel ? null : panel, paletteOpen: false }));
+  set((state) => {
+    const opening = state.panel !== panel;
+    return { panel: opening ? panel : null, paletteOpen: false, dotDock: opening && isNarrowWindow() ? null : state.dotDock };
+  });
 }
 
 export function toggleTerminal(): void {
   set((state) => ({ terminalOpen: !state.terminalOpen, paletteOpen: false }));
-}
-
-export const REMOTE_AGENTS_WARNING =
-  "클라우드 에이전트의 대화를 이 앱에서 읽습니다. 공급자의 약관과 계정 정책이 외부 클라이언트를 허용하는지 먼저 확인하세요. 켭니까?";
-
-/** 원격 호스트 구역을 켜거나 끈다. 켤 때는 경고를 보이고 사용자가 확인해야 켠다 (plan 25 §8). */
-export function toggleRemoteAgents(confirm: (message: string) => boolean = (message) => window.confirm(message)): void {
-  const enable = !useUiStore.getState().remoteAgents;
-  if (enable && !confirm(REMOTE_AGENTS_WARNING)) return;
-  setRemoteAgents(enable);
 }
 
 function setRemoteAgents(enable: boolean): void {
@@ -143,33 +155,33 @@ export function showRemote(host: string): void {
   set({ view: "remote", remoteHost: host, paletteOpen: false });
 }
 
-/** 원격 호스트의 dot 과의 대화 화면을 연다 (D-19). */
+/**
+ * dot 과의 대화를 옆 칸에 연다 (D-19). 보던 화면은 그대로 둔다. 좁은 창에서는 오른쪽 패널을 닫아 자리를 만든다.
+ */
 export function showDot(host: string, dotId: string): void {
-  set({ view: "dot", remoteHost: host, remoteDotId: dotId, paletteOpen: false });
+  set((state) => ({ dotDock: { host, dotId }, paletteOpen: false, panel: isNarrowWindow() ? null : state.panel }));
+}
+
+/** dot 과의 대화 옆 칸을 닫는다. 쓰던 글과 보내기 허락은 남는다. */
+export function closeDot(): void {
+  set({ dotDock: null });
 }
 
 export const DOTS_CLOUD_ENABLE_WARNING =
-  "dots 클라우드 호스트를 켜거나 끕니다. OpenAI 의 비공개 백엔드에 공식 앱 신원으로 붙습니다. 약관과 계정 위험을 확인하세요. 설정은 Gateway 를 다시 시작해야 적용됩니다. 계속합니까?";
+  "Dots 를 켭니다. OpenAI 의 비공개 백엔드에 공식 앱 신원으로 붙습니다. 약관과 계정 위험을 확인하세요. 계속합니까?";
 
 /**
- * dots 클라우드 활성화 플래그와 사이드바의 원격 구역을 함께 켜고 끈다 (plan 25 §3.2). 클라우드 호스트는 Gateway 를
- * 다시 시작해야 생긴다. 그 전에는 구역을 켜도 보일 호스트가 없다.
+ * dots 클라우드 활성화 플래그와 사이드바의 원격 구역을 함께 켜고 끈다 (plan 25 §3.2). 켜는 명령은 이것 하나이다.
+ * 둘 가운데 하나라도 꺼져 있으면 둘 다 켠다. 켤 때만 경고를 보이고 사용자가 확인해야 켠다. 클라우드 호스트는
+ * Gateway 를 다시 시작해야 생긴다. 그 전에는 구역을 켜도 보일 호스트가 없다.
  */
-export async function toggleDotsCloud(
-  confirm: (message: string) => boolean = (message) => window.confirm(message),
-  notify: (message: string) => void = (message) => window.alert(message),
-): Promise<void> {
+export async function toggleDotsCloud(confirm: (message: string) => boolean = (message) => window.confirm(message), notify: (message: string) => void = toast): Promise<void> {
   set({ paletteOpen: false });
-  const current = await window.akra.dots.getEnabled();
-  if (!confirm(DOTS_CLOUD_ENABLE_WARNING)) return;
-  const enabled = await window.akra.dots.setEnabled(!current);
-  // 사이드바의 원격 구역도 같이 켜고 끈다. 경고는 위에서 이미 확인했다. 두 번 켜게 하지 않는다.
+  const enable = !(await window.akra.dots.getEnabled()) || !useUiStore.getState().remoteAgents;
+  if (enable && !confirm(DOTS_CLOUD_ENABLE_WARNING)) return;
+  const enabled = await window.akra.dots.setEnabled(enable);
   setRemoteAgents(enabled);
-  notify(
-    enabled
-      ? "dots 클라우드를 켰습니다. Gateway 를 다시 시작하면 사이드바에 클라우드 에이전트 구역이 나타납니다."
-      : "dots 클라우드를 껐습니다. 사이드바의 구역은 바로 사라집니다. Gateway 는 다시 시작할 때 클라우드 호스트를 내립니다.",
-  );
+  notify(enabled ? "Dots 를 켰습니다. 사이드바에 안 보이면 Gateway 를 다시 시작하세요." : "Dots 를 껐습니다.");
 }
 
 /**
@@ -189,5 +201,11 @@ export async function showRemoteAgentsWhenDotsAreOn(): Promise<void> {
 }
 
 export function toggleTheme(): void {
-  set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" }));
+  const theme: Theme = useUiStore.getState().theme === "dark" ? "light" : "dark";
+  try {
+    window.localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    // 저장하지 못하면 이 창에서만 유지된다.
+  }
+  set({ theme });
 }

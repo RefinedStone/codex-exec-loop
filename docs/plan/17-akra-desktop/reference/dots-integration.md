@@ -114,8 +114,8 @@
 - 됨: dot 목록. Gateway `akra/dots/list` 가 `GET https://chatgpt.com/backend-api/tbo` 를 읽어 dot 의 이름·상태·
   현재 작업 thread 를 준다. Desktop 원격 구역이 dot 을 보이고, 누르면 그 작업 thread 를 연다.
 - 됨: dot 과의 대화 읽기. Gateway `akra/dots/messages` 가 `GET /messaging/rooms/{id}` 와 `.../messages?limit=30`
-  을 읽어 메시지(보낸 쪽 이름, dot 여부, 글)를 준다. Desktop 은 dot 을 누르면 이 대화를 보이고, "작업 대화 열기"로
-  작업 thread 로 간다. 서비스는 모든 메시지의 `role` 을 `user` 로 주므로 dot 은 `member_profile_snapshots` 의 id 로
+  을 읽어 메시지(보낸 쪽 이름, dot 여부, 글)를 준다. Desktop 은 dot 을 누르면 이 대화를 본 창의 옆 칸에 보이고, 따로 뜬 창으로
+  옮길 수 있다. 작업 thread 는 사이드바 Dots 구역의 "작업 대화"에서 연다. 서비스는 모든 메시지의 `role` 을 `user` 로 주므로 dot 은 `member_profile_snapshots` 의 id 로
   가린다 (계정 하나에서 본 규칙).
 - 됨 (2026-11-14 실제 전송 1회로 확인, HTTP 200): 메시지 방에 보내기. Gateway `akra/dots/send { roomId, text }` 가
   `POST /messaging/rooms/{id}/messages` 에 `{"content": {"text": ...}, "request_id": "<uuid>"}` 를 보낸다. Desktop 은 dot 대화의 배너에서

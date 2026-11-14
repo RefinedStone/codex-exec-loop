@@ -19,6 +19,11 @@ export function allowDotSending(dotId: string, confirm: (message: string) => boo
   return true;
 }
 
+/** 다른 창에서 이미 허락한 dot 을 적는다. 다시 묻지 않는다. */
+export function markDotSendingAllowed(dotId: string): void {
+  sendAllowedDots.add(dotId);
+}
+
 export function isDotSendingAllowed(dotId: string): boolean {
   return sendAllowedDots.has(dotId);
 }

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
-import { MOD_KEY, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
+import { closeDot, MOD_KEY, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
 import { DotAvatar } from "../views/DotChat";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
@@ -132,7 +132,8 @@ function useRemoteHost(host: string) {
 }
 
 /**
- * Dots 구역이다 (D-19). dot 은 사용자의 비서이다: 누르면 대화가 열린다. 사용자가 만든 클라우드 스레드와는 다른
+ * Dots 구역이다 (D-19). dot 은 사용자의 비서이다: 누르면 대화가 옆 칸에 열리고, 보던 화면은 그대로 남는다. 다시
+ * 누르면 닫힌다. 그 dot 의 창이 따로 떠 있으면 그 창을 앞으로 가져온다. 사용자가 만든 클라우드 스레드와는 다른
  * 것이므로 구역을 따로 둔다. dot 이 만든 작업 대화는 접어 둔다.
  */
 function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: string, threadId: string): void }) {
@@ -142,7 +143,17 @@ function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: 
   const dots = useStore((state) => state.dots);
   const dotLive = useStore((state) => state.dotLive);
   const dotUnreadRooms = useStore((state) => state.dotUnreadRooms);
-  const shownDotId = useUiStore((state) => (state.view === "dot" && state.remoteHost === host ? state.remoteDotId : null));
+  const shownDotId = useUiStore((state) => (state.dotDock?.host === host ? state.dotDock.dotId : null));
+  const toggleDot = (dotId: string) => {
+    if (shownDotId === dotId) {
+      closeDot();
+      return;
+    }
+    window.akra.dots.hasWindow(host, dotId).then(
+      (inWindow) => (inWindow ? window.akra.dots.openWindow(host, dotId) : showDot(host, dotId)),
+      () => showDot(host, dotId),
+    );
+  };
   const agentThreads = useMemo(() => threads.filter((thread) => thread.agentThread === true), [threads]);
   if (dots.length === 0 && agentThreads.length === 0) return null;
   return (
@@ -161,7 +172,7 @@ function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: 
             const mark = dotRowMark(dot, dotLive, dotUnreadRooms);
             return (
               <li className="thread-row" key={dot.id}>
-                <button type="button" className={shownDotId === dot.id ? "thread selected dot-entry" : "thread dot-entry"} title={`${dot.displayName} 과의 대화를 엽니다.`} onClick={() => showDot(host, dot.id)} data-testid="remote-dot-entry">
+                <button type="button" className={shownDotId === dot.id ? "thread selected dot-entry" : "thread dot-entry"} title={`${dot.displayName} 과의 대화를 옆에 열거나 닫습니다.`} onClick={() => toggleDot(dot.id)} aria-pressed={shownDotId === dot.id} data-testid="remote-dot-entry">
                   <DotAvatar name={dot.displayName} size={22} />
                   <span className="thread-text">
                     <span className="thread-title">{dot.displayName}</span>
