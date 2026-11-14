@@ -378,7 +378,10 @@ the desktop app itself is not shipped yet.
   gets a signed WebSocket address from `GET /celsius/ws/user`, sends `connect` (presence `background`)
   and `subscribe` to topic `calpico-room-live:<room>`, then holds `POST /messaging/rooms/{id}/live`
   (SSE, through curl) open; the service pushes `calpico-room-live-state` on the WebSocket while that
-  stream is open. It reconnects after 5 to 60 seconds and reports `connected: false` in between.
+  stream is open. It reconnects after 5 to 60 seconds and reports `connected: false` in between. It reports
+  `connected: true` only with a real room state: it sends nothing on its own when the channel comes
+  up, and it skips a state whose threads are all still `attaching`, because that state does not know
+  the turn status yet.
   Desktop watches the room of every dot. A room that goes from working to idle counts as a reply:
   Desktop reads the chat again, marks the dot "새 답" in the sidebar until the user opens it, and shows
   an OS notification without the message text when the user is not looking at that chat. While the
