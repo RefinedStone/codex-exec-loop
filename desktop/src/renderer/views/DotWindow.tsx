@@ -59,7 +59,7 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
   dotName.current = dot?.displayName ?? "";
   useEffect(() => {
     if (answered === 0 || dotName.current === "") return;
-    if (document.hidden || !document.hasFocus()) notifyDotReply(dotName.current, () => window.akra.dots.openWindow(host, dotId));
+    if (document.hidden || !document.hasFocus()) notifyDotReply(dotName.current, () => void window.akra.dots.openWindow(host, dotId));
   }, [answered, host, dotId]);
   const request = useCallback<GatewayRequest>((method, params) => {
     const current = session.current;
