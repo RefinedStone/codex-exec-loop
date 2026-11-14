@@ -400,7 +400,8 @@ the desktop app itself is not shipped yet.
   a click on that dot in the sidebar focuses the window. The window loads the same renderer with
   `?dotWindow=<host>&dot=<id>`, opens its own remote Gateway connection, does not connect to `local`,
   and uses the main window's light or dark choice (stored in `localStorage`). The main process holds
-  the send permission per dot while the app runs, so the side chat and the window ask once. While a
+  the send permission per dot while the app runs, so the side chat and the window ask once. The text
+  in the composer moves with the chat in both directions. While a
   dot's window is open, that window shows the reply notification and the main window does not
   (`desktop/src/renderer/views/DotWindow.tsx`, `desktop/src/main/index.ts`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. The

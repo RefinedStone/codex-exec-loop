@@ -113,7 +113,8 @@ try {
   const readsAfterReply = gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length;
   await page.waitForTimeout(5_000);
   check("the chat stops reading after the reply", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length === readsAfterReply);
-  // 따로 뜬 창으로 옮긴다. 옆 칸은 닫힌다. 그 창은 dot 의 대화만 보이고 자기 접속으로 읽는다.
+  // 따로 뜬 창으로 옮긴다. 옆 칸은 닫힌다. 그 창은 dot 의 대화만 보이고 자기 접속으로 읽는다. 쓰던 글도 간다.
+  await page.getByTestId("dot-composer-input").fill("from the side");
   const [dotWindow] = await Promise.all([app.waitForEvent("window"), page.getByTestId("dot-pop-out").click()]);
   await dotWindow.getByTestId("dot-message").nth(1).waitFor({ timeout: 15_000 });
   check("moving the chat to a window closes the side chat", (await page.getByTestId("dot-dock").count()) === 0);
@@ -121,10 +122,19 @@ try {
   // 보내기 허락은 앱을 켠 동안 하나이다. 창을 옮겨도 다시 묻지 않는다.
   await dotWindow.getByTestId("dot-composer-input").waitFor({ timeout: 10_000 });
   check("the dot window keeps the permission to send", warnings.length === 2);
+  await dotWindow.waitForFunction(() => document.querySelector('[data-testid="dot-composer-input"]')?.value === "from the side", null, { timeout: 5_000 }).catch(() => undefined);
+  check("the draft moves to the dot window", (await dotWindow.getByTestId("dot-composer-input").inputValue()) === "from the side");
+  await dotWindow.getByTestId("dot-composer-input").fill("from the window");
   // 창의 단추로 본 창의 옆 칸으로 되돌린다. 창은 닫힌다.
   await Promise.all([dotWindow.waitForEvent("close"), dotWindow.getByTestId("dot-dock-back").click()]);
   await page.getByTestId("dot-dock").waitFor({ timeout: 10_000 });
   check("the dot window moves the chat back beside the main window", app.windows().length === 1 && (await page.getByTestId("dot-composer-input").count()) === 1);
+  check("the draft moves back with the chat", (await page.getByTestId("dot-composer-input").inputValue()) === "from the window");
+  // 좁은 창에서는 단축키로 연 패널도 옆 칸과 함께 있지 않는다.
+  await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Backslash`);
+  await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
+  check("the panel shortcut does not crowd a narrow window", (await page.getByTestId("dot-dock").count()) === 0);
+  await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Backslash`);
   check("the cloud conversation was read without a resume", gateway.remoteReceivedMethods.includes("thread/read") && !gateway.remoteReceivedMethods.includes("thread/resume"));
 
   console.log("--- remote conversation text ---");

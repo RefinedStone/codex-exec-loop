@@ -10,7 +10,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import type { DotLive, DotMessage, DotSummary } from "../session/desktopStore";
-import { setDotSending, setDraft, useUiStore } from "../session/uiStore";
+import { dotDraftKey, setDotSending, setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
 import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, markDotSendingAllowed, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
 
@@ -51,7 +51,7 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
   const [refresh, setRefresh] = useState(0);
   const [canSend, setCanSend] = useState(() => isDotSendingAllowed(dot.id));
   // 쓰던 글은 dot 마다 화면 밖에 둔다. 다른 dot 이나 작업 대화를 보고 돌아와도 남는다. 보내면 지운다.
-  const draftKey = `dot:${dot.id}`;
+  const draftKey = dotDraftKey(dot.id);
   const draft = useUiStore((ui) => ui.drafts[draftKey] ?? "");
   // 전송 중인지도 dot 마다 화면 밖에 둔다. 답을 기다리는 사이 다른 화면을 보고 와도 다시 보낼 수 없다.
   const sending = useUiStore((ui) => ui.sendingDotIds.includes(dot.id));

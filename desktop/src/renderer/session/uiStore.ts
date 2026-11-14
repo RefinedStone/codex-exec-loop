@@ -114,6 +114,11 @@ export function setDotSending(dotId: string, sending: boolean): void {
   });
 }
 
+/** dot 에게 쓰던 글의 초안 키이다. */
+export function dotDraftKey(dotId: string): string {
+  return `dot:${dotId}`;
+}
+
 export function setDraft(key: string, text: string): void {
   set((state) => ({ drafts: { ...state.drafts, [key]: text } }));
 }
@@ -130,11 +135,17 @@ function isNarrowWindow(): boolean {
   return window.innerWidth < TWO_SIDE_COLUMNS_MIN_WIDTH;
 }
 
+/** 오른쪽 패널을 연다. 패널을 여는 곳은 모두 이것을 쓴다: 좁은 창에서는 dot 옆 칸을 닫아 자리를 만든다. */
+export function openPanel(panel: PanelId): void {
+  set((state) => ({ panel, paletteOpen: false, dotDock: isNarrowWindow() ? null : state.dotDock }));
+}
+
 export function togglePanel(panel: PanelId): void {
-  set((state) => {
-    const opening = state.panel !== panel;
-    return { panel: opening ? panel : null, paletteOpen: false, dotDock: opening && isNarrowWindow() ? null : state.dotDock };
-  });
+  if (useUiStore.getState().panel === panel) {
+    set({ panel: null, paletteOpen: false });
+  } else {
+    openPanel(panel);
+  }
 }
 
 export function toggleTerminal(): void {

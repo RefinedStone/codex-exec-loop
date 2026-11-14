@@ -7,7 +7,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import { Icon, type IconName } from "../design/icons";
 import { useConversationStore } from "../session/desktopStore";
-import { toast, useUiStore } from "../session/uiStore";
+import { openPanel, toast } from "../session/uiStore";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
 import { DiffCounts, DiffFileList } from "./DiffView";
 import { ItemView } from "./ItemView";
@@ -93,7 +93,7 @@ function Changes({ files }: { files: readonly DiffFile[] }) {
         <Icon name="diff" />
         <span>파일 {files.length}개 변경</span>
         <DiffCounts added={counts.added} removed={counts.removed} />
-        <button type="button" className="button" onClick={() => useUiStore.setState({ panel: "review" })}>
+        <button type="button" className="button" onClick={() => openPanel("review")}>
           변경 검토
         </button>
       </header>
