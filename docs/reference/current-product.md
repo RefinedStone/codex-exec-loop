@@ -387,7 +387,7 @@ the desktop app itself is not shipped yet.
   an OS notification without the message text when the user is not looking at that chat. While the
   dot works, the chat shows a typing mark and the header shows the service's activity label
   (`src/adapter/outbound/app_server/cloud_dots_live.rs`). A real send was verified once on 2026-11-14.
-  The header shows "새로 고침" only while the live channel is down
+  The header shows "새로 고침" only while the live channel is down or after a failed read
   (`desktop/src/renderer/views/DotChat.tsx`, `desktop/src/renderer/views/dotSend.ts`).
 - Dot side chat (D-19): the chat with a dot is not a main view. A click on the dot in the sidebar opens
   it in a resizable column at the right edge of the main window, beside the thread, home, or fleet

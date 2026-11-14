@@ -235,8 +235,8 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
           </span>
         </div>
         <span className="bar-spacer" />
-        {/* 실시간으로 받는 동안에는 새로 고침이 필요 없다. 통로가 끊겼을 때만 보인다. */}
-        {roomId !== null && !liveConnected && (
+        {/* 실시간으로 받는 동안에는 새로 고침이 필요 없다. 통로가 끊겼거나 대화를 읽지 못했을 때만 보인다. */}
+        {roomId !== null && (!liveConnected || state.phase === "failed") && (
           <button type="button" className="icon-button" title="새로 고침" aria-label="새로 고침" onClick={() => setRefresh((count) => count + 1)} data-testid="dot-refresh">
             <Icon name="refresh" />
           </button>
