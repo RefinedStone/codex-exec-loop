@@ -148,6 +148,17 @@ try {
   await page.getByTestId("remote-dot-entry").first().click();
   await page.getByTestId("dot-dock").waitFor({ timeout: 5_000 });
   check("a wide window holds the panel and the side chat together", (await page.getByTestId("review-toggle").getAttribute("aria-pressed")) === "true");
+  // 두 칸을 끝까지 넓혀도 본문이 남고 옆 칸이 창 안에 있다.
+  for (const column of [".right-panel", ".dot-dock"]) {
+    const handle = await page.locator(`${column} > .resize-handle`).boundingBox();
+    await page.mouse.move(handle.x + 3, handle.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(handle.x - 900, handle.y + 200, { steps: 4 });
+    await page.mouse.up();
+  }
+  const mainBox = await page.locator(".workspace-body > .main").boundingBox();
+  const dockBox = await page.getByTestId("dot-dock").boundingBox();
+  check("widened side columns leave the main view and stay in the window", mainBox.width >= 279 && dockBox.x + dockBox.width <= (await page.evaluate(() => window.innerWidth)) + 1);
   await mainWindow.evaluate((window) => window.setSize(1200, 800));
   await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
   check("shrinking the window closes the side chat beside an open panel", (await page.getByTestId("dot-dock").count()) === 0);
