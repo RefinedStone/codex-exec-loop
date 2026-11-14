@@ -402,7 +402,8 @@ the desktop app itself is not shipped yet.
   and uses the main window's light or dark choice (stored in `localStorage`). The main process holds
   the send permission per dot while the app runs, so the side chat and the window ask once. The text
   in the composer moves with the chat in both directions. While a
-  dot's window is open, that window shows the reply notification and the main window does not
+  dot's window is open, that window shows the reply notification and the main window does not; the main window keeps
+  its unread mark until the user sees the reply in the window
   (`desktop/src/renderer/views/DotWindow.tsx`, `desktop/src/main/index.ts`).
 - Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. The
   command palette has one command for the remote section, "Dots 켜기 / 끄기" (above). The

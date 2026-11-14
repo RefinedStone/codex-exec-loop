@@ -68,6 +68,8 @@ export const IPC_CHANNELS = {
   dotsSendAllowed: "akra:dots-send-allowed",
   dotsAllowSend: "akra:dots-allow-send",
   dotsTakeDraft: "akra:dots-take-draft",
+  dotsReportSeen: "akra:dots-report-seen",
+  dotsSeen: "akra:dots-seen",
 } as const;
 
 export interface GitHubPullRequest {
@@ -427,14 +429,15 @@ export interface DotsBridge {
   dock(host: string, dotId: string, draft: string): void;
   /** 본 창이 듣는다: dot 창이 대화를 옆 칸으로 옮겼다. `draft` 는 그 창에서 쓰던 글이다. */
   onDock(listener: (host: string, dotId: string, draft: string) => void): () => void;
+  /** dot 창이 부른다: 사용자가 이 창에서 그 dot 의 새 답을 봤다. 다른 창들이 안 읽음 표시를 지운다. */
+  reportSeen(host: string, dotId: string): void;
+  /** 본 창이 듣는다: 사용자가 dot 창에서 그 dot 의 새 답을 봤다. */
+  onSeen(listener: (host: string, dotId: string) => void): () => void;
   /** 이 앱을 켠 동안 사용자가 그 dot 에 보내기를 허락했는지이다. 본 창과 dot 창이 같은 답을 받는다. */
   isSendAllowed(dotId: string): Promise<boolean>;
   /** 사용자가 그 dot 에 보내기를 허락했다고 적는다. 앱을 끄면 사라진다. */
   allowSend(dotId: string): void;
 }
-
-/** 창 사이로 옮기는 쓰던 글의 가장 긴 길이이다. 서비스가 받는 메시지보다 넉넉하다. */
-export const DOT_DRAFT_MAX_LENGTH = 20_000;
 
 /** dot 창의 주소에 넣는 dot id 이다. 주소와 파일 이름에 안전한 글자만 받는다. */
 export function isDotId(dotId: unknown): dotId is string {

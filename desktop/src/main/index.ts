@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type WebContents } from "electron";
 
-import { type BrowserBounds, DOT_DRAFT_MAX_LENGTH, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
+import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
@@ -129,9 +129,9 @@ const RENDERER_PAGE = BLUEPRINT ? "blueprint.html" : "index.html";
 /** dot 창이다. 키는 `호스트:dot id` 이다. dot 하나에 창 하나만 둔다. `opener` 는 그 창을 연 본 창이다. */
 const dotWindows = new Map<string, { window: BrowserWindow; opener: BrowserWindow | null; draft: string | null }>();
 
-/** 창 사이로 옮기는 쓰던 글이다. 글이 아니거나 너무 길면 빈 글로 본다. */
+/** 창 사이로 옮기는 쓰던 글이다. 길이는 자르지 않는다: 옮기다가 사용자의 글을 잃지 않는다. */
 function dotDraftOf(value: unknown): string {
-  return typeof value === "string" && value.length <= DOT_DRAFT_MAX_LENGTH ? value : "";
+  return typeof value === "string" ? value : "";
 }
 
 /** 이 앱을 켠 동안 사용자가 보내기를 허락한 dot 이다 ("세션 한 번 허용"). 본 창과 dot 창이 함께 쓴다. */
@@ -371,6 +371,12 @@ ipcMain.handle(IPC_CHANNELS.dotsHasWindow, (_event, host: unknown, dotId: unknow
 ipcMain.on(IPC_CHANNELS.dotsDock, (event, host: unknown, dotId: unknown, draft: unknown) => {
   if (isRemoteHostId(host) && isDotId(dotId)) {
     dockDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender), dotDraftOf(draft));
+  }
+});
+ipcMain.on(IPC_CHANNELS.dotsReportSeen, (event, host: unknown, dotId: unknown) => {
+  if (!isRemoteHostId(host) || !isDotId(dotId)) return;
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents !== event.sender) window.webContents.send(IPC_CHANNELS.dotsSeen, host, dotId);
   }
 });
 ipcMain.handle(IPC_CHANNELS.dotsSendAllowed, (_event, dotId: unknown) => isDotId(dotId) && dotSendAllowed.has(dotId));

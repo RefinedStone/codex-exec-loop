@@ -279,6 +279,15 @@ export function App() {
     if (dotDock !== null && !dotDockVisible) closeDot();
   }, [dotDock, dotDockVisible]);
   // dot 창이 대화를 본 창으로 되돌리면 옆 칸에 연다.
+  useEffect(
+    () =>
+      window.akra.dots.onSeen((host, dotId) => {
+        const store = remoteHostStore(host).getState();
+        const room = store.dots.find((dot) => dot.id === dotId)?.messagingRoomId;
+        if (room) store.markDotRoomRead(room);
+      }),
+    [],
+  );
   // 그 창에서 쓰던 글이 가장 새 글이다: 옆 칸의 초안으로 둔다.
   useEffect(
     () =>
@@ -289,7 +298,8 @@ export function App() {
     [],
   );
   // dot 이 답을 끝냈는데 사용자가 그 대화를 보고 있지 않으면 운영체제 알림을 보인다. 누르면 그 대화가 옆 칸에 열린다.
-  // 그 dot 의 창이 열려 있으면 그 창이 알린다: 본 창은 알리지 않고 안 읽음 표시도 남기지 않는다.
+  // 그 dot 의 창이 열려 있으면 그 창이 알린다: 본 창은 알리지 않는다. 안 읽음 표시는 남긴다. 사용자가 그 창에서
+  // 답을 보면 창이 알려 주고(`onSeen`), 그때 지운다.
   useEffect(() => {
     if (!remoteAgents || !remoteHosts) return;
     const stops = remoteHosts.split(",").map((host) => {
@@ -305,7 +315,7 @@ export function App() {
           const docked = useUiStore.getState().dotDock;
           if (!document.hidden && docked?.host === host && docked.dotId === dot.id) continue;
           window.akra.dots.hasWindow(host, dot.id).then(
-            (inWindow) => (inWindow ? store.getState().markDotRoomRead(room) : notifyDotReply(dot.displayName, () => showDot(host, dot.id))),
+            (inWindow) => inWindow || notifyDotReply(dot.displayName, () => showDot(host, dot.id)),
             () => undefined,
           );
         }
