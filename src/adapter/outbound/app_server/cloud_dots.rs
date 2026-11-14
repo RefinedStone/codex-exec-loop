@@ -60,12 +60,19 @@ impl DotsPort for CloudDotsRestAdapter {
         if !is_safe_room_id(room_id) {
             bail!("the message room id is not valid");
         }
-        let room = self.get(&format!("{ROOMS_URL}/{room_id}"), "dots room")?;
-        let messages = self.get(
-            &format!("{ROOMS_URL}/{room_id}/messages?limit={ROOM_MESSAGE_LIMIT}"),
-            "dots room messages",
-        )?;
-        parse_room_messages(&room, &messages)
+        // 방(구성원, 읽음)과 메시지를 함께 묻는다. 차례로 물으면 요청 하나의 시간만큼 더 걸린다 (2026-11-14 실측:
+        // 차례로 약 1.05초, 함께 약 0.64초).
+        let room_url = format!("{ROOMS_URL}/{room_id}");
+        let (room, messages) = std::thread::scope(|scope| {
+            let room = scope.spawn(|| self.get(&room_url, "dots room"));
+            let messages = self.get(
+                &format!("{ROOMS_URL}/{room_id}/messages?limit={ROOM_MESSAGE_LIMIT}"),
+                "dots room messages",
+            );
+            (room.join(), messages)
+        });
+        let room = room.map_err(|_| anyhow::anyhow!("the dots room request stopped"))??;
+        parse_room_messages(&room, &messages?)
     }
 
     fn watch_room(&self, room_id: &str, on_state: DotLiveListener) -> Result<Box<dyn Send>> {
@@ -477,9 +484,14 @@ mod tests {
             eprintln!("live: no dot has a message room");
             return;
         };
+        let started = std::time::Instant::now();
         let messages = adapter
             .room_messages(&room_id)
             .expect("the room messages must load");
+        eprintln!(
+            "live: room messages took {} ms",
+            started.elapsed().as_millis()
+        );
         eprintln!(
             "live: dot read marker present: {}",
             messages.dot_read_at.is_some()
