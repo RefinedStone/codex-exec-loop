@@ -363,8 +363,8 @@ the desktop app itself is not shipped yet.
 - Dot chat (D-19): `akra/dots/messages` with `{ roomId }` answers `{ messages }`, the latest 30
   messages of that message room, oldest first, each with id, time, author name, a from-dot flag, and
   text; deleted messages are left out. The room id must be letters, digits, `-`, or `_`. Desktop opens
-  this chat when the user clicks a dot. The chat is read-only until the user clicks "이 세션에서 보내기
-  허용" and confirms a warning; the permission holds for that dot until the app closes. Then a composer
+  this chat when the user clicks a dot. The chat is read-only until the user clicks "보내기 허용" and
+  confirms a warning; the permission holds for that dot until the app closes. Then a composer
   appears and `akra/dots/send` with `{ roomId, text }` posts the trimmed text (1 to 8000 characters) to
   the room with a fresh `request_id` and answers `{ sent: true }`. When the service answers HTTP 400 or
   more, the error names the status and the service's short reason. Desktop reads the room on open, on "새로 고침", and when the dot finishes a reply (live state, below).
