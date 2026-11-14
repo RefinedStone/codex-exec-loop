@@ -77,7 +77,13 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
   }
   return (
     <div className="dot-window" data-testid="dot-window">
-      <DotChat dot={dot} live={live} replies={replies} request={request} onSeen={() => room && useStore.getState().markDotRoomRead(room)} onDock={() => window.akra.dots.dock(host, dotId, useUiStore.getState().drafts[dotDraftKey(dotId)] ?? "")} />
+      <DotChat dot={dot} live={live} replies={replies} request={request} onSeen={() => {
+          if (!room) return;
+          useStore.getState().markDotRoomRead(room);
+          // 본 창의 사이드바에 남은 "새 답" 표시도 지우게 한다.
+          window.akra.dots.reportSeen(host, dotId);
+        }}
+        onDock={() => window.akra.dots.dock(host, dotId, useUiStore.getState().drafts[dotDraftKey(dotId)] ?? "")} />
     </div>
   );
 }

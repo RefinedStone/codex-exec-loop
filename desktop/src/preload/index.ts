@@ -200,6 +200,14 @@ const bridge: AkraBridge = {
       ipcRenderer.on(IPC_CHANNELS.dotsDocked, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.dotsDocked, handler);
     },
+    reportSeen(host: string, dotId: string): void {
+      ipcRenderer.send(IPC_CHANNELS.dotsReportSeen, host, dotId);
+    },
+    onSeen(listener: (host: string, dotId: string) => void): () => void {
+      const handler = (_event: IpcRendererEvent, host: string, dotId: string) => listener(host, dotId);
+      ipcRenderer.on(IPC_CHANNELS.dotsSeen, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.dotsSeen, handler);
+    },
     isSendAllowed(dotId: string): Promise<boolean> {
       return ipcRenderer.invoke(IPC_CHANNELS.dotsSendAllowed, dotId) as Promise<boolean>;
     },
