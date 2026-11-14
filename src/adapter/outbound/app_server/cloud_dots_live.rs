@@ -117,8 +117,9 @@ async fn watch_once(
     subscription?;
     *subscribed = true;
 
+    // 붙었다는 것만으로는 상태를 알리지 않는다. 서비스의 첫 실제 상태가 "연결됨"을 알린다. 여기서 "연결됨, 일하지
+    // 않음"을 먼저 보내면, 끊기기 전에 일하던 방이 아직 일하는 중이어도 받는 쪽이 답이 끝난 것으로 본다.
     let mut live_stream = start_live_stream(adapter, room_id).await?;
-    on_state(DotLiveState::connected(room_id));
     let mut ping = tokio::time::interval(PING_EVERY);
     loop {
         tokio::select! {
@@ -196,6 +197,8 @@ fn subscription_outcome(text: &str) -> Option<Result<()>> {
 #[derive(Deserialize)]
 struct LiveThread {
     #[serde(default)]
+    stream_state: Option<String>,
+    #[serde(default)]
     turn_status: Option<String>,
     #[serde(default)]
     is_active: Option<bool>,
@@ -212,6 +215,10 @@ struct LiveActivity {
 }
 
 /// 프레임에서 이 방의 `calpico-room-live-state` 를 꺼낸다. 다른 주제, 다른 방, 모르는 종류는 버린다.
+///
+/// 붙는 중(`stream_state: attaching`)인 thread 뿐인 상태도 버린다. 그 상태는 턴의 상태를 아직 모른다
+/// (`turn_status: null`). 일하지 않는 것으로 읽으면, 다시 붙은 직후에 답이 끝난 것처럼 보인다. 서비스는 바로 뒤에
+/// `attached` 상태를 보낸다 (2026-11-14 실측: 0.6초 뒤).
 fn parse_live_states(text: &str, room_id: &str) -> Vec<DotLiveState> {
     let Ok(frames) = serde_json::from_str::<Vec<serde_json::Value>>(text) else {
         return Vec::new();
@@ -227,6 +234,13 @@ fn parse_live_states(text: &str, room_id: &str) -> Vec<DotLiveState> {
         .filter_map(|state| {
             let threads: Vec<LiveThread> =
                 serde_json::from_value(state.get("threads")?.clone()).ok()?;
+            if !threads.is_empty()
+                && threads
+                    .iter()
+                    .all(|thread| thread.stream_state.as_deref() == Some("attaching"))
+            {
+                return None;
+            }
             let working = threads.iter().any(|thread| {
                 thread.turn_status.as_deref() == Some("in_progress")
                     || thread.is_active == Some(true)
@@ -373,6 +387,28 @@ mod tests {
         assert!(!states[0].working);
         assert_eq!(states[0].activity_label, None);
         assert!(states[0].using_computer);
+    }
+
+    #[test]
+    fn a_thread_that_is_still_attaching_says_nothing_about_the_turn() {
+        // 다시 붙은 직후의 첫 상태이다. 턴의 상태를 모른다. "일하지 않음"으로 알리면 답이 끝난 것처럼 보인다.
+        let attaching = state_frame(
+            ROOM,
+            serde_json::json!([{
+                "thread_id": "t1", "stream_state": "attaching", "turn_id": null,
+                "turn_status": null, "is_active": null, "summary": [],
+            }]),
+        );
+        assert!(parse_live_states(&attaching, ROOM).is_empty());
+        // 붙은 뒤의 상태는 알린다.
+        let attached = state_frame(
+            ROOM,
+            serde_json::json!([{
+                "thread_id": "t1", "stream_state": "attached", "turn_id": "turn-1",
+                "turn_status": "in_progress", "is_active": true,
+            }]),
+        );
+        assert!(parse_live_states(&attached, ROOM)[0].working);
     }
 
     #[test]
