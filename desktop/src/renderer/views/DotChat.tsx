@@ -10,6 +10,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import type { DotLive, DotMessage, DotSummary } from "../session/desktopStore";
+import { setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
 import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, lastReadMessageId, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
 
@@ -47,7 +48,9 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
   const [state, setState] = useState<ChatState>({ phase: "loading" });
   const [refresh, setRefresh] = useState(0);
   const [canSend, setCanSend] = useState(() => isDotSendingAllowed(dot.id));
-  const [draft, setDraft] = useState("");
+  // 쓰던 글은 dot 마다 화면 밖에 둔다. 다른 dot 이나 작업 대화를 보고 돌아와도 남는다. 보내면 지운다.
+  const draftKey = `dot:${dot.id}`;
+  const draft = useUiStore((ui) => ui.drafts[draftKey] ?? "");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   /** 보낸 뒤 답을 기다리기 시작한 시각이다. null 이면 기다리지 않는다. 실시간 통로가 없을 때만 쓴다. */
@@ -61,7 +64,6 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
 
   useEffect(() => {
     setCanSend(isDotSendingAllowed(dot.id));
-    setDraft("");
     setSendError(null);
     setWaitingSince(null);
     setState({ phase: "loading" });
@@ -88,31 +90,65 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
     return () => window.clearInterval(timer);
   }, [waitingSince, liveConnected]);
 
+  // 읽기는 한 번에 하나만 한다. 읽는 동안 온 요청(폴링, 답 알림)은 진행 중인 읽기를 버리지 않고, 그 읽기가 끝난
+  // 뒤에 한 번 더 읽게 한다. 읽기가 간격보다 느려도 답을 잃지 않는다. 방이 바뀌면 진행 중인 읽기의 답은 버린다.
+  const reading = useRef<{ roomId: string; again: boolean } | null>(null);
+  const seen = useRef(onSeen);
+  seen.current = onSeen;
   useEffect(() => {
     if (roomId === null) return;
-    let current = true;
-    // 이미 보이는 대화는 다시 읽는 동안 그대로 둔다. 화면이 깜빡이지 않는다.
-    setState((previous) => (previous.phase === "loaded" ? previous : { phase: "loading" }));
-    request<{ messages: DotMessage[]; dotReadAt?: string | null }>(DOTS_MESSAGES_METHOD, { roomId }).then(
-      (response) => {
-        if (!current) return;
-        setState({ phase: "loaded", messages: response.messages, dotReadAt: response.dotReadAt ?? null });
-        if (hasDotRepliedSince(response.messages, newestIdBeforeSend.current)) setWaitingSince(null);
-        onSeen();
-      },
-      (error: unknown) => current && setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) }),
-    );
-    return () => {
-      current = false;
+    if (reading.current?.roomId === roomId) {
+      reading.current.again = true;
+      return;
+    }
+    const read = () => {
+      const ticket = { roomId, again: false };
+      reading.current = ticket;
+      // 이미 보이는 대화는 다시 읽는 동안 그대로 둔다. 화면이 깜빡이지 않는다.
+      setState((previous) => (previous.phase === "loaded" ? previous : { phase: "loading" }));
+      const done = () => {
+        if (reading.current !== ticket) return false;
+        reading.current = null;
+        if (ticket.again) read();
+        return true;
+      };
+      request<{ messages: DotMessage[]; dotReadAt?: string | null }>(DOTS_MESSAGES_METHOD, { roomId }).then(
+        (response) => {
+          if (!done()) return;
+          setState({ phase: "loaded", messages: response.messages, dotReadAt: response.dotReadAt ?? null });
+          if (hasDotRepliedSince(response.messages, newestIdBeforeSend.current)) setWaitingSince(null);
+          // 창이 보일 때만 읽은 것으로 한다. 숨겨진 동안 온 답은 창이 다시 보일 때 처리한다 (아래).
+          if (!document.hidden) seen.current();
+        },
+        (error: unknown) => {
+          if (done()) setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) });
+        },
+      );
     };
-    // onSeen 은 부모가 매번 새로 만든다. 의존 목록에 넣지 않는다: 넣으면 그릴 때마다 다시 읽는다.
+    read();
   }, [roomId, refresh, request]);
+  // 방이 바뀌거나 화면을 떠나면 진행 중인 읽기의 답을 쓰지 않는다.
+  useEffect(
+    () => () => {
+      reading.current = null;
+    },
+    [roomId],
+  );
+  // 숨겨졌던 창이 다시 보이면 그동안 온 답을 읽은 것으로 한다.
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) seen.current();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
-  // 새 메시지가 오거나 dot 이 답을 만들기 시작하면 맨 아래를 보인다.
-  const messageCount = state.phase === "loaded" ? state.messages.length : 0;
+  // 새 메시지가 오거나 dot 이 답을 만들기 시작하면 맨 아래를 보인다. 방은 최근 메시지만 주므로 개수는 그대로일 수
+  // 있다. 가장 새 메시지의 id 로 새 메시지를 안다.
+  const newestMessageId = state.phase === "loaded" ? (state.messages.at(-1)?.id ?? null) : null;
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [messageCount, working]);
+  }, [newestMessageId, working]);
 
   const send = () => {
     const text = draft.trim();
@@ -122,7 +158,7 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
     newestIdBeforeSend.current = state.phase === "loaded" ? (state.messages.at(-1)?.id ?? null) : null;
     request<{ sent: boolean }>(DOTS_SEND_METHOD, { roomId, text }).then(
       () => {
-        setDraft("");
+        setDraft(draftKey, "");
         setSending(false);
         setRefresh((count) => count + 1);
         setWaitingSince(Date.now());
@@ -243,7 +279,7 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
               <textarea
                 value={draft}
                 rows={1}
-                onChange={(event) => setDraft(event.target.value)}
+                onChange={(event) => setDraft(draftKey, event.target.value)}
                 onKeyDown={onKeyDown}
                 placeholder={`${dot.displayName} 에게 메시지`}
                 disabled={sending}

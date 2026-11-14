@@ -54,14 +54,21 @@ export interface DotLiveSlice {
 
 /**
  * 실시간 상태 하나를 반영한다. "일하는 중"이던 방이 "끝남"이 되면 dot 이 답을 끝낸 것이다: 횟수를 늘리고 그 방을
- * 안 읽음으로 둔다. 통로가 끊겼다는 알림은 답이 아니다.
+ * 안 읽음으로 둔다.
+ *
+ * 통로가 끊겼다는 알림은 답이 아니다. 끊긴 동안에는 "일하는 중"이었다는 사실을 남겨 둔다: 다시 붙었을 때 끝나
+ * 있으면 그 답을 놓치지 않는다. 다시 붙으면 일하던 방이 아니어도 대화를 한 번 다시 읽게 한다: 끊긴 사이에 시작해서
+ * 끝난 답이 있을 수 있다. 그 답은 안 읽음으로 표시하지 못한다(있었는지 알 수 없다).
  */
 export function reduceDotLive(previous: DotLiveSlice, next: DotLiveState): DotLiveSlice {
-  const { roomId, ...live } = next;
-  const finished = previous.dotLive[roomId]?.working === true && live.connected && !live.working;
+  const { roomId, ...state } = next;
+  const before = previous.dotLive[roomId];
+  const live = state.connected ? state : { ...state, working: before?.working === true };
+  const finished = before?.working === true && live.connected && !live.working;
+  const reconnected = before !== undefined && !before.connected && live.connected;
   return {
     dotLive: { ...previous.dotLive, [roomId]: live },
-    dotReplies: finished ? { ...previous.dotReplies, [roomId]: (previous.dotReplies[roomId] ?? 0) + 1 } : previous.dotReplies,
+    dotReplies: finished || reconnected ? { ...previous.dotReplies, [roomId]: (previous.dotReplies[roomId] ?? 0) + 1 } : previous.dotReplies,
     dotUnreadRooms: finished && !previous.dotUnreadRooms.includes(roomId) ? [...previous.dotUnreadRooms, roomId] : previous.dotUnreadRooms,
   };
 }

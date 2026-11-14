@@ -74,6 +74,13 @@ try {
   // "세션 한 번 허용": 경고를 확인하면 입력창이 나타난다. 보낸 글은 가짜 Gateway 의 방에 들어간다.
   await page.getByTestId("dot-allow-send").click();
   await page.getByTestId("dot-composer-input").fill("ship it");
+  // 쓰던 글은 다른 대화를 보고 돌아와도 남는다.
+  await page.getByTestId("remote-thread-entry").first().click();
+  await page.getByTestId("remote-banner").waitFor({ timeout: 10_000 });
+  await page.getByTestId("remote-dot-entry").first().click();
+  await page.getByTestId("dot-composer-input").waitFor({ timeout: 10_000 });
+  check("the draft for the dot survives a visit to another conversation", (await page.getByTestId("dot-composer-input").inputValue()) === "ship it");
+  await page.getByTestId("dot-message").nth(1).waitFor({ timeout: 10_000 });
   await page.getByTestId("dot-composer-send").click();
   await page.getByTestId("dot-message").nth(2).waitFor({ timeout: 10_000 });
   check("permitting the dot shows a second warning", warnings.length === 2 && warnings[1].includes("실계정"));

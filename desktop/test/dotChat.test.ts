@@ -86,6 +86,25 @@ describe("the live state of a dot room", () => {
     expect(lost.dotReplies).toEqual({});
     expect(lost.dotLive["room-1"]?.connected).toBe(false);
   });
+
+  it("does not miss a reply that finished while the channel was down", () => {
+    // 일하는 중 -> 끊김 -> 다시 붙었더니 끝나 있다.
+    const lost = reduceDotLive(reduceDotLive(empty, live(true)), live(false, false));
+    const back = reduceDotLive(lost, live(false));
+    expect(back.dotReplies).toEqual({ "room-1": 1 });
+    expect(back.dotUnreadRooms).toEqual(["room-1"]);
+    // 다시 붙었는데 아직 일하는 중이면 답이 아니다. 끝나면 그때 센다.
+    const stillWorking = reduceDotLive(lost, live(true));
+    expect(stillWorking.dotUnreadRooms).toEqual([]);
+    expect(reduceDotLive(stillWorking, live(false)).dotUnreadRooms).toEqual(["room-1"]);
+  });
+
+  it("reads the chat again after a reconnect, without an unread mark, when no work was known", () => {
+    const idle = reduceDotLive(empty, live(false));
+    const back = reduceDotLive(reduceDotLive(idle, live(false, false)), live(false));
+    expect(back.dotReplies).toEqual({ "room-1": 1 });
+    expect(back.dotUnreadRooms).toEqual([]);
+  });
 });
 
 describe("what the chat shows", () => {
