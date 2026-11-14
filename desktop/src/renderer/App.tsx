@@ -14,7 +14,7 @@ import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { closeDot, dotDraftKey, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -278,6 +278,11 @@ export function App() {
   useEffect(() => {
     if (dotDock !== null && !dotDockVisible) closeDot();
   }, [dotDock, dotDockVisible]);
+  // 창을 줄이면 두 옆 칸이 함께 있을 자리가 없어진다.
+  useEffect(() => {
+    window.addEventListener("resize", fitSideColumns);
+    return () => window.removeEventListener("resize", fitSideColumns);
+  }, []);
   // dot 창이 대화를 본 창으로 되돌리면 옆 칸에 연다.
   useEffect(
     () =>

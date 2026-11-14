@@ -392,7 +392,8 @@ the desktop app itself is not shipped yet.
 - Dot side chat (D-19): the chat with a dot is not a main view. A click on the dot in the sidebar opens
   it in a resizable column at the right edge of the main window, beside the thread, home, or fleet
   view; a second click or the header's close button closes it. Below a window width of 1400 px the
-  side chat and the right panel do not fit together, and the one opened last stays
+  side chat and the right panel do not fit together, and the one opened last stays; when the window shrinks below that width with both
+  open, the side chat closes
   (`desktop/src/renderer/views/DotDock.tsx`, `desktop/src/renderer/session/uiStore.ts`).
 - Dot window (D-19): the side chat's "따로 뜬 창으로 옮기기" moves the chat to a 440 by 680 window that
   shows only that dot, and closes the side chat. The window's "본 창의 옆 칸으로 옮기기" moves it back
