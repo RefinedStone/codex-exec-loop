@@ -241,13 +241,14 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
             <Icon name="refresh" />
           </button>
         )}
+        {/* 전송 답을 기다리는 동안에는 옮기지 않는다. 옮긴 곳은 "전송 중"을 모르므로 같은 글을 다시 보낼 수 있다. */}
         {onPopOut && (
-          <button type="button" className="icon-button" title="따로 뜬 창으로 옮기기" aria-label="따로 뜬 창으로 옮기기" onClick={onPopOut} data-testid="dot-pop-out">
+          <button type="button" className="icon-button" title="따로 뜬 창으로 옮기기" aria-label="따로 뜬 창으로 옮기기" onClick={onPopOut} disabled={sending} data-testid="dot-pop-out">
             <Icon name="popOut" />
           </button>
         )}
         {onDock && (
-          <button type="button" className="icon-button" title="본 창의 옆 칸으로 옮기기" aria-label="본 창의 옆 칸으로 옮기기" onClick={onDock} data-testid="dot-dock-back">
+          <button type="button" className="icon-button" title="본 창의 옆 칸으로 옮기기" aria-label="본 창의 옆 칸으로 옮기기" onClick={onDock} disabled={sending} data-testid="dot-dock-back">
             <Icon name="panel" />
           </button>
         )}
