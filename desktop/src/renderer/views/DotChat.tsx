@@ -12,7 +12,7 @@ import { Icon } from "../design/icons";
 import type { DotLive, DotMessage, DotSummary } from "../session/desktopStore";
 import { setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
-import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, lastReadMessageId, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
+import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
 
 const DOTS_MESSAGES_METHOD = "akra/dots/messages";
 const DOTS_SEND_METHOD = "akra/dots/send";
@@ -95,6 +95,8 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
   const reading = useRef<{ roomId: string; again: boolean } | null>(null);
   const seen = useRef(onSeen);
   seen.current = onSeen;
+  /** 창이 숨겨진 동안 대화를 새로 불러왔다. 창이 다시 보이면 읽은 것으로 한다. */
+  const loadedWhileHidden = useRef(false);
   useEffect(() => {
     if (roomId === null) return;
     if (reading.current?.roomId === roomId) {
@@ -117,8 +119,12 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
           if (!done()) return;
           setState({ phase: "loaded", messages: response.messages, dotReadAt: response.dotReadAt ?? null });
           if (hasDotRepliedSince(response.messages, newestIdBeforeSend.current)) setWaitingSince(null);
-          // 창이 보일 때만 읽은 것으로 한다. 숨겨진 동안 온 답은 창이 다시 보일 때 처리한다 (아래).
-          if (!document.hidden) seen.current();
+          // 창이 보일 때만 읽은 것으로 한다. 숨겨진 동안 불러온 답은 창이 다시 보일 때 처리한다 (아래).
+          if (document.hidden) {
+            loadedWhileHidden.current = true;
+          } else {
+            seen.current();
+          }
         },
         (error: unknown) => {
           if (done()) setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) });
@@ -131,13 +137,17 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
   useEffect(
     () => () => {
       reading.current = null;
+      loadedWhileHidden.current = false;
     },
     [roomId],
   );
-  // 숨겨졌던 창이 다시 보이면 그동안 온 답을 읽은 것으로 한다.
+  // 숨겨졌던 창이 다시 보이면, 숨겨진 동안 화면에 불러온 답만 읽은 것으로 한다. 아직 읽는 중이거나 읽기에
+  // 실패했으면 화면에 답이 없으므로 표시를 지우지 않는다. 읽는 중이던 것은 끝날 때 위에서 처리한다.
   useEffect(() => {
     const onVisible = () => {
-      if (!document.hidden) seen.current();
+      if (document.hidden || !loadedWhileHidden.current) return;
+      loadedWhileHidden.current = false;
+      seen.current();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -158,7 +168,8 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
     newestIdBeforeSend.current = state.phase === "loaded" ? (state.messages.at(-1)?.id ?? null) : null;
     request<{ sent: boolean }>(DOTS_SEND_METHOD, { roomId, text }).then(
       () => {
-        setDraft(draftKey, "");
+        // 보낸 글이 아직 초안으로 남아 있을 때만 지운다. 답을 기다리는 사이 다른 화면을 보고 와서 쓴 새 글은 남긴다.
+        if (isSentDraft(useUiStore.getState().drafts[draftKey], text)) setDraft(draftKey, "");
         setSending(false);
         setRefresh((count) => count + 1);
         setWaitingSince(Date.now());

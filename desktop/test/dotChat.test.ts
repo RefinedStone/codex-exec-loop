@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { reduceDotLive, type DotLiveSlice } from "../src/renderer/session/desktopStore";
-import { allowDotSending, dayLabel, DOT_SEND_WARNING, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, lastReadMessageId, messageTime, resetDotSendPermissions } from "../src/renderer/views/dotSend";
+import { allowDotSending, dayLabel, DOT_SEND_WARNING, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, messageTime, resetDotSendPermissions } from "../src/renderer/views/dotSend";
 
 afterEach(() => resetDotSendPermissions());
 
@@ -137,5 +137,16 @@ describe("what the chat shows", () => {
     expect(older).toBe(dayLabel(new Date(2026, 10, 2, 21, 0, 0).toISOString(), now));
     expect(older).not.toBe("오늘");
     expect(dayLabel("not a time", now)).toBe("");
+  });
+});
+
+describe("isSentDraft", () => {
+  it("clears only the draft that was sent", () => {
+    expect(isSentDraft("  hello  ", "hello")).toBe(true);
+    // 전송 답을 기다리는 사이 쓴 새 글이다. 지우지 않는다.
+    expect(isSentDraft("hello again", "hello")).toBe(false);
+    // 초안이 이미 비었으면 지울 것이 없다.
+    expect(isSentDraft(undefined, "hello")).toBe(false);
+    expect(isSentDraft("", "hello")).toBe(false);
   });
 });
