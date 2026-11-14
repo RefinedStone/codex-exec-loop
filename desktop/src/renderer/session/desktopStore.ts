@@ -46,8 +46,10 @@ export type DotLive = Omit<DotLiveState, "roomId">;
 export interface DotLiveSlice {
   /** 방 id → 실시간 상태 */
   dotLive: Record<string, DotLive>;
-  /** 방 id → dot 이 답을 끝낸 횟수. 늘면 그 방의 대화를 다시 읽는다. */
+  /** 방 id → dot 이 답을 끝낸 횟수. 늘면 알림을 보인다. 실제 답만 센다. */
   dotReplies: Record<string, number>;
+  /** 방 id → 대화를 다시 읽어야 하는 횟수. 답이 끝났을 때와 실시간 통로가 다시 붙었을 때 는다. 알림과는 무관하다. */
+  dotRefreshes: Record<string, number>;
   /** 사용자가 아직 보지 않은 답이 있는 방 id */
   dotUnreadRooms: string[];
 }
@@ -57,8 +59,9 @@ export interface DotLiveSlice {
  * 안 읽음으로 둔다.
  *
  * 통로가 끊겼다는 알림은 답이 아니다. 끊긴 동안에는 "일하는 중"이었다는 사실을 남겨 둔다: 다시 붙었을 때 끝나
- * 있으면 그 답을 놓치지 않는다. 다시 붙으면 일하던 방이 아니어도 대화를 한 번 다시 읽게 한다: 끊긴 사이에 시작해서
- * 끝난 답이 있을 수 있다. 그 답은 안 읽음으로 표시하지 못한다(있었는지 알 수 없다).
+ * 있으면 그 답을 놓치지 않는다. 다시 붙으면 일하던 방이 아니어도 대화를 한 번 다시 읽게 한다(`dotRefreshes`):
+ * 끊긴 사이에 시작해서 끝난 답이 있을 수 있다. 그 답은 알림과 안 읽음으로 표시하지 못한다(있었는지 알 수 없다).
+ * 그래서 다시 붙은 것만으로는 `dotReplies` 를 늘리지 않는다: 답이 없었는데 알림이 뜨지 않는다.
  */
 export function reduceDotLive(previous: DotLiveSlice, next: DotLiveState): DotLiveSlice {
   const { roomId, ...state } = next;
@@ -68,7 +71,8 @@ export function reduceDotLive(previous: DotLiveSlice, next: DotLiveState): DotLi
   const reconnected = before !== undefined && !before.connected && live.connected;
   return {
     dotLive: { ...previous.dotLive, [roomId]: live },
-    dotReplies: finished || reconnected ? { ...previous.dotReplies, [roomId]: (previous.dotReplies[roomId] ?? 0) + 1 } : previous.dotReplies,
+    dotReplies: finished ? { ...previous.dotReplies, [roomId]: (previous.dotReplies[roomId] ?? 0) + 1 } : previous.dotReplies,
+    dotRefreshes: finished || reconnected ? { ...previous.dotRefreshes, [roomId]: (previous.dotRefreshes[roomId] ?? 0) + 1 } : previous.dotRefreshes,
     dotUnreadRooms: finished && !previous.dotUnreadRooms.includes(roomId) ? [...previous.dotUnreadRooms, roomId] : previous.dotUnreadRooms,
   };
 }
@@ -178,6 +182,7 @@ export interface DesktopState {
   setDots(dots: DotSummary[]): void;
   dotLive: DotLiveSlice["dotLive"];
   dotReplies: DotLiveSlice["dotReplies"];
+  dotRefreshes: DotLiveSlice["dotRefreshes"];
   dotUnreadRooms: DotLiveSlice["dotUnreadRooms"];
   applyDotLive(state: DotLiveState): void;
   /** 사용자가 그 방의 대화를 봤다. */
@@ -253,6 +258,7 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   setDots: (dots) => set({ dots }),
   dotLive: {},
   dotReplies: {},
+  dotRefreshes: {},
   dotUnreadRooms: [],
   applyDotLive: (next) => set((state) => reduceDotLive(state, next)),
   markDotRoomRead: (roomId) => set((state) => (state.dotUnreadRooms.includes(roomId) ? { dotUnreadRooms: state.dotUnreadRooms.filter((id) => id !== roomId) } : {})),
