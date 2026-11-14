@@ -163,11 +163,12 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
   }, []);
 
   // 새 메시지가 오거나 dot 이 답을 만들기 시작하면 맨 아래를 보인다. 방은 최근 메시지만 주므로 개수는 그대로일 수
-  // 있다. 가장 새 메시지의 id 로 새 메시지를 안다.
+  // 있다. 가장 새 메시지의 id 로 새 메시지를 안다. 입력창이 나타나면 대화 영역이 줄어든다: 그때도 맨 아래를 보인다.
+  // 안 그러면 가장 새 메시지가 입력창 뒤에 가려진다.
   const newestMessageId = state.phase === "loaded" ? (state.messages.at(-1)?.id ?? null) : null;
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [newestMessageId, working]);
+  }, [newestMessageId, working, canSend]);
 
   const send = () => {
     const text = draft.trim();
@@ -217,12 +218,12 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
         <span className="bar-spacer" />
         {roomId !== null && (
           <button type="button" className="icon-button" title="새로 고침" aria-label="새로 고침" onClick={() => setRefresh((count) => count + 1)} data-testid="dot-refresh">
-            <Icon name="undo" />
+            <Icon name="refresh" />
           </button>
         )}
         {onPopOut && (
           <button type="button" className="icon-button" title="작은 창으로 따로 열기" aria-label="작은 창으로 따로 열기" onClick={onPopOut} data-testid="dot-pop-out">
-            <Icon name="panel" />
+            <Icon name="popOut" />
           </button>
         )}
         {rootThreadId !== null && onOpenWorkThread && (
@@ -282,9 +283,9 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
       </div>
       {roomId !== null && !canSend && (
         <div className="dot-consent" data-testid="dot-consent">
-          <span>지금은 읽기 전용입니다. 보내면 실계정의 대화에 남고, {dot.displayName} 이(가) 답하면서 모델을 씁니다.</span>
+          <span>읽기 전용입니다. {dot.displayName} 에게 말을 걸려면 보내기를 허용하세요.</span>
           <button type="button" className="chip-button selected" onClick={() => setCanSend(allowDotSending(dot.id, (message) => window.confirm(message)))} data-testid="dot-allow-send">
-            이 세션에서 보내기 허용
+            보내기 허용
           </button>
         </div>
       )}

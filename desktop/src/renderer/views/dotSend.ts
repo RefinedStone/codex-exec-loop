@@ -90,8 +90,9 @@ export function dotStatusLine(
     const label = live.activityLabel?.trim();
     return { text: label ? `${label}…` : live.usingComputer ? "컴퓨터로 작업하는 중…" : "답을 만드는 중…", tone: "working" };
   }
-  if (live?.connected) return { text: "대기 중 · 실시간 연결됨", tone: "idle" };
-  return { text: dot.status ? `${dot.status} · 실시간 연결 없음` : "실시간 연결 없음", tone: "muted" };
+  if (live?.connected) return { text: "대기 중", tone: "idle" };
+  // 실시간 통로가 없다. 대화는 읽을 수 있지만 답이 저절로 뜨지 않는다.
+  return { text: "실시간 연결 끊김 · 새로 고침으로 확인하세요", tone: "muted" };
 }
 
 /**

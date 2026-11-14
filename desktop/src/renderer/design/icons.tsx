@@ -34,6 +34,8 @@ const PATHS = {
   eye: "M2.5 12S6 5.5 12 5.5S21.5 12 21.5 12S18 18.5 12 18.5S2.5 12 2.5 12zM12 9.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 0 0 0-5z",
   keyboard: "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M7 14h10",
   stack: "M12 3.5l9 4.5l-9 4.5L3 8zM3 12.5l9 4.5l9-4.5M3 16.5l9 4.5l9-4.5",
+  refresh: "M20 5v5h-5M4 19v-5h5M19.4 10A8 8 0 0 0 5.3 7.6M4.6 14a8 8 0 0 0 14.1 2.4",
+  popOut: "M14 4h6v6M20 4l-8 8M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4",
 } as const;
 
 export type IconName = keyof typeof PATHS;

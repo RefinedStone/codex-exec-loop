@@ -210,9 +210,12 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
           <span className="project-fixed">{host === "cloud" ? "클라우드" : host}</span>
           <span className="project-note">읽기 전용</span>
         </button>
-        <span className="connection" title="이 호스트의 연결 상태">
+        {/* 연결됐을 때는 점만 보인다. 글자는 화면 읽기 프로그램에만 준다. 좁은 머리줄에서 "읽기 전용"과 겹치지 않는다. */}
+        <span className="connection connection-compact" title={`이 호스트의 연결 상태: ${PHASE_LABEL[phase]}`}>
           <span className={`connection-dot connection-${phase}`} />
-          <span data-testid="remote-phase">{PHASE_LABEL[phase]}</span>
+          <span className={phase === "connected" ? "visually-hidden" : undefined} data-testid="remote-phase">
+            {PHASE_LABEL[phase]}
+          </span>
         </span>
       </header>
       {open && problem && <p className="empty-row error">{problem}</p>}

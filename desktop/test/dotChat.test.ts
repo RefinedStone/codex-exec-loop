@@ -128,7 +128,9 @@ describe("what the chat shows", () => {
     expect(dotStatusLine(dot, { connected: true, working: true, activityLabel: "Thinking", usingComputer: false })).toEqual({ text: "Thinking…", tone: "working" });
     expect(dotStatusLine(dot, { connected: true, working: true, activityLabel: null, usingComputer: true }).text).toBe("컴퓨터로 작업하는 중…");
     expect(dotStatusLine(dot, { connected: true, working: false, activityLabel: null, usingComputer: false }).tone).toBe("idle");
-    expect(dotStatusLine(dot, undefined)).toEqual({ text: "active · 실시간 연결 없음", tone: "muted" });
+    expect(dotStatusLine(dot, { connected: true, working: false, activityLabel: null, usingComputer: false }).text).toBe("대기 중");
+    expect(dotStatusLine(dot, undefined).tone).toBe("muted");
+    expect(dotStatusLine(dot, { connected: false, working: true, activityLabel: "Thinking", usingComputer: false }).tone).toBe("muted");
     expect(dotStatusLine({ status: "active", paused: true }, { connected: true, working: true, activityLabel: null, usingComputer: false }).text).toBe("멈춤");
   });
 
