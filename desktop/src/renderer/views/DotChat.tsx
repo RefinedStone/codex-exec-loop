@@ -108,17 +108,24 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
       reading.current = ticket;
       // 이미 보이는 대화는 다시 읽는 동안 그대로 둔다. 화면이 깜빡이지 않는다.
       setState((previous) => (previous.phase === "loaded" ? previous : { phase: "loading" }));
-      const done = () => {
-        if (reading.current !== ticket) return false;
+      // 이 읽기가 아직 유효하면 끝낸다. 밀린 요청이 있으면 다음 읽기를 시작한다. 돌려주는 값은 이 읽기가 가장 새
+      // 읽기인지이다: 다음 읽기를 시작했으면 "latest" 가 아니다.
+      const done = (): "stale" | "superseded" | "latest" => {
+        if (reading.current !== ticket) return "stale";
         reading.current = null;
-        if (ticket.again) read();
-        return true;
+        if (!ticket.again) return "latest";
+        read();
+        return "superseded";
       };
       request<{ messages: DotMessage[]; dotReadAt?: string | null }>(DOTS_MESSAGES_METHOD, { roomId }).then(
         (response) => {
-          if (!done()) return;
+          const outcome = done();
+          if (outcome === "stale") return;
           setState({ phase: "loaded", messages: response.messages, dotReadAt: response.dotReadAt ?? null });
           if (hasDotRepliedSince(response.messages, newestIdBeforeSend.current)) setWaitingSince(null);
+          // 다음 읽기가 밀려 있으면 이 응답은 새 답을 담지 않았을 수 있다. 읽은 것으로 하지 않는다. 다음 읽기가
+          // 성공하면 그때 한다.
+          if (outcome === "superseded") return;
           // 창이 보일 때만 읽은 것으로 한다. 숨겨진 동안 불러온 답은 창이 다시 보일 때 처리한다 (아래).
           if (document.hidden) {
             loadedWhileHidden.current = true;
@@ -127,7 +134,8 @@ export function DotChat({ dot, live, replies, request, onOpenWorkThread, onSeen,
           }
         },
         (error: unknown) => {
-          if (done()) setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) });
+          // 다음 읽기가 시작됐으면 그 결과를 기다린다. 이 실패로 화면을 바꾸지 않는다.
+          if (done() === "latest") setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) });
         },
       );
     };
