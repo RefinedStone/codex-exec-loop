@@ -302,7 +302,7 @@ export function App() {
   );
   const remoteDotReplies = useSyncExternalStore(
     useCallback((listener: () => void) => (remoteHost ? remoteHostStore(remoteHost).subscribe(listener) : () => undefined), [remoteHost]),
-    () => (remoteHost && remoteDotRoom ? (remoteHostStore(remoteHost).getState().dotReplies[remoteDotRoom] ?? 0) : 0),
+    () => (remoteHost && remoteDotRoom ? (remoteHostStore(remoteHost).getState().dotRefreshes[remoteDotRoom] ?? 0) : 0),
   );
   // dot 이 답을 끝냈는데 사용자가 그 대화를 보고 있지 않으면 운영체제 알림을 보인다. 누르면 그 대화로 간다.
   useEffect(() => {

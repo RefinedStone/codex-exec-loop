@@ -36,7 +36,7 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
   const problem = useStore((state) => (state.connection?.phase === "connected" ? state.sessionError : (state.connection?.detail ?? null)));
   const room = dot?.messagingRoomId ?? null;
   const live = useStore((state) => (room ? state.dotLive[room] : undefined));
-  const replies = useStore((state) => (room ? (state.dotReplies[room] ?? 0) : 0));
+  const replies = useStore((state) => (room ? (state.dotRefreshes[room] ?? 0) : 0));
   useEffect(() => {
     document.title = dot ? `${dot.displayName} · Akra` : "Akra";
   }, [dot]);

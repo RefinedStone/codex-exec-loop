@@ -25,7 +25,7 @@ export interface DotChatProps {
   dot: DotSummary;
   /** 방의 실시간 상태이다. 아직 받지 못했으면 없다. */
   live: DotLive | undefined;
-  /** dot 이 답을 끝낸 횟수이다. 늘면 대화를 다시 읽는다. */
+  /** 대화를 다시 읽어야 하는 횟수이다 (`dotRefreshes`): 답이 끝났거나 실시간 통로가 다시 붙었다. 늘면 읽는다. */
   replies: number;
   request: GatewayRequest;
   /** 작업 대화를 여는 곳이 있을 때만 준다. dot 창에는 없다. */

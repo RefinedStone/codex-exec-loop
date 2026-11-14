@@ -61,7 +61,7 @@ describe("hasDotRepliedSince", () => {
 });
 
 describe("the live state of a dot room", () => {
-  const empty: DotLiveSlice = { dotLive: {}, dotReplies: {}, dotUnreadRooms: [] };
+  const empty: DotLiveSlice = { dotLive: {}, dotReplies: {}, dotRefreshes: {}, dotUnreadRooms: [] };
   const live = (working: boolean, connected = true) => ({ roomId: "room-1", connected, working, activityLabel: working ? "Thinking" : null, usingComputer: false });
 
   it("counts a reply when a working room becomes idle, and marks the room unread once", () => {
@@ -71,6 +71,7 @@ describe("the live state of a dot room", () => {
 
     const done = reduceDotLive(working, live(false));
     expect(done.dotReplies).toEqual({ "room-1": 1 });
+    expect(done.dotRefreshes).toEqual({ "room-1": 1 });
     expect(done.dotUnreadRooms).toEqual(["room-1"]);
 
     const again = reduceDotLive(reduceDotLive(done, live(true)), live(false));
@@ -102,7 +103,9 @@ describe("the live state of a dot room", () => {
   it("reads the chat again after a reconnect, without an unread mark, when no work was known", () => {
     const idle = reduceDotLive(empty, live(false));
     const back = reduceDotLive(reduceDotLive(idle, live(false, false)), live(false));
-    expect(back.dotReplies).toEqual({ "room-1": 1 });
+    // 다시 읽기만 한다. 답으로 세지 않으므로 알림과 안 읽음 표시가 없다.
+    expect(back.dotRefreshes).toEqual({ "room-1": 1 });
+    expect(back.dotReplies).toEqual({});
     expect(back.dotUnreadRooms).toEqual([]);
   });
 });
