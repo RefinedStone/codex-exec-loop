@@ -1,3 +1,4 @@
+use crate::domain::work_context::ExternalResourceRef;
 use anyhow::Result;
 
 /*
@@ -11,4 +12,9 @@ pub trait ExternalResourceVersionPort: Send + Sync {
     /// 문서의 지금 버전이다. `key` 는 장부의 문서 키이다. 읽을 수 없으면(권한 없음, 지워짐, 서비스에 닿지 않음,
     /// 이 제공자가 모르는 키) 오류이다.
     fn current_version(&self, key: &str) -> Result<String>;
+
+    /// 연결된 제공자가 없으면 네트워크 실패 예산을 쓰지 않고 다음 새로고침까지 건너뛴다.
+    fn available(&self, _resource: &ExternalResourceRef) -> bool {
+        true
+    }
 }

@@ -9,6 +9,7 @@
 //!   skill root 로 등록한다. 세션은 skill 설명 한 줄만 싣고, 필요할 때 `akra mcp` 를 쓴다.
 
 mod gateway_client;
+mod notion_resource_version;
 mod session;
 
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ use serde_json::{Map, Value, json};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 pub(crate) use self::gateway_client::GatewayRoutedMcpHubBackend;
+pub(crate) use self::notion_resource_version::NotionResourceVersionAdapter;
 use self::session::HubAppServerSession;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
