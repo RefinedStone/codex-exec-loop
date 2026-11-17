@@ -88,7 +88,7 @@ impl McpHubPort for McpHubService {
         }
         Ok(self
             .backend
-            .server_statuses(None)?
+            .tool_catalogs()?
             .into_iter()
             .flat_map(|status| {
                 let server = status.name;
@@ -148,7 +148,7 @@ impl McpHubPort for McpHubService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::mcp_hub::{McpHubServerStatus, McpHubToolInfo};
+    use crate::domain::mcp_hub::{McpHubServerStatus, McpHubToolCatalog, McpHubToolInfo};
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -157,10 +157,22 @@ mod tests {
         specs: Mutex<Vec<McpHubServerSpec>>,
         statuses: Vec<McpHubServerStatus>,
         status_requests: Mutex<Vec<Option<String>>>,
+        catalog_requests: Mutex<usize>,
         calls: Mutex<Vec<(String, String, Value)>>,
     }
 
     impl McpHubBackendPort for FakeBackend {
+        fn tool_catalogs(&self) -> Result<Vec<McpHubToolCatalog>> {
+            *self.catalog_requests.lock().unwrap() += 1;
+            Ok(self
+                .statuses
+                .iter()
+                .map(|status| McpHubToolCatalog {
+                    name: status.name.clone(),
+                    tools: status.tools.clone(),
+                })
+                .collect())
+        }
         fn registered_servers(&self) -> Result<Vec<McpHubServerSpec>> {
             Ok(self.specs.lock().unwrap().clone())
         }
@@ -238,16 +250,20 @@ mod tests {
         assert!(service.servers().unwrap().is_empty());
         assert!(service.search("x").unwrap().is_empty());
         assert!(backend.status_requests.lock().unwrap().is_empty());
+        assert_eq!(*backend.catalog_requests.lock().unwrap(), 0);
     }
 
     #[test]
     fn search_filters_and_shortens_descriptions() {
-        let service = McpHubService::new(notion_backend());
+        let backend = notion_backend();
+        let service = McpHubService::new(backend.clone());
         let found = service.search("search").unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].tool, "search");
         assert_eq!(found[0].description, "Searches Notion only.");
         assert_eq!(service.search("").unwrap().len(), 2);
+        assert!(backend.status_requests.lock().unwrap().is_empty());
+        assert_eq!(*backend.catalog_requests.lock().unwrap(), 2);
     }
 
     #[test]

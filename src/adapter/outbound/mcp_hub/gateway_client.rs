@@ -15,9 +15,9 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
-    MCP_HUB_GATEWAY_CALL, MCP_HUB_GATEWAY_OTHER_HUB, MCP_HUB_GATEWAY_RELOAD,
-    MCP_HUB_GATEWAY_STATUSES, McpHubServerSpec, McpHubServerStatus, McpHubSharedSkill,
-    McpHubSharedSkillAction,
+    MCP_HUB_GATEWAY_CALL, MCP_HUB_GATEWAY_CATALOGS, MCP_HUB_GATEWAY_OTHER_HUB,
+    MCP_HUB_GATEWAY_RELOAD, MCP_HUB_GATEWAY_STATUSES, McpHubServerSpec, McpHubServerStatus,
+    McpHubSharedSkill, McpHubSharedSkillAction, McpHubToolCatalog,
 };
 
 const GATEWAY_WEBSOCKET_URL: &str = "ws://localhost/rpc";
@@ -181,6 +181,19 @@ impl GatewayRoutedMcpHubBackend {
 }
 
 impl McpHubBackendPort for GatewayRoutedMcpHubBackend {
+    fn tool_catalogs(&self) -> Result<Vec<McpHubToolCatalog>> {
+        match self
+            .gateway
+            .request(MCP_HUB_GATEWAY_CATALOGS, json!({}), REQUEST_TIMEOUT)?
+        {
+            GatewayReply::Done(result) => {
+                serde_json::from_value(result.get("catalogs").cloned().unwrap_or(Value::Null))
+                    .context("the gateway returned malformed MCP tool catalogs")
+            }
+            GatewayReply::Unavailable => self.local.tool_catalogs(),
+        }
+    }
+
     fn registered_servers(&self) -> Result<Vec<McpHubServerSpec>> {
         self.local.registered_servers()
     }
@@ -381,6 +394,26 @@ mod tests {
         let (backend, local, _) = routed(Ok(GatewayReply::Done(status)));
         let statuses = backend.server_statuses(None).unwrap();
         assert_eq!(statuses[0].tools[0].name, "search");
+        assert_eq!(*local.calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn catalogs_use_the_gateway_without_live_status_calls() {
+        let (backend, local, methods) = routed(Ok(GatewayReply::Done(json!({
+            "catalogs":[{"name":"notion","tools":[]}]
+        }))));
+        assert_eq!(backend.tool_catalogs().unwrap()[0].name, "notion");
+        assert_eq!(*local.calls.lock().unwrap(), 0);
+        assert_eq!(*methods.lock().unwrap(), [MCP_HUB_GATEWAY_CATALOGS]);
+    }
+
+    #[test]
+    fn catalog_fallback_only_runs_when_the_gateway_did_not_handle_the_request() {
+        let (backend, local, _) = routed(Ok(GatewayReply::Unavailable));
+        assert!(backend.tool_catalogs().unwrap().is_empty());
+        assert_eq!(*local.calls.lock().unwrap(), 1);
+        let (backend, local, _) = routed(Err(anyhow::anyhow!("connection dropped")));
+        assert!(backend.tool_catalogs().is_err());
         assert_eq!(*local.calls.lock().unwrap(), 0);
     }
 

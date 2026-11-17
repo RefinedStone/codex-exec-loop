@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::domain::mcp_hub::{
     McpHubServerSpec, McpHubServerStatus, McpHubSharedSkill, McpHubSharedSkillAction,
+    McpHubToolCatalog,
 };
 
 /*
@@ -22,6 +23,23 @@ pub trait McpHubBackendPort: Send + Sync {
 
     /// `only` 가 있으면 그 서버에만 연결해서 상태와 도구 목록을 읽는다. 없으면 켜진 서버 모두에 연결한다.
     fn server_statuses(&self, only: Option<&str>) -> Result<Vec<McpHubServerStatus>>;
+
+    /// Discovery for search. Authentication and execution always use live methods.
+    fn tool_catalogs(&self) -> Result<Vec<McpHubToolCatalog>> {
+        Ok(self
+            .server_statuses(None)?
+            .into_iter()
+            .map(|status| McpHubToolCatalog {
+                name: status.name,
+                tools: status.tools,
+            })
+            .collect())
+    }
+
+    /// Explicit configuration/authentication changes invalidate persisted discovery.
+    fn invalidate_tool_catalogs(&self) -> Result<()> {
+        Ok(())
+    }
 
     /// `server` 만 연결해서 도구를 한 번 부른다. 결과는 MCP `tools/call` 결과 그대로이다.
     fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value>;
