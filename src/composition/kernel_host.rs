@@ -711,8 +711,8 @@ impl KernelHostLoop {
 
     /*
      * 저장 명령이 시작한 planning 읽기가 끝날 때까지 주기를 돈다 (plan 18 K4-9d). 읽기는 작업 스레드가 한다. 답하기
-     * 전에 끝내야 명령 바로 뒤의 `planning` 조회가 지금의 revision 을 답한다. 더 새 읽기가 이 읽기를 대신해도 끝난
-     * 것이다. 시간이 넘으면 그냥 답한다. 변경은 이미 저장되어 있다.
+     * 전에 끝내야 명령 바로 뒤의 `planning` 조회가 지금의 revision 을 답한다. 더 새 읽기가 이 읽기를 대신하면 그 새
+     * 읽기를 기다린다 (`publish`). 시간이 넘으면 그냥 답한다. 변경은 이미 저장되어 있다.
      */
     fn finish_planning_refresh(&mut self, events: &[AppEvent]) {
         self.awaited_planning_refresh = events.iter().find_map(|event| match event {
@@ -727,6 +727,29 @@ impl KernelHostLoop {
                 break;
             }
             self.run_cycle_with_clock(&Instant::now, left);
+        }
+    }
+
+    /*
+     * 기다리는 planning 읽기를 따라간다 (plan 18 K4-9d). core 는 새 읽기를 시작하면 앞의 읽기를 취소한다. 그때 앞의
+     * 읽기는 끝나지 않았으므로 새 읽기를 기다린다. core 는 시작을 취소보다 먼저 알린다. 그래서 대신하는 읽기가 없는
+     * 취소(대화를 바꿀 때)만 기다림을 끝낸다.
+     */
+    fn follow_awaited_planning_refresh(&mut self, event: &AppEvent) {
+        let Some(awaited) = &self.awaited_planning_refresh else {
+            return;
+        };
+        match event {
+            AppEvent::PlanningRuntimeRefreshStarted { correlation } => {
+                self.awaited_planning_refresh = Some(correlation.clone());
+            }
+            AppEvent::PlanningRuntimeRefreshed { correlation, .. }
+            | AppEvent::PlanningRuntimeRefreshCancelled { correlation }
+                if correlation == awaited =>
+            {
+                self.awaited_planning_refresh = None;
+            }
+            _ => {}
         }
     }
 
@@ -745,12 +768,7 @@ impl KernelHostLoop {
                 if let AppEvent::ThreadActivityChanged(activity) = &event {
                     self.thread_activity = activity.clone();
                 }
-                if let AppEvent::PlanningRuntimeRefreshed { correlation, .. }
-                | AppEvent::PlanningRuntimeRefreshCancelled { correlation } = &event
-                    && self.awaited_planning_refresh.as_ref() == Some(correlation)
-                {
-                    self.awaited_planning_refresh = None;
-                }
+                self.follow_awaited_planning_refresh(&event);
                 self.broadcast(KernelHostEvent::Core(Box::new(event)));
             }
             if core.snapshot.planning_parallel.planning_runtime != self.planning {
@@ -1737,6 +1755,54 @@ mod tests {
                     if matches!(*event, AppEvent::PlanningRuntimeRefreshed { .. })
             )),
             "the planning read did not end before the answer"
+        );
+    }
+
+    #[test]
+    fn the_wait_for_a_planning_read_follows_the_read_that_replaced_it() {
+        // plan 18 K4-9d: a cancelled read did not read planning. The newer read ends the wait.
+        use crate::core::app::PlanningRuntimeRefreshCorrelation;
+        let (mut host, _receiver) = host_loop_with_client();
+        let first = PlanningRuntimeRefreshCorrelation::new(1, "/repo");
+        let second = PlanningRuntimeRefreshCorrelation::new(2, "/repo");
+        let snapshot = host.runtime.snapshot();
+        let publish = |host: &mut KernelHostLoop, events: Vec<AppEvent>| {
+            host.publish(NativeClientDispatchOutcome::Core(
+                crate::core::app::CoreDispatchOutcome {
+                    events,
+                    effects: Vec::new(),
+                    snapshot: Arc::new(snapshot.clone()),
+                },
+            ));
+        };
+
+        host.awaited_planning_refresh = Some(first.clone());
+        publish(
+            &mut host,
+            vec![
+                AppEvent::PlanningRuntimeRefreshStarted {
+                    correlation: second.clone(),
+                },
+                AppEvent::PlanningRuntimeRefreshCancelled {
+                    correlation: first.clone(),
+                },
+            ],
+        );
+        assert_eq!(
+            host.awaited_planning_refresh,
+            Some(second.clone()),
+            "the wait continues with the newer read"
+        );
+
+        publish(
+            &mut host,
+            vec![AppEvent::PlanningRuntimeRefreshCancelled {
+                correlation: second,
+            }],
+        );
+        assert_eq!(
+            host.awaited_planning_refresh, None,
+            "a cancel without a newer read ends the wait"
         );
     }
 

@@ -93,6 +93,15 @@ impl PlanningAdminFacadeService {
         documents: PlanningOperatorPlanningDocuments,
     ) -> Result<()> {
         self.commit_operator_planning_documents_inner(documents, None)
+            .map(|_| ())
+    }
+
+    /// 변경을 저장하고 그 저장이 만든 planning revision 을 돌려준다.
+    pub(super) fn commit_operator_planning_documents_for_revision(
+        &self,
+        documents: PlanningOperatorPlanningDocuments,
+    ) -> Result<i64> {
+        self.commit_operator_planning_documents_inner(documents, None)
     }
 
     pub(super) fn commit_operator_planning_documents_with_guard(
@@ -104,13 +113,14 @@ impl PlanningAdminFacadeService {
             documents,
             Some(authority_mutation_owner_token),
         )
+        .map(|_| ())
     }
 
     fn commit_operator_planning_documents_inner(
         &self,
         mut documents: PlanningOperatorPlanningDocuments,
         authority_mutation_owner_token: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         // admin edit는 direction을 먼저 지우고 child task 정리를 나중에 할 수 있다. commit boundary에서는 default
         // direction 복구와 unresolved direction task 제거를 먼저 수행한 뒤, 실제 persist할 세 문서 조합을 그대로
         // validation에 넣는다.
@@ -202,7 +212,7 @@ impl PlanningAdminFacadeService {
             == Some(documents.result_output_markdown.as_str())
             || !authority_commit_changed
         {
-            return Ok(());
+            return Ok(authority_commit_revision);
         }
         if let Err(error) = self
             .planning_workspace_port
@@ -225,7 +235,7 @@ impl PlanningAdminFacadeService {
             })?;
             return Err(error.context("failed to persist result output"));
         }
-        Ok(())
+        Ok(authority_commit_revision)
     }
 
     fn rollback_operator_planning_documents(

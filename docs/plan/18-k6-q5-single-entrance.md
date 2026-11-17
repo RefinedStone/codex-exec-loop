@@ -34,7 +34,11 @@
 | 큐에 남긴 thread 프롬프트 | 모든 session 이 쉴 때만 다시 낸다 | `src/core/app/controller.rs` `queued_thread_prompt_is_due` |
 | 턴 뒤 경로 | 경로를 기다리는 평가가 둘 이상이면 모두 이어 가지 않고 끝낸다 | `conversation_turn_reducer.rs` `next_post_turn_host_step`, `PostTurnHostStep::SettleWithoutContinuation` |
 | 자동 후속 설정 | 최대 턴 수와 멈춤이 커널에 하나이다 | 프로토콜의 `auto_follow` 조회, `auto_follow_configured` 기록 |
-| 정지 | `stop_all` 은 app-server 의 모든 턴에 닿는다. 끝나지 않은 정지가 있으면 새 턴을 받지 않는다 | `admit_turn_submission_in_session` 의 `RejectedStopPending` |
+| 정지 | `stop_all` 은 app-server 의 모든 턴에 닿는다. 끝나지 않은 정지가 있으면 새 턴을 받지 않는다. 정지 요청은 보는 session 의 턴만 적는다 | `admit_turn_submission_in_session` 의 `RejectedStopPending`, `admit_stop_request` |
+| 승인 검토 저장 | 모든 thread 가 "지금 턴" 자리 하나를 함께 쓴다. 새 턴이 그 자리를 바꾼다 | `ApprovalReviewPersistenceCoordinator::begin_conversation_turn` (2026-11-17 리뷰) |
+
+값이 2 이상이면 이 자리들에서 동작이 틀린다. 예: 둘째 턴이 승인 검토 저장의 자리를 바꾸면, 첫 턴의 저장 실패를
+보는 대화에 알리지 않는다. 그래서 Q5-3 전에는 값을 2 이상으로 열지 않는다.
 
 K2 §3.3 은 이유를 "턴 스트림 worker 가 턴 하나를 기준으로 짜여 있다"로 적었다. 지금은 다르다.
 `spawn_turn_submission_worker` (`src/composition/core_turn_submission.rs`)는 턴마다 worker 를 하나 만들고, worker 가
@@ -110,7 +114,8 @@ pub struct TurnConcurrencyPolicy {
 | 큐에 남긴 thread 프롬프트 | 그대로: 모든 session 이 쉴 때만 낸다 | 자리가 나면 낸다 |
 | 턴 뒤 경로가 둘 이상 | 그대로: 모두 이어 가지 않고 끝낸다 | 자동 후속 차선을 가진 thread 만 이어 간다 |
 | 자동 후속 설정 | 그대로: 커널에 하나 | 차선에 하나 |
-| 정지 | 그대로: 모든 턴을 멈춘다 | 그대로 |
+| 정지 | 그대로: 모든 턴을 멈춘다 | 뒤의 session 의 턴도 정지 요청에 적는다 |
+| 승인 검토 저장 | 그대로: 자리 하나 | thread 마다 자리를 둔다 |
 
 ### 3.3 thread 별 상태 (Q5-2)
 

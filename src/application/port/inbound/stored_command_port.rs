@@ -17,7 +17,10 @@ pub trait StoredCommandPort: Send + Sync {
     fn execute(&self, command: StoredCommand) -> Result<StoredCommandOutcome>;
 }
 
-/// 작업의 필드이다. 만들기에서 없는 값은 기본값이고, 고치기에서 없는 값은 "비운다"이다.
+/*
+ * 작업의 필드이다. 만들기에서 없는 값은 기본값이다. 고치기는 admin 의 폼과 같다: 이유와 참조는 없으면 비우고, 방향,
+ * 설명, 상태, 우선순위는 없으면 그대로 둔다 (`update_input`).
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTaskFields {
     pub direction_id: Option<String>,
