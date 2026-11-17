@@ -286,6 +286,13 @@ K4 설계는 `upsert_task` 처럼 "만들기와 고치기"를 한 명령으로 �
 Gateway), 끝에서 끝까지 (`tests/kernel_cli.rs`, unix: 실제 `akra kernel planning create_task`, 조회, 낡은 revision 의
 종료 코드 2, 확인 없는 지우기의 `-32010`), 구조 시험, 스펙·Desktop 타입·skill 일치. 모델 턴은 없다.
 
+PR 리뷰 반영 (2026-11-17):
+
+- 저장 명령 뒤의 planning 읽기를 답하기 전에 끝낸다 (`RefreshPlanningRuntimeNow`). 전에는 읽기를 작업 스레드에
+  맡기고 바로 답했다. 그래서 명령 바로 뒤의 `planning` 조회가 낡은 revision 을 답할 수 있었다.
+- 같은 작업을 다른 편집이 쥐고 있을 때의 거절("is already being edited")과 admin 변경 guard 를 동시에 잡을 때의
+  거절도 `planning_locked` 이다. 전에는 일반 실패였다.
+
 남긴 것:
 
 - 실제 Gateway 커널에서 저장 명령을 보내는 시험은 없다. 런타임 시험은 가짜 실행기를 쓴다. 실행 뒤에 planning 을

@@ -4603,6 +4603,26 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
 }
 
 #[test]
+fn a_second_edit_of_a_guarded_task_is_refused_as_locked() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let workspace = temp_workspace("task-guard-held");
+    let task_ids = vec!["task-1".to_string()];
+    adapter
+        .acquire_admin_task_mutation_guard(&workspace, &task_ids, "first-owner")
+        .expect("the first edit should take the guard");
+
+    let error = adapter
+        .acquire_admin_task_mutation_guard(&workspace, &task_ids, "second-owner")
+        .expect_err("the second edit should not take the guard");
+
+    assert!(matches!(
+        crate::domain::planning::PlanningMutationRefusal::find_in(&error),
+        Some(crate::domain::planning::PlanningMutationRefusal::Locked { .. })
+    ));
+    assert!(error.to_string().contains("is already being edited"));
+}
+
+#[test]
 fn runtime_reset_preserves_admin_guards_for_guard_first_and_reset_first_orders() {
     let adapter = SqlitePlanningAuthorityAdapter::new();
 

@@ -43,6 +43,10 @@ pub enum CoreEffect {
     LoadPlanningRuntime {
         correlation: PlanningRuntimeRefreshCorrelation,
     },
+    /// 실행기가 읽기를 끝내고 완료를 바로 돌려준다. 작업 스레드를 쓰지 않는다 (plan 18 K4-9d).
+    LoadPlanningRuntimeNow {
+        correlation: PlanningRuntimeRefreshCorrelation,
+    },
     ResetPlanningWorkspace {
         correlation: PlanningWorkspaceOperationCorrelation,
     },
