@@ -598,9 +598,13 @@ The Gateway records the external documents that a thread mentions, without a mod
   `versionCheckedAt`. The first version a thread checks is its read version; a later different version
   sets `changed`. `akra/context/markRead { threadId, kind, key }` makes the checked version the read
   version. `akra/context/thread` asks no external service.
-- Version providers (`ExternalResourceVersionPort`): only GitHub today. It reads `updated_at` of the
+- Version providers (`ExternalResourceVersionPort`): GitHub reads `updated_at` of the
   pull request or issue with `gh api --hostname github.com`, with `AKRA_GITHUB_TOKEN`, `GH_TOKEN`,
-  `GITHUB_TOKEN`, or the stored `gh` login. Notion and Jira documents never show `changed`.
+  `GITHUB_TOKEN`, or the stored `gh` login. Notion uses the registered `notion` MCP server and its
+  existing login. It fetches the page by ID with `notion-fetch` (or the connector's `fetch` alias),
+  reads `page_last_edited_at`, and normalizes the timestamp to UTC. It shares the Gateway's resident
+  hub backend. Tool errors, missing edit metadata, and invalid timestamps leave previous versions
+  unchanged. Page content is not stored in the version ledger. Jira has no provider on this branch.
 - Desktop calls `refresh` after the list is shown, marks changed documents with "바뀜", shows
   `문서 N · 바뀜 M` on the button, and calls `markRead` when the user opens a changed document.
 - Limits: ephemeral threads and threads without turns have no items to read; the first read of a very

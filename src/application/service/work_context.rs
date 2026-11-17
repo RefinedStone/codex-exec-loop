@@ -144,6 +144,9 @@ impl WorkContextService {
                 continue;
             }
             let document = (link.resource.kind.clone(), link.resource.key.clone());
+            if !provider.available(&link.resource) {
+                continue;
+            }
             let failed_at = state.unreachable_since.get(&document).copied();
             if failed_at.is_some_and(|failed_at| !interval_has_passed(failed_at, now)) {
                 continue;
@@ -688,6 +691,91 @@ mod tests {
         assert_eq!(
             versions.asked.lock().unwrap().len(),
             MAX_VERSION_CHECKS_PER_REFRESH + 5
+        );
+    }
+
+    #[test]
+    fn notion_fetch_versions_drive_changed_and_read_state_without_losing_failed_checks() {
+        use crate::adapter::outbound::mcp_hub::NotionResourceVersionAdapter;
+        use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
+        use crate::domain::mcp_hub::{McpHubServerSpec, McpHubServerStatus, McpHubToolInfo};
+        use serde_json::{Value, json};
+
+        struct Hub(Mutex<(bool, Value)>);
+        impl McpHubBackendPort for Hub {
+            fn registered_servers(&self) -> Result<Vec<McpHubServerSpec>> {
+                if !self.0.lock().unwrap().0 {
+                    return Ok(Vec::new());
+                }
+                Ok(vec![
+                    McpHubServerSpec::http("notion", "https://mcp.notion.com/mcp").unwrap(),
+                ])
+            }
+            fn register_server(&self, _: &McpHubServerSpec) -> Result<()> {
+                unreachable!()
+            }
+            fn unregister_server(&self, _: &str) -> Result<bool> {
+                unreachable!()
+            }
+            fn login(&self, _: &str, _: &mut dyn FnMut(&str)) -> Result<()> {
+                unreachable!()
+            }
+            fn server_statuses(&self, only: Option<&str>) -> Result<Vec<McpHubServerStatus>> {
+                assert_eq!(only, Some("notion"));
+                Ok(vec![McpHubServerStatus {
+                    name: "notion".into(),
+                    auth: "oAuth".into(),
+                    connection: "connected".into(),
+                    error: None,
+                    tools: vec![McpHubToolInfo {
+                        name: "notion-fetch".into(),
+                        description: String::new(),
+                        input_schema: json!({}),
+                    }],
+                }])
+            }
+            fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
+                assert_eq!((server, tool), ("notion", "notion-fetch"));
+                assert_eq!(arguments, json!({"id":"0123456789abcdef0123456789abcdef"}));
+                Ok(self.0.lock().unwrap().1.clone())
+            }
+        }
+        let payload = |timestamp| json!({"structuredContent":{"page_last_edited_at":timestamp}});
+        let hub = Arc::new(Hub(Mutex::new((false, payload("2026-11-17T00:00:00Z")))));
+        let transcript = Arc::new(FakeTranscript::default());
+        transcript.pages.lock().unwrap().push(ThreadTextPage {
+            fragments: vec![fragment(
+                "user",
+                "https://notion.so/0123456789abcdef0123456789abcdef",
+            )],
+            newest_item_id: Some("item-1".into()),
+        });
+        let (clock, now) = test_clock("2026-11-17T01:00:00Z");
+        let service = WorkContextService::new(transcript, Arc::new(FakeStore::default()))
+            .with_version_providers(vec![Arc::new(NotionResourceVersionAdapter::new(
+                hub.clone(),
+            ))])
+            .with_clock(clock);
+        assert!(
+            service.refresh_thread_resources("thread-1").unwrap()[0]
+                .version_checked_at
+                .is_none()
+        );
+        hub.0.lock().unwrap().0 = true;
+        let first = service.refresh_thread_resources("thread-1").unwrap();
+        assert!(!first[0].changed);
+        assert!(first[0].version_checked_at.is_some());
+        hub.0.lock().unwrap().1 = payload("2026-11-17T00:01:00Z");
+        *now.lock().unwrap() += chrono::Duration::minutes(6);
+        assert!(service.refresh_thread_resources("thread-1").unwrap()[0].changed);
+        hub.0.lock().unwrap().1 = json!({"isError":true});
+        *now.lock().unwrap() += chrono::Duration::minutes(6);
+        assert!(service.refresh_thread_resources("thread-1").unwrap()[0].changed);
+        assert!(
+            !service
+                .mark_thread_resource_read("thread-1", "notion", "0123456789abcdef0123456789abcdef")
+                .unwrap()[0]
+                .changed
         );
     }
 

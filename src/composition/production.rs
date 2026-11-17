@@ -31,7 +31,9 @@ use crate::adapter::outbound::github::{
     GithubAutomationAdapter, GithubPrValidationAdapter, GithubResourceVersionAdapter,
     GithubReviewPollerAdapter,
 };
-use crate::adapter::outbound::mcp_hub::{CodexMcpHubBackend, GatewayRoutedMcpHubBackend};
+use crate::adapter::outbound::mcp_hub::{
+    CodexMcpHubBackend, GatewayRoutedMcpHubBackend, NotionResourceVersionAdapter,
+};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
 use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessConfig, AdminDebugPort,
@@ -418,10 +420,10 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
     let kernels = Arc::new(RepositoryKernelRegistry::sharing_app_server(
         upstream.kernel_socket(),
     ));
-    let hub = CodexMcpHubBackend::resident_from_environment()?;
+    let hub = Arc::new(CodexMcpHubBackend::resident_from_environment()?);
     let mcp_hub = Arc::new(GatewayMcpHub::new(
         hub.home().display().to_string(),
-        Arc::new(hub),
+        hub.clone(),
     ));
     let upstream: Arc<dyn GatewayUpstreamPort> = Arc::new(upstream);
     let work_context: Arc<dyn WorkContextPort> = Arc::new(
@@ -429,9 +431,12 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
             Arc::new(AppServerThreadTranscript::new(upstream.clone())),
             Arc::new(SqliteWorkContextStore::from_environment()?),
         )
-        .with_version_providers(vec![Arc::new(GithubResourceVersionAdapter::new(
-            crate::configuration::akra_home_dir()?,
-        ))]),
+        .with_version_providers(vec![
+            Arc::new(GithubResourceVersionAdapter::new(
+                crate::configuration::akra_home_dir()?,
+            )),
+            Arc::new(NotionResourceVersionAdapter::new(hub)),
+        ]),
     );
     Ok(GatewayBackend {
         upstream,
