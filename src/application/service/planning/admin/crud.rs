@@ -213,11 +213,8 @@ impl PlanningAdminFacadeService {
                 &mut documents.task_authority,
                 &BTreeSet::from([task_id.to_string()]),
             );
-            self.commit_operator_planning_documents(documents)?;
-            // 저장소가 정한 새 revision 이다. guard 안에서 읽으므로 이 변경의 값이다.
-            self.load_operator_planning_documents()?
-                .observed_planning_revision
-                .ok_or_else(|| anyhow!("planning revision is unavailable after the task delete"))
+            // 이 저장이 만든 revision 이다. 다시 읽지 않는다: guard 는 이 작업만 잡으므로 다른 작업의 변경이 끼어들 수 있다.
+            self.commit_operator_planning_documents_for_revision(documents)
         })
     }
 

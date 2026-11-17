@@ -627,7 +627,7 @@
       "name": "update_task",
       "scope": "planning",
       "state": "store",
-      "summary": "Replace the fields of a planning task as the operator. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
+      "summary": "Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
       "effect": "write",
       "idempotency": "natural",
       "rejections": [

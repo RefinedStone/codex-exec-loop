@@ -84,7 +84,7 @@ spec_names! {
         CreateTask => "create_task",
             "Add a planning task as the operator. The answer carries the new task id and the new planning revision.";
         UpdateTask => "update_task",
-            "Replace the fields of a planning task as the operator. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+            "Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         DeleteTask => "delete_task",
             "Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
     }

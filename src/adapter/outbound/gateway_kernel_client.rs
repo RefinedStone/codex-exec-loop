@@ -137,14 +137,12 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
         send(socket, id, method, params.clone()).await?;
         let reply = response(socket, id, &mut recorded).await?;
         /*
-         * The caller checked the request against its own specification before it sent it. A Gateway that
-         * refuses the shape of that request does not know it: it is an older program. It refused before
-         * it ran anything, so the caller may run a stored command under the repository lock.
+         * A Gateway that does not know the method or the name of the command or query is an older program.
+         * It refused before it ran anything, so the caller may run a stored command under the repository
+         * lock. Another refusal of the parameters (a blank value, a wrong type) is an error of the request,
+         * and the caller gets its code and text.
          */
-        if matches!(
-            reply.pointer("/error/code").and_then(Value::as_i64),
-            Some(ERROR_INVALID_PARAMS | ERROR_METHOD_NOT_FOUND)
-        ) {
+        if refuses_an_unknown_name(&reply) {
             return Ok(KernelGatewayReply::GatewayTooOld);
         }
         let value = answer(reply)?;
@@ -194,6 +192,19 @@ async fn next_json<S: AsyncRead + AsyncWrite + Unpin>(
         }
     }
     bail!("the Gateway closed the connection before it answered")
+}
+
+/// The reply refuses a method, or a command or query name, that the Gateway does not know.
+fn refuses_an_unknown_name(reply: &Value) -> bool {
+    match reply.pointer("/error/code").and_then(Value::as_i64) {
+        Some(ERROR_METHOD_NOT_FOUND) => true,
+        // serde names an unknown `type` tag this way. Older programs cannot change this text.
+        Some(ERROR_INVALID_PARAMS) => reply
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("unknown variant")),
+        _ => false,
+    }
 }
 
 fn is_record_notification(value: &Value) -> bool {
@@ -382,6 +393,30 @@ mod tests {
         };
         let (reply, ()) = tokio::join!(command_over(&mut client), serving);
         assert!(matches!(reply.unwrap(), KernelGatewayReply::GatewayTooOld));
+    }
+
+    #[tokio::test]
+    async fn a_refused_value_of_a_known_command_keeps_its_error() {
+        // The Gateway knows the command and refuses a value. That is not an older Gateway.
+        let (mut client, mut server) = wire().await;
+        let serving = async {
+            serve(&mut server, "akra/kernel/attach", json!({"result":{}})).await;
+            serve(
+                &mut server,
+                "akra/kernel/command",
+                json!({"error":{"code":ERROR_INVALID_PARAMS,"message":"`task_id` must not be blank"}}),
+            )
+            .await;
+        };
+        let (reply, ()) = tokio::join!(command_over(&mut client), serving);
+        let error = match reply {
+            Err(error) => error,
+            Ok(_) => panic!("a refused value is an error of the request"),
+        };
+        assert!(
+            format!("{error:#}").contains("must not be blank"),
+            "{error:#}"
+        );
     }
 
     #[tokio::test]

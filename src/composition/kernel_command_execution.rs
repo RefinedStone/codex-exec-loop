@@ -219,6 +219,7 @@ impl KernelCommandPort for CommandOnlyKernel {
             Err(error) => return Err(error),
         };
         // K6 까지의 예외이다: TUI 가 커널을 쥐 저장소에서는 직접 실행한다. 기록에 남지 않는다.
+        let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
         if lock.is_none() {
             let response = CommandResponse::from_core(Some(&[]));
             return Ok(serde_json::to_value(match self.run(work) {
@@ -228,10 +229,13 @@ impl KernelCommandPort for CommandOnlyKernel {
                 WorkEnd::Rejected(rejection) => {
                     response.with_stored(Some(StoredCommandOutcome::Rejected(rejection)))
                 }
-                WorkEnd::Failed(error) => return Err(error),
+                // 잠금을 쥔 경로와 같은 답이다: 초기화의 실패는 오류이고, 저장 명령의 실패는 답의 `failure` 이다.
+                WorkEnd::Failed(error) if is_reset => return Err(error),
+                WorkEnd::Failed(error) => {
+                    response.with_failed_stored_command(command_failure_detail(&error.to_string()))
+                }
             })?);
         }
-        let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
         let mut descriptor = descriptor.context("stored mutation must have a descriptor")?;
         descriptor.caller = Some(self.caller.to_string());
         let log = super::production::kernel_event_log_port();
@@ -1113,6 +1117,17 @@ mod tests {
         );
         assert_eq!(created["result"]["type"], "task_created");
         assert!(created.get("operation").is_none());
+        // A failed command answers with `failure`, as it does when this assembly holds the lock.
+        let failed = stored(
+            &kernel,
+            KernelCommandKind::DeleteTask,
+            json!({
+                "type":"delete_task","task_id":"no-such-task",
+                "expected_planning_revision":created["result"]["planning_revision"],"confirm":true
+            }),
+        );
+        let failure = failed["failure"].as_str().expect("a failure text");
+        assert!(failure.contains("was not found"), "{failure}");
         let log = super::super::production::kernel_event_log_port();
         assert!(kernel.records(log.as_ref()).unwrap().is_empty());
     }
