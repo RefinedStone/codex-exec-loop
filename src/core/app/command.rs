@@ -88,10 +88,6 @@ pub enum AppCommand {
     RefreshPlanningRuntime {
         workspace_directory: String,
     },
-    /// planning 을 지금 다시 읽는다. 명령이 돌아올 때 스냅샷이 읽은 값이다 (저장 명령 뒤, plan 18 K4-9d).
-    RefreshPlanningRuntimeNow {
-        workspace_directory: String,
-    },
     ResetPlanningWorkspace(PlanningWorkspaceResetIntent),
     StageSimplePlanningDraft {
         workspace_directory: String,

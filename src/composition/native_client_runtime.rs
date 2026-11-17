@@ -1297,8 +1297,7 @@ impl NativeClientRuntime {
         }
         let outcome = match workspace_directory {
             Some(workspace_directory) => self.dispatch_client_event(NativeClientEvent::core(
-                // 답하기 전에 읽기를 끝낸다. 명령 바로 뒤의 `planning` 조회가 지금의 revision 을 답한다.
-                CoreInput::Command(AppCommand::RefreshPlanningRuntimeNow {
+                CoreInput::Command(AppCommand::RefreshPlanningRuntime {
                     workspace_directory,
                 }),
             )),
