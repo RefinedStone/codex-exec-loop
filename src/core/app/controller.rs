@@ -388,10 +388,21 @@ impl CoreController {
             }
             CoreInput::Command(AppCommand::RefreshPlanningRuntime {
                 workspace_directory,
-            }) => self.begin_planning_runtime_refresh(workspace_directory, false),
-            CoreInput::Command(AppCommand::RefreshPlanningRuntimeNow {
-                workspace_directory,
-            }) => self.begin_planning_runtime_refresh(workspace_directory, true),
+            }) => {
+                let (correlation, superseded) =
+                    self.planning.begin_runtime_refresh(workspace_directory);
+                let mut events = vec![AppEvent::PlanningRuntimeRefreshStarted {
+                    correlation: correlation.clone(),
+                }];
+                if let Some(correlation) = superseded {
+                    events.push(AppEvent::PlanningRuntimeRefreshCancelled { correlation });
+                }
+                CoreDispatchOutcome {
+                    events,
+                    effects: vec![CoreEffect::LoadPlanningRuntime { correlation }],
+                    snapshot: self.shared_snapshot(),
+                }
+            }
             CoreInput::Command(AppCommand::ResetPlanningWorkspace(intent)) => self
                 .begin_planning_workspace_operation(PlanningWorkspaceOperationIntent::reset(
                     intent,
@@ -1478,31 +1489,6 @@ impl CoreController {
                     correlation,
                 }])
             }
-        }
-    }
-
-    /// planning 읽기를 시작한다. `now` 이면 실행기가 읽기를 끝내고 완료를 바로 돌려준다.
-    fn begin_planning_runtime_refresh(
-        &mut self,
-        workspace_directory: String,
-        now: bool,
-    ) -> CoreDispatchOutcome {
-        let (correlation, superseded) = self.planning.begin_runtime_refresh(workspace_directory);
-        let mut events = vec![AppEvent::PlanningRuntimeRefreshStarted {
-            correlation: correlation.clone(),
-        }];
-        if let Some(correlation) = superseded {
-            events.push(AppEvent::PlanningRuntimeRefreshCancelled { correlation });
-        }
-        let effect = if now {
-            CoreEffect::LoadPlanningRuntimeNow { correlation }
-        } else {
-            CoreEffect::LoadPlanningRuntime { correlation }
-        };
-        CoreDispatchOutcome {
-            events,
-            effects: vec![effect],
-            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -4839,22 +4825,6 @@ mod tests {
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::LoadDirectionsMaintenance { correlation }]
-        );
-    }
-
-    #[test]
-    fn an_immediate_planning_refresh_asks_the_executor_to_answer_inline() {
-        let mut controller = CoreController::new();
-        let outcome =
-            controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntimeNow {
-                workspace_directory: "/tmp/a".to_string(),
-            }));
-
-        assert_eq!(
-            outcome.effects,
-            vec![CoreEffect::LoadPlanningRuntimeNow {
-                correlation: planning_runtime_refresh_correlation(1, "/tmp/a"),
-            }]
         );
     }
 

@@ -33,6 +33,8 @@ const HOST_IDLE_WAIT: Duration = Duration::from_secs(30);
 /// 넘친 클라이언트에 `Resync` 를 다시 보내는 간격이다. 그 클라이언트가 비우는 일은 커널을 깨우지 않는다.
 const HOST_RESYNC_RETRY_WAIT: Duration = Duration::from_millis(250);
 const HOST_MAX_INPUTS_PER_CYCLE: usize = 64;
+/// 저장 명령 뒤의 planning 읽기를 기다리는 최대 시간이다. 호출자가 답을 기다리는 시간(`KERNEL_CALL_TIMEOUT`)보다 짧다.
+const STORED_COMMAND_REFRESH_WAIT: Duration = Duration::from_secs(5);
 /// 클라이언트마다 쌓아 둘 이벤트 수이다. 넘치면 그 클라이언트에 `Resync` 를 보내고 증분은 버린다.
 const CLIENT_EVENT_CAPACITY: usize = 1024;
 /// 첫 클라이언트가 붙을 때, 이 시간 안에 감독 점검을 했으면 다시 하지 않는다. Gateway 는 같은 저장소의 다른 폴더로
@@ -501,6 +503,8 @@ struct KernelHostLoop {
     /// 병렬 보기에 알린 감독 화면 값이다. 조립 때는 화면이 없으므로 `false` 이다.
     supervisor_view_active: bool,
     idle: KernelIdleClock,
+    /// 저장 명령이 시작한 planning 읽기이다. 끝나면 비운다 (`finish_planning_refresh`).
+    awaited_planning_refresh: Option<crate::core::app::PlanningRuntimeRefreshCorrelation>,
 }
 
 impl KernelHostLoop {
@@ -525,6 +529,7 @@ impl KernelHostLoop {
             last_supervisor_inspection: None,
             supervisor_view_active: false,
             idle,
+            awaited_planning_refresh: None,
         }
     }
 
@@ -692,12 +697,36 @@ impl KernelHostLoop {
                 let events = core_events(&outcome).to_vec();
                 self.publish(outcome);
                 self.sync_parallel_mode();
+                if stored.is_some() {
+                    self.finish_planning_refresh(&events);
+                }
                 KernelCommandOutcome::Handled {
                     events,
                     operation,
                     stored,
                 }
             }
+        }
+    }
+
+    /*
+     * 저장 명령이 시작한 planning 읽기가 끝날 때까지 주기를 돈다 (plan 18 K4-9d). 읽기는 작업 스레드가 한다. 답하기
+     * 전에 끝내야 명령 바로 뒤의 `planning` 조회가 지금의 revision 을 답한다. 더 새 읽기가 이 읽기를 대신해도 끝난
+     * 것이다. 시간이 넘으면 그냥 답한다. 변경은 이미 저장되어 있다.
+     */
+    fn finish_planning_refresh(&mut self, events: &[AppEvent]) {
+        self.awaited_planning_refresh = events.iter().find_map(|event| match event {
+            AppEvent::PlanningRuntimeRefreshStarted { correlation } => Some(correlation.clone()),
+            _ => None,
+        });
+        let deadline = Instant::now() + STORED_COMMAND_REFRESH_WAIT;
+        while self.awaited_planning_refresh.is_some() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                self.awaited_planning_refresh = None;
+                break;
+            }
+            self.run_cycle_with_clock(&Instant::now, left);
         }
     }
 
@@ -715,6 +744,12 @@ impl KernelHostLoop {
             for event in core.events {
                 if let AppEvent::ThreadActivityChanged(activity) = &event {
                     self.thread_activity = activity.clone();
+                }
+                if let AppEvent::PlanningRuntimeRefreshed { correlation, .. }
+                | AppEvent::PlanningRuntimeRefreshCancelled { correlation } = &event
+                    && self.awaited_planning_refresh.as_ref() == Some(correlation)
+                {
+                    self.awaited_planning_refresh = None;
                 }
                 self.broadcast(KernelHostEvent::Core(Box::new(event)));
             }
@@ -1645,6 +1680,63 @@ mod tests {
         assert!(
             !host.is_planning_refresh_request(&refresh),
             "without clients nobody looks at the queue"
+        );
+    }
+
+    #[test]
+    fn a_stored_command_answers_after_its_planning_read_ends() {
+        // plan 18 K4-9d: a `planning` query directly after the answer must see the planning that was read again.
+        use crate::application::port::inbound::stored_command_port::{
+            StoredCommand, StoredCommandOutcome, StoredCommandPort, StoredCommandResult,
+        };
+        struct Deleted;
+        impl StoredCommandPort for Deleted {
+            fn execute(&self, _command: StoredCommand) -> anyhow::Result<StoredCommandOutcome> {
+                Ok(StoredCommandOutcome::Done(
+                    StoredCommandResult::TaskDeleted {
+                        task_id: "task-1".to_string(),
+                        planning_revision: 8,
+                    },
+                ))
+            }
+        }
+        let (mut host, _receiver) = host_loop_with_client();
+        // A second client with room for every event of the command.
+        let (sender, receiver) = mpsc::sync_channel(256);
+        host.clients.insert(
+            2,
+            ClientSink {
+                events: sender,
+                resync_pending: false,
+                transient: false,
+            },
+        );
+        host.runtime
+            .attach_stored_commands(Arc::new(Deleted), "/repo");
+
+        let outcome = host.handle_command(
+            KernelClientCommand::Stored(Box::new(StoredCommand::DeleteTask {
+                task_id: "task-1".to_string(),
+                expected_planning_revision: 7,
+            })),
+            None,
+        );
+
+        assert!(matches!(
+            outcome,
+            KernelCommandOutcome::Handled {
+                stored: Some(_),
+                ..
+            }
+        ));
+        // The events below went out before the answer: nothing ran after `handle_command` returned.
+        assert!(
+            receiver.try_iter().any(|event| matches!(
+                event,
+                KernelHostEvent::Core(event)
+                    if matches!(*event, AppEvent::PlanningRuntimeRefreshed { .. })
+            )),
+            "the planning read did not end before the answer"
         );
     }
 

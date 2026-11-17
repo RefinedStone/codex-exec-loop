@@ -288,8 +288,9 @@ Gateway), 끝에서 끝까지 (`tests/kernel_cli.rs`, unix: 실제 `akra kernel 
 
 PR 리뷰 반영 (2026-11-17):
 
-- 저장 명령 뒤의 planning 읽기를 답하기 전에 끝낸다 (`RefreshPlanningRuntimeNow`). 전에는 읽기를 작업 스레드에
-  맡기고 바로 답했다. 그래서 명령 바로 뒤의 `planning` 조회가 낡은 revision 을 답할 수 있었다.
+- 커널 호스트가 저장 명령 뒤의 planning 읽기가 끝난 뒤에 답한다 (`finish_planning_refresh`, 최대 5초). 읽기는
+  전과 같이 작업 스레드가 한다. 전에는 읽기를 시작만 하고 답했다. 그래서 명령 바로 뒤의 `planning` 조회가 낡은
+  revision 을 답할 수 있었다. 시간이 넘으면 그냥 답한다.
 - 같은 작업을 다른 편집이 쥐고 있을 때의 거절("is already being edited")과 admin 변경 guard 를 동시에 잡을 때의
   거절도 `planning_locked` 이다. 전에는 일반 실패였다.
 
