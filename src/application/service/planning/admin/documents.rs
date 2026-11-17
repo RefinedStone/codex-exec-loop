@@ -201,7 +201,7 @@ impl PlanningAdminFacadeService {
             } => {
                 return Err(PlanningMutationRefusal::revision_stale(format!(
                     "planning db changed while editing (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
-                ))
+                ), current_planning_revision)
                 .into());
             }
         };

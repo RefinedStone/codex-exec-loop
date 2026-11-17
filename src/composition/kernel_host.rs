@@ -518,20 +518,22 @@ struct HeldStoredAnswer {
     deadline: Instant,
 }
 
-/// 저장 명령이 planning 을 바꾸고 다시 읽기를 시작했으면 그 변경의 revision 이다.
+/*
+ * 저장 명령 뒤에 커널이 planning 을 다시 읽기 시작했으면, 그 읽기가 닿아야 하는 revision 이다. 성공한 명령은 그
+ * 변경의 revision 이다. 낡은 revision 으로 거절된 명령은 저장소의 지금 revision 이다: 호출자는 답 바로 뒤에
+ * `planning` 을 조회해서 그 값으로 다시 보낸다. 그 밖의 거절과 실패는 기다릴 값이 없다.
+ */
 fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
     let KernelCommandOutcome::Handled {
         events,
-        stored: Some(StoredCommandEnd::Finished(StoredCommandOutcome::Done(result))),
+        stored: Some(StoredCommandEnd::Finished(end)),
         ..
     } = outcome
     else {
         return None;
     };
-    events
-        .iter()
-        .any(|event| matches!(event, AppEvent::PlanningRuntimeRefreshStarted { .. }))
-        .then_some(match result {
+    let planning_revision = match end {
+        StoredCommandOutcome::Done(
             StoredCommandResult::TaskCreated {
                 planning_revision, ..
             }
@@ -540,8 +542,14 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             }
             | StoredCommandResult::TaskDeleted {
                 planning_revision, ..
-            } => *planning_revision,
-        })
+            },
+        ) => *planning_revision,
+        StoredCommandOutcome::Rejected(rejection) => rejection.planning_revision?,
+    };
+    events
+        .iter()
+        .any(|event| matches!(event, AppEvent::PlanningRuntimeRefreshStarted { .. }))
+        .then_some(planning_revision)
 }
 
 impl KernelHostLoop {
@@ -1809,6 +1817,36 @@ mod tests {
         host.send_due_stored_answers(now + STORED_COMMAND_REFRESH_WAIT);
         assert!(late.try_recv().is_ok());
         assert!(host.held_stored_answers.is_empty());
+    }
+
+    #[test]
+    fn a_command_refused_for_a_stale_revision_waits_for_the_current_planning() {
+        // plan 18 K4-9d: the caller reads `planning` after the refusal and sends the command again.
+        use crate::application::port::inbound::stored_command_port::StoredCommandRejection;
+        use crate::core::app::PlanningRuntimeRefreshCorrelation;
+        use crate::domain::kernel_event::ReasonCode;
+        let refused = |reason, planning_revision| KernelCommandOutcome::Handled {
+            events: vec![AppEvent::PlanningRuntimeRefreshStarted {
+                correlation: PlanningRuntimeRefreshCorrelation::new(1, "/repo"),
+            }],
+            operation: None,
+            stored: Some(StoredCommandEnd::Finished(StoredCommandOutcome::Rejected(
+                StoredCommandRejection {
+                    reason,
+                    message: "refused".to_string(),
+                    planning_revision,
+                },
+            ))),
+        };
+        assert_eq!(
+            stored_change_being_read(&refused(ReasonCode::PlanningRevisionStale, Some(9))),
+            Some(9)
+        );
+        // A locked planning did not change. The answer does not wait.
+        assert_eq!(
+            stored_change_being_read(&refused(ReasonCode::PlanningLocked, None)),
+            None
+        );
     }
 
     #[test]
