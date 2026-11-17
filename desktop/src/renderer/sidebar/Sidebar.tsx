@@ -269,7 +269,7 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(thr
           <span>현황판</span>
           {attention > 0 && <span className="badge badge-warn">{attention}</span>}
         </button>
-        <button type="button" className="nav-item" onClick={() => useUiStore.setState({ paletteOpen: true })}>
+        <button type="button" className="nav-item" onClick={() => useUiStore.setState({ overlay: "palette" })}>
           <Icon name="search" />
           <span>검색과 명령</span>
           <kbd>{MOD_KEY}K</kbd>
@@ -291,10 +291,10 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(thr
           {phase === "connected" && codexVersion && <span data-testid="codex-version"> · {codexVersion}</span>}
           {phase === "disconnected" && connection?.retryInMs !== undefined && <span> · {Math.round(connection.retryInMs / 1000)}초 뒤 다시 연결</span>}
         </span>
-        <button type="button" className="icon-button" title="단축키" onClick={() => useUiStore.setState({ shortcutsOpen: true })}>
+        <button type="button" className="icon-button" title="단축키" onClick={() => useUiStore.setState({ overlay: "shortcuts" })}>
           <Icon name="keyboard" />
         </button>
-        <button type="button" className="icon-button" title={`설정 (${MOD_KEY},)`} onClick={() => useUiStore.setState({ settingsOpen: true })} data-testid="settings-open">
+        <button type="button" className="icon-button" title={`설정 (${MOD_KEY},)`} onClick={() => useUiStore.setState({ overlay: "settings" })} data-testid="settings-open">
           <Icon name="sliders" />
         </button>
         <button type="button" className="icon-button" title="밝은 화면 / 어두운 화면" onClick={toggleTheme}>

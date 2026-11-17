@@ -6,6 +6,7 @@ import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHisto
 export type View = "home" | "thread" | "fleet" | "remote";
 export type PanelId = "review" | "graph" | "kernel" | "browser" | "work" | "docs" | "skills";
 export type Theme = "light" | "dark";
+export type Overlay = "palette" | "shortcuts" | "settings";
 
 /** 단축키 표시에 쓰는 보조 키 이름이다. macOS 는 ⌘, 나머지는 Ctrl 이다. */
 export const MOD_KEY = navigator.userAgent.includes("Mac") ? "⌘" : "Ctrl+";
@@ -21,10 +22,8 @@ export interface UiState {
   sidebarOpen: boolean;
   panel: PanelId | null;
   terminalOpen: boolean;
-  paletteOpen: boolean;
-  shortcutsOpen: boolean;
-  /** 설정 화면이 열려 있다 (plan 26 S1). */
-  settingsOpen: boolean;
+  /** 화면을 덮는 창은 한 번에 하나만 열린다. */
+  overlay: Overlay | null;
   /** 대화 안 찾기 막대가 열려 있다 (plan 26 R1). */
   findOpen: boolean;
   /** 이 창의 이동 기록이다 (plan 26 N1). */
@@ -81,9 +80,7 @@ export const useUiStore = create<UiState>(() => ({
   sidebarOpen: true,
   panel: null,
   terminalOpen: false,
-  paletteOpen: false,
-  shortcutsOpen: false,
-  settingsOpen: false,
+  overlay: null,
   findOpen: false,
   nav: INITIAL_NAV,
   zoomNotice: null,
@@ -114,13 +111,13 @@ function viewOf(entry: NavEntry): Partial<UiState> {
 
 /** 보기를 바꾸고 이동 기록에 적는다. 보기를 바꾸는 곳은 모두 이것을 쓴다. 스레드의 내용은 부르는 쪽이 연다. */
 export function visit(entry: NavEntry): void {
-  set((state) => ({ ...viewOf(entry), paletteOpen: false, findOpen: false, nav: pushNav(state.nav, entry) }));
+  set((state) => ({ ...viewOf(entry), overlay: null, findOpen: false, nav: pushNav(state.nav, entry) }));
 }
 
 /** 뒤로 가기와 앞으로 가기가 쓴다. 기록의 자리만 옮기고 새로 적지 않는다. */
 export function showNavEntry(nav: NavHistory): NavEntry | null {
   const entry = nav.entries[nav.index] ?? null;
-  if (entry) set({ ...viewOf(entry), paletteOpen: false, findOpen: false, nav });
+  if (entry) set({ ...viewOf(entry), overlay: null, findOpen: false, nav });
   return entry;
 }
 
@@ -188,19 +185,19 @@ export function fitSideColumns(): void {
 
 /** 오른쪽 패널을 연다. 패널을 여는 곳은 모두 이것을 쓴다: 좁은 창에서는 dot 옆 칸을 닫아 자리를 만든다. */
 export function openPanel(panel: PanelId): void {
-  set((state) => ({ panel, paletteOpen: false, dotDock: isNarrowWindow() ? null : state.dotDock }));
+  set((state) => ({ panel, overlay: null, dotDock: isNarrowWindow() ? null : state.dotDock }));
 }
 
 export function togglePanel(panel: PanelId): void {
   if (useUiStore.getState().panel === panel) {
-    set({ panel: null, paletteOpen: false });
+    set({ panel: null, overlay: null });
   } else {
     openPanel(panel);
   }
 }
 
 export function toggleTerminal(): void {
-  set((state) => ({ terminalOpen: !state.terminalOpen, paletteOpen: false }));
+  set((state) => ({ terminalOpen: !state.terminalOpen, overlay: null }));
 }
 
 function setRemoteAgents(enable: boolean): void {
@@ -209,14 +206,14 @@ function setRemoteAgents(enable: boolean): void {
   } catch {
     // 저장하지 못하면 이 창에서만 유지된다.
   }
-  set({ remoteAgents: enable, paletteOpen: false });
+  set({ remoteAgents: enable, overlay: null });
 }
 
 /**
  * dot 과의 대화를 옆 칸에 연다 (D-19). 보던 화면은 그대로 둔다. 좁은 창에서는 오른쪽 패널을 닫아 자리를 만든다.
  */
 export function showDot(host: string, dotId: string): void {
-  set((state) => ({ dotDock: { host, dotId }, paletteOpen: false, panel: isNarrowWindow() ? null : state.panel }));
+  set((state) => ({ dotDock: { host, dotId }, overlay: null, panel: isNarrowWindow() ? null : state.panel }));
 }
 
 /** dot 과의 대화 옆 칸을 닫는다. 쓰던 글과 보내기 허락은 남는다. */
@@ -233,7 +230,7 @@ export const DOTS_CLOUD_ENABLE_WARNING =
  * Gateway 를 다시 시작해야 생긴다. 그 전에는 구역을 켜도 보일 호스트가 없다.
  */
 export async function toggleDotsCloud(confirm: (message: string) => boolean = (message) => window.confirm(message), notify: (message: string) => void = toast): Promise<void> {
-  set({ paletteOpen: false });
+  set({ overlay: null });
   const enable = !(await window.akra.dots.getEnabled()) || !useUiStore.getState().remoteAgents;
   if (enable && !confirm(DOTS_CLOUD_ENABLE_WARNING)) return;
   const enabled = await window.akra.dots.setEnabled(enable);

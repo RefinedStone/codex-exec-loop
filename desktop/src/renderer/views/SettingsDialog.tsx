@@ -141,7 +141,7 @@ export function SettingsDialog() {
   const theme = useUiStore((state) => state.theme);
   const zoom = useZoomFactor();
   const [query, setQuery] = useState("");
-  const close = () => useUiStore.setState({ settingsOpen: false });
+  const close = () => useUiStore.setState({ overlay: null });
   const rows = settingsRows(settings, theme, zoom).filter((row) => matchesSetting(row, query));
   const sections = [...new Set(rows.map((row) => row.section))];
   return (
