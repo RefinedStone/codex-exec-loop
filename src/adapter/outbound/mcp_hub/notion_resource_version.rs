@@ -68,8 +68,7 @@ impl ExternalResourceVersionPort for NotionResourceVersionAdapter {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolResult {
-    #[serde(default)]
-    is_error: bool,
+    is_error: Option<bool>,
     structured_content: Option<Value>,
     #[serde(default)]
     content: Vec<ToolContent>,
@@ -93,7 +92,7 @@ struct PageVersion {
 fn version_from_result(result: Value) -> Result<String> {
     let result: ToolResult =
         serde_json::from_value(result).context("Notion MCP returned an invalid tool result")?;
-    if result.is_error {
+    if result.is_error == Some(true) {
         bail!("Notion MCP could not read the page")
     }
     let page: PageVersion = match result.structured_content {
