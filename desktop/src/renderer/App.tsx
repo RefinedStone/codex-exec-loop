@@ -598,7 +598,8 @@ export function App() {
               <>
                 <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} />
                 <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
-                <Composer actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
+                {/* 스레드마다 새로 만든다. 전송 중 표시와 오류가 다른 스레드의 입력창으로 넘어가지 않는다. 초안은 `uiStore` 에 남는다. */}
+                <Composer key={openThreadId ?? ""} actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
               </>
             )}
             {view === "remote" && remoteHost && remoteVisible && (
