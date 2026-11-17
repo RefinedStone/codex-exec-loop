@@ -322,6 +322,9 @@ impl CoreEffectRunner {
                 self.spawn_planning_runtime_projection_load(correlation);
                 None
             }
+            CoreEffect::LoadPlanningRuntimeNow { correlation } => Some(CoreInput::EffectCompleted(
+                load_planning_runtime_projection(&self.planning_runtime, correlation),
+            )),
             CoreEffect::ResetPlanningWorkspace { correlation } => {
                 self.spawn_planning_workspace_reset(correlation);
                 None
@@ -571,15 +574,7 @@ impl CoreEffectRunner {
             result: Err("planning runtime worker panicked".to_string()),
         };
         spawn_effect_completion_worker(input_sender, panic_completion, move || {
-            let result = planning_runtime
-                .inspect_runtime_projection(&correlation.workspace_directory)
-                .map(PlanningRuntimeRefreshSnapshot::new)
-                .map(Box::new)
-                .map_err(|error| error.to_string());
-            CoreEffectCompletion::PlanningRuntimeLoaded {
-                correlation,
-                result,
-            }
+            load_planning_runtime_projection(&planning_runtime, correlation)
         });
     }
 
@@ -1075,6 +1070,21 @@ fn post_turn_evaluation_completion(
     CoreEffectCompletion::PostTurnEvaluationCompleted {
         correlation,
         execution: Box::new(execution),
+    }
+}
+
+fn load_planning_runtime_projection(
+    planning_runtime: &PlanningRuntimeUseCases,
+    correlation: PlanningRuntimeRefreshCorrelation,
+) -> CoreEffectCompletion {
+    let result = planning_runtime
+        .inspect_runtime_projection(&correlation.workspace_directory)
+        .map(PlanningRuntimeRefreshSnapshot::new)
+        .map(Box::new)
+        .map_err(|error| error.to_string());
+    CoreEffectCompletion::PlanningRuntimeLoaded {
+        correlation,
+        result,
     }
 }
 

@@ -72,7 +72,8 @@ use crate::domain::planning::PostTurnContinuationAction;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum KernelClientCommand {
     Core(AppCommand),
-    Stored(StoredCommand),
+    // 저장 명령은 작업의 필드를 모두 가져서 크다. 상자에 넣어 커널의 입력을 작게 둔다.
+    Stored(Box<StoredCommand>),
 }
 
 /// 저장 명령의 끝이다. 실패는 원인의 글을 가진다. 그 글은 완료 기록의 `detail` 과 같다.
@@ -1179,7 +1180,7 @@ impl NativeClientRuntime {
         let command = match command {
             KernelClientCommand::Core(command) => command,
             KernelClientCommand::Stored(stored) => {
-                return self.dispatch_stored_command(stored, admission);
+                return self.dispatch_stored_command(*stored, admission);
             }
         };
         // 기록한 명령은 연산 id 를 가진다. core 가 그 명령이 만든 기록에 같은 id 를 싣는다 (plan 18 K4-4).
@@ -1296,7 +1297,8 @@ impl NativeClientRuntime {
         }
         let outcome = match workspace_directory {
             Some(workspace_directory) => self.dispatch_client_event(NativeClientEvent::core(
-                CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                // 답하기 전에 읽기를 끝낸다. 명령 바로 뒤의 `planning` 조회가 지금의 revision 을 답한다.
+                CoreInput::Command(AppCommand::RefreshPlanningRuntimeNow {
                     workspace_directory,
                 }),
             )),
@@ -3163,7 +3165,7 @@ pub(crate) mod tests {
             }
         }
         let update = || {
-            KernelClientCommand::Stored(StoredCommand::UpdateTask {
+            KernelClientCommand::Stored(Box::new(StoredCommand::UpdateTask {
                 task_id: "task-1".to_string(),
                 task: StoredTaskFields {
                     direction_id: None,
@@ -3177,7 +3179,7 @@ pub(crate) mod tests {
                     blocked_by: Vec::new(),
                 },
                 expected_planning_revision: 7,
-            })
+            }))
         };
         let described = KernelCommandDescriptor {
             command: KernelCommandKind::UpdateTask,

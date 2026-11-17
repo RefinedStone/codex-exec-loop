@@ -21,6 +21,9 @@ const commands = {
   set_auto_follow_max_turns: { type: "set_auto_follow_max_turns", value: 3 },
   pause_auto_follow: { type: "pause_auto_follow" },
   reset_planning: { type: "reset_planning", target: "queue", confirm: true },
+  create_task: { type: "create_task", task: { title: "Task" } },
+  update_task: { type: "update_task", task_id: "task-1", task: { title: "Task" }, expected_planning_revision: 7 },
+  delete_task: { type: "delete_task", task_id: "task-1", expected_planning_revision: 7, confirm: true },
 } as const satisfies Record<KernelCommand["type"], KernelCommand>;
 
 function harness() {

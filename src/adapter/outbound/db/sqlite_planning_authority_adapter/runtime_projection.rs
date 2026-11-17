@@ -380,7 +380,10 @@ impl SqlitePlanningAuthorityAdapter {
                 )
                 .with_context(|| format!("failed to guard admin edit for `{task_id}`"))?;
             if inserted == 0 {
-                anyhow::bail!("planning task `{task_id}` is already being edited");
+                return Err(PlanningMutationRefusal::locked(format!(
+                    "planning task `{task_id}` is already being edited"
+                ))
+                .into());
             }
         }
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
@@ -508,7 +511,10 @@ impl SqlitePlanningAuthorityAdapter {
             )
             .context("failed to acquire admin authority mutation guard")?;
         if inserted == 0 {
-            anyhow::bail!("an admin authority mutation is already in progress");
+            return Err(PlanningMutationRefusal::locked(
+                "an admin authority mutation is already in progress",
+            )
+            .into());
         }
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
         transaction

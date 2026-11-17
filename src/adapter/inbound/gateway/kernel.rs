@@ -237,7 +237,7 @@ impl KernelSession {
             });
         let command = match request.command.into_input(&attached.workspace)? {
             KernelCommandInput::Core(command) => KernelClientCommand::Core(command),
-            KernelCommandInput::Stored(command) => KernelClientCommand::Stored(command),
+            KernelCommandInput::Stored(command) => KernelClientCommand::Stored(Box::new(command)),
         };
         let commands = attached.commands.clone();
         let sent = blocking(move || {
