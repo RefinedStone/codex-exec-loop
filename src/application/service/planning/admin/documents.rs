@@ -235,6 +235,7 @@ impl PlanningAdminFacadeService {
             })?;
             return Err(error.context("failed to persist result output"));
         }
+        // shortcut: result output 쓰기가 revision 을 올리면 이 값은 낮다. 이 경로의 값을 쓰는 명령이 생기면 쓰기가 revision 을 돌려주게 한다.
         Ok(authority_commit_revision)
     }
 

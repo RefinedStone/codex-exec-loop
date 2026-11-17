@@ -628,7 +628,7 @@ pub enum KernelCommand {
 }
 
 /*
- * 작업의 필드이다 (plan 18 K4-9d). 만들기에서 없는 값은 기본값이다. 고치기는 필드 전체를 바꾼다: 이유와
+ * 작업의 필드이다 (plan 18 K4-9d). 만들기에서 없는 값은 기본값이다. 고치기는 제목을 바꾼다. 이유와
  * 참조는 없으면 비우고, 방향·설명·상태·우선순위는 없으면 그대로 둔다.
  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

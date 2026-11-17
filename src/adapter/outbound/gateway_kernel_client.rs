@@ -194,15 +194,21 @@ async fn next_json<S: AsyncRead + AsyncWrite + Unpin>(
     bail!("the Gateway closed the connection before it answered")
 }
 
-/// The reply refuses a method, or a command or query name, that the Gateway does not know.
+/// The reply refuses a method, a command or query name, or a field that the Gateway does not know.
 fn refuses_an_unknown_name(reply: &Value) -> bool {
     match reply.pointer("/error/code").and_then(Value::as_i64) {
         Some(ERROR_METHOD_NOT_FOUND) => true,
-        // serde names an unknown `type` tag this way. Older programs cannot change this text.
+        /*
+         * serde names an unknown `type` tag and an unknown field this way. Older programs cannot change
+         * this text. The caller built the request from its own types, so a Gateway of the same version
+         * knows every name in it.
+         */
         Some(ERROR_INVALID_PARAMS) => reply
             .pointer("/error/message")
             .and_then(Value::as_str)
-            .is_some_and(|message| message.contains("unknown variant")),
+            .is_some_and(|message| {
+                message.contains("unknown variant") || message.contains("unknown field")
+            }),
         _ => false,
     }
 }
@@ -393,6 +399,10 @@ mod tests {
         };
         let (reply, ()) = tokio::join!(command_over(&mut client), serving);
         assert!(matches!(reply.unwrap(), KernelGatewayReply::GatewayTooOld));
+        // An older Gateway that knows the command also refuses a field that it does not know.
+        assert!(refuses_an_unknown_name(&json!({
+            "error":{"code":ERROR_INVALID_PARAMS,"message":"unknown field `labels`"}
+        })));
     }
 
     #[tokio::test]

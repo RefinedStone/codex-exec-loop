@@ -8,6 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::application::port::inbound::stored_command_port::{
+    StoredCommandOutcome, StoredCommandResult,
+};
 use crate::composition::native_client_runtime::{
     ClientCommandDispatch, KernelClientCommand, NativeClientRuntime, StoredCommandEnd,
 };
@@ -33,7 +36,7 @@ const HOST_IDLE_WAIT: Duration = Duration::from_secs(30);
 /// 넘친 클라이언트에 `Resync` 를 다시 보내는 간격이다. 그 클라이언트가 비우는 일은 커널을 깨우지 않는다.
 const HOST_RESYNC_RETRY_WAIT: Duration = Duration::from_millis(250);
 const HOST_MAX_INPUTS_PER_CYCLE: usize = 64;
-/// 저장 명령 뒤의 planning 읽기를 기다리는 최대 시간이다. 호출자가 답을 기다리는 시간(`KERNEL_CALL_TIMEOUT`)보다 짧다.
+/// 저장 명령의 답을 planning 읽기 때문에 미루는 최대 시간이다. 호출자가 답을 기다리는 시간(`KERNEL_CALL_TIMEOUT`)보다 짧다.
 const STORED_COMMAND_REFRESH_WAIT: Duration = Duration::from_secs(5);
 /// 클라이언트마다 쌓아 둘 이벤트 수이다. 넘치면 그 클라이언트에 `Resync` 를 보내고 증분은 버린다.
 const CLIENT_EVENT_CAPACITY: usize = 1024;
@@ -503,8 +506,42 @@ struct KernelHostLoop {
     /// 병렬 보기에 알린 감독 화면 값이다. 조립 때는 화면이 없으므로 `false` 이다.
     supervisor_view_active: bool,
     idle: KernelIdleClock,
-    /// 저장 명령이 시작한 planning 읽기이다. 끝나면 비운다 (`finish_planning_refresh`).
-    awaited_planning_refresh: Option<crate::core::app::PlanningRuntimeRefreshCorrelation>,
+    /// 답을 미룬 저장 명령이다 (`hold_stored_answer`).
+    held_stored_answers: Vec<HeldStoredAnswer>,
+}
+
+/// 저장 명령의 미룬 답이다. 커널의 planning 이 `planning_revision` 에 닿거나 `deadline` 이 지나면 보낸다.
+struct HeldStoredAnswer {
+    reply: Sender<KernelCommandOutcome>,
+    outcome: KernelCommandOutcome,
+    planning_revision: i64,
+    deadline: Instant,
+}
+
+/// 저장 명령이 planning 을 바꾸고 다시 읽기를 시작했으면 그 변경의 revision 이다.
+fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
+    let KernelCommandOutcome::Handled {
+        events,
+        stored: Some(StoredCommandEnd::Finished(StoredCommandOutcome::Done(result))),
+        ..
+    } = outcome
+    else {
+        return None;
+    };
+    events
+        .iter()
+        .any(|event| matches!(event, AppEvent::PlanningRuntimeRefreshStarted { .. }))
+        .then_some(match result {
+            StoredCommandResult::TaskCreated {
+                planning_revision, ..
+            }
+            | StoredCommandResult::TaskUpdated {
+                planning_revision, ..
+            }
+            | StoredCommandResult::TaskDeleted {
+                planning_revision, ..
+            } => *planning_revision,
+        })
 }
 
 impl KernelHostLoop {
@@ -529,7 +566,7 @@ impl KernelHostLoop {
             last_supervisor_inspection: None,
             supervisor_view_active: false,
             idle,
-            awaited_planning_refresh: None,
+            held_stored_answers: Vec::new(),
         }
     }
 
@@ -560,7 +597,13 @@ impl KernelHostLoop {
         } else {
             HOST_IDLE_WAIT
         };
-        until_deadline.min(limit)
+        let until_held_answer = self
+            .held_stored_answers
+            .iter()
+            .map(|held| held.deadline.saturating_duration_since(now))
+            .min()
+            .unwrap_or(limit);
+        until_deadline.min(limit).min(until_held_answer)
     }
 
     /// 클라이언트 입력을 모두 처리한다. 끝내라는 입력이 왔거나 보내는 쪽이 모두 사라졌으면 `false` 이다.
@@ -596,6 +639,7 @@ impl KernelHostLoop {
         }
         self.sync_parallel_mode();
         self.flush_pending_resyncs();
+        self.send_due_stored_answers(Instant::now());
     }
 
     /// 클라이언트도 남은 일도 없으면 한가한 시각을 정한다. 하나라도 있으면 지운다.
@@ -634,7 +678,15 @@ impl KernelHostLoop {
                 descriptor,
                 reply,
             } => {
-                let _ = reply.send(self.handle_command(command, descriptor.as_ref()));
+                let outcome = self.handle_command(command, descriptor.as_ref());
+                match stored_change_being_read(&outcome) {
+                    Some(planning_revision) => {
+                        self.hold_stored_answer(reply, outcome, planning_revision);
+                    }
+                    None => {
+                        let _ = reply.send(outcome);
+                    }
+                }
             }
             #[cfg(test)]
             KernelHostInput::Inputs(inputs) => {
@@ -697,9 +749,6 @@ impl KernelHostLoop {
                 let events = core_events(&outcome).to_vec();
                 self.publish(outcome);
                 self.sync_parallel_mode();
-                if stored.is_some() {
-                    self.finish_planning_refresh(&events);
-                }
                 KernelCommandOutcome::Handled {
                     events,
                     operation,
@@ -710,46 +759,37 @@ impl KernelHostLoop {
     }
 
     /*
-     * 저장 명령이 시작한 planning 읽기가 끝날 때까지 주기를 돈다 (plan 18 K4-9d). 읽기는 작업 스레드가 한다. 답하기
-     * 전에 끝내야 명령 바로 뒤의 `planning` 조회가 지금의 revision 을 답한다. 더 새 읽기가 이 읽기를 대신하면 그 새
-     * 읽기를 기다린다 (`publish`). 시간이 넘으면 그냥 답한다. 변경은 이미 저장되어 있다.
+     * 저장 명령의 답을 미룬다 (plan 18 K4-9d). 변경은 이미 저장되어 있다. 커널의 planning 은 작업 스레드가 다시 읽은
+     * 뒤에 바뀐다. 그 전에 답하면 명령 바로 뒤의 `planning` 조회가 낡은 revision 을 답한다. 커널은 멈추지 않고 다른
+     * 입력을 처리한다. 읽기가 실패하거나 늦으면 마감에 답한다.
      */
-    fn finish_planning_refresh(&mut self, events: &[AppEvent]) {
-        self.awaited_planning_refresh = events.iter().find_map(|event| match event {
-            AppEvent::PlanningRuntimeRefreshStarted { correlation } => Some(correlation.clone()),
-            _ => None,
+    fn hold_stored_answer(
+        &mut self,
+        reply: Sender<KernelCommandOutcome>,
+        outcome: KernelCommandOutcome,
+        planning_revision: i64,
+    ) {
+        self.held_stored_answers.push(HeldStoredAnswer {
+            reply,
+            outcome,
+            planning_revision,
+            deadline: Instant::now() + STORED_COMMAND_REFRESH_WAIT,
         });
-        let deadline = Instant::now() + STORED_COMMAND_REFRESH_WAIT;
-        while self.awaited_planning_refresh.is_some() {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                self.awaited_planning_refresh = None;
-                break;
-            }
-            self.run_cycle_with_clock(&Instant::now, left);
-        }
+        self.send_due_stored_answers(Instant::now());
     }
 
-    /*
-     * 기다리는 planning 읽기를 따라간다 (plan 18 K4-9d). core 는 새 읽기를 시작하면 앞의 읽기를 취소한다. 그때 앞의
-     * 읽기는 끝나지 않았으므로 새 읽기를 기다린다. core 는 시작을 취소보다 먼저 알린다. 그래서 대신하는 읽기가 없는
-     * 취소(대화를 바꿀 때)만 기다림을 끝낸다.
-     */
-    fn follow_awaited_planning_refresh(&mut self, event: &AppEvent) {
-        let Some(awaited) = &self.awaited_planning_refresh else {
-            return;
-        };
-        match event {
-            AppEvent::PlanningRuntimeRefreshStarted { correlation } => {
-                self.awaited_planning_refresh = Some(correlation.clone());
-            }
-            AppEvent::PlanningRuntimeRefreshed { correlation, .. }
-            | AppEvent::PlanningRuntimeRefreshCancelled { correlation }
-                if correlation == awaited =>
-            {
-                self.awaited_planning_refresh = None;
-            }
-            _ => {}
+    /// 커널의 planning 이 그 변경에 닿았거나 마감이 지난 답을 보낸다.
+    fn send_due_stored_answers(&mut self, now: Instant) {
+        let read_revision = self.planning.planning_revision;
+        let (due, held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held_stored_answers)
+            .into_iter()
+            .partition(|held| {
+                read_revision.is_some_and(|revision| revision >= held.planning_revision)
+                    || held.deadline <= now
+            });
+        self.held_stored_answers = held;
+        for held in due {
+            let _ = held.reply.send(held.outcome);
         }
     }
 
@@ -768,7 +808,6 @@ impl KernelHostLoop {
                 if let AppEvent::ThreadActivityChanged(activity) = &event {
                     self.thread_activity = activity.clone();
                 }
-                self.follow_awaited_planning_refresh(&event);
                 self.broadcast(KernelHostEvent::Core(Box::new(event)));
             }
             if core.snapshot.planning_parallel.planning_runtime != self.planning {
@@ -1702,7 +1741,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_command_answers_after_its_planning_read_ends() {
+    fn a_stored_command_answers_after_the_kernel_reads_its_change() {
         // plan 18 K4-9d: a `planning` query directly after the answer must see the planning that was read again.
         use crate::application::port::inbound::stored_command_port::{
             StoredCommand, StoredCommandOutcome, StoredCommandPort, StoredCommandResult,
@@ -1719,91 +1758,57 @@ mod tests {
             }
         }
         let (mut host, _receiver) = host_loop_with_client();
-        // A second client with room for every event of the command.
-        let (sender, receiver) = mpsc::sync_channel(256);
-        host.clients.insert(
-            2,
-            ClientSink {
-                events: sender,
-                resync_pending: false,
-                transient: false,
-            },
-        );
         host.runtime
             .attach_stored_commands(Arc::new(Deleted), "/repo");
-
-        let outcome = host.handle_command(
-            KernelClientCommand::Stored(Box::new(StoredCommand::DeleteTask {
-                task_id: "task-1".to_string(),
-                expected_planning_revision: 7,
-            })),
-            None,
-        );
-
-        assert!(matches!(
-            outcome,
-            KernelCommandOutcome::Handled {
-                stored: Some(_),
-                ..
-            }
-        ));
-        // The events below went out before the answer: nothing ran after `handle_command` returned.
-        assert!(
-            receiver.try_iter().any(|event| matches!(
-                event,
-                KernelHostEvent::Core(event)
-                    if matches!(*event, AppEvent::PlanningRuntimeRefreshed { .. })
-            )),
-            "the planning read did not end before the answer"
-        );
-    }
-
-    #[test]
-    fn the_wait_for_a_planning_read_follows_the_read_that_replaced_it() {
-        // plan 18 K4-9d: a cancelled read did not read planning. The newer read ends the wait.
-        use crate::core::app::PlanningRuntimeRefreshCorrelation;
-        let (mut host, _receiver) = host_loop_with_client();
-        let first = PlanningRuntimeRefreshCorrelation::new(1, "/repo");
-        let second = PlanningRuntimeRefreshCorrelation::new(2, "/repo");
-        let snapshot = host.runtime.snapshot();
-        let publish = |host: &mut KernelHostLoop, events: Vec<AppEvent>| {
-            host.publish(NativeClientDispatchOutcome::Core(
-                crate::core::app::CoreDispatchOutcome {
-                    events,
-                    effects: Vec::new(),
-                    snapshot: Arc::new(snapshot.clone()),
-                },
-            ));
+        let delete = |host: &mut KernelHostLoop| {
+            let (reply, answer) = mpsc::channel();
+            host.handle_input(KernelHostInput::Command {
+                command: KernelClientCommand::Stored(Box::new(StoredCommand::DeleteTask {
+                    task_id: "task-1".to_string(),
+                    expected_planning_revision: 7,
+                })),
+                descriptor: None,
+                reply,
+            });
+            answer
         };
 
-        host.awaited_planning_refresh = Some(first.clone());
-        publish(
-            &mut host,
-            vec![
-                AppEvent::PlanningRuntimeRefreshStarted {
-                    correlation: second.clone(),
-                },
-                AppEvent::PlanningRuntimeRefreshCancelled {
-                    correlation: first.clone(),
-                },
-            ],
+        let answer = delete(&mut host);
+        assert!(
+            answer.try_recv().is_err(),
+            "the answer waits for the planning read"
         );
-        assert_eq!(
-            host.awaited_planning_refresh,
-            Some(second.clone()),
-            "the wait continues with the newer read"
-        );
+        // The kernel takes other inputs while the answer waits.
+        let (reply, view) = mpsc::channel();
+        host.handle_input(KernelHostInput::Query { reply });
+        assert!(view.try_recv().is_ok());
 
-        publish(
-            &mut host,
-            vec![AppEvent::PlanningRuntimeRefreshCancelled {
-                correlation: second,
-            }],
-        );
+        // The read of an older change does not send the answer.
+        host.planning.planning_revision = Some(7);
+        host.send_due_stored_answers(Instant::now());
+        assert!(answer.try_recv().is_err());
+        host.planning.planning_revision = Some(8);
+        host.send_due_stored_answers(Instant::now());
+        assert!(matches!(
+            answer.try_recv(),
+            Ok(KernelCommandOutcome::Handled {
+                stored: Some(_),
+                ..
+            })
+        ));
+
+        // A read that never reaches the change: the answer goes out at its deadline.
+        host.planning.planning_revision = None;
+        let late = delete(&mut host);
+        let now = Instant::now();
         assert_eq!(
-            host.awaited_planning_refresh, None,
-            "a cancel without a newer read ends the wait"
+            host.next_wait(now).max(STORED_COMMAND_REFRESH_WAIT),
+            STORED_COMMAND_REFRESH_WAIT,
+            "the kernel wakes at the deadline of a held answer"
         );
+        host.send_due_stored_answers(now + STORED_COMMAND_REFRESH_WAIT);
+        assert!(late.try_recv().is_ok());
+        assert!(host.held_stored_answers.is_empty());
     }
 
     #[test]
