@@ -72,6 +72,9 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   const setDraft = (text: string) => setDraftFor(draftKey, text);
   const disabled = !connected || (!home && !transcript) || writerElsewhere || sending;
 
+  // 다른 스레드의 실패를 이 스레드의 입력창에 남기지 않는다.
+  useEffect(() => setError(null), [draftKey]);
+
   useEffect(() => {
     if (!disabled) input.current?.focus();
   }, [transcript?.threadId, home, disabled]);
