@@ -3535,7 +3535,6 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "next_approval_decision_generation",
         // plan 18 K2-3: busy sessions the client left, and the one serial review persistence queue.
         "background_sessions",
-        "serving_background",
         "approval_review_persistence",
         // plan 18 K2-4: the background thread activity last published to the client.
         "published_thread_activity",
@@ -11778,11 +11777,9 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         accepted_reducer_settlement < history_seed_commit,
         "Core history may change only after the feature reducer accepts exact settlement"
     );
-    // plan 18 K2-3: the public method finds the owning session; the in-session method gates.
-    let post_turn_settlement = top_level_impl_method_source(
-        &conversation_turn_reducer,
-        "complete_post_turn_evaluation_in_session",
-    );
+    // plan 18 K2-3, Q5-2: the reducer finds the owning session; the method of that session gates.
+    let post_turn_settlement =
+        top_level_impl_method_source(&conversation_turn_reducer, "accept_post_turn_evaluation");
     let compact_post_turn_settlement = post_turn_settlement
         .chars()
         .filter(|character| !character.is_whitespace())
@@ -16167,16 +16164,13 @@ fn verify_turn_stream_authority_match_contract(
         .map(|variant| variant.ident.to_string())
         .collect::<HashSet<_>>();
 
-    // plan 18 K2-3: the public method finds the owning session; the in-session method holds the
-    // authority transition.
-    let methods = inherent_impl_methods(
-        &reducer_syntax,
-        "ConversationTurnFeatureReducer",
-        "apply_turn_stream_event_in_session",
-    );
+    // plan 18 K2-3, Q5-2: the reducer finds the owning session; the method of that session holds
+    // the authority transition.
+    let methods =
+        inherent_impl_methods(&reducer_syntax, "ThreadSession", "apply_turn_stream_event");
     let [method] = methods.as_slice() else {
         return Err(format!(
-            "expected one ConversationTurnFeatureReducer::apply_turn_stream_event_in_session, found {}",
+            "expected one ThreadSession::apply_turn_stream_event, found {}",
             methods.len()
         ));
     };
