@@ -5,6 +5,7 @@ import { type FormEvent, useEffect, useState } from "react";
 
 import type { GitHubBridge, GitHubProject, GitHubProjectItem } from "../../shared/bridge";
 import { filterByRepository, groupByStatus, repositoriesOf } from "./githubProjects";
+import { useAction } from "./useAction";
 
 const PROJECT_KEY = "akra.githubProject";
 
@@ -73,19 +74,8 @@ function ItemRow({
   onEdit?(item: GitHubProjectItem): Promise<void>;
   onOpenRestore(issueUrl: string): Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const act = async (action: (item: GitHubProjectItem) => Promise<void>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await action(item);
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { busy, error, run } = useAction();
+  const act = (action: (item: GitHubProjectItem) => Promise<void>) => run(() => action(item));
   const url = item.url;
   return (
     <li className="work-item" data-testid="github-project-item">
@@ -114,7 +104,7 @@ function ItemRow({
           </button>
         )}
         {item.kind === "issue" && url && (
-          <button type="button" onClick={() => void onOpenRestore(url).catch((cause: unknown) => setError(message(cause)))} data-testid="github-project-open-restore" title="가린 구간을 로컬 전용 창에서 엽니다">
+          <button type="button" onClick={() => void run(() => onOpenRestore(url))} disabled={busy} data-testid="github-project-open-restore" title="가린 구간을 로컬 전용 창에서 엽니다">
             로컬 복원본
           </button>
         )}

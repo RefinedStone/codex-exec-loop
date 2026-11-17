@@ -6,6 +6,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import type { NotionBridge } from "../../shared/bridge";
 import { JsonRpcError } from "../rpc/jsonRpcClient";
 import { type GatewayRequest, NOTION_SERVER, NotionHub, type NotionHubState, type NotionPage, type NotionTools } from "./notionHub";
+import { useAction } from "./useAction";
 
 const ADD_COMMAND = `akra mcp add ${NOTION_SERVER} --url https://mcp.notion.com/mcp`;
 const LOGIN_COMMAND = `akra mcp login ${NOTION_SERVER}`;
@@ -45,19 +46,8 @@ function PageRow({
   notion: NotionBridge;
   onHandOff(page: NotionPage): Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const handOff = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onHandOff(page);
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { busy, error, run } = useAction();
+  const handOff = () => run(async () => onHandOff(page));
   return (
     <li className="work-item" data-testid="notion-page">
       <button type="button" className="work-link" onClick={() => notion.openExternal(page.url)} title={page.url}>

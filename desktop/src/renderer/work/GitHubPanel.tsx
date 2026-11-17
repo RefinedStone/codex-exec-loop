@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import type { GitHubBridge, GitHubPullRequest, GitHubSummary } from "../../shared/bridge";
+import { useAction } from "./useAction";
 
 type PanelState = { phase: "loading" } | { phase: "loaded"; summary: GitHubSummary } | { phase: "failed"; message: string };
 
@@ -17,20 +18,8 @@ function PullRequestRow({
   github: GitHubBridge;
   onHandOff?(pull: GitHubPullRequest): Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const handOff = async () => {
-    if (!onHandOff) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onHandOff(pull);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { busy, error, run } = useAction();
+  const handOff = () => run(async () => onHandOff?.(pull));
   return (
     <li className="work-item" data-testid="github-pull">
       <button type="button" className="work-link" onClick={() => github.openExternal(pull.url)} title={pull.url}>

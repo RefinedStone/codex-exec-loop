@@ -3,6 +3,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { JiraBridge, JiraDeployment, JiraIssue, JiraStatus, JiraSummary } from "../../shared/bridge";
+import { useAction } from "./useAction";
 
 type ListState = { phase: "loading" } | { phase: "loaded"; summary: JiraSummary } | { phase: "failed"; message: string };
 
@@ -17,24 +18,15 @@ function ConnectForm({ jira, onConnected }: { jira: JiraBridge; onConnected(stat
   const [siteUrl, setSiteUrl] = useState("");
   const [email, setEmail] = useState("");
   const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
 
-  const submit = async (event: FormEvent) => {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      onConnected(await jira.connect({ siteUrl, deployment, email, token }));
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setBusy(false);
-    }
+    void run(async () => onConnected(await jira.connect({ siteUrl, deployment, email, token })));
   };
 
   return (
-    <form className="work-section work-form" onSubmit={(event) => void submit(event)} data-testid="jira-connect">
+    <form className="work-section work-form" onSubmit={submit} data-testid="jira-connect">
       <p className="muted">토큰은 이 컴퓨터의 OS 암호화로만 저장합니다. 저장소와 Akra 설정 파일에는 넣지 않습니다.</p>
       <label>
         종류
@@ -70,19 +62,8 @@ function ConnectForm({ jira, onConnected }: { jira: JiraBridge; onConnected(stat
 }
 
 function IssueRow({ issue, jira, onHandOff }: { issue: JiraIssue; jira: JiraBridge; onHandOff(issue: JiraIssue): Promise<void> }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const handOff = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onHandOff(issue);
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { busy, error, run } = useAction();
+  const handOff = () => run(async () => onHandOff(issue));
   return (
     <li className="work-item" data-testid="jira-issue">
       <button type="button" className="work-link" onClick={() => jira.openExternal(issue.url)} title={issue.url}>
