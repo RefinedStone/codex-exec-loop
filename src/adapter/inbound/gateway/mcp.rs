@@ -12,8 +12,8 @@ use tokio_tungstenite::tungstenite::Message;
 use super::recorder::{RecordDirection, SessionRecording};
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
-    MCP_HUB_GATEWAY_CALL, MCP_HUB_GATEWAY_OTHER_HUB, MCP_HUB_GATEWAY_RELOAD,
-    MCP_HUB_GATEWAY_STATUSES,
+    MCP_HUB_GATEWAY_CALL, MCP_HUB_GATEWAY_CATALOGS, MCP_HUB_GATEWAY_OTHER_HUB,
+    MCP_HUB_GATEWAY_RELOAD, MCP_HUB_GATEWAY_STATUSES,
 };
 
 pub(super) use crate::domain::mcp_hub::MCP_HUB_GATEWAY_METHOD_PREFIX as MCP_METHOD_PREFIX;
@@ -109,6 +109,10 @@ fn respond(hub: &GatewayMcpHub, id: Value, method: &str, text: &str) -> String {
         );
     }
     let result = match method {
+        MCP_HUB_GATEWAY_CATALOGS => hub
+            .backend
+            .tool_catalogs()
+            .map(|catalogs| json!({"catalogs":catalogs})),
         MCP_HUB_GATEWAY_STATUSES => hub
             .backend
             .server_statuses(params.server.as_deref())
@@ -124,7 +128,11 @@ fn respond(hub: &GatewayMcpHub, id: Value, method: &str, text: &str) -> String {
             let arguments = params.arguments.unwrap_or_else(|| json!({}));
             hub.backend.call_tool(&server, &tool, arguments)
         }
-        MCP_HUB_GATEWAY_RELOAD => hub.backend.reload().map(|()| json!({})),
+        MCP_HUB_GATEWAY_RELOAD => hub
+            .backend
+            .reload()
+            .and_then(|()| hub.backend.invalidate_tool_catalogs())
+            .map(|()| json!({})),
         _ => {
             return error_response(
                 id,
@@ -146,17 +154,28 @@ fn error_response(id: Value, code: i64, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::mcp_hub::{McpHubServerSpec, McpHubServerStatus};
+    use crate::domain::mcp_hub::{McpHubServerSpec, McpHubServerStatus, McpHubToolCatalog};
     use anyhow::Result;
     use std::sync::Mutex;
 
     #[derive(Default)]
     struct FakeBackend {
         reloads: Mutex<usize>,
+        invalidations: Mutex<usize>,
         calls: Mutex<Vec<(String, String, Value)>>,
     }
 
     impl McpHubBackendPort for FakeBackend {
+        fn tool_catalogs(&self) -> Result<Vec<McpHubToolCatalog>> {
+            Ok(vec![McpHubToolCatalog {
+                name: "cached".into(),
+                tools: vec![],
+            }])
+        }
+        fn invalidate_tool_catalogs(&self) -> Result<()> {
+            *self.invalidations.lock().unwrap() += 1;
+            Ok(())
+        }
         fn registered_servers(&self) -> Result<Vec<McpHubServerSpec>> {
             Ok(vec![])
         }
@@ -236,6 +255,20 @@ mod tests {
         );
         assert_eq!(reload["result"], json!({}));
         assert_eq!(*backend.reloads.lock().unwrap(), 1);
+        assert_eq!(*backend.invalidations.lock().unwrap(), 1);
+        hub.shutdown();
+        assert_eq!(*backend.reloads.lock().unwrap(), 2);
+        assert_eq!(*backend.invalidations.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn catalogs_do_not_claim_live_authentication_state() {
+        let (hub, _) = hub();
+        let result = answer(&hub, MCP_HUB_GATEWAY_CATALOGS, json!({}));
+        assert_eq!(
+            result["result"],
+            json!({"catalogs":[{"name":"cached","tools":[]}]})
+        );
     }
 
     #[test]

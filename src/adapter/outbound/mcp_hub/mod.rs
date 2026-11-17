@@ -8,9 +8,11 @@
 //! - skill: 서버가 하나라도 있으면 `agent-skills/akra-mcp-hub/SKILL.md` 를 쓰고, app-server 연결이 그 폴더를
 //!   skill root 로 등록한다. 세션은 skill 설명 한 줄만 싣고, 필요할 때 `akra mcp` 를 쓴다.
 
+mod catalog;
 mod gateway_client;
 mod notion_resource_version;
 mod session;
+mod tool_cache;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,7 +29,7 @@ use self::session::HubAppServerSession;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
     McpHubServerSpec, McpHubServerStatus, McpHubSharedSkill, McpHubSharedSkillAction,
-    McpHubToolInfo, McpHubTransport,
+    McpHubToolCatalog, McpHubToolInfo, McpHubTransport,
 };
 
 const HUB_DIRECTORY: &str = "mcp-hub";
@@ -56,6 +58,7 @@ struct ResidentEngine {
     session: HubAppServerSession,
     threads: HashMap<String, String>,
     last_used: Instant,
+    catalog_identity: Option<String>,
 }
 
 impl CodexMcpHubBackend {
@@ -121,6 +124,14 @@ impl CodexMcpHubBackend {
         &self,
         work: impl FnOnce(&mut HubAppServerSession, &mut HashMap<String, String>) -> Result<T>,
     ) -> Result<T> {
+        self.with_engine_for_catalog(None, work)
+    }
+
+    fn with_engine_for_catalog<T>(
+        &self,
+        identity: Option<&str>,
+        work: impl FnOnce(&mut HubAppServerSession, &mut HashMap<String, String>) -> Result<T>,
+    ) -> Result<T> {
         let Some(resident) = &self.resident else {
             let mut session = self.open_session()?;
             return work(&mut session, &mut HashMap::new());
@@ -128,11 +139,19 @@ impl CodexMcpHubBackend {
         let mut guard = resident
             .lock()
             .map_err(|_| anyhow::anyhow!("the MCP hub engine lock is poisoned"))?;
+        if identity.is_some()
+            && guard
+                .as_ref()
+                .is_some_and(|engine| engine.catalog_identity.as_deref() != identity)
+        {
+            *guard = None;
+        }
         if guard.is_none() {
             *guard = Some(ResidentEngine {
                 session: self.open_session()?,
                 threads: HashMap::new(),
                 last_used: Instant::now(),
+                catalog_identity: identity.map(str::to_owned),
             });
         }
         let Some(engine) = guard.as_mut() else {
@@ -172,6 +191,13 @@ impl CodexMcpHubBackend {
 }
 
 impl McpHubBackendPort for CodexMcpHubBackend {
+    fn tool_catalogs(&self) -> Result<Vec<McpHubToolCatalog>> {
+        self.cached_tool_catalogs()
+    }
+
+    fn invalidate_tool_catalogs(&self) -> Result<()> {
+        tool_cache::ToolCatalogCache::new(&self.home).invalidate()
+    }
     fn registered_servers(&self) -> Result<Vec<McpHubServerSpec>> {
         Ok(registered_servers_in(&self.read_document()?))
     }
@@ -190,6 +216,7 @@ impl McpHubBackendPort for CodexMcpHubBackend {
         servers.insert(&spec.name, Item::Table(server_table(spec)));
         self.write_document(&document)?;
         write_agent_skill(&self.home)?;
+        self.invalidate_tool_catalogs()?;
         self.reload()
     }
 
@@ -202,6 +229,7 @@ impl McpHubBackendPort for CodexMcpHubBackend {
             .is_some();
         if removed {
             self.write_document(&document)?;
+            self.invalidate_tool_catalogs()?;
             self.reload()?;
         }
         Ok(removed)
@@ -236,32 +264,37 @@ impl McpHubBackendPort for CodexMcpHubBackend {
 
     /// 로그인은 사용자를 오래 기다리므로 상주 엔진을 쓰지 않고 따로 연다. 끝나면 상주 엔진을 내린다.
     fn login(&self, server: &str, on_authorization_url: &mut dyn FnMut(&str)) -> Result<()> {
-        let mut session = self.open_session()?;
-        let response = session.request(
-            "mcpServer/oauth/login",
-            json!({ "name": server }),
-            REQUEST_TIMEOUT,
-        )?;
-        let url = response
-            .get("authorizationUrl")
-            .and_then(Value::as_str)
-            .context("mcpServer/oauth/login returned no authorization URL")?;
-        on_authorization_url(url);
-        let completed = session.wait_for_notification(
-            "mcpServer/oauthLogin/completed",
-            LOGIN_TIMEOUT,
-            |params| params.get("name").and_then(Value::as_str) == Some(server),
-        )?;
-        drop(session);
+        self.invalidate_tool_catalogs()?;
+        let result = (|| {
+            let mut session = self.open_session()?;
+            let response = session.request(
+                "mcpServer/oauth/login",
+                json!({ "name": server }),
+                REQUEST_TIMEOUT,
+            )?;
+            let url = response
+                .get("authorizationUrl")
+                .and_then(Value::as_str)
+                .context("mcpServer/oauth/login returned no authorization URL")?;
+            on_authorization_url(url);
+            let completed = session.wait_for_notification(
+                "mcpServer/oauthLogin/completed",
+                LOGIN_TIMEOUT,
+                |params| params.get("name").and_then(Value::as_str) == Some(server),
+            )?;
+            drop(session);
+            if completed.get("success").and_then(Value::as_bool) == Some(true) {
+                return Ok(());
+            }
+            let detail = completed
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("the login did not finish");
+            bail!("MCP server `{server}` login failed: {detail}")
+        })();
         self.reload()?;
-        if completed.get("success").and_then(Value::as_bool) == Some(true) {
-            return Ok(());
-        }
-        let detail = completed
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("the login did not finish");
-        bail!("MCP server `{server}` login failed: {detail}")
+        self.invalidate_tool_catalogs()?;
+        result
     }
 
     fn reload(&self) -> Result<()> {

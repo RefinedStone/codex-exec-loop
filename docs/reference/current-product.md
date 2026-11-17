@@ -548,13 +548,23 @@ call tools on demand.
   stdin and exits with 1 when the tool result has `isError: true`.
 - The command does not resolve repository configuration, so it runs in any directory.
 - Engine: a hub-only `codex app-server` with `CODEX_HOME=$AKRA_HOME/mcp-hub`. When `akra-gateway` runs,
-  `servers`, `search`, `describe`, and `call` go to its resident engine (`akra/mcp/statuses`,
-  `akra/mcp/call`); otherwise each command starts its own engine and stops it when done. Codex owns the MCP transports, OAuth, and token storage and refresh. The
+  `servers`, `search`, `describe`, and `call` go through its hub (`akra/mcp/statuses`,
+  `akra/mcp/catalogs`, `akra/mcp/call`); otherwise the CLI uses its local backend. Codex owns the MCP transports, OAuth, and token storage and refresh. The
   registry is `$AKRA_HOME/mcp-hub/config.toml` in Codex `[mcp_servers.<name>]` form; extra Codex keys
   written by hand are kept.
-- `call` opens an ephemeral thread with only the target server enabled. `search` and `servers`
-  connect every enabled server. Requests that app-server sends to the hub (MCP elicitation and others)
+- `call` opens an ephemeral thread with only the target server enabled. `servers`
+  connects every enabled server. Requests that app-server sends to the hub (MCP elicitation and others)
   are declined.
+- `search` uses server-specific tool catalogs in the private
+  `$AKRA_HOME/mcp-hub/tool-catalog.sqlite` cache for 10 minutes. A fresh entry needs no app-server.
+  Missing or expired entries refresh only that server. Full schemas are cached, but authentication
+  and connection state are not; `servers`, `describe`, and `call` remain live.
+  Configuration and configured credential-environment changes invalidate cache identity.
+  Add, remove, login attempts, and explicit Gateway reload invalidate the generation.
+  Idle shutdown and normal Gateway shutdown preserve catalogs. An in-flight old generation cannot
+  restore invalidated entries. Failed discovery is not cached, including authentication failure.
+  Cache read/write failures use live discovery; explicit invalidation failures are reported.
+  Unannounced remote schema or account changes may remain visible in search until expiry.
 - `login` prints the authorization URL on stderr and waits up to 10 minutes for the OAuth callback.
 - The Gateway starts the resident engine on the first request, reuses one ephemeral thread per server,
   handles one request at a time, drops the engine after an error, and stops it after 10 idle minutes.

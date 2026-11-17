@@ -19,6 +19,8 @@ pub const MCP_HUB_TOOL_SUMMARY_MAX_CHARS: usize = 160;
 pub const MCP_HUB_GATEWAY_METHOD_PREFIX: &str = "akra/mcp/";
 /// params `{ hubHome, server? }` -> result `{ statuses: [McpHubServerStatus] }`
 pub const MCP_HUB_GATEWAY_STATUSES: &str = "akra/mcp/statuses";
+/// Cached discovery metadata, not authentication or connection state.
+pub const MCP_HUB_GATEWAY_CATALOGS: &str = "akra/mcp/catalogs";
 /// params `{ hubHome, server, tool, arguments }` -> result 는 MCP `tools/call` 결과이다.
 pub const MCP_HUB_GATEWAY_CALL: &str = "akra/mcp/call";
 /// params `{ hubHome }` -> result `{}`. 등록부나 로그인이 바뀐 뒤 상주 엔진을 내린다.
@@ -117,6 +119,12 @@ pub struct McpHubToolInfo {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpHubToolCatalog {
+    pub name: String,
+    pub tools: Vec<McpHubToolInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
