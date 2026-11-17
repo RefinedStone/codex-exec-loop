@@ -13,8 +13,9 @@ use crate::domain::mcp_hub::McpHubToolCatalog;
 impl CodexMcpHubBackend {
     pub(super) fn cached_tool_catalogs(&self) -> Result<Vec<McpHubToolCatalog>> {
         self.catalogs_at(chrono::Utc::now().timestamp(), |name, identity| {
-            self.with_engine_for_catalog(Some(identity), |session, _| {
-                statuses_from(session, Some(name))
+            self.with_engine_for_catalog(Some(identity), |session, threads| {
+                let thread = self.thread_for_server(session, threads, name)?;
+                statuses_from(session, Some(&thread))
             })
         })
     }

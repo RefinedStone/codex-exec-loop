@@ -165,6 +165,20 @@ impl CodexMcpHubBackend {
         result
     }
 
+    fn thread_for_server(
+        &self,
+        session: &mut HubAppServerSession,
+        threads: &mut HashMap<String, String>,
+        server: &str,
+    ) -> Result<String> {
+        if let Some(thread) = threads.get(server) {
+            return Ok(thread.clone());
+        }
+        let thread = self.start_thread_for(session, server)?;
+        threads.insert(server.to_string(), thread.clone());
+        Ok(thread)
+    }
+
     /// 대상 서버만 켠 ephemeral 스레드를 연다. 다른 서버는 접속하지 않는다.
     fn start_thread_for(&self, session: &mut HubAppServerSession, server: &str) -> Result<String> {
         let mut overrides = Map::new();
@@ -236,19 +250,17 @@ impl McpHubBackendPort for CodexMcpHubBackend {
     }
 
     fn server_statuses(&self, only: Option<&str>) -> Result<Vec<McpHubServerStatus>> {
-        self.with_engine(|session, _threads| statuses_from(session, only))
+        self.with_engine(|session, threads| {
+            let thread = only
+                .map(|server| self.thread_for_server(session, threads, server))
+                .transpose()?;
+            statuses_from(session, thread.as_deref())
+        })
     }
 
     fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         self.with_engine(|session, threads| {
-            let thread_id = match threads.get(server) {
-                Some(thread_id) => thread_id.clone(),
-                None => {
-                    let thread_id = self.start_thread_for(session, server)?;
-                    threads.insert(server.to_string(), thread_id.clone());
-                    thread_id
-                }
-            };
+            let thread_id = self.thread_for_server(session, threads, server)?;
             session.request(
                 "mcpServer/tool/call",
                 json!({ "threadId": thread_id, "server": server, "tool": tool, "arguments": arguments }),
@@ -331,14 +343,15 @@ fn is_idle(last_used: Instant, now: Instant) -> bool {
 
 fn statuses_from(
     session: &mut HubAppServerSession,
-    only: Option<&str>,
+    thread_id: Option<&str>,
 ) -> Result<Vec<McpHubServerStatus>> {
     let mut statuses = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
         let mut params = json!({ "detail": "full", "limit": STATUS_PAGE_LIMIT });
-        if let Some(name) = only {
-            params["serverName"] = json!(name);
+        if let Some(thread_id) = thread_id {
+            params["threadId"] = json!(thread_id);
+            params["detail"] = json!("toolsAndAuthOnly");
         }
         if let Some(cursor) = &cursor {
             params["cursor"] = json!(cursor);

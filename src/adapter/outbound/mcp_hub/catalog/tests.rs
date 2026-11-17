@@ -199,3 +199,46 @@ fn identity_covers_extra_configuration_and_credential_environment_without_plaint
             .then(|| "secret-one".into()))
     );
 }
+
+#[test]
+fn targeted_discovery_uses_the_official_thread_scope_on_the_wire() {
+    let backend = backend();
+    let script = backend.home.join("fake-app-server.cjs");
+    std::fs::write(&script, r#"
+const readline = require('node:readline');
+readline.createInterface({input:process.stdin}).on('line', line => {
+  const m = JSON.parse(line);
+  if (m.id === undefined) return;
+  let result = {};
+  if (m.method === 'thread/start') {
+    if (m.params.config['mcp_servers.two.enabled'] !== false || m.params.ephemeral !== true)
+      return process.stdout.write(JSON.stringify({id:m.id,error:{message:'other server enabled'}})+'\n');
+    result = {thread:{id:'scoped-one'}};
+  }
+  if (m.method === 'mcpServerStatus/list') {
+    if (m.params.threadId !== 'scoped-one' || m.params.detail !== 'toolsAndAuthOnly' || 'serverName' in m.params)
+      return process.stdout.write(JSON.stringify({id:m.id,error:{message:'missing official thread scope'}})+'\n');
+    result = {data:[{name:'one',tools:{read:{name:'read',inputSchema:{type:'object'}}}}],nextCursor:null};
+  }
+  process.stdout.write(JSON.stringify({id:m.id,result})+'\n');
+});
+"#).unwrap();
+    let node = which::which("node").unwrap();
+    let command = crate::trusted_executable::TrustedCommand {
+        program: node.clone(),
+        source_executable: node,
+        prefix_args: vec![script.into_os_string()],
+        trust_warning: None,
+    };
+    let mut session =
+        super::super::session::HubAppServerSession::open(&command, &backend.home).unwrap();
+    let mut threads = std::collections::HashMap::new();
+    let thread = backend
+        .thread_for_server(&mut session, &mut threads, "one")
+        .unwrap();
+    let statuses = statuses_from(&mut session, Some(&thread)).unwrap();
+    assert_eq!(statuses[0].name, "one");
+    assert_eq!(statuses[0].tools[0].name, "read");
+    drop(session);
+    std::fs::remove_dir_all(&backend.home).unwrap();
+}
