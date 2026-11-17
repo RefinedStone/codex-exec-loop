@@ -286,7 +286,11 @@ impl PlanningTaskMutationService {
             }
         }
 
-        bail!("planning task mutation could not commit because planning state kept changing")
+        // 아무것도 저장하지 않았다. 다시 보내면 된다. 그래서 실패가 아니라 거절이다 (plan 18 K4-9d).
+        Err(PlanningMutationRefusal::locked(
+            "planning task mutation could not commit because planning state kept changing",
+        )
+        .into())
     }
     pub fn apply_commands(
         &self,
@@ -367,9 +371,10 @@ impl PlanningTaskMutationService {
             }
         }
         let observed_revision = observed_revision.unwrap_or_default();
-        bail!(
+        Err(PlanningMutationRefusal::locked(format!(
             "planning task mutation could not commit because planning state kept changing after observed revision {observed_revision}"
-        )
+        ))
+        .into())
     }
 
     /// Admits one system-authored task through the ordinary planning queue. The idempotency key

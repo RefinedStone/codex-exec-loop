@@ -141,6 +141,38 @@ impl CommandOnlyKernel {
     }
 }
 
+/// 실패의 원인 글이다. 오류의 사슬 전체를 싣는다: 맨 위의 글만으로는 원인을 알 수 없다.
+fn failure_text(error: &anyhow::Error) -> String {
+    command_failure_detail(&format!("{error:#}"))
+}
+
+/*
+ * 일의 끝을 답으로 바꾼다. `op_id` 는 기록한 명령의 번호이다. 기록하지 않은 명령(TUI 가 커널을 쥔 저장소)은 없다.
+ * 초기화의 실패는 오류이다 (K4-9a 의 입구가 그 글을 보인다). 저장 명령의 실패는 답의 `failure` 이다.
+ */
+fn work_answer(end: WorkEnd, is_reset: bool, op_id: Option<i64>) -> Result<Value> {
+    let receipt = |rejection| {
+        op_id.map(|op_id| OperationReceipt {
+            op_id,
+            rejection,
+            replayed: false,
+        })
+    };
+    let response = CommandResponse::from_core(Some(&[]));
+    Ok(serde_json::to_value(match end {
+        WorkEnd::Done(result) => response
+            .with_operation(receipt(None))
+            .with_stored(result.map(StoredCommandOutcome::Done)),
+        WorkEnd::Rejected(rejection) => response
+            .with_operation(receipt(Some(rejection.reason)))
+            .with_stored(Some(StoredCommandOutcome::Rejected(rejection))),
+        WorkEnd::Failed(error) if is_reset => Err(error)?,
+        WorkEnd::Failed(error) => response
+            .with_operation(receipt(None))
+            .with_failed_stored_command(failure_text(&error)),
+    })?)
+}
+
 /// 명령 전용 조립이 실행하는 일이다. 저장된 planning 데이터만 바꾼다.
 enum CommandOnlyWork {
     Reset { target: ResetTarget, confirm: bool },
@@ -216,25 +248,25 @@ impl KernelCommandPort for CommandOnlyKernel {
             {
                 None
             }
+            /*
+             * Gateway 가 커널을 쥐고 있는데 이 명령은 여기로 왔다. 그 Gateway 가 이 명령을 받지 않았다는 뜻이다.
+             * 옛 판이면 다시 시작해야 한다.
+             */
+            Err(error)
+                if error
+                    .downcast_ref::<RepositoryKernelLockHeld>()
+                    .is_some_and(|held| held.owner == Some(RepositoryKernelOwner::Gateway)) =>
+            {
+                return Err(error.context(
+                    "The Akra Gateway runs the kernel of this repository and did not take this command. If the Gateway is an older version than this program, restart it.",
+                ));
+            }
             Err(error) => return Err(error),
         };
         // K6 까지의 예외이다: TUI 가 커널을 쥐 저장소에서는 직접 실행한다. 기록에 남지 않는다.
         let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
         if lock.is_none() {
-            let response = CommandResponse::from_core(Some(&[]));
-            return Ok(serde_json::to_value(match self.run(work) {
-                WorkEnd::Done(result) => {
-                    response.with_stored(result.map(StoredCommandOutcome::Done))
-                }
-                WorkEnd::Rejected(rejection) => {
-                    response.with_stored(Some(StoredCommandOutcome::Rejected(rejection)))
-                }
-                // 잠금을 쥔 경로와 같은 답이다: 초기화의 실패는 오류이고, 저장 명령의 실패는 답의 `failure` 이다.
-                WorkEnd::Failed(error) if is_reset => return Err(error),
-                WorkEnd::Failed(error) => {
-                    response.with_failed_stored_command(command_failure_detail(&error.to_string()))
-                }
-            })?);
+            return work_answer(self.run(work), is_reset, None);
         }
         let mut descriptor = descriptor.context("stored mutation must have a descriptor")?;
         descriptor.caller = Some(self.caller.to_string());
@@ -299,31 +331,11 @@ impl KernelCommandPort for CommandOnlyKernel {
                 thread_id: descriptor.thread_id,
                 result: OperationEnd::Failed,
                 reason: None,
-                detail: Some(command_failure_detail(&error.to_string())),
+                detail: Some(failure_text(error)),
             },
         };
         log.append_kernel_events(&self.workspace, &[record(completed_sequence, closing)])?;
-        let receipt = |rejection| {
-            Some(OperationReceipt {
-                op_id,
-                rejection,
-                replayed: false,
-            })
-        };
-        let response = CommandResponse::from_core(Some(&[]));
-        Ok(serde_json::to_value(match end {
-            WorkEnd::Done(result) => response
-                .with_operation(receipt(None))
-                .with_stored(result.map(StoredCommandOutcome::Done)),
-            WorkEnd::Rejected(rejection) => response
-                .with_operation(receipt(Some(rejection.reason)))
-                .with_stored(Some(StoredCommandOutcome::Rejected(rejection))),
-            // 초기화의 실패는 지금처럼 오류이다 (K4-9a 의 입구가 그 글을 보인다). 저장 명령의 실패는 답에 싣는다.
-            WorkEnd::Failed(error) if is_reset => return Err(error),
-            WorkEnd::Failed(error) => response
-                .with_operation(receipt(None))
-                .with_failed_stored_command(command_failure_detail(&error.to_string())),
-        })?)
+        work_answer(end, is_reset, Some(op_id))
     }
 
     fn query(&self, input: Value, wait: bool) -> Result<Value> {
