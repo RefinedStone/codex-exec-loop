@@ -50,11 +50,18 @@ pub(in crate::core) struct CoreController {
 
 impl CoreController {
     pub(in crate::core) fn new() -> Self {
+        Self::with_turn_concurrency(super::TurnConcurrencyPolicy::default())
+    }
+
+    /// 함께 도는 대화 턴의 수의 정책을 정한 core 이다 (plan 19 P4, plan 18 Q5-1).
+    pub(in crate::core) fn with_turn_concurrency(policy: super::TurnConcurrencyPolicy) -> Self {
+        let mut conversation_turn = ConversationTurnFeatureReducer::new();
+        conversation_turn.set_turn_concurrency(policy);
         Self {
             state: AppState::new(),
             startup: StartupFeatureReducer::new(),
             session_feature: SessionFeatureReducer::new(),
-            conversation_turn: ConversationTurnFeatureReducer::new(),
+            conversation_turn,
             read_models: ReadModelFeatureReducer::new(),
             planning: PlanningFeatureReducer::new(),
             github_review: GithubReviewFeatureReducer::new(),
@@ -10314,6 +10321,67 @@ mod tests {
             );
             assert!(busy.effects.is_empty(), "no planning task is made");
         }
+    }
+
+    #[test]
+    fn the_turn_concurrency_policy_admits_turns_of_other_threads_up_to_its_value() {
+        // plan 19 P4, plan 18 Q5-1: only the policy value differs from the test above.
+        let mut controller =
+            CoreController::with_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelModeEnabled(
+            false,
+        )));
+        load_test_session_catalog(&mut controller);
+        start_test_turn(&mut controller, "thread-1", "turn-1");
+
+        let same_thread = controller.handle_input(thread_prompt("thread-1", "hello"));
+        assert_eq!(
+            thread_prompt_admission(&same_thread),
+            super::super::ThreadPromptAdmission::RejectedBusy,
+            "one thread runs one turn for every policy value"
+        );
+
+        let second = controller.handle_input(thread_prompt("thread-alpha", "hello"));
+        assert_eq!(
+            thread_prompt_admission(&second),
+            super::super::ThreadPromptAdmission::Accepted {
+                correlation: manual_prompt_correlation(1, "/tmp/workspace"),
+            },
+            "a second thread gets the free place"
+        );
+        let submitted = controller.handle_input(prepared_thread_prompt(1, "hello", "planned"));
+        assert!(
+            matches!(
+                submitted.effects.as_slice(),
+                [CoreEffect::SubmitTurn { request, .. }]
+                    if request.thread_id.as_deref() == Some("thread-alpha")
+            ),
+            "{:?}",
+            submitted.events
+        );
+        assert!(submitted.events.iter().any(|event| matches!(
+            event,
+            AppEvent::ThreadActivityChanged(activity)
+                if ["thread-1", "thread-alpha"].iter().all(|thread_id| activity
+                    .iter()
+                    .any(|thread| thread.thread_id == *thread_id && thread.running))
+        )));
+
+        let third = controller.handle_input(thread_prompt("thread-beta", "hello"));
+        assert_eq!(
+            thread_prompt_admission(&third),
+            super::super::ThreadPromptAdmission::RejectedBusy,
+            "two turns use both places"
+        );
+        assert!(third.effects.is_empty());
+    }
+
+    #[test]
+    fn a_turn_concurrency_policy_of_zero_runs_one_turn() {
+        let policy = super::super::TurnConcurrencyPolicy::new(0);
+        assert_eq!(policy, super::super::TurnConcurrencyPolicy::default());
+        assert!(policy.has_room(0));
+        assert!(!policy.has_room(1));
     }
 
     #[test]

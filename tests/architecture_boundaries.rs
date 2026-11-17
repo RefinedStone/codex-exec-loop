@@ -3545,6 +3545,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "kernel_records",
         // plan 18 K4-4b: the recorded commands that wait for the completion of their effect.
         "command_operations",
+        // plan 18 Q5-1: the policy for the number of conversation turns that run together.
+        "turn_concurrency",
     ];
     let thread_session_fields = [
         "turn_stream_state",

@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **제안**. Q5-1 만 바로 구현한다 (§4). 나머지 조각은 구현하지 않았다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. Q5-1 을 구현했다 (2026-11-17, §7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다.
 - 상위 문서: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.4, §5.8, §5.9, §6 의 K6. 결정 KP-03, KP-04,
   KP-06. [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §3.2, §5.3, §6 의 Q5, 성질 P4.
@@ -178,7 +178,7 @@ struct ThreadSessions {
 
 | 조각 | 내용 | 동작 | 확인 |
 | --- | --- | --- | --- |
-| Q5-1 | `TurnConcurrencyPolicy`. 턴을 받는 규칙이 도는 턴의 수를 정책 값과 견준다 | 유지 (기본값 1) | core 시험: 값 1 은 지금과 같다. 값 2 는 thread 둘의 턴을 받고 셋째를 거절한다. 같은 thread 의 둘째 턴은 값과 관계없이 거절한다 |
+| Q5-1 (구현 2026-11-17, §7) | `TurnConcurrencyPolicy`. 턴을 받는 규칙이 도는 턴의 수를 정책 값과 견준다 | 유지 (기본값 1) | core 시험: 값 1 은 지금과 같다. 값 2 는 thread 둘의 턴을 받고 셋째를 거절한다. 같은 thread 의 둘째 턴은 값과 관계없이 거절한다 |
 | Q5-2a ~ | session 맵. 규칙 묶음을 하나씩 옮긴다. `mem::swap` 을 지운다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-3 | 자동 후속 차선. 큐 프롬프트를 자리가 날 때 낸다. 시뮬레이션에 값 2 를 넣는다 | 확장 (값 2 이상에서만 다르다) | 시뮬레이션의 새 불변식: 자동 후속을 이어 가는 thread 는 하나이다 |
 | K6-1 | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 | 가짜 Gateway 시험. 모델 턴은 없다 |
@@ -212,4 +212,22 @@ struct ThreadSessions {
 
 ## 7. 조각의 결과
 
-구현한 조각의 결과를 여기에 적는다.
+### Q5-1 (2026-11-17)
+
+- `TurnConcurrencyPolicy` (`src/core/app/turn_submission.rs`). 값은 모든 thread 를 통튼 턴의 수이고 기본값은 1 이다.
+  0 은 1 로 읽는다.
+- 턴을 받는 두 자리가 정책을 본다: `admit_turn_submission_in_session` (다른 session 의 턴이 정책의 수만큼 있으면
+  `RejectedActive`)과 `thread_rejects_new_prompt` (thread 프롬프트의 `RejectedBusy`). thread 하나의 턴은 값과
+  관계없이 하나이다.
+- `CoreController::with_turn_concurrency` 가 값을 받는다. `CoreController::new` 는 기본값을 쓴다. 커널의 조립은 아직
+  `new` 만 부른다. 그래서 제품에서 값은 항상 1 이다.
+
+확인: core 시험 둘. 값 2 의 core 가 thread 둘의 턴을 받고 셋째를 거절한다. 같은 thread 의 둘째 턴은 거절한다. 값 0
+은 1 과 같다. 기존 core 시험, 커널 호스트 시험, 커널 시뮬레이션, 구조 시험이 통과한다. 모델 턴은 없다.
+
+남긴 것:
+
+- 값을 바꾸는 설정은 없다 (Q-M5-2).
+- 값이 2 이상일 때 §2.1 의 나머지 자리(큐에 남긴 프롬프트, 턴 뒤 경로, 자동 후속 설정)는 한 턴의 규칙 그대로이다.
+  Q5-3 에서 정한다.
+- 커널 시뮬레이션은 값 1 만 돌린다.

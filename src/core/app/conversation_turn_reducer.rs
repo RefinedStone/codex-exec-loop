@@ -231,6 +231,8 @@ pub(super) struct ConversationTurnFeatureReducer {
     background_sessions: Vec<ThreadSession>,
     // 뒤로 보낸 session 을 보는 자리에 잠시 넣고 처리하는 중이다. 화면용 스트림 투영은 내지 않는다.
     serving_background: bool,
+    // 함께 도는 턴의 수의 정책이다 (plan 18 Q5-1). 커널을 조립할 때 정한다.
+    turn_concurrency: super::TurnConcurrencyPolicy,
     // 승인 검토 저장은 모든 thread 를 통틀어 한 줄로 차례대로 한다. 그래서 session 밖에 둔다.
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     // 클라이언트에 마지막으로 알린 뒤의 thread 요약이다 (plan 18 K2-4).
@@ -425,10 +427,23 @@ impl ConversationTurnFeatureReducer {
         })
     }
 
-    fn other_session_active_turn(&self) -> Option<TurnSubmissionCorrelation> {
+    /// 다른 session 에서 도는 턴들이다. 처리하는 session 은 보는 자리에 있으므로 뒤의 목록이 "다른 session" 이다.
+    fn other_session_active_turns(&self) -> impl Iterator<Item = TurnSubmissionCorrelation> + '_ {
         self.background_sessions
             .iter()
-            .find_map(|session| session.conversation_runtime.active_turn_correlation())
+            .filter_map(|session| session.conversation_runtime.active_turn_correlation())
+    }
+
+    /*
+     * 다른 session 의 턴 때문에 새 턴의 자리가 없으면 그 턴 중 하나이다 (plan 18 Q5-1). 정책 값이 1 이면 다른
+     * session 의 턴 하나가 자리를 모두 쓴다.
+     */
+    fn other_session_turn_without_room(&self) -> Option<TurnSubmissionCorrelation> {
+        let running = self.other_session_active_turns().count();
+        if self.turn_concurrency.has_room(running) {
+            return None;
+        }
+        self.other_session_active_turns().next()
     }
 
     /*
@@ -506,6 +521,7 @@ impl ConversationTurnFeatureReducer {
             session: ThreadSession::new(),
             background_sessions: Vec::new(),
             serving_background: false,
+            turn_concurrency: super::TurnConcurrencyPolicy::default(),
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             published_thread_activity: Vec::new(),
             published_thread_turns: Vec::new(),
@@ -716,19 +732,26 @@ impl ConversationTurnFeatureReducer {
     }
 
     /*
-     * 이 thread 는 지금 새 프롬프트를 받을 수 없다 (plan 18 K3-3b). 그 thread 에 일이 남아 있거나, 다른 thread 에서
-     * 턴이 돈다. 턴은 모든 thread 를 통틀어 하나만 돌기 때문이다. 준비는 planning 작업을 만들므로 그 전에 거절한다.
+     * 이 thread 는 지금 새 프롬프트를 받을 수 없다 (plan 18 K3-3b). 그 thread 에 일이 남아 있거나, 도는 턴이 정책의
+     * 수만큼 있다 (plan 18 Q5-1). 준비는 planning 작업을 만들므로 그 전에 거절한다.
      */
     pub(super) fn thread_rejects_new_prompt(&self, thread_id: &str) -> bool {
-        std::iter::once(&self.session)
-            .chain(&self.background_sessions)
-            .any(|session| {
+        let sessions = || std::iter::once(&self.session).chain(&self.background_sessions);
+        let running = sessions()
+            .filter(|session| {
                 session
                     .conversation_runtime
                     .active_turn_correlation()
                     .is_some()
-                    || (session.streams_thread(thread_id) && session.is_busy())
             })
+            .count();
+        !self.turn_concurrency.has_room(running)
+            || sessions().any(|session| session.streams_thread(thread_id) && session.is_busy())
+    }
+
+    /// 함께 도는 턴의 수의 정책을 정한다 (plan 18 Q5-1). 커널을 조립할 때 한 번 부른다.
+    pub(super) fn set_turn_concurrency(&mut self, policy: super::TurnConcurrencyPolicy) {
+        self.turn_concurrency = policy;
     }
 
     /*
@@ -768,12 +791,12 @@ impl ConversationTurnFeatureReducer {
         &mut self,
         request: &TurnSubmissionRequest,
     ) -> TurnSubmissionAdmission {
-        // 대화 턴은 모든 thread 를 통틀어 하나만 실행한다 (plan 18 K2-3).
+        // thread 하나의 턴은 하나이다 (plan 18 K2-3). 다른 thread 의 턴은 정책의 수까지 함께 돈다 (plan 18 Q5-1).
         if let Some(active_correlation) = self
             .session
             .conversation_runtime
             .active_turn_correlation()
-            .or_else(|| self.other_session_active_turn())
+            .or_else(|| self.other_session_turn_without_room())
         {
             if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
                 self.session
