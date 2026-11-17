@@ -916,7 +916,7 @@ fn ensure_expected_planning_revision(
             return Err(PlanningMutationRefusal::revision_stale(format!(
                 "planning changed after task `{}` was opened (revision {expected} -> {current_planning_revision}); reload it and retry",
                 input.task_id.trim()
-            ))
+            ), current_planning_revision)
             .into());
         }
     }

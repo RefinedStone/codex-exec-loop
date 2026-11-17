@@ -7,16 +7,21 @@
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningMutationRefusal {
-    /// 보낸 revision 이 지금의 revision 과 다르다. 화면을 다시 읽고 다시 해야 한다.
-    RevisionStale { message: String },
+    /// 보낸 revision 이 지금의 revision 과 다르다. 화면을 다시 읽고 다시 해야 한다. `current_revision` 은 거절할 때
+    /// 저장소에서 읽은 revision 이다.
+    RevisionStale {
+        message: String,
+        current_revision: i64,
+    },
     /// 다른 변경이나 병렬 작업이 그 planning 데이터를 쥐고 있다. 조금 뒤에 다시 하면 된다.
     Locked { message: String },
 }
 
 impl PlanningMutationRefusal {
-    pub fn revision_stale(message: impl Into<String>) -> Self {
+    pub fn revision_stale(message: impl Into<String>, current_revision: i64) -> Self {
         Self::RevisionStale {
             message: message.into(),
+            current_revision,
         }
     }
 
@@ -28,7 +33,7 @@ impl PlanningMutationRefusal {
 
     pub fn message(&self) -> &str {
         match self {
-            Self::RevisionStale { message } | Self::Locked { message } => message,
+            Self::RevisionStale { message, .. } | Self::Locked { message } => message,
         }
     }
 
@@ -53,7 +58,8 @@ mod tests {
 
     #[test]
     fn a_refusal_keeps_its_text_and_is_found_under_added_context() {
-        let refusal = PlanningMutationRefusal::revision_stale("planning changed; reload and retry");
+        let refusal =
+            PlanningMutationRefusal::revision_stale("planning changed; reload and retry", 8);
         let error = Err::<(), _>(anyhow::Error::from(refusal.clone()))
             .context("failed to update the task")
             .unwrap_err();

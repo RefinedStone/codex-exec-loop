@@ -196,7 +196,7 @@ impl PlanningAdminFacadeService {
             {
                 return Err(PlanningMutationRefusal::revision_stale(format!(
                     "planning changed after task `{task_id}` was opened (revision {expected} -> {current}); reload it and retry"
-                ))
+                ), current)
                 .into());
             }
             let original_count = documents.task_authority.tasks.len();

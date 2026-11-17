@@ -83,6 +83,9 @@ pub enum StoredCommandResult {
 pub struct StoredCommandRejection {
     pub reason: ReasonCode,
     pub message: String,
+    /// 거절할 때 저장소에서 읽은 planning revision 이다. 낡은 revision 의 거절에만 있다. 커널은 자기 planning 이 이
+    /// 값에 닿은 뒤에 답한다 (plan 18 K4-9d).
+    pub planning_revision: Option<i64>,
 }
 
 impl From<&PlanningMutationRefusal> for StoredCommandRejection {
@@ -93,6 +96,12 @@ impl From<&PlanningMutationRefusal> for StoredCommandRejection {
                 PlanningMutationRefusal::Locked { .. } => ReasonCode::PlanningLocked,
             },
             message: refusal.message().to_string(),
+            planning_revision: match refusal {
+                PlanningMutationRefusal::RevisionStale {
+                    current_revision, ..
+                } => Some(*current_revision),
+                PlanningMutationRefusal::Locked { .. } => None,
+            },
         }
     }
 }

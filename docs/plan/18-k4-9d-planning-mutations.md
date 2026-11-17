@@ -320,6 +320,14 @@ PR 리뷰 반영 (2026-11-17):
 - 실패의 원인 글은 오류의 사슬 전체이다 (기록의 `detail` 과 답의 `failure`). 전에는 맨 위의 글만 실었다.
 - 명령 전용 조립의 두 경로(잠금을 쥔 경로, TUI 가 커널을 쥔 경로)가 한 함수로 답을 만든다 (`work_answer`).
 
+PR 리뷰 반영 (2026-11-18, 넷째):
+
+- 낡은 revision 으로 거절된 명령의 답도 미룬다. 셋째 반영은 성공한 명령의 답만 미뤘다. 그래서 거절 바로 뒤의
+  `planning` 조회가 낡은 revision 을 답하고 그 값으로 다시 보낸 명령이 또 거절될 수 있었다. 거절이 저장소의 지금
+  revision 을 싣고 (`PlanningMutationRefusal::RevisionStale.current_revision`,
+  `StoredCommandRejection.planning_revision`), 커널은 자기 planning 이 그 값에 닿은 뒤에 답한다. 이 값은 답에 싣지
+  않는다.
+
 리뷰가 지적했고 고치지 않은 것:
 
 - 시간 초과 뒤의 재시도: CLI 는 실패한 명령의 답에 그 명령의 멱등 키를 싣는다. 호출자가 그 키로 다시 보내면 커널은

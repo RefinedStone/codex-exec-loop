@@ -3195,6 +3195,7 @@ pub(crate) mod tests {
         let stale = StoredCommandOutcome::Rejected(StoredCommandRejection {
             reason: ReasonCode::PlanningRevisionStale,
             message: "planning changed; reload and retry".to_string(),
+            planning_revision: Some(8),
         });
         let executor = Arc::new(Scripted {
             ends: std::sync::Mutex::new(vec![
