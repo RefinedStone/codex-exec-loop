@@ -181,3 +181,16 @@ fn null_structured_payload_uses_text_and_edit_instants_compare_canonically() {
     assert_eq!(first, same);
     assert_ne!(first, changed);
 }
+
+#[test]
+fn nullable_error_flag_preserves_a_successful_version() {
+    for error_flag in [Value::Null, json!(false)] {
+        let version = version_from_result(json!({
+            "isError":error_flag,
+            "content":[],
+            "structuredContent":{"page_last_edited_at":"2026-11-17T01:00:00Z"}
+        }))
+        .unwrap();
+        assert_eq!(version, "2026-11-17T01:00:00Z");
+    }
+}
