@@ -184,6 +184,11 @@ impl ThreadSession {
         self.conversation_runtime.post_turn().active_evaluation()
     }
 
+    fn active_post_turn_evaluation_correlation(&self) -> Option<&PostTurnEvaluationCorrelation> {
+        self.active_post_turn_evaluation()
+            .map(|active| &active.correlation)
+    }
+
     fn activity_summary(&self) -> Option<ThreadActivitySummary> {
         let thread_id = self.turn_stream_state.thread_id()?.to_string();
         let runtime = self.conversation_runtime.snapshot();
@@ -285,6 +290,512 @@ impl ThreadSession {
             op_id: self.op_id,
         })
     }
+
+    /// 이 thread 에 턴을 넣는다 (plan 18 K2-3). `other` 는 다른 session 때문에 받을 수 없는 이유이다.
+    fn admit_turn_submission(
+        &mut self,
+        request: &TurnSubmissionRequest,
+        other: OtherSessionBlocks,
+        next_generation: &mut u64,
+        approval_review_persistence: &mut ApprovalReviewPersistenceCoordinator,
+    ) -> TurnSubmissionAdmission {
+        // thread 하나의 턴은 하나이다 (plan 18 K2-3). 다른 thread 의 턴은 정책의 수까지 함께 돈다 (plan 18 Q5-1).
+        if let Some(active_correlation) = self
+            .conversation_runtime
+            .active_turn_correlation()
+            .or(other.turn_without_room)
+        {
+            if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
+                self.conversation_runtime
+                    .cancel_queued_auto_follow_submission();
+            }
+            return TurnSubmissionAdmission::RejectedActive { active_correlation };
+        }
+        /*
+         * 끝나지 않은 정지 시도가 있으면 턴을 받지 않는다. 정지는 app-server 의 모든 턴에 닿는 신호라서, 늦게 나간
+         * 정지가 새 턴을 멈출 수 있다. 뒤의 session 의 정지도 본다. 정지 중에 새 대화를 열면 그 요청은 뒤로 간다.
+         */
+        if let Some(active_stop) = self
+            .active_stop_request
+            .filter(|active| active.pending_attempt.is_some())
+            .or(other.pending_stop)
+        {
+            if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
+                self.conversation_runtime
+                    .cancel_queued_auto_follow_submission();
+            }
+            return TurnSubmissionAdmission::RejectedStopPending {
+                stop_correlation: active_stop.correlation,
+            };
+        }
+        if matches!(
+            request.prompt_origin,
+            super::CorePromptOrigin::Manual | super::CorePromptOrigin::ManualIntake
+        ) && self.turn_stream_state.has_unapplied_confirmed_terminal()
+        {
+            return TurnSubmissionAdmission::RejectedUnavailable;
+        }
+        match self.conversation_runtime.classify_turn_admission(request) {
+            TurnAuthorityAdmission::Accepted => {}
+            TurnAuthorityAdmission::RejectedPreservingLease => {
+                return TurnSubmissionAdmission::RejectedUnavailable;
+            }
+            TurnAuthorityAdmission::RejectedMalformedCurrentAutoFollowTarget => {
+                self.conversation_runtime
+                    .cancel_queued_auto_follow_submission();
+                return TurnSubmissionAdmission::RejectedUnavailable;
+            }
+        }
+        let correlation =
+            TurnSubmissionCorrelation::new(take_generation(next_generation, "turn submission"));
+        self.guarded_session_rename_stream = None;
+        // 새 턴은 이전 턴의 연산에 속하지 않는다. 명령이 낸 턴이면 부르는 쪽이 뒤에 넣는다.
+        self.op_id = None;
+        if !request.transcript_text.trim().is_empty() {
+            self.post_turn_messages.latest_user_message = Some(request.transcript_text.clone());
+        }
+        self.turn_options = request.turn_options.clone();
+        self.conversation_runtime.begin_turn(correlation, request);
+        approval_review_persistence.begin_conversation_turn(correlation);
+        self.turn_stream_state.begin_submission();
+        self.prune_post_turn_evaluation_for_lifecycle();
+        TurnSubmissionAdmission::Accepted { correlation }
+    }
+
+    /// 이 thread 의 턴 스트림 이벤트를 처리한다. 승인 검토 저장은 모든 thread 가 한 줄을 쓰므로 reducer 가 준다.
+    fn apply_turn_stream_event(
+        &mut self,
+        correlation: TurnSubmissionCorrelation,
+        mut event: TurnStreamEvent,
+        approval_review_persistence: &mut ApprovalReviewPersistenceCoordinator,
+    ) -> TurnStreamReduction {
+        if let TurnStreamEvent::ThreadPrepared {
+            thread_id, title, ..
+        } = &mut event
+            && let Some(guarded_rename) = self
+                .guarded_session_rename_stream
+                .as_ref()
+                .filter(|(turn, _)| *turn == correlation)
+                .map(|(_, rename)| rename.clone())
+        {
+            if thread_id == &guarded_rename.request.thread_id {
+                *title = guarded_rename.request.name;
+            }
+            self.guarded_session_rename_stream = None;
+        }
+        if let TurnStreamEvent::AgentMessageCompleted { text, .. } = &event
+            && !text.trim().is_empty()
+        {
+            // 비어 있지 않은 마지막 응답을 쓴다. 병렬 슬롯 루프와 TUI 의 규칙과 같다.
+            self.post_turn_messages.latest_agent_reply = Some(text.clone());
+        }
+        // 턴 종료 처리 전의 작업 공간이다. TUI 는 같은 순서로 골랐다 (활성 턴, 스트림, 실행 캡처).
+        let active_turn_workspace = self
+            .conversation_runtime
+            .snapshot()
+            .active_turn
+            .as_ref()
+            .map(|turn| turn.workspace_directory.clone())
+            .filter(|workspace| !workspace.trim().is_empty());
+        let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
+        let post_turn_evaluation_due_workspace = match &stream_snapshot.update {
+            TurnStreamUpdate::TurnCompleted {
+                turn_id,
+                changed_planning_file_paths,
+                execution_snapshot_capture,
+                ..
+            } => {
+                let stream_workspace = stream_snapshot
+                    .cwd
+                    .clone()
+                    .filter(|workspace| !workspace.trim().is_empty());
+                let planning_workspace_directory = stream_workspace.clone().unwrap_or_default();
+                let workspace_directory = active_turn_workspace
+                    .or(stream_workspace)
+                    .or_else(|| {
+                        execution_snapshot_capture
+                            .as_ref()
+                            .map(|capture| capture.workspace_directory.clone())
+                    })
+                    .unwrap_or_else(|| planning_workspace_directory.clone());
+                self.conversation_runtime
+                    .mark_post_turn_due(PendingPostTurnEvaluation {
+                        thread_id: stream_snapshot.thread_id.clone().unwrap_or_default(),
+                        completed_turn_id: turn_id.clone(),
+                        workspace_directory,
+                        planning_workspace_directory: planning_workspace_directory.clone(),
+                        changed_planning_file_paths: changed_planning_file_paths.clone(),
+                        execution_snapshot_capture: execution_snapshot_capture.clone(),
+                        latest_user_message: self.post_turn_messages.latest_user_message.clone(),
+                        latest_agent_reply: self.post_turn_messages.latest_agent_reply.clone(),
+                    });
+                Some(planning_workspace_directory)
+            }
+            _ => None,
+        };
+        match &stream_snapshot.update {
+            TurnStreamUpdate::TurnStarted { turn_id, .. } => {
+                self.conversation_runtime
+                    .mark_turn_started(correlation, turn_id.clone());
+            }
+            TurnStreamUpdate::ApprovalRequested { request } => {
+                self.conversation_runtime
+                    .set_pending_approval(request.clone());
+            }
+            TurnStreamUpdate::ApprovalReviewUpdated { review } => {
+                self.conversation_runtime
+                    .set_approval_review(review.clone());
+            }
+            TurnStreamUpdate::ApprovalResolved {
+                request_identity, ..
+            } => {
+                self.conversation_runtime
+                    .clear_pending_approval(request_identity);
+            }
+            TurnStreamUpdate::AttachmentObserved { .. }
+            | TurnStreamUpdate::SessionRenamed { .. }
+            | TurnStreamUpdate::ThreadPrepared { .. }
+            | TurnStreamUpdate::TurnStartedIgnored { .. }
+            | TurnStreamUpdate::RuntimeEnvelopeObserved { .. }
+            | TurnStreamUpdate::ItemLifecycleObserved { .. }
+            | TurnStreamUpdate::ProgressiveActivityObserved { .. }
+            | TurnStreamUpdate::StatusUpdated { .. }
+            | TurnStreamUpdate::AgentMessageCompleted { .. }
+            | TurnStreamUpdate::ToolActivity { .. }
+            | TurnStreamUpdate::ApprovalResolutionIgnored { .. }
+            | TurnStreamUpdate::TurnInterruptRequestFailed { .. }
+            | TurnStreamUpdate::TurnRetrying { .. }
+            | TurnStreamUpdate::TurnCompleted { .. }
+            | TurnStreamUpdate::TurnTerminal { .. }
+            | TurnStreamUpdate::TurnTerminalIgnored { .. }
+            | TurnStreamUpdate::Failed { .. }
+            | TurnStreamUpdate::RuntimeFailureIgnored { .. }
+            | TurnStreamUpdate::RuntimeNotice { .. } => {}
+        }
+        let closes_submission = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnCompleted { .. }
+                | TurnStreamUpdate::TurnTerminal { .. }
+                | TurnStreamUpdate::Failed { .. }
+        );
+        let rejected_terminal = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnTerminalIgnored { .. }
+        );
+        let rejected_start = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnStartedIgnored {
+                rejection: TurnStreamStartRejection::TurnMismatch { .. },
+                ..
+            }
+        );
+        let turn_started = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnStarted { .. }
+        );
+        let retry_reopens_stop = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnRetrying {
+                correlation_failure: None,
+                ..
+            }
+        );
+        let approval_review_persistence = match &stream_snapshot.update {
+            TurnStreamUpdate::ApprovalReviewUpdated { review } => stream_snapshot
+                .cwd
+                .clone()
+                .zip(stream_snapshot.thread_id.clone())
+                .and_then(|(workspace_directory, thread_id)| {
+                    approval_review_persistence.enqueue(
+                        correlation,
+                        workspace_directory,
+                        thread_id,
+                        review.clone(),
+                    )
+                }),
+            _ => None,
+        };
+        let mut snapshots = vec![stream_snapshot];
+        let mut stop_effects = Vec::new();
+        if rejected_start {
+            snapshots.push(
+                self.turn_stream_state
+                    .apply_stream_event(TurnStreamEvent::Failed {
+                        message: "active turn returned a start event with mismatched turn identity"
+                            .to_string(),
+                    }),
+            );
+            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
+            self.conversation_runtime.finish_turn(correlation);
+            self.guarded_session_rename_stream = None;
+        } else if rejected_terminal {
+            snapshots.push(
+                self.turn_stream_state
+                    .apply_stream_event(TurnStreamEvent::Failed {
+                        message: "active turn returned a terminal receipt with mismatched identity"
+                            .to_string(),
+                    }),
+            );
+            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
+            self.conversation_runtime.finish_turn(correlation);
+            self.guarded_session_rename_stream = None;
+        } else if closes_submission {
+            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
+            self.conversation_runtime.finish_turn(correlation);
+            self.guarded_session_rename_stream = None;
+        } else if retry_reopens_stop {
+            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
+        } else if turn_started {
+            self.schedule_stop_synchronization_after_turn_started(&mut stop_effects);
+        }
+        self.prune_post_turn_evaluation_for_lifecycle();
+        TurnStreamReduction {
+            post_turn_evaluation_due_workspace,
+            snapshots,
+            stop_effects,
+            approval_review_persistence,
+        }
+    }
+
+    fn complete_stop_request(
+        &mut self,
+        correlation: StopRequestCorrelation,
+        attempt: StopRequestAttempt,
+        failed: bool,
+    ) -> Option<StopRequestCompletionReduction> {
+        if self.active_stop_request.is_none_or(|active| {
+            active.correlation != correlation || active.pending_attempt != Some(attempt)
+        }) {
+            return None;
+        }
+        self.active_stop_request
+            .as_mut()
+            .expect("exact active stop request must remain present")
+            .pending_attempt = None;
+        let invalidated = self
+            .active_stop_request
+            .is_some_and(|active| active.invalidated);
+        if failed || invalidated || correlation.turn_submission.is_none() {
+            self.active_stop_request = None;
+        }
+        let mut stop_effects = Vec::new();
+        if !failed && !invalidated {
+            self.schedule_stop_synchronization_after_turn_started(&mut stop_effects);
+        }
+        Some(StopRequestCompletionReduction {
+            publish_completion: !invalidated,
+            settlement_finished: self.active_stop_request.is_none(),
+            stop_effects,
+        })
+    }
+
+    fn admit_post_turn_evaluation(
+        &mut self,
+        next_generation: &mut u64,
+        request: &mut PostTurnRequest,
+    ) -> Option<PostTurnEvaluationCorrelation> {
+        self.prune_post_turn_evaluation_for_lifecycle();
+        if self.active_post_turn_evaluation().is_some()
+            || !self.turn_stream_state.can_start_post_turn_evaluation(
+                &request.context.thread_id,
+                &request.completed_turn_id,
+            )
+        {
+            return None;
+        }
+        let runtime = self.conversation_runtime.snapshot();
+        /*
+         * The TUI may carry a compatibility copy while mapping the request,
+         * but it is never authoritative. Bind evaluation to the handoff owned
+         * by the exact admitted turn/post-turn route before any worker starts.
+         */
+        request.context.previous_handoff_task = runtime.planning_handoff.clone();
+        let auto_follow = runtime.auto_follow;
+        let parallel_continuation_enabled = request.context.parallel_mode_enabled
+            && auto_follow.parallel_post_turn_continuation_allowed();
+        request.context.planning_settlement_paused =
+            auto_follow.continuation_paused && !parallel_continuation_enabled;
+        request.context.continuation_paused = (!auto_follow.is_enabled()
+            || auto_follow.continuation_paused)
+            && !parallel_continuation_enabled;
+        request.context.can_queue_next =
+            auto_follow.can_queue_next() || parallel_continuation_enabled;
+        request.context.stop_keyword = auto_follow.stop_keyword.clone();
+        request.context.stop_keyword_matched = request
+            .context
+            .latest_main_reply
+            .as_deref()
+            .is_some_and(|reply| auto_follow.matches_stop_keyword(reply));
+        request.context.no_file_changes_stop_matched =
+            auto_follow.stop_on_no_file_changes && request.changed_planning_file_paths.is_empty();
+        let correlation = PostTurnEvaluationCorrelation::new(
+            take_generation(next_generation, "post-turn evaluation"),
+            request.context.thread_id.clone(),
+            request.completed_turn_id.clone(),
+            request.workspace_directory.clone(),
+            request.context.planning_workspace_directory.clone(),
+        );
+        request.continuation_permit = self.post_turn_continuation_gate.capture();
+        self.conversation_runtime
+            .begin_post_turn_evaluation(ActivePostTurnEvaluation {
+                correlation: correlation.clone(),
+                continuation_permit: request.continuation_permit.clone(),
+            });
+        Some(correlation)
+    }
+
+    /// 이 thread 가 돌리는 평가의 완료를 받는다. 정확히 그 평가의 완료만 받는다.
+    fn accept_post_turn_evaluation(
+        &mut self,
+        correlation: &PostTurnEvaluationCorrelation,
+        execution: &PostTurnExecution,
+    ) -> bool {
+        if self.active_post_turn_evaluation_correlation() != Some(correlation)
+            || !correlation.matches_execution(execution)
+        {
+            return false;
+        }
+        if !self
+            .turn_stream_state
+            .accept_post_turn_evaluation_completion(execution)
+        {
+            return false;
+        }
+        self.conversation_runtime
+            .await_post_turn_route(correlation.clone(), Box::new(execution.clone()))
+    }
+
+    fn set_parallel_post_turn_rearm(&mut self, rearmed: bool) {
+        /*
+         * Turning parallel routing off must not revoke an independently
+         * authorized single-session continuation. In that case the exact
+         * worker may finish and NativeClientRuntime will resolve its route to
+         * AutoSubmit after the parallel control-plane declines it. Every other
+         * parallel policy change still settles the in-flight correlation before
+         * changing authority, so a late worker cannot regain a route.
+         */
+        let preserves_single_session_continuation = !rearmed
+            && self
+                .conversation_runtime
+                .snapshot()
+                .auto_follow
+                .can_queue_next();
+        if !preserves_single_session_continuation {
+            self.settle_post_turn_continuation_for_policy_change();
+        }
+        self.conversation_runtime
+            .set_parallel_post_turn_rearm(rearmed);
+    }
+
+    fn prune_post_turn_evaluation_for_lifecycle(&mut self) {
+        let should_prune = self.active_post_turn_evaluation().is_some_and(|active| {
+            !self.turn_stream_state.can_start_post_turn_evaluation(
+                &active.correlation.thread_id,
+                &active.correlation.completed_turn_id,
+            )
+        });
+        if should_prune {
+            self.cancel_active_post_turn_evaluation();
+        }
+    }
+
+    fn cancel_active_post_turn_evaluation(&mut self) {
+        if let Some(active) = self.conversation_runtime.cancel_post_turn_evaluation() {
+            active.continuation_permit.invalidate_if_current();
+        }
+    }
+
+    fn invalidate_post_turn_continuation(&mut self) {
+        self.post_turn_continuation_gate.advance();
+        self.cancel_active_post_turn_evaluation();
+    }
+
+    fn settle_post_turn_continuation_for_policy_change(&mut self) {
+        self.post_turn_continuation_gate.advance();
+        let active = self.active_post_turn_evaluation().cloned();
+        if let Some(active) = active.as_ref()
+            && !self.turn_stream_state.settle_post_turn_terminal(
+                &active.correlation.thread_id,
+                &active.correlation.completed_turn_id,
+            )
+        {
+            // gate 를 이미 넘겼으므로 permit 은 따로 무효로 만들지 않는다 (Q2-1 이전 동작).
+            let _ = self.conversation_runtime.cancel_post_turn_evaluation();
+            return;
+        }
+        let settled = self
+            .conversation_runtime
+            .settle_in_flight_post_turn_without_continuation();
+        if let Some(active) = active {
+            debug_assert_eq!(
+                settled.as_ref(),
+                Some(&active.correlation),
+                "post-turn worker and runtime authority must settle the same correlation"
+            );
+        }
+    }
+
+    fn schedule_stop_synchronization_after_turn_started(
+        &mut self,
+        stop_effects: &mut Vec<StopEffectIntent>,
+    ) {
+        let Some(active) = self.active_stop_request.as_mut() else {
+            return;
+        };
+        if active.invalidated
+            || !active.synchronize_after_turn_started
+            || active.pending_attempt.is_some()
+            || active.correlation.turn_submission
+                != self.conversation_runtime.active_turn_correlation()
+            || !self.turn_stream_state.has_active_turn()
+        {
+            return;
+        }
+        active.synchronize_after_turn_started = false;
+        active.pending_attempt = Some(StopRequestAttempt::AfterTurnStarted);
+        stop_effects.push(StopEffectIntent::Request {
+            correlation: active.correlation,
+            attempt: StopRequestAttempt::AfterTurnStarted,
+        });
+    }
+
+    fn clear_stop_request_for_turn(
+        &mut self,
+        correlation: TurnSubmissionCorrelation,
+        stop_effects: &mut Vec<StopEffectIntent>,
+    ) {
+        if self
+            .active_stop_request
+            .is_none_or(|active| active.correlation.turn_submission != Some(correlation))
+        {
+            return;
+        }
+        self.invalidate_stop_request_for_lifecycle(stop_effects);
+    }
+
+    fn invalidate_stop_request_for_lifecycle(&mut self, stop_effects: &mut Vec<StopEffectIntent>) {
+        let Some(active) = self.active_stop_request.as_mut() else {
+            return;
+        };
+        if active.pending_attempt.is_none() {
+            self.active_stop_request = None;
+            return;
+        }
+        if active.invalidated {
+            return;
+        }
+        active.invalidated = true;
+        active.synchronize_after_turn_started = false;
+        stop_effects.push(StopEffectIntent::Invalidate {
+            correlation: active.correlation,
+        });
+    }
+}
+
+/// 다른 session 때문에 새 턴을 받을 수 없는 이유이다. 턴을 넣기 전에 reducer 가 읽어 둔다.
+struct OtherSessionBlocks {
+    turn_without_room: Option<TurnSubmissionCorrelation>,
+    pending_stop: Option<ActiveStopRequest>,
 }
 
 /*
@@ -325,8 +836,6 @@ pub(super) struct ConversationTurnFeatureReducer {
      * 끝까지 처리하고, 일이 끝나면 지운다. 보는 thread 를 다시 열면 보는 자리로 돌아온다.
      */
     background_sessions: Vec<ThreadSession>,
-    // 뒤로 보낸 session 을 보는 자리에 잠시 넣고 처리하는 중이다. 화면용 스트림 투영은 내지 않는다.
-    serving_background: bool,
     // 함께 도는 턴의 수의 정책이다 (plan 18 Q5-1). 커널을 조립할 때 정한다.
     turn_concurrency: super::TurnConcurrencyPolicy,
     // 승인 검토 저장은 모든 thread 를 통틀어 한 줄로 차례대로 한다. 그래서 session 밖에 둔다.
@@ -367,50 +876,14 @@ impl std::fmt::Debug for ConversationTurnFeatureReducer {
 }
 
 impl ConversationTurnFeatureReducer {
-    /*
-     * `owns` 가 맞는 session 에서 `reduce` 를 실행한다 (plan 18 K2-3). 보는 session 을 먼저 본다. 뒤로 보낸
-     * session 이면 보는 자리와 잠시 바꿔서 같은 규칙으로 처리한다. 그동안 나머지 session 은 모두
-     * `background_sessions` 에 있다. 일이 끝난 session 은 지운다.
-     */
-    fn with_owning_session<R>(
-        &mut self,
-        owns: impl Fn(&ThreadSession) -> bool,
-        reduce: impl FnOnce(&mut Self) -> R,
-    ) -> Option<R> {
-        if owns(&self.session) {
-            return Some(reduce(self));
-        }
-        let index = self.background_sessions.iter().position(owns)?;
-        let result = self.reduce_background_session(index, reduce);
-        if !self.background_sessions[index].is_busy() {
-            self.background_sessions.remove(index);
-        }
-        Some(result)
-    }
-
-    fn for_each_session(&mut self, mut reduce: impl FnMut(&mut Self)) {
-        reduce(self);
-        for index in 0..self.background_sessions.len() {
-            self.reduce_background_session(index, &mut reduce);
-        }
+    /// 모든 session 에 `reduce` 를 실행한다. 보는 session 이 먼저이다. 일이 끝난 뒤의 session 은 지운다.
+    fn for_each_session(&mut self, mut reduce: impl FnMut(&mut ThreadSession)) {
+        reduce(&mut self.session);
+        self.background_sessions.iter_mut().for_each(&mut reduce);
         self.background_sessions.retain(ThreadSession::is_busy);
     }
 
-    /// 뒤의 session 을 보는 자리와 잠시 바꿔서 `reduce` 를 실행하고 되돌린다.
-    fn reduce_background_session<R>(
-        &mut self,
-        index: usize,
-        reduce: impl FnOnce(&mut Self) -> R,
-    ) -> R {
-        std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
-        self.serving_background = true;
-        let result = reduce(self);
-        self.serving_background = false;
-        std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
-        result
-    }
-
-    /// `owns` 가 맞는 session 의 자리이다 (plan 18 Q5-2). `with_owning_session` 과 같은 차례로 찾는다: 보는 session 이 먼저이다.
+    /// `owns` 가 맞는 session 의 자리이다 (plan 18 Q5-2). 보는 session 을 먼저 본다.
     fn find_session(&self, owns: impl Fn(&ThreadSession) -> bool) -> Option<SessionSlot> {
         if owns(&self.session) {
             return Some(SessionSlot::Viewed);
@@ -535,36 +1008,49 @@ impl ConversationTurnFeatureReducer {
         self.background_sessions.push(busy);
     }
 
-    fn other_session_pending_stop(&self) -> Option<ActiveStopRequest> {
-        self.background_sessions.iter().find_map(|session| {
-            session
-                .active_stop_request
-                .filter(|active| active.pending_attempt.is_some())
-        })
-    }
-
-    /// 다른 session 에서 도는 턴들이다. 처리하는 session 은 보는 자리에 있으므로 뒤의 목록이 "다른 session" 이다.
-    fn other_session_active_turns(&self) -> impl Iterator<Item = TurnSubmissionCorrelation> + '_ {
+    /*
+     * `slot` 이 아닌 session 들이다. 차례는 Q5-2 이전과 같다: 뒤의 session 을 차례대로 보고, `slot` 이 뒤의 자리이면
+     * 그 자리에서 보는 session 을 본다. 거절이 대는 턴과 정지가 이 차례로 정해진다.
+     */
+    fn other_sessions(&self, slot: SessionSlot) -> impl Iterator<Item = &ThreadSession> + '_ {
         self.background_sessions
             .iter()
-            .filter_map(|session| session.conversation_runtime.active_turn_correlation())
+            .enumerate()
+            .map(move |(index, session)| {
+                if slot == SessionSlot::Background(index) {
+                    &self.session
+                } else {
+                    session
+                }
+            })
     }
 
     /*
-     * 다른 session 의 턴 때문에 새 턴의 자리가 없으면 그 턴 중 하나이다 (plan 18 Q5-1). 정책 값이 1 이면 다른
-     * session 의 턴 하나가 자리를 모두 쓴다.
+     * 다른 session 때문에 `slot` 의 session 이 새 턴을 받을 수 없는 이유이다. 다른 session 의 턴이 정책의 수만큼
+     * 돌면 그 턴 중 하나이다 (plan 18 Q5-1). 정책 값이 1 이면 다른 session 의 턴 하나가 자리를 모두 쓴다.
      */
-    fn other_session_turn_without_room(&self) -> Option<TurnSubmissionCorrelation> {
-        let running = self.other_session_active_turns().count();
-        if self.turn_concurrency.has_room(running) {
-            return None;
+    fn other_session_blocks(&self, slot: SessionSlot) -> OtherSessionBlocks {
+        let turns = || {
+            self.other_sessions(slot)
+                .filter_map(|session| session.conversation_runtime.active_turn_correlation())
+        };
+        OtherSessionBlocks {
+            turn_without_room: if self.turn_concurrency.has_room(turns().count()) {
+                None
+            } else {
+                turns().next()
+            },
+            pending_stop: self.other_sessions(slot).find_map(|session| {
+                session
+                    .active_stop_request
+                    .filter(|active| active.pending_attempt.is_some())
+            }),
         }
-        self.other_session_active_turns().next()
     }
 
     /*
      * 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2). Q2-2 이전의 호스트처럼 평가 시작을 경로 결정보다 먼저 한다. 보는
-     * session 을 먼저 보고 뒤의 session 을 본다. `with_owning_session` 이 같은 차례로 주인을 찾는다.
+     * session 을 먼저 보고 뒤의 session 을 본다. `find_session` 이 같은 차례로 주인을 찾는다.
      */
     pub(super) fn next_post_turn_host_step(&self) -> Option<PostTurnHostStep> {
         let sessions = || std::iter::once(&self.session).chain(&self.background_sessions);
@@ -636,7 +1122,6 @@ impl ConversationTurnFeatureReducer {
         Self {
             session: ThreadSession::new(),
             background_sessions: Vec::new(),
-            serving_background: false,
             turn_concurrency: super::TurnConcurrencyPolicy::default(),
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             published_thread_activity: Vec::new(),
@@ -670,16 +1155,21 @@ impl ConversationTurnFeatureReducer {
         &mut self,
         build_request: impl FnOnce(PendingPostTurnEvaluation) -> PostTurnRequest,
     ) -> Option<(PostTurnEvaluationCorrelation, PostTurnRequest)> {
-        self.with_owning_session(
-            |session| session.has_due_post_turn(),
-            |reducer| {
-                let pending = reducer.session.conversation_runtime.take_due_post_turn()?;
+        let slot = self.find_session(ThreadSession::has_due_post_turn)?;
+        let session = slot.of(&mut self.session, &mut self.background_sessions);
+        let started = session
+            .conversation_runtime
+            .take_due_post_turn()
+            .and_then(|pending| {
                 let mut request = build_request(pending);
-                let correlation = reducer.admit_post_turn_evaluation_in_session(&mut request)?;
+                let correlation = session.admit_post_turn_evaluation(
+                    &mut self.next_post_turn_evaluation_generation,
+                    &mut request,
+                )?;
                 Some((correlation, request))
-            },
-        )
-        .flatten()
+            });
+        self.settle_session(slot);
+        started
     }
 
     pub(super) fn runtime_snapshot(&self) -> ConversationRuntimeSnapshot {
@@ -709,9 +1199,10 @@ impl ConversationTurnFeatureReducer {
         if !self.stop_request_settlement_pending() {
             self.send_busy_viewed_session_to_background();
         }
-        self.invalidate_post_turn_continuation();
+        self.session.invalidate_post_turn_continuation();
         let mut stop_effects = Vec::new();
-        self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
+        self.session
+            .invalidate_stop_request_for_lifecycle(&mut stop_effects);
         if self.stop_request_settlement_pending() || blocked_by_session_rename {
             self.deferred_conversation_load = Some(DeferredConversationLoadIntent {
                 thread_id,
@@ -735,7 +1226,7 @@ impl ConversationTurnFeatureReducer {
         );
         self.in_flight_conversation_load = Some(correlation.clone());
         self.session.turn_stream_state = TurnStreamState::new();
-        self.prune_post_turn_evaluation_for_lifecycle();
+        self.session.prune_post_turn_evaluation_for_lifecycle();
         ConversationLoadAdmission::Started {
             correlation,
             fallback_workspace_directory,
@@ -758,10 +1249,11 @@ impl ConversationTurnFeatureReducer {
          */
         let mut stop_effects = Vec::new();
         if self.stop_request_settlement_pending() {
-            self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
+            self.session
+                .invalidate_stop_request_for_lifecycle(&mut stop_effects);
         }
         self.send_busy_viewed_session_to_background();
-        self.invalidate_post_turn_continuation();
+        self.session.invalidate_post_turn_continuation();
         self.deferred_conversation_load = None;
         self.in_flight_conversation_load = None;
         // 정지 요청이나 steer 가 있던 session 은 일이 남은 session 이라 위에서 뒤로 갔다. 보는 자리에는 둘 다 없다.
@@ -780,10 +1272,11 @@ impl ConversationTurnFeatureReducer {
         if self.in_flight_conversation_load.as_ref() != Some(correlation) {
             return None;
         }
-        self.invalidate_post_turn_continuation();
+        self.session.invalidate_post_turn_continuation();
         self.in_flight_conversation_load = None;
         let mut stop_effects = Vec::new();
-        self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
+        self.session
+            .invalidate_stop_request_for_lifecycle(&mut stop_effects);
         self.session.active_turn_steer = None;
         self.session.conversation_runtime.invalidate_conversation();
         self.approval_review_persistence.invalidate_conversation();
@@ -815,7 +1308,7 @@ impl ConversationTurnFeatureReducer {
                     identity.item_lifecycle,
                 );
         }
-        self.prune_post_turn_evaluation_for_lifecycle();
+        self.session.prune_post_turn_evaluation_for_lifecycle();
         Some(ConversationLifecycleReduction { stop_effects })
     }
 
@@ -823,21 +1316,18 @@ impl ConversationTurnFeatureReducer {
         &mut self,
         request: &TurnSubmissionRequest,
     ) -> TurnSubmissionAdmission {
-        // 자동 후속 턴은 원래 thread 의 session 에 넣는다. 사람이 낸 턴은 보는 session 에 넣는다.
-        let auto_follow_thread = request
+        // 자동 후속 턴은 원래 thread 의 session 에 넣는다. 사람이 낸 턴과 주인이 없는 자동 후속 턴은 보는 session 에 넣는다.
+        let slot = request
             .auto_follow_source
             .as_ref()
             .filter(|_| request.prompt_origin == super::CorePromptOrigin::AutoFollow)
-            .map(|source| source.thread_id.clone());
-        match auto_follow_thread {
-            Some(thread_id) => self
-                .with_owning_session(
-                    |session| session.streams_thread(&thread_id),
-                    |reducer| reducer.admit_turn_submission_in_session(request),
-                )
-                .unwrap_or_else(|| self.admit_turn_submission_in_session(request)),
-            None => self.admit_turn_submission_in_session(request),
-        }
+            .and_then(|source| {
+                self.find_session(|session| session.streams_thread(&source.thread_id))
+            })
+            .unwrap_or(SessionSlot::Viewed);
+        let admission = self.admit_turn_submission_at(slot, request);
+        self.settle_session(slot);
+        admission
     }
 
     /// 이 thread 의 session 이 있다. 보는 thread 이거나 일이 남은 thread 이다 (plan 18 K3-3b).
@@ -890,102 +1380,32 @@ impl ConversationTurnFeatureReducer {
             );
             self.background_sessions.push(session);
         }
-        self.with_owning_session(
-            |session| session.streams_thread(thread_id),
-            |reducer| {
-                let admission = reducer.admit_turn_submission_in_session(request);
-                if matches!(admission, TurnSubmissionAdmission::Accepted { .. }) {
-                    reducer.session.op_id = op_id;
-                }
-                admission
-            },
-        )
-        .unwrap_or(TurnSubmissionAdmission::RejectedUnavailable)
+        let Some(slot) = self.find_session(|session| session.streams_thread(thread_id)) else {
+            return TurnSubmissionAdmission::RejectedUnavailable;
+        };
+        let admission = self.admit_turn_submission_at(slot, request);
+        if matches!(admission, TurnSubmissionAdmission::Accepted { .. }) {
+            slot.of(&mut self.session, &mut self.background_sessions)
+                .op_id = op_id;
+        }
+        self.settle_session(slot);
+        admission
     }
 
-    fn admit_turn_submission_in_session(
+    /// `slot` 의 session 에 턴을 넣는다. 다른 session 의 턴과 정지는 먼저 읽는다. 규칙은 session 하나만 고친다.
+    fn admit_turn_submission_at(
         &mut self,
+        slot: SessionSlot,
         request: &TurnSubmissionRequest,
     ) -> TurnSubmissionAdmission {
-        // thread 하나의 턴은 하나이다 (plan 18 K2-3). 다른 thread 의 턴은 정책의 수까지 함께 돈다 (plan 18 Q5-1).
-        if let Some(active_correlation) = self
-            .session
-            .conversation_runtime
-            .active_turn_correlation()
-            .or_else(|| self.other_session_turn_without_room())
-        {
-            if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
-                self.session
-                    .conversation_runtime
-                    .cancel_queued_auto_follow_submission();
-            }
-            return TurnSubmissionAdmission::RejectedActive { active_correlation };
-        }
-        /*
-         * 끝나지 않은 정지 시도가 있으면 턴을 받지 않는다. 정지는 app-server 의 모든 턴에 닿는 신호라서, 늦게 나간
-         * 정지가 새 턴을 멈출 수 있다. 뒤의 session 의 정지도 본다. 정지 중에 새 대화를 열면 그 요청은 뒤로 간다.
-         */
-        if let Some(active_stop) = self
-            .session
-            .active_stop_request
-            .filter(|active| active.pending_attempt.is_some())
-            .or_else(|| self.other_session_pending_stop())
-        {
-            if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
-                self.session
-                    .conversation_runtime
-                    .cancel_queued_auto_follow_submission();
-            }
-            return TurnSubmissionAdmission::RejectedStopPending {
-                stop_correlation: active_stop.correlation,
-            };
-        }
-        if matches!(
-            request.prompt_origin,
-            super::CorePromptOrigin::Manual | super::CorePromptOrigin::ManualIntake
-        ) && self
-            .session
-            .turn_stream_state
-            .has_unapplied_confirmed_terminal()
-        {
-            return TurnSubmissionAdmission::RejectedUnavailable;
-        }
-        match self
-            .session
-            .conversation_runtime
-            .classify_turn_admission(request)
-        {
-            TurnAuthorityAdmission::Accepted => {}
-            TurnAuthorityAdmission::RejectedPreservingLease => {
-                return TurnSubmissionAdmission::RejectedUnavailable;
-            }
-            TurnAuthorityAdmission::RejectedMalformedCurrentAutoFollowTarget => {
-                self.session
-                    .conversation_runtime
-                    .cancel_queued_auto_follow_submission();
-                return TurnSubmissionAdmission::RejectedUnavailable;
-            }
-        }
-        let correlation = TurnSubmissionCorrelation::new(take_generation(
-            &mut self.next_turn_submission_generation,
-            "turn submission",
-        ));
-        self.session.guarded_session_rename_stream = None;
-        // 새 턴은 이전 턴의 연산에 속하지 않는다. 명령이 낸 턴이면 부르는 쪽이 뒤에 넣는다.
-        self.session.op_id = None;
-        if !request.transcript_text.trim().is_empty() {
-            self.session.post_turn_messages.latest_user_message =
-                Some(request.transcript_text.clone());
-        }
-        self.session.turn_options = request.turn_options.clone();
-        self.session
-            .conversation_runtime
-            .begin_turn(correlation, request);
-        self.approval_review_persistence
-            .begin_conversation_turn(correlation);
-        self.session.turn_stream_state.begin_submission();
-        self.prune_post_turn_evaluation_for_lifecycle();
-        TurnSubmissionAdmission::Accepted { correlation }
+        let other = self.other_session_blocks(slot);
+        slot.of(&mut self.session, &mut self.background_sessions)
+            .admit_turn_submission(
+                request,
+                other,
+                &mut self.next_turn_submission_generation,
+                &mut self.approval_review_persistence,
+            )
     }
 
     pub(super) fn reduce_session_rename_projection(
@@ -1012,224 +1432,16 @@ impl ConversationTurnFeatureReducer {
         correlation: TurnSubmissionCorrelation,
         event: TurnStreamEvent,
     ) -> Option<TurnStreamReduction> {
-        self.with_owning_session(
-            |session| session.owns_turn(correlation),
-            |reducer| reducer.apply_turn_stream_event_in_session(correlation, event),
-        )
-    }
-
-    fn apply_turn_stream_event_in_session(
-        &mut self,
-        correlation: TurnSubmissionCorrelation,
-        mut event: TurnStreamEvent,
-    ) -> TurnStreamReduction {
-        if let TurnStreamEvent::ThreadPrepared {
-            thread_id, title, ..
-        } = &mut event
-            && let Some(guarded_rename) = self
-                .session
-                .guarded_session_rename_stream
-                .as_ref()
-                .filter(|(turn, _)| *turn == correlation)
-                .map(|(_, rename)| rename.clone())
-        {
-            if thread_id == &guarded_rename.request.thread_id {
-                *title = guarded_rename.request.name;
-            }
-            self.session.guarded_session_rename_stream = None;
-        }
-        if let TurnStreamEvent::AgentMessageCompleted { text, .. } = &event
-            && !text.trim().is_empty()
-        {
-            // 비어 있지 않은 마지막 응답을 쓴다. 병렬 슬롯 루프와 TUI 의 규칙과 같다.
-            self.session.post_turn_messages.latest_agent_reply = Some(text.clone());
-        }
-        // 턴 종료 처리 전의 작업 공간이다. TUI 는 같은 순서로 골랐다 (활성 턴, 스트림, 실행 캡처).
-        let active_turn_workspace = self
-            .session
-            .conversation_runtime
-            .snapshot()
-            .active_turn
-            .as_ref()
-            .map(|turn| turn.workspace_directory.clone())
-            .filter(|workspace| !workspace.trim().is_empty());
-        let stream_snapshot = self.session.turn_stream_state.apply_stream_event(event);
-        let post_turn_evaluation_due_workspace = match &stream_snapshot.update {
-            TurnStreamUpdate::TurnCompleted {
-                turn_id,
-                changed_planning_file_paths,
-                execution_snapshot_capture,
-                ..
-            } => {
-                let stream_workspace = stream_snapshot
-                    .cwd
-                    .clone()
-                    .filter(|workspace| !workspace.trim().is_empty());
-                let planning_workspace_directory = stream_workspace.clone().unwrap_or_default();
-                let workspace_directory = active_turn_workspace
-                    .or(stream_workspace)
-                    .or_else(|| {
-                        execution_snapshot_capture
-                            .as_ref()
-                            .map(|capture| capture.workspace_directory.clone())
-                    })
-                    .unwrap_or_else(|| planning_workspace_directory.clone());
-                self.session
-                    .conversation_runtime
-                    .mark_post_turn_due(PendingPostTurnEvaluation {
-                        thread_id: stream_snapshot.thread_id.clone().unwrap_or_default(),
-                        completed_turn_id: turn_id.clone(),
-                        workspace_directory,
-                        planning_workspace_directory: planning_workspace_directory.clone(),
-                        changed_planning_file_paths: changed_planning_file_paths.clone(),
-                        execution_snapshot_capture: execution_snapshot_capture.clone(),
-                        latest_user_message: self
-                            .session
-                            .post_turn_messages
-                            .latest_user_message
-                            .clone(),
-                        latest_agent_reply: self
-                            .session
-                            .post_turn_messages
-                            .latest_agent_reply
-                            .clone(),
-                    });
-                Some(planning_workspace_directory)
-            }
-            _ => None,
-        };
-        match &stream_snapshot.update {
-            TurnStreamUpdate::TurnStarted { turn_id, .. } => {
-                self.session
-                    .conversation_runtime
-                    .mark_turn_started(correlation, turn_id.clone());
-            }
-            TurnStreamUpdate::ApprovalRequested { request } => {
-                self.session
-                    .conversation_runtime
-                    .set_pending_approval(request.clone());
-            }
-            TurnStreamUpdate::ApprovalReviewUpdated { review } => {
-                self.session
-                    .conversation_runtime
-                    .set_approval_review(review.clone());
-            }
-            TurnStreamUpdate::ApprovalResolved {
-                request_identity, ..
-            } => {
-                self.session
-                    .conversation_runtime
-                    .clear_pending_approval(request_identity);
-            }
-            TurnStreamUpdate::AttachmentObserved { .. }
-            | TurnStreamUpdate::SessionRenamed { .. }
-            | TurnStreamUpdate::ThreadPrepared { .. }
-            | TurnStreamUpdate::TurnStartedIgnored { .. }
-            | TurnStreamUpdate::RuntimeEnvelopeObserved { .. }
-            | TurnStreamUpdate::ItemLifecycleObserved { .. }
-            | TurnStreamUpdate::ProgressiveActivityObserved { .. }
-            | TurnStreamUpdate::StatusUpdated { .. }
-            | TurnStreamUpdate::AgentMessageCompleted { .. }
-            | TurnStreamUpdate::ToolActivity { .. }
-            | TurnStreamUpdate::ApprovalResolutionIgnored { .. }
-            | TurnStreamUpdate::TurnInterruptRequestFailed { .. }
-            | TurnStreamUpdate::TurnRetrying { .. }
-            | TurnStreamUpdate::TurnCompleted { .. }
-            | TurnStreamUpdate::TurnTerminal { .. }
-            | TurnStreamUpdate::TurnTerminalIgnored { .. }
-            | TurnStreamUpdate::Failed { .. }
-            | TurnStreamUpdate::RuntimeFailureIgnored { .. }
-            | TurnStreamUpdate::RuntimeNotice { .. } => {}
-        }
-        let closes_submission = matches!(
-            &stream_snapshot.update,
-            TurnStreamUpdate::TurnCompleted { .. }
-                | TurnStreamUpdate::TurnTerminal { .. }
-                | TurnStreamUpdate::Failed { .. }
-        );
-        let rejected_terminal = matches!(
-            &stream_snapshot.update,
-            TurnStreamUpdate::TurnTerminalIgnored { .. }
-        );
-        let rejected_start = matches!(
-            &stream_snapshot.update,
-            TurnStreamUpdate::TurnStartedIgnored {
-                rejection: TurnStreamStartRejection::TurnMismatch { .. },
-                ..
-            }
-        );
-        let turn_started = matches!(
-            &stream_snapshot.update,
-            TurnStreamUpdate::TurnStarted { .. }
-        );
-        let retry_reopens_stop = matches!(
-            &stream_snapshot.update,
-            TurnStreamUpdate::TurnRetrying {
-                correlation_failure: None,
-                ..
-            }
-        );
-        let approval_review_persistence = match &stream_snapshot.update {
-            TurnStreamUpdate::ApprovalReviewUpdated { review } => stream_snapshot
-                .cwd
-                .clone()
-                .zip(stream_snapshot.thread_id.clone())
-                .and_then(|(workspace_directory, thread_id)| {
-                    self.approval_review_persistence.enqueue(
-                        correlation,
-                        workspace_directory,
-                        thread_id,
-                        review.clone(),
-                    )
-                }),
-            _ => None,
-        };
-        let mut snapshots = vec![stream_snapshot];
-        let mut stop_effects = Vec::new();
-        if rejected_start {
-            snapshots.push(
-                self.session
-                    .turn_stream_state
-                    .apply_stream_event(TurnStreamEvent::Failed {
-                        message: "active turn returned a start event with mismatched turn identity"
-                            .to_string(),
-                    }),
-            );
-            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
-            self.session.conversation_runtime.finish_turn(correlation);
-            self.session.guarded_session_rename_stream = None;
-        } else if rejected_terminal {
-            snapshots.push(
-                self.session
-                    .turn_stream_state
-                    .apply_stream_event(TurnStreamEvent::Failed {
-                        message: "active turn returned a terminal receipt with mismatched identity"
-                            .to_string(),
-                    }),
-            );
-            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
-            self.session.conversation_runtime.finish_turn(correlation);
-            self.session.guarded_session_rename_stream = None;
-        } else if closes_submission {
-            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
-            self.session.conversation_runtime.finish_turn(correlation);
-            self.session.guarded_session_rename_stream = None;
-        } else if retry_reopens_stop {
-            self.clear_stop_request_for_turn(correlation, &mut stop_effects);
-        } else if turn_started {
-            self.schedule_stop_synchronization_after_turn_started(&mut stop_effects);
-        }
-        self.prune_post_turn_evaluation_for_lifecycle();
-        if self.serving_background {
+        let slot = self.find_session(|session| session.owns_turn(correlation))?;
+        let mut reduction = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .apply_turn_stream_event(correlation, event, &mut self.approval_review_persistence);
+        self.settle_session(slot);
+        if !slot.is_viewed() {
             // 클라이언트는 이 thread 를 보지 않는다. 화면용 투영은 보내지 않는다.
-            snapshots.clear();
+            reduction.snapshots.clear();
         }
-        TurnStreamReduction {
-            post_turn_evaluation_due_workspace,
-            snapshots,
-            stop_effects,
-            approval_review_persistence,
-        }
+        Some(reduction)
     }
 
     pub(super) fn complete_approval_review_persistence(
@@ -1303,49 +1515,16 @@ impl ConversationTurnFeatureReducer {
         attempt: StopRequestAttempt,
         failed: bool,
     ) -> Option<StopRequestCompletionReduction> {
-        self.with_owning_session(
-            |session| {
-                session
-                    .active_stop_request
-                    .is_some_and(|active| active.correlation == correlation)
-            },
-            |reducer| reducer.complete_stop_request_in_session(correlation, attempt, failed),
-        )
-        .flatten()
-    }
-
-    fn complete_stop_request_in_session(
-        &mut self,
-        correlation: StopRequestCorrelation,
-        attempt: StopRequestAttempt,
-        failed: bool,
-    ) -> Option<StopRequestCompletionReduction> {
-        if self.session.active_stop_request.is_none_or(|active| {
-            active.correlation != correlation || active.pending_attempt != Some(attempt)
-        }) {
-            return None;
-        }
-        self.session
-            .active_stop_request
-            .as_mut()
-            .expect("exact active stop request must remain present")
-            .pending_attempt = None;
-        let invalidated = self
-            .session
-            .active_stop_request
-            .is_some_and(|active| active.invalidated);
-        if failed || invalidated || correlation.turn_submission.is_none() {
-            self.session.active_stop_request = None;
-        }
-        let mut stop_effects = Vec::new();
-        if !failed && !invalidated {
-            self.schedule_stop_synchronization_after_turn_started(&mut stop_effects);
-        }
-        Some(StopRequestCompletionReduction {
-            publish_completion: !invalidated,
-            settlement_finished: self.session.active_stop_request.is_none(),
-            stop_effects,
-        })
+        let slot = self.find_session(|session| {
+            session
+                .active_stop_request
+                .is_some_and(|active| active.correlation == correlation)
+        })?;
+        let reduction = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .complete_stop_request(correlation, attempt, failed);
+        self.settle_session(slot);
+        reduction
     }
 
     pub(super) fn stop_request_settlement_pending(&self) -> bool {
@@ -1445,78 +1624,17 @@ impl ConversationTurnFeatureReducer {
         &mut self,
         request: &mut PostTurnRequest,
     ) -> Option<PostTurnEvaluationCorrelation> {
-        let thread_id = request.context.thread_id.clone();
-        let completed_turn_id = request.completed_turn_id.clone();
-        self.with_owning_session(
-            |session| {
-                session
-                    .turn_stream_state
-                    .can_start_post_turn_evaluation(&thread_id, &completed_turn_id)
-            },
-            |reducer| reducer.admit_post_turn_evaluation_in_session(request),
-        )
-        .flatten()
-    }
-
-    fn admit_post_turn_evaluation_in_session(
-        &mut self,
-        request: &mut PostTurnRequest,
-    ) -> Option<PostTurnEvaluationCorrelation> {
-        self.prune_post_turn_evaluation_for_lifecycle();
-        if self.session.active_post_turn_evaluation().is_some()
-            || !self
-                .session
-                .turn_stream_state
-                .can_start_post_turn_evaluation(
-                    &request.context.thread_id,
-                    &request.completed_turn_id,
-                )
-        {
-            return None;
-        }
-        let runtime = self.session.conversation_runtime.snapshot();
-        /*
-         * The TUI may carry a compatibility copy while mapping the request,
-         * but it is never authoritative. Bind evaluation to the handoff owned
-         * by the exact admitted turn/post-turn route before any worker starts.
-         */
-        request.context.previous_handoff_task = runtime.planning_handoff.clone();
-        let auto_follow = runtime.auto_follow;
-        let parallel_continuation_enabled = request.context.parallel_mode_enabled
-            && auto_follow.parallel_post_turn_continuation_allowed();
-        request.context.planning_settlement_paused =
-            auto_follow.continuation_paused && !parallel_continuation_enabled;
-        request.context.continuation_paused = (!auto_follow.is_enabled()
-            || auto_follow.continuation_paused)
-            && !parallel_continuation_enabled;
-        request.context.can_queue_next =
-            auto_follow.can_queue_next() || parallel_continuation_enabled;
-        request.context.stop_keyword = auto_follow.stop_keyword.clone();
-        request.context.stop_keyword_matched = request
-            .context
-            .latest_main_reply
-            .as_deref()
-            .is_some_and(|reply| auto_follow.matches_stop_keyword(reply));
-        request.context.no_file_changes_stop_matched =
-            auto_follow.stop_on_no_file_changes && request.changed_planning_file_paths.is_empty();
-        let correlation = PostTurnEvaluationCorrelation::new(
-            take_generation(
-                &mut self.next_post_turn_evaluation_generation,
-                "post-turn evaluation",
-            ),
-            request.context.thread_id.clone(),
-            request.completed_turn_id.clone(),
-            request.workspace_directory.clone(),
-            request.context.planning_workspace_directory.clone(),
-        );
-        request.continuation_permit = self.session.post_turn_continuation_gate.capture();
-        self.session
-            .conversation_runtime
-            .begin_post_turn_evaluation(ActivePostTurnEvaluation {
-                correlation: correlation.clone(),
-                continuation_permit: request.continuation_permit.clone(),
-            });
-        Some(correlation)
+        let slot = self.find_session(|session| {
+            session.turn_stream_state.can_start_post_turn_evaluation(
+                &request.context.thread_id,
+                &request.completed_turn_id,
+            )
+        })?;
+        let correlation = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .admit_post_turn_evaluation(&mut self.next_post_turn_evaluation_generation, request);
+        self.settle_session(slot);
+        correlation
     }
 
     pub(super) fn complete_post_turn_evaluation(
@@ -1524,37 +1642,19 @@ impl ConversationTurnFeatureReducer {
         correlation: &PostTurnEvaluationCorrelation,
         execution: &PostTurnExecution,
     ) -> bool {
-        self.with_owning_session(
-            |session| session.evaluates_post_turn(correlation),
-            |reducer| reducer.complete_post_turn_evaluation_in_session(correlation, execution),
-        )
-        .unwrap_or(false)
-    }
-
-    fn complete_post_turn_evaluation_in_session(
-        &mut self,
-        correlation: &PostTurnEvaluationCorrelation,
-        execution: &PostTurnExecution,
-    ) -> bool {
-        if self.active_post_turn_evaluation_correlation() != Some(correlation)
-            || !correlation.matches_execution(execution)
-        {
+        let Some(slot) = self.find_session(|session| session.evaluates_post_turn(correlation))
+        else {
             return false;
-        }
+        };
         // 대화를 여는 중에는 보는 session 의 평가 결과를 버린다. 뒤의 session 은 대화 로드와 관계없다.
-        if self.in_flight_conversation_load.is_some() && !self.serving_background {
+        if slot.is_viewed() && self.in_flight_conversation_load.is_some() {
             return false;
         }
-        if !self
-            .session
-            .turn_stream_state
-            .accept_post_turn_evaluation_completion(execution)
-        {
-            return false;
-        }
-        self.session
-            .conversation_runtime
-            .await_post_turn_route(correlation.clone(), Box::new(execution.clone()))
+        let accepted = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .accept_post_turn_evaluation(correlation, execution);
+        self.settle_session(slot);
+        accepted
     }
 
     pub(super) fn resolve_post_turn_route(
@@ -1562,24 +1662,20 @@ impl ConversationTurnFeatureReducer {
         correlation: &PostTurnEvaluationCorrelation,
         resolution: PostTurnRouteResolution,
     ) -> Option<(Box<PostTurnExecution>, PostTurnRouteResolution)> {
-        self.with_owning_session(
-            |session| session.awaits_post_turn_route(correlation),
-            |reducer| {
-                reducer
-                    .session
-                    .conversation_runtime
-                    .resolve_post_turn_route(correlation, resolution)
-            },
-        )
-        .flatten()
+        let slot = self.find_session(|session| session.awaits_post_turn_route(correlation))?;
+        let resolved = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .conversation_runtime
+            .resolve_post_turn_route(correlation, resolution);
+        self.settle_session(slot);
+        resolved
     }
 
     // 자동 후속 정책은 모든 session 에 같이 적용한다 (plan 18 K2-3). 뒤에서 도는 자동 후속도 멈춰야 한다.
     pub(super) fn set_auto_follow_max_turns(&mut self, value: usize) {
-        self.for_each_session(|reducer| {
-            reducer.settle_post_turn_continuation_for_policy_change();
-            reducer
-                .session
+        self.for_each_session(|session| {
+            session.settle_post_turn_continuation_for_policy_change();
+            session
                 .conversation_runtime
                 .set_auto_follow_max_turns(value);
         });
@@ -1591,12 +1687,9 @@ impl ConversationTurnFeatureReducer {
     }
 
     pub(super) fn pause_post_turn_continuation(&mut self) {
-        self.for_each_session(|reducer| {
-            reducer.settle_post_turn_continuation_for_policy_change();
-            reducer
-                .session
-                .conversation_runtime
-                .pause_post_turn_continuation();
+        self.for_each_session(|session| {
+            session.settle_post_turn_continuation_for_policy_change();
+            session.conversation_runtime.pause_post_turn_continuation();
         });
         self.record_kernel_event(KernelEvent::AutoFollowConfigured {
             max_auto_turns: self.runtime_snapshot().auto_follow.max_auto_turns,
@@ -1605,159 +1698,20 @@ impl ConversationTurnFeatureReducer {
     }
 
     pub(super) fn set_parallel_post_turn_rearm(&mut self, rearmed: bool) {
-        self.for_each_session(|reducer| reducer.set_parallel_post_turn_rearm_in_session(rearmed));
+        self.for_each_session(|session| session.set_parallel_post_turn_rearm(rearmed));
     }
 
-    fn set_parallel_post_turn_rearm_in_session(&mut self, rearmed: bool) {
-        /*
-         * Turning parallel routing off must not revoke an independently
-         * authorized single-session continuation. In that case the exact
-         * worker may finish and NativeClientRuntime will resolve its route to
-         * AutoSubmit after the parallel control-plane declines it. Every other
-         * parallel policy change still settles the in-flight correlation before
-         * changing authority, so a late worker cannot regain a route.
-         */
-        let preserves_single_session_continuation =
-            !rearmed && self.runtime_snapshot().auto_follow.can_queue_next();
-        if !preserves_single_session_continuation {
-            self.settle_post_turn_continuation_for_policy_change();
-        }
-        self.session
-            .conversation_runtime
-            .set_parallel_post_turn_rearm(rearmed);
-    }
-
+    #[cfg(test)]
     pub(super) fn active_post_turn_evaluation_correlation(
         &self,
     ) -> Option<&PostTurnEvaluationCorrelation> {
-        self.session
-            .active_post_turn_evaluation()
-            .map(|active| &active.correlation)
+        self.session.active_post_turn_evaluation_correlation()
     }
 
     pub(super) fn matches_conversation(&self, workspace_directory: &str, thread_id: &str) -> bool {
         self.session
             .turn_stream_state
             .matches_conversation(workspace_directory, thread_id)
-    }
-
-    fn prune_post_turn_evaluation_for_lifecycle(&mut self) {
-        let should_prune = self
-            .session
-            .active_post_turn_evaluation()
-            .is_some_and(|active| {
-                !self
-                    .session
-                    .turn_stream_state
-                    .can_start_post_turn_evaluation(
-                        &active.correlation.thread_id,
-                        &active.correlation.completed_turn_id,
-                    )
-            });
-        if should_prune {
-            self.cancel_active_post_turn_evaluation();
-        }
-    }
-
-    fn cancel_active_post_turn_evaluation(&mut self) {
-        if let Some(active) = self
-            .session
-            .conversation_runtime
-            .cancel_post_turn_evaluation()
-        {
-            active.continuation_permit.invalidate_if_current();
-        }
-    }
-
-    fn invalidate_post_turn_continuation(&mut self) {
-        self.session.post_turn_continuation_gate.advance();
-        self.cancel_active_post_turn_evaluation();
-    }
-
-    fn settle_post_turn_continuation_for_policy_change(&mut self) {
-        self.session.post_turn_continuation_gate.advance();
-        let active = self.session.active_post_turn_evaluation().cloned();
-        if let Some(active) = active.as_ref()
-            && !self.session.turn_stream_state.settle_post_turn_terminal(
-                &active.correlation.thread_id,
-                &active.correlation.completed_turn_id,
-            )
-        {
-            // gate 를 이미 넘겼으므로 permit 은 따로 무효로 만들지 않는다 (Q2-1 이전 동작).
-            let _ = self
-                .session
-                .conversation_runtime
-                .cancel_post_turn_evaluation();
-            return;
-        }
-        let settled = self
-            .session
-            .conversation_runtime
-            .settle_in_flight_post_turn_without_continuation();
-        if let Some(active) = active {
-            debug_assert_eq!(
-                settled.as_ref(),
-                Some(&active.correlation),
-                "post-turn worker and runtime authority must settle the same correlation"
-            );
-        }
-    }
-
-    fn schedule_stop_synchronization_after_turn_started(
-        &mut self,
-        stop_effects: &mut Vec<StopEffectIntent>,
-    ) {
-        let Some(active) = self.session.active_stop_request.as_mut() else {
-            return;
-        };
-        if active.invalidated
-            || !active.synchronize_after_turn_started
-            || active.pending_attempt.is_some()
-            || active.correlation.turn_submission
-                != self.session.conversation_runtime.active_turn_correlation()
-            || !self.session.turn_stream_state.has_active_turn()
-        {
-            return;
-        }
-        active.synchronize_after_turn_started = false;
-        active.pending_attempt = Some(StopRequestAttempt::AfterTurnStarted);
-        stop_effects.push(StopEffectIntent::Request {
-            correlation: active.correlation,
-            attempt: StopRequestAttempt::AfterTurnStarted,
-        });
-    }
-
-    fn clear_stop_request_for_turn(
-        &mut self,
-        correlation: TurnSubmissionCorrelation,
-        stop_effects: &mut Vec<StopEffectIntent>,
-    ) {
-        if self
-            .session
-            .active_stop_request
-            .is_none_or(|active| active.correlation.turn_submission != Some(correlation))
-        {
-            return;
-        }
-        self.invalidate_stop_request_for_lifecycle(stop_effects);
-    }
-
-    fn invalidate_stop_request_for_lifecycle(&mut self, stop_effects: &mut Vec<StopEffectIntent>) {
-        let Some(active) = self.session.active_stop_request.as_mut() else {
-            return;
-        };
-        if active.pending_attempt.is_none() {
-            self.session.active_stop_request = None;
-            return;
-        }
-        if active.invalidated {
-            return;
-        }
-        active.invalidated = true;
-        active.synchronize_after_turn_started = false;
-        stop_effects.push(StopEffectIntent::Invalidate {
-            correlation: active.correlation,
-        });
     }
 
     #[cfg(test)]
@@ -2051,6 +2005,35 @@ mod tests {
                 active_correlation
             } if active_correlation == turn
         ));
+    }
+
+    #[test]
+    fn a_turn_without_room_names_the_first_turn_of_the_other_sessions() {
+        // plan 18 Q5-2: the other sessions keep the order that they had when sessions were swapped.
+        let mut reducer = ConversationTurnFeatureReducer::new();
+        reducer.set_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        let accepted = |admission| match admission {
+            TurnSubmissionAdmission::Accepted { correlation } => correlation,
+            other => panic!("the turn must be accepted: {other:?}"),
+        };
+        let viewed = accepted(reducer.admit_turn_submission(&turn_request()));
+        let background =
+            accepted(reducer.admit_thread_turn_submission("thread-b", &turn_request(), None));
+        assert_ne!(viewed, background);
+
+        // The session of `thread-c` is the second background session. The other sessions are the
+        // first background session and then the viewed session.
+        assert_eq!(
+            reducer.admit_thread_turn_submission("thread-c", &turn_request(), None),
+            TurnSubmissionAdmission::RejectedActive {
+                active_correlation: background
+            }
+        );
+        assert_eq!(
+            reducer.background_session_count(),
+            1,
+            "the refused session has no work and is removed"
+        );
     }
 
     #[test]

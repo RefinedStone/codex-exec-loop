@@ -2,14 +2,14 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. Q5-1 과 Q5-2a 를 구현했다 (2026-11-17, §7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18)를 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다.
 - 상위 문서: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.4, §5.8, §5.9, §6 의 K6. 결정 KP-03, KP-04,
   KP-06. [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §3.2, §5.3, §6 의 Q5, 성질 P4.
 - 이 문서를 따로 둔 이유: plan 18 은 K6 을 한 줄로, plan 19 는 Q5 를 한 줄로 적었다. 두 줄은 서로 묶여 있다. TUI 가
   Gateway 의 커널에 붙으려면 커널이 thread 를 클라이언트와 무관하게 다뤄야 하고(Q5), 병렬 제어의 전환
   ([18-K4-9b](18-k4-9b-parallel-control.md))은 K6 을 기다린다.
-- 기준일: 2026-11-17 (Asia/Seoul)
+- 기준일: 2026-11-18 (Asia/Seoul)
 - 기준 커밋: `2459191d` (`origin/prerelease`).
 - 범위: 동시 턴 수의 정책, thread 별 상태 기계, TUI 가 Gateway 의 커널에 붙는 길, 직접 경로의 삭제, 이름 정리.
   관찰자와 기능 카탈로그(plan 20), 엔진 adapter(Q6), 병렬 제어의 전환(K4-9b)은 범위 밖이다.
@@ -185,7 +185,8 @@ struct ThreadSessions {
 | --- | --- | --- | --- |
 | Q5-1 (구현 2026-11-17, §7) | `TurnConcurrencyPolicy`. 턴을 받는 규칙이 도는 턴의 수를 정책 값과 견준다 | 유지 (기본값 1) | core 시험: 값 1 은 지금과 같다. 값 2 는 thread 둘의 턴을 받고 셋째를 거절한다. 같은 thread 의 둘째 턴은 값과 관계없이 거절한다 |
 | Q5-2a (구현 2026-11-17, §7) | session 의 자리(`SessionSlot`)와 찾기. steer, 승인 결정, runtime 알림, 작업 공간 변경의 규칙을 옮긴다 | 유지 | 기존 시험, 커널 시뮬레이션 |
-| Q5-2b ~ | 남은 규칙 묶음을 하나씩 옮긴다 (제출, 스트림, 정지, 평가). `mem::swap` 을 지운다. 그 뒤에 session 을 맵으로 둔다 | 유지 | 기존 시험, 커널 시뮬레이션 |
+| Q5-2b (구현 2026-11-18, §7) | 남은 규칙을 옮긴다 (제출, 스트림, 정지, 평가, 경로, 모든 session 의 정책 변경). `mem::swap` 을 지운다 | 유지 | 기존 시험, 커널 시뮬레이션 |
+| Q5-2c | session 을 thread id 의 맵으로 둔다. 보는 자리는 맵의 키이다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-3 | 자동 후속 차선. 큐 프롬프트를 자리가 날 때 낸다. 시뮬레이션에 값 2 를 넣는다 | 확장 (값 2 이상에서만 다르다) | 시뮬레이션의 새 불변식: 자동 후속을 이어 가는 thread 는 하나이다 |
 | K6-1 | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 | 가짜 Gateway 시험. 모델 턴은 없다 |
 | K6-2 | TUI 가 `akra/kernel/*` 로 붙는다. 잠금을 잡지 않는다. 하네스 화면은 Q-M5-1 의 답대로 한다 | 전환 | 터미널 검증 계약 (`docs/validation/terminal-ui-testing-methodology.md`) |
@@ -257,3 +258,44 @@ struct ThreadSessions {
 - `with_owning_session` 을 부르는 자리가 8곳 남았다 (제출, 스트림, 정지, 평가, 경로, 병렬 재무장). 이 규칙들은
   reducer 의 다른 값(승인 검토 줄, 기록, 다른 session 의 턴)을 함께 읽는다. Q5-2b 부터 옮긴다.
 - `mem::swap`, `reduce_background_session`, `serving_background` 는 그대로 있다.
+
+### Q5-2b (2026-11-18)
+
+- 남은 규칙을 모두 옮겼다: 턴 제출(`admit_turn_submission`, `admit_thread_turn_submission`), 스트림
+  (`apply_correlated_turn_stream_event`), 정지 완료(`complete_stop_request`), 평가(`start_due_post_turn_evaluation`,
+  `admit_post_turn_evaluation`, `complete_post_turn_evaluation`), 경로(`resolve_post_turn_route`), 모든 session 에 거는
+  정책 변경(`set_auto_follow_max_turns`, `pause_post_turn_continuation`, `set_parallel_post_turn_rearm`).
+- `with_owning_session`, `reduce_background_session`, `serving_background` 를 지웠다. 파일에 `mem::swap` 이 없다
+  (목표 S2 의 확인). 보는 session 을 뒤로 보낼 때의 `mem::replace` 는 남는다. 그것은 자리를 옮기는 일이다.
+- thread 하나만 보는 규칙은 `ThreadSession` 의 함수가 되었다 (13개). reducer 의 값이 필요하면 인자로 받는다: 세대
+  번호, 승인 검토 저장의 줄, "보는 대화를 여는 중"이라는 값.
+- 턴을 받는 규칙은 다른 session 의 턴과 정지를 본다. reducer 가 그것을 먼저 읽어서 넘긴다 (`OtherSessionBlocks`).
+  "다른 session"의 차례는 이전과 같다 (`other_sessions`): 바꿔 넣던 때에 뒤의 목록에서 보이던 차례이다. 거절이 대는
+  턴과 정지가 이 차례로 정해지기 때문이다.
+- 한 PR 로 했다. §6 은 규칙 묶음마다 PR 하나라고 했다. 옮기는 방법이 모든 묶음에서 같고 (session 의 함수로 옮기고
+  자리로 부른다) 묶음을 나누면 `mem::swap` 이 PR 사이에 남기 때문이다.
+
+확인: 동작을 바꾸지 않았다. 새 시험은 없다. 기존 core 시험, 커널 호스트 시험, 런타임 시험, 구조 시험이 통과한다.
+커널 시뮬레이션은 seed 2,000개로 돌렸다 (`AKRA_SIM_SEEDS=2000`). 구조 시험 둘은 옮긴 함수를 `ThreadSession` 에서 찾는다. 새 시험 하나가 "다른 session"의 차례를 값 2 에서 본다
+(`a_turn_without_room_names_the_first_turn_of_the_other_sessions`).
+
+코드 리뷰 (2026-11-18). 동작의 차이는 찾지 못했다. 반영한 것:
+
+- 평가 완료를 받는 session 의 함수가 "보는 대화를 여는 중"을 인자로 받지 않는다. reducer 가 먼저 거른다. session 은
+  자기 thread 만 안다.
+- "다른 session"의 차례에 시험을 더했다. 기본값 1 에서는 이 차례가 보이지 않는다.
+- 문서 상태 줄을 고쳤다. Q-M5-1 의 답은 따로 commit 했다.
+
+반영하지 않은 것:
+
+- 턴을 넣을 때마다 다른 session 을 미리 읽는다 (전에는 필요할 때만 읽었다). session 수가 적다. Q5-2c 의 맵에서
+  다시 본다.
+- reducer 와 `ThreadSession` 에 같은 이름의 함수가 있다. 구조 시험의 `top_level_impl_method_source` 는 이름만 본다.
+  그 도우미로 찾는 이름(`accept_post_turn_evaluation`)은 하나뿐이다.
+- 규칙 묶음마다 commit 을 나누지 않았다. 옮긴 함수들이 서로를 부르므로 묶음 하나만 옮긴 상태는 컴파일되지 않는다.
+
+남긴 것:
+
+- session 은 아직 "보는 것 하나와 뒤의 목록"이다. thread id 의 맵으로 바꾸는 일은 Q5-2c 이다.
+- 승인 검토 저장의 줄은 모든 thread 가 하나를 쓴다. 정지는 보는 session 만 받는다 (`admit_stop_request`). 둘 다
+  값 2 이상에서 고쳐야 한다 (Q5-3, §2.1).
