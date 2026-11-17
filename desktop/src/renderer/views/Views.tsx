@@ -137,7 +137,7 @@ function paletteCommands(): PaletteEntry[] {
     { id: "skills", icon: "stack", label: "설치된 스킬 패널 (출처, 업데이트)", hint: "", run: () => togglePanel("skills") },
     { id: "terminal", icon: "terminal", label: "터미널 열기 / 닫기", hint: `${MOD_KEY}J`, run: toggleTerminal },
     { id: "theme", icon: "sun", label: "밝은 화면 / 어두운 화면", hint: "", run: toggleTheme },
-    { id: "settings", icon: "sliders", label: "설정 (글자 크기, 알림, 잠자기 방지)", hint: `${MOD_KEY},`, run: () => useUiStore.setState({ settingsOpen: true }) },
+    { id: "settings", icon: "sliders", label: "설정 (글자 크기, 알림, 잠자기 방지)", hint: `${MOD_KEY},`, run: () => useUiStore.setState({ overlay: "settings" }) },
   ];
 }
 
@@ -151,7 +151,7 @@ export function CommandPalette({ onOpenThread }: { onOpenThread(threadId: string
     const needle = query.trim().toLowerCase();
     return [...paletteCommands(), ...dots, ...threads].filter((entry) => entry.label.toLowerCase().includes(needle)).slice(0, PALETTE_LIMIT);
   }, [folders, query, onOpenThread]);
-  const close = () => useUiStore.setState({ paletteOpen: false });
+  const close = () => useUiStore.setState({ overlay: null });
   const run = (entry: PaletteEntry | undefined) => {
     if (!entry) return;
     close();
@@ -219,7 +219,7 @@ const SHORTCUTS = [
 ] as const;
 
 export function ShortcutsDialog() {
-  const close = () => useUiStore.setState({ shortcutsOpen: false });
+  const close = () => useUiStore.setState({ overlay: null });
   return (
     <div className="overlay" onClick={close}>
       <div className="dialog" role="dialog" aria-label="단축키" onClick={(event) => event.stopPropagation()}>
@@ -273,7 +273,7 @@ export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        useUiStore.setState({ paletteOpen: false, shortcutsOpen: false, settingsOpen: false, findOpen: false });
+        useUiStore.setState({ overlay: null, findOpen: false });
         return;
       }
       if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
@@ -282,7 +282,7 @@ export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
       if (inTerminal && !event.metaKey && event.code !== "Backquote") return;
       // 글자가 아니라 글쇠 자리로 찾는다. 한글 입력 상태에서는 `event.key` 가 한글 자모이다.
       const actions: Record<string, () => void> = {
-        KeyK: () => useUiStore.setState((state) => ({ paletteOpen: !state.paletteOpen })),
+        KeyK: () => useUiStore.setState((state) => ({ overlay: state.overlay === "palette" ? null : "palette" })),
         KeyN: () => showHome(),
         KeyB: () => useUiStore.setState((state) => ({ sidebarOpen: !state.sidebarOpen })),
         KeyJ: toggleTerminal,
@@ -294,7 +294,7 @@ export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
         KeyF: () => {
           const view = useUiStore.getState().view;
           if (view !== "thread" && view !== "remote") return;
-          useUiStore.setState({ findOpen: true, paletteOpen: false });
+          useUiStore.setState({ findOpen: true, overlay: null });
           document.querySelector<HTMLInputElement>("[data-find-input]")?.select();
         },
       };
