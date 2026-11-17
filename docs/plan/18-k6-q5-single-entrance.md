@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. Q5-1 을 구현했다 (2026-11-17, §7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. Q5-1 과 Q5-2a 를 구현했다 (2026-11-17, §7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다.
 - 상위 문서: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.4, §5.8, §5.9, §6 의 K6. 결정 KP-03, KP-04,
   KP-06. [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §3.2, §5.3, §6 의 Q5, 성질 P4.
@@ -179,7 +179,8 @@ struct ThreadSessions {
 | 조각 | 내용 | 동작 | 확인 |
 | --- | --- | --- | --- |
 | Q5-1 (구현 2026-11-17, §7) | `TurnConcurrencyPolicy`. 턴을 받는 규칙이 도는 턴의 수를 정책 값과 견준다 | 유지 (기본값 1) | core 시험: 값 1 은 지금과 같다. 값 2 는 thread 둘의 턴을 받고 셋째를 거절한다. 같은 thread 의 둘째 턴은 값과 관계없이 거절한다 |
-| Q5-2a ~ | session 맵. 규칙 묶음을 하나씩 옮긴다. `mem::swap` 을 지운다 | 유지 | 기존 시험, 커널 시뮬레이션 |
+| Q5-2a (구현 2026-11-17, §7) | session 의 자리(`SessionSlot`)와 찾기. steer, 승인 결정, runtime 알림, 작업 공간 변경의 규칙을 옮긴다 | 유지 | 기존 시험, 커널 시뮬레이션 |
+| Q5-2b ~ | 남은 규칙 묶음을 하나씩 옮긴다 (제출, 스트림, 정지, 평가). `mem::swap` 을 지운다. 그 뒤에 session 을 맵으로 둔다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-3 | 자동 후속 차선. 큐 프롬프트를 자리가 날 때 낸다. 시뮬레이션에 값 2 를 넣는다 | 확장 (값 2 이상에서만 다르다) | 시뮬레이션의 새 불변식: 자동 후속을 이어 가는 thread 는 하나이다 |
 | K6-1 | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 | 가짜 Gateway 시험. 모델 턴은 없다 |
 | K6-2 | TUI 가 `akra/kernel/*` 로 붙는다. 잠금을 잡지 않는다. 하네스 화면은 Q-M5-1 의 답대로 한다 | 전환 | 터미널 검증 계약 (`docs/validation/terminal-ui-testing-methodology.md`) |
@@ -231,3 +232,23 @@ struct ThreadSessions {
 - 값이 2 이상일 때 §2.1 의 나머지 자리(큐에 남긴 프롬프트, 턴 뒤 경로, 자동 후속 설정)는 한 턴의 규칙 그대로이다.
   Q5-3 에서 정한다.
 - 커널 시뮬레이션은 값 1 만 돌린다.
+
+### Q5-2a (2026-11-17)
+
+- `SessionSlot` (`Viewed`, `Background(index)`)과 `find_session`, `settle_session` 을 더했다
+  (`src/core/app/conversation_turn_reducer.rs`). 찾는 차례는 `with_owning_session` 과 같다: 보는 session 이 먼저이다.
+  규칙을 처리한 뒤에 일이 끝난 뒤의 session 을 지우는 것도 같다.
+- 규칙 여섯을 옮겼다: `apply_correlated_runtime_notice`, `apply_turn_workspace_change`, `admit_turn_steer`,
+  `complete_turn_steer`, `admit_approval_decision`, `complete_approval_decision`. 이 규칙들은 session 을 바꿔 넣지
+  않고 그 자리의 session 을 직접 고친다.
+- steer 와 승인 결정을 받는 규칙은 `ThreadSession` 의 함수가 되었다. 세대 번호는 인자로 받는다.
+- "보지 않는 thread 의 결과는 화면에 내지 않는다"는 `serving_background` 대신 `SessionSlot::is_viewed` 로 가른다.
+
+확인: 동작을 바꾸지 않았다. 새 시험은 없다. 기존 core 시험, 커널 호스트 시험, 런타임 시험, 커널 시뮬레이션, 구조
+시험이 통과한다.
+
+남긴 것:
+
+- `with_owning_session` 을 부르는 자리가 8곳 남았다 (제출, 스트림, 정지, 평가, 경로, 병렬 재무장). 이 규칙들은
+  reducer 의 다른 값(승인 검토 줄, 기록, 다른 session 의 턴)을 함께 읽는다. Q5-2b 부터 옮긴다.
+- `mem::swap`, `reduce_background_session`, `serving_background` 는 그대로 있다.

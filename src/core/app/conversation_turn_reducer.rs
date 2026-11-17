@@ -207,6 +207,73 @@ impl ThreadSession {
         self.turn_stream_state.matches_thread(thread_id)
     }
 
+    /// 이 thread 의 도는 턴에 steer 를 받는다 (plan 18 K3-3a). 세대 번호는 모든 thread 에서 유일하므로 reducer 가 준다.
+    fn admit_turn_steer(
+        &mut self,
+        next_generation: &mut u64,
+        request: &ConversationTurnSteerRequest,
+    ) -> TurnSteerAdmission {
+        if let Some(active) = &self.active_turn_steer {
+            return TurnSteerAdmission::RejectedActive {
+                active_correlation: active.correlation,
+            };
+        }
+        let Some(turn_submission) = self.conversation_runtime.active_turn_correlation() else {
+            return TurnSteerAdmission::RejectedUnavailable;
+        };
+        if !self
+            .turn_stream_state
+            .matches_active_turn(&request.thread_id, &request.expected_turn_id)
+        {
+            return TurnSteerAdmission::RejectedUnavailable;
+        }
+        let correlation = TurnSteerCorrelation::new(
+            take_generation(next_generation, "active turn steer"),
+            turn_submission,
+        );
+        self.active_turn_steer = Some(ActiveTurnSteer {
+            correlation,
+            expected_turn_id: request.expected_turn_id.clone(),
+        });
+        TurnSteerAdmission::Accepted { correlation }
+    }
+
+    /// 이 thread 가 기다리는 승인의 결정을 받는다 (plan 18 K3-3a).
+    fn admit_approval_decision(
+        &mut self,
+        next_generation: &mut u64,
+        request_identity: ConversationApprovalRequestIdentity,
+        decision: ConversationApprovalDecision,
+    ) -> ApprovalDecisionAdmission {
+        if let Some(active) = self.conversation_runtime.active_approval_decision() {
+            return ApprovalDecisionAdmission::RejectedActive {
+                active_correlation: active.clone(),
+            };
+        }
+        let Some(turn_submission) = self.conversation_runtime.active_turn_correlation() else {
+            return ApprovalDecisionAdmission::RejectedUnavailable;
+        };
+        if !self
+            .turn_stream_state
+            .matches_pending_approval(&request_identity)
+        {
+            return ApprovalDecisionAdmission::RejectedUnavailable;
+        }
+        let correlation = ApprovalDecisionCorrelation::new(
+            take_generation(next_generation, "approval decision"),
+            turn_submission,
+            request_identity,
+            decision,
+        );
+        if !self
+            .conversation_runtime
+            .begin_approval_decision(correlation.clone())
+        {
+            return ApprovalDecisionAdmission::RejectedUnavailable;
+        }
+        ApprovalDecisionAdmission::Accepted { correlation }
+    }
+
     /// 이 thread 가 내거나 돌리는 턴이다 (plan 19 Q3-2). 턴이 없으면 `None` 이다.
     fn thread_turn(&self) -> Option<crate::domain::kernel_event::ThreadTurn> {
         let thread_id = self.turn_stream_state.thread_id()?.to_string();
@@ -217,6 +284,35 @@ impl ThreadSession {
             turn_id: active_turn.turn_id.clone(),
             op_id: self.op_id,
         })
+    }
+}
+
+/*
+ * 규칙이 처리할 session 의 자리이다 (plan 18 Q5-2). 규칙은 이 자리의 session 을 직접 고친다. 뒤의 session 을 보는
+ * 자리와 바꿔 넣지 않는다.
+ */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionSlot {
+    Viewed,
+    Background(usize),
+}
+
+impl SessionSlot {
+    /// 클라이언트가 보는 session 이다. 보지 않는 session 의 결과는 화면용 투영으로 내지 않는다.
+    fn is_viewed(self) -> bool {
+        self == Self::Viewed
+    }
+
+    /// 이 자리의 session 이다. reducer 의 다른 필드(세대 번호)와 함께 빌릴 수 있게 두 필드를 받는다.
+    fn of<'a>(
+        self,
+        viewed: &'a mut ThreadSession,
+        background: &'a mut [ThreadSession],
+    ) -> &'a mut ThreadSession {
+        match self {
+            Self::Viewed => viewed,
+            Self::Background(index) => &mut background[index],
+        }
     }
 }
 
@@ -312,6 +408,26 @@ impl ConversationTurnFeatureReducer {
         self.serving_background = false;
         std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
         result
+    }
+
+    /// `owns` 가 맞는 session 의 자리이다 (plan 18 Q5-2). `with_owning_session` 과 같은 차례로 찾는다: 보는 session 이 먼저이다.
+    fn find_session(&self, owns: impl Fn(&ThreadSession) -> bool) -> Option<SessionSlot> {
+        if owns(&self.session) {
+            return Some(SessionSlot::Viewed);
+        }
+        self.background_sessions
+            .iter()
+            .position(owns)
+            .map(SessionSlot::Background)
+    }
+
+    /// 규칙을 처리한 뒤에 부른다. 일이 끝난 뒤의 session 은 지운다. 그 뒤에는 이 자리를 쓰지 않는다.
+    fn settle_session(&mut self, slot: SessionSlot) {
+        if let SessionSlot::Background(index) = slot
+            && !self.background_sessions[index].is_busy()
+        {
+            self.background_sessions.remove(index);
+        }
     }
 
     /// 이 평가가 클라이언트가 보지 않는 thread 의 것이다. 그 결과는 클라이언트에 알리지 않는다.
@@ -1132,17 +1248,14 @@ impl ConversationTurnFeatureReducer {
         correlation: TurnSubmissionCorrelation,
         notice: String,
     ) -> Option<TurnStreamSnapshot> {
-        self.with_owning_session(
-            |session| session.owns_turn(correlation),
-            |reducer| {
-                let snapshot = reducer
-                    .session
-                    .turn_stream_state
-                    .apply_runtime_notice(notice);
-                (!reducer.serving_background).then_some(snapshot)
-            },
-        )
-        .flatten()
+        let slot = self.find_session(|session| session.owns_turn(correlation))?;
+        let snapshot = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .turn_stream_state
+            .apply_runtime_notice(notice);
+        self.settle_session(slot);
+        // 클라이언트는 뒤의 thread 를 보지 않는다. 화면용 투영은 보내지 않는다.
+        slot.is_viewed().then_some(snapshot)
     }
 
     pub(super) fn apply_turn_workspace_change(
@@ -1150,17 +1263,15 @@ impl ConversationTurnFeatureReducer {
         correlation: TurnSubmissionCorrelation,
         workspace_directory: String,
     ) -> bool {
-        self.with_owning_session(
-            |session| session.owns_turn(correlation),
-            |reducer| {
-                reducer
-                    .session
-                    .conversation_runtime
-                    .replace_active_turn_workspace(correlation, workspace_directory)
-                    && !reducer.serving_background
-            },
-        )
-        .unwrap_or(false)
+        let Some(slot) = self.find_session(|session| session.owns_turn(correlation)) else {
+            return false;
+        };
+        let replaced = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .conversation_runtime
+            .replace_active_turn_workspace(correlation, workspace_directory);
+        self.settle_session(slot);
+        replaced && slot.is_viewed()
     }
 
     pub(super) fn admit_stop_request(&mut self) -> StopRequestAdmission {
@@ -1249,42 +1360,15 @@ impl ConversationTurnFeatureReducer {
         &mut self,
         request: &ConversationTurnSteerRequest,
     ) -> TurnSteerAdmission {
-        self.with_owning_session(
-            |session| session.streams_thread(&request.thread_id),
-            |reducer| reducer.admit_turn_steer_in_session(request),
-        )
-        .unwrap_or(TurnSteerAdmission::RejectedUnavailable)
-    }
-
-    fn admit_turn_steer_in_session(
-        &mut self,
-        request: &ConversationTurnSteerRequest,
-    ) -> TurnSteerAdmission {
-        if let Some(active) = &self.session.active_turn_steer {
-            return TurnSteerAdmission::RejectedActive {
-                active_correlation: active.correlation,
-            };
-        }
-        let Some(turn_submission) = self.session.conversation_runtime.active_turn_correlation()
+        let Some(slot) = self.find_session(|session| session.streams_thread(&request.thread_id))
         else {
             return TurnSteerAdmission::RejectedUnavailable;
         };
-        if !self
-            .session
-            .turn_stream_state
-            .matches_active_turn(&request.thread_id, &request.expected_turn_id)
-        {
-            return TurnSteerAdmission::RejectedUnavailable;
-        }
-        let correlation = TurnSteerCorrelation::new(
-            take_generation(&mut self.next_turn_steer_generation, "active turn steer"),
-            turn_submission,
-        );
-        self.session.active_turn_steer = Some(ActiveTurnSteer {
-            correlation,
-            expected_turn_id: request.expected_turn_id.clone(),
-        });
-        TurnSteerAdmission::Accepted { correlation }
+        let admission = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .admit_turn_steer(&mut self.next_turn_steer_generation, request);
+        self.settle_session(slot);
+        admission
     }
 
     pub(super) fn complete_turn_steer(
@@ -1292,21 +1376,19 @@ impl ConversationTurnFeatureReducer {
         correlation: TurnSteerCorrelation,
         result: Result<ConversationTurnSteerReceipt, String>,
     ) -> Option<Result<ConversationTurnSteerReceipt, String>> {
-        let active = self
-            .with_owning_session(
-                |session| {
-                    session
-                        .active_turn_steer
-                        .as_ref()
-                        .is_some_and(|active| active.correlation == correlation)
-                },
-                // 보지 않는 thread 의 steer 결과는 정리만 하고 클라이언트에 알리지 않는다.
-                |reducer| {
-                    let active = reducer.session.active_turn_steer.take();
-                    active.filter(|_| !reducer.serving_background)
-                },
-            )
-            .flatten()?;
+        let slot = self.find_session(|session| {
+            session
+                .active_turn_steer
+                .as_ref()
+                .is_some_and(|active| active.correlation == correlation)
+        })?;
+        let active = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .active_turn_steer
+            .take();
+        self.settle_session(slot);
+        // 보지 않는 thread 의 steer 결과는 정리만 하고 클라이언트에 알리지 않는다.
+        let active = active.filter(|_| slot.is_viewed())?;
         Some(result.and_then(|receipt| {
             if receipt.turn_id == active.expected_turn_id {
                 Ok(receipt)
@@ -1322,56 +1404,22 @@ impl ConversationTurnFeatureReducer {
         request_identity: ConversationApprovalRequestIdentity,
         decision: ConversationApprovalDecision,
     ) -> ApprovalDecisionAdmission {
-        let owner_identity = request_identity.clone();
-        self.with_owning_session(
-            |session| {
-                session
-                    .turn_stream_state
-                    .matches_pending_approval(&owner_identity)
-            },
-            |reducer| reducer.admit_approval_decision_in_session(request_identity, decision),
-        )
-        .unwrap_or(ApprovalDecisionAdmission::RejectedUnavailable)
-    }
-
-    fn admit_approval_decision_in_session(
-        &mut self,
-        request_identity: ConversationApprovalRequestIdentity,
-        decision: ConversationApprovalDecision,
-    ) -> ApprovalDecisionAdmission {
-        if let Some(active) = self.session.conversation_runtime.active_approval_decision() {
-            return ApprovalDecisionAdmission::RejectedActive {
-                active_correlation: active.clone(),
-            };
-        }
-        let Some(turn_submission) = self.session.conversation_runtime.active_turn_correlation()
-        else {
+        let Some(slot) = self.find_session(|session| {
+            session
+                .turn_stream_state
+                .matches_pending_approval(&request_identity)
+        }) else {
             return ApprovalDecisionAdmission::RejectedUnavailable;
         };
-        if !self
-            .session
-            .turn_stream_state
-            .matches_pending_approval(&request_identity)
-        {
-            return ApprovalDecisionAdmission::RejectedUnavailable;
-        }
-        let correlation = ApprovalDecisionCorrelation::new(
-            take_generation(
+        let admission = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .admit_approval_decision(
                 &mut self.next_approval_decision_generation,
-                "approval decision",
-            ),
-            turn_submission,
-            request_identity,
-            decision,
-        );
-        if !self
-            .session
-            .conversation_runtime
-            .begin_approval_decision(correlation.clone())
-        {
-            return ApprovalDecisionAdmission::RejectedUnavailable;
-        }
-        ApprovalDecisionAdmission::Accepted { correlation }
+                request_identity,
+                decision,
+            );
+        self.settle_session(slot);
+        admission
     }
 
     pub(super) fn complete_approval_decision(
@@ -1379,18 +1427,18 @@ impl ConversationTurnFeatureReducer {
         correlation: &ApprovalDecisionCorrelation,
         succeeded: bool,
     ) -> bool {
-        self.with_owning_session(
-            |session| session.conversation_runtime.active_approval_decision() == Some(correlation),
-            |reducer| {
-                // 보지 않는 thread 의 승인 결과는 상태에만 반영하고 클라이언트에 알리지 않는다.
-                reducer
-                    .session
-                    .conversation_runtime
-                    .complete_approval_decision(correlation, succeeded)
-                    && !reducer.serving_background
-            },
-        )
-        .unwrap_or(false)
+        let Some(slot) = self.find_session(|session| {
+            session.conversation_runtime.active_approval_decision() == Some(correlation)
+        }) else {
+            return false;
+        };
+        let completed = slot
+            .of(&mut self.session, &mut self.background_sessions)
+            .conversation_runtime
+            .complete_approval_decision(correlation, succeeded);
+        self.settle_session(slot);
+        // 보지 않는 thread 의 승인 결과는 상태에만 반영하고 클라이언트에 알리지 않는다.
+        completed && slot.is_viewed()
     }
 
     pub(super) fn admit_post_turn_evaluation(
