@@ -399,7 +399,7 @@ the desktop app itself is not shipped yet.
   `akra/git/refs` with `{ cwd }` returns `{ repository, refsDigest }` without reading commits.
   `akra/git/commit` with `{ cwd, commit }` returns `{ commit }`: the full message, author, committer,
   parents, and the diff against the first parent (`git show --first-parent --no-ext-diff --no-textconv`),
-  or `commit: null` for an unknown sha. `commit` must be 7 to 64 hexadecimal characters. A diff over
+  or `commit: null` for an unknown sha. `commit` must be a full sha (40 or 64 hexadecimal characters). A diff over
   2 MiB is not read; the answer has `diffTooLarge: true` and an empty `diff`.
 - Cloud host (D-19): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
   `~/.codex/auth.json`. The bridge forwards only the public-protocol methods it allows

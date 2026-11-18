@@ -42,7 +42,7 @@ pub trait GitHistoryPort: Send + Sync {
         include_head: bool,
     ) -> Result<HashSet<String>>;
 
-    /// 커밋 하나의 상세이다. `commit` 은 16 진수 sha 이다 (`is_git_commit_id`). 그 커밋이 없으면 `None` 이다.
+    /// 커밋 하나의 상세이다. `commit` 은 전체 sha 이다 (`is_git_commit_id`). 그 커밋이 없으면 `None` 이다.
     fn read_commit_detail(
         &self,
         repository_dir: &str,

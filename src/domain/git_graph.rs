@@ -115,9 +115,11 @@ pub struct GitCommitDetail {
     pub diff_too_large: bool,
 }
 
-/// 커밋 id 로 받을 수 있는 글이다: 16 진수 7 – 64 자이다. git 의 옵션이나 rev 식으로 읽힐 글을 막는다.
+/// 커밋 id 로 받을 수 있는 글이다: 전체 sha 이다 (16 진수 40 자, SHA-256 저장소는 64 자). git 의 옵션이나 rev 식으로
+/// 읽힐 글을 막는다. 짧은 sha 는 받지 않는다: git 은 짧은 16 진수 글을 같은 이름의 ref 로 먼저 읽고, 두 객체의
+/// 앞부분이면 고르지 못한다.
 pub fn is_git_commit_id(text: &str) -> bool {
-    (7..=64).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+    matches!(text.len(), 40 | 64) && text.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// 줄과 줄 사이의 레인 상태이다. 레인마다 "다음에 나올 커밋"을 가진다. 빈 레인은 `None` 이다.
@@ -342,11 +344,12 @@ mod tests {
 
     #[test]
     fn commit_id_accepts_only_hex_of_a_sha_length() {
-        assert!(is_git_commit_id("abc1234"));
         assert!(is_git_commit_id(&"a".repeat(40)));
         assert!(is_git_commit_id(&"A".repeat(64)));
-        assert!(!is_git_commit_id("abc123"));
-        assert!(!is_git_commit_id(&"a".repeat(65)));
+        // 짧은 sha 는 ref 이름으로 읽힐 수 있다.
+        assert!(!is_git_commit_id("abc1234"));
+        assert!(!is_git_commit_id(&"a".repeat(41)));
+        assert!(!is_git_commit_id(&"g".repeat(40)));
         assert!(!is_git_commit_id("--output=x"));
         assert!(!is_git_commit_id("HEAD~1^{tree}"));
     }

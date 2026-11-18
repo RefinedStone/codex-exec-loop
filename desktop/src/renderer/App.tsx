@@ -278,7 +278,6 @@ export function App() {
   const paletteOpen = useUiStore((state) => state.paletteOpen);
   const shortcutsOpen = useUiStore((state) => state.shortcutsOpen);
   const openCwd = useDesktopStore(openThreadCwd);
-  const folders = useDesktopStore((state) => state.folders);
   const tree = useWorkingTree(window.akra);
   useZoom();
   useAppSettings();
@@ -569,7 +568,7 @@ export function App() {
           {panel && (
             <RightPanel panel={panel}>
               {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)} />}
-              {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} folders={folders} onOpenThread={openThread} />}
+              {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} />}
               {panel === "browser" && <BrowserPanel bridge={window.akra.browser} />}
               {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} />}

@@ -354,9 +354,11 @@ export function nextMatch(matches: readonly number[], from: number, step: 1 | -1
 
 /**
  * 줄을 바꾼 뒤의 스크롤 위치이다. 화면 맨 위에 있던 커밋이 새 줄에서도 같은 자리에 보이게 한다. 그 커밋이 없어졌으면
- * 그 아래의 커밋 가운데 남은 첫 커밋을 쓴다. 남은 커밋이 없으면 위치를 그대로 둔다.
+ * 그 아래의 커밋 가운데 남은 첫 커밋을 쓴다. 남은 커밋이 없으면 위치를 그대로 둔다. 맨 위에 있었으면 맨 위에 둔다:
+ * 새 커밋은 위에 온다. 맨 위를 보는 사용자는 새 커밋을 봐야 한다.
  */
 export function scrollTopAfterRowsChange(previous: readonly GitGraphRow[], next: readonly GitGraphRow[], scrollTop: number): number {
+  if (scrollTop <= 0) return 0;
   const top = Math.floor(scrollTop / ROW_HEIGHT);
   const offset = scrollTop - top * ROW_HEIGHT;
   const nextIndex = new Map(next.map((row, index) => [row.id, index]));

@@ -156,7 +156,7 @@ impl GitHistoryPort for GitHistoryAdapter {
         if !repository.is_absolute() {
             bail!("the repository folder must be an absolute path");
         }
-        // 짧은 sha 를 전체 sha 로 바꾼다. 그 커밋이 없으면 (또는 커밋이 아니면) 실패한다.
+        // 그 커밋이 있는지 본다. 없으면 (또는 커밋이나 커밋을 가리키는 태그가 아니면) 실패한다.
         let revision = format!("{commit}^{{commit}}");
         let Ok(resolved) =
             git_output(repository, &["rev-parse", "--verify", "--quiet", &revision])?
@@ -196,7 +196,11 @@ fn read_commit_diff(repository: &Path, id: &str) -> Result<Option<String>> {
     let mut command = git_subprocess::command([
         "show",
         "--format=",
+        // 병합 커밋은 첫 부모와 비교한다. `-m` 이 없으면 git 2.31 앞의 판은 결합 diff (`diff --cc`) 를 쓴다.
+        "-m",
         "--first-parent",
+        // 저장소 설정 `log.showRoot=false` 는 첫 커밋의 변경을 숨긴다.
+        "--root",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
@@ -220,8 +224,14 @@ fn read_commit_diff(repository: &Path, id: &str) -> Result<Option<String>> {
         COMMIT_DIFF_STDERR_LIMIT_BYTES,
     ) {
         Ok(output) => output,
-        // 출력이 한도를 넘었다. 실행기는 이 종류로만 알린다.
-        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return Ok(None),
+        // 변경이 한도를 넘었다. 실행기는 한도를 이 종류와 이 글로 알린다. stderr 만 넘은 것은 git 의 오류이므로
+        // 오류로 올린다.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::InvalidData
+                && error.to_string().contains("stdout exceeded") =>
+        {
+            return Ok(None);
+        }
         Err(error) => return Err(error).context("failed to read the commit diff"),
     };
     if !output.status.success() {
@@ -595,7 +605,7 @@ mod tests {
         let second = head_sha(&directory);
 
         let detail = adapter
-            .read_commit_detail(&repository, &second[..10])
+            .read_commit_detail(&repository, &second)
             .unwrap()
             .expect("the commit exists");
 
@@ -616,6 +626,40 @@ mod tests {
                 .unwrap(),
             None
         );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_merge_commit_is_compared_with_its_first_parent() {
+        let directory = temp_repository("merge-detail");
+        let repository = directory.display().to_string();
+        initialize(&directory);
+        commit(&directory, "base");
+        git(&directory, &["checkout", "--quiet", "-b", "topic"]);
+        std::fs::write(directory.join("topic.txt"), "topic\n").unwrap();
+        git(&directory, &["add", "topic.txt"]);
+        git(&directory, &["commit", "--quiet", "-m", "topic file"]);
+        git(&directory, &["checkout", "--quiet", "main"]);
+        std::fs::write(directory.join("main.txt"), "main\n").unwrap();
+        git(&directory, &["add", "main.txt"]);
+        git(&directory, &["commit", "--quiet", "-m", "main file"]);
+        let first_parent = head_sha(&directory);
+        git(
+            &directory,
+            &["merge", "--quiet", "--no-ff", "-m", "merge topic", "topic"],
+        );
+
+        let detail = GitHistoryAdapter
+            .read_commit_detail(&repository, &head_sha(&directory))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(detail.parents.len(), 2);
+        assert_eq!(detail.parents[0], first_parent);
+        // 첫 부모(main)에 없던 파일만 나온다. 결합 diff 가 아니다.
+        assert!(detail.diff.contains("diff --git a/topic.txt b/topic.txt"));
+        assert!(!detail.diff.contains("main.txt"));
+        assert!(!detail.diff.contains("diff --cc"));
         let _ = std::fs::remove_dir_all(&directory);
     }
 

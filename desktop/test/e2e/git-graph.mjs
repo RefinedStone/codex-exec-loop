@@ -174,7 +174,8 @@ try {
   check("the new commit is the first row", (await page.getByTestId("git-graph-row").first().innerText()).includes("New commit"));
 
   // 줄을 고르면 상세가 나온다.
-  await rowWith("Topic work").click();
+  // 줄의 가운데를 누르지 않는다. 좁은 패널에서는 가운데에 스레드 배지가 온다. 배지는 줄을 고르지 않는다.
+  await rowWith("Topic work").locator(".git-row-time").click();
   await page.getByTestId("git-commit-message").waitFor({ timeout: 10_000 });
   check("selecting a row reads that commit", commitRequests.length === 1 && commitRequests[0] === sha(total - 1));
   check("the detail shows the whole message", (await page.getByTestId("git-commit-message").innerText()).includes("The body of the topic commit."));
