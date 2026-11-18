@@ -40,11 +40,13 @@ const savedWhen = async (page, done) => {
 };
 const launch = () => electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env });
 const quit = async (app) => {
-  const exited = new Promise((resolve) => app.process().once("exit", resolve));
+  // 프로세스는 앱이 끝나기 전에 한 번만 받는다. 앱이 끝난 뒤의 `app.process()` 는 오류이다: playwright 가 그 객체를 지운다.
+  const child = app.process();
+  const exited = new Promise((resolve) => child.once("exit", resolve));
   for (const window of app.windows()) await window.close();
   await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
   // macOS 에서는 창을 모두 닫아도 앱이 남는다.
-  if (app.process().exitCode === null) app.process().kill();
+  if (child.exitCode === null) child.kill();
 };
 const token = (page, name) => page.evaluate((property) => document.documentElement.style.getPropertyValue(property), name);
 
