@@ -15,6 +15,8 @@ pub mod repository_state_port;
 // gateway upstream port는 akra-gateway 세션마다 codex app-server 와 이어진 바이트 스트림을 연다.
 pub mod dots_port;
 pub mod gateway_upstream_port;
+// git history port 는 저장소의 ref 와 커밋 이력을 읽는 경계다 (plan 27).
+pub mod git_history_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
 pub mod github_automation_port;
 // GitHub PR validation port는 review/CI/merge 관찰 snapshot의 read-only 계약을 정의한다.

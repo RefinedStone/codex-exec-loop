@@ -381,6 +381,16 @@ the desktop app itself is not shipped yet.
   to a host other than `local`, `akra/kernel/*` is refused with `-32601`, `akra/context/*` answers
   with empty `resources` and does not read or write the ledger, `akra/mcp/*` is unchanged, and
   `AKRA_GATEWAY_RECORD` records nothing.
+- Commit graph (plan 27 G1): `akra/git/graph` with params `{ cwd, limit?, cursor? }` returns one page of
+  the commit graph of the repository that contains `cwd`: `repository`, `stale`, `head`, `refs` (local
+  branches, remote branches, and tags; first page only), `rows`, and `next`. A row carries the commit
+  (`id`, `parents`, `authorName`, `authorTime`, `subject`) and its lane placement (`lane`, `lanesIn`,
+  `lanesOut`, `lanesThrough`). The Gateway reads with `git for-each-ref` and
+  `git log --date-order --branches --remotes --tags HEAD` through the hardened Git boundary and writes
+  nothing. `limit` defaults to 300 and is capped at 1000. The Gateway keeps no state between pages: the
+  client returns `next` as `cursor`, and a cursor from before a ref change answers `stale: true` with no
+  rows. A folder outside a repository answers `repository: false`. The method exists only on `local`
+  connections.
 - Cloud host (D-19): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
   `~/.codex/auth.json`. The bridge forwards only the public-protocol methods it allows
   (`initialize`, `initialized`, `thread/list`, `thread/read`, `thread/turns/list`,
@@ -730,6 +740,12 @@ The Gateway records the external documents that a thread mentions, without a mod
   branch's GitHub PR with its CI state through `gh` (`desktop/src/main/gitBranch.ts`). It can push the branch
   to the remote branch of the same name (never a force push) and create a PR with `gh`; the main process asks
   before both and shows the target (`desktop/src/main/gitPublish.ts`)
+  The "그래프" side panel (plan 27 G1) shows the commit graph of the open thread's folder, read-only. It reads
+  `akra/git/graph` when the panel opens, when the folder changes, and on "새로 고침"; it draws only the
+  visible rows and reads the next page 60 rows before the end. A row shows the lane lines, the ref labels,
+  the subject, the author, the relative time, and the short sha. A remote branch on the same commit as the
+  local branch of the same name is one label; the checked-out commit has a hollow node. The panel does not
+  watch the repository and has no commit detail yet (`desktop/src/renderer/git/`).
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

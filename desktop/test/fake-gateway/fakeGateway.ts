@@ -177,6 +177,8 @@ export async function startFakeGateway(
     onRequest?(method: string): void;
     mcpHub?: FakeMcpHub;
     threadDocuments?: Record<string, FakeThreadDocument[]>;
+    /** `akra/git/graph` 의 답이다 (plan 27). 요청의 params 를 받아 쪽 하나를 돌려준다. 없으면 모르는 method 로 답한다. */
+    gitGraph?(params: { cwd?: unknown; cursor?: unknown }): unknown;
     /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 뒤에는 다시 찾지 않는다. */
     changedThreadDocuments?: Record<string, string[]>;
     /**
@@ -350,6 +352,11 @@ export async function startFakeGateway(
         }
         const resources = (options.threadDocuments[threadId] ?? []).map((document) => ({ ...document, changed: changedDocuments.has(`${threadId}\n${document.key}`) }));
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources } }));
+        return;
+      }
+      if (options.gitGraph && message.method === "akra/git/graph") {
+        const params = (message as { params?: { cwd?: unknown; cursor?: unknown } }).params ?? {};
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: options.gitGraph(params) }));
         return;
       }
       if (options.mcpHub && message.method.startsWith("akra/mcp/")) {

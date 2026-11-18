@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
 
 export type View = "home" | "thread" | "fleet" | "remote";
-export type PanelId = "review" | "kernel" | "browser" | "work" | "docs";
+export type PanelId = "review" | "graph" | "kernel" | "browser" | "work" | "docs";
 export type Theme = "light" | "dark";
 
 /** 단축키 표시에 쓰는 보조 키 이름이다. macOS 는 ⌘, 나머지는 Ctrl 이다. */

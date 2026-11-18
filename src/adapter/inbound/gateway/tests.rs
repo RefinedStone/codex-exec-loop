@@ -988,3 +988,73 @@ async fn a_remote_host_session_is_not_recorded() {
     assert!(sessions() > before, "the local session is still recorded");
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// 폴더 이름을 `head` 로 돌려주는 가짜 그래프이다.
+struct FolderEchoGraph;
+
+impl crate::application::port::inbound::git_graph_port::GitGraphPort for FolderEchoGraph {
+    fn graph_page(
+        &self,
+        request: crate::application::port::inbound::git_graph_port::GitGraphPageRequest,
+    ) -> anyhow::Result<crate::application::port::inbound::git_graph_port::GitGraphPage> {
+        Ok(
+            crate::application::port::inbound::git_graph_port::GitGraphPage {
+                repository: true,
+                stale: false,
+                head: Some(request.repository_dir),
+                refs: Vec::new(),
+                rows: Vec::new(),
+                next: None,
+            },
+        )
+    }
+}
+
+async fn connect_with_git_graph(path: &str) -> WebSocketStream<DuplexStream> {
+    let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+    let hosts = GatewayHosts::new(
+        EchoUpstream::new(true),
+        vec![("cloud".to_string(), EchoUpstream::new(true) as _)],
+    );
+    let services = super::session::GatewayServices {
+        git_graph: Some(Arc::new(FolderEchoGraph)),
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        let _ = run_session(
+            gateway_side,
+            hosts,
+            Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
+            services,
+            None,
+        )
+        .await;
+    });
+    let (websocket, _) = tokio_tungstenite::client_async_with_config(
+        format!("ws://localhost{path}"),
+        client_side,
+        Some(websocket_config()),
+    )
+    .await
+    .expect("client handshake through the gateway session should succeed");
+    websocket
+}
+
+#[tokio::test]
+async fn the_local_host_answers_the_git_graph_and_a_remote_host_does_not() {
+    // plan 27 G1. The graph reads repositories of this machine, so a remote host has no such method.
+    let mut local = connect_with_git_graph("/").await;
+    let page = kernel_request(&mut local, "g", "akra/git/graph", json!({ "cwd": "/repo" })).await;
+    assert_eq!(page["result"]["repository"], json!(true));
+    assert_eq!(page["result"]["head"], json!("/repo"));
+
+    let mut remote = connect_with_git_graph("/host/cloud").await;
+    let refused = kernel_request(
+        &mut remote,
+        "g",
+        "akra/git/graph",
+        json!({ "cwd": "/repo" }),
+    )
+    .await;
+    assert_eq!(refused["error"]["code"], json!(-32601));
+}
