@@ -5,6 +5,7 @@ use super::forms::{
     AkraControlRequest, CreateDraftRequest, DraftPromoteApiResponse, EditorQuery,
     OverviewApiResponse, PrValidationCommandRequest, ResetRequest, SaveDraftRequest,
 };
+use super::helpers::AdminMutationFailure;
 use super::realtime::AkraCommandView;
 use super::{
     AdminAppState, ensure_csrf_cookie, internal_server_error, reset_request,
@@ -714,11 +715,11 @@ pub(super) async fn upsert_task_api(
 ) -> std::result::Result<Response, StatusCode> {
     // task mutation은 priority/dependency semantics를 보존하기 위해 application request form 그대로 유지한다.
     verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .upsert_task(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
+    // 거절은 409 와 이유 코드와 글이고, 실패는 500 과 원인의 글이다 (plan 18 K4-9d).
+    Ok(match state.facade.upsert_task(request) {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(error) => AdminMutationFailure::from_error(error).into_response(),
+    })
 }
 
 pub(super) async fn delete_task_api(
@@ -729,11 +730,11 @@ pub(super) async fn delete_task_api(
 ) -> std::result::Result<Response, StatusCode> {
     // adapter는 transport envelope만 받는다. queue cleanup과 authority write는 아래 계층에 남긴다.
     verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .delete_task(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
+    // 거절은 409 와 이유 코드와 글이고, 실패는 500 과 원인의 글이다 (plan 18 K4-9d).
+    Ok(match state.facade.delete_task(request) {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(error) => AdminMutationFailure::from_error(error).into_response(),
+    })
 }
 
 pub(super) async fn export_files_api(

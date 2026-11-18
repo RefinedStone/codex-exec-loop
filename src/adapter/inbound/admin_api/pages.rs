@@ -1,10 +1,11 @@
 use super::forms::{
     AgentProfilesForm, CreateDraftForm, DirectionMutationForm, DraftMutationForm, EditorQuery,
-    FileSyncForm, IdDeleteForm, ResetForm, TaskMutationForm,
+    FileSyncForm, IdDeleteForm, ResetForm, TaskDeleteForm, TaskMutationForm,
 };
 use super::helpers::{
-    encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
-    notice_location, render_fragment, render_html, verify_draft_name_path, verify_form_csrf,
+    AdminMutationFailure, encode_uri_component, ensure_csrf_cookie, internal_server_error,
+    is_htmx_request, notice_location, render_fragment, render_html, verify_draft_name_path,
+    verify_form_csrf,
 };
 use super::views::{
     AkraDashboardTemplate, AkraMetricsTemplate, AppServerPromptLogView, AppServerPromptsTemplate,
@@ -308,6 +309,15 @@ async fn render_tasks_page(
     query: Query<HashMap<String, String>>,
     surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
+    tasks_page_response(&state, jar, query.get("notice").cloned(), surface)
+}
+
+fn tasks_page_response(
+    state: &AdminAppState,
+    jar: CookieJar,
+    notice: Option<String>,
+    surface: PlanningAdminSurface,
+) -> std::result::Result<Response, StatusCode> {
     // task page도 direction page와 같은 management projection을 쓰지만 nav marker와 redirect notice target은 task flow로 분리한다.
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let overview = state
@@ -325,13 +335,34 @@ async fn render_tasks_page(
             current_nav: surface.tasks_nav(),
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
-            notice: query.get("notice").cloned(),
+            notice,
             task_upsert_path: surface.task_upsert_path(),
             task_delete_path: surface.task_delete_path(),
             overview,
             management,
         },
     )
+}
+
+/*
+ * 작업 변경의 오류를 작업 화면으로 답한다 (plan 18 K4-9d). 화면은 다시 읽은 값이고 알림이 원인의 글이다. 그래서
+ * 낡은 폼에서 거절된 사용자는 같은 답에서 새 값과 "다시 읽고 다시 하라"를 본다. 상태 코드는 거절이면 409,
+ * 실패이면 500 이다. 화면을 읽을 수 없으면 글만 답한다.
+ */
+fn task_mutation_failure_page(
+    state: &AdminAppState,
+    jar: CookieJar,
+    surface: PlanningAdminSurface,
+    error: anyhow::Error,
+) -> Response {
+    let failure = AdminMutationFailure::from_error(error);
+    match tasks_page_response(state, jar, Some(failure.message.clone()), surface) {
+        Ok(mut page) => {
+            *page.status_mut() = failure.status;
+            page
+        }
+        Err(_) => (failure.status, failure.message).into_response(),
+    }
 }
 
 pub(super) async fn reviews_page(
@@ -477,29 +508,31 @@ async fn upsert_task_for_surface(
      * pages.rs가 부분 파서를 갖지 않으면 browser form과 JSON/API mutation의 task semantics가 한 곳에 유지된다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
-    let outcome = state
-        .facade
-        .upsert_task(PlanningAdminTaskMutationRequest {
-            id: form.id,
-            direction_id: form.direction_id,
-            title: form.title,
-            description: form.description,
-            status: form.status,
-            base_priority: form.base_priority,
-            dynamic_priority_delta: form.dynamic_priority_delta,
-            priority_reason: form.priority_reason,
-            depends_on_text: form.depends_on_text,
-            blocked_by_text: form.blocked_by_text,
-            expected_planning_revision: form.expected_planning_revision,
-        })
-        .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response())
+    let outcome = state.facade.upsert_task(PlanningAdminTaskMutationRequest {
+        id: form.id,
+        direction_id: form.direction_id,
+        title: form.title,
+        description: form.description,
+        status: form.status,
+        base_priority: form.base_priority,
+        dynamic_priority_delta: form.dynamic_priority_delta,
+        priority_reason: form.priority_reason,
+        depends_on_text: form.depends_on_text,
+        blocked_by_text: form.blocked_by_text,
+        expected_planning_revision: form.expected_planning_revision,
+    });
+    Ok(match outcome {
+        Ok(outcome) => {
+            Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response()
+        }
+        Err(error) => task_mutation_failure_page(&state, jar, surface, error),
+    })
 }
 
 pub(super) async fn delete_task_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
-    Form(form): Form<IdDeleteForm>,
+    Form(form): Form<TaskDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
     delete_task_for_surface(state, jar, form, PlanningAdminSurface::Default).await
 }
@@ -507,7 +540,7 @@ pub(super) async fn delete_task_page(
 pub(super) async fn delete_akra_task_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
-    Form(form): Form<IdDeleteForm>,
+    Form(form): Form<TaskDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
     delete_task_for_surface(state, jar, form, PlanningAdminSurface::Akra).await
 }
@@ -515,16 +548,21 @@ pub(super) async fn delete_akra_task_page(
 async fn delete_task_for_surface(
     state: AdminAppState,
     jar: CookieJar,
-    form: IdDeleteForm,
+    form: TaskDeleteForm,
     surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
     // task delete도 direction delete와 같은 post-redirect-get shape를 써서 destructive POST가 browser refresh로 반복되지 않게 한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
-    let outcome = state
-        .facade
-        .delete_task(PlanningAdminTaskDeleteRequest { id: form.id })
-        .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response())
+    let outcome = state.facade.delete_task(PlanningAdminTaskDeleteRequest {
+        id: form.id,
+        expected_planning_revision: form.expected_planning_revision,
+    });
+    Ok(match outcome {
+        Ok(outcome) => {
+            Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response()
+        }
+        Err(error) => task_mutation_failure_page(&state, jar, surface, error),
+    })
 }
 
 pub(super) async fn export_files_page(

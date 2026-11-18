@@ -12,6 +12,7 @@ pub(crate) mod core_turn_submission;
 pub(crate) mod kernel_command_execution;
 pub(crate) mod kernel_event_recorder;
 pub(crate) mod kernel_host;
+pub(crate) mod kernel_routed_planning_admin;
 pub(crate) mod native_client_runtime;
 pub(crate) mod native_terminal_event_ingress;
 pub(crate) mod production;

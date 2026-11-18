@@ -175,6 +175,7 @@
         <form method="post" action="{{ task_delete_path }}" class="danger-zone">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="id" value="{{ task.id }}">
+          <input type="hidden" name="expected_planning_revision" value="{{ management.planning_revision }}">
           <button type="submit" class="error" data-confirm="Delete this task from the planning ledger?">Delete task</button>
         </form>
       </div>

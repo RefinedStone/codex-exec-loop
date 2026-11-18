@@ -109,8 +109,17 @@ pub(super) struct DirectionMutationForm {
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct IdDeleteForm {
     pub(super) csrf_token: String,
-    // direction/task delete route가 같은 envelope를 쓰고, 어떤 service delete request로 갈지는 route handler가 결정한다.
+    // direction delete route의 envelope이다. task delete는 revision 을 함께 보내는 `TaskDeleteForm` 을 쓴다.
     pub(super) id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct TaskDeleteForm {
+    pub(super) csrf_token: String,
+    pub(super) id: String,
+    // 화면이 작업을 보여 줄 때의 planning revision 이다. 지우기에 필수이다 (plan 18 K4-9d).
+    #[serde(default)]
+    pub(super) expected_planning_revision: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. 9d-1 을 구현했다 (2026-11-13, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
+- 상태: **구현 중**. 9d-1 (2026-11-13) 과 9d-2 (2026-11-18) 를 구현했다 (§8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
 - 상위 문서: [K4 명령 스펙](18-k4-command-spec.md) §2.2, §3.7 의 순서 4, §4 의 K4-9d. 같은 방법의 앞 조각은 §8 의
   K4-9a (planning 초기화)이다.
 - 이 문서를 따로 둔 이유: K4 설계는 K4-9d 를 한 줄로 적었다. 2026-11-13 의 코드 조사와 독립 리뷰(§7)에서 그 한 줄에 새
@@ -195,7 +195,7 @@ K4 설계는 `upsert_task` 처럼 "만들기와 고치기"를 한 명령으로 �
 | 조각 | 내용 | 동작 | 확인 |
 | --- | --- | --- | --- |
 | 9d-1 (구현 2026-11-13, §8) | 저장 명령의 실행기 (port 와 구현). 커널 입력을 "core 명령 또는 저장 명령"으로 넓힌다. 답의 `result` 와 스펙의 모양. 이유 코드 `planning_revision_stale`, `planning_locked` 와 서비스의 타입 오류. 명령 전용 조립의 `planning` 조회. 옛 Gateway 의 판별을 명령으로 넓힌다. 첫 명령 셋: `create_task`, `update_task`, `delete_task` | 확장 (`akra kernel planning create_task …` 가 된다. 입구는 그대로이다) | 실행기 시험 (다섯 갈래, 낡은 revision, guard, 결과), 프로토콜 시험, 명령 전용 조립 시험, Gateway 커널 시험 (실행 뒤와 거절 뒤의 `planning` 이벤트), 커널 시뮬레이션 (가짜 실행기. 기록과 거절의 불변식), 스펙·Desktop 타입·skill 일치 |
-| 9d-2 | admin 의 작업 변경이 커널 명령으로 간다. 지우기 폼에 revision. 처리기의 오류 타입, 409 와 원인의 글 | 전환 (지우기에 revision 이 필수가 된다) | 입구 시험 (기록의 호출자, 낡은 폼의 409), admin 시험 (JSON, HTML, HTMX) |
+| 9d-2 (구현 2026-11-18, §8) | admin 의 작업 변경이 커널 명령으로 간다. 지우기 폼에 revision. 처리기의 오류 타입, 409 와 원인의 글 | 전환 (지우기에 revision 이 필수가 된다) | 입구 시험 (기록의 호출자, 낡은 폼의 409), admin 시험 (JSON, HTML, HTMX) |
 | 9d-3 | 방향: 명령 셋과 admin | 전환 (고치기·지우기에 revision 이 필수가 된다) | 같다 |
 | 9d-4 | 파일 내보내기·적용: 명령 둘과 admin | 유지 | 같다. 작업 공간이 대표 checkout 과 다른 경우 |
 | 9d-5 | 초안의 승격: 명령 하나, 입력을 받는 승격 함수, admin | 유지 | 같다. 명령 전용 조립에서 승격이 되는지 본다 |
@@ -347,3 +347,48 @@ PR 리뷰 반영 (2026-11-18, 넷째):
   다시 읽는 것(`planning` 이벤트)도 시험이 보지 않는다.
 - 입구는 아직 이 명령을 쓰지 않는다 (9d-2).
 - 같은 멱등 키의 재전송은 `result` 를 받지 못한다 (설계 §3.2).
+
+### 9d-2 (2026-11-18)
+
+만든 것:
+
+- 입구의 `PlanningAdminPort`: 조립의 `KernelRoutedPlanningAdmin` (`src/composition/kernel_routed_planning_admin.rs`).
+  읽기, 초안, 방향, 파일, 초기화는 facade 로 보낸다. 작업의 만들기, 고치기, 지우기는 폼을 저장 명령으로 바꾸고
+  (`PlanningAdminFacadeService::stored_task_command`, `stored_task_delete_command`. 직접 실행과 같은 parser 이다)
+  커널 명령으로 보낸다 (`KernelCommand::from_stored`, 호출자 `akra-admin`). 답의 `result` 에서 작업 id 를 얻고,
+  화면의 값은 facade 가 저장소에서 다시 읽는다.
+- 거절의 타입: `PlanningAdminMutationRefusal` (이유 코드와 글). 커널의 `rejection` 이 이 오류가 된다. 직접 실행의
+  `PlanningMutationRefusal` 도 `find_in` 이 같은 값으로 읽는다.
+- 처리기: 작업 변경의 오류를 `AdminMutationFailure` 로 답한다. 거절은 409 이고 그 밖의 실패는 500 이다. JSON 은
+  `{ "reason", "message" }` 이다 (실패에는 `reason` 이 없다). 폼은 작업 화면을 그 상태 코드로 다시 답한다: 값은 다시
+  읽은 것이고 알림(notice)이 원인의 글이다. 화면을 읽지 못하면 글만 답한다.
+- 지우기: `PlanningAdminTaskDeleteRequest.expected_planning_revision` 이 필수이다. 작업 화면의 지우기 폼이 그 값을
+  보낸다 (`TaskDeleteForm`). 직접 실행하는 facade 의 지우기도 그 값을 검사한다.
+
+설계와 다른 점:
+
+- 작업 변경에는 HTMX 조각이 없다. 폼은 전체 화면으로 답한다. 그래서 HTMX 의 답은 만들지 않았다.
+- 폼의 거절은 redirect 가 아니다. 409 와 함께 작업 화면을 바로 답한다. redirect 는 상태 코드를 실을 수 없다.
+- 멱등 키를 보내지 않는다. 입구는 실패한 명령을 스스로 다시 보내지 않는다. 키를 보내면 기록이 없는 Gateway 커널이
+  그 명령을 거절한다.
+- revision 이 없는 지우기는 커널에 보내기 전에 실패한다 (500 과 글). 거절이 아니다: 입력이 틀린 것이다.
+
+확인: 조립 시험 (실제 admin 조립과 명령 전용 조립: 만들기·고치기·지우기의 기록과 호출자 `akra-admin`, 낡은
+revision 의 거절과 그 기록, 실패의 원인), admin 의 router 시험 (낡은 폼의 409: JSON 의 이유 코드와 글, HTML 의 알림과
+지금의 revision. revision 이 없는 지우기의 500 과 글), facade 시험 (지우기의 revision). 모델 턴은 없다.
+
+남긴 것:
+
+- 틀린 입력(빈 제목, 없는 revision, 모르는 상태)은 500 이다. 400 으로 가르려면 parser 의 오류에 타입이 필요하다.
+- 방향, 파일, 승격의 변경은 아직 직접 실행이고 500 만 답한다 (9d-3 ~ 9d-5).
+- Gateway 가 그 저장소의 커널을 쥐 경우의 admin 변경은 시험이 보지 않는다 (9d-1 의 남긴 것과 같다).
+- 입구 경계 시험(admin adapter 가 변경 서비스를 직접 부르지 않는다)은 9d-7 에 있다.
+
+독립 리뷰 (2026-11-18). 심각한 결함은 없었다. 고치지 않고 남긴 것:
+
+- TUI 가 커널을 쥔 저장소의 admin 변경은 기록에 남지 않는다 (§3.1 의 표와 같다. 제품 문서에 적었다).
+- 폼의 409 화면은 POST 의 답이다. 브라우저의 새로 고침은 낡은 폼을 다시 보낸다. 화면의 값은 이미 새 값이므로
+  사용자는 그 화면에서 다시 하면 된다. 알림의 글("reload it and retry")은 서비스의 글이고 바꾸지 않았다.
+- 저장소 커널이 있는지 묻는 검사가 실패하면(파일 오류 포함) 직접 경로로 간다. K4-9a 의 초기화와 같다.
+- Gateway 의 답이 시간을 넘긴 만들기는 결과를 알 수 없다. 다시 보내면 작업이 둘이 될 수 있다 (§6 의 위험).
+  고치기와 지우기는 revision 이 막는다.

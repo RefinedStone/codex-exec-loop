@@ -439,6 +439,30 @@ async fn bootstrap_admin_html_session(router: &Router) -> (String, String, Strin
     (format!("akra_admin_csrf={csrf_token}"), csrf_token, body)
 }
 
+// The planning revision that the tasks page puts in its forms. The page must list a task.
+async fn html_planning_revision(router: &Router, cookie: &str) -> String {
+    let page = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/admin/tasks")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("tasks page request should build"),
+        )
+        .await
+        .expect("tasks page should be served");
+    assert_eq!(page.status(), StatusCode::OK);
+    text_body(page)
+        .await
+        .split("name=\"expected_planning_revision\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("tasks page should carry the planning revision")
+        .to_string()
+}
+
 fn csrf_token_from_set_cookie(set_cookie: &str) -> String {
     set_cookie
         .split("akra_admin_csrf=")
@@ -1389,7 +1413,10 @@ async fn admin_json_crud_and_file_sync_routes_round_trip_through_router() {
         .oneshot(json_request(
             Method::POST,
             "/api/planning/tasks/delete",
-            json!({ "id": task_id }),
+            json!({
+                "id": task_id,
+                "expected_planning_revision": task_body["management"]["planning_revision"].to_string()
+            }),
             Some(&cookie),
             Some(&csrf_token),
         ))
@@ -3442,6 +3469,15 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             "/admin/controls?notice=planning%20workspace%20reset",
         ),
     ] {
+        // A task delete form carries the revision that the tasks page showed (plan 18 K4-9d).
+        let body = if uri.ends_with("/tasks/delete") {
+            format!(
+                "{body}&expected_planning_revision={}",
+                html_planning_revision(&router, &cookie).await
+            )
+        } else {
+            body
+        };
         let response = router
             .clone()
             .oneshot(html_form_request(uri, body, Some(&cookie), false))
@@ -5239,4 +5275,126 @@ fn controls_page_uses_agent_profiles_for_parallel_agent_prompting() {
     assert!(!CONTROLS_TEMPLATE.contains("Parallel Agent Persona"));
     assert!(!CONTROLS_TEMPLATE.contains("name=\"persona\""));
     assert!(!ADMIN_MOD.contains("\"/admin/controls/parallel-persona\""));
+}
+
+#[tokio::test]
+async fn a_stale_task_form_gets_409_with_the_reason_and_changes_nothing() {
+    // plan 18 K4-9d D3: a change from a stale screen is not a 500. The user reads why and what to do.
+    let workspace = TempAdminWorkspace::new("stale-task-form");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+    let created = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/tasks",
+            json!({ "title": "Keep me" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("task create should be served");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = json_body(created).await;
+    let task_id = created["management"]["tasks"][0]["id"]
+        .as_str()
+        .expect("created task id")
+        .to_string();
+    let revision = created["management"]["planning_revision"]
+        .as_i64()
+        .expect("planning revision");
+    let stale = (revision - 1).to_string();
+
+    // JSON: the reason code and the text.
+    for (uri, body) in [
+        (
+            "/api/planning/tasks",
+            json!({ "id": task_id, "title": "Changed", "expected_planning_revision": stale }),
+        ),
+        (
+            "/api/planning/tasks/delete",
+            json!({ "id": task_id, "expected_planning_revision": stale }),
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                uri,
+                body,
+                Some(&cookie),
+                Some(&csrf_token),
+            ))
+            .await
+            .expect("stale JSON change should be served");
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let body = json_body(response).await;
+        assert_eq!(body["reason"], "planning_revision_stale", "{uri}");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("reload")),
+            "{body}"
+        );
+    }
+
+    // HTML: the tasks page again, with the text as its notice and the task unchanged.
+    for (uri, body) in [
+        (
+            "/admin/tasks/upsert",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", task_id.as_str()),
+                ("title", "Changed"),
+                ("expected_planning_revision", stale.as_str()),
+            ]),
+        ),
+        (
+            "/admin/akra/tasks/delete",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", task_id.as_str()),
+                ("expected_planning_revision", stale.as_str()),
+            ]),
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(html_form_request(uri, body, Some(&cookie), false))
+            .await
+            .expect("stale HTML change should be served");
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let page = text_body(response).await;
+        assert!(page.contains("class=\"notice\""), "{uri}");
+        assert!(page.contains("reload it and retry"), "{uri}");
+        assert!(page.contains("Keep me"), "{uri}");
+        assert!(
+            page.contains(&format!(
+                "name=\"expected_planning_revision\" value=\"{revision}\""
+            )),
+            "{uri} should show the current revision"
+        );
+    }
+
+    // A failure that is not a refusal is a 500 that carries its cause.
+    let missing_revision = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/tasks/delete",
+            json!({ "id": task_id }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("delete without a revision should be served");
+    assert_eq!(missing_revision.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = json_body(missing_revision).await;
+    assert!(body.get("reason").is_none(), "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("expected_planning_revision is required")),
+        "{body}"
+    );
 }

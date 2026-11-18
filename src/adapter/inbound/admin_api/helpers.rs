@@ -1,3 +1,4 @@
+use crate::application::port::inbound::planning_admin_port::PlanningAdminMutationRefusal;
 use crate::domain::planning::validate_planning_draft_name;
 use askama::Template;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -122,4 +123,46 @@ pub(super) fn render_fragment<T: Template>(
 pub(super) fn internal_server_error(error: impl Into<anyhow::Error>) -> StatusCode {
     eprintln!("admin server error: {:#}", error.into());
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+/*
+ * planning 변경의 오류를 사용자에게 보이는 답으로 바꾼다 (plan 18 K4-9d). 거절(낡은 화면에서 낸 변경, 잠긴
+ * planning)은 실패가 아니다: 아무것도 바뀌지 않았고 다시 읽거나 조금 뒤에 다시 하면 된다. 그래서 409 와 이유
+ * 코드와 글이다. 그 밖의 실패는 500 이고 원인의 글을 싣는다. 이 서버는 사용자의 로컬 프로세스이다.
+ */
+pub(super) struct AdminMutationFailure {
+    pub(super) status: StatusCode,
+    pub(super) reason: Option<&'static str>,
+    pub(super) message: String,
+}
+
+impl AdminMutationFailure {
+    pub(super) fn from_error(error: anyhow::Error) -> Self {
+        match PlanningAdminMutationRefusal::find_in(&error) {
+            Some(refusal) => Self {
+                status: StatusCode::CONFLICT,
+                reason: Some(refusal.reason.name()),
+                message: refusal.message,
+            },
+            None => {
+                eprintln!("admin server error: {error:#}");
+                Self {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    reason: None,
+                    message: format!("{error:#}"),
+                }
+            }
+        }
+    }
+}
+
+// JSON API 의 답이다: `{ "reason": "<이유 코드>", "message": "<글>" }`. 실패에는 `reason` 이 없다.
+impl IntoResponse for AdminMutationFailure {
+    fn into_response(self) -> Response {
+        let mut body = serde_json::json!({ "message": self.message });
+        if let Some(reason) = self.reason {
+            body["reason"] = reason.into();
+        }
+        (self.status, axum::Json(body)).into_response()
+    }
 }

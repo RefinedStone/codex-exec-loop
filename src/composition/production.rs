@@ -346,15 +346,20 @@ pub(crate) fn build_admin_application_with_debug_harness(
         } else {
             production_pr_validation_rollout_evidence_query_port
         };
-    let facade: Arc<dyn PlanningAdminPort> =
-        Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
-            workspace_dir,
-            // 입구의 초기화는 저장소 커널의 명령으로 간다 (plan 18 K4-9a).
-            entrance_planning_services(&ports, kernel_command_execution::CALLER_ADMIN),
-            ports.planning_workspace_port,
-            ports.planning_authority_port,
-            ports.planning_task_repository_port,
-        ));
+    // 입구의 작업 변경은 저장소 커널의 명령으로 간다 (plan 18 K4-9d). 읽기와 초안의 편집은 facade 가 직접 한다.
+    let facade: Arc<dyn PlanningAdminPort> = Arc::new(
+        super::kernel_routed_planning_admin::KernelRoutedPlanningAdmin::new(
+            PlanningAdminFacadeService::from_planning_with_authority(
+                workspace_dir,
+                // 입구의 초기화는 저장소 커널의 명령으로 간다 (plan 18 K4-9a).
+                entrance_planning_services(&ports, kernel_command_execution::CALLER_ADMIN),
+                ports.planning_workspace_port,
+                ports.planning_authority_port,
+                ports.planning_task_repository_port,
+            ),
+            kernel_command_execution::CALLER_ADMIN,
+        ),
+    );
     ProductionAdminApplication {
         facade,
         parallel_mode_admin_port,
