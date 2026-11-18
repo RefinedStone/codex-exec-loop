@@ -9,12 +9,14 @@ import { chosenTheme, dotDraftKey, setDraft, useUiStore } from "../session/uiSto
 import type { GatewayRequest } from "../work/notionHub";
 import { DotChat } from "./DotChat";
 import { notifyDotReply } from "./notify";
+import { useAppSettings } from "./useAppSettings";
 import { useZoom } from "./useZoom";
 
 export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId: string; clientVersion: string }) {
   const useStore = remoteHostStore(host);
   const session = useRef<DesktopSession | null>(null);
   useZoom();
+  useAppSettings();
   useEffect(() => {
     const created = new DesktopSession(remoteHostBridge(window.akra.remote, host), desktopSessionStore(useStore), clientVersion, undefined, true);
     session.current = created;

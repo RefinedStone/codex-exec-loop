@@ -294,6 +294,9 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(thr
         <button type="button" className="icon-button" title="단축키" onClick={() => useUiStore.setState({ shortcutsOpen: true })}>
           <Icon name="keyboard" />
         </button>
+        <button type="button" className="icon-button" title={`설정 (${MOD_KEY},)`} onClick={() => useUiStore.setState({ settingsOpen: true })} data-testid="settings-open">
+          <Icon name="sliders" />
+        </button>
         <button type="button" className="icon-button" title="밝은 화면 / 어두운 화면" onClick={toggleTheme}>
           <Icon name={theme === "dark" ? "sun" : "moon"} />
         </button>

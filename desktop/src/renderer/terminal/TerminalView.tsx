@@ -7,6 +7,7 @@ import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 
 import type { TerminalBridge } from "../../shared/bridge";
+import { useSettings } from "../session/settingsStore";
 
 export interface TerminalViewProps {
   bridge: TerminalBridge;
@@ -33,7 +34,7 @@ export function TerminalView({ bridge, cwd, visible, onOpened, onExited }: Termi
     if (!container) return;
     const terminal = new Terminal({
       fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
-      fontSize: 13,
+      fontSize: useSettings.getState().fonts.terminal,
       cursorBlink: true,
       scrollback: 10_000,
       allowProposedApi: false,
@@ -82,6 +83,13 @@ export function TerminalView({ bridge, cwd, visible, onOpened, onExited }: Termi
       callbacks.current.onOpened({ cwd: result.cwd, shell: result.shell });
     });
 
+    // 터미널 글자 크기 설정이 바뀌면 열과 행을 다시 맞춘다 (plan 26 Z4).
+    const unsubscribeSettings = useSettings.subscribe((state) => {
+      if (terminal.options.fontSize === state.fonts.terminal) return;
+      terminal.options.fontSize = state.fonts.terminal;
+      if (container.offsetParent !== null) fit.fit();
+    });
+
     const observer = new ResizeObserver(() => {
       if (container.offsetParent !== null) fit.fit();
     });
@@ -90,6 +98,7 @@ export function TerminalView({ bridge, cwd, visible, onOpened, onExited }: Termi
     return () => {
       disposed = true;
       observer.disconnect();
+      unsubscribeSettings();
       unsubscribeData();
       unsubscribeExit();
       input.dispose();

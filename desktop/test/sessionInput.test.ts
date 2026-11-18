@@ -1,4 +1,5 @@
 // 입력과 승인 응답이 어떤 요청을 보내는지 시험한다. 서버 역할은 손으로 쓴 응답으로 대신한다 (턴 없음).
+import { DEFAULT_SETTINGS } from "../src/shared/settings";
 import { describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
@@ -78,6 +79,7 @@ function harness() {
     remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
     zoom: { get: () => Promise.resolve(1), step: () => undefined, onChanged: () => () => undefined },
     isAppFocused: () => Promise.resolve(false),
+    settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: (settings) => Promise.resolve(settings), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined },
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {

@@ -1,5 +1,6 @@
 // main 과 renderer 가 공유하는 메시지 버스 계약이다. main 은 메시지를 해석하지 않고 문자열 그대로 전달한다.
 import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
+import type { AppSettings } from "./settings";
 import type { ZoomDirection } from "./zoom";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
@@ -75,6 +76,11 @@ export const IPC_CHANNELS = {
   zoomStep: "akra:zoom-step",
   zoomChanged: "akra:zoom-changed",
   appFocused: "akra:app-focused",
+  settingsGet: "akra:settings-get",
+  settingsSet: "akra:settings-set",
+  settingsChanged: "akra:settings-changed",
+  settingsOpen: "akra:settings-open",
+  reportWorking: "akra:report-working",
 } as const;
 
 export interface GitHubPullRequest {
@@ -417,6 +423,20 @@ export interface AkraBridge {
   zoom: ZoomBridge;
   /** 이 앱의 창 가운데 하나에 포커스가 있는지 묻는다. 브라우저 패널에 포커스가 있어도 true 이다. */
   isAppFocused(): Promise<boolean>;
+  settings: SettingsBridge;
+}
+
+/** 앱 설정이다 (plan 26 U2). 값은 main 이 가지고 저장한다. */
+export interface SettingsBridge {
+  get(): Promise<AppSettings>;
+  /** 설정 전체를 바꾼다. main 이 검증하고 저장한 값을 돌려준다. */
+  set(settings: AppSettings): Promise<AppSettings>;
+  /** 설정이 바뀌면 부른다. 다른 창에서 바꾼 것도 온다. */
+  onChanged(listener: (settings: AppSettings) => void): () => void;
+  /** 앱 메뉴의 "설정…" 을 고르면 부른다. */
+  onOpen(listener: () => void): () => void;
+  /** 이 창에 실행 중인 턴이 있는지 알린다. main 이 "일할 때만 잠자기 방지"에 쓴다. */
+  reportWorking(working: boolean): void;
 }
 
 /** 앱 전체 확대이다 (plan 26 Z1–Z2). 값은 main 이 가지고 모든 창에 적용한다. */

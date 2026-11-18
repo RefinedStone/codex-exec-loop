@@ -1,4 +1,5 @@
 // main 의 GatewayConnection 과 renderer 세션을 가짜 Gateway 에 실제로 연결해서 시험한다. 턴은 쓰지 않는다.
+import { DEFAULT_SETTINGS } from "../src/shared/settings";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
@@ -119,6 +120,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
     zoom: { get: () => Promise.resolve(1), step: () => undefined, onChanged: () => () => undefined },
     isAppFocused: () => Promise.resolve(false),
+    settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: (settings) => Promise.resolve(settings), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };

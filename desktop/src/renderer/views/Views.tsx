@@ -135,6 +135,7 @@ function paletteCommands(): PaletteEntry[] {
     { id: "docs", icon: "book", label: "문서 패널", hint: "", run: () => togglePanel("docs") },
     { id: "terminal", icon: "terminal", label: "터미널 열기 / 닫기", hint: `${MOD_KEY}J`, run: toggleTerminal },
     { id: "theme", icon: "sun", label: "밝은 화면 / 어두운 화면", hint: "", run: toggleTheme },
+    { id: "settings", icon: "sliders", label: "설정 (글자 크기, 알림, 잠자기 방지)", hint: `${MOD_KEY},`, run: () => useUiStore.setState({ settingsOpen: true }) },
   ];
 }
 
@@ -204,6 +205,7 @@ const SHORTCUTS = [
   [`${MOD_KEY}B`, "사이드바 열기 / 닫기"],
   [`${MOD_KEY}\\`, "오른쪽 패널 열기 / 닫기"],
   [`${MOD_KEY}J`, "터미널 열기 / 닫기"],
+  [`${MOD_KEY},`, "설정"],
   [`${MOD_KEY}[ · ${MOD_KEY}]`, "뒤로 · 앞으로 (마우스 뒤로·앞으로 단추)"],
   [`${MOD_KEY}F`, "대화 안 찾기 (⏎ 다음, ⇧⏎ 이전)"],
   [`${MOD_KEY}+ · ${MOD_KEY}− · ${MOD_KEY}0`, `확대 · 축소 · 실제 크기 (${MOD_KEY}휠, 핀치)`],
@@ -269,7 +271,7 @@ export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        useUiStore.setState({ paletteOpen: false, shortcutsOpen: false, findOpen: false });
+        useUiStore.setState({ paletteOpen: false, shortcutsOpen: false, settingsOpen: false, findOpen: false });
         return;
       }
       if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
