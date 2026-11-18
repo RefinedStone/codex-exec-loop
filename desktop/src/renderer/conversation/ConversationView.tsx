@@ -20,8 +20,8 @@ import { activitySummary, formatDuration, type StepItem, type StepKind, stepKind
 const ESTIMATED_TURN_HEIGHT = 320;
 const BOTTOM_THRESHOLD_PX = 64;
 
-const STEP_ICON: Record<StepKind, IconName> = { read: "file", search: "search", edit: "pencil", command: "terminal", tool: "bolt" };
-const STEP_VERB: Record<StepKind, string> = { read: "읽음", search: "검색", edit: "수정", command: "실행", tool: "도구" };
+const STEP_ICON: Record<StepKind, IconName> = { read: "file", search: "search", edit: "pencil", command: "terminal", tool: "bolt", web: "globe" };
+const STEP_VERB: Record<StepKind, string> = { read: "읽음", search: "검색", edit: "수정", command: "실행", tool: "도구", web: "웹 검색" };
 
 /** 아이템 객체가 같으면 다시 그리지 않는다. */
 const StepRow = memo(function StepRow({ step }: { step: StepItem }) {
@@ -30,7 +30,7 @@ const StepRow = memo(function StepRow({ step }: { step: StepItem }) {
   const kind = stepKind(step);
   const output = step.type === "commandExecution" ? step.aggregatedOutput : null;
   const hasDetail = step.type === "fileChange" ? step.changes.length > 0 : Boolean(output);
-  const durationMs = step.type === "fileChange" ? null : step.durationMs;
+  const durationMs = step.type === "fileChange" || step.type === "webSearch" ? null : step.durationMs;
   return (
     <li className={`step step-${status}`} data-testid={step.type === "commandExecution" ? "item-command" : step.type === "fileChange" ? "item-file-change" : undefined}>
       <button type="button" className="step-line" onClick={() => setOpen(!open)} disabled={!hasDetail} aria-expanded={open}>
@@ -38,7 +38,7 @@ const StepRow = memo(function StepRow({ step }: { step: StepItem }) {
         <span className="step-verb">{STEP_VERB[kind]}</span>
         <code>{stepLabel(step)}</code>
         {status === "running" && <span className="spinner" />}
-        {status === "failed" && <span className="badge badge-bad">{step.status === "declined" ? "거부" : "실패"}</span>}
+        {status === "failed" && <span className="badge badge-bad">{"status" in step && step.status === "declined" ? "거부" : "실패"}</span>}
         {durationMs !== null && <span className="step-duration">{formatDuration(durationMs)}</span>}
         {hasDetail && <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />}
       </button>

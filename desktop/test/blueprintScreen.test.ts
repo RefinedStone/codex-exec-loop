@@ -40,6 +40,20 @@ describe("turnBlocks", () => {
     expect(activitySummary([read, search, mixed, mixed])).toBe("파일 1개 읽음 · 검색 1회 · 명령 2개 실행");
   });
 
+  it("names a web search step from its action", () => {
+    const web = (fields: Record<string, unknown>) => item({ type: "webSearch", id: "w", query: "부천역 맛집", action: null, results: null, ...fields }) as StepItem;
+    const search = web({ action: { type: "search", query: "부천역 맛집", queries: ["부천역 맛집", "부천역 카페"] } });
+    const open = web({ action: { type: "openPage", url: "https://example.com/a" } });
+    const find = web({ action: { type: "findInPage", url: "https://example.com/a", pattern: "영업" } });
+    expect(turnBlocks([web({ id: "w1" }), web({ id: "w2" })]).map((block) => block.type)).toEqual(["activity"]);
+    expect([stepKind(search), stepLabel(search), stepStatus(search)]).toEqual(["web", "부천역 맛집, 부천역 카페", "ok"]);
+    expect(stepLabel(open)).toBe("https://example.com/a");
+    expect(stepLabel(find)).toBe("영업 · https://example.com/a");
+    expect(stepLabel(web({ action: { type: "other" } }))).toBe("부천역 맛집");
+    expect(stepLabel(web({}))).toBe("부천역 맛집");
+    expect(activitySummary([search, open])).toBe("웹 검색 2회");
+  });
+
   it("shows a declined step as failed", () => {
     expect(stepStatus(command("c", { status: "inProgress" }))).toBe("running");
     expect(stepStatus(command("c", { status: "declined" }))).toBe("failed");
