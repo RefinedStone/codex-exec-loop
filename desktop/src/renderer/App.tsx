@@ -130,6 +130,28 @@ function SessionBanner() {
   );
 }
 
+/**
+ * 다른 Codex 앱이 열린 스레드의 쓰기 잠금을 가지고 있어서 읽기만 했을 때 보인다. "다시 연결"은 다시 구독을
+ * 시도하고, 잠금이 아직 있으면 최신 기록을 다시 읽는다.
+ */
+function WriterElsewhereBanner({ onReconnect }: { onReconnect(): Promise<void> }) {
+  const writerElsewhere = useDesktopStore((state) => state.writerElsewhere);
+  const [reconnecting, setReconnecting] = useState(false);
+  if (!writerElsewhere) return null;
+  const reconnect = () => {
+    setReconnecting(true);
+    void onReconnect().finally(() => setReconnecting(false));
+  };
+  return (
+    <div className="banner" data-testid="writer-elsewhere-banner">
+      <span className="warning">다른 Codex 앱이 이 스레드를 쓰고 있습니다. 읽기 전용이고, 새 내용은 다시 연결해야 보입니다.</span>
+      <button type="button" className="chip-button" onClick={reconnect} disabled={reconnecting} data-testid="writer-elsewhere-reconnect">
+        {reconnecting ? "연결하는 중…" : "다시 연결"}
+      </button>
+    </div>
+  );
+}
+
 const MIN_PANEL_WIDTH = 360;
 const MAX_PANEL_WIDTH = 900;
 
@@ -453,6 +475,7 @@ export function App() {
             {view === "fleet" && <Fleet onOpenThread={openThread} />}
             {view === "thread" && (
               <>
+                <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} />
                 <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
                 <Composer actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
               </>

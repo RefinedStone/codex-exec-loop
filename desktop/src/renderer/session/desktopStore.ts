@@ -154,6 +154,11 @@ export interface DesktopState {
   openThreadId: string | null;
   transcript: Transcript | null;
   transcriptError: string | null;
+  /**
+   * 다른 Codex 프로세스(예: Codex 앱)가 열린 스레드의 쓰기 잠금을 가지고 있다. 그래서 구독하지 않고 읽기만 했다.
+   * 보내기를 막고, 새 내용은 다시 읽어야 보인다.
+   */
+  writerElsewhere: boolean;
   /** 답을 기다리는 승인 요청이다. 모든 스레드의 것을 모으고, 화면은 스레드별로 골라 보여 준다. */
   pendingApprovals: PendingApproval[];
   setConnection(connection: ConnectionState): void;
@@ -167,6 +172,7 @@ export interface DesktopState {
   setOpenThread(threadId: string | null): void;
   setTranscript(transcript: Transcript | null, error?: string | null): void;
   updateTranscript(update: (transcript: Transcript) => Transcript): void;
+  setWriterElsewhere(writerElsewhere: boolean): void;
   addApproval(approval: PendingApproval): void;
   removeApproval(requestId: PendingApproval["requestId"]): void;
   clearApprovals(): void;
@@ -208,6 +214,7 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   openThreadId: null,
   transcript: null,
   transcriptError: null,
+  writerElsewhere: false,
   pendingApprovals: [],
   setConnection: (connection) => set({ connection }),
   setSession: (session) => set({ ...session, sessionError: null }),
@@ -228,10 +235,11 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
       return { folders: state.folders.map((folder) => ({ ...folder, threads: folder.threads.map((thread) => (thread.id === threadId ? { ...thread, failed } : thread)) })) };
     }),
   setOpenThread: (openThreadId) =>
-    set((state) => ({ openThreadId, transcript: null, transcriptError: null, unreadThreadIds: state.unreadThreadIds.filter((id) => id !== openThreadId) })),
+    set((state) => ({ openThreadId, transcript: null, transcriptError: null, writerElsewhere: false, unreadThreadIds: state.unreadThreadIds.filter((id) => id !== openThreadId) })),
   setTranscript: (transcript, transcriptError = null) => set({ transcript, transcriptError }),
   updateTranscript: (update) =>
     set((state) => (state.transcript ? { transcript: update(state.transcript) } : {})),
+  setWriterElsewhere: (writerElsewhere) => set({ writerElsewhere }),
   addApproval: (approval) =>
     set((state) => ({
       pendingApprovals: [
@@ -298,6 +306,7 @@ export type SessionStore = Pick<
   | "setOpenThread"
   | "setTranscript"
   | "updateTranscript"
+  | "setWriterElsewhere"
   | "addApproval"
   | "removeApproval"
   | "clearApprovals"
@@ -321,6 +330,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     setOpenThread: state.setOpenThread,
     setTranscript: state.setTranscript,
     updateTranscript: state.updateTranscript,
+    setWriterElsewhere: state.setWriterElsewhere,
     addApproval: state.addApproval,
     removeApproval: state.removeApproval,
     clearApprovals: state.clearApprovals,

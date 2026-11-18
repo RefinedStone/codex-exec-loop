@@ -59,6 +59,8 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   const input = useRef<HTMLTextAreaElement>(null);
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const transcript = useDesktopStore((state) => (home ? null : state.transcript));
+  // 다른 Codex 앱이 쓰기 잠금을 가진 스레드는 읽기만 한다. 보내기는 위의 배너에서 다시 연결한 뒤에 된다.
+  const writerElsewhere = useDesktopStore((state) => !home && state.writerElsewhere);
   const inProgress = isTurnInProgress(transcript);
   const livePlan = inProgress ? (transcript?.turns.at(-1)?.plan ?? null) : null;
   const percent = contextPercent(transcript);
@@ -66,7 +68,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   const draftKey = home ? HOME_DRAFT : (transcript?.threadId ?? "");
   const draft = useUiStore((state) => state.drafts[draftKey] ?? "");
   const setDraft = (text: string) => setDraftFor(draftKey, text);
-  const disabled = !connected || (!home && !transcript) || sending;
+  const disabled = !connected || (!home && !transcript) || writerElsewhere || sending;
 
   useEffect(() => {
     if (!disabled) input.current?.focus();
@@ -129,7 +131,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
             rows={1}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={inProgress ? "진행 중인 턴에 추가 지시 (steer)" : "무엇을 할까요?"}
+            placeholder={writerElsewhere ? "다른 Codex 앱이 이 스레드를 쓰는 동안 보낼 수 없습니다" : inProgress ? "진행 중인 턴에 추가 지시 (steer)" : "무엇을 할까요?"}
             disabled={disabled}
             data-testid="composer-input"
           />

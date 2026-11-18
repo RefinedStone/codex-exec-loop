@@ -144,7 +144,8 @@ function sessionStore() {
       const others = (snapshot.activeThreadIds ?? []).filter((id) => id !== threadId);
       snapshot.activeThreadIds = active ? [...others, threadId] : others;
     },
-    setOpenThread: (openThreadId) => Object.assign(snapshot, { openThreadId, transcript: null, transcriptError: null }),
+    setOpenThread: (openThreadId) => Object.assign(snapshot, { openThreadId, transcript: null, transcriptError: null, writerElsewhere: false }),
+    setWriterElsewhere: (writerElsewhere) => Object.assign(snapshot, { writerElsewhere }),
     setTranscript: (transcript, transcriptError = null) => Object.assign(snapshot, { transcript, transcriptError }),
     updateTranscript: (update) => {
       if (snapshot.transcript) {

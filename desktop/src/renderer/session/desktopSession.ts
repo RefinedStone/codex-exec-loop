@@ -1,6 +1,7 @@
 // 접속이 맺어질 때마다 initialize 를 다시 하고 Gateway 정보와 작업 폴더 목록을 읽는다 (P2 §4.5).
 // 스레드를 열면 `thread/resume` 으로 기록을 받고, 그 스레드의 알림을 화면 프레임마다 묶어 반영한다 (P3 §6.1, §7).
 // 다시 연결되면 열려 있던 스레드를 다시 resume 한다 (P3 §6.5).
+// 다른 Codex 프로세스가 그 스레드의 쓰기 잠금을 가지고 있으면 resume 이 거절된다. 그때는 thread/read 로 읽기만 한다.
 // 입력(새 턴, steer, 중단, 새 스레드)과 승인 요청 응답도 여기서 보낸다 (P3 §6.2, §6.4). 턴을 만드는 요청은
 // 사용자가 보낸 메시지에서만 나간다.
 import type { AkraBridge, RemoteHostBridge } from "../../shared/bridge";
@@ -34,6 +35,12 @@ const THREAD_LIST_LIMIT = 100;
 const TURN_PAGE_SIZE = 10;
 /** 첫 턴 전의 새 스레드에 대한 app-server 오류이다 (2026-11-05 실측: `no rollout found for thread id …`). */
 const NO_ROLLOUT_ERROR = /no rollout found/i;
+/**
+ * 다른 Codex 프로세스(예: Codex 앱)가 스레드의 쓰기 잠금을 가지고 있을 때의 resume 오류이다 (2026-11-18 실측,
+ * codex 0.167.2: `thread … already has an active writer`). 이때도 `thread/read` 와 `thread/turns/list` 는 된다.
+ */
+const WRITER_ELSEWHERE_ERROR = /already has an active writer/i;
+const WRITER_ELSEWHERE_SEND_ERROR = "다른 Codex 앱이 이 스레드를 쓰고 있어서 보낼 수 없습니다. 다시 연결한 뒤에 보내세요.";
 /** shortcut: 최대 50 페이지(5,000 스레드)까지만 읽는다. 더 많으면 사이드바를 필요할 때 더 읽는 방식으로 바꾼다. */
 const THREAD_LIST_MAX_PAGES = 50;
 
@@ -129,6 +136,12 @@ export function remoteHostBridge(remote: RemoteHostBridge, host: string): Sessio
 
 const READ_ONLY_ERROR = "원격 호스트의 대화는 읽기 전용입니다.";
 
+/** 열린 스레드의 기록과, 다른 프로세스가 쓰기 잠금을 가져서 구독하지 못하고 읽기만 했는지이다. */
+interface OpenedThread {
+  thread: Thread;
+  writerElsewhere: boolean;
+}
+
 export class DesktopSession {
   private readonly client: JsonRpcClient;
   private readonly batcher: FrameBatcher<QueuedNotification>;
@@ -143,6 +156,8 @@ export class DesktopSession {
    * 한다. 허락하면 열린 스레드를 thread/resume 으로 다시 구독해 실시간으로 받고, 턴을 보낼 수 있다.
    */
   private sendingAllowed = false;
+  /** 다른 Codex 프로세스가 쓰기 잠금을 가져서 구독하지 못하고 읽기만 한 스레드이다. 이 스레드에는 보내지 않는다. */
+  private writerElsewhereThreadId: string | null = null;
   /** 접속마다 늘어난다. 이전 접속에서 늦게 끝난 전체 검사는 반영하지 않는다. */
   private listGeneration = 0;
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
@@ -219,6 +234,7 @@ export class DesktopSession {
   async sendMessage(text: string): Promise<void> {
     this.assertWritable();
     const threadId = this.store.getOpenThreadId();
+    this.assertSubscribed(threadId);
     const trimmed = text.trim();
     if (!threadId || trimmed.length === 0) {
       return;
@@ -237,6 +253,7 @@ export class DesktopSession {
   async interrupt(): Promise<void> {
     this.assertWritable();
     const threadId = this.store.getOpenThreadId();
+    this.assertSubscribed(threadId);
     const transcript = this.store.getTranscript();
     const turn = transcript?.turns.at(-1);
     if (!threadId || !turn || turn.status !== "inProgress") {
@@ -287,6 +304,20 @@ export class DesktopSession {
     }
   }
 
+  private assertSubscribed(threadId: string | null): void {
+    if (threadId !== null && threadId === this.writerElsewhereThreadId) {
+      throw new Error(WRITER_ELSEWHERE_SEND_ERROR);
+    }
+  }
+
+  /**
+   * 열린 스레드를 다시 연다. 다른 Codex 앱이 쓰기 잠금을 놓았으면 구독해서 보낼 수 있게 되고, 아직 가지고
+   * 있으면 최신 기록을 다시 읽는다.
+   */
+  reopenThread(): Promise<void> {
+    return this.resumeOpenThread();
+  }
+
   private handleServerRequest(method: string, params: unknown, id: JsonRpcId): Promise<unknown> {
     const approval = this.canSend() ? toPendingApproval(method, params, id) : null;
     if (!approval) {
@@ -316,7 +347,8 @@ export class DesktopSession {
   /** 스레드를 연다. 이전 스레드는 진행 중인 턴이 없으면 구독을 끝낸다. */
   async openThread(threadId: string): Promise<void> {
     const previousId = this.store.getOpenThreadId();
-    if (this.canSend() && previousId && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
+    const previousSubscribed = previousId !== this.writerElsewhereThreadId;
+    if (this.canSend() && previousId && previousSubscribed && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
       void this.client.request("thread/unsubscribe", { threadId: previousId }).catch(() => undefined);
     }
     this.batcher.clear();
@@ -427,13 +459,13 @@ export class DesktopSession {
       // 긴 스레드의 전체 resume 은 수십 MB 가 된다. 턴 없이 구독만 하고 최근 턴부터 페이지로 읽는다.
       // 허락 전 원격 호스트는 구독하지 않고 thread/read 로 한 번만 읽는다. 허락하면 로컬과 같이 thread/resume 으로
       // 구독해 실시간으로 받는다 (plan 25 "세션 한 번 허용").
-      const response = this.canSend()
-        ? await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true })
-        : await this.client.request<ThreadReadResponse>("thread/read", { threadId, includeTurns: false });
+      const opened = this.canSend() ? await this.subscribeOrRead(threadId) : { thread: await this.readThread(threadId), writerElsewhere: false };
       if (this.store.getOpenThreadId() !== threadId) {
         return;
       }
-      let transcript = transcriptFromThread(response.thread);
+      this.writerElsewhereThreadId = opened.writerElsewhere ? threadId : null;
+      this.store.setWriterElsewhere(opened.writerElsewhere);
+      let transcript = transcriptFromThread(opened.thread);
       // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
       if (transcript.turns.length === 0) {
         const page = await this.readTurnPage(threadId, null);
@@ -452,6 +484,24 @@ export class DesktopSession {
         this.loading = null;
       }
     }
+  }
+
+  /** 구독해서 연다. 다른 Codex 프로세스가 쓰기 잠금을 가지고 있으면 구독하지 않고 읽기만 한다. */
+  private async subscribeOrRead(threadId: string): Promise<OpenedThread> {
+    try {
+      const response = await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true });
+      return { thread: response.thread, writerElsewhere: false };
+    } catch (error) {
+      if (!(error instanceof JsonRpcError && WRITER_ELSEWHERE_ERROR.test(error.message))) {
+        throw error;
+      }
+      return { thread: await this.readThread(threadId), writerElsewhere: true };
+    }
+  }
+
+  private async readThread(threadId: string): Promise<Thread> {
+    const response = await this.client.request<ThreadReadResponse>("thread/read", { threadId, includeTurns: false });
+    return response.thread;
   }
 
   /** 열린 스레드의 이전 턴을 한 페이지 더 읽어 앞에 붙인다. */
