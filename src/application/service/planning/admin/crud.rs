@@ -4,16 +4,22 @@ use anyhow::{Context, Result, anyhow, bail};
 use rand::RngCore;
 
 use super::direction_mutation::{
-    PlanningAdminDirectionMutationCommand, PlanningAdminDirectionMutationService,
+    PlanningAdminDirectionMutationCommand, PlanningAdminDirectionMutationOutcome,
+    PlanningAdminDirectionMutationService,
 };
-use super::documents::{default_direction_id, normalized_required_id, remove_task_references};
+use super::documents::{
+    default_direction_id, direction_fields_from_request, normalized_required_id,
+    remove_task_references,
+};
 use super::projection::map_management_view;
 use super::{
     PlanningAdminCrudOutcome, PlanningAdminDirectionDeleteRequest,
     PlanningAdminDirectionMutationRequest, PlanningAdminFacadeService, PlanningAdminManagementView,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
-use crate::application::port::inbound::stored_command_port::{StoredCommand, StoredTaskFields};
+use crate::application::port::inbound::stored_command_port::{
+    StoredCommand, StoredDirectionFields, StoredTaskFields,
+};
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskMutationRequest,
     PlanningTaskMutationSource, PlanningTaskUpdateInput,
@@ -28,6 +34,22 @@ const ADMIN_NEW_TASK_MUTATION_SCOPE: &str = "__admin-new-task__";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningOperatorTaskChange {
     pub task_id: String,
+    pub planning_revision: i64,
+}
+
+/// 사용자의 방향 만들기 또는 고치기 하나의 결과이다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningOperatorDirectionChange {
+    pub direction_id: String,
+    pub planning_revision: i64,
+}
+
+/// 사용자의 방향 지우기 하나의 결과이다. `default_retained` 가 참이면 기본 방향이라서 지우지 않았다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningOperatorDirectionDeletion {
+    pub direction_id: String,
+    pub removed_task_count: usize,
+    pub default_retained: bool,
     pub planning_revision: i64,
 }
 
@@ -56,54 +78,146 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDirectionMutationRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
-        // direction upsert는 catalog document semantics가 강하므로 task mutation service를 거치지 않는다. 전용
+        // direction 변경은 catalog document semantics가 강하므로 task mutation service를 거치지 않는다. 전용
         // direction mutation service가 id 생성, default 보장, dependent cleanup 정책을 담당하고 facade는 refreshed
         // management view와 notice만 조립한다.
-        self.ensure_default_authority()?;
-        let outcome =
-            self.with_admin_authority_mutation_guard("upsert planning direction", |owner_token| {
-                PlanningAdminDirectionMutationService::new(self).apply_with_authority_guard(
-                    PlanningAdminDirectionMutationCommand::Upsert(request),
-                    owner_token,
-                )
-            })?;
-        let management = self.load_management_view()?;
-        Ok(PlanningAdminCrudOutcome {
-            notice: if outcome.updated {
-                format!("direction `{}` updated", outcome.direction_id)
-            } else {
-                format!("direction `{}` added", outcome.direction_id)
-            },
-            management,
-        })
+        match Self::stored_direction_command(request)? {
+            StoredCommand::CreateDirection { direction } => {
+                let change = self.create_operator_direction(direction)?;
+                self.direction_upsert_outcome(&change.direction_id, false)
+            }
+            StoredCommand::UpdateDirection {
+                direction_id,
+                direction,
+                expected_planning_revision,
+            } => {
+                let change = self.update_operator_direction(
+                    &direction_id,
+                    direction,
+                    expected_planning_revision,
+                )?;
+                self.direction_upsert_outcome(&change.direction_id, true)
+            }
+            other => bail!("a direction form made the command {:?}", other.kind()),
+        }
     }
     pub fn delete_direction(
         &self,
         request: PlanningAdminDirectionDeleteRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
+        let (direction_id, expected_planning_revision) = direction_delete_from_request(&request)?;
+        let deletion = self.delete_operator_direction(direction_id, expected_planning_revision)?;
+        self.direction_delete_outcome(
+            &deletion.direction_id,
+            deletion.removed_task_count,
+            deletion.default_retained,
+        )
+    }
+
+    /*
+     * 끝난 방향 변경의 화면 결과이다: 알림 글과 다시 읽은 관리 화면의 값. 직접 실행한 변경과 커널 명령으로 간
+     * 변경(plan 18 K4-9d-3)이 같은 결과를 만든다.
+     */
+    pub fn direction_upsert_outcome(
+        &self,
+        direction_id: &str,
+        updated: bool,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        Ok(PlanningAdminCrudOutcome {
+            notice: if updated {
+                format!("direction `{direction_id}` updated")
+            } else {
+                format!("direction `{direction_id}` added")
+            },
+            management: self.load_management_view()?,
+        })
+    }
+
+    pub fn direction_delete_outcome(
+        &self,
+        direction_id: &str,
+        removed_task_count: usize,
+        default_retained: bool,
+    ) -> Result<PlanningAdminCrudOutcome> {
         // default direction delete는 실제 삭제가 아니라 retained outcome으로 보고한다. blank task creation fallback과
         // bootstrap repair anchor라서 operator가 삭제를 눌러도 service가 다시 보장하고 no-op에 가까운 notice를 돌려준다.
-        self.ensure_default_authority()?;
-        let outcome =
-            self.with_admin_authority_mutation_guard("delete planning direction", |owner_token| {
-                PlanningAdminDirectionMutationService::new(self).apply_with_authority_guard(
-                    PlanningAdminDirectionMutationCommand::Delete(request),
-                    owner_token,
-                )
-            })?;
-        let management = self.load_management_view()?;
-        if !outcome.deleted {
-            return Ok(PlanningAdminCrudOutcome {
-                notice: format!("default direction `{}` is retained", outcome.direction_id),
-                management,
-            });
-        }
         Ok(PlanningAdminCrudOutcome {
-            notice: format!(
-                "direction `{}` deleted with {} child tasks",
-                outcome.direction_id, outcome.removed_task_count
-            ),
-            management,
+            notice: if default_retained {
+                format!("default direction `{direction_id}` is retained")
+            } else {
+                format!("direction `{direction_id}` deleted with {removed_task_count} child tasks")
+            },
+            management: self.load_management_view()?,
+        })
+    }
+
+    /*
+     * 사용자의 방향 변경 셋이다. admin 의 폼과 저장 명령(`create_direction`, `update_direction`,
+     * `delete_direction`, plan 18 K4-9d-3)이 같은 길을 쓴다. 화면의 값을 만들지 않고 변경의 결과만 돌려준다.
+     */
+    pub fn create_operator_direction(
+        &self,
+        fields: StoredDirectionFields,
+    ) -> Result<PlanningOperatorDirectionChange> {
+        let outcome = self.apply_operator_direction_command(
+            "create planning direction",
+            PlanningAdminDirectionMutationCommand::Create(fields),
+        )?;
+        Ok(PlanningOperatorDirectionChange {
+            direction_id: outcome.direction_id,
+            planning_revision: outcome.planning_revision,
+        })
+    }
+
+    pub fn update_operator_direction(
+        &self,
+        direction_id: &str,
+        fields: StoredDirectionFields,
+        expected_planning_revision: i64,
+    ) -> Result<PlanningOperatorDirectionChange> {
+        let outcome = self.apply_operator_direction_command(
+            "update planning direction",
+            PlanningAdminDirectionMutationCommand::Update {
+                direction_id: direction_id.to_string(),
+                fields,
+                expected_planning_revision,
+            },
+        )?;
+        Ok(PlanningOperatorDirectionChange {
+            direction_id: outcome.direction_id,
+            planning_revision: outcome.planning_revision,
+        })
+    }
+
+    pub fn delete_operator_direction(
+        &self,
+        direction_id: &str,
+        expected_planning_revision: i64,
+    ) -> Result<PlanningOperatorDirectionDeletion> {
+        let outcome = self.apply_operator_direction_command(
+            "delete planning direction",
+            PlanningAdminDirectionMutationCommand::Delete {
+                direction_id: direction_id.to_string(),
+                expected_planning_revision,
+            },
+        )?;
+        Ok(PlanningOperatorDirectionDeletion {
+            direction_id: outcome.direction_id,
+            removed_task_count: outcome.removed_task_count,
+            default_retained: !outcome.deleted,
+            planning_revision: outcome.planning_revision,
+        })
+    }
+
+    fn apply_operator_direction_command(
+        &self,
+        action: &str,
+        command: PlanningAdminDirectionMutationCommand,
+    ) -> Result<PlanningAdminDirectionMutationOutcome> {
+        self.ensure_default_authority()?;
+        self.with_admin_authority_mutation_guard(action, |owner_token| {
+            PlanningAdminDirectionMutationService::new(self)
+                .apply_with_authority_guard(command, owner_token)
         })
     }
     pub fn upsert_task(
@@ -340,6 +454,41 @@ impl PlanningAdminFacadeService {
         })
     }
 
+    /*
+     * admin 의 방향 폼을 저장 명령으로 바꾼다. blank id 는 만들기이고 nonblank id 는 고치기이다. 고치기는 폼이 열린 뒤
+     * 다른 쓰기가 있었는지 확인할 값이 없으면 하지 않는다 (plan 18 K4-9d-3).
+     */
+    pub fn stored_direction_command(
+        request: PlanningAdminDirectionMutationRequest,
+    ) -> Result<StoredCommand> {
+        if request.id.trim().is_empty() {
+            return Ok(StoredCommand::CreateDirection {
+                direction: direction_fields_from_request(request)?,
+            });
+        }
+        let direction_id = normalized_required_id(&request.id, "direction id")?.to_string();
+        let expected_planning_revision = expected_planning_revision(
+            &request.expected_planning_revision,
+            "update a direction (a request with an id is an update); reload the direction",
+        )?;
+        Ok(StoredCommand::UpdateDirection {
+            direction_id,
+            direction: direction_fields_from_request(request)?,
+            expected_planning_revision,
+        })
+    }
+
+    /// admin 의 방향 지우기를 저장 명령으로 바꾼다.
+    pub fn stored_direction_delete_command(
+        request: &PlanningAdminDirectionDeleteRequest,
+    ) -> Result<StoredCommand> {
+        let (direction_id, expected_planning_revision) = direction_delete_from_request(request)?;
+        Ok(StoredCommand::DeleteDirection {
+            direction_id: direction_id.to_string(),
+            expected_planning_revision,
+        })
+    }
+
     /// admin 의 작업 지우기를 저장 명령으로 바꾼다.
     pub fn stored_task_delete_command(
         request: &PlanningAdminTaskDeleteRequest,
@@ -350,6 +499,23 @@ impl PlanningAdminFacadeService {
             expected_planning_revision,
         })
     }
+}
+
+fn direction_delete_from_request(
+    request: &PlanningAdminDirectionDeleteRequest,
+) -> Result<(&str, i64)> {
+    let direction_id = normalized_required_id(&request.id, "direction id")?;
+    let expected_planning_revision = expected_planning_revision(
+        &request.expected_planning_revision,
+        "delete a direction; reload the direction",
+    )?;
+    Ok((direction_id, expected_planning_revision))
+}
+
+fn expected_planning_revision(raw: &str, action: &str) -> Result<i64> {
+    raw.trim()
+        .parse::<i64>()
+        .map_err(|_| anyhow!("expected_planning_revision is required to {action} and retry"))
 }
 
 // 지우기도 폼이 열린 뒤 다른 쓰기가 있었는지 확인할 값이 없으면 하지 않는다 (plan 18 K4-9d).
@@ -538,24 +704,23 @@ mod tests {
             .expect("new direction should be added through facade");
         let updated = fixture
             .facade
-            .upsert_direction(direction_request(
-                "dir-release-planning",
-                "Release Execution",
-                "paused",
-                "Updated release direction",
+            .upsert_direction(editing_direction(
+                &fixture,
+                direction_request(
+                    "dir-release-planning",
+                    "Release Execution",
+                    "paused",
+                    "Updated release direction",
+                ),
             ))
             .expect("existing direction should be updated through facade");
         let retained = fixture
             .facade
-            .delete_direction(PlanningAdminDirectionDeleteRequest {
-                id: "general-workstream".to_string(),
-            })
+            .delete_direction(direction_delete_request(&fixture, "general-workstream"))
             .expect("default direction delete should be retained");
         let deleted = fixture
             .facade
-            .delete_direction(PlanningAdminDirectionDeleteRequest {
-                id: "dir-release-planning".to_string(),
-            })
+            .delete_direction(direction_delete_request(&fixture, "dir-release-planning"))
             .expect("non-default direction should be deleted");
 
         assert_eq!(added.notice, "direction `dir-release-planning` added");
@@ -771,8 +936,8 @@ mod tests {
         fixture
             .facade
             .upsert_direction(direction_request(
-                "dir-runtime-owned",
-                "Runtime-owned direction",
+                "",
+                "Runtime owned",
                 "active",
                 "Runtime-owned",
             ))
@@ -824,11 +989,14 @@ mod tests {
         assert!(task_error.to_string().contains("slot `slot-1` is running"));
         let direction_error = fixture
             .facade
-            .upsert_direction(direction_request(
-                "dir-runtime-owned",
-                "Changed direction while running",
-                "paused",
-                "Changed",
+            .upsert_direction(editing_direction(
+                &fixture,
+                direction_request(
+                    "dir-runtime-owned",
+                    "Changed direction while running",
+                    "paused",
+                    "Changed",
+                ),
             ))
             .expect_err("active child direction edit must fail closed");
         assert!(
@@ -838,9 +1006,7 @@ mod tests {
         );
         let direction_delete_error = fixture
             .facade
-            .delete_direction(PlanningAdminDirectionDeleteRequest {
-                id: "dir-runtime-owned".to_string(),
-            })
+            .delete_direction(direction_delete_request(&fixture, "dir-runtime-owned"))
             .expect_err("active child direction delete must fail closed");
         assert!(
             direction_delete_error
@@ -872,11 +1038,14 @@ mod tests {
             .expect("inactive task edit should be allowed");
         fixture
             .facade
-            .upsert_direction(direction_request(
-                "dir-runtime-owned",
-                "Changed direction after cleanup",
-                "active",
-                "Changed",
+            .upsert_direction(editing_direction(
+                &fixture,
+                direction_request(
+                    "dir-runtime-owned",
+                    "Changed direction after cleanup",
+                    "active",
+                    "Changed",
+                ),
             ))
             .expect("inactive child direction edit should be allowed");
     }
@@ -1386,7 +1555,36 @@ mod tests {
             scope_hints_text: "scope".to_string(),
             detail_doc_path: String::new(),
             state: state.to_string(),
+            expected_planning_revision: String::new(),
         }
+    }
+
+    // 고치기와 지우기는 화면이 읽은 revision 을 보낸다 (plan 18 K4-9d-3).
+    fn editing_direction(
+        fixture: &TestAdminFixture,
+        mut request: PlanningAdminDirectionMutationRequest,
+    ) -> PlanningAdminDirectionMutationRequest {
+        request.expected_planning_revision = current_revision(fixture);
+        request
+    }
+
+    fn direction_delete_request(
+        fixture: &TestAdminFixture,
+        id: &str,
+    ) -> PlanningAdminDirectionDeleteRequest {
+        PlanningAdminDirectionDeleteRequest {
+            id: id.to_string(),
+            expected_planning_revision: current_revision(fixture),
+        }
+    }
+
+    fn current_revision(fixture: &TestAdminFixture) -> String {
+        fixture
+            .facade
+            .load_management_view()
+            .expect("management view should load")
+            .planning_revision
+            .to_string()
     }
 
     fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {

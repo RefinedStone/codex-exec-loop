@@ -54,7 +54,31 @@ fn sample_commands() -> Vec<KernelCommand> {
             expected_planning_revision: 7,
             confirm: true,
         },
+        KernelCommand::CreateDirection {
+            direction: sample_direction_fields(),
+        },
+        KernelCommand::UpdateDirection {
+            direction_id: "direction-1".to_string(),
+            direction: sample_direction_fields(),
+            expected_planning_revision: 7,
+        },
+        KernelCommand::DeleteDirection {
+            direction_id: "direction-1".to_string(),
+            expected_planning_revision: 7,
+            confirm: true,
+        },
     ]
+}
+
+fn sample_direction_fields() -> DirectionFields {
+    DirectionFields {
+        title: "Release".to_string(),
+        summary: Some("Ship the release.".to_string()),
+        success_criteria: vec!["The release is out.".to_string()],
+        scope_hints: Vec::new(),
+        detail_doc_path: None,
+        state: Some(PlanningDirectionState::Paused),
+    }
 }
 
 fn sample_task_fields() -> TaskFields {
@@ -1878,8 +1902,8 @@ fn a_destructive_command_needs_confirm_in_the_schema_and_in_the_code() {
         assert!(confirmed.confirmed(), "{name}");
     }
     assert_eq!(
-        destructive, 2,
-        "reset_planning and delete_task are the destructive commands today"
+        destructive, 3,
+        "reset_planning, delete_task, and delete_direction are the destructive commands today"
     );
 }
 

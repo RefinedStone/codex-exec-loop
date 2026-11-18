@@ -6,20 +6,19 @@ use std::collections::BTreeSet;
 // 사용하고, 도메인 규칙 위반은 bail!로 즉시 중단한다.
 use anyhow::{Result, bail};
 
-// Documents helper들은 direction request 정규화, default direction 보장, task cross-reference 정리를 담당한다.
+// Documents helper들은 방향의 정규화, default direction 보장, task cross-reference 정리를 담당한다.
 // mutation service는 high-level orchestration만 맡는다.
+use super::PlanningAdminFacadeService;
 use super::documents::{
-    DEFAULT_DIRECTION_ID, direction_from_request, ensure_default_direction, normalized_required_id,
-    remove_task_references,
+    DEFAULT_DIRECTION_ID, PlanningOperatorPlanningDocuments, direction_definition,
+    ensure_default_direction, new_direction_id, normalized_required_id, remove_task_references,
 };
-// Admin facade service는 operator planning documents를 load/commit하는 boundary이고, request 타입은 CLI/admin API 쪽에서
-// 들어온 direction mutation payload다.
-use super::{
-    PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
-    PlanningAdminFacadeService,
-};
+use crate::application::port::inbound::stored_command_port::StoredDirectionFields;
 // Task authority document는 direction 삭제 시 같이 정리되는 source of truth다.
-use crate::domain::planning::TaskAuthorityDocument;
+use crate::domain::planning::{PlanningMutationRefusal, TaskAuthorityDocument};
+
+// 만들기는 보낸 revision 이 없다. 읽기와 저장 사이에 다른 쓰기가 끼면 이 횟수까지 다시 한다.
+const CREATE_ATTEMPTS: usize = 3;
 
 // PlanningAdminDirectionMutationService는 direction catalog와 task authority를 함께 수정하는 admin use-case service다.
 // facade를 통해 파일/DB boundary를 숨기고 문서 단위 mutation만 표현한다.
@@ -28,12 +27,23 @@ pub(super) struct PlanningAdminDirectionMutationService<'a> {
     facade: &'a PlanningAdminFacadeService,
 }
 
+/*
+ * 방향의 변경은 셋이다 (plan 18 K4-9d-3). admin 의 폼과 저장 명령(`create_direction`, `update_direction`,
+ * `delete_direction`)이 같은 명령을 쓴다. 고치기와 지우기는 보낸 쪽이 읽은 revision 을 가진다: 지금의 revision 과
+ * 다르면 아무것도 바꾸지 않는다.
+ */
 #[derive(Debug, Clone)]
-// Direction mutation은 upsert와 delete 두 명령만 허용한다. caller는 request shape를 command로 감싸고,
-// service는 apply에서 공통 결과 타입으로 돌려준다.
 pub(super) enum PlanningAdminDirectionMutationCommand {
-    Upsert(PlanningAdminDirectionMutationRequest),
-    Delete(PlanningAdminDirectionDeleteRequest),
+    Create(StoredDirectionFields),
+    Update {
+        direction_id: String,
+        fields: StoredDirectionFields,
+        expected_planning_revision: i64,
+    },
+    Delete {
+        direction_id: String,
+        expected_planning_revision: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +52,7 @@ pub(super) enum PlanningAdminDirectionMutationCommand {
 pub(super) struct PlanningAdminDirectionMutationOutcome {
     // mutation 대상 direction id다.
     pub(super) direction_id: String,
-    // upsert가 기존 direction을 교체했으면 true, 새로 추가했으면 false다.
+    // 고치기이면 true, 만들기이면 false다.
     pub(super) updated: bool,
     // delete가 실제 direction을 제거했는지 여부다. default direction 보호 경로는 false다.
     pub(super) deleted: bool,
@@ -50,6 +60,8 @@ pub(super) struct PlanningAdminDirectionMutationOutcome {
     pub(super) removed_task_count: usize,
     // direction 삭제 때문에 task authority에서 제거된 task id 목록이다.
     pub(super) removed_task_ids: BTreeSet<String>,
+    // 이 변경의 저장이 만든 planning revision 이다.
+    pub(super) planning_revision: i64,
 }
 
 impl<'a> PlanningAdminDirectionMutationService<'a> {
@@ -62,7 +74,6 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
     #[cfg(test)]
     pub(super) fn apply(
         &self,
-        // caller가 upsert/delete 중 하나로 정규화한 admin mutation command다.
         command: PlanningAdminDirectionMutationCommand,
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
         self.apply_inner(command, None)
@@ -81,79 +92,138 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
         command: PlanningAdminDirectionMutationCommand,
         authority_mutation_owner_token: Option<&str>,
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
-        // apply는 command router다. 실제 문서 load/commit과 cascade cleanup은 각 private method에 나눠 두어
-        // upsert와 delete의 정책 차이를 드러낸다.
         match command {
-            PlanningAdminDirectionMutationCommand::Upsert(request) => {
-                self.upsert(request, authority_mutation_owner_token)
+            PlanningAdminDirectionMutationCommand::Create(fields) => {
+                self.create(fields, authority_mutation_owner_token)
             }
-            PlanningAdminDirectionMutationCommand::Delete(request) => {
-                self.delete(request, authority_mutation_owner_token)
-            }
+            PlanningAdminDirectionMutationCommand::Update {
+                direction_id,
+                fields,
+                expected_planning_revision,
+            } => self.update(
+                &direction_id,
+                fields,
+                expected_planning_revision,
+                authority_mutation_owner_token,
+            ),
+            PlanningAdminDirectionMutationCommand::Delete {
+                direction_id,
+                expected_planning_revision,
+            } => self.delete(
+                &direction_id,
+                expected_planning_revision,
+                authority_mutation_owner_token,
+            ),
         }
     }
 
-    fn upsert(
+    /*
+     * 새 방향을 catalog 끝에 더한다. id 는 제목에서 만든다. 저장은 읽은 revision 과 견주므로, 읽기와 저장 사이에 다른
+     * 쓰기가 끼면 저장소가 거절한다. 그때는 다시 읽고 다시 한다. 계속 끼면 잠김으로 거절한다: 아무것도 저장하지
+     * 않았으므로 다시 보내면 된다.
+     */
+    fn create(
         &self,
-        // direction 생성 또는 갱신 request다. documents helper가 id/title/detail 정규화를 수행한다.
-        request: PlanningAdminDirectionMutationRequest,
+        fields: StoredDirectionFields,
         authority_mutation_owner_token: Option<&str>,
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
-        // direction catalog와 task authority를 같은 document snapshot으로 읽는다. upsert는 direction catalog만
+        for _ in 0..CREATE_ATTEMPTS {
+            let mut documents = self.facade.load_operator_planning_documents()?;
+            let direction_id = new_direction_id(&fields.title, &documents.directions)?;
+            documents
+                .directions
+                .directions
+                .push(direction_definition(&direction_id, fields.clone())?);
+            match self.commit_documents(documents, authority_mutation_owner_token) {
+                Ok(planning_revision) => {
+                    return Ok(PlanningAdminDirectionMutationOutcome {
+                        direction_id,
+                        updated: false,
+                        deleted: false,
+                        removed_task_count: 0,
+                        removed_task_ids: BTreeSet::new(),
+                        planning_revision,
+                    });
+                }
+                Err(error) => match PlanningMutationRefusal::find_in(&error) {
+                    Some(PlanningMutationRefusal::RevisionStale { .. }) => {}
+                    _ => return Err(error),
+                },
+            }
+        }
+        Err(PlanningMutationRefusal::locked(
+            "planning data kept changing while the direction was added; nothing was changed; retry",
+        )
+        .into())
+    }
+
+    // 있는 방향 하나를 통째로 바꾼다. 없는 id 는 만들지 않는다: 오타가 새 방향이 되지 않게 한다.
+    fn update(
+        &self,
+        direction_id: &str,
+        fields: StoredDirectionFields,
+        expected_planning_revision: i64,
+        authority_mutation_owner_token: Option<&str>,
+    ) -> Result<PlanningAdminDirectionMutationOutcome> {
+        let direction = direction_definition(direction_id, fields)?;
+        let direction_id = direction.id.clone();
+        // direction catalog와 task authority를 같은 document snapshot으로 읽는다. 고치기는 direction catalog만
         // 바꾸지만 commit 단위는 operator planning documents 전체다.
         let mut documents = self.facade.load_operator_planning_documents()?;
-        // request를 domain direction으로 변환하면서 기존 catalog와의 id normalization/validation을 적용한다.
-        let direction = direction_from_request(request, &documents.directions)?;
-        // outcome과 기존 direction lookup에 같은 canonical id를 사용해야 한다.
-        let direction_id = direction.id.clone();
-        // 같은 id가 이미 있으면 그 entry를 교체하고, 없으면 catalog 끝에 추가한다. trim 비교는 문서에 남은
-        // 주변 공백 때문에 같은 direction이 중복되는 일을 막는다.
-        let updated = if let Some(existing) = documents
+        ensure_expected_revision(
+            &direction_id,
+            expected_planning_revision,
+            documents.observed_planning_revision,
+        )?;
+        // trim 비교는 문서에 남은 주변 공백 때문에 같은 direction을 놓치는 일을 막는다.
+        let Some(existing) = documents
             .directions
             .directions
             .iter_mut()
             .find(|existing| existing.id.trim() == direction_id)
-        {
-            *existing = direction;
-            true
-        } else {
-            documents.directions.directions.push(direction);
-            false
+        else {
+            bail!("direction `{direction_id}` was not found");
         };
-        // mutation은 in-memory document를 모두 갱신한 뒤 한 번만 commit한다.
-        self.commit_documents(documents, authority_mutation_owner_token)?;
-
-        // upsert는 direction 삭제나 task cascade를 수행하지 않으므로 deleted와 removed_task_count는 고정값이다.
+        *existing = direction;
+        let planning_revision = self.commit_documents(documents, authority_mutation_owner_token)?;
         Ok(PlanningAdminDirectionMutationOutcome {
             direction_id,
-            updated,
+            updated: true,
             deleted: false,
             removed_task_count: 0,
             removed_task_ids: BTreeSet::new(),
+            planning_revision,
         })
     }
 
     fn delete(
         &self,
-        // 삭제할 direction id request다.
-        request: PlanningAdminDirectionDeleteRequest,
+        direction_id: &str,
+        expected_planning_revision: i64,
         authority_mutation_owner_token: Option<&str>,
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
         // blank id는 admin command contract 위반이므로 문서를 읽기 전에 실패시킨다.
-        let direction_id = normalized_required_id(&request.id, "direction id")?.to_string();
+        let direction_id = normalized_required_id(direction_id, "direction id")?.to_string();
         // 삭제는 direction catalog와 task authority를 함께 갱신해야 하므로 전체 planning documents를 로드한다.
         let mut documents = self.facade.load_operator_planning_documents()?;
+        ensure_expected_revision(
+            &direction_id,
+            expected_planning_revision,
+            documents.observed_planning_revision,
+        )?;
         // default direction은 workspace bootstrap과 queue validation의 안전망이라 삭제하지 않는다. 대신 누락되어
         // 있다면 다시 보장하고 no-op outcome을 반환한다.
         if direction_id == DEFAULT_DIRECTION_ID {
             ensure_default_direction(&mut documents.directions)?;
-            self.commit_documents(documents, authority_mutation_owner_token)?;
+            let planning_revision =
+                self.commit_documents(documents, authority_mutation_owner_token)?;
             return Ok(PlanningAdminDirectionMutationOutcome {
                 direction_id,
                 updated: false,
                 deleted: false,
                 removed_task_count: 0,
                 removed_task_ids: BTreeSet::new(),
+                planning_revision,
             });
         }
 
@@ -179,29 +249,49 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
         let removed_task_count = removed_task_ids.len();
         // 삭제 후에도 direction catalog에는 항상 default direction이 남아야 한다.
         ensure_default_direction(&mut documents.directions)?;
-        self.commit_documents(documents, authority_mutation_owner_token)?;
+        let planning_revision = self.commit_documents(documents, authority_mutation_owner_token)?;
 
-        // 이 outcome은 direction 자체가 삭제되었고 task cascade가 몇 건 있었는지 보고한다.
         Ok(PlanningAdminDirectionMutationOutcome {
             direction_id,
             updated: false,
             deleted: true,
             removed_task_count,
             removed_task_ids,
+            planning_revision,
         })
     }
 
     fn commit_documents(
         &self,
-        documents: super::documents::PlanningOperatorPlanningDocuments,
+        documents: PlanningOperatorPlanningDocuments,
         authority_mutation_owner_token: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         match authority_mutation_owner_token {
             Some(owner_token) => self
                 .facade
                 .commit_operator_planning_documents_with_guard(documents, owner_token),
-            None => self.facade.commit_operator_planning_documents(documents),
+            None => self
+                .facade
+                .commit_operator_planning_documents_for_revision(documents),
         }
+    }
+}
+
+// 폼이나 명령을 만든 뒤에 다른 쓰기가 있었으면 바꾸지 않는다 (plan 18 K4-9d).
+fn ensure_expected_revision(
+    direction_id: &str,
+    expected: i64,
+    observed: Option<i64>,
+) -> Result<()> {
+    match observed {
+        Some(current) if current != expected => Err(PlanningMutationRefusal::revision_stale(
+            format!(
+                "planning changed after direction `{direction_id}` was opened (revision {expected} -> {current}); reload it and retry"
+            ),
+            current,
+        )
+        .into()),
+        _ => Ok(()),
     }
 }
 
@@ -252,14 +342,16 @@ mod tests {
         let service = PlanningAdminDirectionMutationService::new(&fixture.facade);
 
         let inserted = service
-            .apply(PlanningAdminDirectionMutationCommand::Upsert(
-                direction_request("", "Release Planning", "active"),
+            .apply(PlanningAdminDirectionMutationCommand::Create(
+                direction_fields("Release Planning", DirectionState::Active),
             ))
             .expect("new direction should be inserted");
         let updated = service
-            .apply(PlanningAdminDirectionMutationCommand::Upsert(
-                direction_request("dir-release-planning", "Release Execution", "paused"),
-            ))
+            .apply(PlanningAdminDirectionMutationCommand::Update {
+                direction_id: "dir-release-planning".to_string(),
+                fields: direction_fields("Release Execution", DirectionState::Paused),
+                expected_planning_revision: inserted.planning_revision,
+            })
             .expect("existing direction should be updated");
         let documents = fixture
             .facade
@@ -299,11 +391,7 @@ mod tests {
             .expect("commit should restore default direction");
 
         let outcome = PlanningAdminDirectionMutationService::new(&fixture.facade)
-            .apply(PlanningAdminDirectionMutationCommand::Delete(
-                PlanningAdminDirectionDeleteRequest {
-                    id: DEFAULT_DIRECTION_ID.to_string(),
-                },
-            ))
+            .apply(delete_command(&fixture, DEFAULT_DIRECTION_ID))
             .expect("default delete should be accepted as protected noop");
         let reloaded = fixture
             .facade
@@ -356,11 +444,7 @@ mod tests {
             .expect("fixture documents should commit");
 
         let outcome = PlanningAdminDirectionMutationService::new(&fixture.facade)
-            .apply(PlanningAdminDirectionMutationCommand::Delete(
-                PlanningAdminDirectionDeleteRequest {
-                    id: "dir-remove".to_string(),
-                },
-            ))
+            .apply(delete_command(&fixture, "dir-remove"))
             .expect("non-default direction should be deleted");
         let reloaded = fixture
             .facade
@@ -397,18 +481,10 @@ mod tests {
         let service = PlanningAdminDirectionMutationService::new(&fixture.facade);
 
         let blank = service
-            .apply(PlanningAdminDirectionMutationCommand::Delete(
-                PlanningAdminDirectionDeleteRequest {
-                    id: "  ".to_string(),
-                },
-            ))
+            .apply(delete_command(&fixture, "  "))
             .expect_err("blank id should fail before document loading");
         let missing = service
-            .apply(PlanningAdminDirectionMutationCommand::Delete(
-                PlanningAdminDirectionDeleteRequest {
-                    id: "missing-direction".to_string(),
-                },
-            ))
+            .apply(delete_command(&fixture, "missing-direction"))
             .expect_err("missing id should fail explicitly");
 
         assert_eq!(blank.to_string(), "direction id is required");
@@ -418,20 +494,117 @@ mod tests {
         );
     }
 
-    fn direction_request(
-        id: &str,
-        title: &str,
-        state: &str,
-    ) -> PlanningAdminDirectionMutationRequest {
-        PlanningAdminDirectionMutationRequest {
-            id: id.to_string(),
-            title: title.to_string(),
-            summary: format!("Summary for {title}"),
-            success_criteria_text: "done".to_string(),
-            scope_hints_text: "scope".to_string(),
-            detail_doc_path: String::new(),
-            state: state.to_string(),
+    #[test]
+    fn a_stale_update_or_delete_is_refused_and_changes_nothing() {
+        let fixture = TestAdminFixture::new("direction-mutation-stale");
+        let service = PlanningAdminDirectionMutationService::new(&fixture.facade);
+        let opened = current_revision(&fixture);
+        let created = service
+            .apply(PlanningAdminDirectionMutationCommand::Create(
+                direction_fields("Release Planning", DirectionState::Active),
+            ))
+            .expect("a direction should be created");
+        assert!(created.planning_revision > opened);
+
+        let update = service
+            .apply(PlanningAdminDirectionMutationCommand::Update {
+                direction_id: created.direction_id.clone(),
+                fields: direction_fields("Changed", DirectionState::Paused),
+                expected_planning_revision: opened,
+            })
+            .expect_err("a stale update should be refused");
+        let delete = service
+            .apply(PlanningAdminDirectionMutationCommand::Delete {
+                direction_id: created.direction_id.clone(),
+                expected_planning_revision: opened,
+            })
+            .expect_err("a stale delete should be refused");
+
+        for error in [&update, &delete] {
+            assert_eq!(
+                PlanningMutationRefusal::find_in(error),
+                Some(&PlanningMutationRefusal::revision_stale(
+                    format!(
+                        "planning changed after direction `dir-release-planning` was opened (revision {opened} -> {}); reload it and retry",
+                        created.planning_revision
+                    ),
+                    created.planning_revision
+                ))
+            );
         }
+        let documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("documents should reload");
+        let direction = documents
+            .directions
+            .directions
+            .iter()
+            .find(|direction| direction.id == created.direction_id)
+            .expect("the direction should remain");
+        assert_eq!(direction.title, "Release Planning");
+        assert_eq!(
+            documents.observed_planning_revision,
+            Some(created.planning_revision)
+        );
+    }
+
+    #[test]
+    fn an_update_of_an_unknown_direction_fails_and_adds_nothing() {
+        let fixture = TestAdminFixture::new("direction-mutation-unknown-update");
+        let error = PlanningAdminDirectionMutationService::new(&fixture.facade)
+            .apply(PlanningAdminDirectionMutationCommand::Update {
+                direction_id: "no-such-direction".to_string(),
+                fields: direction_fields("Typo", DirectionState::Active),
+                expected_planning_revision: current_revision(&fixture),
+            })
+            .expect_err("an unknown id should not become a new direction");
+
+        assert_eq!(
+            error.to_string(),
+            "direction `no-such-direction` was not found"
+        );
+        assert!(
+            !fixture
+                .facade
+                .load_operator_planning_documents()
+                .expect("documents should reload")
+                .directions
+                .directions
+                .iter()
+                .any(|direction| direction.id == "no-such-direction")
+        );
+    }
+
+    fn direction_fields(title: &str, state: DirectionState) -> StoredDirectionFields {
+        StoredDirectionFields {
+            title: title.to_string(),
+            summary: Some(format!("Summary for {title}")),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: vec!["scope".to_string()],
+            detail_doc_path: None,
+            state: Some(state),
+        }
+    }
+
+    // A delete that was made from the planning data as it is now.
+    fn delete_command(
+        fixture: &TestAdminFixture,
+        direction_id: &str,
+    ) -> PlanningAdminDirectionMutationCommand {
+        PlanningAdminDirectionMutationCommand::Delete {
+            direction_id: direction_id.to_string(),
+            expected_planning_revision: current_revision(fixture),
+        }
+    }
+
+    fn current_revision(fixture: &TestAdminFixture) -> i64 {
+        fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("documents should load")
+            .observed_planning_revision
+            .expect("loaded documents should carry a planning revision")
     }
 
     fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {

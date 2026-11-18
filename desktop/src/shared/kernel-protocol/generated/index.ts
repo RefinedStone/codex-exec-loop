@@ -35,7 +35,10 @@ export const KERNEL_COMMAND_EFFECT = {
   "refresh_planning": "read",
   "create_task": "write",
   "update_task": "write",
-  "delete_task": "destructive"
+  "delete_task": "destructive",
+  "create_direction": "write",
+  "update_direction": "write",
+  "delete_direction": "destructive"
 } as const satisfies Record<KernelCommand["type"], string>;
 
 export type ApprovalDecision = ("accept" | "decline");
@@ -60,11 +63,13 @@ export type CommandRequest = { readonly "command": KernelCommand; readonly "idem
 
 export type CommandResponse = { readonly "failure"?: (string | null); readonly "operation"?: (Operation | null); readonly "processed": boolean; readonly "rejection"?: (CommandRejection | null); readonly "result"?: (CommandResult | null); };
 
-export type CommandResult = ({ readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_created"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_updated"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_deleted"; });
+export type CommandResult = ({ readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_created"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_updated"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_deleted"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_created"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_updated"; } | { readonly "default_retained": boolean; readonly "direction_id": string; readonly "planning_revision": number; readonly "removed_task_count": number; readonly "type": "direction_deleted"; });
+
+export type DirectionFields = { readonly "detail_doc_path"?: (string | null); readonly "scope_hints"?: Array<string>; readonly "state"?: (PlanningDirectionState | null); readonly "success_criteria": Array<string>; readonly "summary"?: (string | null); readonly "title": string; };
 
 export type EventNotification = { readonly "event": KernelEvent; };
 
-export type KernelCommand = ({ readonly "type": "load_sessions"; } | { readonly "name": string; readonly "thread_id": string; readonly "type": "rename_session"; } | { readonly "prompt": string; readonly "thread_id": string; readonly "type": "submit_prompt"; } | { readonly "expected_turn_id": string; readonly "prompt": string; readonly "thread_id": string; readonly "type": "steer_turn"; } | { readonly "type": "stop_all"; } | { readonly "approval_id": string; readonly "decision": ApprovalDecision; readonly "server_request_id": string; readonly "type": "decide_approval"; } | { readonly "type": "set_auto_follow_max_turns"; readonly "value": number; } | { readonly "type": "pause_auto_follow"; } | { readonly "confirm"?: boolean; readonly "target": ResetTarget; readonly "type": "reset_planning"; } | { readonly "type": "refresh_planning"; } | { readonly "task": TaskFields; readonly "type": "create_task"; } | { readonly "expected_planning_revision": number; readonly "task": TaskFields; readonly "task_id": string; readonly "type": "update_task"; } | { readonly "confirm"?: boolean; readonly "expected_planning_revision": number; readonly "task_id": string; readonly "type": "delete_task"; });
+export type KernelCommand = ({ readonly "type": "load_sessions"; } | { readonly "name": string; readonly "thread_id": string; readonly "type": "rename_session"; } | { readonly "prompt": string; readonly "thread_id": string; readonly "type": "submit_prompt"; } | { readonly "expected_turn_id": string; readonly "prompt": string; readonly "thread_id": string; readonly "type": "steer_turn"; } | { readonly "type": "stop_all"; } | { readonly "approval_id": string; readonly "decision": ApprovalDecision; readonly "server_request_id": string; readonly "type": "decide_approval"; } | { readonly "type": "set_auto_follow_max_turns"; readonly "value": number; } | { readonly "type": "pause_auto_follow"; } | { readonly "confirm"?: boolean; readonly "target": ResetTarget; readonly "type": "reset_planning"; } | { readonly "type": "refresh_planning"; } | { readonly "task": TaskFields; readonly "type": "create_task"; } | { readonly "expected_planning_revision": number; readonly "task": TaskFields; readonly "task_id": string; readonly "type": "update_task"; } | { readonly "confirm"?: boolean; readonly "expected_planning_revision": number; readonly "task_id": string; readonly "type": "delete_task"; } | { readonly "direction": DirectionFields; readonly "type": "create_direction"; } | { readonly "direction": DirectionFields; readonly "direction_id": string; readonly "expected_planning_revision": number; readonly "type": "update_direction"; } | { readonly "confirm"?: boolean; readonly "direction_id": string; readonly "expected_planning_revision": number; readonly "type": "delete_direction"; });
 
 export type KernelEvent = (SessionsState & { readonly "type": "sessions"; } | AutoFollowSettings & { readonly "type": "auto_follow"; } | { readonly "threads": Array<ThreadActivity>; readonly "type": "thread_activity"; } | PromptSubmissionState & { readonly "type": "prompt_submission"; } | PlanningState & { readonly "type": "planning"; } | ParallelState & { readonly "type": "parallel"; } | { readonly "type": "resync"; } | RecordedKernelEvent & { readonly "type": "recorded"; });
 
@@ -113,6 +118,8 @@ export type ParallelSupervisor = { readonly "agents": Array<ParallelAgent>; read
 export type ParallelSupervisorState = ("prepare" | "supervise" | "recover");
 
 export type PendingApproval = { readonly "approval_id": string; readonly "request_kind": ApprovalRequestKind; readonly "summary": string; readonly "thread_id": string; readonly "turn_id"?: (string | null); };
+
+export type PlanningDirectionState = ("active" | "paused" | "done");
 
 export type PlanningState = { readonly "active_tasks": Array<PlanningTask>; readonly "auto_follow_pause_reason"?: (string | null); readonly "failure_reason"?: (string | null); readonly "next_task"?: (PlanningTask | null); readonly "proposed_tasks": Array<PlanningTask>; readonly "queue_summary"?: (string | null); readonly "revision"?: (number | null); readonly "skipped_tasks": Array<SkippedPlanningTask>; readonly "status": PlanningStatus; };
 

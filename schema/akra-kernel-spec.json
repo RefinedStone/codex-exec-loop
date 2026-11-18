@@ -752,6 +752,199 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "create_direction",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Add a planning direction as the operator. The answer carries the new direction id and the new planning revision.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "$ref": "#/$defs/DirectionFields"
+          },
+          "type": {
+            "const": "create_direction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "direction_id": {
+            "type": "string"
+          },
+          "planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "const": "direction_created",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "direction_id",
+          "planning_revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "update_direction",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "planning_revision_stale",
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "$ref": "#/$defs/DirectionFields"
+          },
+          "direction_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "expected_planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "const": "update_direction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "direction_id",
+          "direction",
+          "expected_planning_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "direction_id": {
+            "type": "string"
+          },
+          "planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "const": "direction_updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "direction_id",
+          "planning_revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delete_direction",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
+      "effect": "destructive",
+      "idempotency": "natural",
+      "rejections": [
+        "planning_revision_stale",
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "direction_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "expected_planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "const": "delete_direction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "direction_id",
+          "expected_planning_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "default_retained": {
+            "type": "boolean"
+          },
+          "direction_id": {
+            "type": "string"
+          },
+          "planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "removed_task_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "const": "direction_deleted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "direction_id",
+          "removed_task_count",
+          "default_retained",
+          "planning_revision"
+        ],
+        "type": "object"
+      }
     }
   ],
   "queries": [
@@ -2203,8 +2396,130 @@
             "planning_revision"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "direction_id": {
+              "type": "string"
+            },
+            "planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "direction_created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "direction_id",
+            "planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "direction_id": {
+              "type": "string"
+            },
+            "planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "direction_updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "direction_id",
+            "planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "default_retained": {
+              "type": "boolean"
+            },
+            "direction_id": {
+              "type": "string"
+            },
+            "planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "removed_task_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "direction_deleted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "direction_id",
+            "removed_task_count",
+            "default_retained",
+            "planning_revision"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "DirectionFields": {
+      "additionalProperties": false,
+      "properties": {
+        "detail_doc_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope_hints": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanningDirectionState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "success_criteria"
+      ],
+      "type": "object"
     },
     "EventNotification": {
       "properties": {
@@ -2490,6 +2805,79 @@
           "required": [
             "type",
             "task_id",
+            "expected_planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/DirectionFields"
+            },
+            "type": {
+              "const": "create_direction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "direction"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/DirectionFields"
+            },
+            "direction_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "expected_planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "update_direction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "direction_id",
+            "direction",
+            "expected_planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "confirm": {
+              "default": false,
+              "type": "boolean"
+            },
+            "direction_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "expected_planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "delete_direction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "direction_id",
             "expected_planning_revision"
           ],
           "type": "object"
@@ -3800,6 +4188,14 @@
         "summary"
       ],
       "type": "object"
+    },
+    "PlanningDirectionState": {
+      "enum": [
+        "active",
+        "paused",
+        "done"
+      ],
+      "type": "string"
     },
     "PlanningState": {
       "properties": {

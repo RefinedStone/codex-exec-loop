@@ -685,11 +685,11 @@ pub(super) async fn upsert_direction_api(
 ) -> std::result::Result<Response, StatusCode> {
     // direction JSON body는 이미 application mutation request와 같은 shape라 adapter mapping이 필요 없다.
     verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .upsert_direction(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
+    // 거절은 409 와 이유 코드와 글이고, 실패는 500 과 원인의 글이다 (plan 18 K4-9d).
+    Ok(match state.facade.upsert_direction(request) {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(error) => AdminMutationFailure::from_error(error).into_response(),
+    })
 }
 
 pub(super) async fn delete_direction_api(
@@ -700,11 +700,11 @@ pub(super) async fn delete_direction_api(
 ) -> std::result::Result<Response, StatusCode> {
     // direction 삭제는 task planning context에 영향을 줄 수 있으므로 cascading rule은 facade가 소유한다.
     verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .delete_direction(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
+    // 거절은 409 와 이유 코드와 글이고, 실패는 500 과 원인의 글이다 (plan 18 K4-9d).
+    Ok(match state.facade.delete_direction(request) {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(error) => AdminMutationFailure::from_error(error).into_response(),
+    })
 }
 
 pub(super) async fn upsert_task_api(

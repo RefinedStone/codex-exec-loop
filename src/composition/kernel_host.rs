@@ -542,6 +542,15 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             }
             | StoredCommandResult::TaskDeleted {
                 planning_revision, ..
+            }
+            | StoredCommandResult::DirectionCreated {
+                planning_revision, ..
+            }
+            | StoredCommandResult::DirectionUpdated {
+                planning_revision, ..
+            }
+            | StoredCommandResult::DirectionDeleted {
+                planning_revision, ..
             },
         ) => *planning_revision,
         StoredCommandOutcome::Rejected(rejection) => rejection.planning_revision?,

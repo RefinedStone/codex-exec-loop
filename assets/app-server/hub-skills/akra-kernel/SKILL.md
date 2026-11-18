@@ -41,6 +41,9 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel planning create_task --json` | write | Add a planning task as the operator. The answer carries the new task id and the new planning revision. |
 | `akra kernel planning update_task --json` | write | Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 | `akra kernel planning delete_task --json` | destructive | Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
+| `akra kernel planning create_direction --json` | write | Add a planning direction as the operator. The answer carries the new direction id and the new planning revision. |
+| `akra kernel planning update_direction --json` | write | Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
+| `akra kernel planning delete_direction --json` | destructive | Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.
 

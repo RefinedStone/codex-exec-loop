@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
-use crate::domain::planning::{PlanningMutationRefusal, TaskStatus};
+use crate::domain::planning::{DirectionState, PlanningMutationRefusal, TaskStatus};
 
 /*
  * 저장 명령의 실행기이다 (plan 18 K4-9d, 설계 `docs/plan/18-k4-9d-planning-mutations.md` §3.1).
@@ -34,6 +34,20 @@ pub struct StoredTaskFields {
     pub blocked_by: Vec<String>,
 }
 
+/*
+ * 방향의 필드이다. 만들기와 고치기가 같은 뜻으로 읽는다 (admin 의 폼과 같다): 요약이 없으면 제목을 쓰고, 상태가
+ * 없으면 `active` 이고, 완료 기준은 하나 이상이어야 한다. 고치기는 방향 전체를 이 값으로 바꾼다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredDirectionFields {
+    pub title: String,
+    pub summary: Option<String>,
+    pub success_criteria: Vec<String>,
+    pub scope_hints: Vec<String>,
+    pub detail_doc_path: Option<String>,
+    pub state: Option<DirectionState>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
     CreateTask {
@@ -48,6 +62,19 @@ pub enum StoredCommand {
         task_id: String,
         expected_planning_revision: i64,
     },
+    CreateDirection {
+        direction: StoredDirectionFields,
+    },
+    UpdateDirection {
+        direction_id: String,
+        direction: StoredDirectionFields,
+        expected_planning_revision: i64,
+    },
+    /// 방향과 그 방향의 작업을 지운다. 기본 방향은 지우지 않고 남긴다.
+    DeleteDirection {
+        direction_id: String,
+        expected_planning_revision: i64,
+    },
 }
 
 impl StoredCommand {
@@ -57,6 +84,9 @@ impl StoredCommand {
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
             Self::DeleteTask { .. } => KernelCommandKind::DeleteTask,
+            Self::CreateDirection { .. } => KernelCommandKind::CreateDirection,
+            Self::UpdateDirection { .. } => KernelCommandKind::UpdateDirection,
+            Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
         }
     }
 }
@@ -74,6 +104,21 @@ pub enum StoredCommandResult {
     },
     TaskDeleted {
         task_id: String,
+        planning_revision: i64,
+    },
+    DirectionCreated {
+        direction_id: String,
+        planning_revision: i64,
+    },
+    DirectionUpdated {
+        direction_id: String,
+        planning_revision: i64,
+    },
+    /// `default_retained` 가 참이면 기본 방향이라서 지우지 않았다.
+    DirectionDeleted {
+        direction_id: String,
+        removed_task_count: usize,
+        default_retained: bool,
         planning_revision: i64,
     },
 }

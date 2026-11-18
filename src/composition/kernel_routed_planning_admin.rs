@@ -21,7 +21,7 @@ use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::domain::planning::PlanningResetRequest;
 
 /*
- * 입구(admin)의 `PlanningAdminPort` 이다. 읽기와 초안의 편집은 facade 가 직접 한다. 작업의 변경은 저장 명령으로
+ * 입구(admin)의 `PlanningAdminPort` 이다. 읽기와 초안의 편집은 facade 가 직접 한다. 작업과 방향의 변경은 저장 명령으로
  * 바꿔서 저장소 커널에 보낸다. 명령은 Gateway 의 커널, 명령 전용 조립, 또는 TUI 가 커널을 쥔 저장소의 직접 경로 중
  * 하나로 간다. 어느 길이든 답은 실행이 끝난 뒤에 온다. 그 뒤에 화면의 값을 저장소에서 다시 읽는다.
  *
@@ -75,11 +75,20 @@ impl KernelRoutedPlanningAdmin {
     }
 }
 
-fn changed_task_id(result: CommandResult) -> String {
+fn changed_task_id(result: CommandResult) -> Result<String> {
     match result {
         CommandResult::TaskCreated { task_id, .. }
         | CommandResult::TaskUpdated { task_id, .. }
-        | CommandResult::TaskDeleted { task_id, .. } => task_id,
+        | CommandResult::TaskDeleted { task_id, .. } => Ok(task_id),
+        other => bail!("the repository kernel answered a task command with {other:?}"),
+    }
+}
+
+fn changed_direction_id(result: CommandResult) -> Result<String> {
+    match result {
+        CommandResult::DirectionCreated { direction_id, .. }
+        | CommandResult::DirectionUpdated { direction_id, .. } => Ok(direction_id),
+        other => bail!("the repository kernel answered a direction command with {other:?}"),
     }
 }
 
@@ -104,14 +113,36 @@ impl PlanningAdminPort for KernelRoutedPlanningAdmin {
         &self,
         request: PlanningAdminDirectionMutationRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
-        self.direct.upsert_direction(request)
+        if !self.has_repository_kernel() {
+            return self.direct.upsert_direction(request);
+        }
+        let command = PlanningAdminFacadeService::stored_direction_command(request)?;
+        let updated = matches!(command, StoredCommand::UpdateDirection { .. });
+        let direction_id = changed_direction_id(self.send(command)?)?;
+        self.direct.direction_upsert_outcome(&direction_id, updated)
     }
 
     fn delete_direction(
         &self,
         request: PlanningAdminDirectionDeleteRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
-        self.direct.delete_direction(request)
+        if !self.has_repository_kernel() {
+            return self.direct.delete_direction(request);
+        }
+        let command = PlanningAdminFacadeService::stored_direction_delete_command(&request)?;
+        match self.send(command)? {
+            CommandResult::DirectionDeleted {
+                direction_id,
+                removed_task_count,
+                default_retained,
+                ..
+            } => self.direct.direction_delete_outcome(
+                &direction_id,
+                removed_task_count,
+                default_retained,
+            ),
+            other => bail!("the repository kernel answered delete_direction with {other:?}"),
+        }
     }
 
     fn upsert_task(
@@ -123,7 +154,7 @@ impl PlanningAdminPort for KernelRoutedPlanningAdmin {
         }
         let command = PlanningAdminFacadeService::stored_task_command(request)?;
         let updated = matches!(command, StoredCommand::UpdateTask { .. });
-        let task_id = changed_task_id(self.send(command)?);
+        let task_id = changed_task_id(self.send(command)?)?;
         self.direct.task_upsert_outcome(&task_id, updated)
     }
 
@@ -135,7 +166,7 @@ impl PlanningAdminPort for KernelRoutedPlanningAdmin {
             return self.direct.delete_task(request);
         }
         let command = PlanningAdminFacadeService::stored_task_delete_command(&request)?;
-        let task_id = changed_task_id(self.send(command)?);
+        let task_id = changed_task_id(self.send(command)?)?;
         self.direct.task_delete_outcome(&task_id)
     }
 
@@ -358,5 +389,168 @@ mod tests {
             .unwrap_err();
         assert!(PlanningAdminMutationRefusal::find_in(&error).is_none());
         assert!(error.to_string().contains("was not found"), "{error:#}");
+    }
+
+    fn direction(
+        id: &str,
+        title: &str,
+        revision: Option<i64>,
+    ) -> PlanningAdminDirectionMutationRequest {
+        PlanningAdminDirectionMutationRequest {
+            id: id.to_string(),
+            title: title.to_string(),
+            summary: String::new(),
+            success_criteria_text: "the release is out".to_string(),
+            scope_hints_text: String::new(),
+            detail_doc_path: String::new(),
+            state: "active".to_string(),
+            expected_planning_revision: revision.map(|value| value.to_string()).unwrap_or_default(),
+        }
+    }
+
+    fn delete_direction(id: &str, revision: Option<i64>) -> PlanningAdminDirectionDeleteRequest {
+        PlanningAdminDirectionDeleteRequest {
+            id: id.to_string(),
+            expected_planning_revision: revision.map(|value| value.to_string()).unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn admin_direction_changes_are_kernel_commands_with_the_admin_caller() {
+        // plan 18 K4-9d-3: every direction change of the admin leaves `command_received` with `caller: akra-admin`.
+        let (workspace, admin) = admin("direction-records");
+        let created = admin
+            .upsert_direction(direction("", "Release", None))
+            .unwrap();
+        assert_eq!(created.notice, "direction `dir-release` added");
+
+        let mut child = task("", "Ship it", None);
+        child.direction_id = "dir-release".to_string();
+        let with_task = admin.upsert_task(child).unwrap();
+
+        let updated = admin
+            .upsert_direction(direction(
+                "dir-release",
+                "Release 2",
+                Some(with_task.management.planning_revision),
+            ))
+            .unwrap();
+        assert_eq!(updated.notice, "direction `dir-release` updated");
+        assert!(
+            updated
+                .management
+                .directions
+                .iter()
+                .any(|direction| direction.id == "dir-release" && direction.title == "Release 2")
+        );
+
+        let retained = admin
+            .delete_direction(delete_direction(
+                "general-workstream",
+                Some(updated.management.planning_revision),
+            ))
+            .unwrap();
+        assert_eq!(
+            retained.notice,
+            "default direction `general-workstream` is retained"
+        );
+
+        let deleted = admin
+            .delete_direction(delete_direction(
+                "dir-release",
+                Some(retained.management.planning_revision),
+            ))
+            .unwrap();
+        assert_eq!(
+            deleted.notice,
+            "direction `dir-release` deleted with 1 child tasks"
+        );
+        assert!(deleted.management.tasks.is_empty());
+
+        assert_eq!(
+            command_records(&workspace),
+            [
+                "received create_direction by akra-admin",
+                "completed Done",
+                "received create_task by akra-admin",
+                "completed Done",
+                "received update_direction by akra-admin",
+                "completed Done",
+                "received delete_direction by akra-admin",
+                "completed Done",
+                "received delete_direction by akra-admin",
+                "completed Done",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stale_admin_direction_form_is_refused_and_changes_nothing() {
+        let (workspace, admin) = admin("direction-stale");
+        let created = admin.upsert_direction(direction("", "Keep", None)).unwrap();
+        let stale = created.management.planning_revision - 1;
+
+        for error in [
+            admin
+                .upsert_direction(direction("dir-keep", "Changed", Some(stale)))
+                .unwrap_err(),
+            admin
+                .delete_direction(delete_direction("dir-keep", Some(stale)))
+                .unwrap_err(),
+        ] {
+            let refusal = PlanningAdminMutationRefusal::find_in(&error).expect("a refusal");
+            assert_eq!(refusal.reason, ReasonCode::PlanningRevisionStale);
+            assert!(refusal.message.contains("reload"), "{}", refusal.message);
+        }
+
+        // A form without the revision is not sent to the kernel.
+        for missing in [
+            admin
+                .upsert_direction(direction("dir-keep", "Changed", None))
+                .unwrap_err(),
+            admin
+                .delete_direction(delete_direction("dir-keep", None))
+                .unwrap_err(),
+        ] {
+            assert!(PlanningAdminMutationRefusal::find_in(&missing).is_none());
+            assert!(
+                missing
+                    .to_string()
+                    .contains("expected_planning_revision is required"),
+                "{missing:#}"
+            );
+        }
+
+        // An unknown id is a failure with its cause. It does not become a new direction.
+        let unknown = admin
+            .upsert_direction(direction(
+                "dir-typo",
+                "Typo",
+                Some(created.management.planning_revision),
+            ))
+            .unwrap_err();
+        assert!(PlanningAdminMutationRefusal::find_in(&unknown).is_none());
+        assert!(unknown.to_string().contains("was not found"), "{unknown:#}");
+
+        let management = admin.load_management_view().unwrap();
+        assert_eq!(
+            management.planning_revision,
+            created.management.planning_revision
+        );
+        assert!(
+            management
+                .directions
+                .iter()
+                .any(|direction| direction.id == "dir-keep" && direction.title == "Keep")
+        );
+        assert_eq!(
+            command_records(&workspace)[2..6],
+            [
+                "received update_direction by akra-admin",
+                "rejected planning_revision_stale",
+                "received delete_direction by akra-admin",
+                "rejected planning_revision_stale",
+            ]
+        );
     }
 }

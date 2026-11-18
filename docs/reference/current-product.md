@@ -79,8 +79,9 @@ kernel up. The automatic follow-up settings are kept: the kernel records them
 (`auto_follow_configured`) and the next Gateway kernel restores the last record.
 
 Stored commands change stored planning data only, so they run without a running kernel. Today
-they are `reset_planning`, `create_task`, `update_task`, and `delete_task` (`state: store` in the
-specification). The process that holds the repository lock runs them at once: the Gateway kernel,
+they are `reset_planning`, the task commands (`create_task`, `update_task`, `delete_task`), and
+the direction commands (`create_direction`, `update_direction`, `delete_direction`)
+(`state: store` in the specification). The process that holds the repository lock runs them at once: the Gateway kernel,
 or the command-only kernel when no Gateway runs or the running Gateway is an older version that
 does not know the command. The answer of `create_task`, `update_task`, and `delete_task` comes
 after the change: `result` (the task id and the new planning revision), `rejection`, or `failure`
@@ -92,7 +93,19 @@ change or parallel work holds the planning data. `akra kernel query planning` an
 store when no kernel runs, so a client can read the current revision. An object field goes as
 JSON text: `akra kernel planning create_task --task '{"title":"..."}' --json`.
 
-The admin sends its task changes as these commands. The task forms (`/admin/tasks/upsert`,
+The direction commands follow the same rules. `create_direction` makes the id from the title.
+`update_direction` replaces the whole direction (a missing summary becomes the title and a
+missing state becomes `active`) and fails when no direction has that id. `delete_direction`
+needs `confirm: true` and also deletes the tasks of the direction; its `result` has
+`removed_task_count` and `default_retained`. The default direction is kept
+(`default_retained: true`). A direction needs one success criterion or more.
+
+The admin sends its task and direction changes as these commands. The direction forms
+(`/admin/directions/upsert`, `/admin/directions/delete`, the same paths below `/admin/akra`)
+and the JSON routes (`/api/planning/directions`, `/api/planning/directions/delete`) make
+`create_direction`, `update_direction`, or `delete_direction` and answer like the task routes
+that follow. A direction update or delete needs `expected_planning_revision`. A direction
+request with an id is an update: it does not make a new direction with that id. The task forms (`/admin/tasks/upsert`,
 `/admin/tasks/delete`, the same paths below `/admin/akra`) and the JSON routes
 (`/api/planning/tasks`, `/api/planning/tasks/delete`) make `create_task`, `update_task`, or
 `delete_task`, and the record of the command has `caller: akra-admin`. The admin reads the page
@@ -105,8 +118,7 @@ notice and the current values. Another failure of these routes is a 500 that car
 (`{ "message" }`, or the tasks page with the cause as its notice). Two cases are not recorded:
 a folder that cannot have a repository kernel (a repository without a primary checkout, a
 parallel slot worktree) changes tasks directly, and a repository whose kernel a TUI holds runs
-the command without a record. The direction, file, and draft changes of the
-admin still run directly.
+the command without a record. The file and draft changes of the admin still run directly.
 
 The planning reset of the other entrances also goes to the repository kernel. `akra reset`, the
 admin reset (`/api/planning/reset`, `/admin/controls/reset`), and the Telegram `/reset` commands
