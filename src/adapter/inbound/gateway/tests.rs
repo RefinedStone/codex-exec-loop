@@ -226,12 +226,17 @@ async fn unavailable_upstream_closes_the_client_with_try_again_later() {
 }
 
 #[test]
-fn arguments_accept_only_help() {
+fn arguments_accept_help_and_desktop_browser_bridge() {
     assert_eq!(parse_args(&[]).unwrap(), GatewayCommand::Run);
     assert_eq!(
         parse_args(&["--help".to_string()]).unwrap(),
         GatewayCommand::Help
     );
+    assert_eq!(
+        parse_args(&["desktop-browser-bridge".to_string()]).unwrap(),
+        GatewayCommand::DesktopBrowserBridge
+    );
+    assert!(parse_args(&["desktop-browser-bridge".to_string(), "extra".to_string()]).is_err());
     let error = parse_args(&["--port".to_string()]).unwrap_err().to_string();
     assert!(error.contains("unsupported argument: --port"), "{error}");
 }

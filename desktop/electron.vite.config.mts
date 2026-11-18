@@ -8,7 +8,10 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: { index: resolve(import.meta.dirname, "src/main/index.ts") },
+        input: {
+          index: resolve(import.meta.dirname, "src/main/index.ts"),
+          browserMcp: resolve(import.meta.dirname, "src/browser-mcp/main.ts"),
+        },
       },
     },
   },

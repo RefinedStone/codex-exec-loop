@@ -10,7 +10,18 @@ interface OwnerView {
   view: WebContentsView;
   profileId: string;
   window: BrowserWindow;
+  visible: boolean;
+  generation: number;
 }
+
+export interface BrowserAgentView {
+  readonly contents: WebContents;
+  readonly profileId: string;
+  readonly visible: boolean;
+  readonly generation: number;
+}
+
+export type BrowserViewChange = "shown" | "hidden" | "closed" | "replaced";
 
 const hardenedSessions = new WeakSet<Session>();
 
@@ -37,6 +48,24 @@ function clampBounds(bounds: BrowserBounds, scale: number): Electron.Rectangle {
 
 export class BrowserPanelService {
   private readonly views = new Map<number, OwnerView>();
+  private readonly listeners = new Set<(ownerId: number, change: BrowserViewChange) => void>();
+  private generation = 0;
+
+  onViewChange(listener: (ownerId: number, change: BrowserViewChange) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  forAgent(ownerId: number): BrowserAgentView | null {
+    const entry = this.views.get(ownerId);
+    return entry && !entry.view.webContents.isDestroyed()
+      ? { contents: entry.view.webContents, profileId: entry.profileId, visible: entry.visible, generation: entry.generation }
+      : null;
+  }
+
+  private changed(ownerId: number, change: BrowserViewChange): void {
+    for (const listener of this.listeners) listener(ownerId, change);
+  }
 
   /** `onCreate` 는 브라우저 보기를 만들 때마다 부른다. main 이 오른쪽 클릭 메뉴를 건다. */
   constructor(private readonly onCreate: (contents: WebContents) => void = () => undefined) {}
@@ -45,7 +74,7 @@ export class BrowserPanelService {
   show(ownerId: number, window: BrowserWindow, profileId: string, bounds: BrowserBounds, url: string | null): BrowserState {
     let entry = this.views.get(ownerId);
     if (entry && entry.profileId !== profileId) {
-      this.close(ownerId);
+      this.close(ownerId, "replaced");
       entry = undefined;
     }
     if (!entry) {
@@ -53,6 +82,10 @@ export class BrowserPanelService {
     }
     entry.view.setBounds(clampBounds(bounds, window.webContents.getZoomFactor()));
     entry.view.setVisible(true);
+    if (!entry.visible) {
+      entry.visible = true;
+      this.changed(ownerId, "shown");
+    }
     if (url) {
       this.navigate(ownerId, url);
     }
@@ -65,7 +98,11 @@ export class BrowserPanelService {
   }
 
   hide(ownerId: number): void {
-    this.views.get(ownerId)?.view.setVisible(false);
+    const entry = this.views.get(ownerId);
+    if (!entry) return;
+    entry.visible = false;
+    this.changed(ownerId, "hidden");
+    entry.view.setVisible(false);
   }
 
   /** 주소창 입력을 연다. 열 수 없는 주소이면 false 이다. */
@@ -87,10 +124,11 @@ export class BrowserPanelService {
   }
 
   /** 창이 닫히면 그 창의 브라우저 보기를 닫는다. WebContentsView 의 webContents 는 직접 닫아야 한다. */
-  close(ownerId: number): void {
+  close(ownerId: number, change: "closed" | "replaced" = "closed"): void {
     const entry = this.views.get(ownerId);
     if (!entry) return;
     this.views.delete(ownerId);
+    this.changed(ownerId, change);
     if (!entry.window.isDestroyed()) entry.window.contentView.removeChildView(entry.view);
     if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
   }
@@ -101,7 +139,7 @@ export class BrowserPanelService {
     const view = new WebContentsView({
       webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
-    const entry: OwnerView = { view, profileId, window };
+    const entry: OwnerView = { view, profileId, window, visible: false, generation: ++this.generation };
     this.views.set(ownerId, entry);
     window.contentView.addChildView(view);
 

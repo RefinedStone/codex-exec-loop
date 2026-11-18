@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, powerSaveBlocker, safeStorage, screen, shell, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
@@ -14,6 +14,9 @@ import { spawn as spawnPty } from "node-pty";
 
 import { loadAppSettings, saveAppSettings } from "./appSettings";
 import { BrowserPanelService } from "./browserPanel";
+import { BrowserAgentService } from "./browserAgentService";
+import { BrowserAgentTransport } from "./browserAgentTransport";
+import { BrowserAutomation } from "./browserAgent/automation";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { contextMenuItems } from "./contextMenuItems";
 import { isDotsCloudEnabled, setDotsCloudEnabled } from "./dotsSettings";
@@ -37,6 +40,24 @@ const remoteConnections = new Map<string, GatewayConnection>();
 const remoteKey = (contentsId: number, host: string) => `${contentsId}:${host}`;
 const terminals = new TerminalService(spawnPty);
 const browsers = new BrowserPanelService(installContextMenu);
+const browserAgents = new BrowserAgentService({
+  command: process.execPath,
+  args: [join(__dirname, "browserMcp.js")],
+  view: (owner) => {
+    const view = browsers.forAgent(owner);
+    return view ? { generation: view.generation, visible: view.visible, profileId: view.profileId, url: view.contents.getURL(), title: view.contents.getTitle() } : null;
+  },
+  automation: (owner, onPause) => {
+    const view = browsers.forAgent(owner);
+    if (!view?.visible) throw new Error("브라우저 패널을 먼저 여세요.");
+    return new BrowserAutomation(view.contents, onPause);
+  },
+  onViewChange: (listener) => browsers.onViewChange(listener),
+  notify: (owner, state) => {
+    const window = BrowserWindow.getAllWindows().find((window) => window.webContents.id === owner);
+    if (window && !window.webContents.isDestroyed()) window.webContents.send(IPC_CHANNELS.browserAgentState, state);
+  },
+}, (callbacks) => new BrowserAgentTransport({ command: resolveGatewayExecutable(repositoryRoot()), ...callbacks }));
 const browserSettingsPath = () => join(app.getPath("userData"), "browser-settings.json");
 // userData 는 위에서 정한 뒤이다. 토큰은 safeStorage 로 암호화한다.
 const jira = new JiraService(app.getPath("userData"), safeStorage);
@@ -368,7 +389,10 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
 });
 
 // renderer 가 상태 수신 함수를 등록한 뒤 보낸다. 화면을 다시 불러오면 다시 오고, 그때 접속을 새로 연다.
-ipcMain.on(IPC_CHANNELS.ready, (event) => attachGatewayConnection(event.sender));
+ipcMain.on(IPC_CHANNELS.ready, (event) => {
+  browsers.close(event.sender.id);
+  attachGatewayConnection(event.sender);
+});
 
 // 원격 호스트의 접속은 renderer 가 열라고 할 때만 연다 (plan 25 §3.3). 사용자가 켠 뒤에만 renderer 가 요청한다.
 ipcMain.on(IPC_CHANNELS.remoteOpen, (event, host: unknown) => {
@@ -472,10 +496,32 @@ ipcMain.handle(IPC_CHANNELS.browserShow, (event, profileId: unknown, bounds: unk
 });
 ipcMain.on(IPC_CHANNELS.browserBounds, (event, bounds: unknown) => browsers.setBounds(event.sender.id, bounds as BrowserBounds));
 ipcMain.on(IPC_CHANNELS.browserHide, (event) => browsers.hide(event.sender.id));
-ipcMain.handle(IPC_CHANNELS.browserNavigate, (event, input: unknown) => browsers.navigate(event.sender.id, input));
-ipcMain.on(IPC_CHANNELS.browserCommand, (event, command: unknown) => browsers.command(event.sender.id, command));
+ipcMain.handle(IPC_CHANNELS.browserNavigate, (event, input: unknown) => {
+  browserAgents.pause(event.sender.id, "user_navigation");
+  return browsers.navigate(event.sender.id, input);
+});
+ipcMain.on(IPC_CHANNELS.browserCommand, (event, command: unknown) => {
+  browserAgents.pause(event.sender.id, "user_navigation");
+  browsers.command(event.sender.id, command);
+});
 ipcMain.handle(IPC_CHANNELS.browserLoadSettings, () => loadSettings(browserSettingsPath()));
 ipcMain.handle(IPC_CHANNELS.browserSaveSettings, (_event, settings: unknown) => saveSettings(browserSettingsPath(), settings));
+
+function browserAgentOwner(event: IpcMainInvokeEvent): number {
+  if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) throw new Error("브라우저 제어 요청을 허용하지 않습니다.");
+  return event.sender.id;
+}
+function browserIdentifier(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 256) throw new Error("잘못된 브라우저 식별자입니다.");
+  return value;
+}
+ipcMain.handle(IPC_CHANNELS.browserAgentPrepare, (event) => browserAgents.prepare(browserAgentOwner(event)));
+ipcMain.handle(IPC_CHANNELS.browserAgentBind, (event, id: unknown, thread: unknown) => browserAgents.bind(browserAgentOwner(event), browserIdentifier(id), browserIdentifier(thread)));
+ipcMain.handle(IPC_CHANNELS.browserAgentRelease, (event, id: unknown) => browserAgents.release(browserAgentOwner(event), browserIdentifier(id)));
+ipcMain.handle(IPC_CHANNELS.browserAgentActiveThread, (event, thread: unknown) => browserAgents.setActiveThread(browserAgentOwner(event), thread === null ? null : browserIdentifier(thread)));
+ipcMain.handle(IPC_CHANNELS.browserAgentPause, (event) => browserAgents.pause(browserAgentOwner(event)));
+ipcMain.handle(IPC_CHANNELS.browserAgentResume, (event) => browserAgents.resume(browserAgentOwner(event)));
+ipcMain.handle(IPC_CHANNELS.browserAgentStatus, (event) => browserAgents.status(browserAgentOwner(event)));
 
 ipcMain.handle(IPC_CHANNELS.githubSummary, () => readGitHubSummary());
 ipcMain.handle(IPC_CHANNELS.githubReviewPrompt, (_event, url: unknown) => readReviewPrompt(url));
@@ -663,7 +709,15 @@ void app.whenReady().then(() => {
 });
 
 // 셸은 앱과 함께 끝난다. Gateway 데몬과 다르다.
-app.on("before-quit", () => terminals.closeAll());
+let closingAgents = false;
+app.on("before-quit", (event) => {
+  terminals.closeAll();
+  if (closingAgents) return;
+  event.preventDefault();
+  closingAgents = true;
+  void browserAgents.close().catch((error: unknown) => console.error("Browser bridge shutdown failed", error instanceof Error ? error.message : "unknown error"))
+    .finally(() => app.quit());
+});
 
 app.on("window-all-closed", () => {
   // Gateway 데몬은 앱과 별개로 계속 실행된다 (D-06).

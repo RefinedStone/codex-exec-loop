@@ -5,6 +5,9 @@
 // 입력(새 턴, steer, 중단, 새 스레드)과 승인 요청 응답도 여기서 보낸다 (P3 §6.2, §6.4). 턴을 만드는 요청은
 // 사용자가 보낸 메시지에서만 나간다.
 import type { AkraBridge, RemoteHostBridge } from "../../shared/bridge";
+import { BROWSER_TOOL_NAMES, type BrowserAgentBridge } from "../../shared/browserAgent";
+import type { ListMcpServerStatusResponse } from "../../shared/protocol/generated/v2/ListMcpServerStatusResponse";
+import type { ListMcpServerStatusParams } from "../../shared/protocol/generated/v2/ListMcpServerStatusParams";
 import type { InitializeParams } from "../../shared/protocol/generated/InitializeParams";
 import type { Thread } from "../../shared/protocol/generated/v2/Thread";
 import type { ThreadListResponse } from "../../shared/protocol/generated/v2/ThreadListResponse";
@@ -297,6 +300,50 @@ export class DesktopSession {
     this.store.setTranscript(transcript);
     this.store.addThreadToFolder(response.thread.cwd, workspaceThread(response.thread, transcript.title));
     return response.thread.id;
+  }
+
+  async startBrowserThread(cwd: string, agent: BrowserAgentBridge): Promise<string> {
+    if (this.readOnly) throw new Error("브라우저 대화는 로컬 호스트에서만 만들 수 있습니다.");
+    const registration = await agent.prepare();
+    try {
+      const response = await this.client.request<ThreadStartResponse>("thread/start", {
+        cwd,
+        config: {
+          "mcp_servers.akra_browser.command": registration.command,
+          "mcp_servers.akra_browser.args": [...registration.args],
+          "mcp_servers.akra_browser.env.ELECTRON_RUN_AS_NODE": "1",
+          "mcp_servers.akra_browser.env.AKRA_BROWSER_SESSION_FILE": registration.sessionFile,
+        },
+      });
+      const threadId = response.thread.id;
+      await agent.setActiveThread(threadId);
+      await agent.bind(registration.registrationId, threadId);
+      let cursor: string | null = null;
+      let verified = false;
+      do {
+        const status: ListMcpServerStatusResponse = await this.client.request("mcpServerStatus/list", {
+          threadId, detail: "toolsAndAuthOnly", ...(cursor ? { cursor } : {}),
+        } satisfies ListMcpServerStatusParams);
+        const browser = status.data.find((server) => server.name === "akra_browser");
+        if (browser) {
+          verified = browser.runtimeStatus === "connected" && !browser.toolsError
+            && BROWSER_TOOL_NAMES.every((name) => browser.tools[name] !== undefined);
+          break;
+        }
+        cursor = status.nextCursor;
+      } while (cursor);
+      if (!verified) throw new Error("브라우저 도구를 확인할 수 없습니다. 새 브라우저 대화를 만드세요.");
+      const transcript = transcriptFromThread(response.thread);
+      this.batcher.clear();
+      this.store.setOpenThread(threadId);
+      this.store.setTranscript(transcript);
+      this.store.addThreadToFolder(response.thread.cwd, workspaceThread(response.thread, transcript.title));
+      return threadId;
+    } catch (error) {
+      await agent.release(registration.registrationId);
+      await agent.setActiveThread(this.store.getOpenThreadId());
+      throw error;
+    }
   }
 
   /** 승인 요청에 답한다. 다른 창이 먼저 답했으면 이미 닫혀 있으므로 아무것도 하지 않는다. */

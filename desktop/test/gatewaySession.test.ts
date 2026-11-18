@@ -88,6 +88,16 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
       onExit: () => () => undefined,
     },
     browser: {
+      agent: {
+        prepare: async () => { throw new Error("not used"); },
+        bind: async () => undefined,
+        release: async () => undefined,
+        setActiveThread: async () => undefined,
+        pause: async () => undefined,
+        resume: async () => undefined,
+        status: async () => ({ phase: "idle", threadId: null, lastAction: null, reason: null, attached: false }),
+        onState: () => () => undefined,
+      },
       show: async () => {
         throw new Error("not used");
       },

@@ -1,8 +1,9 @@
 // 입력과 승인 응답이 어떤 요청을 보내는지 시험한다. 서버 역할은 손으로 쓴 응답으로 대신한다 (턴 없음).
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../src/shared/settings";
-import { describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
+import { BROWSER_TOOL_NAMES } from "../src/shared/browserAgent";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, type SessionStore } from "../src/renderer/session/desktopStore";
@@ -15,13 +16,18 @@ interface Sent {
   result?: unknown;
 }
 
-function harness() {
+function harness(readOnly = false) {
   const sent: Sent[] = [];
+  const requestListeners = new Set<(message: Sent) => void>();
   let readyCalls = 0;
   const messageListeners = new Set<(text: string) => void>();
   const stateListeners = new Set<(state: ConnectionState) => void>();
   const bridge: AkraBridge = {
-    send: (text) => sent.push(JSON.parse(text) as Sent),
+    send: (text) => {
+      const message = JSON.parse(text) as Sent;
+      sent.push(message);
+      requestListeners.forEach((listener) => listener(message));
+    },
     onMessage: (listener) => (messageListeners.add(listener), () => messageListeners.delete(listener)),
     onConnectionState: (listener) => (stateListeners.add(listener), () => stateListeners.delete(listener)),
     ready: () => {
@@ -47,6 +53,16 @@ function harness() {
       onExit: () => () => undefined,
     },
     browser: {
+      agent: {
+        prepare: vi.fn(async () => ({ registrationId: "registration-1", sessionFile: "/private/browser.json", command: "/app/electron", args: ["/app/browser-mcp.js"] })),
+        bind: vi.fn(async () => undefined),
+        release: vi.fn(async () => undefined),
+        setActiveThread: vi.fn(async () => undefined),
+        pause: async () => undefined,
+        resume: async () => undefined,
+        status: async () => ({ phase: "idle", threadId: null, lastAction: null, reason: null, attached: false }),
+        onState: () => () => undefined,
+      },
       show: async () => {
         throw new Error("not used");
       },
@@ -119,7 +135,7 @@ function harness() {
     applyDotLive: (live) => Object.assign(state, { lastDotLive: live }),
     getKernel: () => state.kernel ?? EMPTY_KERNEL_VIEW,
   };
-  const session = new DesktopSession(bridge, store, "test", (callback) => callback());
+  const session = new DesktopSession(bridge, store, "test", (callback) => callback(), readOnly);
   session.start();
   const receive = (message: object) => messageListeners.forEach((listener) => listener(JSON.stringify(message)));
   /** 마지막으로 보낸 요청에 결과로 답한다. */
@@ -135,7 +151,15 @@ function harness() {
     const request = [...sent].reverse().find((message) => message.method === method && message.id !== undefined);
     receive({ jsonrpc: "2.0", id: request?.id, result });
   };
-  return { session, sent, state, receive, reply, replyTo, openWith, emitState, readyCalls: () => readyCalls };
+  const nextRequest = (method: string) => new Promise<Sent>((resolve) => {
+    const listener = (message: Sent) => {
+      if (message.method !== method) return;
+      requestListeners.delete(listener);
+      resolve(message);
+    };
+    requestListeners.add(listener);
+  });
+  return { session, sent, state, receive, reply, replyTo, openWith, emitState, nextRequest, agent: bridge.browser.agent, readyCalls: () => readyCalls };
 }
 
 const transcript = (status: "inProgress" | "completed"): Transcript => ({
@@ -192,6 +216,109 @@ describe("sending input", () => {
     await pending;
     expect(state.openThreadId).toBe("new-thread");
     expect(state.folders?.[0]?.threads[0]?.id).toBe("new-thread");
+  });
+});
+
+describe("browser conversations", () => {
+  const thread = { id: "browser-thread", cwd: "/work/example-app", name: null, preview: "", status: { type: "idle" }, turns: [], updatedAt: 1 };
+  const browserStatus = {
+    name: "akra_browser",
+    runtimeStatus: "connected",
+    toolsError: null,
+    tools: Object.fromEntries(BROWSER_TOOL_NAMES.map((name) => [name, { name }])),
+  };
+
+  it("rejects remote hosts before preparing or starting a browser thread", async () => {
+    const { session, sent, agent } = harness(true);
+    await expect(session.startBrowserThread("/work/example-app", agent)).rejects.toThrow();
+    expect(agent.prepare).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    session.stop();
+  });
+
+  it("does not start a thread if preparation fails", async () => {
+    const { session, sent, agent } = harness();
+    vi.mocked(agent.prepare).mockRejectedValueOnce(new Error("prepare failed"));
+    await expect(session.startBrowserThread("/work/example-app", agent)).rejects.toThrow("prepare failed");
+    expect(agent.release).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    session.stop();
+  });
+
+  it("prepares, starts, selects, binds and verifies tools before displaying the thread", async () => {
+    const { session, sent, state, reply, nextRequest, agent } = harness();
+    const started = nextRequest("thread/start");
+    const pending = session.startBrowserThread("/work/example-app", agent);
+    expect(await started).toMatchObject({
+      params: { cwd: "/work/example-app", config: {
+        "mcp_servers.akra_browser.command": "/app/electron",
+        "mcp_servers.akra_browser.args": ["/app/browser-mcp.js"],
+        "mcp_servers.akra_browser.env.ELECTRON_RUN_AS_NODE": "1",
+        "mcp_servers.akra_browser.env.AKRA_BROWSER_SESSION_FILE": "/private/browser.json",
+      } },
+    });
+    expect(agent.prepare).toHaveBeenCalledOnce();
+    expect(state.openThreadId).toBeNull();
+    const listed = nextRequest("mcpServerStatus/list");
+    reply({ thread });
+    expect((await listed).params).toEqual({ threadId: thread.id, detail: "toolsAndAuthOnly" });
+    expect(agent.setActiveThread).toHaveBeenCalledWith(thread.id);
+    expect(agent.bind).toHaveBeenCalledWith("registration-1", thread.id);
+    expect(vi.mocked(agent.setActiveThread).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(agent.bind).mock.invocationCallOrder[0]!);
+    expect(state.openThreadId).toBeNull();
+    reply({ data: [browserStatus], nextCursor: null });
+    expect(await pending).toBe(thread.id);
+    expect(state.openThreadId).toBe(thread.id);
+    expect(state.transcript?.threadId).toBe(thread.id);
+    expect(agent.release).not.toHaveBeenCalled();
+    expect(sent.map((message) => message.method)).toEqual(["thread/start", "mcpServerStatus/list"]);
+    session.stop();
+  });
+
+  it.each(["thread/start", "selection", "bind", "mcpServerStatus/list", "missing tools", "disconnected runtime"] as const)("releases the registration after %s fails", async (failure) => {
+    const { session, state, reply, receive, nextRequest, agent, openWith } = harness();
+    openWith(transcript("completed"));
+    if (failure === "bind") vi.mocked(agent.bind).mockRejectedValueOnce(new Error("bind failed"));
+    if (failure === "selection") vi.mocked(agent.setActiveThread).mockRejectedValueOnce(new Error("selection failed"));
+    const started = nextRequest("thread/start");
+    const pending = session.startBrowserThread("/work/example-app", agent);
+    const rejected = expect(pending).rejects.toThrow();
+    const request = await started;
+    if (failure === "thread/start") {
+      receive({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "start failed" } });
+    } else {
+      const listed = failure !== "bind" && failure !== "selection" ? nextRequest("mcpServerStatus/list") : null;
+      reply({ thread });
+      if (listed) {
+        const statusRequest = await listed;
+        if (failure === "mcpServerStatus/list") {
+          receive({ jsonrpc: "2.0", id: statusRequest.id, error: { code: -32000, message: "status failed" } });
+        } else {
+          reply({ data: [{ ...browserStatus, ...(failure === "missing tools" ? { tools: {} } : { runtimeStatus: "failed" }) }], nextCursor: null });
+        }
+      }
+    }
+    await rejected;
+    expect(agent.release).toHaveBeenCalledExactlyOnceWith("registration-1");
+    expect(state.openThreadId).toBe("t1");
+    expect(agent.setActiveThread).toHaveBeenLastCalledWith("t1");
+    session.stop();
+  });
+
+  it("reads thread-scoped status pages until it finds the browser server", async () => {
+    const { session, reply, nextRequest, agent } = harness();
+    const started = nextRequest("thread/start");
+    const pending = session.startBrowserThread("/work/example-app", agent);
+    await started;
+    const listed = nextRequest("mcpServerStatus/list");
+    reply({ thread });
+    await listed;
+    const secondPage = nextRequest("mcpServerStatus/list");
+    reply({ data: [], nextCursor: "next-page" });
+    expect((await secondPage).params).toEqual({ threadId: thread.id, detail: "toolsAndAuthOnly", cursor: "next-page" });
+    reply({ data: [browserStatus], nextCursor: null });
+    await pending;
+    session.stop();
   });
 });
 

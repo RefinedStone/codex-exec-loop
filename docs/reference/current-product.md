@@ -711,6 +711,18 @@ The Gateway records the external documents that a thread mentions, without a mod
   adds a fresh UUID idempotency key to each mutation and leaves read commands keyless. It does not replay
   requests after disconnect. The panel currently sends only the read command `refresh_planning`;
   conversation and approval actions still use the app-server path.
+  The browser panel can start a new local browser conversation. It verifies 16
+  thread-scoped MCP tools before opening the conversation. The embedded view supports
+  navigation, bounded accessibility snapshots and refs, input, same-origin frames,
+  waits, console/network diagnostics, and JPEG captures up to 1280 pixels with duplicate
+  suppression. It does not expose arbitrary JavaScript or CDP commands. Human input,
+  hiding the panel, and changing the selected thread pause control. Resume is explicit.
+  `browser_handoff` waits for that resume. Cold sessions and remote threads are not
+  silently attached. A private `akra-gateway desktop-browser-bridge` process owns
+  authenticated registrations and removes their secret sidecars on shutdown. The
+  renderer receives a sidecar path, not its token. Screenshots are not saved by default.
+  Browser diagnostics and actions live in `desktop/src/main/browserAgent/`; the thin
+  MCP executable lives in `desktop/src/browser-mcp/`.
   Codex allows one writer process per thread. When another Codex process (for example the Codex app) holds the
   thread's writer lock, `thread/resume` fails with `already has an active writer`. Desktop then opens the thread
   read-only with `thread/read` and `thread/turns/list`, shows a banner, and disables the composer. The banner's

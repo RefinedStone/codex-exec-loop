@@ -3,12 +3,17 @@
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { BrowserBridge, BrowserSettings, BrowserState } from "../../shared/bridge";
+import type { BrowserAgentState } from "../../shared/browserAgent";
 import { profileIdFromName } from "./profileId";
 
 type Editing = { kind: "profile" | "preset"; value: string } | null;
 
 
-export function BrowserPanel({ bridge }: { bridge: BrowserBridge }) {
+export function BrowserPanel({ bridge, threadId, onStartConversation }: {
+  bridge: BrowserBridge;
+  threadId: string | null;
+  onStartConversation(): Promise<void>;
+}) {
   const slotRef = useRef<HTMLDivElement>(null);
   const [settings, setSettings] = useState<BrowserSettings | null>(null);
   const [profileId, setProfileId] = useState("default");
@@ -17,6 +22,44 @@ export function BrowserPanel({ bridge }: { bridge: BrowserBridge }) {
   const [editingAddress, setEditingAddress] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
+  const [agent, setAgent] = useState<BrowserAgentState | null>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
+
+  useEffect(() => {
+    let current = true;
+    let received = false;
+    const unsubscribe = bridge.agent.onState((next) => {
+      received = true;
+      if (current) setAgent(next);
+    });
+    void bridge.agent.status().then((next) => {
+      if (current && !received) setAgent(next);
+    }, (error: unknown) => {
+      if (current) setMessage(error instanceof Error ? error.message : String(error));
+    });
+    return () => {
+      current = false;
+      unsubscribe();
+    };
+  }, [bridge, threadId]);
+
+  const agentAction = async (action: () => Promise<void>) => {
+    setAgentBusy(true);
+    setMessage(null);
+    try {
+      await action();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+  const matchingAgent = threadId !== null && agent?.threadId === threadId;
+  const canPause = matchingAgent && (agent?.phase === "active" || agent?.phase === "handoff");
+  const canResume = matchingAgent && (agent?.phase === "paused" || agent?.phase === "handoff");
+  const agentLabel = !agent ? "브라우저 연결 확인 중" : !matchingAgent && threadId
+    ? "이 대화에서 브라우저 제어를 사용할 수 없습니다."
+    : ({ idle: "직접 제어", active: "에이전트 제어", paused: "일시 정지", handoff: "사용자 입력 대기", unavailable: "브라우저 제어 사용 불가" } as const)[agent.phase];
 
   const bounds = () => {
     const rect = slotRef.current?.getBoundingClientRect();
@@ -162,6 +205,19 @@ export function BrowserPanel({ bridge }: { bridge: BrowserBridge }) {
           data-testid="browser-address"
         />
       </form>
+      <div className="browser-agent" aria-busy={agentBusy}>
+        <div className="browser-toolbar">
+          <span className="browser-agent-status" role="status" data-testid="browser-agent-status">{agentLabel}</span>
+          {canPause && <button type="button" disabled={agentBusy} onClick={() => void agentAction(() => bridge.agent.pause())} data-testid="browser-agent-pause">일시 정지</button>}
+          {canResume
+            ? <button type="button" disabled={agentBusy} onClick={() => void agentAction(() => bridge.agent.resume())} data-testid="browser-agent-resume">제어 재개</button>
+            : !canPause && <button type="button" disabled={agentBusy || !settings || !agent} onClick={() => void agentAction(onStartConversation)} data-testid="browser-agent-new">새 브라우저 대화</button>}
+        </div>
+        {(matchingAgent || agent?.phase === "unavailable") && (agent?.reason || agent?.lastAction) && <div className="browser-message browser-agent-detail">
+          {agent.reason && <div>{agent.reason}</div>}
+          {agent.lastAction && <div>마지막 동작: {agent.lastAction}</div>}
+        </div>}
+      </div>
       {message && (
         <div className="error browser-message" data-testid="browser-message">
           {message}

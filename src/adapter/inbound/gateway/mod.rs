@@ -58,6 +58,7 @@ const KERNEL_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 enum GatewayCommand {
     Run,
     Help,
+    DesktopBrowserBridge,
 }
 
 pub async fn run_from_env() -> Result<()> {
@@ -65,9 +66,15 @@ pub async fn run_from_env() -> Result<()> {
 }
 
 pub async fn run_with_args(args: Vec<String>) -> Result<()> {
-    if parse_args(&args)? == GatewayCommand::Help {
-        print!("{USAGE}");
-        return Ok(());
+    match parse_args(&args)? {
+        GatewayCommand::Help => {
+            print!("{USAGE}");
+            return Ok(());
+        }
+        GatewayCommand::DesktopBrowserBridge => {
+            return super::desktop_browser_bridge::run().await;
+        }
+        GatewayCommand::Run => {}
     }
     let akra_home = crate::configuration::akra_home_dir()?;
     let run_dir = akra_home.join(crate::gateway_endpoint::RUN_DIRECTORY_NAME);
@@ -138,6 +145,9 @@ async fn stop_backend(
 fn parse_args(args: &[String]) -> Result<GatewayCommand> {
     match args {
         [] => Ok(GatewayCommand::Run),
+        [command] if command == "desktop-browser-bridge" => {
+            Ok(GatewayCommand::DesktopBrowserBridge)
+        }
         [flag] if flag == "-h" || flag == "--help" => Ok(GatewayCommand::Help),
         [unsupported, ..] => bail!("unsupported argument: {unsupported}\n\n{USAGE}"),
     }

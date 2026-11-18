@@ -490,6 +490,10 @@ export function App() {
   // 확인이 실패하면 (이전 Gateway, 서비스에 닿지 않음) 목록을 그대로 둔다.
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const openThreadId = useDesktopStore((state) => state.openThreadId);
+  const browserThreadId = view === "thread" ? openThreadId : null;
+  useEffect(() => {
+    void window.akra.browser.agent.setActiveThread(browserThreadId).catch((error: unknown) => toast(errorText(error)));
+  }, [browserThreadId]);
   const turnInProgress = useDesktopStore((state) => isTurnInProgress(state.transcript));
   const [documents, setDocuments] = useState<ThreadDocumentsState>({ phase: "idle" });
   const [documentsRefresh, setDocumentsRefresh] = useState(0);
@@ -574,7 +578,13 @@ export function App() {
               {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)} />}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} />}
-              {panel === "browser" && <BrowserPanel bridge={window.akra.browser} />}
+              {panel === "browser" && <BrowserPanel bridge={window.akra.browser} threadId={browserThreadId} onStartConversation={async () => {
+                const current = session.current;
+                const cwd = openCwd ?? useUiStore.getState().homeCwd ?? (await window.akra.chooseFolder());
+                if (!cwd || !current) return;
+                const threadId = await current.startBrowserThread(cwd, window.akra.browser.agent);
+                visit({ view: "thread", threadId });
+              }} />}
               {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} />}
               {panel === "docs" && <DocumentsPanel state={documents} onRefresh={() => setDocumentsRefresh((count) => count + 1)} onOpenChanged={markDocumentRead} />}
             </RightPanel>
