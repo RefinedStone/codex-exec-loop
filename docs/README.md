@@ -35,6 +35,7 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
 The following content is not implementation truth:
 
+- [plan/26-akra-desktop-usability.md](plan/26-akra-desktop-usability.md): proposed: Akra Desktop usability gaps against the Codex app, Orca, and OmO Desktop (zoom, back and forward, context menus, window restore, notifications, composer, thread list) and the order to close them (Korean)
 - [plan/24-akra-evidence-harness.md](plan/24-akra-evidence-harness.md): proposed: a task carries acceptance criteria, a criterion passes only with an evidence file that the kernel records against the code tree, unmet criteria block delivery, and Akra Desktop shows the criteria and the evidence (Korean)
 - [plan/25-akra-cloud-agent-host.md](plan/25-akra-cloud-agent-host.md): proposed: the Gateway relays more than one app-server host, so Akra Desktop can read and message a cloud agent; it starts only when an official connection path exists (Korean)
 - [plan/23-akra-attention-items.md](plan/23-akra-attention-items.md): proposed: the kernel decides one list of attention items (thread, task, pull request, repository) with a closed cause list; the sidebar groups, the reason line, and the completion card read it (Korean)
