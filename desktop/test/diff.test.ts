@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { diffFileFromChange, parseGitDiff, totalCounts, turnDiffFiles } from "../src/renderer/conversation/diff";
+import { diffFileFromChange, parseGitDiff, patchText, totalCounts, turnDiffFiles } from "../src/renderer/conversation/diff";
+import { bundledLanguage, bundledLanguages } from "../src/renderer/conversation/diffLanguages";
 import { applyNotification, type Transcript } from "../src/renderer/conversation/transcript";
 import type { ThreadItem } from "../src/shared/protocol/generated/v2/ThreadItem";
 
@@ -144,5 +145,48 @@ describe("turn changes", () => {
     });
     const item = updated.turns[0]!.items[0]!;
     expect(item.type === "fileChange" && item.changes).toEqual(changes);
+  });
+});
+
+describe("patch text for the diff view (P-12)", () => {
+  it("puts a git file header before the hunks of an update, with the move path", () => {
+    const file = diffFileFromChange({ path: "a.ts", kind: { type: "update", move_path: "b.ts" }, diff: "@@ -1,2 +1,2 @@\n keep\n-old\n+new\n\\ No newline at end of file\n" });
+    expect(patchText(file)).toBe(
+      "diff --git a/a.ts b/b.ts\n--- a/a.ts\n+++ b/b.ts\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n\\ No newline at end of file\n",
+    );
+  });
+
+  it("makes one whole-file hunk for an added and a deleted file", () => {
+    expect(patchText(diffFileFromChange({ path: "n.txt", kind: { type: "add" }, diff: "one\ntwo\n" }))).toBe(
+      "diff --git a/n.txt b/n.txt\nnew file mode 100644\n--- /dev/null\n+++ b/n.txt\n@@ -0,0 +1,2 @@\n+one\n+two\n",
+    );
+    expect(patchText(diffFileFromChange({ path: "d.txt", kind: { type: "delete" }, diff: "gone\n" }))).toBe(
+      "diff --git a/d.txt b/d.txt\ndeleted file mode 100644\n--- a/d.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-gone\n",
+    );
+  });
+
+  it("keeps the hunks of a file from a git diff", () => {
+    const [file] = parseGitDiff("diff --git a/x.rs b/x.rs\nindex 1..2 100644\n--- a/x.rs\n+++ b/x.rs\n@@ -3 +3 @@ fn x\n-a\n+b\n");
+    expect(patchText(file!)).toBe("diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -3 +3 @@ fn x\n-a\n+b\n");
+  });
+
+  it("is null when the lines cannot be a numbered patch, so the plain lines show", () => {
+    // 줄 단위 변경이 없다.
+    expect(patchText(diffFileFromChange({ path: "a.ts", kind: { type: "update", move_path: null }, diff: "" }))).toBeNull();
+    // 덩어리 머리에 줄 번호가 없다.
+    expect(patchText(diffFileFromChange({ path: "a.ts", kind: { type: "update", move_path: null }, diff: "@@\n-a\n+b\n" }))).toBeNull();
+    // 덩어리 머리가 없는 수정이다.
+    expect(patchText(diffFileFromChange({ path: "a.ts", kind: { type: "update", move_path: null }, diff: "-a\n+b\n" }))).toBeNull();
+  });
+});
+
+describe("languages with syntax colours (P-12)", () => {
+  it("bundles twenty languages and maps the other names to plain text", () => {
+    expect(Object.keys(bundledLanguages)).toHaveLength(20);
+    expect(bundledLanguage("rust")).toBe("rust");
+    expect(bundledLanguage("yml")).toBe("yaml");
+    expect(bundledLanguage("zsh")).toBe("shellscript");
+    expect(bundledLanguage("swift")).toBe("text");
+    expect(bundledLanguage("toString")).toBe("text");
   });
 });

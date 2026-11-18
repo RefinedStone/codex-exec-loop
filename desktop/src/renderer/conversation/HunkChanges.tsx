@@ -5,7 +5,7 @@ import type { GitHunkAction, GitHunkDiff } from "../../shared/gitHunks";
 import { toast } from "../session/uiStore";
 import type { ActionLock } from "./BranchCommits";
 import { diffFileFromChange } from "./diff";
-import { DiffLines } from "./DiffView";
+import { DiffBody } from "./DiffView";
 
 type HunkState = { phase: "loading" } | { phase: "loaded"; diff: GitHunkDiff } | { phase: "failed"; message: string };
 type HunkAccess = Pick<AkraBridge, "gitHunks" | "gitHunkAction">;
@@ -62,7 +62,7 @@ export function HunkChanges({
               이 부분 버리기
             </button>
           </header>
-          <DiffLines lines={diffFileFromChange({ path, kind: { type: "update", move_path: null }, diff: hunk.text }).lines} />
+          <DiffBody file={diffFileFromChange({ path, kind: { type: "update", move_path: null }, diff: hunk.text })} />
         </section>
       ))}
       <details className="diff-file">

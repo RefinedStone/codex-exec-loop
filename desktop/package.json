@@ -20,6 +20,8 @@
     "postinstall": "node scripts/fix-pty-permissions.mjs"
   },
   "dependencies": {
+    "@pierre/diffs": "1.6.4",
+    "@shikijs/langs": "4.6.0",
     "node-pty": "1.1.0",
     "ws": "8.22.1"
   },

@@ -7,7 +7,7 @@
 - 목적: Akra Desktop 의 diff 표시와 이후 파일 편집에 쓸 엔진을 고른다. 지금은 직접 만든 unified diff
   표시(`desktop/src/renderer/conversation/DiffView.tsx`)를 쓴다 ([R1](../roadmap/R1-change-review.md)).
 - 출처: npm 레지스트리, 공개 저장소 `pierrecomputer/pierre`, 패키지의 `.d.ts` 파일, 로컬 시험.
-- 이 문서는 Desktop 의 현재 동작을 설명하지 않는다. 아직 의존성을 추가하지 않았다.
+- 이 문서는 조사한 때의 기록이다. 그 뒤 1단계(보기)를 구현했다 (2026-11-18). 결과는 P-12 에 있다.
 
 ## 1. 기본 정보
 

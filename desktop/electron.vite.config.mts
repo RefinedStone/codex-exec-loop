@@ -30,6 +30,10 @@ export default defineConfig({
         },
       },
     },
+    resolve: {
+      // 문법 색의 언어를 목록의 것으로 줄인다 (P-12). `@pierre/diffs` 가 `shiki/langs` 에서 언어를 찾는다.
+      alias: { "shiki/langs": resolve(import.meta.dirname, "src/renderer/conversation/diffLanguages.ts") },
+    },
     plugins: [react()],
   },
 });
