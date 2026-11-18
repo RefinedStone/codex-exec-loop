@@ -1,6 +1,7 @@
 // renderer 에 노출하는 것은 AkraBridge 의 함수뿐이다. Node API 와 ipcRenderer 자체는 노출하지 않는다.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { GitHunkAction, GitHunkDiff } from "../shared/gitHunks";
+import type { LinearFilters, LinearStatus, LinearSummary } from "../shared/linear";
 import type { BrowserAgentState } from "../shared/browserAgent";
 
 import {
@@ -188,6 +189,14 @@ const bridge: AkraBridge = {
     openExternal(url: string): void {
       ipcRenderer.send(IPC_CHANNELS.openExternal, url);
     },
+  },
+  linear: {
+    status: (): Promise<LinearStatus> => ipcRenderer.invoke(IPC_CHANNELS.linearStatus),
+    connect: (token: string): Promise<LinearStatus> => ipcRenderer.invoke(IPC_CHANNELS.linearConnect, token),
+    disconnect: (): Promise<LinearStatus> => ipcRenderer.invoke(IPC_CHANNELS.linearDisconnect),
+    summary: (filters: LinearFilters, refresh: boolean): Promise<LinearSummary> => ipcRenderer.invoke(IPC_CHANNELS.linearSummary, filters, refresh),
+    issuePrompt: (id: string): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.linearIssuePrompt, id),
+    openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.linearOpenExternal, url),
   },
   dots: {
     getEnabled(): Promise<boolean> {

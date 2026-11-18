@@ -26,6 +26,7 @@ import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks"
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
 import { readGitHubSummary, readIssuePrompt, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
+import { LinearService, isLinearIssueUrl } from "./linearService";
 import { TerminalService } from "./terminalService";
 import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
 
@@ -61,6 +62,7 @@ const browserAgents = new BrowserAgentService({
 const browserSettingsPath = () => join(app.getPath("userData"), "browser-settings.json");
 // userData 는 위에서 정한 뒤이다. 토큰은 safeStorage 로 암호화한다.
 const jira = new JiraService(app.getPath("userData"), safeStorage);
+const linear = new LinearService(app.getPath("userData"), safeStorage);
 
 /**
  * 화면 시험용이다. 창을 보이지 않게 만들어 사용자가 쓰는 다른 앱 위로 올라오지 않게 한다.
@@ -549,6 +551,24 @@ ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => changeJira(() => jira.disconne
 ipcMain.handle(IPC_CHANNELS.jiraCurrentVersion, (_event, request: unknown) => jira.currentVersion(request));
 ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
 ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
+function requireLinearSender(event: IpcMainInvokeEvent): void {
+  if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame)
+    throw new Error("Linear 요청을 보낸 창을 확인할 수 없습니다.");
+}
+ipcMain.handle(IPC_CHANNELS.linearStatus, (event) => { requireLinearSender(event); return linear.status(); });
+ipcMain.handle(IPC_CHANNELS.linearConnect, (event, token: unknown) => { requireLinearSender(event); return linear.connect(token); });
+ipcMain.handle(IPC_CHANNELS.linearDisconnect, (event) => { requireLinearSender(event); return linear.disconnect(); });
+ipcMain.handle(IPC_CHANNELS.linearSummary, (event, filters: unknown, refresh: unknown) => {
+  requireLinearSender(event);
+  if (typeof refresh !== "boolean") throw new Error("Linear 새로 고침 요청이 올바르지 않습니다.");
+  return linear.summary(filters, refresh);
+});
+ipcMain.handle(IPC_CHANNELS.linearIssuePrompt, (event, id: unknown) => { requireLinearSender(event); return linear.issuePrompt(id); });
+ipcMain.handle(IPC_CHANNELS.linearOpenExternal, async (event, url: unknown) => {
+  requireLinearSender(event);
+  if (typeof url !== "string" || !isLinearIssueUrl(url)) throw new Error("Linear 이슈 주소만 열 수 있습니다.");
+  await shell.openExternal(url);
+});
 ipcMain.handle(
   IPC_CHANNELS.dotsOpenWindow,
   (event, host: unknown, dotId: unknown, draft: unknown) => isRemoteHostId(host) && isDotId(dotId) && openDotWindow(host, dotId, BrowserWindow.fromWebContents(event.sender), dotDraftOf(draft)),
@@ -587,7 +607,7 @@ ipcMain.handle(IPC_CHANNELS.dotsSetEnabled, (_event, enabled: unknown) => {
 // renderer 가 보낸 주소는 github.com, Notion, 연결된 Jira 사이트의 티켓만 기본 브라우저로 연다.
 ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
   if (typeof url !== "string") return;
-  if (url.startsWith("https://github.com/") || isNotionPageUrl(url)) {
+  if (url.startsWith("https://github.com/") || isNotionPageUrl(url) || isLinearIssueUrl(url)) {
     void shell.openExternal(url);
     return;
   }
