@@ -74,6 +74,7 @@ export const IPC_CHANNELS = {
   zoomGet: "akra:zoom-get",
   zoomStep: "akra:zoom-step",
   zoomChanged: "akra:zoom-changed",
+  appFocused: "akra:app-focused",
 } as const;
 
 export interface GitHubPullRequest {
@@ -414,6 +415,8 @@ export interface AkraBridge {
   notion: NotionBridge;
   dots: DotsBridge;
   zoom: ZoomBridge;
+  /** 이 앱의 창 가운데 하나에 포커스가 있는지 묻는다. 브라우저 패널에 포커스가 있어도 true 이다. */
+  isAppFocused(): Promise<boolean>;
 }
 
 /** 앱 전체 확대이다 (plan 26 Z1–Z2). 값은 main 이 가지고 모든 창에 적용한다. */

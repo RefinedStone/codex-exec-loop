@@ -272,7 +272,8 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
   if (inset) insetWindows.add(window);
   if (!dotQuery && !BLUEPRINT) {
     mainWindows.add(window);
-    if (restored && windowState.maximized) window.maximize();
+    // `maximize()` 는 창을 보이게 한다. 그래서 숨긴 창에는 쓰지 않고, 화면을 그린 뒤에 한다.
+    if (restored && windowState.maximized && !HIDDEN_WINDOWS) window.once("ready-to-show", () => window.maximize());
     // 마지막으로 옮기거나 닫은 본 창의 자리를 다음 실행에 쓴다. 옮기는 동안에는 멈춘 뒤에 한 번만 쓴다.
     const remember = () => {
       if (window.isDestroyed()) return;
@@ -505,6 +506,7 @@ ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
   });
 });
 
+ipcMain.handle(IPC_CHANNELS.appFocused, () => BrowserWindow.getFocusedWindow() !== null);
 ipcMain.handle(IPC_CHANNELS.zoomGet, () => windowState.zoom);
 ipcMain.on(IPC_CHANNELS.zoomStep, (_event, direction: unknown) => {
   if (isZoomDirection(direction)) stepZoom(direction);

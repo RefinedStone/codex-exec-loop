@@ -9,15 +9,15 @@ export interface AttentionEvent {
   threadId: string;
 }
 
-type AttentionSource = Pick<DesktopState, "connection" | "activeThreadIds" | "pendingApprovals" | "folders">;
+type AttentionSource = Pick<DesktopState, "connection" | "activeThreadIds" | "activeRefills" | "pendingApprovals" | "folders">;
 
 function isFailed(state: AttentionSource, threadId: string): boolean {
   return state.folders.some((folder) => folder.threads.some((thread) => thread.id === threadId && thread.failed));
 }
 
 /**
- * 접속이 끊겼다가 붙는 동안에는 목록을 새로 채우므로 알리지 않는다: 그때 사라진 "진행 중"은 지금 끝난 턴이 아닐 수
- * 있다.
+ * 접속이 끊긴 동안에는 알리지 않는다. 다시 붙은 뒤 목록을 통째로 다시 채울 때(`activeRefills`)도 끝난 턴을 알리지
+ * 않는다: 그때 사라진 "진행 중"은 지금 끝난 턴이 아닐 수 있다 (예: Gateway 를 다시 시작했다).
  */
 export function attentionEvents(previous: AttentionSource, next: AttentionSource): AttentionEvent[] {
   if (previous.connection?.phase !== "connected" || next.connection?.phase !== "connected") return [];
@@ -27,6 +27,7 @@ export function attentionEvents(previous: AttentionSource, next: AttentionSource
       events.push({ kind: "approval", threadId: approval.threadId });
     }
   }
+  if (previous.activeRefills !== next.activeRefills) return events;
   for (const threadId of previous.activeThreadIds) {
     if (!next.activeThreadIds.includes(threadId)) {
       events.push({ kind: isFailed(next, threadId) ? "failed" : "finished", threadId });

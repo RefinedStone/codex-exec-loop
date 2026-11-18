@@ -172,7 +172,7 @@ describe("composer keys", () => {
 describe("attention events", () => {
   type Source = Parameters<typeof attentionEvents>[0];
   const connected = { phase: "connected", endpoint: "" } as DesktopState["connection"];
-  const state = (fields: Partial<Source>): Source => ({ connection: connected, activeThreadIds: [], pendingApprovals: [], folders: [], ...fields });
+  const state = (fields: Partial<Source>): Source => ({ connection: connected, activeThreadIds: [], activeRefills: 0, pendingApprovals: [], folders: [], ...fields });
   const approval = (requestId: number, threadId: string) => ({ requestId, threadId }) as unknown as PendingApproval;
 
   it("reports a finished turn, a failed turn and a new approval request", () => {
@@ -188,5 +188,7 @@ describe("attention events", () => {
     const disconnected = { phase: "disconnected", endpoint: "" } as DesktopState["connection"];
     expect(attentionEvents(state({ activeThreadIds: ["a"] }), state({ connection: disconnected }))).toEqual([]);
     expect(attentionEvents(state({ connection: disconnected, activeThreadIds: ["a"] }), state({}))).toEqual([]);
+    // 다시 붙은 뒤 목록을 통째로 다시 채웠다.
+    expect(attentionEvents(state({ activeThreadIds: ["a"] }), state({ activeRefills: 1 }))).toEqual([]);
   });
 });
