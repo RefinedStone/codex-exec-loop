@@ -860,4 +860,5 @@
 /* `@pierre/diffs` 의 글자 크기를 코드 토큰에 맞춘다 (plan 26 Z4). */
 .diff-patch {
   --diffs-font-size: var(--text-code);
+  --diffs-line-height: calc(var(--text-code) * 1.55);
 }

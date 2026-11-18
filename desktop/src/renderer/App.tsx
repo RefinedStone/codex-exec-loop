@@ -283,7 +283,8 @@ export function App() {
   // 앱 메뉴의 "설정…" (⌘,) 은 main 이 받아서 이 창에 알린다.
   useEffect(() => window.akra.settings.onOpen(() => useUiStore.setState({ settingsOpen: true, paletteOpen: false })), []);
   // 실행 중인 턴이 있는지 main 에 알린다. main 이 "일할 때만 잠자기 방지"에 쓴다 (plan 26 W5).
-  const working = useDesktopStore((state) => state.activeThreadIds.length > 0);
+  // 접속이 끊기면 턴의 상태를 알 수 없다. 그때는 일하는 중으로 치지 않는다: 잠자기 방지가 켜진 채로 남지 않는다.
+  const working = useDesktopStore((state) => state.connection?.phase === "connected" && state.activeThreadIds.length > 0);
   useEffect(() => window.akra.settings.reportWorking(working), [working]);
 
   useEffect(() => {

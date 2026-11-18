@@ -429,8 +429,8 @@ export interface AkraBridge {
 /** 앱 설정이다 (plan 26 U2). 값은 main 이 가지고 저장한다. */
 export interface SettingsBridge {
   get(): Promise<AppSettings>;
-  /** 설정 전체를 바꾼다. main 이 검증하고 저장한 값을 돌려준다. */
-  set(settings: AppSettings): Promise<AppSettings>;
+  /** 설정의 한 부분을 바꾼다. main 이 지금 값에 합치고, 검증하고, 저장한 값을 돌려준다. */
+  set(patch: Partial<AppSettings>): Promise<AppSettings>;
   /** 설정이 바뀌면 부른다. 다른 창에서 바꾼 것도 온다. */
   onChanged(listener: (settings: AppSettings) => void): () => void;
   /** 앱 메뉴의 "설정…" 을 고르면 부른다. */

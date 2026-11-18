@@ -120,7 +120,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
     zoom: { get: () => Promise.resolve(1), step: () => undefined, onChanged: () => () => undefined },
     isAppFocused: () => Promise.resolve(false),
-    settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: (settings) => Promise.resolve(settings), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined },
+    settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: () => Promise.resolve(DEFAULT_SETTINGS), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };

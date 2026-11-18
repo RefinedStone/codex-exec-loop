@@ -342,6 +342,11 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     workingWindows.delete(contentsId);
     updateKeepAwake();
   });
+  // renderer 가 죽으면 "일하는 중" 보고도 믿을 수 없다. 다시 뜬 화면이 새로 보고한다.
+  contents.on("render-process-gone", () => {
+    workingWindows.delete(contentsId);
+    updateKeepAwake();
+  });
   if (!HIDDEN_WINDOWS) {
     window.once("ready-to-show", () => window.show());
   }
@@ -537,7 +542,8 @@ ipcMain.on(IPC_CHANNELS.zoomStep, (_event, direction: unknown) => {
 
 ipcMain.handle(IPC_CHANNELS.settingsGet, () => appSettings);
 ipcMain.handle(IPC_CHANNELS.settingsSet, (_event, settings: unknown) => {
-  appSettings = validateSettings(settings);
+  // renderer 는 바꾼 부분만 보낸다. 여기서 합치므로 오래된 사본을 가진 창이 다른 설정을 되돌리지 않는다.
+  appSettings = validateSettings({ ...appSettings, ...(typeof settings === "object" && settings !== null ? settings : {}) });
   if (PERSIST_WINDOW_STATE) saveAppSettings(appSettingsPath, appSettings);
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send(IPC_CHANNELS.settingsChanged, appSettings);
@@ -573,8 +579,10 @@ function installApplicationMenu(): void {
     accelerator: "CmdOrCtrl+,",
     click: (_item, window) => {
       const target = window instanceof BrowserWindow && mainWindows.has(window) ? window : [...mainWindows][0];
-      target?.webContents.send(IPC_CHANNELS.settingsOpen);
-      target?.focus();
+      if (!target) return;
+      if (target.isMinimized()) target.restore();
+      target.webContents.send(IPC_CHANNELS.settingsOpen);
+      target.focus();
     },
   };
   const menu = Menu.buildFromTemplate([
