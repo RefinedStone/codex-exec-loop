@@ -891,6 +891,76 @@
   background: var(--bg-hover);
 }
 
+.git-row {
+  cursor: default;
+}
+
+/* 고른 줄은 바탕과 왼쪽 띠로 보인다. 색만으로 구분하지 않는다. */
+.git-row-selected,
+.git-row-selected:hover {
+  background: var(--bg-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 찾기에 맞지 않는 줄과 백업에서만 닿는 커밋은 흐리다. 고른 줄은 흐리게 하지 않는다. */
+.git-row-dim:not(.git-row-selected) {
+  opacity: 0.45;
+}
+
+.git-graph-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.git-find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.git-find input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+.git-find > span {
+  flex: none;
+  font-size: var(--text-s);
+}
+
+/* 커밋 상세는 패널의 아래 절반이다. 줄 목록과 따로 스크롤한다. */
+.git-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--line-strong);
+}
+
+.git-detail .work-scroll {
+  padding: 0 12px 12px;
+}
+
+.git-detail .work-section {
+  margin: 0;
+  padding: 2px 0;
+}
+
+.git-detail-message {
+  margin: 8px 0 4px;
+  font-family: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .git-graph-cell {
   flex: none;
 }
@@ -989,10 +1059,35 @@
   color: var(--text-2);
 }
 
+/* 백업 ref 는 긴 점선 테두리이고 흐리다 (plan 27 §7.3). 태그의 짧은 점선과 모양이 다르다. */
+.git-ref-backup {
+  border-style: dashed;
+  border-color: var(--text-3);
+  color: var(--text-3);
+  font-style: italic;
+}
+
 .git-ref-current {
   background: var(--accent);
   color: var(--accent-text);
   font-weight: 600;
+}
+
+/* 스레드 배지는 둥근 단추이다. 누르면 그 스레드를 연다. 라벨(네모)과 모양이 다르다. */
+.work-panel button.git-thread-badge {
+  flex: none;
+  max-width: 160px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 9px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.work-panel button.git-thread-badge:hover {
+  border-color: var(--accent);
 }
 
 .git-ref-synced {

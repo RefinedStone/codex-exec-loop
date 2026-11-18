@@ -1002,11 +1002,33 @@ impl crate::application::port::inbound::git_graph_port::GitGraphPort for FolderE
                 repository: true,
                 stale: false,
                 head: Some(request.repository_dir),
+                refs_digest: None,
                 refs: Vec::new(),
+                worktrees: Vec::new(),
                 rows: Vec::new(),
                 next: None,
             },
         )
+    }
+
+    fn refs_state(
+        &self,
+        _repository_dir: &str,
+    ) -> anyhow::Result<crate::application::port::inbound::git_graph_port::GitGraphRefsState> {
+        Ok(
+            crate::application::port::inbound::git_graph_port::GitGraphRefsState {
+                repository: true,
+                refs_digest: None,
+            },
+        )
+    }
+
+    fn commit_detail(
+        &self,
+        _repository_dir: &str,
+        _commit: &str,
+    ) -> anyhow::Result<Option<crate::domain::git_graph::GitCommitDetail>> {
+        Ok(None)
     }
 }
 

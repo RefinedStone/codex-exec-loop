@@ -381,7 +381,7 @@ the desktop app itself is not shipped yet.
   to a host other than `local`, `akra/kernel/*` is refused with `-32601`, `akra/context/*` answers
   with empty `resources` and does not read or write the ledger, `akra/mcp/*` is unchanged, and
   `AKRA_GATEWAY_RECORD` records nothing.
-- Commit graph (plan 27 G1): `akra/git/graph` with params `{ cwd, limit?, cursor? }` returns one page of
+- Commit graph (plan 27 G1, G2): `akra/git/graph` with params `{ cwd, limit?, cursor? }` returns one page of
   the commit graph of the repository that contains `cwd`: `repository`, `stale`, `head`, `refs` (local
   branches, remote branches, and tags; first page only), `rows`, and `next`. A row carries the commit
   (`id`, `parents`, `authorName`, `authorTime`, `subject`) and its lane placement (`lane`, `lanesIn`,
@@ -390,8 +390,17 @@ the desktop app itself is not shipped yet.
   nothing. `limit` defaults to 300 and is capped at 1000. The Gateway keeps no state between pages: the
   client returns `next` as `cursor`, and a cursor from before a ref change answers `stale: true` with no
   rows. A cursor with more than 4,096 lanes is refused. A folder outside a repository answers
-  `repository: false`. The method exists only on `local`
+  `repository: false`. The methods exist only on `local`
   connections.
+  Since plan 27 G2 a page also carries `refsDigest` (a digest of HEAD, the refs, and the worktrees) and,
+  on the first page, `worktrees` (`path`, `head`, `branch` from `git worktree list`). `refs` includes
+  backup refs (`refs/akra/backup/*`, kind `backup`), the log includes the commits they reach, and a row
+  reached only from a backup ref has `backupOnly: true`. Nothing writes a backup ref yet (plan 27 G3).
+  `akra/git/refs` with `{ cwd }` returns `{ repository, refsDigest }` without reading commits.
+  `akra/git/commit` with `{ cwd, commit }` returns `{ commit }`: the full message, author, committer,
+  parents, and the diff against the first parent (`git show --first-parent --no-ext-diff --no-textconv`),
+  or `commit: null` for an unknown sha. `commit` must be 7 to 64 hexadecimal characters. A diff over
+  2 MiB is not read; the answer has `diffTooLarge: true` and an empty `diff`.
 - Cloud host (D-19): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
   `~/.codex/auth.json`. The bridge forwards only the public-protocol methods it allows
   (`initialize`, `initialized`, `thread/list`, `thread/read`, `thread/turns/list`,
@@ -741,12 +750,21 @@ The Gateway records the external documents that a thread mentions, without a mod
   branch's GitHub PR with its CI state through `gh` (`desktop/src/main/gitBranch.ts`). It can push the branch
   to the remote branch of the same name (never a force push) and create a PR with `gh`; the main process asks
   before both and shows the target (`desktop/src/main/gitPublish.ts`)
-  The "그래프" side panel (plan 27 G1) shows the commit graph of the open thread's folder, read-only. It reads
+  The "그래프" side panel (plan 27 G1, G2) shows the commit graph of the open thread's folder, read-only. It reads
   `akra/git/graph` when the panel opens, when the folder changes, and on "새로 고침"; it draws only the
   visible rows and reads the next page 60 rows before the end. A row shows the lane lines, the ref labels,
   the subject, the author, the relative time, and the short sha. A remote branch on the same commit as the
-  local branch of the same name is one label; the checked-out commit has a hollow node. The panel does not
-  watch the repository and has no commit detail yet (`desktop/src/renderer/git/`).
+  local branch of the same name is one label; the checked-out commit has a hollow node
+  (`desktop/src/renderer/git/`).
+  Since plan 27 G2: while the panel is open and the window is visible, it reads `akra/git/refs` every 3
+  seconds and, when the digest differs, reads the same number of rows again and keeps the top visible
+  commit in place. A click or the up and down arrow keys select a row; the lower half of the panel then
+  shows that commit from `akra/git/commit` (message, author, parents, and the changed files in the shared
+  diff view). The find box searches the loaded rows by subject, author, ref label, and sha prefix, dims
+  the other rows, and "다음" reads up to 10 further pages of 1,000 rows when the loaded rows have no
+  further match. The commit that a worktree has checked out carries a badge with the newest thread whose
+  folder is in that worktree; the badge opens the thread. A backup ref has a dashed label, and a commit
+  reached only from a backup ref is dim. The panel has no path or branch filter and no maximised layout.
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`
