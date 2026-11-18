@@ -1,6 +1,7 @@
 // 화면 시험 (plan 27 G1, G2): 빌드한 앱을 가짜 Gateway 에 붙여 "커밋 그래프" 패널을 확인한다. 실제 codex, 턴, git 은
 // 쓰지 않는다. 스레드를 열고 패널을 열면 그 스레드의 폴더로 그래프를 읽고, 라벨과 선을 그리고, 끝에 가까워지면 다음
 // 쪽을 읽는다. 저장소가 바뀌면 누르지 않아도 다시 읽고, 줄을 고르면 상세를 보이고, 읽지 않은 쪽까지 찾는다 (G2).
+// 고른 커밋에서 작업의 계획을 보고, 실행하고, 되돌린다 (G3). 가짜 Gateway 는 저장소를 고치지 않는다.
 // 창은 숨긴 채로 돌린다. `AKRA_QA_SCREENSHOT=<png>` 이면 패널을 찍는다.
 import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -86,6 +87,45 @@ function secondPage() {
   return { repository: true, stale: false, head: sha(FIRST_PAGE_ROWS + SECOND_PAGE_ROWS), refs: [], rows, next: null };
 }
 
+// ---- G3: 작업 엔진의 가짜 답 ----
+const planRequests = [];
+const executeRequests = [];
+const undoRequests = [];
+const journal = [];
+// 첫 실행은 "저장소가 계획과 다르다"로 답한다. 화면은 새 계획을 보여야 한다.
+let staleAnswers = 1;
+
+function operationPlan(operation, expectation) {
+  const total = FIRST_PAGE_ROWS + SECOND_PAGE_ROWS;
+  return {
+    operation,
+    expectation,
+    branch: "main",
+    before: { commit: sha(total + 1), branch: "main" },
+    after: { commit: operation.target, branch: "main" },
+    impact: { dropped: 4, unreachable: 2, gained: 0 },
+    blockers: [],
+  };
+}
+
+function operationRecord(opId, operation, undoOf) {
+  const total = FIRST_PAGE_ROWS + SECOND_PAGE_ROWS;
+  return {
+    opId,
+    operation,
+    worktree: "/work/example-app",
+    before: { commit: sha(total + 1), branch: "main" },
+    after: { commit: operation.target, branch: "main" },
+    backupRef: `refs/akra/backup/main/${opId}`,
+    status: "done",
+    startedAt: NOW,
+    finishedAt: NOW,
+    error: null,
+    undoOf,
+    undoneBy: null,
+  };
+}
+
 const graphRequests = [];
 const commitRequests = [];
 let refsRequests = 0;
@@ -102,6 +142,31 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
   gitCommit(params) {
     commitRequests.push(params.commit);
     return commitDetail(params.commit);
+  },
+  gitPlan(params) {
+    planRequests.push(params);
+    return operationPlan(params.operation, "seen-at-plan");
+  },
+  gitExecute(params) {
+    executeRequests.push(params);
+    if (staleAnswers > 0) {
+      staleAnswers -= 1;
+      return { status: "stale", plan: operationPlan(params.operation, "seen-after-change") };
+    }
+    const record = operationRecord("20261119T010203Z-0000002a", params.operation, null);
+    journal.unshift(record);
+    return { status: "done", record };
+  },
+  gitOperations() {
+    return { operations: journal };
+  },
+  gitUndo(params) {
+    undoRequests.push(params.opId);
+    const undone = journal.find((record) => record.opId === params.opId);
+    const record = operationRecord("20261119T010300Z-0000002b", { kind: "reset", target: undone.before.commit }, undone.opId);
+    undone.undoneBy = record.opId;
+    journal.unshift(record);
+    return { status: "done", record };
   },
 });
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1" };
@@ -183,9 +248,9 @@ try {
   check("the detail lists the changed file with its counts", (await detail.getByTestId("diff-file").count()) === 1 && (await detail.getByTestId("diff-file").innerText()).includes("src/topic.ts"));
   check("the selected row is marked", (await rowWith("Topic work").getAttribute("aria-selected")) === "true");
   // 숨긴 창에서는 `page.screenshot` 이 끝나지 않을 수 있다. 창의 내용을 직접 찍는다.
+  // 숨긴 창은 그리기를 미룬다. 한 번 찍어 그리게 하고, 그 다음 장면을 쓴다.
+  const capture = () => app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));
   if (process.env.AKRA_QA_SCREENSHOT) {
-    // 숨긴 창은 그리기를 미룬다. 한 번 찍어 그리게 하고, 그 다음 장면을 쓴다.
-    const capture = () => app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));
     await capture();
     await page.waitForTimeout(300);
     const png = await capture();
@@ -215,6 +280,44 @@ try {
   await page.locator(".git-row-selected").filter({ hasText: "Commit 39" }).waitFor({ timeout: 15_000 });
   const findRequest = graphRequests[requestsBeforeFind];
   check("next reads further pages until it finds the text", graphRequests.length === requestsBeforeFind + 1 && findRequest.cursor?.skip === FIRST_PAGE_ROWS && findRequest.limit === 1000);
+
+  // ---- G3 ----
+  await find.fill("");
+  await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTo(0, 0));
+  await rowWith("Fork point").locator(".git-row-time").click();
+  const reset = page.getByTestId("git-action-reset");
+  await reset.waitFor({ timeout: 10_000 });
+  check("the selected commit offers a reset of the checked-out branch", (await reset.innerText()) === "여기로 reset (main)");
+  check("no operation log is shown before the first operation", (await page.getByTestId("git-operation-log").count()) === 0);
+  await reset.click();
+  await page.getByTestId("git-plan").waitFor({ timeout: 10_000 });
+  check("a click asks for a plan and changes nothing", planRequests.length === 1 && planRequests[0].operation.kind === "reset" && planRequests[0].operation.target === sha(total - 3) && executeRequests.length === 0);
+  const planLines = (await page.getByTestId("git-plan-line").allInnerTexts()).join("\n");
+  check("the plan says how many commits leave the branch and what the backup keeps", planLines.includes("브랜치에서 커밋 4개가 빠집니다.") && planLines.includes("그중 2개는 다른 브랜치와 태그가 닿지 못합니다. 백업 ref 가 지킵니다."));
+
+  await page.getByTestId("git-plan-run").click();
+  await page.getByTestId("git-plan").filter({ hasText: "저장소가 바뀌어서 실행하지 않았습니다." }).waitFor({ timeout: 10_000 });
+  check("the execution carries the expectation of the plan", executeRequests.length === 1 && executeRequests[0].expectation === "seen-at-plan");
+  check("a stale plan is not run; the new plan is shown", (await page.getByTestId("git-operation-notice").count()) === 0 && journal.length === 0);
+
+  await page.getByTestId("git-plan-run").click();
+  await page.getByTestId("git-operation-notice").waitFor({ timeout: 10_000 });
+  check("the second execution carries the expectation of the new plan", executeRequests.length === 2 && executeRequests[1].expectation === "seen-after-change");
+  check("the notice names the operation and offers undo", (await page.getByTestId("git-operation-notice").innerText()).includes("reset: main → ") && (await page.getByTestId("git-operation-notice").innerText()).includes("· 완료") && (await page.getByTestId("git-operation-undo").count()) === 1);
+  check("the plan closes after the execution", (await page.getByTestId("git-plan").count()) === 0);
+  await page.getByTestId("git-operation-log").waitFor({ timeout: 10_000 });
+  await page.getByTestId("git-operation-log").locator("summary").click();
+  check("the operation log lists the operation", (await page.getByTestId("git-operation-entry").count()) === 1);
+  if (process.env.AKRA_QA_SCREENSHOT) {
+    await capture();
+    await page.waitForTimeout(300);
+    writeFileSync(process.env.AKRA_QA_SCREENSHOT.replace(/\.png$/, "-g3.png"), Buffer.from(await capture(), "base64"));
+  }
+
+  await page.getByTestId("git-operation-undo").click();
+  await page.getByTestId("git-operation-notice").filter({ hasText: "되돌리기 (reset" }).waitFor({ timeout: 10_000 });
+  check("undo names the operation of the notice", undoRequests.length === 1 && undoRequests[0] === "20261119T010203Z-0000002a");
+  check("an undo and an undone operation offer no further undo", (await page.getByTestId("git-operation-undo").count()) === 0 && (await page.getByTestId("git-operation-entry").count()) === 2 && (await page.getByTestId("git-operation-entry").locator("button").count()) === 0);
   check("the panel never starts a turn", !gateway.receivedMethods.includes("turn/start"));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);

@@ -21,7 +21,7 @@ use super::context::{
     spawn_request as spawn_context_request,
 };
 use super::dots::{DOTS_METHOD_PREFIX, DotWatches, spawn_request as spawn_dots_request};
-use super::git::{GIT_METHOD_PREFIX, spawn_request as spawn_git_request};
+use super::git::{GIT_METHOD_PREFIX, GitPorts, spawn_request as spawn_git_request};
 use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
@@ -31,6 +31,7 @@ use super::router::{
     ClientTextRoute, refuse_kernel_on_remote_host, respond_to_akra_request, route_client_text,
 };
 use crate::application::port::inbound::git_graph_port::GitGraphPort;
+use crate::application::port::inbound::git_operation_port::GitOperationPort;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::dots_port::DotsPort;
 use crate::application::port::outbound::gateway_upstream_port::{
@@ -63,6 +64,8 @@ pub(super) struct GatewayServices {
         Option<Arc<dyn crate::application::port::inbound::resource_version_provider_port::ResourceVersionProviderPort>>,
     /// 커밋 그래프이다 (plan 27). 이 기기의 저장소를 읽으므로 `local` 접속에만 답한다.
     pub(super) git_graph: Option<Arc<dyn GitGraphPort>>,
+    /// git 작업 엔진이다 (plan 27 G3). `git_graph` 와 같은 `akra/git/*` 에서 답한다. `local` 접속에만 답한다.
+    pub(super) git_operations: Option<Arc<dyn GitOperationPort>>,
     /// dots 가 켜졌을 때만 있다 (D-19). 없으면 `akra/dots/*` 는 모르는 method 이다.
     pub(super) dots: Option<Arc<dyn DotsPort>>,
 }
@@ -240,7 +243,10 @@ where
                             None
                         } else if let Some(graph) = git_for_method {
                             spawn_git_request(
-                                graph.clone(),
+                                GitPorts {
+                                    graph: graph.clone(),
+                                    operations: services.git_operations.clone(),
+                                },
                                 id,
                                 method,
                                 text.as_str().to_string(),

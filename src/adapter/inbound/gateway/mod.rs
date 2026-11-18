@@ -90,6 +90,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         work_context,
         resource_versions,
         git_graph,
+        git_operations,
         dots,
     } = production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
@@ -117,6 +118,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             work_context: Some(work_context),
             resource_versions: Some(resource_versions),
             git_graph: Some(git_graph),
+            git_operations: Some(git_operations),
             dots,
         },
         recorder,

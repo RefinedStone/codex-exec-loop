@@ -183,6 +183,11 @@ export async function startFakeGateway(
     gitRefs?(params: { cwd?: unknown }): unknown;
     /** `akra/git/commit` 의 답이다 (plan 27 G2). 없으면 모르는 method 로 답한다. */
     gitCommit?(params: { cwd?: unknown; commit?: unknown }): unknown;
+    /** `akra/git/plan`, `execute`, `operations`, `undo` 의 답이다 (plan 27 G3). 없으면 모르는 method 로 답한다. */
+    gitPlan?(params: { cwd?: unknown; operation?: unknown }): unknown;
+    gitExecute?(params: { cwd?: unknown; operation?: unknown; expectation?: unknown }): unknown;
+    gitOperations?(params: { cwd?: unknown }): unknown;
+    gitUndo?(params: { cwd?: unknown; opId?: unknown }): unknown;
     /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 뒤에는 다시 찾지 않는다. */
     changedThreadDocuments?: Record<string, string[]>;
     /**
@@ -358,7 +363,15 @@ export async function startFakeGateway(
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources } }));
         return;
       }
-      const gitAnswer = { "akra/git/graph": options.gitGraph, "akra/git/refs": options.gitRefs, "akra/git/commit": options.gitCommit }[message.method];
+      const gitAnswer = {
+        "akra/git/graph": options.gitGraph,
+        "akra/git/refs": options.gitRefs,
+        "akra/git/commit": options.gitCommit,
+        "akra/git/plan": options.gitPlan,
+        "akra/git/execute": options.gitExecute,
+        "akra/git/operations": options.gitOperations,
+        "akra/git/undo": options.gitUndo,
+      }[message.method];
       if (gitAnswer) {
         const params = (message as { params?: Record<string, unknown> }).params ?? {};
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: gitAnswer(params) }));

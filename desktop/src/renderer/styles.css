@@ -950,6 +950,102 @@
   font-size: var(--text-s);
 }
 
+/* ---- git 작업 (plan 27 G3) ---- */
+
+.git-operations {
+  border-bottom: 1px solid var(--line);
+}
+
+.git-operation-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+}
+
+.git-operation-notice > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.git-operation-log {
+  padding: 4px 12px;
+  font-size: var(--text-s);
+}
+
+.git-operation-log > summary {
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.git-operation-log ul {
+  max-height: 160px;
+  margin: 4px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.git-operation-log li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.git-operation-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-actions {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.git-actions p {
+  margin: 6px 0 0;
+}
+
+.git-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.git-action-buttons select {
+  max-width: 220px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--bg-elevated);
+  color: inherit;
+  font-size: var(--text-s);
+}
+
+/* 계획은 실행 전에 읽는 글이다. 테두리로 단추 줄과 구분한다. */
+.git-plan {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+}
+
+.git-plan ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+
+.work-panel .git-plan button.primary:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
 /* 커밋 상세는 패널의 아래 절반이다. 줄 목록과 따로 스크롤한다. */
 .git-detail {
   display: flex;

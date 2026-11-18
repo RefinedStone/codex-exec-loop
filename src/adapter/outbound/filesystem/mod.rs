@@ -6,6 +6,8 @@ pub mod pr_validation_rollout_evidence;
 pub(crate) mod secure_fs;
 // kernel_lock 은 저장소당 커널 하나를 지키는 OS 파일 잠금이다 (plan 18 K3-4).
 pub(crate) mod kernel_lock;
+// git_operation_journal 은 저장소마다 하나인 git 작업 일지 파일이다 (plan 27 G3).
+pub(crate) mod git_operation_journal;
 
 // re-export를 두면 composition/wiring code가 파일명 세부 구조를 몰라도 adapter를 직접 주입할 수 있다.
 pub(crate) use self::kernel_lock::{

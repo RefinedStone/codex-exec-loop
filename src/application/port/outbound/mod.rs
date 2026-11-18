@@ -17,6 +17,10 @@ pub mod dots_port;
 pub mod gateway_upstream_port;
 // git history port 는 저장소의 ref 와 커밋 이력을 읽는 경계다 (plan 27).
 pub mod git_history_port;
+// git operation journal port 는 저장소마다 하나인 git 작업 일지의 경계다 (plan 27 G3).
+pub mod git_operation_journal_port;
+// git workspace port 는 작업 트리의 상태를 읽고 저장소를 고치는 경계다 (plan 27 G3).
+pub mod git_workspace_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
 pub mod github_automation_port;
 // GitHub PR validation port는 review/CI/merge 관찰 snapshot의 read-only 계약을 정의한다.
