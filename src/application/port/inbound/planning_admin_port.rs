@@ -324,11 +324,17 @@ pub struct PlanningAdminDirectionMutationRequest {
     pub detail_doc_path: String,
     #[serde(default)]
     pub state: String,
+    // 폼을 읽은 때의 planning revision 이다. 고치기(id 가 있다)에 필수이다 (plan 18 K4-9d).
+    #[serde(default)]
+    pub expected_planning_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningAdminDirectionDeleteRequest {
     pub id: String,
+    // 화면을 읽은 때의 planning revision 이다. 필수이다 (plan 18 K4-9d).
+    #[serde(default)]
+    pub expected_planning_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

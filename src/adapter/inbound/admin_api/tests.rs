@@ -439,27 +439,28 @@ async fn bootstrap_admin_html_session(router: &Router) -> (String, String, Strin
     (format!("akra_admin_csrf={csrf_token}"), csrf_token, body)
 }
 
-// The planning revision that the tasks page puts in its forms. The page must list a task.
-async fn html_planning_revision(router: &Router, cookie: &str) -> String {
+// The planning revision that a page (`/admin/tasks`, `/admin/directions`) puts in its forms. The page must
+// list an item.
+async fn html_planning_revision(router: &Router, cookie: &str, page_uri: &str) -> String {
     let page = router
         .clone()
         .oneshot(
             admin_request_builder()
                 .method(Method::GET)
-                .uri("/admin/tasks")
+                .uri(page_uri)
                 .header(header::COOKIE, cookie)
                 .body(Body::empty())
-                .expect("tasks page request should build"),
+                .expect("page request should build"),
         )
         .await
-        .expect("tasks page should be served");
+        .expect("page should be served");
     assert_eq!(page.status(), StatusCode::OK);
     text_body(page)
         .await
         .split("name=\"expected_planning_revision\" value=\"")
         .nth(1)
         .and_then(|rest| rest.split('"').next())
-        .expect("tasks page should carry the planning revision")
+        .expect("the page should carry the planning revision")
         .to_string()
 }
 
@@ -1423,13 +1424,17 @@ async fn admin_json_crud_and_file_sync_routes_round_trip_through_router() {
         .await
         .expect("task delete request should be served");
     assert_eq!(deleted_task.status(), StatusCode::OK);
+    let deleted_task_body = json_body(deleted_task).await;
 
     let deleted_direction = router
         .clone()
         .oneshot(json_request(
             Method::POST,
             "/api/planning/directions/delete",
-            json!({ "id": direction_id }),
+            json!({
+                "id": direction_id,
+                "expected_planning_revision": deleted_task_body["management"]["planning_revision"].to_string()
+            }),
             Some(&cookie),
             Some(&csrf_token),
         ))
@@ -3289,7 +3294,6 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             "/admin/directions/upsert",
             encoded_form(&[
                 ("csrf_token", csrf_token.as_str()),
-                ("id", "html-direction"),
                 ("title", "HTML Direction"),
                 ("summary", "Rendered through HTML form"),
                 ("success_criteria_text", "direction is editable"),
@@ -3317,7 +3321,6 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             "/admin/akra/directions/upsert",
             encoded_form(&[
                 ("csrf_token", csrf_token.as_str()),
-                ("id", "akra-html-direction"),
                 ("title", "AKRA HTML Direction"),
                 ("summary", "Rendered through the graphic admin form"),
                 ("success_criteria_text", "graphic direction is editable"),
@@ -3346,7 +3349,7 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             encoded_form(&[
                 ("csrf_token", csrf_token.as_str()),
                 ("id", ""),
-                ("direction_id", "html-direction"),
+                ("direction_id", "dir-html-direction"),
                 ("title", "HTML Task"),
                 ("description", "Created through the browser adapter"),
                 ("status", "ready"),
@@ -3383,7 +3386,7 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             encoded_form(&[
                 ("csrf_token", csrf_token.as_str()),
                 ("id", ""),
-                ("direction_id", "akra-html-direction"),
+                ("direction_id", "dir-akra-html-direction"),
                 ("title", "AKRA HTML Task"),
                 ("description", "Created through the graphic browser adapter"),
                 ("status", "ready"),
@@ -3451,7 +3454,7 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             "/admin/directions/delete",
             encoded_form(&[
                 ("csrf_token", csrf_token.as_str()),
-                ("id", "html-direction"),
+                ("id", "dir-html-direction"),
             ]),
             "/admin/directions?notice=",
         ),
@@ -3459,7 +3462,7 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             "/admin/akra/directions/delete",
             encoded_form(&[
                 ("csrf_token", csrf_token.as_str()),
-                ("id", "akra-html-direction"),
+                ("id", "dir-akra-html-direction"),
             ]),
             "/admin/akra/directions?notice=",
         ),
@@ -3469,11 +3472,16 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             "/admin/controls?notice=planning%20workspace%20reset",
         ),
     ] {
-        // A task delete form carries the revision that the tasks page showed (plan 18 K4-9d).
-        let body = if uri.ends_with("/tasks/delete") {
+        // A delete form carries the revision that the page showed (plan 18 K4-9d).
+        let body = if uri.ends_with("/delete") {
+            let page_uri = if uri.contains("/directions/") {
+                "/admin/directions"
+            } else {
+                "/admin/tasks"
+            };
             format!(
                 "{body}&expected_planning_revision={}",
-                html_planning_revision(&router, &cookie).await
+                html_planning_revision(&router, &cookie, page_uri).await
             )
         } else {
             body
@@ -5383,6 +5391,128 @@ async fn a_stale_task_form_gets_409_with_the_reason_and_changes_nothing() {
             Method::POST,
             "/api/planning/tasks/delete",
             json!({ "id": task_id }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("delete without a revision should be served");
+    assert_eq!(missing_revision.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = json_body(missing_revision).await;
+    assert!(body.get("reason").is_none(), "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("expected_planning_revision is required")),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_direction_form_gets_409_with_the_reason_and_changes_nothing() {
+    // plan 18 K4-9d-3: the direction routes answer a stale change like the task routes.
+    let workspace = TempAdminWorkspace::new("stale-direction-form");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+    let created = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/directions",
+            json!({ "title": "Keep me", "success_criteria_text": "done" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("direction create should be served");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = json_body(created).await;
+    let revision = created["management"]["planning_revision"]
+        .as_i64()
+        .expect("planning revision");
+    let stale = (revision - 1).to_string();
+
+    // JSON: the reason code and the text.
+    for (uri, body) in [
+        (
+            "/api/planning/directions",
+            json!({
+                "id": "dir-keep-me", "title": "Changed", "success_criteria_text": "done",
+                "expected_planning_revision": stale
+            }),
+        ),
+        (
+            "/api/planning/directions/delete",
+            json!({ "id": "dir-keep-me", "expected_planning_revision": stale }),
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                uri,
+                body,
+                Some(&cookie),
+                Some(&csrf_token),
+            ))
+            .await
+            .expect("stale JSON change should be served");
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let body = json_body(response).await;
+        assert_eq!(body["reason"], "planning_revision_stale", "{uri}");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("reload")),
+            "{body}"
+        );
+    }
+
+    // HTML: the directions page again, with the text as its notice and the direction unchanged.
+    for (uri, body) in [
+        (
+            "/admin/directions/upsert",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", "dir-keep-me"),
+                ("title", "Changed"),
+                ("success_criteria_text", "done"),
+                ("expected_planning_revision", stale.as_str()),
+            ]),
+        ),
+        (
+            "/admin/akra/directions/delete",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", "dir-keep-me"),
+                ("expected_planning_revision", stale.as_str()),
+            ]),
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(html_form_request(uri, body, Some(&cookie), false))
+            .await
+            .expect("stale HTML change should be served");
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let page = text_body(response).await;
+        assert!(page.contains("class=\"notice\""), "{uri}");
+        assert!(page.contains("reload it and retry"), "{uri}");
+        assert!(page.contains("Keep me"), "{uri}");
+        assert!(
+            page.contains(&format!(
+                "name=\"expected_planning_revision\" value=\"{revision}\""
+            )),
+            "{uri} should show the current revision"
+        );
+    }
+
+    // A failure that is not a refusal is a 500 that carries its cause.
+    let missing_revision = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/directions/delete",
+            json!({ "id": "dir-keep-me" }),
             Some(&cookie),
             Some(&csrf_token),
         ))

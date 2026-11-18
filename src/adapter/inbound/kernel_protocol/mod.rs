@@ -3,7 +3,8 @@
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
 use crate::application::port::inbound::stored_command_port::{
-    StoredCommand, StoredCommandOutcome, StoredCommandResult, StoredTaskFields,
+    StoredCommand, StoredCommandOutcome, StoredCommandResult, StoredDirectionFields,
+    StoredTaskFields,
 };
 pub use crate::domain::kernel_event::ReasonCode;
 use crate::domain::kernel_event::{
@@ -29,7 +30,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorState, PrValidationOperatorState, PrValidationPhase,
 };
 use crate::domain::planning::{
-    PriorityQueueTask, RuntimeProjection, RuntimeWorkspaceStatus, TaskStatus,
+    DirectionState, PriorityQueueTask, RuntimeProjection, RuntimeWorkspaceStatus, TaskStatus,
 };
 use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
 
@@ -240,7 +241,10 @@ impl CommandRequest {
             | KernelCommand::RefreshPlanning {}
             | KernelCommand::CreateTask { .. }
             | KernelCommand::UpdateTask { .. }
-            | KernelCommand::DeleteTask { .. } => String::new(),
+            | KernelCommand::DeleteTask { .. }
+            | KernelCommand::CreateDirection { .. }
+            | KernelCommand::UpdateDirection { .. }
+            | KernelCommand::DeleteDirection { .. } => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
             KernelProtocolError::invalid_params(format!("command cannot be described: {error}"))
@@ -361,6 +365,22 @@ pub enum CommandResult {
         task_id: String,
         planning_revision: i64,
     },
+    DirectionCreated {
+        direction_id: String,
+        planning_revision: i64,
+    },
+    DirectionUpdated {
+        direction_id: String,
+        planning_revision: i64,
+    },
+    DirectionDeleted {
+        direction_id: String,
+        /// 그 방향과 함께 지운 작업의 수이다.
+        removed_task_count: usize,
+        /// 참이면 기본 방향이라서 지우지 않았다.
+        default_retained: bool,
+        planning_revision: i64,
+    },
 }
 
 impl CommandResult {
@@ -387,6 +407,31 @@ impl CommandResult {
                 task_id,
                 planning_revision,
             },
+            StoredCommandResult::DirectionCreated {
+                direction_id,
+                planning_revision,
+            } => Self::DirectionCreated {
+                direction_id,
+                planning_revision,
+            },
+            StoredCommandResult::DirectionUpdated {
+                direction_id,
+                planning_revision,
+            } => Self::DirectionUpdated {
+                direction_id,
+                planning_revision,
+            },
+            StoredCommandResult::DirectionDeleted {
+                direction_id,
+                removed_task_count,
+                default_retained,
+                planning_revision,
+            } => Self::DirectionDeleted {
+                direction_id,
+                removed_task_count,
+                default_retained,
+                planning_revision,
+            },
         }
     }
 
@@ -397,6 +442,9 @@ impl CommandResult {
             KernelCommandKind::CreateTask => Some("task_created"),
             KernelCommandKind::UpdateTask => Some("task_updated"),
             KernelCommandKind::DeleteTask => Some("task_deleted"),
+            KernelCommandKind::CreateDirection => Some("direction_created"),
+            KernelCommandKind::UpdateDirection => Some("direction_updated"),
+            KernelCommandKind::DeleteDirection => Some("direction_deleted"),
             KernelCommandKind::LoadSessions
             | KernelCommandKind::RenameSession
             | KernelCommandKind::SubmitPrompt
@@ -625,6 +673,97 @@ pub enum KernelCommand {
         #[serde(default)]
         confirm: bool,
     },
+    /// 사용자의 방향 만들기이다 (plan 18 K4-9d). 저장 명령이다.
+    CreateDirection {
+        direction: DirectionFields,
+    },
+    /// 사용자의 방향 고치기이다. 방향 전체를 바꾼다. 보낸 쪽이 읽은 revision 이 필수이다.
+    UpdateDirection {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        direction_id: String,
+        direction: DirectionFields,
+        expected_planning_revision: i64,
+    },
+    /// 방향과 그 방향의 작업을 지운다. 기본 방향은 남는다.
+    DeleteDirection {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        direction_id: String,
+        expected_planning_revision: i64,
+        /// 지우는 명령이라 `true` 가 아니면 거절한다 (K-D1).
+        #[serde(default)]
+        confirm: bool,
+    },
+}
+
+/*
+ * 방향의 필드이다 (plan 18 K4-9d). 만들기와 고치기가 같은 뜻으로 읽는다: 요약이 없으면 제목을 쓰고, 상태가 없으면
+ * `active` 이다. 고치기는 방향 전체를 이 값으로 바꾼다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DirectionFields {
+    #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// 이 방향이 끝났는지 정하는 기준이다. 빈 줄이 아닌 값이 하나 이상이어야 한다. 실행기가 검사한다.
+    pub success_criteria: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_doc_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<PlanningDirectionState>,
+}
+
+impl DirectionFields {
+    fn from_stored(direction: StoredDirectionFields) -> Self {
+        Self {
+            title: direction.title,
+            summary: direction.summary,
+            success_criteria: direction.success_criteria,
+            scope_hints: direction.scope_hints,
+            detail_doc_path: direction.detail_doc_path,
+            state: direction.state.map(PlanningDirectionState::from_core),
+        }
+    }
+
+    fn into_stored(self) -> Result<StoredDirectionFields, KernelProtocolError> {
+        Ok(StoredDirectionFields {
+            title: non_blank("direction.title", self.title)?,
+            summary: self.summary,
+            success_criteria: self.success_criteria,
+            scope_hints: self.scope_hints,
+            detail_doc_path: self.detail_doc_path,
+            state: self.state.map(PlanningDirectionState::into_core),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningDirectionState {
+    Active,
+    Paused,
+    Done,
+}
+
+impl PlanningDirectionState {
+    fn into_core(self) -> DirectionState {
+        match self {
+            Self::Active => DirectionState::Active,
+            Self::Paused => DirectionState::Paused,
+            Self::Done => DirectionState::Done,
+        }
+    }
+
+    fn from_core(state: DirectionState) -> Self {
+        match state {
+            DirectionState::Active => Self::Active,
+            DirectionState::Paused => Self::Paused,
+            DirectionState::Done => Self::Done,
+        }
+    }
 }
 
 /*
@@ -724,6 +863,9 @@ impl KernelCommand {
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
             Self::DeleteTask { .. } => KernelCommandKind::DeleteTask,
+            Self::CreateDirection { .. } => KernelCommandKind::CreateDirection,
+            Self::UpdateDirection { .. } => KernelCommandKind::UpdateDirection,
+            Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
         }
     }
 
@@ -731,8 +873,13 @@ impl KernelCommand {
     /// 스펙의 `effect` 로 명령을 받을지 정한다 (plan 18 K4-5). 이 adapter 는 검사하지 않는다.
     pub fn confirmed(&self) -> bool {
         match self {
-            Self::ResetPlanning { confirm, .. } | Self::DeleteTask { confirm, .. } => *confirm,
-            Self::CreateTask { .. } | Self::UpdateTask { .. } => false,
+            Self::ResetPlanning { confirm, .. }
+            | Self::DeleteTask { confirm, .. }
+            | Self::DeleteDirection { confirm, .. } => *confirm,
+            Self::CreateTask { .. }
+            | Self::UpdateTask { .. }
+            | Self::CreateDirection { .. }
+            | Self::UpdateDirection { .. } => false,
             Self::LoadSessions {}
             | Self::RenameSession { .. }
             | Self::SubmitPrompt { .. }
@@ -771,6 +918,26 @@ impl KernelCommand {
                 expected_planning_revision,
                 confirm: true,
             },
+            StoredCommand::CreateDirection { direction } => Self::CreateDirection {
+                direction: DirectionFields::from_stored(direction),
+            },
+            StoredCommand::UpdateDirection {
+                direction_id,
+                direction,
+                expected_planning_revision,
+            } => Self::UpdateDirection {
+                direction_id,
+                direction: DirectionFields::from_stored(direction),
+                expected_planning_revision,
+            },
+            StoredCommand::DeleteDirection {
+                direction_id,
+                expected_planning_revision,
+            } => Self::DeleteDirection {
+                direction_id,
+                expected_planning_revision,
+                confirm: true,
+            },
         }
     }
 
@@ -801,6 +968,26 @@ impl KernelCommand {
                 confirm: _,
             } => StoredCommand::DeleteTask {
                 task_id: non_blank("task_id", task_id)?,
+                expected_planning_revision,
+            },
+            Self::CreateDirection { direction } => StoredCommand::CreateDirection {
+                direction: direction.into_stored()?,
+            },
+            Self::UpdateDirection {
+                direction_id,
+                direction,
+                expected_planning_revision,
+            } => StoredCommand::UpdateDirection {
+                direction_id: non_blank("direction_id", direction_id)?,
+                direction: direction.into_stored()?,
+                expected_planning_revision,
+            },
+            Self::DeleteDirection {
+                direction_id,
+                expected_planning_revision,
+                confirm: _,
+            } => StoredCommand::DeleteDirection {
+                direction_id: non_blank("direction_id", direction_id)?,
                 expected_planning_revision,
             },
             core => {
@@ -876,7 +1063,12 @@ impl KernelCommand {
             Self::RefreshPlanning {} => AppCommand::RefreshPlanningRuntime {
                 workspace_directory: workspace_directory.to_string(),
             },
-            Self::CreateTask { .. } | Self::UpdateTask { .. } | Self::DeleteTask { .. } => {
+            Self::CreateTask { .. }
+            | Self::UpdateTask { .. }
+            | Self::DeleteTask { .. }
+            | Self::CreateDirection { .. }
+            | Self::UpdateDirection { .. }
+            | Self::DeleteDirection { .. } => {
                 return Err(KernelProtocolError::invalid_params(
                     "a stored command is not a core command",
                 ));

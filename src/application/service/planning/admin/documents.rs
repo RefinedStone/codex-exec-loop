@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::{PlanningAdminDirectionMutationRequest, PlanningAdminFacadeService};
+use crate::application::port::inbound::stored_command_port::StoredDirectionFields;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityDocumentCommit;
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommitResult, load_consistent_planning_authority_snapshots,
@@ -88,6 +89,7 @@ impl PlanningAdminFacadeService {
             observed_planning_revision: Some(task_authority_snapshot.planning_revision),
         })
     }
+    #[cfg(test)]
     pub(super) fn commit_operator_planning_documents(
         &self,
         documents: PlanningOperatorPlanningDocuments,
@@ -104,16 +106,16 @@ impl PlanningAdminFacadeService {
         self.commit_operator_planning_documents_inner(documents, None)
     }
 
+    /// guard 를 쥔 쪽의 저장이다. 그 저장이 만든 planning revision 을 돌려준다.
     pub(super) fn commit_operator_planning_documents_with_guard(
         &self,
         documents: PlanningOperatorPlanningDocuments,
         authority_mutation_owner_token: &str,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         self.commit_operator_planning_documents_inner(
             documents,
             Some(authority_mutation_owner_token),
         )
-        .map(|_| ())
     }
 
     fn commit_operator_planning_documents_inner(
@@ -285,38 +287,74 @@ pub(super) struct PlanningOperatorPlanningDocuments {
     pub(super) observed_planning_revision: Option<i64>,
 }
 
-pub(super) fn direction_from_request(
+/*
+ * admin 의 방향 폼을 방향의 필드로 바꾼다. 폼은 목록을 textarea 로, 상태를 글로 보낸다. 뜻의 검사(제목, 완료 기준)는
+ * `direction_definition` 이 한다: 저장 명령 `create_direction`, `update_direction` 도 그 함수를 지난다.
+ */
+pub(super) fn direction_fields_from_request(
     request: PlanningAdminDirectionMutationRequest,
+) -> Result<StoredDirectionFields> {
+    Ok(StoredDirectionFields {
+        state: Some(parse_direction_state(&request.state)?),
+        title: request.title,
+        summary: Some(request.summary),
+        success_criteria: split_lines(&request.success_criteria_text),
+        scope_hints: split_lines(&request.scope_hints_text),
+        detail_doc_path: Some(request.detail_doc_path),
+    })
+}
+
+/// 새 방향의 id 를 제목에서 만든다. 지금 있는 방향의 id 와 겹치지 않는다.
+pub(super) fn new_direction_id(
+    title: &str,
     directions: &DirectionCatalogDocument,
+) -> Result<String> {
+    Ok(generated_unique_id(
+        GENERATED_DIRECTION_ID_PREFIX,
+        normalized_required_text(title, "direction title")?,
+        directions
+            .directions
+            .iter()
+            .map(|direction| direction.id.trim()),
+    ))
+}
+
+/*
+ * 방향의 필드로 저장할 방향을 만든다. success criteria 는 queue-idle review 가 완료 판정의 authority 로 쓰는 필드라서
+ * 하나도 없는 방향을 받지 않는다. 요약이 없으면 제목을 쓰고, 상태가 없으면 active 이다.
+ */
+pub(super) fn direction_definition(
+    id: &str,
+    fields: StoredDirectionFields,
 ) -> Result<DirectionDefinition> {
-    // direction form은 기존 id를 업데이트하거나 title에서 stable id를 생성할 수 있다. success criteria는
-    // queue-idle review가 완료 판정의 authority로 쓰는 필드라서 blank direction을 허용하지 않는다.
-    let title = normalized_required_text(&request.title, "direction title")?;
-    let id = if request.id.trim().is_empty() {
-        generated_unique_id(
-            GENERATED_DIRECTION_ID_PREFIX,
-            title,
-            directions
-                .directions
-                .iter()
-                .map(|direction| direction.id.trim()),
-        )
-    } else {
-        normalized_required_id(&request.id, "direction id")?.to_string()
-    };
-    let success_criteria = split_lines(&request.success_criteria_text);
+    let title = normalized_required_text(&fields.title, "direction title")?;
+    let id = normalized_required_id(id, "direction id")?.to_string();
+    let success_criteria = non_blank_lines(fields.success_criteria);
     if success_criteria.is_empty() {
         bail!("direction `{id}` requires at least one success criterion");
     }
     Ok(DirectionDefinition {
         id,
         title: title.to_string(),
-        summary: non_empty_or(&request.summary, title),
+        summary: non_empty_or(fields.summary.as_deref().unwrap_or_default(), title),
         success_criteria,
-        scope_hints: split_lines(&request.scope_hints_text),
-        detail_doc_path: request.detail_doc_path.trim().to_string(),
-        state: parse_direction_state(&request.state)?,
+        scope_hints: non_blank_lines(fields.scope_hints),
+        detail_doc_path: fields
+            .detail_doc_path
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        state: fields.state.unwrap_or(DirectionState::Active),
     })
+}
+
+fn non_blank_lines(lines: Vec<String>) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 pub(super) fn ensure_default_direction(directions: &mut DirectionCatalogDocument) -> Result<()> {
@@ -561,6 +599,7 @@ mod tests {
                 scope_hints_text: " backend \n frontend \n".to_string(),
                 detail_doc_path: " docs/release.md ".to_string(),
                 state: " ".to_string(),
+                expected_planning_revision: String::new(),
             },
             &directions,
         )
@@ -588,6 +627,7 @@ mod tests {
                 scope_hints_text: String::new(),
                 detail_doc_path: String::new(),
                 state: "active".to_string(),
+                expected_planning_revision: String::new(),
             },
             &directions,
         )
@@ -606,6 +646,7 @@ mod tests {
                 scope_hints_text: String::new(),
                 detail_doc_path: String::new(),
                 state: "active".to_string(),
+                expected_planning_revision: String::new(),
             },
             &directions,
         )
@@ -624,6 +665,7 @@ mod tests {
                 scope_hints_text: String::new(),
                 detail_doc_path: String::new(),
                 state: "waiting".to_string(),
+                expected_planning_revision: String::new(),
             },
             &directions,
         )
@@ -644,6 +686,7 @@ mod tests {
                 scope_hints_text: String::new(),
                 detail_doc_path: String::new(),
                 state: "done".to_string(),
+                expected_planning_revision: String::new(),
             },
             &directions,
         )
@@ -922,6 +965,21 @@ mod tests {
                 .iter()
                 .any(|direction| direction.id == "concurrent-direction")
         );
+    }
+
+    // The form path: a blank id makes a new direction, and a given id names the direction.
+    fn direction_from_request(
+        request: PlanningAdminDirectionMutationRequest,
+        directions: &DirectionCatalogDocument,
+    ) -> Result<DirectionDefinition> {
+        let id = request.id.clone();
+        let fields = direction_fields_from_request(request)?;
+        let id = if id.trim().is_empty() {
+            new_direction_id(&fields.title, directions)?
+        } else {
+            id
+        };
+        direction_definition(&id, fields)
     }
 
     fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {

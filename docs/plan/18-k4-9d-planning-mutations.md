@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. 9d-1 (2026-11-13) 과 9d-2 (2026-11-18) 를 구현했다 (§8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
+- 상태: **구현 중**. 9d-1 (2026-11-13), 9d-2 와 9d-3 (2026-11-18) 을 구현했다 (§8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
 - 상위 문서: [K4 명령 스펙](18-k4-command-spec.md) §2.2, §3.7 의 순서 4, §4 의 K4-9d. 같은 방법의 앞 조각은 §8 의
   K4-9a (planning 초기화)이다.
 - 이 문서를 따로 둔 이유: K4 설계는 K4-9d 를 한 줄로 적었다. 2026-11-13 의 코드 조사와 독립 리뷰(§7)에서 그 한 줄에 새
@@ -196,7 +196,7 @@ K4 설계는 `upsert_task` 처럼 "만들기와 고치기"를 한 명령으로 �
 | --- | --- | --- | --- |
 | 9d-1 (구현 2026-11-13, §8) | 저장 명령의 실행기 (port 와 구현). 커널 입력을 "core 명령 또는 저장 명령"으로 넓힌다. 답의 `result` 와 스펙의 모양. 이유 코드 `planning_revision_stale`, `planning_locked` 와 서비스의 타입 오류. 명령 전용 조립의 `planning` 조회. 옛 Gateway 의 판별을 명령으로 넓힌다. 첫 명령 셋: `create_task`, `update_task`, `delete_task` | 확장 (`akra kernel planning create_task …` 가 된다. 입구는 그대로이다) | 실행기 시험 (다섯 갈래, 낡은 revision, guard, 결과), 프로토콜 시험, 명령 전용 조립 시험, Gateway 커널 시험 (실행 뒤와 거절 뒤의 `planning` 이벤트), 커널 시뮬레이션 (가짜 실행기. 기록과 거절의 불변식), 스펙·Desktop 타입·skill 일치 |
 | 9d-2 (구현 2026-11-18, §8) | admin 의 작업 변경이 커널 명령으로 간다. 지우기 폼에 revision. 처리기의 오류 타입, 409 와 원인의 글 | 전환 (지우기에 revision 이 필수가 된다) | 입구 시험 (기록의 호출자, 낡은 폼의 409), admin 시험 (JSON, HTML, HTMX) |
-| 9d-3 | 방향: 명령 셋과 admin | 전환 (고치기·지우기에 revision 이 필수가 된다) | 같다 |
+| 9d-3 (구현 2026-11-18, §8) | 방향: 명령 셋과 admin | 전환 (고치기·지우기에 revision 이 필수가 된다) | 같다 |
 | 9d-4 | 파일 내보내기·적용: 명령 둘과 admin | 유지 | 같다. 작업 공간이 대표 checkout 과 다른 경우 |
 | 9d-5 | 초안의 승격: 명령 하나, 입력을 받는 승격 함수, admin | 유지 | 같다. 명령 전용 조립에서 승격이 되는지 본다 |
 | 9d-6 | `planning-tool` 의 선택 revision 과 worker 의 skill | 확장 | skill 파일 시험, CLI 시험 (모델 턴 없음) |
@@ -392,3 +392,55 @@ revision 의 거절과 그 기록, 실패의 원인), admin 의 router 시험 (�
 - 저장소 커널이 있는지 묻는 검사가 실패하면(파일 오류 포함) 직접 경로로 간다. K4-9a 의 초기화와 같다.
 - Gateway 의 답이 시간을 넘긴 만들기는 결과를 알 수 없다. 다시 보내면 작업이 둘이 될 수 있다 (§6 의 위험).
   고치기와 지우기는 revision 이 막는다.
+
+### 9d-3 (2026-11-18)
+
+만든 것:
+
+- 명령 셋: `create_direction`, `update_direction`, `delete_direction` (`state: store`, 성질은 §3.3 의 표와 같다).
+  결과는 `direction_created`, `direction_updated` (방향 id, 새 revision), `direction_deleted` (방향 id, 함께 지운 작업
+  수 `removed_task_count`, 기본 방향을 남겼는가 `default_retained`, 새 revision)이다.
+- 방향의 필드 (`DirectionFields`): 제목, 요약, 완료 기준, 범위 힌트, 상세 문서 경로, 상태. 만들기와 고치기가 같은
+  뜻으로 읽는다: 요약이 없으면 제목이고, 상태가 없으면 `active` 이고, 빈 줄이 아닌 완료 기준이 하나 이상 있어야 한다.
+  고치기는 방향 전체를 이 값으로 바꾼다.
+- 서비스: 방향의 변경을 만들기, 고치기, 지우기로 나눴다 (`PlanningAdminDirectionMutationCommand`). 고치기와 지우기는
+  읽은 문서의 revision 을 보낸 revision 과 견주고, 다르면 `planning_revision_stale` 로 거절한다. 만들기는 저장 충돌을
+  세 번까지 다시 하고, 그래도 충돌하면 `planning_locked` 로 거절한다. 변경은 저장이 만든 revision 을 돌려준다.
+- facade: 폼과 저장 명령이 함께 쓰는 함수 (`create_operator_direction`, `update_operator_direction`,
+  `delete_operator_direction`)와 폼을 저장 명령으로 바꾸는 함수 (`stored_direction_command`,
+  `stored_direction_delete_command`).
+- 입구: `KernelRoutedPlanningAdmin` 이 방향의 변경을 커널 명령으로 보낸다 (호출자 `akra-admin`). 방향의 처리기는
+  작업의 처리기와 같이 답한다: 거절은 409 (JSON 은 `{ "reason", "message" }`, 폼은 방향 화면과 알림), 그 밖의 실패는
+  500 과 원인의 글이다.
+- 폼: 방향 고치기와 지우기 폼이 화면의 revision 을 보낸다. 지우기 폼의 타입은 작업과 방향이 함께 쓴다
+  (`EntityDeleteForm`).
+
+동작이 바뀐 것:
+
+- 방향 고치기와 지우기에 `expected_planning_revision` 이 필수이다 (JSON 과 폼). 없으면 커널에 보내기 전에 실패한다.
+- id 가 있는 방향 요청은 고치기이다. 그 id 의 방향이 없으면 실패한다 ("was not found"). 전에는 그 id 로 새 방향을
+  만들었다. 새 방향의 id 는 항상 제목에서 만든다. 화면의 만들기 폼은 전에도 id 를 보내지 않았다.
+
+설계와 다른 점:
+
+- 완료 기준의 "하나 이상"은 스펙의 스키마가 아니라 실행기가 검사한다. Desktop 의 타입 생성기가 `minItems` 를 받지
+  않는다. 빈 줄만 있는 목록도 실행기가 막아야 하므로 검사는 한 곳이다.
+- 기본 방향의 지우기는 거절이 아니라 끝난 명령이다 (`default_retained: true`). 전의 admin 과 같다.
+
+확인: 서비스 시험 (만들기, 고치기, 지우기와 함께 지운 작업, 낡은 revision 의 거절, 없는 id 의 고치기), 프로토콜 시험
+(명령의 왕복, 지우는 명령의 확인 규칙, 스펙 파일 일치), 조립 시험 (실제 admin 조립과 명령 전용 조립: 기록과 호출자,
+거절과 그 기록, revision 이 없는 폼, 없는 id), admin 의 router 시험 (낡은 폼의 409: JSON 과 HTML, revision 이 없는
+지우기의 500), 스펙·Desktop 타입·skill 일치. 모델 턴은 없다.
+
+남긴 것:
+
+- 저장 명령으로 방향을 바꾸는 CLI 의 끝에서 끝까지 시험은 없다. 작업의 시험(`tests/kernel_cli.rs`)이 같은 길을 본다.
+- 9d-2 의 남긴 것(틀린 입력의 500, Gateway 가 커널을 쥔 경우의 시험)은 방향에도 같다.
+
+독립 리뷰 (2026-11-18). 심각한 결함은 없었다. 고친 것: id 가 있고 revision 이 없는 방향 요청의 글이 "id 가 있는
+요청은 고치기이다"를 말한다. 고치지 않고 남긴 것:
+
+- JSON 요청의 `expected_planning_revision` 은 글자이고 답의 `planning_revision` 은 숫자이다. 숫자를 그대로 보내면
+  422 이다. 작업의 route 도 같다 (9d-2 의 모양이다).
+- 만들기의 다시 하기(충돌 뒤의 재시도, 세 번 뒤의 `planning_locked`)와 방향 route 의 `planning_locked` → 409 에는
+  시험이 없다. 타입의 길은 작업과 같다.

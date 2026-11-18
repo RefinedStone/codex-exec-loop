@@ -65,6 +65,42 @@ impl StoredCommandService {
                     planning_revision,
                 })
             }
+            StoredCommand::CreateDirection { direction } => {
+                let change = self.planning.create_operator_direction(direction)?;
+                Ok(StoredCommandResult::DirectionCreated {
+                    direction_id: change.direction_id,
+                    planning_revision: change.planning_revision,
+                })
+            }
+            StoredCommand::UpdateDirection {
+                direction_id,
+                direction,
+                expected_planning_revision,
+            } => {
+                let change = self.planning.update_operator_direction(
+                    &direction_id,
+                    direction,
+                    expected_planning_revision,
+                )?;
+                Ok(StoredCommandResult::DirectionUpdated {
+                    direction_id: change.direction_id,
+                    planning_revision: change.planning_revision,
+                })
+            }
+            StoredCommand::DeleteDirection {
+                direction_id,
+                expected_planning_revision,
+            } => {
+                let deletion = self
+                    .planning
+                    .delete_operator_direction(&direction_id, expected_planning_revision)?;
+                Ok(StoredCommandResult::DirectionDeleted {
+                    direction_id: deletion.direction_id,
+                    removed_task_count: deletion.removed_task_count,
+                    default_retained: deletion.default_retained,
+                    planning_revision: deletion.planning_revision,
+                })
+            }
         }
     }
 }

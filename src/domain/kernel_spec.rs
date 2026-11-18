@@ -87,6 +87,12 @@ spec_names! {
             "Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         DeleteTask => "delete_task",
             "Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+        CreateDirection => "create_direction",
+            "Add a planning direction as the operator. The answer carries the new direction id and the new planning revision.";
+        UpdateDirection => "update_direction",
+            "Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+        DeleteDirection => "delete_direction",
+            "Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
     }
 }
 
@@ -277,7 +283,10 @@ impl KernelCommandKind {
             | Self::ResetPlanning
             | Self::CreateTask
             | Self::UpdateTask
-            | Self::DeleteTask => CommandCompletion::Records,
+            | Self::DeleteTask
+            | Self::CreateDirection
+            | Self::UpdateDirection
+            | Self::DeleteDirection => CommandCompletion::Records,
         };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (
@@ -351,19 +360,19 @@ impl KernelCommandKind {
                 &[Reason::KernelUnreachable],
             ),
             // 저장 명령이다 (plan 18 K4-9d). 커널이 없어도 실행되므로 `kernel_unreachable` 이 없다.
-            Self::CreateTask => (
+            Self::CreateTask | Self::CreateDirection => (
                 CommandScope::Planning,
                 Write,
                 Keyed,
                 &[Reason::PlanningLocked],
             ),
-            Self::UpdateTask => (
+            Self::UpdateTask | Self::UpdateDirection => (
                 CommandScope::Planning,
                 Write,
                 Natural,
                 &[Reason::PlanningRevisionStale, Reason::PlanningLocked],
             ),
-            Self::DeleteTask => (
+            Self::DeleteTask | Self::DeleteDirection => (
                 CommandScope::Planning,
                 Destructive,
                 Natural,
@@ -373,9 +382,13 @@ impl KernelCommandKind {
         CommandSpec {
             scope,
             state: match self {
-                Self::ResetPlanning | Self::CreateTask | Self::UpdateTask | Self::DeleteTask => {
-                    CommandState::Store
-                }
+                Self::ResetPlanning
+                | Self::CreateTask
+                | Self::UpdateTask
+                | Self::DeleteTask
+                | Self::CreateDirection
+                | Self::UpdateDirection
+                | Self::DeleteDirection => CommandState::Store,
                 Self::LoadSessions
                 | Self::RenameSession
                 | Self::SubmitPrompt

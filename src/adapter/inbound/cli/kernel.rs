@@ -453,7 +453,8 @@ mod tests {
         }
     }
 
-    /// A value that the schema accepts: the first enum value, a text, a number, or an object with its required fields.
+    /// A value that the schema accepts: the first enum value, a text, a number, a list of one item, or an object
+    /// with its required fields.
     fn sample_value(schema: &Value, spec: &Value) -> Value {
         let schema = resolve(schema, spec).unwrap();
         if let Some(values) = schema["enum"].as_array() {
@@ -466,6 +467,7 @@ mod tests {
         match kind.as_str() {
             "string" => json!("test-value"),
             "boolean" => json!(true),
+            "array" => json!([sample_value(&schema["items"], spec)]),
             "object" => Value::Object(
                 schema["required"]
                     .as_array()

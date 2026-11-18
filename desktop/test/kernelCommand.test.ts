@@ -24,6 +24,14 @@ const commands = {
   create_task: { type: "create_task", task: { title: "Task" } },
   update_task: { type: "update_task", task_id: "task-1", task: { title: "Task" }, expected_planning_revision: 7 },
   delete_task: { type: "delete_task", task_id: "task-1", expected_planning_revision: 7, confirm: true },
+  create_direction: { type: "create_direction", direction: { title: "Release", success_criteria: ["Shipped"] } },
+  update_direction: {
+    type: "update_direction",
+    direction_id: "dir-release",
+    direction: { title: "Release", success_criteria: ["Shipped"] },
+    expected_planning_revision: 7,
+  },
+  delete_direction: { type: "delete_direction", direction_id: "dir-release", expected_planning_revision: 7, confirm: true },
 } as const satisfies Record<KernelCommand["type"], KernelCommand>;
 
 function harness() {

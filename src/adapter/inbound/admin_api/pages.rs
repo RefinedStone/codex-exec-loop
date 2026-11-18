@@ -1,6 +1,6 @@
 use super::forms::{
     AgentProfilesForm, CreateDraftForm, DirectionMutationForm, DraftMutationForm, EditorQuery,
-    FileSyncForm, IdDeleteForm, ResetForm, TaskDeleteForm, TaskMutationForm,
+    EntityDeleteForm, FileSyncForm, ResetForm, TaskMutationForm,
 };
 use super::helpers::{
     AdminMutationFailure, encode_uri_component, ensure_csrf_cookie, internal_server_error,
@@ -256,6 +256,15 @@ async fn render_directions_page(
     query: Query<HashMap<String, String>>,
     surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
+    directions_page_response(&state, jar, query.get("notice").cloned(), surface)
+}
+
+fn directions_page_response(
+    state: &AdminAppState,
+    jar: CookieJar,
+    notice: Option<String>,
+    surface: PlanningAdminSurface,
+) -> std::result::Result<Response, StatusCode> {
     /*
      * direction edit 화면은 compact overview와 management projection을 동시에 필요로 한다.
      * overview는 navigation badge, runtime/doctor 상태, queue summary를 채우고, management view는 editable direction과
@@ -277,7 +286,7 @@ async fn render_directions_page(
             current_nav: surface.directions_nav(),
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
-            notice: query.get("notice").cloned(),
+            notice,
             direction_upsert_path: surface.direction_upsert_path(),
             direction_delete_path: surface.direction_delete_path(),
             draft_surface_token: surface.token(),
@@ -345,18 +354,16 @@ fn tasks_page_response(
 }
 
 /*
- * 작업 변경의 오류를 작업 화면으로 답한다 (plan 18 K4-9d). 화면은 다시 읽은 값이고 알림이 원인의 글이다. 그래서
- * 낡은 폼에서 거절된 사용자는 같은 답에서 새 값과 "다시 읽고 다시 하라"를 본다. 상태 코드는 거절이면 409,
- * 실패이면 500 이다. 화면을 읽을 수 없으면 글만 답한다.
+ * 작업이나 방향의 변경의 오류를 그 화면으로 답한다 (plan 18 K4-9d). 화면은 다시 읽은 값이고 알림이 원인의 글이다.
+ * 그래서 낡은 폼에서 거절된 사용자는 같은 답에서 새 값과 "다시 읽고 다시 하라"를 본다. 상태 코드는 거절이면 409,
+ * 실패이면 500 이다. 화면을 읽을 수 없으면 글만 답한다. `page` 는 알림을 받아 그 화면을 그린다.
  */
-fn task_mutation_failure_page(
-    state: &AdminAppState,
-    jar: CookieJar,
-    surface: PlanningAdminSurface,
+fn mutation_failure_page(
     error: anyhow::Error,
+    page: impl FnOnce(Option<String>) -> std::result::Result<Response, StatusCode>,
 ) -> Response {
     let failure = AdminMutationFailure::from_error(error);
-    match tasks_page_response(state, jar, Some(failure.message.clone()), surface) {
+    match page(Some(failure.message.clone())) {
         Ok(mut page) => {
             *page.status_mut() = failure.status;
             page
@@ -443,15 +450,37 @@ async fn upsert_direction_for_surface(
             scope_hints_text: form.scope_hints_text,
             detail_doc_path: form.detail_doc_path,
             state: form.state,
-        })
-        .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location(surface.directions_path(), &outcome.notice)).into_response())
+            expected_planning_revision: form.expected_planning_revision,
+        });
+    Ok(direction_mutation_response(
+        state,
+        jar,
+        surface,
+        outcome.map(|outcome| outcome.notice),
+    ))
+}
+
+// 끝난 방향 변경은 redirect 로 답하고, 거절과 실패는 방향 화면과 그 글로 답한다 (plan 18 K4-9d-3).
+fn direction_mutation_response(
+    state: AdminAppState,
+    jar: CookieJar,
+    surface: PlanningAdminSurface,
+    notice: anyhow::Result<String>,
+) -> Response {
+    match notice {
+        Ok(notice) => {
+            Redirect::to(&notice_location(surface.directions_path(), &notice)).into_response()
+        }
+        Err(error) => mutation_failure_page(error, |notice| {
+            directions_page_response(&state, jar, notice, surface)
+        }),
+    }
 }
 
 pub(super) async fn delete_direction_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
-    Form(form): Form<IdDeleteForm>,
+    Form(form): Form<EntityDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
     delete_direction_for_surface(state, jar, form, PlanningAdminSurface::Default).await
 }
@@ -459,7 +488,7 @@ pub(super) async fn delete_direction_page(
 pub(super) async fn delete_akra_direction_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
-    Form(form): Form<IdDeleteForm>,
+    Form(form): Form<EntityDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
     delete_direction_for_surface(state, jar, form, PlanningAdminSurface::Akra).await
 }
@@ -467,16 +496,23 @@ pub(super) async fn delete_akra_direction_page(
 async fn delete_direction_for_surface(
     state: AdminAppState,
     jar: CookieJar,
-    form: IdDeleteForm,
+    form: EntityDeleteForm,
     surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
-    // route가 direction delete라는 operation 의미를 제공하고, shared IdDeleteForm은 선택된 id와 CSRF proof만 운반한다.
+    // route가 direction delete라는 operation 의미를 제공하고, 폼은 선택된 id, 읽은 revision, CSRF proof를 운반한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
         .facade
-        .delete_direction(PlanningAdminDirectionDeleteRequest { id: form.id })
-        .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location(surface.directions_path(), &outcome.notice)).into_response())
+        .delete_direction(PlanningAdminDirectionDeleteRequest {
+            id: form.id,
+            expected_planning_revision: form.expected_planning_revision,
+        });
+    Ok(direction_mutation_response(
+        state,
+        jar,
+        surface,
+        outcome.map(|outcome| outcome.notice),
+    ))
 }
 
 pub(super) async fn upsert_task_page(
@@ -525,14 +561,16 @@ async fn upsert_task_for_surface(
         Ok(outcome) => {
             Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response()
         }
-        Err(error) => task_mutation_failure_page(&state, jar, surface, error),
+        Err(error) => mutation_failure_page(error, |notice| {
+            tasks_page_response(&state, jar, notice, surface)
+        }),
     })
 }
 
 pub(super) async fn delete_task_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
-    Form(form): Form<TaskDeleteForm>,
+    Form(form): Form<EntityDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
     delete_task_for_surface(state, jar, form, PlanningAdminSurface::Default).await
 }
@@ -540,7 +578,7 @@ pub(super) async fn delete_task_page(
 pub(super) async fn delete_akra_task_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
-    Form(form): Form<TaskDeleteForm>,
+    Form(form): Form<EntityDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
     delete_task_for_surface(state, jar, form, PlanningAdminSurface::Akra).await
 }
@@ -548,7 +586,7 @@ pub(super) async fn delete_akra_task_page(
 async fn delete_task_for_surface(
     state: AdminAppState,
     jar: CookieJar,
-    form: TaskDeleteForm,
+    form: EntityDeleteForm,
     surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
     // task delete도 direction delete와 같은 post-redirect-get shape를 써서 destructive POST가 browser refresh로 반복되지 않게 한다.
@@ -561,7 +599,9 @@ async fn delete_task_for_surface(
         Ok(outcome) => {
             Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response()
         }
-        Err(error) => task_mutation_failure_page(&state, jar, surface, error),
+        Err(error) => mutation_failure_page(error, |notice| {
+            tasks_page_response(&state, jar, notice, surface)
+        }),
     })
 }
 

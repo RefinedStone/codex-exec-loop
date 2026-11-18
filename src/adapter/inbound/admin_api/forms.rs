@@ -104,20 +104,17 @@ pub(super) struct DirectionMutationForm {
     pub(super) detail_doc_path: String,
     #[serde(default)]
     pub(super) state: String,
+    // 화면이 방향을 보여 줄 때의 planning revision 이다. 고치기에 필수이다 (plan 18 K4-9d).
+    #[serde(default)]
+    pub(super) expected_planning_revision: String,
 }
 
+// 작업과 방향의 지우기 폼이다. route 가 무엇을 지우는지 정한다.
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct IdDeleteForm {
-    pub(super) csrf_token: String,
-    // direction delete route의 envelope이다. task delete는 revision 을 함께 보내는 `TaskDeleteForm` 을 쓴다.
-    pub(super) id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct TaskDeleteForm {
+pub(super) struct EntityDeleteForm {
     pub(super) csrf_token: String,
     pub(super) id: String,
-    // 화면이 작업을 보여 줄 때의 planning revision 이다. 지우기에 필수이다 (plan 18 K4-9d).
+    // 화면이 그 항목을 보여 줄 때의 planning revision 이다. 지우기에 필수이다 (plan 18 K4-9d).
     #[serde(default)]
     pub(super) expected_planning_revision: String,
 }
