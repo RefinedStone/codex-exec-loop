@@ -8,6 +8,7 @@ import { type KeyboardEvent, memo, useCallback, useEffect, useLayoutEffect, useM
 import { copyText } from "../conversation/copyText";
 import { parseGitDiff } from "../conversation/diff";
 import { DiffFileList, DiffStyleToggle } from "../conversation/DiffView";
+import { useDesktopStore } from "../session/desktopStore";
 import type { GatewayRequest } from "../work/notionHub";
 import {
   appendPage,
@@ -80,7 +81,8 @@ export function useGitGraph(request: GatewayRequest, cwd: string | null): GitGra
 
   useEffect(reload, [reload]);
 
-  const loadMore = useCallback(
+  const pendingMore = useRef<Promise<LoadedGitGraph | null> | null>(null);
+  const readMore = useCallback(
     async (limit?: number): Promise<LoadedGitGraph | null> => {
       const loaded = latest.current;
       if (loaded.phase !== "loaded" || loaded.next === null || loaded.loadingMore) return null;
@@ -107,6 +109,18 @@ export function useGitGraph(request: GatewayRequest, cwd: string | null): GitGra
     },
     [request, reload],
   );
+  // 이미 읽는 중이면 그 읽기의 결과를 준다. 찾기의 "다음"이 자동 읽기와 겹쳐도 그 쪽부터 이어서 찾는다.
+  const loadMore = useCallback(
+    (limit?: number): Promise<LoadedGitGraph | null> => {
+      if (pendingMore.current) return pendingMore.current;
+      const reading = readMore(limit).finally(() => {
+        pendingMore.current = null;
+      });
+      pendingMore.current = reading;
+      return reading;
+    },
+    [readMore],
+  );
 
   // 저장소를 감시한다. 지문이 다르면 읽은 만큼 다시 읽고 줄을 바꾼다. 화면은 그동안 앞의 줄을 보인다. 읽는 사이에
   // 화면의 상태가 바뀌었으면 (다음 쪽을 읽었다, 다시 읽었다) 읽은 것을 버린다: 낡은 자리와 새 줄이 섞이지 않게 한다.
@@ -117,10 +131,12 @@ export function useGitGraph(request: GatewayRequest, cwd: string | null): GitGra
       const shown = latest.current;
       if (polling.current || document.visibilityState !== "visible" || shown.phase !== "loaded" || shown.loadingMore) return;
       polling.current = true;
+      const current = generation.current;
       try {
         if ((await fetchRefsDigest(request, cwd)) === shown.refsDigest) return;
         const fresh = await fetchGraphRows(request, cwd, shown.rows.length);
-        if (latest.current === shown) setState(fresh);
+        // `generation` 은 폴더가 바뀌거나 다시 읽기를 시작한 그 자리에서 오른다. 화면의 상태는 그리기 뒤에야 바뀐다.
+        if (current === generation.current && latest.current === shown) setState(fresh);
       } catch {
         // 다음 주기에 다시 본다.
       } finally {
@@ -295,6 +311,7 @@ function GraphRows({ graph, folders, selected, onSelect, onOpenThread }: GraphRo
 
   // 다음 찾은 줄로 간다. 읽은 줄에 더 없으면 다음 쪽들을 읽으며 찾는다. 끝까지 없으면 처음의 찾은 줄로 돌아간다.
   const findNext = async (step: 1 | -1) => {
+    if (query.trim() === "") return;
     const ahead = step === 1 ? matches.find((index) => index > selectedIndex) : undefined;
     if (step === -1 || ahead !== undefined || state.next === null) {
       const target = ahead ?? nextMatch(matches, selectedIndex, step);
@@ -470,12 +487,12 @@ function CommitDetail({ commit, state, onSelect, onClose }: { commit: string; st
 export interface GitGraphPanelProps {
   request: GatewayRequest;
   cwd: string | null;
-  /** 스레드 목록의 폴더들이다. 작업 트리의 커밋에 스레드 배지를 붙이는 데 쓴다. */
-  folders: readonly BadgeFolder[];
   onOpenThread(threadId: string): void;
 }
 
-export function GitGraphPanel({ request, cwd, folders, onOpenThread }: GitGraphPanelProps) {
+export function GitGraphPanel({ request, cwd, onOpenThread }: GitGraphPanelProps) {
+  // 스레드 목록의 폴더들이다. 작업 트리의 커밋에 스레드 배지를 붙이는 데 쓴다. 패널이 열려 있을 때만 구독한다.
+  const folders = useDesktopStore((state) => state.folders);
   const graph = useGitGraph(request, cwd);
   const { state, reload } = graph;
   const [selection, setSelection] = useState<{ cwd: string; commit: string } | null>(null);

@@ -82,7 +82,7 @@ impl GitGraphPort for GitGraphService {
 
     fn commit_detail(&self, repository_dir: &str, commit: &str) -> Result<Option<GitCommitDetail>> {
         if !is_git_commit_id(commit) {
-            bail!("the commit id must be 7 to 64 hexadecimal characters");
+            bail!("the commit id must be a full sha of 40 or 64 hexadecimal characters");
         }
         self.history.read_commit_detail(repository_dir, commit)
     }
@@ -409,7 +409,11 @@ mod tests {
 
         assert!(service.commit_detail("/repo", "--all").is_err());
         assert!(service.commit_detail("/repo", "c1").is_err());
-        assert_eq!(service.commit_detail("/repo", "abcdef1").unwrap(), None);
+        assert!(service.commit_detail("/repo", "abcdef1").is_err());
+        assert_eq!(
+            service.commit_detail("/repo", &"a".repeat(40)).unwrap(),
+            None
+        );
     }
 
     #[test]

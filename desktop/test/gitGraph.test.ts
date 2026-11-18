@@ -262,6 +262,8 @@ describe("scrollTopAfterRowsChange", () => {
     const previous = rowsOf("c3", "c2", "c1");
     const next = rowsOf("c5", "c4", "c3", "c2", "c1");
     expect(scrollTopAfterRowsChange(previous, next, ROW_HEIGHT + 10)).toBe(3 * ROW_HEIGHT + 10);
+    // 맨 위를 보고 있었으면 맨 위에 둔다. 새 커밋이 보인다.
+    expect(scrollTopAfterRowsChange(previous, next, 0)).toBe(0);
     // 뒤에 줄을 이은 때는 그대로이다.
     expect(scrollTopAfterRowsChange(previous, [...previous, ...rowsOf("c0")], ROW_HEIGHT + 10)).toBe(ROW_HEIGHT + 10);
   });

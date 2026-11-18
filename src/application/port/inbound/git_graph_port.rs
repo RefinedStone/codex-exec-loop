@@ -66,6 +66,6 @@ pub trait GitGraphPort: Send + Sync {
     /// ref 들의 지문만 읽는다. 커밋은 읽지 않는다.
     fn refs_state(&self, repository_dir: &str) -> Result<GitGraphRefsState>;
 
-    /// 커밋 하나의 상세이다. 그 커밋이 없으면 `None` 이다. `commit` 이 sha 모양이 아니면 오류이다.
+    /// 커밋 하나의 상세이다. 그 커밋이 없으면 `None` 이다. `commit` 이 전체 sha 가 아니면 오류이다.
     fn commit_detail(&self, repository_dir: &str, commit: &str) -> Result<Option<GitCommitDetail>>;
 }
