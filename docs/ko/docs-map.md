@@ -32,6 +32,7 @@
 
 다음 문서는 현재 구현 계약이 아닙니다.
 
+- [Akra Desktop 사용성: Codex 앱·Orca·OmO Desktop 과 비교한 차이(확대, 뒤로 가기, 오른쪽 클릭, 창 복원, 알림, 입력창, 스레드 목록)와 고칠 순서 (제안)](../plan/26-akra-desktop-usability.md)
 - [주의 항목: kernel 이 "사람이 지금 해야 하는 것"을 한 번만 판정하고 client 는 그리기만 한다 (제안)](../plan/23-akra-attention-items.md)
 - [Akra 관찰-제안 구조 (전체 그림): 일반 대화를 관찰하고 Akra 기능을 제안·실행, 기록은 Codex·관제와 주의는 Akra](../plan/20-akra-observe-and-offer.md)
 - [Akra 커널 성질 목표: 재시작 복구, 경합 재현, 자기 설명, 정책으로서의 동시성, 엔진 중립](../plan/19-akra-kernel-quality-goals.md)
