@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use rand::RngCore;
 
 use super::direction_mutation::{
@@ -13,6 +13,7 @@ use super::{
     PlanningAdminDirectionMutationRequest, PlanningAdminFacadeService, PlanningAdminManagementView,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
+use crate::application::port::inbound::stored_command_port::{StoredCommand, StoredTaskFields};
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskMutationRequest,
     PlanningTaskMutationSource, PlanningTaskUpdateInput,
@@ -111,30 +112,44 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminCrudOutcome> {
         // task form submit은 document를 직접 고치지 않고 common mutation service로 들어간다. admin/operator 입력도
         // worker/runtime/model command와 같은 priority 계산과 queue projection commit 규칙을 공유해야 하기 때문이다.
-        let updated = !request.id.trim().is_empty();
         let command = task_command_from_request(request)?;
+        let updated = matches!(command, PlanningTaskMutationCommand::UpdateTask(_));
         let PlanningOperatorTaskChange { task_id, .. } =
             self.apply_operator_task_command(command)?;
-        let management = self.load_management_view()?;
+        self.task_upsert_outcome(&task_id, updated)
+    }
+    pub fn delete_task(
+        &self,
+        request: PlanningAdminTaskDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        let (task_id, expected_planning_revision) = task_delete_from_request(&request)?;
+        self.delete_operator_task(task_id, Some(expected_planning_revision))?;
+        self.task_delete_outcome(task_id)
+    }
+
+    /*
+     * 끝난 작업 변경의 화면 결과이다: 알림 글과 다시 읽은 관리 화면의 값. 직접 실행한 변경과 커널 명령으로 간
+     * 변경(plan 18 K4-9d)이 같은 결과를 만든다.
+     */
+    pub fn task_upsert_outcome(
+        &self,
+        task_id: &str,
+        updated: bool,
+    ) -> Result<PlanningAdminCrudOutcome> {
         Ok(PlanningAdminCrudOutcome {
             notice: if updated {
                 format!("task `{task_id}` updated")
             } else {
                 format!("task `{task_id}` added")
             },
-            management,
+            management: self.load_management_view()?,
         })
     }
-    pub fn delete_task(
-        &self,
-        request: PlanningAdminTaskDeleteRequest,
-    ) -> Result<PlanningAdminCrudOutcome> {
-        let task_id = normalized_required_id(&request.id, "task id")?;
-        self.delete_operator_task(task_id, None)?;
-        let management = self.load_management_view()?;
+
+    pub fn task_delete_outcome(&self, task_id: &str) -> Result<PlanningAdminCrudOutcome> {
         Ok(PlanningAdminCrudOutcome {
             notice: format!("task `{task_id}` deleted"),
-            management,
+            management: self.load_management_view()?,
         })
     }
 
@@ -283,6 +298,73 @@ impl PlanningAdminFacadeService {
             )),
         }
     }
+}
+
+/*
+ * admin 의 작업 폼을 저장 명령으로 바꾼다 (plan 18 K4-9d). 입구의 조립이 이 값을 커널 명령으로 보낸다. 폼의 뜻은
+ * 직접 실행과 같다: 같은 parser 를 지난다.
+ */
+impl PlanningAdminFacadeService {
+    pub fn stored_task_command(request: PlanningAdminTaskMutationRequest) -> Result<StoredCommand> {
+        Ok(match task_command_from_request(request)? {
+            PlanningTaskMutationCommand::CreateTask(input) => StoredCommand::CreateTask {
+                task: StoredTaskFields {
+                    direction_id: input.direction_id,
+                    title: input.title,
+                    description: input.description,
+                    status: input.status,
+                    base_priority: input.base_priority,
+                    dynamic_priority_delta: input.dynamic_priority_delta,
+                    priority_reason: input.priority_reason,
+                    depends_on: input.depends_on,
+                    blocked_by: input.blocked_by,
+                },
+            },
+            PlanningTaskMutationCommand::UpdateTask(input) => StoredCommand::UpdateTask {
+                expected_planning_revision: input
+                    .expected_planning_revision
+                    .context("an admin task update has no expected planning revision")?,
+                task_id: input.task_id,
+                task: StoredTaskFields {
+                    direction_id: input.direction_id,
+                    title: input.title.context("an admin task update has no title")?,
+                    description: input.description,
+                    status: input.status,
+                    base_priority: input.base_priority,
+                    dynamic_priority_delta: input.dynamic_priority_delta,
+                    priority_reason: input.priority_reason,
+                    depends_on: input.depends_on.unwrap_or_default(),
+                    blocked_by: input.blocked_by.unwrap_or_default(),
+                },
+            },
+        })
+    }
+
+    /// admin 의 작업 지우기를 저장 명령으로 바꾼다.
+    pub fn stored_task_delete_command(
+        request: &PlanningAdminTaskDeleteRequest,
+    ) -> Result<StoredCommand> {
+        let (task_id, expected_planning_revision) = task_delete_from_request(request)?;
+        Ok(StoredCommand::DeleteTask {
+            task_id: task_id.to_string(),
+            expected_planning_revision,
+        })
+    }
+}
+
+// 지우기도 폼이 열린 뒤 다른 쓰기가 있었는지 확인할 값이 없으면 하지 않는다 (plan 18 K4-9d).
+fn task_delete_from_request(request: &PlanningAdminTaskDeleteRequest) -> Result<(&str, i64)> {
+    let task_id = normalized_required_id(&request.id, "task id")?;
+    let expected_planning_revision = request
+        .expected_planning_revision
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| {
+            anyhow!(
+                "expected_planning_revision is required to delete a task; reload the task and retry"
+            )
+        })?;
+    Ok((task_id, expected_planning_revision))
 }
 
 fn task_command_from_request(
@@ -862,9 +944,7 @@ mod tests {
         assert!(update_error.to_string().contains("official-refresh"));
         let delete_error = fixture
             .facade
-            .delete_task(PlanningAdminTaskDeleteRequest {
-                id: task_id.clone(),
-            })
+            .delete_task(delete_request(&fixture.facade, task_id.clone()))
             .expect_err("official refresh must block task deletion");
         assert!(delete_error.to_string().contains("official-refresh"));
 
@@ -878,7 +958,7 @@ mod tests {
             .expect("official refresh claim should release");
         fixture
             .facade
-            .delete_task(PlanningAdminTaskDeleteRequest { id: task_id })
+            .delete_task(delete_request(&fixture.facade, task_id))
             .expect("task deletion should proceed after refresh release");
     }
 
@@ -937,9 +1017,7 @@ mod tests {
 
         let error = fixture
             .facade
-            .delete_task(PlanningAdminTaskDeleteRequest {
-                id: "deleted-task".to_string(),
-            })
+            .delete_task(delete_request(&fixture.facade, "deleted-task".to_string()))
             .expect_err("running task delete must be rejected");
         let management = fixture
             .facade
@@ -1029,9 +1107,7 @@ mod tests {
 
         let outcome = fixture
             .facade
-            .delete_task(PlanningAdminTaskDeleteRequest {
-                id: "deleted-task".to_string(),
-            })
+            .delete_task(delete_request(&fixture.facade, "deleted-task".to_string()))
             .expect("terminal-only task should delete");
         let runtime = fixture
             .authority_port
@@ -1081,15 +1157,11 @@ mod tests {
 
         let blank = fixture
             .facade
-            .delete_task(PlanningAdminTaskDeleteRequest {
-                id: " ".to_string(),
-            })
+            .delete_task(delete_request(&fixture.facade, " ".to_string()))
             .expect_err("blank task id should fail");
         let missing = fixture
             .facade
-            .delete_task(PlanningAdminTaskDeleteRequest {
-                id: "missing-task".to_string(),
-            })
+            .delete_task(delete_request(&fixture.facade, "missing-task".to_string()))
             .expect_err("missing task id should fail");
 
         assert_eq!(blank.to_string(), "task id is required");
@@ -1241,6 +1313,21 @@ mod tests {
             bad_task_id.to_string(),
             "task id `bad/task` must not contain whitespace or path separators"
         );
+    }
+
+    // 지우기는 화면이 읽은 revision 을 보낸다 (plan 18 K4-9d).
+    fn delete_request(
+        facade: &crate::application::service::planning::PlanningAdminFacadeService,
+        id: impl Into<String>,
+    ) -> PlanningAdminTaskDeleteRequest {
+        PlanningAdminTaskDeleteRequest {
+            id: id.into(),
+            expected_planning_revision: facade
+                .load_management_view()
+                .expect("management view should load")
+                .planning_revision
+                .to_string(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

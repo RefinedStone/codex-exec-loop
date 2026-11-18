@@ -655,6 +655,20 @@ pub struct TaskFields {
 }
 
 impl TaskFields {
+    fn from_stored(task: StoredTaskFields) -> Self {
+        Self {
+            direction_id: task.direction_id,
+            title: task.title,
+            description: task.description,
+            status: task.status.map(PlanningTaskStatus::from_core),
+            base_priority: task.base_priority,
+            dynamic_priority_delta: task.dynamic_priority_delta,
+            priority_reason: task.priority_reason,
+            depends_on: task.depends_on,
+            blocked_by: task.blocked_by,
+        }
+    }
+
     fn into_stored(self) -> Result<StoredTaskFields, KernelProtocolError> {
         Ok(StoredTaskFields {
             direction_id: self.direction_id,
@@ -728,6 +742,35 @@ impl KernelCommand {
             | Self::SetAutoFollowMaxTurns { .. }
             | Self::PauseAutoFollow {}
             | Self::RefreshPlanning {} => false,
+        }
+    }
+
+    /*
+     * 저장 명령을 보낼 명령으로 바꾼다 (`into_input` 의 반대). 입구의 조립이 쓴다 (plan 18 K4-9d). 지우는 명령의
+     * `confirm` 은 `true` 이다: 입구가 사용자의 확인을 받은 뒤에 이 값을 만든다.
+     */
+    pub fn from_stored(command: StoredCommand) -> Self {
+        match command {
+            StoredCommand::CreateTask { task } => Self::CreateTask {
+                task: TaskFields::from_stored(task),
+            },
+            StoredCommand::UpdateTask {
+                task_id,
+                task,
+                expected_planning_revision,
+            } => Self::UpdateTask {
+                task_id,
+                task: TaskFields::from_stored(task),
+                expected_planning_revision,
+            },
+            StoredCommand::DeleteTask {
+                task_id,
+                expected_planning_revision,
+            } => Self::DeleteTask {
+                task_id,
+                expected_planning_revision,
+                confirm: true,
+            },
         }
     }
 

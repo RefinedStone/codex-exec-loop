@@ -90,8 +90,23 @@ the fields of the task and `delete_task` needs `confirm: true`; both need
 `planning_revision_stale` and changes nothing. `planning_locked` rejects a command while another
 change or parallel work holds the planning data. `akra kernel query planning` answers from the
 store when no kernel runs, so a client can read the current revision. An object field goes as
-JSON text: `akra kernel planning create_task --task '{"title":"..."}' --json`. No entrance uses
-the task commands yet; the admin forms still change tasks directly.
+JSON text: `akra kernel planning create_task --task '{"title":"..."}' --json`.
+
+The admin sends its task changes as these commands. The task forms (`/admin/tasks/upsert`,
+`/admin/tasks/delete`, the same paths below `/admin/akra`) and the JSON routes
+(`/api/planning/tasks`, `/api/planning/tasks/delete`) make `create_task`, `update_task`, or
+`delete_task`, and the record of the command has `caller: akra-admin`. The admin reads the page
+values from the store after the command ends. A task delete now needs
+`expected_planning_revision`, the same as a task update; the delete form sends the value that the
+tasks page showed. When the kernel rejects a change (`planning_revision_stale`,
+`planning_locked`), the admin answers 409, not 500: the JSON routes answer
+`{ "reason", "message" }`, and the forms answer the tasks page again with the message as its
+notice and the current values. Another failure of these routes is a 500 that carries its cause
+(`{ "message" }`, or the tasks page with the cause as its notice). Two cases are not recorded:
+a folder that cannot have a repository kernel (a repository without a primary checkout, a
+parallel slot worktree) changes tasks directly, and a repository whose kernel a TUI holds runs
+the command without a record. The direction, file, and draft changes of the
+admin still run directly.
 
 The planning reset of the other entrances also goes to the repository kernel. `akra reset`, the
 admin reset (`/api/planning/reset`, `/admin/controls/reset`), and the Telegram `/reset` commands

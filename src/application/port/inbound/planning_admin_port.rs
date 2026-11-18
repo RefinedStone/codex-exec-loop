@@ -4,7 +4,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::planning::PlanningResetRequest;
+use crate::application::port::inbound::stored_command_port::StoredCommandRejection;
+use crate::domain::kernel_spec::ReasonCode;
+use crate::domain::planning::{PlanningMutationRefusal, PlanningResetRequest};
 
 /*
  * PlanningAdminPort 계약은 의도적으로 data-heavy하다. inbound admin route/template과 planning application
@@ -358,7 +360,48 @@ pub struct PlanningAdminTaskMutationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningAdminTaskDeleteRequest {
     pub id: String,
+    // 필수이다. 화면이 작업을 보여 줄 때의 planning revision 이다 (plan 18 K4-9d).
+    #[serde(default)]
+    pub expected_planning_revision: String,
 }
+
+/*
+ * planning 의 변경이 아무것도 바꾸지 않고 거절되었다 (plan 18 K4-9d). 낡은 화면에서 낸 변경과 잠긴 planning 이다.
+ * 실패가 아니다: 사용자는 다시 읽거나 조금 뒤에 다시 하면 된다. 그래서 입구는 이 오류를 500 이 아닌 409 와 이
+ * 글로 답한다. 이유 코드는 커널 명령의 거절과 같은 값이다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningAdminMutationRefusal {
+    pub reason: ReasonCode,
+    pub message: String,
+}
+
+impl PlanningAdminMutationRefusal {
+    /*
+     * 오류 사슬에서 거절을 찾는다. 커널 명령으로 간 변경은 이 타입을 돌려준다. 직접 실행한 변경(저장소 커널이 있을
+     * 수 없는 폴더)은 서비스의 거절 타입을 돌려준다. 둘 다 같은 거절이다.
+     */
+    pub fn find_in(error: &anyhow::Error) -> Option<Self> {
+        if let Some(refusal) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
+            return Some(refusal.clone());
+        }
+        PlanningMutationRefusal::find_in(error).map(|refusal| {
+            let rejection = StoredCommandRejection::from(refusal);
+            Self {
+                reason: rejection.reason,
+                message: rejection.message,
+            }
+        })
+    }
+}
+
+impl fmt::Display for PlanningAdminMutationRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PlanningAdminMutationRefusal {}
 
 /*
  * command outcome은 operator notice와 갱신된 admin surface를 함께 돌려준다. mutation 후 caller가 별도 reload를
