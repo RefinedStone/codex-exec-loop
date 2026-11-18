@@ -754,6 +754,17 @@ The Gateway records the external documents that a thread mentions, without a mod
   The "Notion" view of the "업무" side panel reads the `notion` server of the
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
   only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).
+  The "Linear" view reads the latest 30 assigned, incomplete issues through Linear's
+  GraphQL API. Main validates the personal key with `viewer` before saving encrypted
+  credentials in `linear-token.bin`. Team/project IDs and the active-cycle filter
+  operate on that cached list. Open and refresh fetch data; filters do not.
+  Hand-off reads the description and ten newest comments, preserves the issue URL
+  and suggested branch name, and fills a draft capped at 20,000 characters.
+  It uses the visible local thread's folder or asks for one; cancellation preserves
+  the draft. It does not create a thread, branch or turn. Linear issue URLs are also
+  recognized as related documents, without a change-version provider. There are no
+  issue mutations or OAuth flows (`desktop/src/main/linearService.ts`,
+  `desktop/src/renderer/work/LinearPanel.tsx`, `src/domain/work_context.rs`).
   The "Projects" view reads one GitHub Project (`owner/number` or its address, kept in the renderer's local
   storage) with `gh api graphql` (`ProjectV2`, `read:project` scope, at most 500 items). It shows the open
   issues, pull requests, and drafts grouped by the Status field and counts the closed ones. The repository

@@ -49,7 +49,7 @@ describe("documentsFrom", () => {
 describe("labels and groups", () => {
   it("labels known kinds and shows unknown kinds as they are", () => {
     expect(kindLabel("notion")).toBe("Notion");
-    expect(kindLabel("linear")).toBe("linear");
+    expect(kindLabel("linear")).toBe("Linear");
     expect(sourceLabel("agent")).toBe("AI");
     expect(sourceLabel("hook")).toBe("hook");
   });

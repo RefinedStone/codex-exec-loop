@@ -1,6 +1,10 @@
 # R12. Linear 패널
 
-상태: 제안 (proposed) · 기준일: 2026-11-13 · 선행: R4 (업무 패널) · 규모: 약 1주 (+ 문서 인식기 0.5주)
+상태: 구현·로컬 검증 완료, 실제 계정 검증 대기 · 기준일: 2026-11-18 · 선행: R4 (업무 패널)
+
+현재 구현은 [`docs/reference/current-product.md`](../../../reference/current-product.md)에 정리했다.
+개인 API 키와 실제 계정은 가짜 서버 검증에 사용하지 않았다. 계정 검증과 PR 전달 상태는
+`.omo/evidence/linear-verification.md`에서 추적한다.
 
 ## 목표
 
@@ -104,7 +108,7 @@ query($first: Int!) {
     assignedIssues(
       first: $first
       orderBy: updatedAt
-      filter: { state: { type: { nin: ["completed", "canceled"] } } }
+      filter: { state: { type: { nin: ["completed", "canceled", "duplicate"] } } }
     ) {
       nodes {
         identifier title url priority updatedAt branchName
@@ -119,7 +123,8 @@ query($first: Int!) {
 ```
 
 - 연결 확인은 `viewer { id name }` 이다.
-- 넘기기 때만 그 이슈의 `description` (Markdown)과 `comments(last: 10)` 를 읽는다.
+- 넘기기 때만 그 이슈의 `description` (Markdown)과 `comments(first: 10, orderBy: createdAt)`를 읽는다.
+  현재 공식 스키마에서 `first`는 최신 순이다. 이전 제안의 `last: 10`은 오래된 댓글을 고르므로 수정했다.
 - 필터(팀, 프로젝트, 사이클)는 받은 목록에서 main 이 적용한다. 다시 호출하지 않는다.
 - 필드 이름과 필터 문법은 구현 전에 Linear 스키마로 확인한다.
 
@@ -179,7 +184,7 @@ query($first: Int!) {
 5. `LinearRecognizer` (Rust). 단위 시험.
 6. 실제 워크스페이스로 확인하고 이 문서와 README 표의 상태를 고친다. 끝난 동작은 `docs/reference/` 로 옮긴다.
 
-1~4 는 PR 하나, 5 는 PR 하나로 한다 (Desktop 과 Rust 를 나눈다).
+이번 전달은 사용자 요청에 따라 Desktop과 Rust 인식기를 한 R12 PR로 묶는다.
 
 ## 미결
 

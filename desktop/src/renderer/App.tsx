@@ -31,6 +31,7 @@ import { GitHubPanel } from "./work/GitHubPanel";
 import { GitHubProjectPanel } from "./work/GitHubProjectPanel";
 import { findFolderForRepository } from "./work/githubProjects";
 import { JiraPanel } from "./work/JiraPanel";
+import { LinearPanel } from "./work/LinearPanel";
 import type { GatewayRequest } from "./work/notionHub";
 import { NotionPanel } from "./work/NotionPanel";
 import { GitGraphPanel } from "./git/GitGraphPanel";
@@ -206,7 +207,7 @@ function RightPanel({ panel, children }: { panel: PanelId; children: React.React
   );
 }
 
-const WORK_SOURCES = ["GitHub", "Projects", "Jira", "Notion"] as const;
+const WORK_SOURCES = ["GitHub", "Projects", "Jira", "Notion", "Linear"] as const;
 type WorkSource = (typeof WORK_SOURCES)[number];
 
 /** 폴더의 GitHub 저장소(`owner/name`)이다. 폴더가 없거나 GitHub 가 아니면 null 이다. */
@@ -241,7 +242,11 @@ async function handOffIssue(url: string, repository: string): Promise<void> {
   handOffToNewThread(text);
 }
 
-function WorkTab({ request, onHandOff }: { request: GatewayRequest; onHandOff(text: string): Promise<void> }) {
+function WorkTab({ request, onHandOff, onLinearHandOff }: {
+  request: GatewayRequest;
+  onHandOff(text: string): Promise<void>;
+  onLinearHandOff(text: string): Promise<void>;
+}) {
   const [source, setSource] = useState<WorkSource>("GitHub");
   const currentRepository = useGitHubRepository(useDesktopStore(openThreadCwd));
   return (
@@ -265,6 +270,7 @@ function WorkTab({ request, onHandOff }: { request: GatewayRequest; onHandOff(te
       )}
       {source === "Jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => onHandOff(await window.akra.jira.issuePrompt(issue.key))} />}
       {source === "Notion" && <NotionPanel request={request} notion={window.akra.notion} onHandOff={onHandOff} />}
+      {source === "Linear" && <LinearPanel linear={window.akra.linear} onHandOff={async (issue) => onLinearHandOff(await window.akra.linear.issuePrompt(issue.id))} />}
     </div>
   );
 }
@@ -473,6 +479,14 @@ export function App() {
     if (cwd) useUiStore.setState({ homeCwd: cwd });
     handOffToNewThread(text);
   };
+  const handOffLinear = async (text: string) => {
+    const currentView = useUiStore.getState().view;
+    const cwd = currentView === "thread" ? openThreadCwd(useDesktopStore.getState()) : null;
+    const folder = cwd ?? await window.akra.chooseFolder();
+    if (!folder) return;
+    useUiStore.setState({ homeCwd: folder });
+    handOffToNewThread(text);
+  };
 
   // 패널이 접속마다 새 객체를 받지 않도록 한 번만 만든다. 요청은 그때의 세션으로 보낸다.
   const gatewayRequest = useMemo<GatewayRequest>(
@@ -585,7 +599,7 @@ export function App() {
                 const threadId = await current.startBrowserThread(cwd, window.akra.browser.agent);
                 visit({ view: "thread", threadId });
               }} />}
-              {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} />}
+              {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} onLinearHandOff={handOffLinear} />}
               {panel === "docs" && <DocumentsPanel state={documents} onRefresh={() => setDocumentsRefresh((count) => count + 1)} onOpenChanged={markDocumentRead} />}
             </RightPanel>
           )}

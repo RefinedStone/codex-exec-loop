@@ -1,5 +1,6 @@
 // main 과 renderer 가 공유하는 메시지 버스 계약이다. main 은 메시지를 해석하지 않고 문자열 그대로 전달한다.
 import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
+import type { LinearBridge } from "./linear";
 import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings } from "./settings";
 import type { ZoomDirection } from "./zoom";
@@ -72,6 +73,12 @@ export const IPC_CHANNELS = {
   jiraDisconnect: "akra:jira-disconnect",
   jiraSummary: "akra:jira-summary",
   jiraIssuePrompt: "akra:jira-issue-prompt",
+  linearStatus: "akra:linear-status",
+  linearConnect: "akra:linear-connect",
+  linearDisconnect: "akra:linear-disconnect",
+  linearSummary: "akra:linear-summary",
+  linearIssuePrompt: "akra:linear-issue-prompt",
+  linearOpenExternal: "akra:linear-open-external",
   dotsGetEnabled: "akra:dots-get-enabled",
   dotsSetEnabled: "akra:dots-set-enabled",
   dotsOpenWindow: "akra:dots-open-window",
@@ -432,6 +439,7 @@ export interface AkraBridge {
   browser: BrowserBridge;
   github: GitHubBridge;
   jira: JiraBridge;
+  linear: LinearBridge;
   notion: NotionBridge;
   dots: DotsBridge;
   zoom: ZoomBridge;

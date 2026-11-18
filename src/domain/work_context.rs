@@ -48,6 +48,7 @@ pub fn external_resource_recognizers() -> Vec<Box<dyn ExternalResourceRecognizer
         Box::new(NotionRecognizer),
         Box::new(JiraRecognizer),
         Box::new(GitHubRecognizer),
+        Box::new(LinearRecognizer),
     ]
 }
 
@@ -344,6 +345,64 @@ impl ExternalResourceRecognizer for GitHubRecognizer {
     }
 }
 
+struct LinearRecognizer;
+
+impl ExternalResourceRecognizer for LinearRecognizer {
+    fn kind(&self) -> &'static str {
+        "linear"
+    }
+
+    fn recognize(&self, url: &HttpsUrlParts<'_>) -> Option<ExternalResourceRef> {
+        let authority = url
+            .url
+            .strip_prefix("https://")?
+            .split(['/', '?', '#'])
+            .next()?;
+        if !url.host.eq_ignore_ascii_case("linear.app")
+            || !authority.eq_ignore_ascii_case("linear.app")
+        {
+            return None;
+        }
+        let segments = url.path.strip_prefix('/')?.split('/').collect::<Vec<_>>();
+        let (workspace, issue) = match segments.as_slice() {
+            [workspace, "issue", issue] => (*workspace, *issue),
+            [workspace, "issue", issue, slug] if !slug.is_empty() => (*workspace, *issue),
+            _ => return None,
+        };
+        let valid_workspace = workspace
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphanumeric())
+            && workspace
+                .chars()
+                .last()
+                .is_some_and(|last| last.is_ascii_alphanumeric())
+            && workspace
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-');
+        let (team, number) = issue.split_once('-')?;
+        let valid_team = team
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+            && team
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric());
+        let valid_number =
+            !number.is_empty() && number.chars().all(|character| character.is_ascii_digit());
+        if !valid_workspace || !valid_team || !valid_number {
+            return None;
+        }
+        let identifier = issue.to_ascii_uppercase();
+        Some(ExternalResourceRef {
+            kind: self.kind().to_string(),
+            key: format!("{}/{identifier}", workspace.to_ascii_lowercase()),
+            url: url.url.to_string(),
+            title_hint: title_hint(&identifier),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +555,76 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a/b#1", "x.atlassian.net/K-1"]
         );
+    }
+
+    #[test]
+    fn linear_issues_use_workspace_and_identifier_without_the_slug() {
+        let found = extract(
+            "Fix [login](https://LINEAR.APP/Acme-Team/issue/eng2-123/fix-login?view=board#comment). \
+             Then https://linear.app/other-team/issue/ENG2-123!",
+        );
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].kind, "linear");
+        assert_eq!(found[0].key, "acme-team/ENG2-123");
+        assert_eq!(found[0].title_hint.as_deref(), Some("ENG2-123"));
+        assert_eq!(
+            found[0].url,
+            "https://LINEAR.APP/Acme-Team/issue/eng2-123/fix-login?view=board#comment"
+        );
+        assert_eq!(found[1].key, "other-team/ENG2-123");
+    }
+
+    #[test]
+    fn linear_issues_deduplicate_case_slug_query_and_fragment_variants() {
+        let found = extract(
+            "https://linear.app/Acme/issue/eng-42/original-title?view=all#comment \
+             https://linear.app/acme/issue/ENG-42/renamed-title \
+             https://linear.app/ACME/issue/Eng-42?view=mine \
+             https://linear.app/acme/issue/ENG-43.",
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|resource| resource.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme/ENG-42", "acme/ENG-43"]
+        );
+        assert_eq!(
+            found[0].url,
+            "https://linear.app/Acme/issue/eng-42/original-title?view=all#comment"
+        );
+    }
+
+    #[test]
+    fn linear_rejects_unsafe_hosts_non_issue_paths_and_malformed_identifiers() {
+        for url in [
+            "http://linear.app/acme/issue/ENG-1",
+            "https://linear.app.evil.com/acme/issue/ENG-1",
+            "https://evil-linear.app/acme/issue/ENG-1",
+            "https://www.linear.app/acme/issue/ENG-1",
+            "https://user:secret@linear.app/acme/issue/ENG-1",
+            "https://linear.app@evil.com/acme/issue/ENG-1",
+            "https://linear.app:443/acme/issue/ENG-1",
+            "https://linear.app/acme",
+            "https://linear.app/acme/project/ENG-1",
+            "https://linear.app/acme/issue",
+            "https://linear.app//issue/ENG-1",
+            "https://linear.app/acme//issue/ENG-1",
+            "https://linear.app/acme/issue/ENG-1/title/extra",
+            "https://linear.app/acme/issue/ENG-1/",
+            "https://linear.app/acme/issue/-1",
+            "https://linear.app/acme/issue/1ENG-1",
+            "https://linear.app/acme/issue/EN_G-1",
+            "https://linear.app/acme/issue/ENG-",
+            "https://linear.app/acme/issue/ENG-one",
+            "https://linear.app/acme/issue/ENG-1-2",
+            "https://linear.app/acme/issue/ENG-%31",
+            "https://linear.app/acme/issue/ENG-１２",
+            "https://linear.app/-acme/issue/ENG-1",
+            "https://linear.app/acme.example/issue/ENG-1",
+        ] {
+            assert!(extract(url).is_empty(), "unexpected recognition: {url}");
+        }
     }
 
     #[test]

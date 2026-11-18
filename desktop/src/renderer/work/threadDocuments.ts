@@ -27,7 +27,7 @@ export type ThreadDocumentsState =
   | { phase: "loaded"; threadId: string; documents: ThreadDocument[] }
   | { phase: "failed"; threadId: string; message: string };
 
-const KIND_LABELS: Record<string, string> = { notion: "Notion", jira: "Jira", github: "GitHub" };
+const KIND_LABELS: Record<string, string> = { notion: "Notion", jira: "Jira", github: "GitHub", linear: "Linear" };
 const SOURCE_LABELS: Record<string, string> = { user: "사용자", agent: "AI", tool: "도구" };
 
 export function kindLabel(kind: string): string {
