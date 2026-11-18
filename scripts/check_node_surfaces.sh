@@ -17,6 +17,7 @@ for script_path in \
   scripts/capture_admin_validation_evidence.mjs \
   scripts/agent-plan.mjs \
   scripts/ci-scope.mjs \
+  scripts/npm-audit-gate.mjs \
   scripts/normalize_codex_app_server_schema.mjs \
   npm/scripts/publish-package.mjs \
   npm/scripts/stage-npm-packages.mjs \
@@ -33,6 +34,7 @@ printf '\n==> CI, agent planning, and approval-package tests\n'
 node --test \
   scripts/ci-scope.test.mjs \
   scripts/agent-plan.test.mjs \
+  scripts/npm-audit-gate.test.mjs \
   scripts/pr-validation-approval-package.test.mjs
 
 printf '\n==> npm launcher tests\n'
@@ -42,7 +44,8 @@ printf '\n==> admin game dependencies\n'
 npm --prefix assets/admin/game ci
 
 printf '\n==> admin game dependency audit\n'
-npm --prefix assets/admin/game audit --audit-level=high
+# High and critical advisories fail, except the dated exceptions in scripts/npm-audit-exceptions.json.
+node scripts/npm-audit-gate.mjs assets/admin/game
 
 printf '\n==> admin game typecheck\n'
 npm --prefix assets/admin/game run check
@@ -61,7 +64,8 @@ printf '\n==> desktop dependencies\n'
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm --prefix desktop ci
 
 printf '\n==> desktop dependency audit\n'
-npm --prefix desktop audit --audit-level=high
+# High and critical advisories fail, except the dated exceptions in scripts/npm-audit-exceptions.json.
+node scripts/npm-audit-gate.mjs desktop
 
 printf '\n==> desktop typecheck\n'
 npm --prefix desktop run check
