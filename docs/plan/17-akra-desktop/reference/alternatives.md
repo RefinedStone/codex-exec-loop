@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | Codex 엔진과 app-server (`openai/codex`) | Apache-2.0 | 실행하고 참고한다. 코드를 차용하면 고지를 유지한다 |
 | Orca (`stablyai/orca`) | MIT | 코드를 차용할 수 있다. 고지를 유지한다 |
-| herdr, herdr-core | Apache-2.0 | 참고만 한다 |
+| herdr, herdr-core | Apache-2.0 | 참고만 한다. 조사: [docs/competitive/herdr/](../../../competitive/herdr/README.md) |
 | doriface | AGPL-3.0 | **코드를 차용하지 않는다.** 차용하면 Akra 전체에 AGPL 의무가 생긴다 |
 | OmO 엔진 (oh-my-openagent) | SUL-1.0 | **코드를 차용하지 않는다.** 상업적 재배포가 제한된다 |
 | 공식 Codex(ChatGPT) 데스크톱 앱 | 비공개 | 구조만 관찰한다. 코드를 복사하지 않는다 |
