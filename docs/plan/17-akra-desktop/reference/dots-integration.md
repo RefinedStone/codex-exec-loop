@@ -135,7 +135,8 @@
   computer_status, activity_status:{status_type, status_label}}], revision}}}]`. 구독만 하고 SSE 를 열지 않으면
   아무것도 오지 않는다. `connect` 없이 구독하면 `not_connected`, 배열이 아니면 `invalid_command_batch` 이다.
   메시지를 보내면 0.1초 뒤 `turn_status: in_progress`, 답이 끝나면 `completed` 가 온다(실측 5.7초). 새 메시지 자체의
-  알림은 없다. 그래서 "일하는 중 -> 끝남"을 답으로 보고 대화를 다시 읽는다.
+  알림은 없다. 그래서 "일하는 중 -> 끝남"을 답으로 보고 대화를 다시 읽는다. dot 은 답보다 먼저 중간 메시지를 방에
+  넣는다 (2026-11-19 사용자 확인). Desktop 은 일하는 동안 2초마다 다시 읽어 그 메시지를 바로 보인다.
   - 다른 주제도 있다: `app_notifications`, `conversations`, `tbo-tasks`, `resource-updates`. 구독은 되지만 시험한
     40초 동안 아무것도 오지 않았다. 쓰지 않는다.
 - 됨: 읽음 표시(dot 이 읽은 시각). `GET /messaging/rooms/{id}` 의 `read_receipts` 에서 dot 의 `last_read_at` 을 쓴다.

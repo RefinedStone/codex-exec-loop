@@ -104,7 +104,11 @@ try {
   // 읽지 않는다. 실시간 상태는 Gateway 가 민다.
   await page.getByTestId("dot-typing").waitFor({ timeout: 5_000 });
   check("the chat shows that the dot is working", (await page.getByTestId("dot-status").innerText()).includes("Thinking"));
+  // dot 이 답보다 먼저 방에 넣은 중간 메시지는 답을 기다리지 않고 나타난다. 그때 dot 은 아직 일하는 중이다.
   await page.getByTestId("dot-message").nth(3).waitFor({ timeout: 15_000 });
+  const chatWithInterim = await page.getByTestId("dot-chat").innerText();
+  check("an interim message of the dot appears while the dot still works", chatWithInterim.includes("Let me check.") && !chatWithInterim.includes("On it.") && (await page.getByTestId("dot-typing").count()) === 1);
+  await page.getByTestId("dot-message").nth(4).waitFor({ timeout: 15_000 });
   check("the reply of the dot appears without a manual refresh", (await page.getByTestId("dot-chat").innerText()).includes("On it."));
   await page.getByTestId("dot-typing").waitFor({ state: "detached", timeout: 5_000 });
   check("my message that the dot has read shows the read mark", (await page.getByTestId("dot-read").count()) === 1);

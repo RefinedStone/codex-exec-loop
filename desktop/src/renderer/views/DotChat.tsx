@@ -2,7 +2,8 @@
 // dot 이 답을 만드는 동안의 표시, 내 글의 "읽음". 본 창의 옆 칸(`DotDock`)과 dot 창(`DotWindow`)이 함께 쓴다.
 //
 // 읽기: 메시지 방을 Gateway 의 `akra/dots/messages` 로 읽는다. 화면을 열 때, "새로 고침"을 누를 때, dot 이 답을
-// 끝냈을 때(`replies` 가 늘 때) 읽는다. 실시간 통로가 끊겨 있을 때만, 보낸 뒤 답이 올 때까지 짧은 간격으로 읽는다.
+// 끝냈을 때(`replies` 가 늘 때) 읽는다. dot 이 일하는 동안에는 짧은 간격으로 읽는다: 답보다 먼저 온 중간 메시지를
+// 바로 보인다. 실시간 통로가 끊겨 있을 때는, 보낸 뒤 답이 올 때까지 짧은 간격으로 읽는다.
 // 쓰기: 기본은 읽기 전용이다. 사용자가 이 dot 에 보내기를 한 번 허락하면 입력창이 나타나고 `akra/dots/send` 로
 // 보낸다 ("세션 한 번 허용").
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
@@ -97,6 +98,17 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
     const timer = window.setTimeout(() => setRefresh((count) => count + 1), SETTLE_REFRESH_MS);
     return () => window.clearTimeout(timer);
   }, [replies]);
+
+  // dot 이 일하는 동안에는 짧은 간격으로 다시 읽는다. 서비스는 새 메시지를 알리지 않는다. dot 은 답보다 먼저 중간
+  // 메시지("확인해볼게요")를 방에 넣는다: 답이 끝날 때만 읽으면 그 메시지가 답과 함께 나타난다. 숨겨진 창은 읽지
+  // 않는다: 답이 끝날 때의 읽기가 모두 가져온다.
+  useEffect(() => {
+    if (!working) return;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) setRefresh((count) => count + 1);
+    }, REPLY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [working]);
 
   // 실시간 통로가 없을 때의 대비이다. 보낸 뒤 답이 올 때까지만 다시 읽는다.
   useEffect(() => {

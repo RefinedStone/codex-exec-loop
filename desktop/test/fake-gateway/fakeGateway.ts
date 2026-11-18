@@ -314,13 +314,15 @@ export async function startFakeGateway(
       if (remote && hasId && options.dotMessages && message.method === "akra/dots/send") {
         const params = (message as { params?: { text?: unknown } }).params;
         options.dotMessages.push({ id: `sent-${options.dotMessages.length}`, createdAt: "2026-11-14T02:00:00Z", author: "Me", fromDot: false, text: String(params?.text ?? "") });
-        // dot 은 바로 답을 만들기 시작하고 조금 뒤에 답한다. 방을 보는 접속에는 실시간 상태를 민다.
+        // dot 은 바로 답을 만들기 시작하고 조금 뒤에 답한다. 방을 보는 접속에는 실시간 상태를 민다. 답보다 먼저 중간
+        // 메시지를 방에 넣는다. 실제 서비스처럼 그 메시지는 알리지 않는다.
         const messages = options.dotMessages;
         pushDotLive(socket, true);
+        setTimeout(() => messages.push({ id: `interim-${messages.length}`, createdAt: "2026-11-14T02:00:01Z", author: "Mika", fromDot: true, text: "Let me check." }), 500);
         setTimeout(() => {
           messages.push({ id: `reply-${messages.length}`, createdAt: "2026-11-14T02:00:03Z", author: "Mika", fromDot: true, text: "On it." });
           pushDotLive(socket, false);
-        }, 1_000);
+        }, 4_000);
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { sent: true } }));
         return;
       }
