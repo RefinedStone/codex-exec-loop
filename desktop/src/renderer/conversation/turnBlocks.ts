@@ -1,8 +1,8 @@
-// 턴의 아이템을 화면 덩어리로 묶는다. 이어진 도구 호출(명령, 파일 변경, MCP 도구)은 작업 묶음 하나가 된다. 순수 함수이다.
+// 턴의 아이템을 화면 덩어리로 묶는다. 이어진 도구 호출(명령, 파일 변경, MCP 도구, 웹 검색)은 작업 묶음 하나가 된다. 순수 함수이다.
 import type { ThreadItem } from "../../shared/protocol/generated/v2/ThreadItem";
 
-export type StepItem = Extract<ThreadItem, { type: "commandExecution" | "fileChange" | "mcpToolCall" }>;
-export type StepKind = "read" | "search" | "edit" | "command" | "tool";
+export type StepItem = Extract<ThreadItem, { type: "commandExecution" | "fileChange" | "mcpToolCall" | "webSearch" }>;
+export type StepKind = "read" | "search" | "edit" | "command" | "tool" | "web";
 export type StepStatus = "running" | "ok" | "failed";
 
 export type TurnBlock =
@@ -14,7 +14,7 @@ export type TurnBlock =
   | { type: "other"; id: string; item: ThreadItem };
 
 function isStep(item: ThreadItem): item is StepItem {
-  return item.type === "commandExecution" || item.type === "fileChange" || item.type === "mcpToolCall";
+  return item.type === "commandExecution" || item.type === "fileChange" || item.type === "mcpToolCall" || item.type === "webSearch";
 }
 
 function userText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
@@ -49,12 +49,23 @@ export function turnBlocks(items: readonly ThreadItem[]): TurnBlock[] {
 export function stepKind(item: StepItem): StepKind {
   if (item.type === "fileChange") return "edit";
   if (item.type === "mcpToolCall") return "tool";
+  if (item.type === "webSearch") return "web";
   const [action, ...rest] = item.commandActions ?? [];
   if (action && rest.length === 0 && (action.type === "read" || action.type === "search")) return action.type;
   return "command";
 }
 
+/** 검색어, 연 페이지의 주소, 페이지 안에서 찾은 글을 쓴다. 동작이 없으면 아이템의 검색어를 쓴다. */
+function webSearchLabel(item: Extract<StepItem, { type: "webSearch" }>): string {
+  const action = item.action;
+  if (action?.type === "search") return action.queries?.join(", ") || action.query || item.query;
+  if (action?.type === "openPage") return action.url || item.query;
+  if (action?.type === "findInPage") return [action.pattern, action.url].filter(Boolean).join(" · ") || item.query;
+  return item.query;
+}
+
 export function stepLabel(item: StepItem): string {
+  if (item.type === "webSearch") return webSearchLabel(item);
   if (item.type === "fileChange") return item.changes.map((change) => change.path).join(", ");
   if (item.type === "mcpToolCall") return `${item.server}.${item.tool}`;
   const action = item.commandActions?.[0];
@@ -65,6 +76,8 @@ export function stepLabel(item: StepItem): string {
 }
 
 export function stepStatus(item: StepItem): StepStatus {
+  // 웹 검색 아이템에는 상태가 없다.
+  if (item.type === "webSearch") return "ok";
   if (item.status === "inProgress") return "running";
   return item.status === "completed" ? "ok" : "failed";
 }
@@ -77,6 +90,7 @@ export function activitySummary(steps: readonly StepItem[]): string {
     count("edit") > 0 ? `파일 변경 ${count("edit")}회` : null,
     count("command") > 0 ? `명령 ${count("command")}개 실행` : null,
     count("tool") > 0 ? `도구 ${count("tool")}회` : null,
+    count("web") > 0 ? `웹 검색 ${count("web")}회` : null,
   ];
   return parts.filter(Boolean).join(" · ");
 }
