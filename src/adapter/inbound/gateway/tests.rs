@@ -23,6 +23,7 @@ use crate::application::port::outbound::gateway_upstream_port::{
 
 const DUPLEX_BUFFER_BYTES: usize = 64 * 1024;
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+mod resource_versions;
 
 struct EchoUpstream {
     generation: watch::Sender<u64>,

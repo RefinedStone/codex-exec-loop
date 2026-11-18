@@ -9,9 +9,9 @@ pub trait ExternalResourceVersionPort: Send + Sync {
     /// 이 제공자가 아는 문서 종류이다. 인식기의 `kind()` 와 같은 값이다.
     fn kind(&self) -> &'static str;
 
-    /// 문서의 지금 버전이다. `key` 는 장부의 문서 키이다. 읽을 수 없으면(권한 없음, 지워짐, 서비스에 닿지 않음,
+    /// 문서의 지금 버전이다. 사이트를 확인할 수 있도록 장부의 키와 주소를 함께 받는다. 읽을 수 없으면(권한 없음, 지워짐, 서비스에 닿지 않음,
     /// 이 제공자가 모르는 키) 오류이다.
-    fn current_version(&self, key: &str) -> Result<String>;
+    fn current_version(&self, resource: &ExternalResourceRef) -> Result<String>;
 
     /// 연결된 제공자가 없으면 네트워크 실패 예산을 쓰지 않고 다음 새로고침까지 건너뛴다.
     fn available(&self, _resource: &ExternalResourceRef) -> bool {

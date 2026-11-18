@@ -657,11 +657,21 @@ The Gateway records the external documents that a thread mentions, without a mod
   version. `akra/context/thread` asks no external service.
 - Version providers (`ExternalResourceVersionPort`): GitHub reads `updated_at` of the
   pull request or issue with `gh api --hostname github.com`, with `AKRA_GITHUB_TOKEN`, `GH_TOKEN`,
-  `GITHUB_TOKEN`, or the stored `gh` login. Notion uses the registered `notion` MCP server and its
-  existing login. It fetches the page by ID with `notion-fetch` (or the connector's `fetch` alias),
-  reads `page_last_edited_at`, and normalizes the timestamp to UTC. It shares the Gateway's resident
-  hub backend. Tool errors, missing edit metadata, and invalid timestamps leave previous versions
-  unchanged. Page content is not stored in the version ledger. Jira has no provider on this branch.
+  `GITHUB_TOKEN`, or the stored `gh` login. Jira reads `updated` through a connected Desktop's
+  existing Jira login. Credentials stay in Electron main; the renderer handles the reverse
+  `akra/resourceVersion/current` request through a typed IPC call. Only local Gateway sessions can
+  register a provider. A disconnect or registration replacement cancels pending requests.
+  No connected provider means the document is skipped, without spending the failure budget.
+  Notion uses the registered `notion` MCP server and its existing login. It fetches
+  the page by ID with `notion-fetch` (or the connector's `fetch` alias), reads
+  `page_last_edited_at`, and normalizes the timestamp to UTC. It shares the Gateway's
+  resident hub backend. Tool errors, missing edit metadata, and invalid timestamps
+  leave previous versions unchanged. Page content is not stored in the version ledger.
+- Jira site identity includes the origin, non-default port, and context path. Root-site keys remain
+  compatible. The first ledger open after this change schedules existing Jira threads for recollection.
+  Old links retain a `legacy:` key until their exact URL is recollected; they cannot supply versions.
+  This preserves references outside the 5,000-item recollection limit without assigning a potentially
+  collapsed legacy identity to the wrong installation.
 - Desktop calls `refresh` after the list is shown, marks changed documents with "바뀜", shows
   `문서 N · 바뀜 M` on the button, and calls `markRead` when the user opens a changed document.
 - Limits: ephemeral threads and threads without turns have no items to read; the first read of a very

@@ -143,10 +143,10 @@ impl WorkContextService {
                 }
                 continue;
             }
-            let document = (link.resource.kind.clone(), link.resource.key.clone());
             if !provider.available(&link.resource) {
                 continue;
             }
+            let document = (link.resource.kind.clone(), link.resource.key.clone());
             let failed_at = state.unreachable_since.get(&document).copied();
             if failed_at.is_some_and(|failed_at| !interval_has_passed(failed_at, now)) {
                 continue;
@@ -158,7 +158,7 @@ impl WorkContextService {
         let mut failures = 0;
         let candidates = due.into_iter().take(MAX_VERSION_CHECKS_PER_REFRESH);
         for (_, provider, link, document) in candidates {
-            match provider.current_version(&link.resource.key) {
+            match provider.current_version(&link.resource) {
                 Ok(version) => {
                     state.unreachable_since.remove(&document);
                     self.store.record_resource_version(
@@ -418,6 +418,7 @@ mod tests {
     struct FakeVersions {
         versions: Mutex<HashMap<String, String>>,
         asked: Mutex<Vec<String>>,
+        blocked: Mutex<std::collections::HashSet<String>>,
     }
 
     impl FakeVersions {
@@ -433,7 +434,11 @@ mod tests {
         fn kind(&self) -> &'static str {
             "github"
         }
-        fn current_version(&self, key: &str) -> Result<String> {
+        fn available(&self, resource: &ExternalResourceRef) -> bool {
+            !self.blocked.lock().unwrap().contains(&resource.key)
+        }
+        fn current_version(&self, resource: &ExternalResourceRef) -> Result<String> {
+            let key = &resource.key;
             self.asked.lock().unwrap().push(key.to_string());
             self.versions
                 .lock()
@@ -640,6 +645,7 @@ mod tests {
             .with_clock(clock);
 
         service.refresh_thread_resources("thread-1").unwrap();
+        versions.blocked.lock().unwrap().insert("a/b#2".into());
         *now.lock().unwrap() += chrono::Duration::seconds(60);
         service.refresh_thread_resources("thread-2").unwrap();
         assert_eq!(
@@ -648,6 +654,7 @@ mod tests {
             "the check is recent"
         );
 
+        versions.blocked.lock().unwrap().clear();
         versions.set("a/b#2", "v2");
         *now.lock().unwrap() += chrono::Duration::seconds(10 * 60);
         service.refresh_thread_resources("thread-1").unwrap();
@@ -668,6 +675,20 @@ mod tests {
             changed_flags(&service.thread_resources("thread-2").unwrap()),
             [("a/b#2", true)]
         );
+    }
+
+    #[test]
+    fn an_unavailable_provider_does_not_spend_failures_or_create_a_cooldown() {
+        let (service, versions, _now) =
+            versioned_service("https://github.com/a/b/issues/1 https://github.com/a/b/issues/2");
+        versions.blocked.lock().unwrap().insert("a/b#1".into());
+        versions.set("a/b#1", "v1");
+        versions.set("a/b#2", "v1");
+        service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(*versions.asked.lock().unwrap(), ["a/b#2"]);
+        versions.blocked.lock().unwrap().clear();
+        service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(*versions.asked.lock().unwrap(), ["a/b#2", "a/b#1"]);
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { adfToText, issuePrompt, type JiraFetch, JiraService, normalizeSiteUrl, parseIssues, type SecretBox } from "../src/main/jiraService";
 
@@ -112,6 +112,115 @@ describe("Jira parsing", () => {
 });
 
 describe("Jira service", () => {
+  it("bounds a stalled response body below the Gateway deadline", async () => {
+    // Given a response body that does not complete.
+    let started: (() => void) | undefined;
+    const bodyStarted = new Promise<void>((resolve) => { started = resolve; });
+    let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const { jira } = await service(async (url) => {
+      if (url.endsWith("/myself")) return new Response("{}");
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; started?.(); } }));
+    });
+    await jira.connect({ siteUrl: SITE, deployment: "cloud", email: "me@acme.com", token: "t" });
+    vi.useFakeTimers();
+    try {
+      const pending = jira.currentVersion({ key: "acme.atlassian.net/APP-12", url: `${SITE}/browse/APP-12` });
+      const rejected = expect(pending).rejects.toThrow();
+      await bodyStarted;
+      // When the eight-second main deadline expires.
+      await vi.advanceTimersByTimeAsync(8_000);
+      // Then the caller finishes before the ten-second Gateway deadline.
+      await rejected;
+    } finally {
+      body?.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { siteUrl: SITE, deployment: "cloud", email: "me@acme.com", token: "cloud-token", api: "3", auth: `Basic ${Buffer.from("me@acme.com:cloud-token").toString("base64")}`, key: "acme.atlassian.net/APP-12" },
+    { siteUrl: "https://jira.example:8443/jira", deployment: "server", email: "", token: "server-token", api: "2", auth: "Bearer server-token", key: "jira.example:8443/jira/APP-12" },
+  ])("reads only updated with stored credentials for $deployment", async (connection) => {
+    // Given an existing Desktop login.
+    const calls: Array<{ url: string; init: Parameters<JiraFetch>[1] }> = [];
+    const { jira } = await service(async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ fields: { updated: "2026-11-06T10:00:00.000+0900" } }));
+    });
+    await jira.connect(connection);
+    // When the provider resolves the matching resource.
+    const result = await jira.currentVersion({ key: connection.key, url: `${connection.siteUrl}/browse/APP-12?focusedCommentId=123#comment-123` });
+    // Then credentials stay in main and the request is narrow.
+    expect(result).toEqual({ version: "2026-11-06T01:00:00.000Z" });
+    expect(calls.at(-1)?.url).toBe(`${connection.siteUrl}/rest/api/${connection.api}/issue/APP-12?fields=updated`);
+    expect(calls.at(-1)?.init.headers.Authorization).toBe(connection.auth);
+    expect(calls.at(-1)?.init.redirect).toBe("error");
+  });
+
+  it.each([
+    { key: "evil.example/APP-12", url: "https://evil.example/browse/APP-12" },
+    { key: "acme.atlassian.net/APP-13", url: `${SITE}/browse/APP-12` },
+    { key: "acme.atlassian.net/APP-12", url: `${SITE}/jira/browse/APP-12` },
+    { key: "acme.atlassian.net/APP-12", url: `${SITE}:8443/browse/APP-12` },
+    { key: "acme.atlassian.net/APP-12", url: "https://user@acme.atlassian.net/browse/APP-12" },
+    { key: "acme.atlassian.net/APP-12/../APP-13", url: `${SITE}/browse/APP-13` },
+  ])("rejects a mismatched resource before fetching: $url", async (request) => {
+    // Given a login and a mismatched resource.
+    let calls = 0;
+    const { jira } = await service(async () => { calls++; return new Response("{}"); });
+    await jira.connect({ siteUrl: SITE, deployment: "cloud", email: "me@acme.com", token: "t" });
+    // When a version is requested.
+    await expect(jira.currentVersion(request)).rejects.toThrow();
+    // Then no additional authenticated HTTP request occurs.
+    expect(calls).toBe(1);
+  });
+
+  it.each(["not-a-date", "2026-02-30T10:00:00.000Z", "2026-11-06", "2026-11-06T24:00:00Z"])("rejects invalid updated timestamp %s", async (updated) => {
+    // Given an invalid response timestamp.
+    const { jira } = await service(async () => new Response(JSON.stringify({ fields: { updated } })));
+    await jira.connect({ siteUrl: SITE, deployment: "cloud", email: "me@acme.com", token: "t" });
+    // When the matching resource is resolved, then the provider fails closed.
+    await expect(jira.currentVersion({ key: "acme.atlassian.net/APP-12", url: `${SITE}/browse/APP-12` })).rejects.toThrow();
+  });
+
+  it.each([302, 401, 403, 404])("rejects HTTP %s without returning a version", async (status) => {
+    // Given a successful login followed by an unsuccessful version response.
+    const { jira } = await service(async (url) => new Response("{}", { status: url.endsWith("/myself") ? 200 : status }));
+    await jira.connect({ siteUrl: SITE, deployment: "cloud", email: "me@acme.com", token: "t" });
+    // When a version is requested, then redirects and authentication failures are rejected.
+    await expect(jira.currentVersion({ key: "acme.atlassian.net/APP-12", url: `${SITE}/browse/APP-12` })).rejects.toThrow();
+  });
+
+  it("rejects oversized bodies while streaming", async () => {
+    // Given a connected account and an oversized response.
+    const { jira } = await service(async (url) => new Response(url.endsWith("/myself") ? "{}" : "x".repeat(65_537)));
+    await jira.connect({ siteUrl: SITE, deployment: "cloud", email: "me@acme.com", token: "t" });
+    // When a version is requested, then no version escapes the body limit.
+    await expect(jira.currentVersion({ key: "acme.atlassian.net/APP-12", url: `${SITE}/browse/APP-12` })).rejects.toThrow();
+  });
+
+  it.each(["disconnect", "account change"])("cancels a pending body on %s", async (change) => {
+    // Given a body that has started but has not completed.
+    let started: (() => void) | undefined;
+    const bodyStarted = new Promise<void>((resolve) => { started = resolve; });
+    let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const { jira } = await service(async (url) => {
+      if (url.endsWith("/myself")) return new Response("{}");
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; started?.(); } }));
+    });
+    await jira.connect({ siteUrl: SITE, deployment: "cloud", email: "me@acme.com", token: "t" });
+    const pending = jira.currentVersion({ key: "acme.atlassian.net/APP-12", url: `${SITE}/browse/APP-12` });
+    const rejected = expect(pending).rejects.toThrow();
+    await bodyStarted;
+    // When the login changes before the body arrives.
+    if (change === "disconnect") await jira.disconnect();
+    else await jira.connect({ siteUrl: SITE, deployment: "cloud", email: "other@acme.com", token: "new-token" });
+    body?.enqueue(new TextEncoder().encode(JSON.stringify({ fields: { updated: "2026-11-06T10:00:00Z" } })));
+    body?.close();
+    // Then the old response cannot provide a version.
+    await rejected;
+  });
+
   it("verifies the token before saving it encrypted, then searches my open issues", async () => {
     const { calls, fetcher } = recorder({ "/myself": { status: 200, body: "{}" }, "/search/jql": { status: 200, body: searchJson } });
     const { directory, jira } = await service(fetcher);

@@ -26,6 +26,7 @@ use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
+use super::resource_version::{self, ProviderSession};
 use super::router::{
     ClientTextRoute, refuse_kernel_on_remote_host, respond_to_akra_request, route_client_text,
 };
@@ -58,6 +59,8 @@ pub(super) fn websocket_config() -> WebSocketConfig {
 pub(super) struct GatewayServices {
     pub(super) mcp_hub: Option<Arc<GatewayMcpHub>>,
     pub(super) work_context: Option<Arc<dyn WorkContextPort>>,
+    pub(super) resource_versions:
+        Option<Arc<dyn crate::application::port::inbound::resource_version_provider_port::ResourceVersionProviderPort>>,
     /// 커밋 그래프이다 (plan 27). 이 기기의 저장소를 읽으므로 `local` 접속에만 답한다.
     pub(super) git_graph: Option<Arc<dyn GitGraphPort>>,
     /// dots 가 켜졌을 때만 있다 (D-19). 없으면 `akra/dots/*` 는 모르는 method 이다.
@@ -145,6 +148,15 @@ where
     // 커널 요청은 따로 처리한다. 읽기 고리는 커널을 기다리지 않고 app-server 메시지를 계속 전달한다.
     let kernel_requests =
         is_local.then(|| KernelRequests::start(kernels, outbox.clone(), recording.clone()));
+    let provider_session = if is_local {
+        services
+            .resource_versions
+            .as_ref()
+            .map(|service| ProviderSession::start(service.clone(), outbox.clone()))
+            .transpose()?
+    } else {
+        None
+    };
 
     let client_to_upstream = async {
         // 이 접속이 보는 dot 방들이다. 접속이 끝나면 함께 멈춘다.
@@ -160,6 +172,12 @@ where
             match message {
                 Message::Text(text) => match route_client_text(text.as_str()) {
                     ClientTextRoute::Forward => {
+                        if let Some(id) = resource_version::response_id(text.as_str()) {
+                            if let Some(provider) = &provider_session {
+                                provider.answer(&id, text.as_str());
+                            }
+                            continue;
+                        }
                         record(RecordDirection::Client, text.as_str());
                         if upstream_sink.send(Message::Text(text)).await.is_err() {
                             return SessionEnd::UpstreamClosed;
@@ -183,7 +201,12 @@ where
                             .dots
                             .as_ref()
                             .filter(|_| method.starts_with(DOTS_METHOD_PREFIX));
-                        let immediate = if method.starts_with(KERNEL_METHOD_PREFIX) {
+                        let immediate = if method.starts_with(resource_version::METHOD_PREFIX) {
+                            Some(match &provider_session {
+                                Some(provider) => provider.request(id, &method, text.as_str()),
+                                None => refuse_kernel_on_remote_host(id, &method),
+                            })
+                        } else if method.starts_with(KERNEL_METHOD_PREFIX) {
                             match &kernel_requests {
                                 Some(kernel_requests) => kernel_requests
                                     .submit(id, method, text.as_str().to_string())
@@ -314,6 +337,7 @@ where
         end = upstream_to_client => end,
         end = upstream_restarted => end,
     };
+    drop(provider_session);
     if end == SessionEnd::UpstreamRestarted {
         let _ = outbox
             .send(close_message(

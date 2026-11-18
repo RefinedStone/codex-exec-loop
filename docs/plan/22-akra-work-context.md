@@ -120,11 +120,14 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
 
 ## 남은 단계 (proposed)
 
-2. **변경 확인의 남은 종류**: GitHub 는 끝났다 (위 "2단계 첫 조각"). Notion 제공자를 구현하고 로컬 검증을 마쳤다.
+2. **변경 확인의 남은 종류**: GitHub 는 끝났다 (위 "2단계 첫 조각"). Jira 는 Desktop 의 기존 로그인을
+   재사용하는 역방향 버전 조회를 구현했다. 로컬 검증을 마쳤고 PR 전달은 진행 중이다. 자격 증명은 Electron main 에만
+   두고, Gateway 가 버전 비교와 읽음 기준을 관리한다. 연결한 Desktop 이 없으면 건너뛴다.
+   Notion 제공자도 구현하고 로컬 검증을 마쳤다.
    기존 `notion` MCP 로그인으로 `notion-fetch`의 `page_last_edited_at`을 읽는다. 커넥터의 `fetch` 별칭도
    지원한다. 실제 등록된 도구 스키마를 모델 턴 없이 확인했다. `notion-get-version-changes`는 편집 권한과
    시간 범위를 요구하므로, 현재 버전의 동등성만 필요한 제공자에는 쓰지 않는다. 읽기 권한만 있는 페이지도
-   같은 경로로 처리한다. Jira는 별도 PR에서 기존 Desktop 인증 재사용을 구현했다.
+   같은 경로로 처리한다.
 3. **경로 범위와 `akra context`**: 스레드가 고친 파일의 폴더, 문서가 연결된 커밋과 PR 의 경로를 `path` 범위로 잇는다.
    AI 용 `akra context list|show|changes` 와 skill 을 더한다. 새 스레드가 같은 경로를 만지면 관련 문서를 찾는다.
    키워드 검색은 SQLite FTS5 로 한다. 벡터 검색은 놓친 사례를 측정한 뒤에 검색 포트 뒤에 더한다.

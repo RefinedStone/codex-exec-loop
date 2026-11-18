@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::application::port::outbound::external_resource_version_port::ExternalResourceVersionPort;
+use crate::domain::work_context::ExternalResourceRef;
 use crate::subprocess;
 
 const GITHUB_KIND: &str = "github";
@@ -61,8 +62,8 @@ impl ExternalResourceVersionPort for GithubResourceVersionAdapter {
         GITHUB_KIND
     }
 
-    fn current_version(&self, key: &str) -> Result<String> {
-        let target = GithubIssueTarget::parse(key)?;
+    fn current_version(&self, resource: &ExternalResourceRef) -> Result<String> {
+        let target = GithubIssueTarget::parse(&resource.key)?;
         let gh = crate::trusted_executable::resolve_native_from_current_path(
             "gh",
             &self.working_directory,

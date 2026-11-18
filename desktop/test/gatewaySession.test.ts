@@ -108,6 +108,8 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
       openExternal: () => undefined,
     },
     jira: {
+      onChanged: () => () => undefined,
+      currentVersion: async () => ({ version: "" }),
       status: async () => ({ connected: false }),
       connect: async () => ({ connected: false }),
       disconnect: async () => ({ connected: false }),

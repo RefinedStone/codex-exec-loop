@@ -13,6 +13,7 @@ mod kernel;
 mod listener;
 mod mcp;
 mod recorder;
+mod resource_version;
 mod router;
 mod session;
 #[cfg(test)]
@@ -80,6 +81,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         kernels,
         mcp_hub,
         work_context,
+        resource_versions,
         git_graph,
         dots,
     } = production::build_gateway_backend(&run_dir)?;
@@ -103,10 +105,10 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         listener,
         hosts.clone(),
         kernels.clone(),
-        mcp_hub.clone(),
         session::GatewayServices {
             mcp_hub: Some(mcp_hub.clone()),
             work_context: Some(work_context),
+            resource_versions: Some(resource_versions),
             git_graph: Some(git_graph),
             dots,
         },
@@ -186,7 +188,6 @@ async fn serve(
     mut listener: GatewayListener,
     hosts: GatewayHosts,
     kernels: Arc<RepositoryKernelRegistry>,
-    mcp_hub: Arc<GatewayMcpHub>,
     services: session::GatewayServices,
     recorder: Option<Arc<GatewayRecorder>>,
 ) {
@@ -203,8 +204,9 @@ async fn serve(
             }
             _ = idle_sweep.tick() => {
                 unload_idle_kernels(kernels.clone());
-                let mcp_hub = mcp_hub.clone();
-                tokio::task::spawn_blocking(move || mcp_hub.release_if_idle());
+                if let Some(mcp_hub) = services.mcp_hub.clone() {
+                    tokio::task::spawn_blocking(move || mcp_hub.release_if_idle());
+                }
             }
             accepted = listener.accept() => match accepted {
                 Ok(connection) => {

@@ -43,4 +43,5 @@ pub mod turn_prompt_assembly_service;
 // git graph service 는 커밋 그래프의 한 쪽을 읽고 레인을 배치한다 (plan 27).
 pub mod git_graph;
 // work context service 는 스레드의 외부 문서를 모델 없이 수집한다.
+pub mod resource_version;
 pub mod work_context;

@@ -419,6 +419,8 @@ pub(crate) struct GatewayBackend {
     pub(crate) kernels: Arc<RepositoryKernelRegistry>,
     pub(crate) mcp_hub: Arc<GatewayMcpHub>,
     pub(crate) work_context: Arc<dyn WorkContextPort>,
+    pub(crate) resource_versions:
+        Arc<crate::application::service::resource_version::ResourceVersionService>,
     /// 커밋 그래프 읽기이다 (plan 27 G1).
     pub(crate) git_graph: Arc<dyn GitGraphPort>,
     /// dot 목록이다. dots 클라우드가 켜졌을 때만 있다 (D-19).
@@ -436,6 +438,8 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         hub.clone(),
     ));
     let upstream: Arc<dyn GatewayUpstreamPort> = Arc::new(upstream);
+    let resource_versions =
+        Arc::new(crate::application::service::resource_version::ResourceVersionService::default());
     let work_context: Arc<dyn WorkContextPort> = Arc::new(
         WorkContextService::new(
             Arc::new(AppServerThreadTranscript::new(upstream.clone())),
@@ -445,6 +449,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
             Arc::new(GithubResourceVersionAdapter::new(
                 crate::configuration::akra_home_dir()?,
             )),
+            resource_versions.clone(),
             Arc::new(NotionResourceVersionAdapter::new(hub)),
         ]),
     );
@@ -454,6 +459,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         kernels,
         mcp_hub,
         work_context,
+        resource_versions,
         git_graph: Arc::new(GitGraphService::new(Arc::new(GitHistoryAdapter))),
         dots: build_dots()?,
     })
