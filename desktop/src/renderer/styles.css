@@ -373,6 +373,20 @@
   font-size: var(--text-s);
 }
 
+.browser-agent .browser-toolbar {
+  flex-wrap: wrap;
+}
+
+.browser-agent-status {
+  flex: 1;
+  min-width: 120px;
+  font-size: var(--text-s);
+}
+
+.browser-agent-detail {
+  overflow-wrap: anywhere;
+}
+
 /* main 의 WebContentsView 가 이 자리 위에 페이지를 그린다. */
 .browser-slot {
   flex: 1;

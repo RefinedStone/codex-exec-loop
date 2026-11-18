@@ -47,6 +47,13 @@ try {
   await page.getByTestId("browser-panel").waitFor({ timeout: 10_000 });
 
   const slot = page.getByTestId("browser-slot");
+  const armProfile = () => app.evaluate(({ app }) => {
+    globalThis.profileReady = new Promise((resolve, reject) => {
+      const ready = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(() => { app.off("web-contents-created", ready); reject(new Error("Profile view was not created")); }, 10_000);
+      app.once("web-contents-created", ready);
+    });
+  });
   const go = async (path) => {
     await page.getByTestId("browser-address").fill(`${origin}${path}`);
     await page.getByTestId("browser-address").press("Enter");
@@ -72,8 +79,9 @@ try {
   await go("/echo");
   check("a new profile has no cookie from the default profile", await titleIs("cookie:"), await slot.getAttribute("title"));
 
+  await armProfile();
   await page.getByTestId("browser-profile").selectOption("default");
-  await page.waitForTimeout(500);
+  await app.evaluate(() => globalThis.profileReady);
   await go("/echo");
   check("switching back finds the default profile's cookie", await titleIs("cookie:akra=1"), await slot.getAttribute("title"));
 
@@ -81,8 +89,9 @@ try {
   await page.getByTestId("browser-editing-input").fill("Echo");
   await page.getByTestId("browser-editing-input").press("Enter");
   await page.locator('[data-testid="browser-preset"] option', { hasText: "Echo" }).waitFor({ state: "attached", timeout: 10_000 });
+  await armProfile();
   await page.getByTestId("browser-profile").selectOption("qa");
-  await page.waitForTimeout(500);
+  await app.evaluate(() => globalThis.profileReady);
   await page.getByTestId("browser-preset").selectOption("Echo");
   await page.waitForFunction(() => document.querySelector('[data-testid="browser-profile"]')?.value === "default", null, { timeout: 10_000 });
   check("a preset switches to its profile and opens its address", await titleIs("cookie:akra=1"), await slot.getAttribute("title"));

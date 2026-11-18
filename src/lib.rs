@@ -40,6 +40,7 @@ pub(crate) mod gateway_endpoint;
 pub(crate) mod private_fs;
 // private_directory는 gateway 실행 디렉터리처럼 현재 사용자 전용이어야 하는 디렉터리를 만든다.
 pub(crate) mod private_directory;
+pub(crate) mod private_ipc;
 // process liveness is shared by durable local leases that must not reclaim a live owner.
 pub(crate) mod process_liveness;
 pub(crate) mod shutdown;

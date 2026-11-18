@@ -1,6 +1,7 @@
 // renderer 에 노출하는 것은 AkraBridge 의 함수뿐이다. Node API 와 ipcRenderer 자체는 노출하지 않는다.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { GitHunkAction, GitHunkDiff } from "../shared/gitHunks";
+import type { BrowserAgentState } from "../shared/browserAgent";
 
 import {
   type AkraBridge,
@@ -108,6 +109,16 @@ const bridge: AkraBridge = {
     onExit: (listener) => listen<[number, number]>(IPC_CHANNELS.terminalExit, listener),
   },
   browser: {
+    agent: {
+      prepare: () => ipcRenderer.invoke(IPC_CHANNELS.browserAgentPrepare),
+      bind: (id, thread) => ipcRenderer.invoke(IPC_CHANNELS.browserAgentBind, id, thread),
+      release: (id) => ipcRenderer.invoke(IPC_CHANNELS.browserAgentRelease, id),
+      setActiveThread: (thread) => ipcRenderer.invoke(IPC_CHANNELS.browserAgentActiveThread, thread),
+      pause: () => ipcRenderer.invoke(IPC_CHANNELS.browserAgentPause),
+      resume: () => ipcRenderer.invoke(IPC_CHANNELS.browserAgentResume),
+      status: () => ipcRenderer.invoke(IPC_CHANNELS.browserAgentStatus),
+      onState: (listener) => listen<[BrowserAgentState]>(IPC_CHANNELS.browserAgentState, listener),
+    },
     show(profileId: string, bounds: BrowserBounds, url: string | null): Promise<BrowserState> {
       return ipcRenderer.invoke(IPC_CHANNELS.browserShow, profileId, bounds, url) as Promise<BrowserState>;
     },

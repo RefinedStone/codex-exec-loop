@@ -1,5 +1,6 @@
 // main 과 renderer 가 공유하는 메시지 버스 계약이다. main 은 메시지를 해석하지 않고 문자열 그대로 전달한다.
 import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
+import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings } from "./settings";
 import type { ZoomDirection } from "./zoom";
 
@@ -50,6 +51,14 @@ export const IPC_CHANNELS = {
   browserState: "akra:browser-state",
   browserLoadSettings: "akra:browser-load-settings",
   browserSaveSettings: "akra:browser-save-settings",
+  browserAgentPrepare: "akra:browser-agent-prepare",
+  browserAgentBind: "akra:browser-agent-bind",
+  browserAgentRelease: "akra:browser-agent-release",
+  browserAgentActiveThread: "akra:browser-agent-active-thread",
+  browserAgentPause: "akra:browser-agent-pause",
+  browserAgentResume: "akra:browser-agent-resume",
+  browserAgentStatus: "akra:browser-agent-status",
+  browserAgentState: "akra:browser-agent-state",
   githubSummary: "akra:github-summary",
   githubReviewPrompt: "akra:github-review-prompt",
   githubProject: "akra:github-project",
@@ -240,6 +249,7 @@ export type BrowserCommand = "back" | "forward" | "reload" | "stop";
 
 /** 앱 창 안의 브라우저 보기이다 (R3). */
 export interface BrowserBridge {
+  readonly agent: BrowserAgentBridge;
   show(profileId: string, bounds: BrowserBounds, url: string | null): Promise<BrowserState>;
   setBounds(bounds: BrowserBounds): void;
   hide(): void;

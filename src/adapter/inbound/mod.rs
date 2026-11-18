@@ -5,6 +5,7 @@
 pub mod admin_api;
 // CLI는 스크립트와 운영자가 직접 실행하는 명령줄 진입점이다.
 pub mod cli;
+pub(crate) mod desktop_browser_bridge;
 // gateway는 데스크톱 앱 같은 로컬 클라이언트를 codex app-server 에 중계하는 akra-gateway 데몬이다.
 pub mod gateway;
 // kernel_protocol은 akra/kernel/* 응용 프로토콜의 직렬화 타입과 core 변환이다 (plan 18 K3).
