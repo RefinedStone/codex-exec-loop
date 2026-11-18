@@ -705,8 +705,8 @@ The Gateway records the external documents that a thread mentions, without a mod
   no app window has focus, always) and their sound; sleep prevention (off, only while a turn runs, always).
   main validates the values, saves them in `userData/app-settings.json`, and sends them to every window.
   Sleep prevention uses Electron `powerSaveBlocker` (`prevent-app-suspension`); each main window reports if it
-  has a running turn. The notification setting also applies to dot replies. The default mode is "only when no
-  app window has focus"
+  has a running turn. For dot replies only "off" applies; Desktop still decides by itself when a dot reply is
+  worth a notification. The default mode is "only when no app window has focus"
   (`desktop/src/shared/settings.ts`, `desktop/src/main/appSettings.ts`,
   `desktop/src/renderer/views/SettingsDialog.tsx`).
   The "Notion" view of the "업무" side panel reads the `notion` server of the
