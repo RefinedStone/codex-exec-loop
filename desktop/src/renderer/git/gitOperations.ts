@@ -1,7 +1,7 @@
 // git 작업의 자료이다 (plan 27 G3). Gateway 의 작업 엔진이 계획을 만들고, 기대 상태를 다시 본 뒤 실행하고, 일지에
 // 적고, 되돌린다. 여기서는 요청을 보내고, 답을 읽고, 화면에 쓸 글을 만든다. git 을 직접 부르지 않는다.
 import type { GatewayRequest } from "../work/notionHub";
-import { type GitRef, type GitWorktree, shortSha } from "./gitGraph";
+import { type GitRef, type GitWorktree, samePath, shortSha } from "./gitGraph";
 
 export const GIT_PLAN_METHOD = "akra/git/plan";
 export const GIT_EXECUTE_METHOD = "akra/git/execute";
@@ -53,6 +53,8 @@ export type GitOperationStatus = "started" | "done" | "failed";
 export interface GitOperationRecord {
   opId: string;
   operation: GitOperation;
+  /** 작업을 실행한 폴더이다. reset 과 체크아웃은 이 작업 트리의 HEAD 를 바꿨다. */
+  worktree: string;
   before: GitHeadPosition;
   after: GitHeadPosition;
   backupRef: string | null;
@@ -129,7 +131,7 @@ export function recordFrom(value: unknown): GitOperationRecord | null {
   const after = positionFrom(item.after);
   const status = STATUSES.find((candidate) => candidate === item.status);
   if (!opId || !operation || !before || !after || !status) return null;
-  return { opId, operation, before, after, backupRef: text(item.backupRef), status, startedAt: count(item.startedAt), error: text(item.error), undoOf: text(item.undoOf), undoneBy: text(item.undoneBy) };
+  return { opId, operation, worktree: text(item.worktree) ?? "", before, after, backupRef: text(item.backupRef), status, startedAt: count(item.startedAt), error: text(item.error), undoOf: text(item.undoOf), undoneBy: text(item.undoneBy) };
 }
 
 /** 실행이나 되돌리기의 답을 읽는다. */
@@ -161,9 +163,14 @@ export async function undoOperation(request: GatewayRequest, cwd: string, opId: 
   return outcomeFrom(await request(GIT_UNDO_METHOD, { cwd, opId }));
 }
 
-/** 되돌리기 단추를 보일 기록이다. 저장소가 그 뒤에 바뀌었는지는 Gateway 가 본다. */
-export function canUndo(record: GitOperationRecord): boolean {
-  return record.status === "done" && record.undoneBy === null && record.undoOf === null;
+/**
+ * 되돌리기 단추를 보일 기록이다. 일지는 저장소의 모든 작업 트리가 함께 쓴다. reset 과 체크아웃은 그 작업을 한 작업
+ * 트리(`cwd` 와 같은 폴더)에서만 되돌린다. 브랜치 이동은 어느 작업 트리에서나 되돌린다. 저장소가 그 뒤에 바뀌었는지는
+ * Gateway 가 본다.
+ */
+export function canUndo(record: GitOperationRecord, cwd: string): boolean {
+  const here = record.operation.kind === "move_branch" || samePath(record.worktree, cwd);
+  return here && record.status === "done" && record.undoneBy === null && record.undoOf === null;
 }
 
 /** 고른 커밋에서 할 수 있는 작업들이다. */
@@ -277,7 +284,8 @@ export function noticeFrom(outcome: GitOperationOutcome, undo: boolean): Operati
     case "done":
       return { text: `${recordTitle(outcome.record)} · 완료`, failed: false, record: outcome.record };
     case "failed":
-      return { text: `${recordTitle(outcome.record)} · 실패. ${outcome.record.error ?? ""}`.trim(), failed: true, record: null };
+      // git 이 파일을 쓰다가 멈췄을 수 있다 (다른 프로그램이 파일을 잡고 있었다). 작업 트리를 보게 한다.
+      return { text: `${recordTitle(outcome.record)} · 실패. ${outcome.record.error ?? ""} 터미널에서 git status 로 작업 트리를 확인하십시오.`.replace(/\s+/g, " "), failed: true, record: null };
     case "stale":
       return { text: `${undo ? "되돌리지" : "실행하지"} 않았습니다. ${outcome.plan.blockers.map(blockerText).join(" ") || "저장소가 계획과 다릅니다."}`, failed: true, record: null };
     case "refused":

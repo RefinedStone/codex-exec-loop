@@ -305,16 +305,36 @@ function comparablePath(path: string): string {
   return /^[a-zA-Z]:\//.test(slashed) || slashed.startsWith("//") ? slashed.toLowerCase() : slashed;
 }
 
+/** 두 글이 같은 폴더인가. 구분자와 끝의 구분자를 가리지 않는다. */
+export function samePath(left: string, right: string): boolean {
+  return comparablePath(left) === comparablePath(right);
+}
+
+/** `folder` 가 든 작업 트리이다. 작업 트리가 겹치면 가장 깊은 것이다. 어느 작업 트리에도 없으면 `null` 이다. */
+export function worktreeOf(folder: string, worktrees: readonly GitWorktree[]): GitWorktree | null {
+  const path = comparablePath(folder);
+  const owners = worktrees.filter((worktree) => {
+    const root = comparablePath(worktree.path);
+    return path === root || path.startsWith(`${root}/`);
+  });
+  return owners.sort((left, right) => comparablePath(right.path).length - comparablePath(left.path).length)[0] ?? null;
+}
+
+/** `folder` 와 같은 작업 트리에 폴더가 있는 스레드들의 id 이다. */
+export function threadIdsInWorktreeOf(folder: string, worktrees: readonly GitWorktree[], folders: readonly BadgeFolder[]): string[] {
+  const owner = worktreeOf(folder, worktrees);
+  if (!owner) return [];
+  return folders.filter((candidate) => worktreeOf(candidate.cwd, worktrees) === owner).flatMap((candidate) => candidate.threads.map((thread) => thread.id));
+}
+
 /**
  * 작업 트리가 체크아웃한 커밋마다 붙일 스레드 배지이다. 스레드는 그 스레드의 폴더가 든 작업 트리에 속한다. 작업
  * 트리가 겹치면 (작업 트리 안의 작업 트리) 가장 깊은 것에 속한다. 스레드가 없는 작업 트리는 배지가 없다.
  */
 export function threadBadges(worktrees: readonly GitWorktree[], folders: readonly BadgeFolder[]): Map<string, GitThreadBadge[]> {
-  const candidates = worktrees.map((worktree) => ({ worktree, path: comparablePath(worktree.path) })).sort((left, right) => right.path.length - left.path.length);
   const threadsByWorktree = new Map<GitWorktree, BadgeFolder["threads"][number][]>();
   for (const folder of folders) {
-    const cwd = comparablePath(folder.cwd);
-    const owner = candidates.find((candidate) => cwd === candidate.path || cwd.startsWith(`${candidate.path}/`))?.worktree;
+    const owner = worktreeOf(folder.cwd, worktrees);
     if (owner) threadsByWorktree.set(owner, [...(threadsByWorktree.get(owner) ?? []), ...folder.threads]);
   }
   const byCommit = new Map<string, GitThreadBadge[]>();

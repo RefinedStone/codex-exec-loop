@@ -1,17 +1,18 @@
 //! 작업 트리의 상태를 읽고 저장소를 고친다 (plan 27 G3). 이 저장소에서 사용자 저장소를 고치는 git 명령은 이 파일에만
 //! 있다: `update-ref` (백업 ref, 브랜치 이동), `reset --keep`, `switch`.
 //!
-//! 체크아웃과 reset 은 작업 트리의 파일을 쓴다. 그때 git 은 저장소 설정의 필터(smudge)를 실행한다. 이 파일의 규칙:
+//! 이 파일의 git 은 `git_subprocess` 의 git 이다. 그 git 은 저장소 설정만 읽는다. 사용자 설정(`~/.gitconfig`)과
+//! 시스템 설정은 읽지 않고, hook 을 끈다. 그 위에 이 파일이 지키는 규칙:
 //!
-//! - 필터 프로그램은 실행하지 않는다. 설정에 있는 필터마다 명령에서 빈 값으로 덮는다. 전역 설정의 LFS 필터가 흔해서
-//!   (`git lfs install`), 설정에 필터가 있다는 이유만으로 거절하면 거의 모든 저장소를 거절한다.
-//! - 필터를 끄고 체크아웃하면 필터를 쓰는 파일의 내용이 틀린다 (LFS 는 포인터 파일이 된다). 그래서
-//!   `.gitattributes` 가 필터를 쓰는 저장소는 거절한다.
-//! - 프로그램을 실행하는 다른 설정(`core.worktree` 등)이 있으면 거절한다. 판정은 `git_execution_guard` 의 것이다.
-//! - hook 은 `git_subprocess` 가 끈다.
-//! - `git_subprocess` 는 시스템 설정을 읽지 않는다. Git for Windows 는 줄 끝 설정(`core.autocrlf=true`)을 시스템
-//!   설정에 둔다. 그 값을 모르면 사용자의 git 이 CRLF 로 쓴 파일이 모두 "수정됨"으로 보이고, 체크아웃이 LF 로 쓴다.
-//!   그래서 시스템 설정의 줄 끝 값 둘만 읽어서 명령에 준다. 사용자 설정이나 저장소 설정에 값이 있으면 그 값이 이긴다.
+//! - 저장소 설정이 프로그램을 실행하면 (필터, `core.worktree`, `diff.external` 등) 거절한다. 판정은
+//!   `git_execution_guard` 의 것이다.
+//! - 필터 프로그램은 실행되지 않는다. 사용자 설정의 필터(`git lfs install` 이 쓰는 것)를 이 git 은 읽지 않고, 저장소
+//!   설정의 필터는 위에서 거절한다. 그런데 필터 없이 체크아웃하면 필터를 쓰는 파일의 내용이 틀린다 (LFS 는 포인터
+//!   파일이 된다). 그래서 `.gitattributes` 가 필터를 쓰는 저장소는 거절한다.
+//! - 서브모듈로 내려가지 않는다 (`submodule.recurse=false`). 서브모듈의 설정과 속성은 보지 않았다.
+//! - 줄 끝 설정은 사용자의 것을 쓴다. Git for Windows 는 `core.autocrlf=true` 를 시스템 설정에 둔다. 그 값을 모르면
+//!   사용자의 git 이 CRLF 로 쓴 파일이 모두 "수정됨"으로 보이고, 체크아웃이 LF 로 쓴다. 그래서 줄 끝 키 둘만 사용자
+//!   설정과 시스템 설정에서 읽어 명령에 준다. 순서는 git 과 같다: 저장소 설정, 사용자 설정, 시스템 설정.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -37,7 +38,13 @@ const IN_PROGRESS_MARKERS: &[(&str, &str)] = &[
 const FAILURE_TEXT_LIMIT: usize = 600;
 /// `.gitattributes` 에서 필터를 정하는 글이다.
 const FILTER_ATTRIBUTE: &str = "filter=";
-/// 시스템 설정에서 읽어 오는 키와 받는 값이다. 값은 이 목록의 글만 명령에 준다.
+/// 어느 작업 트리의 rebase 나 bisect 가 쓰는 브랜치를 적은 파일들이다. 작업 트리의 git 폴더 안에 있다.
+const BRANCH_IN_USE_FILES: &[&str] = &[
+    "rebase-merge/head-name",
+    "rebase-apply/head-name",
+    "BISECT_START",
+];
+/// 사용자 설정과 시스템 설정에서 읽어 오는 키와 받는 값이다. 값은 이 목록의 글만 명령에 준다.
 const LINE_ENDING_KEYS: &[(&str, &[&str])] = &[
     ("core.autocrlf", &["true", "false", "input"]),
     ("core.eol", &["lf", "crlf", "native"]),
@@ -51,10 +58,10 @@ pub(crate) struct GitWorkspaceAdapter;
 impl GitWorkspacePort for GitWorkspaceAdapter {
     fn read_condition(&self, repository_dir: &str) -> Result<GitWorkspaceCondition> {
         let repository = absolute(repository_dir)?;
-        let overrides = match CommandOverrides::read(repository)? {
-            Ok(overrides) => overrides,
-            Err(refusal) => return Ok(refused(refusal)),
-        };
+        if let Some(refusal) = configuration_refusal(repository) {
+            return Ok(refused(refusal));
+        }
+        let overrides = CommandOverrides::read(repository)?;
         let dirs = GitDirs::read(repository)?;
         // 지금 커밋의 파일과 stage 한 파일을 본다. 대상 커밋의 파일은 고치는 명령이 실행 직전에 본다.
         for source in [Some("HEAD"), None] {
@@ -74,6 +81,7 @@ impl GitWorkspacePort for GitWorkspaceAdapter {
             refusal: None,
             tracked_changes: !status.trim().is_empty(),
             operation_in_progress,
+            busy_branches: branches_in_use(&dirs.common),
         })
     }
 
@@ -174,49 +182,39 @@ fn refused(refusal: String) -> GitWorkspaceCondition {
     }
 }
 
-/// 작업 트리의 파일을 읽거나 쓰는 명령에 주는 `-c` 인자들이다: 설정에 있는 필터를 끄고, 시스템 설정의 줄 끝 값을
-/// 준다.
+/// 저장소 설정이 프로그램을 실행하면 그 이유이다. 검사를 하지 못한 때도 이유로 본다: 모르는 저장소는 고치지 않는다.
+fn configuration_refusal(repository: &Path) -> Option<String> {
+    git_execution_guard::ensure_host_git_execution_config_safe(repository)
+        .err()
+        .map(|error| format!("{error:#}"))
+}
+
+/// 작업 트리의 파일을 읽거나 쓰는 명령에 주는 `-c` 인자들이다: 서브모듈로 내려가지 않고, 사용자의 줄 끝 설정을 쓴다.
 struct CommandOverrides(Vec<String>);
 
 impl CommandOverrides {
-    /// 설정을 읽는다. 필터가 아닌 실행 설정이 있으면 `Err(이유)` 이다.
-    fn read(repository: &Path) -> Result<std::result::Result<Self, String>> {
-        let keys = git_execution_guard::host_git_execution_config_keys(repository)?;
-        let (filters, others): (Vec<String>, Vec<String>) = keys
-            .into_iter()
-            .partition(|key| key.to_ascii_lowercase().starts_with("filter."));
-        if !others.is_empty() {
-            return Ok(Err(format!(
-                "the git configuration runs programs ({}); Akra does not change this repository",
-                others.join(", ")
-            )));
-        }
-        let mut overrides: Vec<String> = filters
-            .into_iter()
-            .flat_map(|key| {
-                let off = if key.to_ascii_lowercase().ends_with(".required") {
-                    "false"
-                } else {
-                    ""
-                };
-                ["-c".to_string(), format!("{key}={off}")]
-            })
-            .collect();
+    fn read(repository: &Path) -> Result<Self> {
+        let mut overrides = vec!["-c".to_string(), "submodule.recurse=false".to_string()];
         // 찾지 못하면 git 은 실패(1)와 빈 출력으로 답한다.
-        let listed = |scope: &[&str]| -> Result<String> {
-            let mut args = vec!["config"];
-            args.extend_from_slice(scope);
-            args.extend(["--get-regexp", LINE_ENDING_KEYS_REGEX]);
-            Ok(run(repository, &args)?.unwrap_or_default())
+        let listed = |scope: &str, user_configuration: bool| -> Result<String> {
+            let args = ["config", scope, "--get-regexp", LINE_ENDING_KEYS_REGEX];
+            let mut command = git_subprocess::command(args);
+            if user_configuration {
+                // `git_subprocess` 는 사용자 설정 파일을 가린다. 이 읽기 하나만 그 파일을 본다. 키 둘의 값만 읽고,
+                // 값은 `LINE_ENDING_KEYS` 의 글일 때만 쓴다. `--global` 은 그 파일의 include 를 따라가지 않는다.
+                command.env_remove("GIT_CONFIG_GLOBAL");
+            }
+            Ok(output_of(repository, command)?.unwrap_or_default())
         };
-        overrides.extend(line_ending_overrides(
-            &listed(&["--includes"])?,
-            &listed(&["--system"])?,
-        ));
-        Ok(Ok(Self(overrides)))
+        overrides.extend(line_ending_overrides(&[
+            &listed("--local", false)?,
+            &listed("--global", true)?,
+            &listed("--system", false)?,
+        ]));
+        Ok(Self(overrides))
     }
 
-    /// 필터를 끈 명령의 인자이다. `-c` 는 하위 명령 앞에 온다.
+    /// `-c` 를 붙인 명령의 인자이다. `-c` 는 하위 명령 앞에 온다.
     fn with<'args>(&'args self, args: &[&'args str]) -> Vec<&'args str> {
         self.0
             .iter()
@@ -226,10 +224,9 @@ impl CommandOverrides {
     }
 }
 
-/// 시스템 설정의 줄 끝 값을 주는 `-c` 인자들이다. `effective` 는 사용자 설정과 저장소 설정의 값이고 (시스템 설정은
-/// 빠져 있다), `system` 은 시스템 설정의 값이다. 둘 다 `git config --get-regexp` 의 출력이다. `-c` 는 모든 설정을
-/// 이기므로, `effective` 에 있는 키는 주지 않는다.
-fn line_ending_overrides(effective: &str, system: &str) -> Vec<String> {
+/// 줄 끝 값을 주는 `-c` 인자들이다. `listings` 는 저장소 설정, 사용자 설정, 시스템 설정의 `git config --get-regexp`
+/// 출력이다. 이 순서로 이긴다. 저장소 설정에 있는 키는 주지 않는다: 이 git 이 이미 읽는다.
+fn line_ending_overrides(listings: &[&str; 3]) -> Vec<String> {
     let value_of = |listing: &str, key: &str| -> Option<String> {
         listing
             .lines()
@@ -238,17 +235,44 @@ fn line_ending_overrides(effective: &str, system: &str) -> Vec<String> {
             .map(|(_, value)| value.trim().to_ascii_lowercase())
             .next_back()
     };
+    let [local, user, system] = listings;
     LINE_ENDING_KEYS
         .iter()
-        .filter(|(key, _)| value_of(effective, key).is_none())
+        .filter(|(key, _)| value_of(local, key).is_none())
         .filter_map(|(key, allowed)| {
-            let value = value_of(system, key)?;
+            let value = value_of(user, key).or_else(|| value_of(system, key))?;
             allowed
                 .contains(&value.as_str())
                 .then(|| ["-c".to_string(), format!("{key}={value}")])
         })
         .flatten()
         .collect()
+}
+
+/// 어느 작업 트리의 끝나지 않은 rebase 나 bisect 가 쓰는 브랜치들이다. `common` 은 저장소의 git 폴더이다. 대표 작업
+/// 트리의 표시는 그 폴더에, 연결된 작업 트리의 표시는 `worktrees/<이름>` 에 있다. 읽지 못한 폴더는 건너뛴다.
+fn branches_in_use(common: &Path) -> Vec<String> {
+    let mut git_dirs = vec![common.to_path_buf()];
+    if let Ok(entries) = std::fs::read_dir(common.join("worktrees")) {
+        git_dirs.extend(entries.flatten().map(|entry| entry.path()));
+    }
+    let mut branches: Vec<String> = git_dirs
+        .iter()
+        .flat_map(|git_dir| {
+            BRANCH_IN_USE_FILES
+                .iter()
+                .map(move |file| git_dir.join(file))
+        })
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .map(|name| {
+            let name = name.trim();
+            name.strip_prefix("refs/heads/").unwrap_or(name).to_string()
+        })
+        .filter(|name| !name.is_empty())
+        .collect();
+    branches.sort();
+    branches.dedup();
+    branches
 }
 
 /// `source` 의 파일이 필터를 쓰면 거절하는 이유이다. `source` 는 커밋이나 ref 이고, `None` 은 stage 한 파일이다.
@@ -344,10 +368,10 @@ fn count(repository: &Path, args: &[&str]) -> Result<usize> {
 /// 있고, 대상 커밋만 필터를 쓸 수 있다.
 fn write_files(repository_dir: &str, target: &str, args: &[&str]) -> Result<()> {
     let repository = absolute(repository_dir)?;
-    let overrides = match CommandOverrides::read(repository)? {
-        Ok(overrides) => overrides,
-        Err(refusal) => bail!(refusal),
-    };
+    if let Some(refusal) = configuration_refusal(repository) {
+        bail!(refusal);
+    }
+    let overrides = CommandOverrides::read(repository)?;
     let dirs = GitDirs::read(repository)?;
     if let Some(refusal) = filter_attribute_refusal(repository, &dirs, Some(target))? {
         bail!(refusal);
@@ -367,7 +391,13 @@ fn read(repository: &Path, args: &[&str]) -> Result<String> {
 
 /// 명령이 성공하면 `Ok(출력)` 이고, 실패하면 `Err(git 이 쓴 오류)` 이다. 실행하지 못하면 바깥 오류이다.
 fn run(repository: &Path, args: &[&str]) -> Result<std::result::Result<String, String>> {
-    let mut command = git_subprocess::command(args.iter().copied());
+    output_of(repository, git_subprocess::command(args.iter().copied()))
+}
+
+fn output_of(
+    repository: &Path,
+    mut command: std::process::Command,
+) -> Result<std::result::Result<String, String>> {
     command
         .current_dir(repository)
         .stdout(Stdio::piped())

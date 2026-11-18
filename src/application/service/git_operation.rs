@@ -27,7 +27,7 @@ use crate::domain::git_operation::{
     GIT_AGENT_BRANCH_PREFIX, GIT_OPERATION_LIST_LIMIT, GitHeadPosition, GitOperation,
     GitOperationBlocker, GitOperationBlockerCode, GitOperationExpectation, GitOperationPlan,
     GitOperationRecord, GitOperationStatus, git_backup_ref_name, git_backups_to_prune,
-    git_operation_id,
+    git_operation_id, same_git_worktree_path,
 };
 
 /// 지금 시각(Unix 초)과 작업 id 를 가르는 임의의 수이다.
@@ -101,6 +101,15 @@ impl GitOperationPort for GitOperationService {
         if !record.can_undo() {
             return Ok(refused(
                 "this operation did not finish, was undone before, or is an undo itself",
+            ));
+        }
+        // 일지는 모든 작업 트리가 함께 쓴다. reset 과 체크아웃은 작업 트리 하나의 HEAD 를 바꿨다. 다른 작업 트리에서
+        // 되돌리면 그 작업 트리를 바꾼다.
+        if record.is_bound_to_worktree()
+            && !same_git_worktree_path(&record.worktree, repository_dir)
+        {
+            return Ok(refused(
+                "this operation ran in another worktree; undo it from that worktree",
             ));
         }
         let observed = self.build_plan(repository_dir, record.inverse())?;
@@ -194,10 +203,10 @@ impl GitOperationService {
                 self.plan_reset(repository_dir, &head, &condition, target, &mut plan)?;
             }
             GitOperation::MoveBranch { branch, target } => {
-                self.plan_move(repository_dir, &refs, branch, target, &mut plan)?;
+                self.plan_move(repository_dir, &refs, &condition, branch, target, &mut plan)?;
             }
             GitOperation::CheckoutBranch { branch } => {
-                plan_checkout_branch(&refs, &head, branch, &mut plan);
+                plan_checkout_branch(&refs, &condition, &head, branch, &mut plan);
             }
             GitOperation::CheckoutCommit { target } => {
                 self.plan_checkout_commit(repository_dir, &head, target, &mut plan)?;
@@ -242,6 +251,7 @@ impl GitOperationService {
         &self,
         repository_dir: &str,
         refs: &GitHistoryRefs,
+        condition: &GitWorkspaceCondition,
         branch: &str,
         target: &str,
         plan: &mut GitOperationPlan,
@@ -262,16 +272,7 @@ impl GitOperationService {
             branch: Some(branch.to_string()),
         });
         block_agent_branch(plan, branch);
-        if let Some(worktree) = worktree_holding(refs, branch) {
-            block(
-                plan,
-                GitOperationBlockerCode::BranchCheckedOut,
-                format!(
-                    "the worktree `{}` has `{branch}` checked out; moving the ref would leave that worktree behind",
-                    worktree.path
-                ),
-            );
-        }
+        block_branch_in_use(refs, condition, branch, plan);
         self.plan_branch_move(repository_dir, branch, &current, target, plan)
     }
 
@@ -454,6 +455,7 @@ impl GitOperationService {
 
 fn plan_checkout_branch(
     refs: &GitHistoryRefs,
+    condition: &GitWorkspaceCondition,
     head: &GitHeadPosition,
     branch: &str,
     plan: &mut GitOperationPlan,
@@ -470,6 +472,8 @@ fn plan_checkout_branch(
         );
         return;
     };
+    // 계획 뒤에 그 브랜치가 옮겨지면 사용자가 본 커밋과 다른 커밋을 체크아웃한다. 기대 상태에 넣어 막는다.
+    plan.expectation.branch_commit = Some(commit.to_string());
     plan.after = Some(GitHeadPosition {
         commit: commit.to_string(),
         branch: Some(branch.to_string()),
@@ -483,14 +487,30 @@ fn plan_checkout_branch(
         return;
     }
     block_agent_branch(plan, branch);
+    block_branch_in_use(refs, condition, branch, plan);
+}
+
+/// 브랜치를 어느 작업 트리가 쓰고 있으면 막는다: 체크아웃했거나, 그 브랜치의 rebase 나 bisect 가 끝나지 않았다.
+fn block_branch_in_use(
+    refs: &GitHistoryRefs,
+    condition: &GitWorkspaceCondition,
+    branch: &str,
+    plan: &mut GitOperationPlan,
+) {
     if let Some(worktree) = worktree_holding(refs, branch) {
         block(
             plan,
             GitOperationBlockerCode::BranchCheckedOut,
             format!(
-                "the worktree `{}` already has `{branch}` checked out",
+                "the worktree `{}` has `{branch}` checked out",
                 worktree.path
             ),
+        );
+    } else if condition.busy_branches.iter().any(|busy| busy == branch) {
+        block(
+            plan,
+            GitOperationBlockerCode::BranchCheckedOut,
+            format!("an unfinished rebase or bisect in a worktree uses `{branch}`"),
         );
     }
 }
@@ -580,6 +600,7 @@ mod tests {
         other_worktree_branch: Option<String>,
         tracked_changes: bool,
         operation_in_progress: Option<String>,
+        busy_branches: Vec<String>,
         refusal: Option<String>,
         fail_reset: bool,
         calls: Vec<String>,
@@ -700,6 +721,7 @@ mod tests {
                 refusal: state.refusal.clone(),
                 tracked_changes: state.tracked_changes,
                 operation_in_progress: state.operation_in_progress.clone(),
+                busy_branches: state.busy_branches.clone(),
             })
         }
 
@@ -1152,6 +1174,86 @@ mod tests {
         };
         let unknown = fixture.service.plan("/repo", missing).unwrap();
         assert_eq!(codes(&unknown), [GitOperationBlockerCode::UnknownBranch]);
+    }
+
+    #[test]
+    fn a_branch_that_an_unfinished_rebase_uses_is_not_moved_or_checked_out() {
+        let fixture = fixture();
+        // 다른 작업 트리가 `topic` 을 rebase 하는 중이다. 그 작업 트리의 HEAD 는 브랜치 없이 있다.
+        fixture
+            .repository
+            .edit(|state| state.busy_branches = vec!["topic".to_string()]);
+        for operation in [
+            GitOperation::MoveBranch {
+                branch: "topic".to_string(),
+                target: sha('a'),
+            },
+            GitOperation::CheckoutBranch {
+                branch: "topic".to_string(),
+            },
+        ] {
+            let plan = fixture.service.plan("/repo", operation).unwrap();
+            assert_eq!(codes(&plan), [GitOperationBlockerCode::BranchCheckedOut]);
+            assert!(plan.blockers[0].message.contains("rebase"));
+        }
+    }
+
+    #[test]
+    fn a_checkout_is_stale_when_its_branch_moved_after_the_plan() {
+        let fixture = fixture();
+        let checkout = GitOperation::CheckoutBranch {
+            branch: "topic".to_string(),
+        };
+        let plan = fixture.service.plan("/repo", checkout.clone()).unwrap();
+        assert_eq!(plan.expectation.branch_commit, Some(sha('b')));
+        fixture.repository.edit(|state| {
+            state.branches.insert("topic".to_string(), sha('d'));
+        });
+
+        let outcome = fixture
+            .service
+            .execute("/repo", checkout, plan.expectation)
+            .unwrap();
+
+        let GitOperationOutcome::Stale { plan: fresh } = outcome else {
+            panic!("the checkout must not run on another commit");
+        };
+        assert_eq!(fresh.after.unwrap().commit, sha('d'));
+        assert!(fixture.repository.calls().is_empty());
+    }
+
+    #[test]
+    fn a_reset_or_a_checkout_is_undone_only_from_its_own_worktree() {
+        let fixture = fixture();
+        let plan = fixture.service.plan("/repo", reset_to('a')).unwrap();
+        let reset = done(
+            fixture
+                .service
+                .execute("/repo", reset_to('a'), plan.expectation)
+                .unwrap(),
+        );
+        let calls_before = fixture.repository.calls().len();
+
+        // 일지는 저장소의 모든 작업 트리가 함께 쓴다. 다른 작업 트리의 요청은 이 기록을 본다.
+        let elsewhere = fixture.service.undo("/repo-other", &reset.op_id).unwrap();
+        assert!(matches!(elsewhere, GitOperationOutcome::Refused { .. }));
+        assert_eq!(fixture.repository.calls().len(), calls_before);
+        // 같은 폴더의 다른 표기는 같은 작업 트리이다.
+        done(fixture.service.undo("/repo/", &reset.op_id).unwrap());
+
+        // 브랜치 이동은 ref 만 바꿨다. 어느 작업 트리에서나 되돌린다.
+        let move_topic = GitOperation::MoveBranch {
+            branch: "topic".to_string(),
+            target: sha('a'),
+        };
+        let plan = fixture.service.plan("/repo", move_topic.clone()).unwrap();
+        let moved = done(
+            fixture
+                .service
+                .execute("/repo", move_topic, plan.expectation)
+                .unwrap(),
+        );
+        done(fixture.service.undo("/repo-other", &moved.op_id).unwrap());
     }
 
     #[test]

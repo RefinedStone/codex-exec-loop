@@ -18,8 +18,11 @@ import {
   nextMatch,
   refLabels,
   relativeTime,
+  samePath,
   scrollTopAfterRowsChange,
   threadBadges,
+  threadIdsInWorktreeOf,
+  worktreeOf,
 } from "../src/renderer/git/gitGraph";
 import { ROW_HEIGHT } from "../src/renderer/git/graphGeometry";
 
@@ -223,6 +226,35 @@ describe("threadBadges", () => {
   it("compares POSIX paths with their case", () => {
     const badges = threadBadges([{ path: "/home/u/Repo", head: "a", branch: null }], [{ cwd: "/home/u/repo", threads: [thread("t1", 1)] }, { cwd: "/home/u/Repo/sub", threads: [thread("t2", 1)] }]);
     expect(badges.get("a")!.map((badge) => badge.threadId)).toEqual(["t2"]);
+  });
+});
+
+describe("worktreeOf", () => {
+  const worktrees = [
+    { path: "C:/dev/repo", head: "a", branch: "main" },
+    { path: "C:/dev/repo/nested", head: "b", branch: "nested" },
+    { path: "C:/dev/repo-topic", head: "c", branch: "topic" },
+  ];
+  const thread = (id: string) => ({ id, title: id, updatedAt: 1 });
+
+  it("finds the deepest worktree that contains a folder", () => {
+    expect(worktreeOf("c:\\dev\\repo\\src", worktrees)?.branch).toBe("main");
+    expect(worktreeOf("C:/dev/repo/nested/deep", worktrees)?.branch).toBe("nested");
+    expect(worktreeOf("C:/dev/repo-topic-other", worktrees)).toBeNull();
+    expect(samePath("C:\\dev\\repo\\", "c:/dev/repo")).toBe(true);
+    expect(samePath("C:/dev/repo", "C:/dev/repo-topic")).toBe(false);
+  });
+
+  it("lists the threads whose folders are in the same worktree", () => {
+    const folders = [
+      { cwd: "C:\\dev\\repo", threads: [thread("t1")] },
+      { cwd: "C:\\dev\\repo\\docs", threads: [thread("t2")] },
+      { cwd: "C:\\dev\\repo-topic", threads: [thread("t3")] },
+      { cwd: "C:\\dev\\repo\\nested", threads: [thread("t4")] },
+    ];
+    expect(threadIdsInWorktreeOf("C:/dev/repo/src", worktrees, folders)).toEqual(["t1", "t2"]);
+    expect(threadIdsInWorktreeOf("C:/dev/repo-topic", worktrees, folders)).toEqual(["t3"]);
+    expect(threadIdsInWorktreeOf("D:/elsewhere", worktrees, folders)).toEqual([]);
   });
 });
 

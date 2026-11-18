@@ -405,22 +405,26 @@ the desktop app itself is not shipped yet.
   (`src/application/service/git_operation.rs`). The operations are `reset` (move the checked-out
   branch and its worktree to a commit), `move_branch` (move a branch that no worktree has checked
   out), `checkout_branch`, and `checkout_commit` (detached). `akra/git/plan` with `{ cwd, operation }`
-  returns a plan and changes nothing: `expectation` (the HEAD position and, for `move_branch`, the
-  commit of that branch), `before`, `after`, `impact` (`dropped`, `unreachable`, `gained` commits of a
+  returns a plan and changes nothing: `expectation` (the HEAD position and, for `move_branch` and
+  `checkout_branch`, the commit of that branch), `before`, `after`, `impact` (`dropped`, `unreachable`, `gained` commits of a
   branch move), and `blockers`. `akra/git/execute` with `{ cwd, operation, expectation }` builds the
   plan again and runs it only when the expectation is equal and there is no blocker; otherwise it
   answers `{ status: "stale", plan }`. A run answers `done` or `failed` with the journal record.
   `akra/git/operations` returns the 50 newest records and `akra/git/undo` with `{ cwd, opId }` runs the
   inverse operation when the repository is still in the state that operation left, and answers
-  `refused` otherwise. Blockers: no repository or commit, an unfinished merge, rebase, cherry-pick,
-  revert or bisect, an unknown commit or branch, a detached HEAD or uncommitted tracked changes (for
-  `reset`), a branch that a worktree has checked out, a branch named `akra-agent/…`, a `.gitattributes`
-  or `info/attributes` that sets a `filter`, and a Git setting that runs a program other than a
-  filter. Before a branch moves, the engine writes `refs/akra/backup/<branch>/<op-id>` at the old
+  `refused` otherwise. A `reset` or a checkout is undone only from the worktree that ran it; a
+  `move_branch` from any worktree. Blockers: no repository or commit, an unfinished merge, rebase,
+  cherry-pick, revert or bisect in this worktree, an unknown commit or branch, a detached HEAD or
+  uncommitted tracked changes (for `reset`), a branch that a worktree has checked out or that an
+  unfinished rebase or bisect of any worktree uses, a branch named `akra-agent/…`, a `.gitattributes`
+  or `info/attributes` that sets a `filter`, and a repository Git setting that runs a program (a
+  filter, `core.worktree`, `diff.external`, …; the check of `git_execution_guard`). Before a branch
+  moves, the engine writes `refs/akra/backup/<branch>/<op-id>` at the old
   commit; after it, the engine deletes the backups of that kind that are both older than 30 days and
   beyond the newest 20 of their branch. The commands are `git update-ref`, `git reset --keep`, and
-  `git switch`, with every configured filter turned off on the command line and with the system-level
-  `core.autocrlf` and `core.eol` passed on when no user or repository setting exists. The journal is
+  `git switch`, with `submodule.recurse=false`. The Gateway's Git reads only the repository
+  configuration; the commands also receive `core.autocrlf` and `core.eol` from the user and system
+  configuration (repository, then user, then system), and no other user setting. The journal is
   `git-operations.jsonl` in the repository runtime directory under `AKRA_HOME` (newest 2,000 lines).
   The engine does not know about running turns.
 - Cloud host (D-19): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
@@ -826,8 +830,10 @@ The Gateway records the external documents that a thread mentions, without a mod
   as text (the move, the commits that leave the branch, and the blockers); nothing changes until
   "실행". When the Gateway answers `stale`, the panel shows the new plan and does not run it. A
   finished operation shows one notice line with "되돌리기", and "작업 기록" lists the journal. "실행"
-  and "되돌리기" are off while the open thread has a turn in progress; this check exists only in
-  Desktop (`desktop/src/renderer/git/GitOperationViews.tsx`).
+  and "되돌리기" are off while the open thread, or another thread whose folder is in the same
+  worktree, has a turn in progress; this check exists only in Desktop
+  (`desktop/src/renderer/git/GitOperationViews.tsx`). "되돌리기" of a reset or a checkout shows only in
+  the worktree that ran it.
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

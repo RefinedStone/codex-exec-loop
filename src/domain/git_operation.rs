@@ -51,7 +51,7 @@ pub struct GitHeadPosition {
 pub struct GitOperationExpectation {
     /// 이 작업 트리의 HEAD 이다. 커밋이 없는 저장소는 없다.
     pub head: Option<GitHeadPosition>,
-    /// `MoveBranch` 가 옮기는 브랜치의 지금 커밋이다.
+    /// `MoveBranch` 가 옮기는 브랜치, 또는 `CheckoutBranch` 가 체크아웃하는 브랜치의 지금 커밋이다.
     pub branch_commit: Option<String>,
 }
 
@@ -159,6 +159,12 @@ pub struct GitOperationRecord {
 }
 
 impl GitOperationRecord {
+    /// 이 작업이 작업 트리 하나의 HEAD 를 바꿨는가. 그런 작업은 그 작업 트리에서만 되돌린다. 브랜치 이동은 ref 만
+    /// 바꾸므로 어느 작업 트리에서나 되돌린다.
+    pub fn is_bound_to_worktree(&self) -> bool {
+        !matches!(self.operation, GitOperation::MoveBranch { .. })
+    }
+
     /// 되돌릴 수 있는 기록이다: 끝났고, 아직 되돌리지 않았고, 되돌리기 자신이 아니다. 저장소가 작업 후의 상태와
     /// 같은지는 따로 본다.
     pub fn can_undo(&self) -> bool {
@@ -208,6 +214,22 @@ impl GitOperationRecord {
             GitOperation::CheckoutCommit { .. } => head == Some(&self.after),
         }
     }
+}
+
+/// 두 글이 같은 작업 트리 폴더인가. 구분자와 끝의 구분자를 가리지 않는다. Windows 의 드라이브 경로는 대소문자도
+/// 가리지 않는다. 파일 시스템을 보지 않는다: 링크로 이어진 두 이름은 다른 폴더로 본다.
+pub fn same_git_worktree_path(left: &str, right: &str) -> bool {
+    fn comparable(path: &str) -> String {
+        let slashed = path.replace('\\', "/");
+        let trimmed = slashed.trim_end_matches('/');
+        let drive = trimmed.as_bytes().get(1) == Some(&b':');
+        if drive || trimmed.starts_with("//") {
+            trimmed.to_ascii_lowercase()
+        } else {
+            trimmed.to_string()
+        }
+    }
+    comparable(left) == comparable(right)
 }
 
 /// 일지의 줄들을 작업마다 하나로 접는다. 같은 id 의 뒤 줄이 앞 줄을 대신한다. 순서는 처음 나온 순서이다.
@@ -426,6 +448,37 @@ mod tests {
         );
         assert!(checkout.still_applies(Some(&position("newer", Some("topic"))), None));
         assert!(!checkout.still_applies(Some(&position("new", Some("main"))), None));
+    }
+
+    #[test]
+    fn worktree_paths_compare_without_separator_and_drive_case_differences() {
+        assert!(same_git_worktree_path("C:\\dev\\repo\\", "c:/dev/repo"));
+        assert!(same_git_worktree_path("/home/u/repo/", "/home/u/repo"));
+        assert!(!same_git_worktree_path("/home/u/Repo", "/home/u/repo"));
+        assert!(!same_git_worktree_path("C:/dev/repo", "C:/dev/repo-topic"));
+    }
+
+    #[test]
+    fn only_a_branch_move_is_free_of_a_worktree() {
+        let reset = record(
+            "a",
+            GitOperation::Reset {
+                target: "new".to_string(),
+            },
+            position("old", Some("main")),
+            position("new", Some("main")),
+        );
+        assert!(reset.is_bound_to_worktree());
+        let moved = record(
+            "b",
+            GitOperation::MoveBranch {
+                branch: "topic".to_string(),
+                target: "new".to_string(),
+            },
+            position("old", Some("topic")),
+            position("new", Some("topic")),
+        );
+        assert!(!moved.is_bound_to_worktree());
     }
 
     #[test]

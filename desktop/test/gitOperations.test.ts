@@ -95,11 +95,15 @@ describe("records and outcomes", () => {
 
   it("offers undo only for a finished operation that is not undone and is not an undo", () => {
     const record = (overrides: Record<string, unknown>) => recordFrom(rawRecord(overrides)) as GitOperationRecord;
-    expect(canUndo(record({}))).toBe(true);
-    expect(canUndo(record({ undoneBy: "x" }))).toBe(false);
-    expect(canUndo(record({ undoOf: "x" }))).toBe(false);
-    expect(canUndo(record({ status: "failed" }))).toBe(false);
-    expect(canUndo(record({ status: "started" }))).toBe(false);
+    expect(canUndo(record({}), "/repo")).toBe(true);
+    expect(canUndo(record({ undoneBy: "x" }), "/repo")).toBe(false);
+    expect(canUndo(record({ undoOf: "x" }), "/repo")).toBe(false);
+    expect(canUndo(record({ status: "failed" }), "/repo")).toBe(false);
+    expect(canUndo(record({ status: "started" }), "/repo")).toBe(false);
+    // 일지는 모든 작업 트리가 함께 쓴다. reset 과 체크아웃은 그 작업을 한 작업 트리에서만 되돌린다.
+    expect(canUndo(record({}), "/repo-other")).toBe(false);
+    expect(canUndo(record({ worktree: "C:/dev/repo" }), "c:\\dev\\repo\\")).toBe(true);
+    expect(canUndo(record({ operation: { kind: "move_branch", branch: "topic", target: sha("a") } }), "/repo-other")).toBe(true);
     expect(recordStatus(record({ undoneBy: "x" }))).toBe("되돌림");
     expect(recordStatus(record({ status: "started" }))).toBe("끝을 적지 못함");
     expect(recordTitle(record({}))).toBe("reset: main → aaaaaaa");
@@ -208,6 +212,7 @@ describe("texts", () => {
     const failed = noticeFrom(outcomeFrom({ status: "failed", record: rawRecord({ status: "failed", error: "file in the way" }) }), false);
     expect(failed).toMatchObject({ failed: true, record: null });
     expect(failed.text).toContain("file in the way");
+    expect(failed.text).toContain("git status");
     const stale = noticeFrom(outcomeFrom({ status: "stale", plan: rawPlan({ blockers: [{ code: "uncommitted_changes", message: "" }] }) }), true);
     expect(stale.text).toContain("되돌리지 않았습니다.");
     expect(stale.text).toContain("커밋하지 않은 변경");
