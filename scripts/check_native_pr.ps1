@@ -90,8 +90,9 @@ function Invoke-NodeAdminChecks {
         "npm/test/schema-normalizer.test.js"
     )
     Invoke-ExternalStep "admin game dependencies" "npm" @("--prefix", "assets/admin/game", "ci")
-    Invoke-ExternalStep "admin game dependency audit" "npm" @(
-        "--prefix", "assets/admin/game", "audit", "--audit-level=high"
+    # High and critical advisories fail, except the dated exceptions in scripts/npm-audit-exceptions.json.
+    Invoke-ExternalStep "admin game dependency audit" "node" @(
+        "scripts/npm-audit-gate.mjs", "assets/admin/game"
     )
     Invoke-ExternalStep "admin game typecheck" "npm" @(
         "--prefix", "assets/admin/game", "run", "check"
@@ -114,8 +115,9 @@ function Invoke-NodeAdminChecks {
     } finally {
         Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
     }
-    Invoke-ExternalStep "desktop dependency audit" "npm" @(
-        "--prefix", "desktop", "audit", "--audit-level=high"
+    # High and critical advisories fail, except the dated exceptions in scripts/npm-audit-exceptions.json.
+    Invoke-ExternalStep "desktop dependency audit" "node" @(
+        "scripts/npm-audit-gate.mjs", "desktop"
     )
     Invoke-ExternalStep "desktop typecheck" "npm" @("--prefix", "desktop", "run", "check")
     Invoke-ExternalStep "desktop tests" "npm" @("--prefix", "desktop", "test")
@@ -185,7 +187,8 @@ try {
         Invoke-ExternalStep "CI policy tests" "node" @(
             "--test",
             "scripts/ci-scope.test.mjs",
-            "scripts/agent-plan.test.mjs"
+            "scripts/agent-plan.test.mjs",
+            "scripts/npm-audit-gate.test.mjs"
         )
     }
     if ($Mode -in @("Full", "Rust")) {

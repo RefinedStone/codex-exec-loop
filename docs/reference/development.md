@@ -114,6 +114,15 @@ recovery boundaries. Primitive-sensitive terminal changes also follow
 [the validation methodology](../validation/terminal-ui-testing-methodology.md) and attach the
 required real-terminal evidence.
 
+### npm audit exceptions
+
+The Node checks run `node scripts/npm-audit-gate.mjs <package directory>` for `assets/admin/game`
+and `desktop`. It is `npm audit` at the `high` level with one difference: an advisory in
+`scripts/npm-audit-exceptions.json` does not fail the check until its `expires` date. Use an
+exception only when no patched version exists. Each entry names one advisory id (`GHSA-…`), the
+package, the date, and the reason. After the date the check fails again; then update the package
+and remove the entry, or look at the advisory again and set a new date.
+
 ## Worktree Lane
 
 Read-only diagnosis, review, and planning use the current checkout. Create a dedicated worktree only
