@@ -556,8 +556,9 @@ export class DesktopSession {
       const status = (params as { status: ThreadStatus }).status.type;
       const active = status === "active";
       this.statusChangesWhileListing?.set(threadId, active);
-      this.store.setThreadActive(threadId, active);
+      // 실패를 먼저 적는다: "진행 중"이 끝나는 순간에 화면과 알림이 실패인지 안다.
       this.store.setThreadFailed(threadId, status === "systemError");
+      this.store.setThreadActive(threadId, active);
     }
     if (method === "serverRequest/resolved") {
       this.resolveApprovalElsewhere((params as { requestId: JsonRpcId }).requestId);

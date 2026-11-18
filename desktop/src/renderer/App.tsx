@@ -60,6 +60,8 @@ function navEntryExists(entry: NavEntry): boolean {
 }
 
 function TopBar({ tree, documentCount, changedDocumentCount, onNavigate }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void }) {
+  // 스레드 목록이 바뀌면 갈 수 있는 곳도 바뀐다.
+  useDesktopStore((state) => state.folders);
   const canGoBack = useUiStore((state) => stepNav(state.nav, -1, navEntryExists) !== null);
   const canGoForward = useUiStore((state) => stepNav(state.nav, 1, navEntryExists) !== null);
   const sidebarOpen = useUiStore((state) => state.sidebarOpen);
@@ -427,16 +429,24 @@ export function App() {
   );
   useShortcuts(navigate);
 
-  // 창이 뒤에 있는 동안 턴이 끝나거나 승인 요청이 오면 운영체제 알림을 보인다 (plan 26 A1). 누르면 그 스레드를 연다.
+  // 앱의 창이 모두 뒤에 있는 동안 턴이 끝나거나 승인 요청이 오면 운영체제 알림을 보인다 (plan 26 A1). 누르면 그
+  // 스레드를 연다. 포커스는 main 에 묻는다: 다른 창이나 브라우저 패널을 쓰는 중이면 알리지 않는다.
   // 알림에는 스레드 이름만 넣는다. 대화의 글은 넣지 않는다.
   useEffect(
     () =>
       useDesktopStore.subscribe((state, previous) => {
-        if (document.hasFocus()) return;
-        for (const event of attentionEvents(previous, state)) {
-          const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";
-          notifyOs(title, ATTENTION_TEXT[event.kind], () => openThread(event.threadId), `akra:${event.kind}:${event.threadId}`);
-        }
+        const events = attentionEvents(previous, state);
+        if (events.length === 0) return;
+        window.akra.isAppFocused().then(
+          (focused) => {
+            if (focused) return;
+            for (const event of events) {
+              const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";
+              notifyOs(title, ATTENTION_TEXT[event.kind], () => openThread(event.threadId), `akra:${event.kind}:${event.threadId}`);
+            }
+          },
+          () => undefined,
+        );
       }),
     [openThread],
   );

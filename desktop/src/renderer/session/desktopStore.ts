@@ -147,6 +147,8 @@ export interface DesktopState {
   sessionError: string | null;
   /** 진행 중인 턴이 있는 스레드 id (사이드바 표시용) */
   activeThreadIds: string[];
+  /** `setActiveThreads` 로 진행 중 표시를 통째로 다시 채운 횟수이다. 그때 사라진 표시는 지금 끝난 턴이 아닐 수 있다. */
+  activeRefills: number;
   /** 열려 있지 않은 동안 턴이 끝난 스레드 id 이다. 이 창의 메모리에만 있다. 스레드를 열면 빠진다. */
   unreadThreadIds: string[];
   /** 열린 스레드의 대화가 화면에 있다. 새 스레드 화면이나 현황판을 보는 동안은 false 이다. */
@@ -209,6 +211,7 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   folders: [],
   sessionError: null,
   activeThreadIds: [],
+  activeRefills: 0,
   unreadThreadIds: [],
   threadVisible: true,
   openThreadId: null,
@@ -227,7 +230,7 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
       const unread = state.unreadThreadIds.filter((id) => id !== threadId);
       return { activeThreadIds: active ? [...others, threadId] : others, unreadThreadIds: finishedUnseen ? [...unread, threadId] : unread };
     }),
-  setActiveThreads: (activeThreadIds) => set({ activeThreadIds }),
+  setActiveThreads: (activeThreadIds) => set((state) => ({ activeThreadIds, activeRefills: state.activeRefills + 1 })),
   setThreadFailed: (threadId, failed) =>
     set((state) => {
       const changed = state.folders.some((folder) => folder.threads.some((thread) => thread.id === threadId && thread.failed !== failed));

@@ -215,6 +215,7 @@ const bridge: AkraBridge = {
       ipcRenderer.send(IPC_CHANNELS.dotsAllowSend, dotId);
     },
   },
+  isAppFocused: () => ipcRenderer.invoke(IPC_CHANNELS.appFocused) as Promise<boolean>,
   zoom: {
     get(): Promise<number> {
       return ipcRenderer.invoke(IPC_CHANNELS.zoomGet) as Promise<number>;
