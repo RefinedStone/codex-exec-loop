@@ -8,8 +8,8 @@ import { Icon, type IconName } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { toast } from "../session/uiStore";
 import { type ActionLock, BranchCommits, type BranchState } from "./BranchCommits";
-import { type DiffLine, diffFileFromChange, parseGitDiff } from "./diff";
-import { DiffCounts, DiffLines } from "./DiffView";
+import { type DiffFile, diffFileFromChange, parseGitDiff } from "./diff";
+import { DiffBody, DiffCounts, DiffStyleToggle } from "./DiffView";
 import { HunkChanges } from "./HunkChanges";
 
 /** 변경 패널이 쓰는 브리지 함수이다. 읽기와 파일별 동작이다. */
@@ -19,7 +19,7 @@ type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" 
 
 type PanelState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; result: GitStatusResult } | { phase: "failed"; message: string };
 
-type FileState = { phase: "loading" } | { phase: "loaded"; lines: DiffLine[]; note: string | null } | { phase: "failed"; message: string };
+type FileState = { phase: "loading" } | { phase: "loaded"; diff: DiffFile | null; note: string | null } | { phase: "failed"; message: string };
 
 const STATUS_LABEL: Record<string, string> = { M: "수정", A: "추가", D: "삭제", R: "이동", C: "복사", U: "충돌", "?": "새 파일" };
 
@@ -28,16 +28,17 @@ function statusLabel(file: GitChangedFile): string {
   return STATUS_LABEL[letter] ?? file.status;
 }
 
-function linesFromDiff(diff: GitFileDiff, path: string): { lines: DiffLine[]; note: string | null } {
+function fileFromDiff(diff: GitFileDiff, path: string): { diff: DiffFile | null; note: string | null } {
   if (diff.kind === "binary") {
-    return { lines: [], note: "바이너리 파일입니다." };
+    return { diff: null, note: "바이너리 파일입니다." };
   }
   const note = diff.truncated ? "1 MB 까지만 보여 줍니다." : null;
   if (diff.kind === "content") {
-    return { lines: diffFileFromChange({ path, kind: { type: "add" }, diff: diff.text }).lines, note };
+    return { diff: diffFileFromChange({ path, kind: { type: "add" }, diff: diff.text }), note };
   }
   const file = parseGitDiff(diff.text)[0];
-  return { lines: file?.lines ?? [], note: file && file.lines.length > 0 ? note : (note ?? "줄 단위 변경이 없습니다 (모드나 바이너리 변경).") };
+  const hasLines = file !== undefined && file.lines.length > 0;
+  return { diff: hasLines ? file : null, note: hasLines ? note : (note ?? "줄 단위 변경이 없습니다 (모드나 바이너리 변경).") };
 }
 
 const ACTION_LABEL: Record<GitFileAction, string> = { stage: "스테이지", unstage: "스테이지 취소", discard: "변경 버리기" };
@@ -111,7 +112,7 @@ function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
     if (next && state.phase !== "loaded") {
       setState({ phase: "loading" });
       git.gitFileDiff(cwd, file.path, file.untracked).then(
-        (diff) => setState({ phase: "loaded", ...linesFromDiff(diff, file.path) }),
+        (diff) => setState({ phase: "loaded", ...fileFromDiff(diff, file.path) }),
         (error: unknown) => setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) }),
       );
     }
@@ -147,7 +148,7 @@ function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
       {open && state.phase === "failed" && <div className="error diff-hint">{state.message}</div>}
       {open && state.phase === "loaded" && (
         <HunkChanges cwd={cwd} path={file.path} git={git} lock={lock} onChanged={onChanged}>
-          {state.lines.length > 0 && <DiffLines lines={state.lines} />}
+          {state.diff && <DiffBody file={state.diff} />}
           {state.note && <div className="muted diff-hint">{state.note}</div>}
         </HunkChanges>
       )}
@@ -251,6 +252,7 @@ export function WorkingTreePanel({ tree, git, onOpenUrl }: { tree: WorkingTree; 
           </span>
         )}
         <span className="bar-spacer" />
+        <DiffStyleToggle />
         <button type="button" className="button" onClick={() => tree.refresh()} disabled={panel.phase === "loading"}>
           {panel.phase === "loading" ? "읽는 중…" : "새로 고침"}
         </button>

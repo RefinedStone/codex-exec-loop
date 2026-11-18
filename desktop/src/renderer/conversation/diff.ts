@@ -62,6 +62,34 @@ export function diffFileFromChange(change: FileUpdateChange): DiffFile {
   }
 }
 
+const NUMBERED_HUNK = /^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/;
+const LINE_PREFIX: Record<DiffLineKind, string> = { add: "+", del: "-", context: " ", hunk: "", meta: "" };
+
+/**
+ * 파일 하나의 변경을 git 형식의 patch 글로 만든다. 문법 색과 좌우 비교를 그리는 표시(`PatchDiffView`)의 입력이다.
+ * 줄 단위 변경이 없거나 줄 번호를 알 수 없으면 null 이다. 그때는 줄을 그대로 그린다.
+ */
+export function patchText(file: DiffFile): string | null {
+  const { lines } = file;
+  if (file.added + file.removed === 0) return null;
+  let body = lines;
+  if (lines[0]?.kind !== "hunk") {
+    // `fileChange` 의 add 와 delete 는 파일 내용만 온다. 파일 전체가 덩어리 하나이다.
+    if (file.kind === "update" || lines.some((line) => line.kind !== "add" && line.kind !== "del")) return null;
+    const range = file.kind === "add" ? `-0,0 +1,${lines.length}` : `-1,${lines.length} +0,0`;
+    body = [{ kind: "hunk", text: `@@ ${range} @@` }, ...lines];
+  }
+  if (body.some((line) => line.kind === "hunk" && !NUMBERED_HUNK.test(line.text))) return null;
+  const to = file.movePath ?? file.path;
+  const head = [
+    `diff --git a/${file.path} b/${to}`,
+    ...(file.kind === "add" ? ["new file mode 100644"] : file.kind === "delete" ? ["deleted file mode 100644"] : []),
+    file.kind === "add" ? "--- /dev/null" : `--- a/${file.path}`,
+    file.kind === "delete" ? "+++ /dev/null" : `+++ b/${to}`,
+  ];
+  return [...head, ...body.map((line) => LINE_PREFIX[line.kind] + line.text), ""].join("\n");
+}
+
 function stripPrefix(path: string): string {
   return path.replace(/^[ab]\//, "");
 }

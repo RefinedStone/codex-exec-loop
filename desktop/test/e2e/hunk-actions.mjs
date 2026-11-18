@@ -53,6 +53,14 @@ try {
   await entry.locator("summary").first().click();
   await page.getByTestId("git-hunk-stage").first().waitFor();
   assert.equal(await page.getByTestId("git-hunk").count(), 2);
+  // 덩어리는 문법 색과 좌우 비교가 있는 표시로 그린다 (P-12). 기본은 좌우 비교이고, 버튼이 한 줄 보기로 바꾼다.
+  const firstHunk = page.getByTestId("git-hunk").first();
+  await firstHunk.locator('[data-diff-style="split"]').waitFor();
+  await firstHunk.getByText("stage this hunk").waitFor();
+  await page.getByTestId("diff-style-toggle").click();
+  await firstHunk.locator('[data-diff-style="unified"]').waitFor();
+  await page.getByTestId("diff-style-toggle").click();
+  await firstHunk.locator('[data-diff-style="split"]').waitFor();
   if (process.env.AKRA_QA_SCREENSHOT) {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive());
     await page.screenshot({ path: process.env.AKRA_QA_SCREENSHOT, animations: "disabled" });
