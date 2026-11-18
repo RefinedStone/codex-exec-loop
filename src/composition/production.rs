@@ -423,6 +423,9 @@ pub(crate) struct GatewayBackend {
         Arc<crate::application::service::resource_version::ResourceVersionService>,
     /// 커밋 그래프 읽기이다 (plan 27 G1).
     pub(crate) git_graph: Arc<dyn GitGraphPort>,
+    /// git 작업 엔진이다 (plan 27 G3).
+    pub(crate) git_operations:
+        Arc<dyn crate::application::port::inbound::git_operation_port::GitOperationPort>,
     /// dot 목록이다. dots 클라우드가 켜졌을 때만 있다 (D-19).
     pub(crate) dots: Option<Arc<dyn DotsPort>>,
 }
@@ -461,8 +464,30 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         work_context,
         resource_versions,
         git_graph: Arc::new(GitGraphService::new(Arc::new(GitHistoryAdapter))),
+        git_operations: build_git_operations(),
         dots: build_dots()?,
     })
+}
+
+/// git 작업 엔진을 조립한다 (plan 27 G3). 일지는 planning 기준 데이터와 같은 저장소 runtime 디렉터리에 둔다. 그
+/// 디렉터리는 현재 사용자 전용이고 저장소 밖에 있다.
+fn build_git_operations()
+-> Arc<dyn crate::application::port::inbound::git_operation_port::GitOperationPort> {
+    use crate::adapter::outbound::filesystem::git_operation_journal::GitOperationJournalAdapter;
+    use crate::adapter::outbound::git::workspace::GitWorkspaceAdapter;
+    use crate::application::service::git_operation::GitOperationService;
+
+    let journal = GitOperationJournalAdapter::new(|repository_dir| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(repository_dir)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    });
+    Arc::new(GitOperationService::new(
+        Arc::new(GitHistoryAdapter),
+        Arc::new(GitWorkspaceAdapter),
+        Arc::new(journal),
+        Arc::new(|| (chrono::Utc::now().timestamp(), rand::random::<u32>())),
+    ))
 }
 
 /// `local` 외의 호스트를 만든다. dots 클라우드 호스트는 `AKRA_DOTS_CLOUD` 이 켜졌을 때만 켠다 (D-19). 호스트를

@@ -1,11 +1,13 @@
-// 커밋 그래프 패널이다 (plan 27 G1, G2). 열린 스레드의 저장소의 커밋을 그래프로 보여 준다. 읽기만 한다.
+// 커밋 그래프 패널이다 (plan 27 G1 – G3). 열린 스레드의 저장소의 커밋을 그래프로 보여 준다. 저장소를 고치는 일은
+// 고른 커밋의 작업 단추에서 시작하고 Gateway 의 작업 엔진이 한다 (`GitOperationViews.tsx`).
 // 긴 이력은 보이는 줄만 그린다. 끝에 가까워지면 다음 쪽을 읽는다. 줄 높이는 고정이다: 줄마다 그린 선이 위아래 줄과
 // 이어져야 한다. 저장소가 바뀌었는지 주기적으로 보고, 바뀌면 보던 자리를 지키며 다시 읽는다. 줄을 고르면 그 커밋의
 // 상세를 아래에 보인다.
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type KeyboardEvent, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { copyText } from "../conversation/copyText";
+import { isTurnInProgress } from "../conversation/transcript";
 import { parseGitDiff } from "../conversation/diff";
 import { DiffFileList, DiffStyleToggle } from "../conversation/DiffView";
 import { useDesktopStore } from "../session/desktopStore";
@@ -35,6 +37,7 @@ import {
   shortSha,
   threadBadges,
 } from "./gitGraph";
+import { CommitActionsView, OperationLogView, useGitOperationLog } from "./GitOperationViews";
 import { graphWidth, laneColorIndex, laneX, NODE_RADIUS, ROW_HEIGHT, rowPaths } from "./graphGeometry";
 
 /** 읽은 줄의 끝에서 이만큼 앞에 오면 다음 쪽을 읽는다. */
@@ -55,6 +58,8 @@ export interface GitGraph {
   reload(): void;
   /** 다음 쪽을 읽어 잇는다. 이은 뒤의 상태를 준다. 읽지 않았거나 실패하면 `null` 이다. */
   loadMore(limit?: number): Promise<LoadedGitGraph | null>;
+  /** 저장소가 바뀌었는지 지금 본다. 바뀌었으면 보던 자리를 지키며 다시 읽는다. 작업을 실행한 뒤에 부른다. */
+  refresh(): void;
 }
 
 /** 저장소의 그래프를 읽는다. 폴더가 바뀌면 첫 쪽부터 다시 읽는다. 저장소가 바뀌면 읽은 만큼 다시 읽는다. */
@@ -125,28 +130,32 @@ export function useGitGraph(request: GatewayRequest, cwd: string | null): GitGra
   // 저장소를 감시한다. 지문이 다르면 읽은 만큼 다시 읽고 줄을 바꾼다. 화면은 그동안 앞의 줄을 보인다. 읽는 사이에
   // 화면의 상태가 바뀌었으면 (다음 쪽을 읽었다, 다시 읽었다) 읽은 것을 버린다: 낡은 자리와 새 줄이 섞이지 않게 한다.
   // 버렸거나 실패했으면 다음 주기에 다시 본다.
-  useEffect(() => {
-    if (!cwd) return undefined;
-    const timer = setInterval(async () => {
-      const shown = latest.current;
-      if (polling.current || document.visibilityState !== "visible" || shown.phase !== "loaded" || shown.loadingMore) return;
-      polling.current = true;
-      const current = generation.current;
-      try {
-        if ((await fetchRefsDigest(request, cwd)) === shown.refsDigest) return;
-        const fresh = await fetchGraphRows(request, cwd, shown.rows.length);
-        // `generation` 은 폴더가 바뀌거나 다시 읽기를 시작한 그 자리에서 오른다. 화면의 상태는 그리기 뒤에야 바뀐다.
-        if (current === generation.current && latest.current === shown) setState(fresh);
-      } catch {
-        // 다음 주기에 다시 본다.
-      } finally {
-        polling.current = false;
-      }
-    }, REFS_POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
+  const refresh = useCallback(async () => {
+    const shown = latest.current;
+    if (!cwd || polling.current || shown.phase !== "loaded" || shown.loadingMore) return;
+    polling.current = true;
+    const current = generation.current;
+    try {
+      if ((await fetchRefsDigest(request, cwd)) === shown.refsDigest) return;
+      const fresh = await fetchGraphRows(request, cwd, shown.rows.length);
+      // `generation` 은 폴더가 바뀌거나 다시 읽기를 시작한 그 자리에서 오른다. 화면의 상태는 그리기 뒤에야 바뀐다.
+      if (current === generation.current && latest.current === shown) setState(fresh);
+    } catch {
+      // 다음 주기에 다시 본다.
+    } finally {
+      polling.current = false;
+    }
   }, [request, cwd]);
 
-  return { state, reload, loadMore };
+  useEffect(() => {
+    if (!cwd) return undefined;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, REFS_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [cwd, refresh]);
+
+  return { state, reload, loadMore, refresh };
 }
 
 export type CommitDetailState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; detail: GitCommitDetail } | { phase: "missing" } | { phase: "failed"; message: string };
@@ -456,7 +465,7 @@ function CommitDetailBody({ detail, onSelect }: { detail: GitCommitDetail; onSel
   );
 }
 
-function CommitDetail({ commit, state, onSelect, onClose }: { commit: string; state: CommitDetailState; onSelect(commit: string): void; onClose(): void }) {
+function CommitDetail({ commit, state, actions, onSelect, onClose }: { commit: string; state: CommitDetailState; actions: ReactNode; onSelect(commit: string): void; onClose(): void }) {
   return (
     <section className="git-detail" aria-label="커밋 상세" data-testid="git-commit-detail">
       <div className="work-header">
@@ -472,6 +481,7 @@ function CommitDetail({ commit, state, onSelect, onClose }: { commit: string; st
           </button>
         </span>
       </div>
+      {actions}
       {(state.phase === "loading" || state.phase === "idle") && <p className="muted work-section">읽는 중…</p>}
       {state.phase === "missing" && <p className="muted work-section">이 커밋은 저장소에 없습니다.</p>}
       {state.phase === "failed" && (
@@ -500,6 +510,11 @@ export function GitGraphPanel({ request, cwd, onOpenThread }: GitGraphPanelProps
   const selected = selection !== null && selection.cwd === cwd ? selection.commit : null;
   const select = useCallback((commit: string) => cwd && setSelection({ cwd, commit }), [cwd]);
   const detail = useCommitDetail(request, cwd, selected);
+  const log = useGitOperationLog(request, cwd, graph.refresh);
+  // 턴이 도는 동안 에이전트가 이 작업 트리의 파일을 쓴다. 그 사이에 reset 이나 체크아웃을 하면 에이전트의 일이 섞인다.
+  // Gateway 는 이 스레드의 턴을 알지 못한다. 그래서 화면이 막는다 (plan 27 §9.3).
+  const turnRunning = useDesktopStore((store) => isTurnInProgress(store.transcript));
+  const busyReason = turnRunning ? "이 스레드에서 턴이 실행 중입니다. 턴이 끝난 뒤에 실행하십시오." : null;
   const current = state.phase === "loaded" ? headName(state.refs, state.head) : null;
   return (
     <aside className="work-panel git-graph-panel" data-testid="git-graph-panel">
@@ -527,10 +542,19 @@ export function GitGraphPanel({ request, cwd, onOpenThread }: GitGraphPanelProps
           {state.message}
         </div>
       )}
+      {state.phase === "loaded" && state.repository && <OperationLogView log={log} busyReason={busyReason} />}
       {state.phase === "loaded" && !state.repository && <p className="muted work-section">이 폴더는 git 저장소가 아닙니다.</p>}
       {state.phase === "loaded" && state.repository && state.rows.length === 0 && <p className="muted work-section">이 저장소에는 아직 커밋이 없습니다.</p>}
       {state.phase === "loaded" && state.repository && state.rows.length > 0 && <GraphRows graph={{ ...graph, state }} folders={folders} selected={selected} onSelect={select} onOpenThread={onOpenThread} />}
-      {selected !== null && <CommitDetail commit={selected} state={detail} onSelect={select} onClose={() => setSelection(null)} />}
+      {selected !== null && (
+        <CommitDetail
+          commit={selected}
+          state={detail}
+          actions={state.phase === "loaded" && cwd && <CommitActionsView key={selected} request={request} cwd={cwd} commit={selected} refs={state.refs} head={state.head} worktrees={state.worktrees} busyReason={busyReason} log={log} />}
+          onSelect={select}
+          onClose={() => setSelection(null)}
+        />
+      )}
     </aside>
   );
 }

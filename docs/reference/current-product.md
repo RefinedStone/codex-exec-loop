@@ -401,6 +401,28 @@ the desktop app itself is not shipped yet.
   parents, and the diff against the first parent (`git show --first-parent --no-ext-diff --no-textconv`),
   or `commit: null` for an unknown sha. `commit` must be a full sha (40 or 64 hexadecimal characters). A diff over
   2 MiB is not read; the answer has `diffTooLarge: true` and an empty `diff`.
+  Since plan 27 G3 the Gateway also changes a repository, only through the operation engine
+  (`src/application/service/git_operation.rs`). The operations are `reset` (move the checked-out
+  branch and its worktree to a commit), `move_branch` (move a branch that no worktree has checked
+  out), `checkout_branch`, and `checkout_commit` (detached). `akra/git/plan` with `{ cwd, operation }`
+  returns a plan and changes nothing: `expectation` (the HEAD position and, for `move_branch`, the
+  commit of that branch), `before`, `after`, `impact` (`dropped`, `unreachable`, `gained` commits of a
+  branch move), and `blockers`. `akra/git/execute` with `{ cwd, operation, expectation }` builds the
+  plan again and runs it only when the expectation is equal and there is no blocker; otherwise it
+  answers `{ status: "stale", plan }`. A run answers `done` or `failed` with the journal record.
+  `akra/git/operations` returns the 50 newest records and `akra/git/undo` with `{ cwd, opId }` runs the
+  inverse operation when the repository is still in the state that operation left, and answers
+  `refused` otherwise. Blockers: no repository or commit, an unfinished merge, rebase, cherry-pick,
+  revert or bisect, an unknown commit or branch, a detached HEAD or uncommitted tracked changes (for
+  `reset`), a branch that a worktree has checked out, a branch named `akra-agent/…`, a `.gitattributes`
+  or `info/attributes` that sets a `filter`, and a Git setting that runs a program other than a
+  filter. Before a branch moves, the engine writes `refs/akra/backup/<branch>/<op-id>` at the old
+  commit; after it, the engine deletes the backups of that kind that are both older than 30 days and
+  beyond the newest 20 of their branch. The commands are `git update-ref`, `git reset --keep`, and
+  `git switch`, with every configured filter turned off on the command line and with the system-level
+  `core.autocrlf` and `core.eol` passed on when no user or repository setting exists. The journal is
+  `git-operations.jsonl` in the repository runtime directory under `AKRA_HOME` (newest 2,000 lines).
+  The engine does not know about running turns.
 - Cloud host (D-19): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
   `~/.codex/auth.json`. The bridge forwards only the public-protocol methods it allows
   (`initialize`, `initialized`, `thread/list`, `thread/read`, `thread/turns/list`,
@@ -787,6 +809,14 @@ The Gateway records the external documents that a thread mentions, without a mod
   further match. The commit that a worktree has checked out carries a badge with the newest thread whose
   folder is in that worktree; the badge opens the thread. A backup ref has a dashed label, and a commit
   reached only from a backup ref is dim. The panel has no path or branch filter and no maximised layout.
+  Since plan 27 G3 the detail of a selected commit has operation buttons: reset the checked-out branch
+  to this commit, check out a local branch that is on this commit, check out the commit without a
+  branch, and move another local branch here. A button reads a plan from `akra/git/plan` and shows it
+  as text (the move, the commits that leave the branch, and the blockers); nothing changes until
+  "실행". When the Gateway answers `stale`, the panel shows the new plan and does not run it. A
+  finished operation shows one notice line with "되돌리기", and "작업 기록" lists the journal. "실행"
+  and "되돌리기" are off while the open thread has a turn in progress; this check exists only in
+  Desktop (`desktop/src/renderer/git/GitOperationViews.tsx`).
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

@@ -42,6 +42,8 @@ pub mod startup_service;
 pub mod turn_prompt_assembly_service;
 // git graph service 는 커밋 그래프의 한 쪽을 읽고 레인을 배치한다 (plan 27).
 pub mod git_graph;
+// git operation service 는 git 작업을 계획하고, 기대 상태를 다시 본 뒤 실행하고, 되돌린다 (plan 27 G3).
+pub mod git_operation;
 // work context service 는 스레드의 외부 문서를 모델 없이 수집한다.
 pub mod resource_version;
 pub mod work_context;
