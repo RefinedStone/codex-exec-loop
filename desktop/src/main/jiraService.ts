@@ -22,7 +22,41 @@ export interface SecretBox {
   decryptString(data: Buffer): string;
 }
 
-export type JiraFetch = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<{ status: number; text(): Promise<string> }>;
+export type JiraFetch = (url: string, init: { headers: Record<string, string>; signal: AbortSignal; redirect?: "error" }) => Promise<{ status: number; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }>;
+
+class JiraVersionError extends Error {}
+
+function versionIssueKey(input: unknown, siteUrl: string): string {
+  if (!input || typeof input !== "object" || !("key" in input) || !("url" in input) ||
+      typeof input.key !== "string" || typeof input.url !== "string") {
+    throw new JiraVersionError("Invalid Jira version request.");
+  }
+  const site = new URL(siteUrl);
+  const prefix = `${site.host}${site.pathname.replace(/\/+$/, "")}/`;
+  const key = input.key.slice(prefix.length);
+  const target = new URL(input.url);
+  if (input.key !== `${prefix}${key}` || !ISSUE_KEY.test(key) ||
+      target.username || target.password || input.url.includes("\\") ||
+      target.origin !== site.origin || target.pathname !== `${site.pathname.replace(/\/+$/, "")}/browse/${key}`) {
+    throw new JiraVersionError("Jira resource does not match the connected site and issue key.");
+  }
+  return key;
+}
+
+function canonicalVersion(input: unknown): string {
+  if (typeof input !== "string") throw new JiraVersionError("Missing Jira updated timestamp.");
+  const normalized = input.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(normalized);
+  if (!match || Number(match[2]) > 23 || Number(match[3]) > 59 || Number(match[4]) > 59) {
+    throw new JiraVersionError("Invalid Jira updated timestamp.");
+  }
+  const date = new Date(normalized);
+  const calendar = new Date(`${match[1]}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || calendar.toISOString().slice(0, 10) !== match[1]) {
+    throw new JiraVersionError("Invalid Jira updated timestamp.");
+  }
+  return date.toISOString();
+}
 
 interface StoredConnection {
   siteUrl: string;
@@ -150,10 +184,69 @@ export function validateConnectRequest(input: unknown): { connection: StoredConn
 const defaultFetch: JiraFetch = async (url, init) => {
   // Chromium 네트워크(net.fetch)를 쓴다. 회사 프록시와 인증서 설정을 따른다.
   const { net } = await import("electron");
-  return net.fetch(url, { headers: init.headers, signal: init.signal, credentials: "omit" });
+  return net.fetch(url, { headers: init.headers, signal: init.signal, credentials: "omit", redirect: init.redirect });
 };
 
 export class JiraService {
+  private versionGeneration = 0;
+  private connectionChanges = 0;
+  private readonly versionRequests = new Set<AbortController>();
+
+  private invalidateVersions(): void {
+    this.versionGeneration++;
+    for (const controller of this.versionRequests) controller.abort();
+    this.versionRequests.clear();
+  }
+
+  async currentVersion(input: unknown): Promise<{ version: string }> {
+    const generation = this.versionGeneration;
+    const controller = new AbortController();
+    this.versionRequests.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    const aborted = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener("abort", () => reject(new JiraVersionError("Jira version request cancelled or timed out.")), { once: true });
+    });
+    try {
+      return await Promise.race([aborted, (async () => {
+        if (this.connectionChanges > 0) throw new JiraVersionError("Jira account is changing.");
+        const { connection, token } = await this.require();
+        if (generation !== this.versionGeneration) throw new JiraVersionError("Jira account changed.");
+        controller.signal.throwIfAborted();
+        const key = versionIssueKey(input, connection.siteUrl);
+        const response = await this.fetcher(`${apiBase(connection)}/issue/${key}?fields=updated`, {
+          headers: { Accept: "application/json", Authorization: authorization(connection, token) },
+          signal: controller.signal,
+          redirect: "error",
+        });
+        if (response.status < 200 || response.status >= 300) throw new JiraVersionError(`Jira version request failed (HTTP ${response.status}).`);
+        if (!response.body) throw new JiraVersionError("Jira version response has no body.");
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let length = 0;
+        try {
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            length += chunk.value.byteLength;
+            if (length > 64 * 1024) throw new JiraVersionError("Jira version response is too large.");
+            chunks.push(chunk.value);
+          }
+        } finally {
+          await reader.cancel();
+          reader.releaseLock();
+        }
+        const json: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (!json || typeof json !== "object" || !("fields" in json) || !json.fields ||
+            typeof json.fields !== "object" || !("updated" in json.fields)) throw new JiraVersionError("Missing Jira updated timestamp.");
+        const version = canonicalVersion(json.fields.updated);
+        if (generation !== this.versionGeneration || controller.signal.aborted) throw new JiraVersionError("Jira account changed.");
+        return { version };
+      })()]);
+    } finally {
+      clearTimeout(timeout);
+      this.versionRequests.delete(controller);
+    }
+  }
   constructor(
     private readonly directory: string,
     private readonly secrets: SecretBox,
@@ -208,6 +301,7 @@ export class JiraService {
   }
 
   async status(): Promise<JiraStatus> {
+    if (this.connectionChanges > 0) return { connected: false };
     const stored = await this.load();
     return stored ? { connected: true, ...stored.connection } : { connected: false };
   }
@@ -215,19 +309,33 @@ export class JiraService {
   /** 토큰으로 `myself` 를 읽어서 확인한 뒤에만 저장한다. */
   async connect(input: unknown): Promise<JiraStatus> {
     const { connection, token } = validateConnectRequest(input);
+    this.invalidateVersions();
     if (!this.secrets.isEncryptionAvailable()) {
       throw new Error("이 시스템에서 OS 암호화를 쓸 수 없어서 토큰을 저장하지 않습니다.");
     }
-    await this.get(connection, token, "/myself");
-    await writeAtomically(this.tokenPath, this.secrets.encryptString(token));
-    await writeAtomically(this.connectionPath, `${JSON.stringify(connection, null, 2)}\n`);
-    return { connected: true, ...connection };
+    this.connectionChanges++;
+    try {
+      await this.get(connection, token, "/myself");
+      await writeAtomically(this.tokenPath, this.secrets.encryptString(token));
+      await writeAtomically(this.connectionPath, `${JSON.stringify(connection, null, 2)}\n`);
+      return { connected: true, ...connection };
+    } finally {
+      this.connectionChanges--;
+      this.invalidateVersions();
+    }
   }
 
   async disconnect(): Promise<JiraStatus> {
-    await rm(this.tokenPath, { force: true });
-    await rm(this.connectionPath, { force: true });
-    return { connected: false };
+    this.invalidateVersions();
+    this.connectionChanges++;
+    try {
+      await rm(this.tokenPath, { force: true });
+      await rm(this.connectionPath, { force: true });
+      return { connected: false };
+    } finally {
+      this.connectionChanges--;
+      this.invalidateVersions();
+    }
   }
 
   async summary(): Promise<JiraSummary> {

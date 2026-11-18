@@ -20,6 +20,7 @@ pub mod planning_workspace_maintenance_port;
 pub mod pr_validation_command_port;
 pub mod pr_validation_query_port;
 pub mod pr_validation_rollout_evidence_query_port;
+pub mod resource_version_provider_port;
 pub mod review_center_query_port;
 pub mod stored_command_port;
 pub mod work_context_port;

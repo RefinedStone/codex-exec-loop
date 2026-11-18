@@ -152,6 +152,8 @@ const bridge: AkraBridge = {
     },
   },
   jira: {
+    onChanged: (listener) => listen<[]>(IPC_CHANNELS.jiraChanged, listener),
+    currentVersion: (request) => ipcRenderer.invoke(IPC_CHANNELS.jiraCurrentVersion, request),
     status(): Promise<JiraStatus> {
       return ipcRenderer.invoke(IPC_CHANNELS.jiraStatus) as Promise<JiraStatus>;
     },

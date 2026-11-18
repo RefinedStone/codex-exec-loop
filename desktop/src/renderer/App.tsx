@@ -295,9 +295,13 @@ export function App() {
 
   useEffect(() => {
     const created = new DesktopSession(window.akra, desktopSessionStore(), CLIENT_VERSION);
+    const unsubscribe = created.onVersionProviderReady(() => setDocumentsRefresh((value) => value + 1));
     created.start();
     session.current = created;
-    return () => created.stop();
+    return () => {
+      unsubscribe();
+      created.stop();
+    };
   }, []);
 
   useEffect(() => {

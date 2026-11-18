@@ -483,8 +483,24 @@ ipcMain.handle(IPC_CHANNELS.githubProject, (_event, project: unknown) => readPro
 ipcMain.handle(IPC_CHANNELS.githubIssuePrompt, (_event, url: unknown) => readIssuePrompt(url));
 ipcMain.handle(IPC_CHANNELS.githubRepository, (_event, cwd: unknown) => readGitHubRepository(cwd));
 ipcMain.handle(IPC_CHANNELS.jiraStatus, () => jira.status());
-ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.connect(request));
-ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
+async function changeJira(action: () => Promise<unknown>): Promise<unknown> {
+  // Typed lifecycle notification only. Gateway JSON-RPC stays in the renderer.
+  const notify = () => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(IPC_CHANNELS.jiraChanged);
+    }
+  };
+  try {
+    const pending = action();
+    notify();
+    return await pending;
+  } finally {
+    notify();
+  }
+}
+ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => changeJira(() => jira.connect(request)));
+ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => changeJira(() => jira.disconnect()));
+ipcMain.handle(IPC_CHANNELS.jiraCurrentVersion, (_event, request: unknown) => jira.currentVersion(request));
 ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
 ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
 ipcMain.handle(

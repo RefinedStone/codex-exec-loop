@@ -57,6 +57,8 @@ export const IPC_CHANNELS = {
   githubRepository: "akra:github-repository",
   openExternal: "akra:open-external",
   jiraStatus: "akra:jira-status",
+  jiraChanged: "akra:jira-changed",
+  jiraCurrentVersion: "akra:jira-current-version",
   jiraConnect: "akra:jira-connect",
   jiraDisconnect: "akra:jira-disconnect",
   jiraSummary: "akra:jira-summary",
@@ -180,6 +182,8 @@ export interface JiraSummary {
 /** Jira 업무 패널이다 (R4). main 이 Jira REST 를 직접 부른다. */
 export interface JiraBridge {
   status(): Promise<JiraStatus>;
+  onChanged(listener: () => void): () => void;
+  currentVersion(request: { readonly key: string; readonly url: string }): Promise<{ version: string }>;
   connect(request: JiraConnectRequest): Promise<JiraStatus>;
   disconnect(): Promise<JiraStatus>;
   summary(): Promise<JiraSummary>;

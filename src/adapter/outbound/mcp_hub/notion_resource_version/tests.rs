@@ -5,6 +5,15 @@ use crate::domain::mcp_hub::{McpHubServerSpec, McpHubServerStatus, McpHubToolInf
 
 const PAGE_ID: &str = "0123456789abcdef0123456789abcdef";
 
+fn page(key: &str) -> ExternalResourceRef {
+    ExternalResourceRef {
+        kind: "notion".into(),
+        key: key.into(),
+        url: format!("https://www.notion.so/{key}"),
+        title_hint: None,
+    }
+}
+
 struct Backend {
     registered: bool,
     auth: String,
@@ -74,7 +83,7 @@ fn fetches_only_the_requested_page_through_the_registered_notion_server() {
     })));
     let adapter = NotionResourceVersionAdapter::new(backend.clone());
     assert_eq!(
-        adapter.current_version(PAGE_ID).unwrap(),
+        adapter.current_version(&page(PAGE_ID)).unwrap(),
         "2026-11-17T01:00:00Z"
     );
     assert_eq!(*backend.statuses.lock().unwrap(), [Some(SERVER.into())]);
@@ -94,7 +103,7 @@ fn connector_fetch_alias_and_text_payload_are_supported() {
     let backend = Arc::new(backend);
     let adapter = NotionResourceVersionAdapter::new(backend.clone());
     assert_eq!(
-        adapter.current_version(PAGE_ID).unwrap(),
+        adapter.current_version(&page(PAGE_ID)).unwrap(),
         "2026-11-17T01:00:00Z"
     );
     assert_eq!(backend.calls.lock().unwrap()[0].1, "fetch");
@@ -110,7 +119,7 @@ fn invalid_ids_are_rejected_before_discovery() {
         "https://other.example",
         "0123456789abcdef0123456789abcdeg",
     ] {
-        assert!(adapter.current_version(key).is_err());
+        assert!(adapter.current_version(&page(key)).is_err());
     }
     assert!(backend.statuses.lock().unwrap().is_empty());
     assert!(backend.calls.lock().unwrap().is_empty());
@@ -123,7 +132,7 @@ fn an_unregistered_server_is_not_contacted() {
     let backend = Arc::new(backend);
     assert!(
         NotionResourceVersionAdapter::new(backend.clone())
-            .current_version(PAGE_ID)
+            .current_version(&page(PAGE_ID))
             .is_err()
     );
     assert!(backend.statuses.lock().unwrap().is_empty());
@@ -142,7 +151,7 @@ fn unavailable_login_or_missing_read_tool_does_not_call_a_tool() {
         let backend = Arc::new(backend);
         assert!(
             NotionResourceVersionAdapter::new(backend.clone())
-                .current_version(PAGE_ID)
+                .current_version(&page(PAGE_ID))
                 .is_err()
         );
         assert!(backend.calls.lock().unwrap().is_empty());

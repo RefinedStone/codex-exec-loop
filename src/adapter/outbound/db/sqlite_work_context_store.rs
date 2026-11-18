@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS read_versions (
     version TEXT NOT NULL,
     PRIMARY KEY (scope_kind, scope_id, resource_id)
 );
+CREATE TABLE IF NOT EXISTS ledger_migrations (
+    name TEXT PRIMARY KEY
+);
 ";
 
 pub(crate) struct SqliteWorkContextStore {
@@ -96,13 +99,43 @@ fn open(path: &Path) -> Result<Connection> {
     if let Some(directory) = path.parent() {
         crate::private_directory::ensure_private_directory(directory)?;
     }
-    let connection =
+    let mut connection =
         Connection::open(path).with_context(|| format!("failed to open `{}`", path.display()))?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection
         .execute_batch(SCHEMA)
         .context("failed to prepare the work context ledger")?;
+    migrate_jira_identity(&mut connection)?;
     Ok(connection)
+}
+
+fn migrate_jira_identity(connection: &mut Connection) -> Result<()> {
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let applied = transaction.execute(
+        "INSERT OR IGNORE INTO ledger_migrations (name) VALUES ('jira-site-identity-v1')",
+        [],
+    )?;
+    if applied != 0 {
+        // Old keys collapsed ports and contexts. The first stored URL cannot identify the
+        // installation for every linked thread. Recollect instead of guessing that mapping.
+        // Keep legacy links because transcript pagination is capped. Their prefixed key
+        // cannot be used for version lookup; recollection replaces only recovered links.
+        transaction.execute_batch(
+            "DELETE FROM scan_markers
+             WHERE scope_kind = 'thread' AND scope_id IN (
+                 SELECT l.scope_id FROM links l JOIN resources r ON r.id = l.resource_id
+                 WHERE l.scope_kind = 'thread' AND r.kind = 'jira'
+             );
+             DELETE FROM read_versions
+             WHERE resource_id IN (SELECT id FROM resources WHERE kind = 'jira');
+             DELETE FROM resource_versions
+             WHERE resource_id IN (SELECT id FROM resources WHERE kind = 'jira');
+             UPDATE resources SET key = 'legacy:' || key WHERE kind = 'jira';",
+        )?;
+    }
+    transaction.commit()?;
+    Ok(())
 }
 
 impl WorkContextStorePort for SqliteWorkContextStore {
@@ -133,6 +166,18 @@ impl WorkContextStorePort for SqliteWorkContextStore {
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![scope_kind, scope_id, resource_id, source, now],
                 )?;
+                if resource.kind == "jira"
+                    && crate::domain::work_context::jira_resource_site(resource).is_some()
+                {
+                    transaction.execute(
+                        "DELETE FROM links WHERE scope_kind = ?1 AND scope_id = ?2
+                         AND resource_id IN (
+                             SELECT id FROM resources
+                             WHERE kind = 'jira' AND key LIKE 'legacy:%' AND url = ?3
+                         )",
+                        params![scope_kind, scope_id, resource.url],
+                    )?;
+                }
             }
             transaction.commit()?;
             Ok(())
@@ -268,6 +313,116 @@ mod tests {
             url: format!("https://example.test/{key}"),
             title_hint: title.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn legacy_jira_migration_recollects_once_and_preserves_non_jira_state() {
+        let check = |version: &str, checked_at: &str| ResourceVersionCheck {
+            version: version.to_string(),
+            checked_at: checked_at.to_string(),
+        };
+        let (store, directory) = store("jira-migration");
+        crate::private_directory::ensure_private_directory(&directory).unwrap();
+        let connection = Connection::open(&store.path).unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection.execute_batch(
+            "INSERT INTO resources VALUES
+                 (1, 'jira', 'jira.example/ABC-1', 'https://jira.example/one/browse/ABC-1', 'ABC-1'),
+                 (2, 'github', 'a/b#1', 'https://github.com/a/b/pull/1', 'PR');
+             INSERT INTO links VALUES
+                 ('thread', 'one', 1, 'user', 'first'),
+                 ('thread', 'two', 1, 'assistant', 'second'),
+                 ('thread', 'one', 2, 'user', 'github-first'),
+                 ('thread', 'github-only', 2, 'user', 'third');
+             INSERT INTO scan_markers VALUES
+                 ('thread', 'one', 'old-one'), ('thread', 'two', 'old-two'),
+                 ('thread', 'github-only', 'keep'), ('repository', 'one', 'keep-repo');
+             INSERT INTO resource_versions VALUES (1, 'jira-v1', 'old'), (2, 'github-v1', 'checked');
+             INSERT INTO read_versions VALUES
+                 ('thread', 'one', 1, 'jira-v1'), ('thread', 'one', 2, 'github-read');",
+        ).unwrap();
+        drop(connection);
+
+        let links = store.links("thread", "one").unwrap();
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].resource.key, "legacy:jira.example/ABC-1");
+        assert!(crate::domain::work_context::jira_resource_site(&links[0].resource).is_none());
+        assert_eq!(links[1].resource.kind, "github");
+        assert_eq!(links[1].source, "user");
+        assert_eq!(links[1].first_seen_at, "github-first");
+        assert_eq!(
+            links[1].checked_version,
+            Some(check("github-v1", "checked"))
+        );
+        assert_eq!(links[1].read_version.as_deref(), Some("github-read"));
+        assert_eq!(
+            store.links("thread", "two").unwrap()[0].resource.key,
+            "legacy:jira.example/ABC-1"
+        );
+        assert_eq!(store.scan_marker("thread", "one").unwrap(), None);
+        assert_eq!(store.scan_marker("thread", "two").unwrap(), None);
+        assert_eq!(
+            store
+                .scan_marker("thread", "github-only")
+                .unwrap()
+                .as_deref(),
+            Some("keep")
+        );
+        assert_eq!(
+            store.scan_marker("repository", "one").unwrap().as_deref(),
+            Some("keep-repo")
+        );
+        store
+            .with_connection(|connection| {
+                for (table, expected) in [
+                    ("resources", 2),
+                    ("resource_versions", 1),
+                    ("read_versions", 1),
+                ] {
+                    let count: i64 = connection.query_row(
+                        &format!("SELECT COUNT(*) FROM {table}"),
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    assert_eq!(count, expected, "{table}");
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        let resources = crate::domain::work_context::extract_external_resources(
+            "https://jira.example/one/browse/ABC-1 https://jira.example:8443/two/browse/ABC-1",
+            &crate::domain::work_context::external_resource_recognizers(),
+        );
+        store
+            .link_resources("thread", "one", "user", &resources)
+            .unwrap();
+        store
+            .record_resource_version(&resources[0], &check("new", "now"))
+            .unwrap();
+        store
+            .set_read_version("thread", "one", &resources[0], "read", false)
+            .unwrap();
+        store
+            .set_scan_marker("thread", "one", "new-marker")
+            .unwrap();
+        let expected = store.links("thread", "one").unwrap();
+        assert_eq!(expected.len(), 3);
+        assert!(
+            expected
+                .iter()
+                .all(|link| !link.resource.key.starts_with("legacy:"))
+        );
+        drop(store);
+
+        let reopened = SqliteWorkContextStore::at(directory.join(FILE));
+        assert_eq!(reopened.links("thread", "one").unwrap(), expected);
+        assert_eq!(
+            reopened.scan_marker("thread", "one").unwrap().as_deref(),
+            Some("new-marker")
+        );
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

@@ -196,6 +196,99 @@ impl ExternalResourceRecognizer for NotionRecognizer {
 
 struct JiraRecognizer;
 
+/// Normalize a Jira installation URL, including its non-default port and context path.
+pub fn normalize_jira_site(site: &str) -> Option<String> {
+    if site.contains(['?', '#', '@', '\\'])
+        || site
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return None;
+    }
+    let uri: http::Uri = site.parse().ok()?;
+    if uri.scheme_str() != Some("https") {
+        return None;
+    }
+    let authority = uri.authority()?;
+    let host = authority.host().to_ascii_lowercase();
+    if host.starts_with('[') {
+        host.strip_prefix('[')?
+            .strip_suffix(']')?
+            .parse::<std::net::Ipv6Addr>()
+            .ok()?;
+    } else if host.is_empty()
+        || !host.split('.').all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+    {
+        return None;
+    }
+    let port = if authority.as_str().len() > host.len() {
+        let port = authority.port_u16()?;
+        if port == 0 {
+            return None;
+        }
+        (port != 443).then_some(port)
+    } else {
+        None
+    };
+    let path = uri.path().trim_end_matches('/');
+    if !path.is_empty()
+        && !path.strip_prefix('/')?.split('/').all(|segment| {
+            !segment.is_empty()
+                && !matches!(segment, "." | "..")
+                && segment.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '~')
+                })
+        })
+    {
+        return None;
+    }
+    let authority = match port {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    };
+    Some(format!("https://{authority}{path}"))
+}
+
+fn jira_url_identity(url: &str) -> Option<(String, &str)> {
+    if url.contains('\\')
+        || url
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return None;
+    }
+    let base = url.split(['?', '#']).next()?;
+    let (site, issue) = base.rsplit_once("/browse/")?;
+    let site = normalize_jira_site(site)?;
+    let (project, number) = issue.split_once('-')?;
+    if !project.starts_with(|character: char| character.is_ascii_uppercase())
+        || !project.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+        || number.is_empty()
+        || !number.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((site, issue))
+}
+
+/// Return the installation only when the Jira URL and stored identity agree.
+pub fn jira_resource_site(resource: &ExternalResourceRef) -> Option<String> {
+    if resource.kind != "jira" {
+        return None;
+    }
+    let (site, issue) = jira_url_identity(&resource.url)?;
+    (resource.key == format!("{}/{issue}", site.strip_prefix("https://")?)).then_some(site)
+}
+
 impl ExternalResourceRecognizer for JiraRecognizer {
     fn kind(&self) -> &'static str {
         "jira"
@@ -203,27 +296,10 @@ impl ExternalResourceRecognizer for JiraRecognizer {
 
     /// Cloud 와 Server 모두 티켓 주소가 `<사이트>/browse/<프로젝트>-<번호>` 이다. 사이트가 다르면 다른 문서이다.
     fn recognize(&self, url: &HttpsUrlParts<'_>) -> Option<ExternalResourceRef> {
-        let mut segments = url.path.split('/').filter(|segment| !segment.is_empty());
-        let issue = segments
-            .by_ref()
-            .skip_while(|segment| *segment != "browse")
-            .nth(1)?;
-        let (project, number) = issue.split_once('-')?;
-        let valid_project = project
-            .chars()
-            .next()
-            .is_some_and(|first| first.is_ascii_uppercase())
-            && project.chars().all(|character| {
-                character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-            });
-        let valid_number =
-            !number.is_empty() && number.chars().all(|character| character.is_ascii_digit());
-        if !valid_project || !valid_number {
-            return None;
-        }
+        let (site, issue) = jira_url_identity(url.url)?;
         Some(ExternalResourceRef {
             kind: self.kind().to_string(),
-            key: format!("{}/{issue}", url.host.to_ascii_lowercase()),
+            key: format!("{}/{issue}", site.strip_prefix("https://")?),
             url: url.url.to_string(),
             title_hint: title_hint(issue),
         })
@@ -313,13 +389,80 @@ mod tests {
         assert_eq!(found[0].kind, "jira");
         assert_eq!(found[0].key, "acme.atlassian.net/ABC-123");
         assert_eq!(found[0].title_hint.as_deref(), Some("ABC-123"));
-        assert_eq!(found[1].key, "jira.corp.example/OPS_2-7");
+        assert_eq!(found[1].key, "jira.corp.example/jira/OPS_2-7");
         assert!(
             extract(
                 "https://acme.atlassian.net/browse/abc-1 https://acme.atlassian.net/browse/ABC-"
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn jira_identity_keeps_ports_and_contexts_but_normalizes_default_port() {
+        let found = extract(
+            "https://Jira.example/browse/ABC-1 https://jira.example:443/browse/ABC-1 \
+             https://jira.example:8443/browse/ABC-1 https://jira.example/one/browse/ABC-1 \
+             https://jira.example/two/browse/ABC-1",
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|resource| resource.key.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "jira.example/ABC-1",
+                "jira.example:8443/ABC-1",
+                "jira.example/one/ABC-1",
+                "jira.example/two/ABC-1"
+            ]
+        );
+        for resource in &found {
+            assert_eq!(
+                jira_resource_site(resource),
+                Some(format!(
+                    "https://{}",
+                    resource.key.strip_suffix("/ABC-1").unwrap()
+                ))
+            );
+        }
+        let mut mismatch = found[2].clone();
+        mismatch.key = "jira.example/ABC-1".into();
+        assert_eq!(jira_resource_site(&mismatch), None);
+        mismatch = found[0].clone();
+        mismatch.kind = "github".into();
+        assert_eq!(jira_resource_site(&mismatch), None);
+    }
+
+    #[test]
+    fn jira_rejects_unsafe_sites_and_non_issue_paths() {
+        for site in [
+            "https://user@jira.example",
+            "https://jira.example:bad",
+            "https://jira.example:65536",
+            "https://jira.example:0",
+            "https://jira.example:",
+            "https://jira.example/jira?site=other",
+            "https://jira.example/jira#other",
+            "https://jira.example/a/../b",
+            "https://jira.example/a%2fb",
+            "http://jira.example",
+        ] {
+            assert_eq!(normalize_jira_site(site), None, "{site}");
+        }
+        assert_eq!(
+            normalize_jira_site("https://JIRA.example:443/jira/"),
+            Some("https://jira.example/jira".into())
+        );
+        for url in [
+            "https://jira.example:bad/browse/ABC-1",
+            "https://jira.example:65536/browse/ABC-1",
+            "https://user@jira.example/browse/ABC-1",
+            "https://jira.example/browse/ABC-1/extra",
+            "https://jira.example/?next=/browse/ABC-1",
+        ] {
+            assert!(extract(url).is_empty(), "{url}");
+        }
     }
 
     #[test]

@@ -34,7 +34,8 @@ impl ExternalResourceVersionPort for NotionResourceVersionAdapter {
             .is_ok_and(|servers| servers.iter().any(|server| server.name == SERVER))
     }
 
-    fn current_version(&self, key: &str) -> Result<String> {
+    fn current_version(&self, resource: &ExternalResourceRef) -> Result<String> {
+        let key = &resource.key;
         if key.len() != 32 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             bail!("invalid Notion page id")
         }

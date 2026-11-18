@@ -184,12 +184,18 @@ jobs:
       - name: Install Electron runtime for desktop screen tests
         run: |
           node desktop/node_modules/electron/install.js
-          command -v xvfb-run >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y xvfb)
+          sudo apt-get update
+          sudo apt-get install -y xvfb gnome-keyring dbus-x11
 
       - name: Run desktop screen tests
         env:
           CI: "true"
-        run: xvfb-run --auto-servernum npm --prefix desktop run e2e
+          XDG_CURRENT_DESKTOP: GNOME
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "%s" "akra-ci-fixture-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            xvfb-run --auto-servernum npm --prefix desktop run e2e
+          '
 
   portable_native:
     name: Portable Rust Check (${{ matrix.label }})
