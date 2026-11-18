@@ -14,13 +14,16 @@ import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showRemote, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { ATTENTION_TEXT, attentionEvents } from "./session/attention";
+import { type NavEntry, stepNav } from "./session/navHistory";
+import { closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { DotDock } from "./views/DotDock";
-import { notifyDotReply } from "./views/dotNotify";
-import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts } from "./views/Views";
+import { notifyDotReply, notifyOs } from "./views/notify";
+import { useZoom } from "./views/useZoom";
+import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, ZoomNotice } from "./views/Views";
 import { DocumentsPanel } from "./work/DocumentsPanel";
 import { GitHubPanel } from "./work/GitHubPanel";
 import { GitHubProjectPanel } from "./work/GitHubProjectPanel";
@@ -44,7 +47,21 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function TopBar({ tree, documentCount, changedDocumentCount }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number }) {
+/** 이동 기록의 항목으로 지금 갈 수 있는지 본다. 지워진 스레드와 꺼진 원격 호스트는 건너뛴다 (plan 26 U-2). */
+function navEntryExists(entry: NavEntry): boolean {
+  const state = useDesktopStore.getState();
+  if (entry.view === "thread") {
+    return state.openThreadId === entry.threadId || state.folders.some((folder) => folder.threads.some((thread) => thread.id === entry.threadId));
+  }
+  if (entry.view === "remote") {
+    return useUiStore.getState().remoteAgents && remoteHostKey(state).split(",").includes(entry.host);
+  }
+  return true;
+}
+
+function TopBar({ tree, documentCount, changedDocumentCount, onNavigate }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void }) {
+  const canGoBack = useUiStore((state) => stepNav(state.nav, -1, navEntryExists) !== null);
+  const canGoForward = useUiStore((state) => stepNav(state.nav, 1, navEntryExists) !== null);
   const sidebarOpen = useUiStore((state) => state.sidebarOpen);
   const panel = useUiStore((state) => state.panel);
   const terminalOpen = useUiStore((state) => state.terminalOpen);
@@ -57,6 +74,12 @@ function TopBar({ tree, documentCount, changedDocumentCount }: { tree: WorkingTr
     <header className={sidebarOpen ? "top-bar" : "top-bar no-sidebar"} data-testid="gateway-info">
       <button type="button" className="icon-button" title={`사이드바 (${MOD_KEY}B)`} onClick={() => useUiStore.setState({ sidebarOpen: !sidebarOpen })}>
         <Icon name="sidebar" />
+      </button>
+      <button type="button" className="icon-button" title={`뒤로 (${MOD_KEY}[)`} onClick={() => onNavigate(-1)} disabled={!canGoBack} data-testid="nav-back">
+        <Icon name="chevronLeft" />
+      </button>
+      <button type="button" className="icon-button" title={`앞으로 (${MOD_KEY}])`} onClick={() => onNavigate(1)} disabled={!canGoForward} data-testid="nav-forward">
+        <Icon name="chevronRight" />
       </button>
       {inThread && title && cwd && (
         <div className="top-title">
@@ -250,7 +273,7 @@ export function App() {
   const shortcutsOpen = useUiStore((state) => state.shortcutsOpen);
   const openCwd = useDesktopStore(openThreadCwd);
   const tree = useWorkingTree(window.akra);
-  useShortcuts();
+  useZoom();
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -359,12 +382,18 @@ export function App() {
     [dotDockHost],
   );
 
-  const openRemoteThread = useCallback((host: string, threadId: string) => {
-    showRemote(host);
+  const loadRemoteThread = useCallback((host: string, threadId: string) => {
     const state = remoteHostStore(host).getState();
     if (state.openThreadId === threadId && state.transcript?.threadId === threadId) return;
     void remoteSessions.current.get(host)?.openThread(threadId);
   }, []);
+  const openRemoteThread = useCallback(
+    (host: string, threadId: string) => {
+      visit({ view: "remote", host, threadId });
+      loadRemoteThread(host, threadId);
+    },
+    [loadRemoteThread],
+  );
 
   // 커널 패널이 열려 있을 때만 열린 스레드의 저장소 커널에 붙는다. 붙어 있는 동안 그 저장소의 TUI 는 열리지 않는다.
   const kernelWorkspace = panel === "kernel" ? openCwd : null;
@@ -372,13 +401,45 @@ export function App() {
     void session.current?.showKernel(kernelWorkspace);
   }, [kernelWorkspace]);
 
-  const openThread = useCallback((threadId: string) => {
-    showView("thread");
+  const loadThread = useCallback((threadId: string) => {
     // 이미 열려서 기록이 있는 스레드는 다시 읽지 않는다. 다시 읽으면 실시간으로만 오는 값(턴 diff, 계획, 사용량)을 잃는다.
     const state = useDesktopStore.getState();
     if (state.openThreadId === threadId && state.transcript?.threadId === threadId) return;
     void session.current?.openThread(threadId);
   }, []);
+  const openThread = useCallback(
+    (threadId: string) => {
+      visit({ view: "thread", threadId });
+      loadThread(threadId);
+    },
+    [loadThread],
+  );
+
+  // 이동 기록에서 뒤나 앞으로 간다 (plan 26 N1). 기록의 자리만 옮기고, 그 항목의 스레드를 연다.
+  const navigate = useCallback(
+    (delta: -1 | 1) => {
+      const target = stepNav(useUiStore.getState().nav, delta, navEntryExists);
+      const entry = target && showNavEntry(target);
+      if (entry?.view === "thread") loadThread(entry.threadId);
+      if (entry?.view === "remote") loadRemoteThread(entry.host, entry.threadId);
+    },
+    [loadThread, loadRemoteThread],
+  );
+  useShortcuts(navigate);
+
+  // 창이 뒤에 있는 동안 턴이 끝나거나 승인 요청이 오면 운영체제 알림을 보인다 (plan 26 A1). 누르면 그 스레드를 연다.
+  // 알림에는 스레드 이름만 넣는다. 대화의 글은 넣지 않는다.
+  useEffect(
+    () =>
+      useDesktopStore.subscribe((state, previous) => {
+        if (document.hasFocus()) return;
+        for (const event of attentionEvents(previous, state)) {
+          const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";
+          notifyOs(title, ATTENTION_TEXT[event.kind], () => openThread(event.threadId), `akra:${event.kind}:${event.threadId}`);
+        }
+      }),
+    [openThread],
+  );
 
   // 대화가 화면에 있는지 저장소에 알린다. 다른 보기에 있는 동안 끝난 턴은 읽지 않음이 된다. 대화로 돌아오면 지운다.
   useEffect(() => {
@@ -453,7 +514,7 @@ export function App() {
       const cwd = useUiStore.getState().homeCwd ?? (await window.akra.chooseFolder());
       if (!cwd || !current) return false;
       const threadId = await current.startThread(cwd);
-      showView("thread");
+      visit({ view: "thread", threadId });
       // 스레드는 이미 만들었다. 첫 메시지가 실패하면 글을 그 스레드의 입력창에 되돌려서 다시 보낼 수 있게 한다.
       await current.sendMessage(text).catch((error: unknown) => {
         setDraft(threadId, text);
@@ -467,7 +528,7 @@ export function App() {
     <div className="shell">
       {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} />}
       <div className="workspace">
-        <TopBar tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} />
+        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} />
         <SessionBanner />
         <div className="workspace-body">
           <main className="main">
@@ -505,6 +566,7 @@ export function App() {
       </div>
       {paletteOpen && <CommandPalette onOpenThread={openThread} />}
       {shortcutsOpen && <ShortcutsDialog />}
+      <ZoomNotice />
       <Toasts />
     </div>
   );

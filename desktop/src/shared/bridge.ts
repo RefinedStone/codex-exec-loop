@@ -1,5 +1,6 @@
 // main 과 renderer 가 공유하는 메시지 버스 계약이다. main 은 메시지를 해석하지 않고 문자열 그대로 전달한다.
 import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
+import type { ZoomDirection } from "./zoom";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
 
@@ -70,6 +71,9 @@ export const IPC_CHANNELS = {
   dotsTakeDraft: "akra:dots-take-draft",
   dotsReportSeen: "akra:dots-report-seen",
   dotsSeen: "akra:dots-seen",
+  zoomGet: "akra:zoom-get",
+  zoomStep: "akra:zoom-step",
+  zoomChanged: "akra:zoom-changed",
 } as const;
 
 export interface GitHubPullRequest {
@@ -409,6 +413,16 @@ export interface AkraBridge {
   jira: JiraBridge;
   notion: NotionBridge;
   dots: DotsBridge;
+  zoom: ZoomBridge;
+}
+
+/** 앱 전체 확대이다 (plan 26 Z1–Z2). 값은 main 이 가지고 모든 창에 적용한다. */
+export interface ZoomBridge {
+  get(): Promise<number>;
+  /** 한 단계 확대하거나 축소하거나 100% 로 되돌린다. */
+  step(direction: ZoomDirection): void;
+  /** 확대 값이 바뀌면 부른다. 메뉴, 단축키, 다른 창에서 바꾼 것도 온다. */
+  onChanged(listener: (factor: number) => void): () => void;
 }
 
 /** dots 클라우드 호스트의 활성화 설정이다 (plan 25 §3.2). Gateway 를 다시 시작해야 적용된다. */

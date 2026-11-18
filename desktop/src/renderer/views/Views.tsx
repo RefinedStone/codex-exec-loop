@@ -204,6 +204,10 @@ const SHORTCUTS = [
   [`${MOD_KEY}B`, "사이드바 열기 / 닫기"],
   [`${MOD_KEY}\\`, "오른쪽 패널 열기 / 닫기"],
   [`${MOD_KEY}J`, "터미널 열기 / 닫기"],
+  [`${MOD_KEY}[ · ${MOD_KEY}]`, "뒤로 · 앞으로 (마우스 뒤로·앞으로 단추)"],
+  [`${MOD_KEY}F`, "대화 안 찾기 (⏎ 다음, ⇧⏎ 이전)"],
+  [`${MOD_KEY}+ · ${MOD_KEY}− · ${MOD_KEY}0`, `확대 · 축소 · 실제 크기 (${MOD_KEY}휠, 핀치)`],
+  ["↑ · ↓", "빈 입력창에서 이전 프롬프트 불러오기"],
   ["⏎", "보내기 (진행 중이면 추가 지시)"],
   ["⇧⏎", "줄바꿈"],
   [`${MOD_KEY}⏎`, "승인 요청 허용"],
@@ -236,6 +240,17 @@ export function ShortcutsDialog() {
   );
 }
 
+/** 확대 값을 바꾼 직후에 배율을 잠깐 보인다 (plan 26 Z2). */
+export function ZoomNotice() {
+  const factor = useUiStore((state) => state.zoomNotice);
+  if (factor === null) return null;
+  return (
+    <div className="zoom-notice" role="status" data-testid="zoom-notice">
+      {Math.round(factor * 100)}%
+    </div>
+  );
+}
+
 export function Toasts() {
   const toasts = useUiStore((state) => state.toasts);
   return (
@@ -249,12 +264,12 @@ export function Toasts() {
   );
 }
 
-/** 전역 단축키이다. 입력창에 글을 쓰는 중에도 동작한다. */
-export function useShortcuts(): void {
+/** 전역 단축키이다. 입력창에 글을 쓰는 중에도 동작한다. `onNavigate` 는 이동 기록에서 뒤(-1)나 앞(1)으로 간다. */
+export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        useUiStore.setState({ paletteOpen: false, shortcutsOpen: false });
+        useUiStore.setState({ paletteOpen: false, shortcutsOpen: false, findOpen: false });
         return;
       }
       if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
@@ -269,6 +284,15 @@ export function useShortcuts(): void {
         KeyJ: toggleTerminal,
         Backquote: toggleTerminal,
         Backslash: () => (useUiStore.getState().panel ? useUiStore.setState({ panel: null }) : openPanel("review")),
+        BracketLeft: () => onNavigate(-1),
+        BracketRight: () => onNavigate(1),
+        // 대화가 화면에 있을 때만 찾기 막대를 연다. 이미 열려 있으면 입력란으로 포커스를 옮긴다.
+        KeyF: () => {
+          const view = useUiStore.getState().view;
+          if (view !== "thread" && view !== "remote") return;
+          useUiStore.setState({ findOpen: true, paletteOpen: false });
+          document.querySelector<HTMLInputElement>("[data-find-input]")?.select();
+        },
       };
       const action = actions[event.code];
       if (action) {
@@ -276,7 +300,17 @@ export function useShortcuts(): void {
         action();
       }
     };
+    // 마우스의 뒤로(3)와 앞으로(4) 단추이다.
+    const onMouse = (event: MouseEvent) => {
+      if (event.button !== 3 && event.button !== 4) return;
+      event.preventDefault();
+      onNavigate(event.button === 3 ? -1 : 1);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    window.addEventListener("mouseup", onMouse);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mouseup", onMouse);
+    };
+  }, [onNavigate]);
 }

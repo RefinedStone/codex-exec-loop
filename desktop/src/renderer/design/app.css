@@ -564,8 +564,13 @@ kbd {
   -webkit-app-region: no-drag;
 }
 
+/* macOS 창 단추의 자리이다. 단추는 확대해도 같은 자리에 있으므로 확대 값으로 나눈다 (plan 26 Z3). */
 .inset-title-bar .top-bar.no-sidebar {
-  padding-left: 84px;
+  padding-left: calc(84px / var(--zoom, 1));
+}
+
+.top-bar .icon-button:disabled {
+  opacity: 0.35;
 }
 
 .top-title {
@@ -574,6 +579,11 @@ kbd {
   gap: 6px;
   min-width: 0;
   margin-left: 6px;
+}
+
+.top-title .muted {
+  flex: none;
+  white-space: nowrap;
 }
 
 .top-title strong {
@@ -622,7 +632,7 @@ kbd {
   padding: 9px 14px;
   border-radius: var(--radius-l) var(--radius-l) 4px var(--radius-l);
   background: var(--bg-active);
-  font-size: var(--text-l);
+  font-size: var(--text-reading);
   line-height: 1.55;
 }
 
@@ -636,8 +646,97 @@ kbd {
 }
 
 .agent-message {
-  font-size: var(--text-l);
+  font-size: var(--text-reading);
   line-height: 1.65;
+}
+
+/* 메시지와 코드 블록의 복사 단추이다. 마우스를 올리면 보인다. */
+.user-message,
+.agent-message,
+.code-block {
+  position: relative;
+}
+
+.message-copy,
+.code-copy {
+  position: absolute;
+  right: 0;
+  z-index: 1;
+  background: var(--bg-elevated);
+  font-size: var(--text-xs);
+  opacity: 0;
+  user-select: none;
+}
+
+.message-copy {
+  top: 100%;
+}
+
+.code-copy {
+  top: 6px;
+  right: 6px;
+}
+
+.user-message:hover > .message-copy,
+.agent-message:hover > .message-copy,
+.code-block:hover > .code-copy,
+.message-copy:focus-visible,
+.code-copy:focus-visible {
+  opacity: 1;
+}
+
+/* 대화 안 찾기 */
+.find-bar {
+  position: absolute;
+  top: 10px;
+  right: 24px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+
+.find-bar input {
+  width: 200px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.find-count {
+  min-width: 56px;
+  color: var(--text-3);
+  font-size: var(--text-s);
+  text-align: right;
+}
+
+::highlight(akra-find) {
+  background: var(--warn-bg);
+}
+
+::highlight(akra-find-current) {
+  background: var(--warn);
+  color: var(--accent-text);
+}
+
+.zoom-notice {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  z-index: 70;
+  padding: 6px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .markdown > :first-child {
@@ -778,7 +877,7 @@ kbd {
   border-radius: var(--radius-s);
   background: var(--bg-sunken);
   color: var(--text-2);
-  font-size: var(--text-s);
+  font-size: var(--text-code);
 }
 
 .plan-card,
@@ -1361,7 +1460,7 @@ kbd {
   padding: 6px 0;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: var(--text-s);
+  font-size: var(--text-code);
   line-height: 1.6;
 }
 

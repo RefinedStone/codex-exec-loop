@@ -1,7 +1,7 @@
 // 앱 창 안의 브라우저 보기이다 (R3). 창마다 WebContentsView 를 하나 두고, renderer 가 알려 준 자리에 놓는다.
 // 브라우저 보기는 프로필별 세션(persist:akra-browser-<id>)을 쓴다. 앱 화면 renderer 의 세션과 보안 설정을 공유하지 않는다:
 // preload 없음, sandbox, contextIsolation, 권한 요청 거절, http(s) 밖으로의 이동 차단.
-import { type BrowserWindow, session, type Session, WebContentsView } from "electron";
+import { type BrowserWindow, session, type Session, type WebContents, WebContentsView } from "electron";
 
 import { type BrowserBounds, type BrowserState, IPC_CHANNELS } from "../shared/bridge";
 import { normalizeUrl, profilePartition } from "./browserSettings";
@@ -26,13 +26,20 @@ function isWebUrl(url: string): boolean {
   return url.startsWith("https://") || url.startsWith("http://") || url === "about:blank";
 }
 
-function clampBounds(bounds: BrowserBounds): Electron.Rectangle {
-  const value = (number: unknown) => (typeof number === "number" && Number.isFinite(number) ? Math.max(0, Math.round(number)) : 0);
+/**
+ * renderer 는 자리를 CSS 픽셀로 보낸다. 앱을 확대하면 CSS 픽셀 하나가 창의 픽셀 `scale` 개이다. 그래서 곱한다
+ * (plan 26 Z3).
+ */
+function clampBounds(bounds: BrowserBounds, scale: number): Electron.Rectangle {
+  const value = (number: unknown) => (typeof number === "number" && Number.isFinite(number) ? Math.max(0, Math.round(number * scale)) : 0);
   return { x: value(bounds?.x), y: value(bounds?.y), width: value(bounds?.width), height: value(bounds?.height) };
 }
 
 export class BrowserPanelService {
   private readonly views = new Map<number, OwnerView>();
+
+  /** `onCreate` 는 브라우저 보기를 만들 때마다 부른다. main 이 오른쪽 클릭 메뉴를 건다. */
+  constructor(private readonly onCreate: (contents: WebContents) => void = () => undefined) {}
 
   /** 브라우저 보기를 보이거나 프로필을 바꾼다. 프로필이 바뀌면 그 프로필의 세션으로 보기를 새로 만든다. */
   show(ownerId: number, window: BrowserWindow, profileId: string, bounds: BrowserBounds, url: string | null): BrowserState {
@@ -44,7 +51,7 @@ export class BrowserPanelService {
     if (!entry) {
       entry = this.create(ownerId, window, profileId);
     }
-    entry.view.setBounds(clampBounds(bounds));
+    entry.view.setBounds(clampBounds(bounds, window.webContents.getZoomFactor()));
     entry.view.setVisible(true);
     if (url) {
       this.navigate(ownerId, url);
@@ -53,7 +60,8 @@ export class BrowserPanelService {
   }
 
   setBounds(ownerId: number, bounds: BrowserBounds): void {
-    this.views.get(ownerId)?.view.setBounds(clampBounds(bounds));
+    const entry = this.views.get(ownerId);
+    if (entry && !entry.window.isDestroyed()) entry.view.setBounds(clampBounds(bounds, entry.window.webContents.getZoomFactor()));
   }
 
   hide(ownerId: number): void {
@@ -121,6 +129,7 @@ export class BrowserPanelService {
         window.webContents.send(IPC_CHANNELS.browserState, { ...this.state(entry), error: `${description} (${url})` });
       }
     });
+    this.onCreate(contents);
     return entry;
   }
 

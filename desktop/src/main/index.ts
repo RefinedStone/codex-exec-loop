@@ -2,16 +2,18 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, safeStorage, screen, shell, type WebContents } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
+import { isZoomDirection, nextZoom, type ZoomDirection } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
 import { spawn as spawnPty } from "node-pty";
 
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
+import { contextMenuItems } from "./contextMenuItems";
 import { isDotsCloudEnabled, setDotsCloudEnabled } from "./dotsSettings";
 import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBranch";
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
@@ -20,6 +22,7 @@ import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, read
 import { readGitHubSummary, readIssuePrompt, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { TerminalService } from "./terminalService";
+import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
 
 // 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
 if (process.env.AKRA_DESKTOP_USER_DATA) {
@@ -31,10 +34,79 @@ const connections = new Map<number, GatewayConnection>();
 const remoteConnections = new Map<string, GatewayConnection>();
 const remoteKey = (contentsId: number, host: string) => `${contentsId}:${host}`;
 const terminals = new TerminalService(spawnPty);
-const browsers = new BrowserPanelService();
+const browsers = new BrowserPanelService(installContextMenu);
 const browserSettingsPath = () => join(app.getPath("userData"), "browser-settings.json");
 // userData 는 위에서 정한 뒤이다. 토큰은 safeStorage 로 암호화한다.
 const jira = new JiraService(app.getPath("userData"), safeStorage);
+
+/**
+ * 화면 시험용이다. 창을 보이지 않게 만들어 사용자가 쓰는 다른 앱 위로 올라오지 않게 한다.
+ * 보이지 않는 창에서도 requestAnimationFrame 과 타이머가 돌도록 background throttling 을 끈다.
+ */
+const HIDDEN_WINDOWS = process.env.AKRA_DESKTOP_HIDDEN === "1";
+
+/**
+ * 창의 자리와 확대 값이다 (plan 26 W1, U-3). 화면 시험이 사용자의 실제 값을 읽거나 바꾸지 않게 한다: 숨긴 창은
+ * 시험용 userData 를 정했을 때만 파일을 쓴다.
+ */
+const windowStatePath = join(app.getPath("userData"), "window-state.json");
+const PERSIST_WINDOW_STATE = !HIDDEN_WINDOWS || Boolean(process.env.AKRA_DESKTOP_USER_DATA);
+const windowState = PERSIST_WINDOW_STATE ? loadWindowState(windowStatePath) : { ...DEFAULT_WINDOW_STATE };
+
+function persistWindowState(): void {
+  if (PERSIST_WINDOW_STATE) saveWindowState(windowStatePath, windowState);
+}
+
+/** 화면 위 막대의 높이(CSS 픽셀, `app.css` 의 `.top-bar`)와 macOS 창 단추의 높이이다. */
+const TOP_BAR_HEIGHT = 44;
+const WINDOW_BUTTON_HEIGHT = 16;
+
+/** macOS 창 단추를 위 막대의 가운데 높이에 둔다. 위 막대는 확대 값만큼 커진다 (plan 26 Z3). */
+function windowButtonPosition(zoom: number): { x: number; y: number } {
+  return { x: 14, y: Math.max(2, Math.round((TOP_BAR_HEIGHT * zoom - WINDOW_BUTTON_HEIGHT) / 2)) };
+}
+
+/** 제목 막대를 화면 위 막대와 합친 창이다 (macOS 의 본 창과 블루프린트 창). dot 창은 기본 제목 막대를 쓴다. */
+const insetWindows = new WeakSet<BrowserWindow>();
+
+function applyZoom(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  window.webContents.setZoomFactor(windowState.zoom);
+  if (insetWindows.has(window)) window.setWindowButtonPosition(windowButtonPosition(windowState.zoom));
+}
+
+/** 확대 값을 한 단계 바꾼다. 모든 창에 적용하고 저장한다. 창은 배율을 잠깐 보인다 (plan 26 Z1–Z2). */
+function stepZoom(direction: ZoomDirection): void {
+  windowState.zoom = nextZoom(windowState.zoom, direction);
+  for (const window of BrowserWindow.getAllWindows()) {
+    applyZoom(window);
+    window.webContents.send(IPC_CHANNELS.zoomChanged, windowState.zoom);
+  }
+  persistWindowState();
+}
+
+/** 오른쪽 클릭 메뉴이다 (plan 26 C1). 앱 창과 브라우저 패널의 페이지에 건다. */
+function installContextMenu(contents: WebContents): void {
+  contents.on("context-menu", (_event, params) => {
+    const template = contextMenuItems(params).map<MenuItemConstructorOptions>((item) => {
+      switch (item.kind) {
+        case "separator":
+          return { type: "separator" };
+        case "suggestion":
+          return { label: item.word, click: () => contents.replaceMisspelling(item.word) };
+        case "learn":
+          return { label: "사전에 추가", click: () => contents.session.addWordToSpellCheckerDictionary(item.word) };
+        case "copyLink":
+          return { label: "링크 복사", click: () => clipboard.writeText(item.url) };
+        case "edit":
+          return { role: item.role, label: item.label, enabled: item.enabled };
+      }
+    });
+    if (template.length > 0) {
+      Menu.buildFromTemplate(template).popup({ window: BrowserWindow.fromWebContents(contents) ?? undefined });
+    }
+  });
+}
 
 function repositoryRoot(): string {
   // 개발 중에는 desktop/ 의 부모가 Akra 저장소 루트이다. 패키징 경로는 R8 에서 정한다.
@@ -114,12 +186,6 @@ function isAppUrl(url: string, contents: WebContents): boolean {
 }
 
 /**
- * 화면 시험용이다. 창을 보이지 않게 만들어 사용자가 쓰는 다른 앱 위로 올라오지 않게 한다.
- * 보이지 않는 창에서도 requestAnimationFrame 과 타이머가 돌도록 background throttling 을 끈다.
- */
-const HIDDEN_WINDOWS = process.env.AKRA_DESKTOP_HIDDEN === "1";
-
-/**
  * UX 블루프린트 화면을 연다 (`npm run blueprint`). mock 데이터만 쓰는 화면이고 Gateway 에 접속하지 않는다.
  * 블루프린트는 `ready` 를 보내지 않으므로 Gateway 접속과 데몬 시작이 일어나지 않는다.
  */
@@ -174,16 +240,26 @@ function dockDotWindow(host: string, dotId: string, sender: BrowserWindow | null
   entry.window.close();
 }
 
+const WINDOW_STATE_SAVE_DELAY_MS = 400;
+
+/** 열려 있는 본 창이다. dot 창과 블루프린트 창은 넣지 않는다. */
+const mainWindows = new Set<BrowserWindow>();
+
 /** `dotQuery` 가 있으면 dot 창이다: 작고, renderer 가 그 dot 의 대화만 그린다. */
 function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWindow {
+  // 본 창은 지난번의 자리에 연다 (plan 26 W1). 본 창이 이미 있으면 겹치지 않게 기본 자리에 연다.
+  const restores = !dotQuery && !BLUEPRINT && mainWindows.size === 0;
+  const restored = restores ? visibleBounds(windowState.bounds, screen.getAllDisplays().map((display) => display.workArea)) : null;
+  // 창 제목 막대를 화면 위 막대와 합친다 (macOS, plan 26 W2). dot 창은 위 막대가 없어서 기본 제목 막대를 쓴다.
+  const inset = !dotQuery && process.platform === "darwin";
   const window = new BrowserWindow({
     width: dotQuery ? 440 : BLUEPRINT ? 1440 : 1200,
     height: dotQuery ? 680 : BLUEPRINT ? 900 : 800,
+    ...(restored ?? {}),
     ...(dotQuery ? { minWidth: 340, minHeight: 420 } : {}),
     title: BLUEPRINT ? "Akra Desktop Blueprint" : "Akra Desktop",
     show: false,
-    // 블루프린트는 창 제목 막대를 화면 위 막대와 합친다 (macOS).
-    ...(BLUEPRINT && process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 14 } } : {}),
+    ...(inset ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: windowButtonPosition(windowState.zoom) } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: true,
@@ -193,6 +269,33 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     },
   });
   const contents = window.webContents;
+  if (inset) insetWindows.add(window);
+  if (!dotQuery && !BLUEPRINT) {
+    mainWindows.add(window);
+    if (restored && windowState.maximized) window.maximize();
+    // 마지막으로 옮기거나 닫은 본 창의 자리를 다음 실행에 쓴다. 옮기는 동안에는 멈춘 뒤에 한 번만 쓴다.
+    const remember = () => {
+      if (window.isDestroyed()) return;
+      windowState.bounds = window.getNormalBounds();
+      windowState.maximized = window.isMaximized();
+      persistWindowState();
+    };
+    let rememberTimer: NodeJS.Timeout | undefined;
+    const rememberSoon = () => {
+      clearTimeout(rememberTimer);
+      rememberTimer = setTimeout(remember, WINDOW_STATE_SAVE_DELAY_MS);
+    };
+    window.on("resize", rememberSoon);
+    window.on("move", rememberSoon);
+    window.on("close", () => {
+      clearTimeout(rememberTimer);
+      remember();
+    });
+    window.once("closed", () => mainWindows.delete(window));
+  }
+  // 확대 값은 페이지를 읽을 때마다 다시 적용한다.
+  contents.on("did-finish-load", () => applyZoom(window));
+  installContextMenu(contents);
 
   // 앱 화면 밖으로 이동하지 않는다. http(s) 링크는 기본 브라우저로 연다.
   contents.on("will-navigate", (event, url) => {
@@ -402,6 +505,11 @@ ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
   });
 });
 
+ipcMain.handle(IPC_CHANNELS.zoomGet, () => windowState.zoom);
+ipcMain.on(IPC_CHANNELS.zoomStep, (_event, direction: unknown) => {
+  if (isZoomDirection(direction)) stepZoom(direction);
+});
+
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
   const options = { title: "작업 폴더 선택", properties: ["openDirectory" as const] };
@@ -427,7 +535,18 @@ function installApplicationMenu(): void {
     { role: "editMenu" },
     {
       label: "보기",
-      submenu: [{ role: "reload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "togglefullscreen" }],
+      submenu: [
+        { id: "zoom-in", label: "확대", accelerator: "CmdOrCtrl+Plus", click: () => stepZoom("in") },
+        // 미국 자판에서 Shift 없이 누르는 글쇠는 `=` 이다. 같은 동작을 숨긴 항목으로 한 번 더 건다.
+        { label: "확대", accelerator: "CmdOrCtrl+=", visible: false, acceleratorWorksWhenHidden: true, click: () => stepZoom("in") },
+        { id: "zoom-out", label: "축소", accelerator: "CmdOrCtrl+-", click: () => stepZoom("out") },
+        { id: "zoom-reset", label: "실제 크기", accelerator: "CmdOrCtrl+0", click: () => stepZoom("reset") },
+        { type: "separator" },
+        { role: "reload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
     },
     { role: "windowMenu" },
   ]);

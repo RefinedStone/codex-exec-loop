@@ -74,7 +74,7 @@
   overflow: auto;
   border-radius: var(--radius-s);
   background: var(--bg-hover);
-  font-size: var(--text-s);
+  font-size: var(--text-code);
 }
 
 .markdown pre {
@@ -82,7 +82,7 @@
   overflow-x: auto;
   border-radius: var(--radius-s);
   background: var(--bg-sunken);
-  font-size: var(--text-s);
+  font-size: var(--text-code);
 }
 
 .approvals {

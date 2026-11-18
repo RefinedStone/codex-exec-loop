@@ -686,6 +686,19 @@ The Gateway records the external documents that a thread mentions, without a mod
   read-only with `thread/read` and `thread/turns/list`, shows a banner, and disables the composer. The banner's
   "다시 연결" tries `thread/resume` again and reads the newest history when the lock is still held
   (`desktop/src/renderer/session/desktopSession.ts`).
+- Desktop basics (plan 26 U1): one zoom factor for all windows (view menu, `Cmd/Ctrl` `+` `-` `0`, `Cmd/Ctrl`
+  + wheel, pinch), saved with the main window's size and position in `userData/window-state.json`; the
+  browser panel and the macOS window buttons follow the factor. On macOS the main window has an inset title
+  bar. A right-click menu gives the edit commands, spelling suggestions, and "링크 복사" in the app window and
+  the browser panel. Each window keeps a navigation history of views and opened threads (top-bar buttons,
+  `Cmd/Ctrl` `[` `]`, mouse back and forward buttons; a deleted thread is skipped). `Cmd/Ctrl+F` finds text
+  in the user and agent messages of the open thread, turn by turn. Messages and code blocks have copy buttons.
+  In an empty composer the arrow keys recall sent prompts (kept in the window's local storage). While the
+  window is not focused, a finished or failed turn and a new approval request raise an OS notification that
+  names the thread and opens it on click
+  (`desktop/src/main/windowState.ts`, `desktop/src/main/contextMenuItems.ts`,
+  `desktop/src/renderer/session/navHistory.ts`, `desktop/src/renderer/conversation/find.ts`,
+  `desktop/src/renderer/session/attention.ts`).
   The "Notion" view of the "업무" side panel reads the `notion` server of the
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
   only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).

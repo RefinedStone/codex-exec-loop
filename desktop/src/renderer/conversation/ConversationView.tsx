@@ -7,9 +7,11 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import { Icon, type IconName } from "../design/icons";
 import { useConversationStore } from "../session/desktopStore";
-import { openPanel, toast } from "../session/uiStore";
+import { openPanel, useUiStore } from "../session/uiStore";
+import { copyText } from "./copyText";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
 import { DiffCounts, DiffFileList } from "./DiffView";
+import { findTurns, matchOffsets } from "./find";
 import { ItemView } from "./ItemView";
 import { Markdown } from "./Markdown";
 import type { TurnView } from "./transcript";
@@ -115,18 +117,29 @@ function sameBlock(previous: { block: TurnBlock }, next: { block: TurnBlock }): 
   return a.type === b.type && a.id === b.id && a.text === b.text;
 }
 
+/** 메시지 하나를 복사하는 단추이다 (plan 26 R2). 메시지에 마우스를 올리면 보인다. */
+function MessageCopy({ text }: { text: string }) {
+  return (
+    <button type="button" className="ghost message-copy" onClick={() => copyText(text, "메시지를 복사했습니다")}>
+      복사
+    </button>
+  );
+}
+
 const Block = memo(function Block({ block }: { block: TurnBlock }) {
   switch (block.type) {
     case "user":
       return (
         <div className="user-message" data-testid="item-user">
           <p>{block.text}</p>
+          <MessageCopy text={block.text} />
         </div>
       );
     case "agent":
       return (
         <div className="agent-message" data-testid="item-agent">
           <Markdown text={block.text} />
+          <MessageCopy text={block.text} />
         </div>
       );
     case "reasoning":
@@ -176,11 +189,7 @@ function Working({ turn }: { turn: TurnView }) {
 }
 
 function copyAnswer(turn: TurnView): void {
-  const text = turn.items.flatMap((item) => (item.type === "agentMessage" ? [item.text] : [])).join("\n\n");
-  navigator.clipboard.writeText(text).then(
-    () => toast("답을 복사했습니다"),
-    () => toast("복사하지 못했습니다"),
-  );
+  copyText(turn.items.flatMap((item) => (item.type === "agentMessage" ? [item.text] : [])).join("\n\n"), "답을 복사했습니다");
 }
 
 const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
@@ -216,6 +225,27 @@ const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
     </article>
   );
 });
+
+const FIND_ALL = "akra-find";
+const FIND_CURRENT = "akra-find-current";
+
+/** `root` 안의 사용자 글과 에이전트 답에서 `needle`(소문자)이 있는 자리이다. 단추의 글은 뺀다. */
+function findRanges(root: HTMLElement, needle: string): Range[] {
+  const ranges: Range[] = [];
+  for (const message of root.querySelectorAll(".user-message, .agent-message")) {
+    const walker = document.createTreeWalker(message, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.parentElement?.closest("button")) continue;
+      for (const offset of matchOffsets((node.nodeValue ?? "").toLowerCase(), needle)) {
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + needle.length);
+        ranges.push(range);
+      }
+    }
+  }
+  return ranges;
+}
 
 export function ConversationView({ onLoadOlder }: { onLoadOlder(): Promise<void> }) {
   const openThreadId = useConversationStore((state) => state.openThreadId);
@@ -262,6 +292,68 @@ export function ConversationView({ onLoadOlder }: { onLoadOlder(): Promise<void>
     }
   }, [transcript, turns, virtualizer]);
 
+  // 대화 안 찾기이다 (plan 26 R1). 기록에서 찾은 턴으로 스크롤하고, 화면에 그린 턴 안의 글에 표시한다.
+  const findOpen = useUiStore((state) => state.findOpen);
+  const [query, setQuery] = useState("");
+  const [findAt, setFindAt] = useState(0);
+  const matches = useMemo(() => (findOpen ? findTurns(turns, query) : []), [findOpen, turns, query]);
+  const matchAt = Math.min(findAt, Math.max(0, matches.length - 1));
+  const currentTurn = matches[matchAt];
+  /** 찾은 턴으로 옮긴 뒤, 그 턴 안의 첫 표시가 화면 밖이면 한 번 보이게 한다. */
+  const revealMatch = useRef(false);
+
+  const goToMatch = (position: number) => {
+    if (matches.length === 0) return;
+    const next = (position + matches.length) % matches.length;
+    const index = matches[next];
+    if (index === undefined) return;
+    setFindAt(next);
+    followBottom.current = false;
+    revealMatch.current = true;
+    virtualizer.scrollToIndex(index, { align: "start" });
+  };
+  const goToMatchRef = useRef(goToMatch);
+  goToMatchRef.current = goToMatch;
+  // 찾는 글을 바꾸면 처음 찾은 턴으로 간다.
+  useEffect(() => {
+    if (findOpen) goToMatchRef.current(0);
+  }, [findOpen, query]);
+
+  // 그릴 때마다 표시를 다시 만든다: 스크롤하면 그려진 턴이 바뀐다. 찾기 막대가 열려 있을 때만 일한다.
+  useLayoutEffect(() => {
+    if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
+    const needle = query.trim().toLowerCase();
+    const root = scrollRef.current;
+    if (!findOpen || needle.length === 0 || !root) {
+      CSS.highlights.delete(FIND_ALL);
+      CSS.highlights.delete(FIND_CURRENT);
+      return;
+    }
+    const others: Range[] = [];
+    const current: Range[] = [];
+    for (const row of root.querySelectorAll<HTMLElement>(".turn-row")) {
+      (Number(row.dataset.index) === currentTurn ? current : others).push(...findRanges(row, needle));
+    }
+    CSS.highlights.set(FIND_ALL, new Highlight(...others));
+    CSS.highlights.set(FIND_CURRENT, new Highlight(...current));
+    const first = current[0];
+    if (revealMatch.current && first) {
+      revealMatch.current = false;
+      const rect = first.getBoundingClientRect();
+      const view = root.getBoundingClientRect();
+      if (rect.top < view.top || rect.bottom > view.bottom) first.startContainer.parentElement?.scrollIntoView({ block: "center" });
+    }
+  });
+  useEffect(
+    () => () => {
+      if (typeof CSS !== "undefined" && "highlights" in CSS) {
+        CSS.highlights.delete(FIND_ALL);
+        CSS.highlights.delete(FIND_CURRENT);
+      }
+    },
+    [],
+  );
+
   const loadOlder = async () => {
     setOlderError(null);
     setLoadingOlder(true);
@@ -297,6 +389,36 @@ export function ConversationView({ onLoadOlder }: { onLoadOlder(): Promise<void>
 
   return (
     <div className="conversation-wrap">
+      {findOpen && (
+        <div className="find-bar" role="search" data-testid="find-bar">
+          <input
+            autoFocus
+            data-find-input
+            value={query}
+            placeholder="대화에서 찾기"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                goToMatch(matchAt + (event.shiftKey ? -1 : 1));
+              }
+            }}
+            data-testid="find-input"
+          />
+          <span className="find-count" data-testid="find-count">
+            {matches.length > 0 ? `턴 ${matchAt + 1}/${matches.length}` : query.trim() ? "없음" : ""}
+          </span>
+          <button type="button" className="ghost" title="이전 (⇧⏎)" onClick={() => goToMatch(matchAt - 1)} disabled={matches.length === 0}>
+            이전
+          </button>
+          <button type="button" className="ghost" title="다음 (⏎)" onClick={() => goToMatch(matchAt + 1)} disabled={matches.length === 0}>
+            다음
+          </button>
+          <button type="button" className="icon-button" title="닫기 (esc)" onClick={() => useUiStore.setState({ findOpen: false })}>
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
       <section className="conversation" data-testid="conversation" ref={scrollRef} onScroll={onScroll}>
         <div className="column">
           {transcript.olderTurnsCursor && (
