@@ -108,12 +108,13 @@ function operationPlan(operation, expectation) {
   };
 }
 
-function operationRecord(opId, operation, undoOf) {
+function operationRecord(opId, operation, undoOf, cwd) {
   const total = FIRST_PAGE_ROWS + SECOND_PAGE_ROWS;
   return {
     opId,
     operation,
-    worktree: "/work/example-app",
+    // 작업을 실행한 폴더이다. 화면은 같은 폴더의 기록에만 되돌리기를 보인다.
+    worktree: cwd,
     before: { commit: sha(total + 1), branch: "main" },
     after: { commit: operation.target, branch: "main" },
     backupRef: `refs/akra/backup/main/${opId}`,
@@ -153,7 +154,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
       staleAnswers -= 1;
       return { status: "stale", plan: operationPlan(params.operation, "seen-after-change") };
     }
-    const record = operationRecord("20261119T010203Z-0000002a", params.operation, null);
+    const record = operationRecord("20261119T010203Z-0000002a", params.operation, null, params.cwd);
     journal.unshift(record);
     return { status: "done", record };
   },
@@ -163,7 +164,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
   gitUndo(params) {
     undoRequests.push(params.opId);
     const undone = journal.find((record) => record.opId === params.opId);
-    const record = operationRecord("20261119T010300Z-0000002b", { kind: "reset", target: undone.before.commit }, undone.opId);
+    const record = operationRecord("20261119T010300Z-0000002b", { kind: "reset", target: undone.before.commit }, undone.opId, params.cwd);
     undone.undoneBy = record.opId;
     journal.unshift(record);
     return { status: "done", record };

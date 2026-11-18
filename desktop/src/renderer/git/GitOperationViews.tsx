@@ -91,7 +91,7 @@ export function useGitOperationLog(request: GatewayRequest, cwd: string | null, 
 }
 
 /** 마지막 결과의 알림과 작업 기록이다. 패널의 머리 아래에 있다. */
-export function OperationLogView({ log, busyReason }: { log: GitOperationLog; busyReason: string | null }) {
+export function OperationLogView({ log, cwd, busyReason }: { log: GitOperationLog; cwd: string; busyReason: string | null }) {
   const { records, notice, working } = log;
   const blocked = working || busyReason !== null;
   if (notice === null && records.length === 0) return null;
@@ -100,7 +100,7 @@ export function OperationLogView({ log, busyReason }: { log: GitOperationLog; bu
       {notice !== null && (
         <div className={`git-operation-notice${notice.failed ? " error" : ""}`} role="status" data-testid="git-operation-notice">
           <span>{notice.text}</span>
-          {notice.record !== null && canUndo(notice.record) && (
+          {notice.record !== null && canUndo(notice.record, cwd) && (
             <button type="button" disabled={blocked} title={busyReason ?? undefined} onClick={() => log.undo(notice.record!.opId)} data-testid="git-operation-undo">
               되돌리기
             </button>
@@ -116,13 +116,13 @@ export function OperationLogView({ log, busyReason }: { log: GitOperationLog; bu
           <ul>
             {records.map((record) => (
               <li key={record.opId} data-testid="git-operation-entry">
-                <span className="git-operation-title" title={record.error ?? record.backupRef ?? undefined}>
+                <span className="git-operation-title" title={record.error ?? record.worktree}>
                   {recordTitle(record)}
                 </span>
                 <span className="muted">
                   {recordStatus(record)} · {fullTime(record.startedAt)}
                 </span>
-                {canUndo(record) && (
+                {canUndo(record, cwd) && (
                   <button type="button" disabled={blocked} title={busyReason ?? undefined} onClick={() => log.undo(record.opId)}>
                     되돌리기
                   </button>
@@ -184,29 +184,32 @@ export function CommitActionsView({ request, cwd, commit, refs, head, worktrees,
     );
   };
 
+  // 실행 중에는 다른 작업을 고르지 못한다. 고르면 실행의 답을 버리게 되고, 저장소는 이미 바뀌었다.
+  const running = state.phase === "planned" && state.running;
   const nothing = actions.reset === null && actions.checkoutBranches.length === 0 && actions.checkoutCommit === null && actions.movableBranches.length === 0;
   if (nothing) return null;
   return (
     <div className="git-actions">
       <div className="git-action-buttons">
         {actions.reset && (
-          <button type="button" onClick={() => plan(actions.reset!.operation, actions.reset!.branch)} data-testid="git-action-reset">
+          <button type="button" disabled={running} onClick={() => plan(actions.reset!.operation, actions.reset!.branch)} data-testid="git-action-reset">
             여기로 reset ({actions.reset.branch})
           </button>
         )}
         {actions.checkoutBranches.map(({ operation, branch }) => (
-          <button key={branch} type="button" onClick={() => plan(operation, null)} data-testid="git-action-checkout-branch">
+          <button key={branch} type="button" disabled={running} onClick={() => plan(operation, null)} data-testid="git-action-checkout-branch">
             체크아웃: {branch}
           </button>
         ))}
         {actions.checkoutCommit && (
-          <button type="button" onClick={() => plan(actions.checkoutCommit!, null)} data-testid="git-action-checkout-commit">
+          <button type="button" disabled={running} onClick={() => plan(actions.checkoutCommit!, null)} data-testid="git-action-checkout-commit">
             이 커밋 체크아웃
           </button>
         )}
         {actions.movableBranches.length > 0 && (
           <select
             value=""
+            disabled={running}
             aria-label="이 커밋으로 옮길 브랜치"
             onChange={(event) => event.target.value && plan({ kind: "move_branch", branch: event.target.value, target: commit }, null)}
             data-testid="git-action-move"

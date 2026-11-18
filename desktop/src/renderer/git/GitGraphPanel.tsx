@@ -36,6 +36,7 @@ import {
   scrollTopAfterRowsChange,
   shortSha,
   threadBadges,
+  threadIdsInWorktreeOf,
 } from "./gitGraph";
 import { CommitActionsView, OperationLogView, useGitOperationLog } from "./GitOperationViews";
 import { graphWidth, laneColorIndex, laneX, NODE_RADIUS, ROW_HEIGHT, rowPaths } from "./graphGeometry";
@@ -510,11 +511,20 @@ export function GitGraphPanel({ request, cwd, onOpenThread }: GitGraphPanelProps
   const selected = selection !== null && selection.cwd === cwd ? selection.commit : null;
   const select = useCallback((commit: string) => cwd && setSelection({ cwd, commit }), [cwd]);
   const detail = useCommitDetail(request, cwd, selected);
-  const log = useGitOperationLog(request, cwd, graph.refresh);
-  // 턴이 도는 동안 에이전트가 이 작업 트리의 파일을 쓴다. 그 사이에 reset 이나 체크아웃을 하면 에이전트의 일이 섞인다.
-  // Gateway 는 이 스레드의 턴을 알지 못한다. 그래서 화면이 막는다 (plan 27 §9.3).
-  const turnRunning = useDesktopStore((store) => isTurnInProgress(store.transcript));
-  const busyReason = turnRunning ? "이 스레드에서 턴이 실행 중입니다. 턴이 끝난 뒤에 실행하십시오." : null;
+  // 저장소가 아닌 폴더의 일지는 읽지 않는다. Gateway 는 일지를 읽을 때 그 폴더의 runtime 디렉터리를 만든다.
+  const repositoryCwd = state.phase === "loaded" && state.repository ? cwd : null;
+  const log = useGitOperationLog(request, repositoryCwd, graph.refresh);
+  // 턴이 도는 동안 에이전트가 작업 트리의 파일을 쓴다. 그 사이에 reset 이나 체크아웃을 하면 에이전트의 일이 섞인다.
+  // Gateway 는 Desktop 의 턴을 알지 못한다. 그래서 화면이 막는다 (plan 27 §9.3): 열린 스레드의 턴과, 같은 작업
+  // 트리에 폴더가 있는 다른 스레드의 턴이다.
+  const worktrees = state.phase === "loaded" ? state.worktrees : null;
+  const turnRunning = useDesktopStore((store) => {
+    if (isTurnInProgress(store.transcript)) return true;
+    if (!cwd || !worktrees) return false;
+    const neighbours = threadIdsInWorktreeOf(cwd, worktrees, store.folders);
+    return store.activeThreadIds.some((id) => neighbours.includes(id));
+  });
+  const busyReason = turnRunning ? "이 작업 트리에서 턴이 실행 중입니다. 턴이 끝난 뒤에 실행하십시오." : null;
   const current = state.phase === "loaded" ? headName(state.refs, state.head) : null;
   return (
     <aside className="work-panel git-graph-panel" data-testid="git-graph-panel">
@@ -542,7 +552,7 @@ export function GitGraphPanel({ request, cwd, onOpenThread }: GitGraphPanelProps
           {state.message}
         </div>
       )}
-      {state.phase === "loaded" && state.repository && <OperationLogView log={log} busyReason={busyReason} />}
+      {repositoryCwd !== null && <OperationLogView log={log} cwd={repositoryCwd} busyReason={busyReason} />}
       {state.phase === "loaded" && !state.repository && <p className="muted work-section">이 폴더는 git 저장소가 아닙니다.</p>}
       {state.phase === "loaded" && state.repository && state.rows.length === 0 && <p className="muted work-section">이 저장소에는 아직 커밋이 없습니다.</p>}
       {state.phase === "loaded" && state.repository && state.rows.length > 0 && <GraphRows graph={{ ...graph, state }} folders={folders} selected={selected} onSelect={select} onOpenThread={onOpenThread} />}

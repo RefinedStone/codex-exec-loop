@@ -238,52 +238,10 @@ fn effective_git_toplevel(repo_or_worktree: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(value))
 }
 
-/// 프로그램을 실행하게 하는 설정 키들이다. 이름은 git 이 쓴 그대로이다 (하위 구역의 대소문자를 지킨다).
-/// 저장소를 고치는 git 작업 엔진(plan 27 G3)이 쓴다: 필터 키는 명령에서 끄고, 나머지 키가 있으면 거절한다.
-pub(crate) fn host_git_execution_config_keys(repo_or_worktree: &Path) -> Result<Vec<String>> {
-    let payload = read_execution_config_keys(repo_or_worktree)?;
-    let mut keys = Vec::new();
-    for record in payload.split(|byte| *byte == 0) {
-        if record.is_empty() {
-            continue;
-        }
-        if record.len() > MAX_GIT_CONFIG_KEY_BYTES {
-            bail!("host Git execution-config audit returned an oversized key");
-        }
-        let key = std::str::from_utf8(record)
-            .context("host Git execution-config audit returned a non-UTF-8 key")?;
-        if config_key_enables_external_execution(&key.to_ascii_lowercase()) {
-            keys.push(key.to_string());
-            if keys.len() > MAX_REPORTED_EXECUTION_KEYS {
-                bail!("host Git execution-config audit found too many executable keys");
-            }
-        }
-    }
-    Ok(keys)
-}
-
 fn ensure_host_git_execution_config_safe_with_policy(
     repo_or_worktree: &Path,
     allow_verified_core_worktree: bool,
 ) -> Result<()> {
-    let payload = read_execution_config_keys(repo_or_worktree)?;
-    let unsafe_keys =
-        unsafe_execution_config_keys_with_policy(&payload, allow_verified_core_worktree)?;
-    if !unsafe_keys.is_empty() {
-        let labels = unsafe_keys
-            .iter()
-            .map(|key| escaped_config_key_label(key))
-            .collect::<Vec<_>>();
-        bail!(
-            "host Git mutation is blocked by executable repository configuration: {}",
-            labels.join(", ")
-        );
-    }
-    Ok(())
-}
-
-/// 설정 키 가운데 실행과 관계있는 구역의 이름들이다. NUL 로 나눈 글이다.
-fn read_execution_config_keys(repo_or_worktree: &Path) -> Result<Vec<u8>> {
     let mut command = git_subprocess::command(std::iter::empty::<&str>());
     command
         .arg("-C")
@@ -318,7 +276,20 @@ fn read_execution_config_keys(repo_or_worktree: &Path) -> Result<Vec<u8>> {
             output.status
         );
     }
-    Ok(output.stdout)
+
+    let unsafe_keys =
+        unsafe_execution_config_keys_with_policy(&output.stdout, allow_verified_core_worktree)?;
+    if !unsafe_keys.is_empty() {
+        let labels = unsafe_keys
+            .iter()
+            .map(|key| escaped_config_key_label(key))
+            .collect::<Vec<_>>();
+        bail!(
+            "host Git mutation is blocked by executable repository configuration: {}",
+            labels.join(", ")
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

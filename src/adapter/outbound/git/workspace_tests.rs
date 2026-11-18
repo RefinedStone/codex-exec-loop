@@ -374,56 +374,105 @@ fn a_branch_checked_out_in_another_worktree_is_not_moved_or_checked_out() {
 }
 
 #[test]
-fn a_filter_in_the_configuration_alone_does_not_refuse_the_repository() {
-    let directory = temp_repository("filter-config");
+fn a_branch_that_a_rebase_or_a_bisect_uses_is_reported() {
+    let directory = temp_repository("in-use");
     let repository = directory.display().to_string();
-    let base = commit_file(&directory, "a.txt", "one\n", "base");
-    commit_file(&directory, "a.txt", "two\n", "second");
-    // `git lfs install` 이 전역 설정에 쓰는 것과 같은 모양이다. 어느 파일도 이 필터를 쓰지 않는다.
-    for variable in ["smudge", "process"] {
-        let key = format!("filter.Demo.{variable}");
-        git(&directory, &["config", &key, "missing-filter-program"]);
-    }
-    git(&directory, &["config", "filter.Demo.required", "true"]);
-
-    let condition = GitWorkspaceAdapter.read_condition(&repository).unwrap();
-    assert_eq!(condition.refusal, None);
-    // 하위 구역의 대소문자를 지킨다. 다르면 git 은 다른 필터로 본다.
-    let mut overrides = CommandOverrides::read(&directory).unwrap().ok().unwrap().0;
-    overrides.retain(|argument| argument.starts_with("filter."));
-    overrides.sort();
-    assert_eq!(
-        overrides,
-        [
-            "filter.Demo.process=",
-            "filter.Demo.required=false",
-            "filter.Demo.smudge="
-        ]
+    commit_file(&directory, "a.txt", "one\n", "base");
+    let adapter = GitWorkspaceAdapter;
+    assert!(
+        adapter
+            .read_condition(&repository)
+            .unwrap()
+            .busy_branches
+            .is_empty()
     );
-    let engine = engine();
-    let reset = GitOperation::Reset {
-        target: base.clone(),
-    };
-    run_operation(&engine, &repository, reset);
-    assert_eq!(git_text(&directory, &["rev-parse", "main"]), base);
+
+    // git 이 rebase 와 bisect 를 시작할 때 쓰는 파일이다. 대표 작업 트리와 연결된 작업 트리에 하나씩 둔다.
+    let git_dir = directory.join(".git");
+    std::fs::create_dir_all(git_dir.join("worktrees/linked/rebase-merge")).unwrap();
+    std::fs::write(
+        git_dir.join("worktrees/linked/rebase-merge/head-name"),
+        "refs/heads/feature/a\n",
+    )
+    .unwrap();
+    std::fs::write(git_dir.join("BISECT_START"), "topic\n").unwrap();
+
+    let condition = adapter.read_condition(&repository).unwrap();
+
+    assert_eq!(condition.busy_branches, ["feature/a", "topic"]);
     let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]
-fn the_line_endings_of_the_system_configuration_reach_the_commands() {
+fn a_filter_in_the_repository_configuration_refuses_the_repository() {
+    let directory = temp_repository("filter-config");
+    let repository = directory.display().to_string();
+    let base = commit_file(&directory, "a.txt", "one\n", "base");
+    commit_file(&directory, "a.txt", "two\n", "second");
+    let engine = engine();
+    let reset = GitOperation::Reset {
+        target: base.clone(),
+    };
+    assert!(
+        engine
+            .plan(&repository, reset.clone())
+            .unwrap()
+            .blockers
+            .is_empty()
+    );
+    // 저장소 설정의 필터이다. 어느 파일도 이 필터를 쓰지 않는다. 그래도 체크아웃이 실행할 수 있는 프로그램이다.
+    git(
+        &directory,
+        &["config", "filter.demo.smudge", "missing-filter-program"],
+    );
+
+    let plan = engine.plan(&repository, reset.clone()).unwrap();
+
+    assert_eq!(
+        plan.blockers[0].code,
+        GitOperationBlockerCode::ExecutionConfig
+    );
+    assert!(plan.blockers[0].message.contains("filter.demo.smudge"));
+    // 계획 뒤에 설정이 생긴 경우이다. 고치는 명령이 실행 직전에 다시 본다.
+    assert!(GitWorkspaceAdapter.reset_to(&repository, &base).is_err());
+    assert_ne!(git_text(&directory, &["rev-parse", "main"]), base);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn the_line_endings_of_the_user_reach_the_commands_in_the_order_of_git() {
     let system = "core.autocrlf true\ncore.eol CRLF\ncore.fscache true\n";
     assert_eq!(
-        line_ending_overrides("", system),
+        line_ending_overrides(&["", "", system]),
         ["-c", "core.autocrlf=true", "-c", "core.eol=crlf"]
     );
-    // 사용자 설정이나 저장소 설정에 값이 있으면 그 값이 이긴다. `-c` 로 덮지 않는다.
+    // 사용자 설정이 시스템 설정을 이긴다.
     assert_eq!(
-        line_ending_overrides("core.autocrlf input\n", system),
+        line_ending_overrides(&["", "core.autocrlf false\n", system]),
+        ["-c", "core.autocrlf=false", "-c", "core.eol=crlf"]
+    );
+    // 저장소 설정에 있는 키는 주지 않는다. 이 git 이 그 값을 이미 읽고, `-c` 는 그 값을 덮는다.
+    assert_eq!(
+        line_ending_overrides(&["core.autocrlf input\n", "core.autocrlf false\n", system]),
         ["-c", "core.eol=crlf"]
     );
     // 목록에 없는 값은 명령에 주지 않는다.
-    assert!(line_ending_overrides("", "core.autocrlf yes; rm -rf\n").is_empty());
-    assert!(line_ending_overrides("", "").is_empty());
+    assert!(line_ending_overrides(&["", "core.autocrlf yes; rm -rf\n", ""]).is_empty());
+    assert!(line_ending_overrides(&["", "", ""]).is_empty());
+}
+
+#[test]
+fn every_command_that_touches_files_stays_out_of_submodules() {
+    let directory = temp_repository("overrides");
+    commit_file(&directory, "a.txt", "one\n", "base");
+
+    let overrides = CommandOverrides::read(&directory).unwrap();
+    let args = overrides.with(&["switch", "--detach"]);
+
+    // `-c` 는 하위 명령 앞에 온다. 줄 끝 값은 이 기기의 설정에 따라 그 사이에 올 수 있다.
+    assert_eq!(args[..2], ["-c", "submodule.recurse=false"]);
+    assert_eq!(args[args.len() - 2..], ["switch", "--detach"]);
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]

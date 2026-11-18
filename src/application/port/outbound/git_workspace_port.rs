@@ -11,13 +11,16 @@ use crate::domain::git_operation::GitOperationImpact;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitWorkspaceCondition {
     /// 이 저장소에서 쓰기 명령을 돌리지 않는 이유이다. 돌려도 되면 `None` 이다. 있으면 아래 값은 읽지 않은 것이다.
-    /// 이유는 둘이다: 설정이 프로그램을 실행한다 (필터는 뺀다. 필터는 명령에서 끈다), 또는 파일이 필터를 쓴다
-    /// (LFS 등. 필터를 끄고 체크아웃하면 내용이 틀린다).
+    /// 이유는 둘이다: 저장소 설정이 프로그램을 실행한다 (필터, 바깥 diff 등), 또는 파일이 필터를 쓴다 (LFS 등.
+    /// 데몬의 git 은 필터를 실행하지 않으므로 체크아웃하면 내용이 틀린다).
     pub refusal: Option<String>,
     /// 추적하는 파일에 커밋하지 않은 변경이 있다 (stage 한 것과 하지 않은 것).
     pub tracked_changes: bool,
-    /// 끝나지 않은 작업의 이름이다 (`merge`, `rebase`, `cherry-pick`, `revert`, `bisect`).
+    /// 이 작업 트리의 끝나지 않은 작업의 이름이다 (`merge`, `rebase`, `cherry-pick`, `revert`, `bisect`).
     pub operation_in_progress: Option<String>,
+    /// 어느 작업 트리의 끝나지 않은 rebase 나 bisect 가 쓰는 브랜치들이다. 그런 작업 트리는 그 브랜치를 체크아웃한
+    /// 것으로 보이지 않는다 (HEAD 가 브랜치 없이 있다). 그래도 그 ref 를 옮기면 그 작업이 끝에서 실패한다.
+    pub busy_branches: Vec<String>,
 }
 
 pub trait GitWorkspacePort: Send + Sync {
