@@ -6,7 +6,7 @@
  */
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::application::port::inbound::git_graph_port::{
@@ -14,7 +14,8 @@ use crate::application::port::inbound::git_graph_port::{
 };
 use crate::application::port::outbound::git_history_port::{GitHistoryPort, GitHistoryRefs};
 use crate::domain::git_graph::{
-    GitGraphCommit, GitGraphLaneState, GitGraphRow, clamp_git_graph_page_limit,
+    GIT_GRAPH_LANE_LIMIT, GitGraphCommit, GitGraphLaneState, GitGraphRow,
+    clamp_git_graph_page_limit,
 };
 
 pub struct GitGraphService {
@@ -37,6 +38,9 @@ impl GitGraphPort for GitGraphService {
         let (skip, mut lanes) = match request.cursor {
             Some(cursor) if cursor.refs_digest != refs_digest => {
                 return Ok(empty_page(true, true, refs.head));
+            }
+            Some(cursor) if cursor.lanes.lane_count() > GIT_GRAPH_LANE_LIMIT => {
+                bail!("the graph cursor has more than {GIT_GRAPH_LANE_LIMIT} lanes");
             }
             Some(cursor) => (cursor.skip, cursor.lanes),
             None => (0, GitGraphLaneState::default()),
@@ -242,6 +246,19 @@ mod tests {
         assert!(page.stale);
         assert!(page.rows.is_empty());
         assert_eq!(page.next, None);
+    }
+
+    #[test]
+    fn a_cursor_with_too_many_lanes_is_refused() {
+        let history = Arc::new(FakeHistory::linear(3));
+        let service = GitGraphService::new(history.clone());
+        let mut cursor = service.graph_page(request(1, None)).unwrap().next.unwrap();
+        let lanes = vec![Some("x"); GIT_GRAPH_LANE_LIMIT + 1];
+        cursor.lanes = serde_json::from_value(serde_json::json!(lanes)).unwrap();
+
+        assert!(service.graph_page(request(1, Some(cursor))).is_err());
+        // 첫 쪽의 읽기만 있었다. 거절한 자리로는 git 을 부르지 않는다.
+        assert_eq!(history.reads.lock().unwrap().len(), 1);
     }
 
     #[test]

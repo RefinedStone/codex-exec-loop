@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 
 /// 한 번에 읽는 커밋 수의 최댓값이다.
 pub const GIT_GRAPH_PAGE_LIMIT_MAX: usize = 1000;
+/// 자리가 담을 수 있는 레인 수의 최댓값이다. 줄마다 지나가는 레인을 모두 적으므로, 레인 수는 답의 크기를 줄 수와
+/// 곱으로 키운다. 클라이언트가 돌려준 자리가 이 수를 넘으면 받지 않는다.
+pub const GIT_GRAPH_LANE_LIMIT: usize = 4096;
 /// 요청이 개수를 주지 않을 때 읽는 커밋 수이다.
 pub const GIT_GRAPH_PAGE_LIMIT_DEFAULT: usize = 300;
 
@@ -76,6 +79,11 @@ pub struct GitGraphLaneState {
 }
 
 impl GitGraphLaneState {
+    /// 레인의 수이다. 빈 레인도 센다.
+    pub fn lane_count(&self) -> usize {
+        self.lanes.len()
+    }
+
     /// 커밋 하나를 놓고 그 줄을 돌려준다. 상태는 이 줄의 아래쪽 경계로 바뀐다.
     pub fn place(&mut self, commit: GitGraphCommit) -> GitGraphRow {
         let lanes_in = self.lanes_waiting_for(&commit.id);

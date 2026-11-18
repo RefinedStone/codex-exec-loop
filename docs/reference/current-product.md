@@ -389,7 +389,8 @@ the desktop app itself is not shipped yet.
   `git log --date-order --branches --remotes --tags HEAD` through the hardened Git boundary and writes
   nothing. `limit` defaults to 300 and is capped at 1000. The Gateway keeps no state between pages: the
   client returns `next` as `cursor`, and a cursor from before a ref change answers `stale: true` with no
-  rows. A folder outside a repository answers `repository: false`. The method exists only on `local`
+  rows. A cursor with more than 4,096 lanes is refused. A folder outside a repository answers
+  `repository: false`. The method exists only on `local`
   connections.
 - Cloud host (D-19): `/host/cloud` bridges to the OpenAI cloud app-server with the access token of
   `~/.codex/auth.json`. The bridge forwards only the public-protocol methods it allows
