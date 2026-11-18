@@ -85,8 +85,9 @@ function harness() {
     setThreadActive: () => undefined,
     setThreadFailed: () => undefined,
     setActiveThreads: (threadIds) => Object.assign(state, { activeThreadIds: threadIds }),
-    setOpenThread: (openThreadId) => Object.assign(state, { openThreadId, transcript: null }),
-    setTranscript: (transcript) => Object.assign(state, { transcript }),
+    setOpenThread: (openThreadId) => Object.assign(state, { openThreadId, transcript: null, writerElsewhere: false }),
+    setTranscript: (transcript, transcriptError = null) => Object.assign(state, { transcript, transcriptError }),
+    setWriterElsewhere: (writerElsewhere) => Object.assign(state, { writerElsewhere }),
     updateTranscript: (update) => {
       if (state.transcript) state.transcript = update(state.transcript);
     },
@@ -373,6 +374,73 @@ describe("turn list errors on an existing thread", () => {
     receive({ jsonrpc: "2.0", id: list?.id, error: { code: -32603, message: "internal error" } });
     await opened;
     expect(state.transcript ?? null).toBeNull();
+  });
+});
+
+describe("a thread whose writer lock another Codex process holds", () => {
+  const turn = (id: string) => ({ id, items: [], itemsView: "full", status: "completed", error: null, startedAt: null, completedAt: null, durationMs: null });
+  const thread = (id: string) => ({ id, name: id, preview: "", cwd: "/w", status: { type: "idle" }, turns: [] });
+  const lastId = (sent: Sent[], method: string) => [...sent].reverse().find((message) => message.method === method)?.id;
+
+  it("reads it without subscribing, refuses to send, and subscribes again on reconnect", async () => {
+    const { session, sent, state, receive, replyTo, emitState } = harness();
+    emitState("connected");
+    const opened = session.openThread("locked");
+    await flush();
+    receive({ jsonrpc: "2.0", id: lastId(sent, "thread/resume"), error: { code: -32603, message: "thread locked already has an active writer" } });
+    await flush();
+    expect(sent.find((message) => message.method === "thread/read")?.params).toMatchObject({ threadId: "locked", includeTurns: false });
+    replyTo("thread/read", { thread: thread("locked") });
+    await flush();
+    replyTo("thread/turns/list", { data: [turn("t1")], nextCursor: null, backwardsCursor: null });
+    await opened;
+    expect(state.transcript?.turns.map((item) => item.id)).toEqual(["t1"]);
+    expect(state.transcriptError ?? null).toBeNull();
+    expect(state.writerElsewhere).toBe(true);
+
+    await expect(session.sendMessage("hello")).rejects.toThrow("다른 Codex 앱");
+    expect(sent.some((message) => message.method === "turn/start")).toBe(false);
+
+    const reopened = session.reopenThread();
+    await flush();
+    replyTo("thread/resume", { thread: thread("locked") });
+    await flush();
+    replyTo("thread/turns/list", { data: [turn("t2"), turn("t1")], nextCursor: null, backwardsCursor: null });
+    await reopened;
+    expect(state.writerElsewhere).toBe(false);
+    expect(state.transcript?.turns.map((item) => item.id)).toEqual(["t1", "t2"]);
+    const sending = session.sendMessage("hello");
+    await flush();
+    expect(sent.at(-1)).toMatchObject({ method: "turn/start", params: { threadId: "locked" } });
+    replyTo("turn/start", {});
+    await sending;
+  });
+
+  it("shows other resume errors instead of reading", async () => {
+    const { session, sent, state, receive, emitState } = harness();
+    emitState("connected");
+    const opened = session.openThread("broken");
+    await flush();
+    receive({ jsonrpc: "2.0", id: lastId(sent, "thread/resume"), error: { code: -32603, message: "internal error" } });
+    await opened;
+    expect(sent.some((message) => message.method === "thread/read")).toBe(false);
+    expect(state.transcriptError).toBe("internal error");
+  });
+
+  it("does not unsubscribe from a read-only thread when another thread opens", async () => {
+    const { session, sent, receive, replyTo, emitState } = harness();
+    emitState("connected");
+    const opened = session.openThread("locked");
+    await flush();
+    receive({ jsonrpc: "2.0", id: lastId(sent, "thread/resume"), error: { code: -32603, message: "thread locked already has an active writer" } });
+    await flush();
+    replyTo("thread/read", { thread: thread("locked") });
+    await flush();
+    replyTo("thread/turns/list", { data: [], nextCursor: null, backwardsCursor: null });
+    await opened;
+    void session.openThread("other");
+    await flush();
+    expect(sent.some((message) => message.method === "thread/unsubscribe")).toBe(false);
   });
 });
 

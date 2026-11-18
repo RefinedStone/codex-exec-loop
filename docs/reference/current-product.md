@@ -669,6 +669,11 @@ The Gateway records the external documents that a thread mentions, without a mod
   adds a fresh UUID idempotency key to each mutation and leaves read commands keyless. It does not replay
   requests after disconnect. The panel currently sends only the read command `refresh_planning`;
   conversation and approval actions still use the app-server path.
+  Codex allows one writer process per thread. When another Codex process (for example the Codex app) holds the
+  thread's writer lock, `thread/resume` fails with `already has an active writer`. Desktop then opens the thread
+  read-only with `thread/read` and `thread/turns/list`, shows a banner, and disables the composer. The banner's
+  "다시 연결" tries `thread/resume` again and reads the newest history when the lock is still held
+  (`desktop/src/renderer/session/desktopSession.ts`).
   The "Notion" view of the "업무" side panel reads the `notion` server of the
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
   only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).
