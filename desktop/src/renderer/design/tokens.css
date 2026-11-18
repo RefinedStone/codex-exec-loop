@@ -4,11 +4,14 @@
   --font-sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  --text-xs: 11px;
+  --text-xs: 12px;
   --text-s: 12px;
   --text-m: 13px;
   --text-l: 14px;
   --text-xl: 20px;
+  /* 대화 본문과 코드의 크기이다 (plan 26 U-1). 글꼴 설정(Z4)은 이 두 값만 바꾼다. */
+  --text-reading: 15px;
+  --text-code: 13px;
 
   --space-1: 4px;
   --space-2: 8px;

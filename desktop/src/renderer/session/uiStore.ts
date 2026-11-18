@@ -1,6 +1,8 @@
 // 화면 틀의 상태이다: 어떤 보기와 패널이 열려 있는지. 대화 상태는 `desktopStore` 에 있다.
 import { create } from "zustand";
 
+import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
+
 export type View = "home" | "thread" | "fleet" | "remote";
 export type PanelId = "review" | "kernel" | "browser" | "work" | "docs";
 export type Theme = "light" | "dark";
@@ -21,6 +23,12 @@ export interface UiState {
   terminalOpen: boolean;
   paletteOpen: boolean;
   shortcutsOpen: boolean;
+  /** 대화 안 찾기 막대가 열려 있다 (plan 26 R1). */
+  findOpen: boolean;
+  /** 이 창의 이동 기록이다 (plan 26 N1). */
+  nav: NavHistory;
+  /** 확대 값을 바꾼 직후에 잠깐 보이는 배율이다. null 이면 보이지 않는다. */
+  zoomNotice: number | null;
   /** 새 스레드 화면이 고른 작업 폴더이다. null 이면 보낼 때 폴더를 고르게 한다. */
   homeCwd: string | null;
   /** 입력창에 쓰던 글이다. 키는 스레드 id 이고, 새 스레드 화면은 `HOME_DRAFT` 이다. 보기를 바꿔도 남는다. */
@@ -73,6 +81,9 @@ export const useUiStore = create<UiState>(() => ({
   terminalOpen: false,
   paletteOpen: false,
   shortcutsOpen: false,
+  findOpen: false,
+  nav: INITIAL_NAV,
+  zoomNotice: null,
   homeCwd: null,
   drafts: {},
   toasts: [],
@@ -94,13 +105,40 @@ export function toast(text: string): void {
   window.setTimeout(() => set((state) => ({ toasts: state.toasts.filter((item) => item.id !== id) })), TOAST_MS);
 }
 
-export function showView(view: View): void {
-  set({ view, paletteOpen: false });
+function viewOf(entry: NavEntry): Partial<UiState> {
+  return entry.view === "remote" ? { view: "remote", remoteHost: entry.host } : { view: entry.view };
+}
+
+/** 보기를 바꾸고 이동 기록에 적는다. 보기를 바꾸는 곳은 모두 이것을 쓴다. 스레드의 내용은 부르는 쪽이 연다. */
+export function visit(entry: NavEntry): void {
+  set((state) => ({ ...viewOf(entry), paletteOpen: false, findOpen: false, nav: pushNav(state.nav, entry) }));
+}
+
+/** 뒤로 가기와 앞으로 가기가 쓴다. 기록의 자리만 옮기고 새로 적지 않는다. */
+export function showNavEntry(nav: NavHistory): NavEntry | null {
+  const entry = nav.entries[nav.index] ?? null;
+  if (entry) set({ ...viewOf(entry), paletteOpen: false, findOpen: false, nav });
+  return entry;
+}
+
+export function showView(view: "home" | "fleet"): void {
+  visit({ view });
 }
 
 /** 새 스레드 화면을 연다. `cwd` 를 주면 그 폴더를 고른 상태로 연다. */
 export function showHome(cwd?: string): void {
-  set((state) => ({ view: "home", paletteOpen: false, homeCwd: cwd ?? state.homeCwd }));
+  visit({ view: "home" });
+  if (cwd) set({ homeCwd: cwd });
+}
+
+const ZOOM_NOTICE_MS = 1200;
+let zoomNoticeTimer: number | undefined;
+
+/** 바뀐 배율을 잠깐 보인다 (plan 26 Z2). */
+export function showZoomNotice(factor: number): void {
+  window.clearTimeout(zoomNoticeTimer);
+  set({ zoomNotice: factor });
+  zoomNoticeTimer = window.setTimeout(() => set({ zoomNotice: null }), ZOOM_NOTICE_MS);
 }
 
 /** 새 스레드 화면 입력창의 초안 키이다. */
@@ -125,7 +163,8 @@ export function setDraft(key: string, text: string): void {
 
 /** 글을 새 스레드 화면의 입력창에 채운다. 바로 보내지 않는다. */
 export function handOffToNewThread(text: string): void {
-  set((state) => ({ view: "home", paletteOpen: false, drafts: { ...state.drafts, [HOME_DRAFT]: text } }));
+  visit({ view: "home" });
+  set((state) => ({ drafts: { ...state.drafts, [HOME_DRAFT]: text } }));
 }
 
 /** 이 폭보다 좁은 창에는 오른쪽 패널과 dot 옆 칸을 함께 둘 자리가 없다. 나중에 연 것만 남긴다. */
@@ -168,11 +207,6 @@ function setRemoteAgents(enable: boolean): void {
     // 저장하지 못하면 이 창에서만 유지된다.
   }
   set({ remoteAgents: enable, paletteOpen: false });
-}
-
-/** 원격 호스트의 대화 화면을 연다. */
-export function showRemote(host: string): void {
-  set({ view: "remote", remoteHost: host, paletteOpen: false });
 }
 
 /**

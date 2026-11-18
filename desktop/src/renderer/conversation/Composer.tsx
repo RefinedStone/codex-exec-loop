@@ -7,7 +7,9 @@ import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanSt
 import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
+import { isSendKey, recallCursor } from "./composerKeys";
 import { PlanList } from "./ConversationView";
+import { loadPrompts, rememberPrompt } from "./promptHistory";
 import { contextPercent, isTurnInProgress } from "./transcript";
 
 export interface ComposerActions {
@@ -105,14 +107,36 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
       } else {
         await actions.sendMessage(text);
       }
+      rememberPrompt(text);
       setDraft("");
     });
   };
 
+  /**
+   * ↑ / ↓ 로 불러온 이전 프롬프트이다 (plan 26 I1). 입력창이 비었거나 불러온 글이 그대로일 때만 옮긴다: 사용자가 글을
+   * 고치면 화살표는 다시 커서를 옮긴다.
+   */
+  const recalled = useRef<{ cursor: number; text: string } | null>(null);
+  const recall = (direction: "older" | "newer"): boolean => {
+    const browsing = recalled.current !== null && recalled.current.text === draft;
+    if (!browsing && (draft !== "" || direction === "newer")) return false;
+    const prompts = loadPrompts();
+    const cursor = recallCursor(prompts.length, browsing ? (recalled.current?.cursor ?? null) : null, direction);
+    const text = cursor === null ? "" : (prompts[cursor] ?? "");
+    recalled.current = cursor === null ? null : { cursor, text };
+    setDraft(text);
+    return true;
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
+    if (isSendKey(event)) {
       event.preventDefault();
       send();
+      return;
+    }
+    const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.nativeEvent.isComposing;
+    if (plain && (event.key === "ArrowUp" || event.key === "ArrowDown") && recall(event.key === "ArrowUp" ? "older" : "newer")) {
+      event.preventDefault();
     }
   };
 

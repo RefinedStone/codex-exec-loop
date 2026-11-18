@@ -215,6 +215,13 @@ const bridge: AkraBridge = {
       ipcRenderer.send(IPC_CHANNELS.dotsAllowSend, dotId);
     },
   },
+  zoom: {
+    get(): Promise<number> {
+      return ipcRenderer.invoke(IPC_CHANNELS.zoomGet) as Promise<number>;
+    },
+    step: (direction) => ipcRenderer.send(IPC_CHANNELS.zoomStep, direction),
+    onChanged: (listener) => listen<[number]>(IPC_CHANNELS.zoomChanged, listener),
+  },
 };
 
 contextBridge.exposeInMainWorld("akra", bridge);
