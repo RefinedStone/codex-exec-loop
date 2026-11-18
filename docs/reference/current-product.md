@@ -456,6 +456,8 @@ the desktop app itself is not shipped yet.
   appears and `akra/dots/send` with `{ roomId, text }` posts the trimmed text (1 to 8000 characters) to
   the room with a fresh `request_id` and answers `{ sent: true }`. When the service answers HTTP 400 or
   more, the error names the status and the service's short reason. Desktop reads the room on open, on "새로 고침", and when the dot finishes a reply (live state, below).
+  While the dot works and the window is visible, it reads again every 2 seconds, because the service
+  does not announce a new message; a message the dot posts before its reply appears then.
   Only while the live channel is down, after a send it reads again every 2 seconds until the newest
   message is a new one from the dot, for at most 45 seconds. The answer also carries `dotReadAt`, the
   time the dot last read the room; the chat shows "읽음" under the user's newest message before it.
