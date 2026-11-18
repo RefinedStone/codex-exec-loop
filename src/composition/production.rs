@@ -25,6 +25,7 @@ use crate::adapter::outbound::filesystem::{
     FilesystemPrValidationRolloutEvidenceAdapter, RepositoryKernelLock,
     RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
 };
+use crate::adapter::outbound::git::history::GitHistoryAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::git::repository_state::GitRepositoryStateAdapter;
 use crate::adapter::outbound::github::{
@@ -39,6 +40,7 @@ use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessConfig, AdminDebugPort,
 };
 use crate::application::port::inbound::app_server_prompt_log_query_port::AppServerPromptLogQueryPort;
+use crate::application::port::inbound::git_graph_port::GitGraphPort;
 use crate::application::port::inbound::mcp_hub_port::McpHubPort;
 use crate::application::port::inbound::parallel_agent_profile_port::ParallelAgentProfilePort;
 use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
@@ -79,6 +81,7 @@ use crate::application::port::outbound::telegram_update_ledger_port::TelegramUpd
 use crate::application::service::admin_debug_harness::AdminDebugHarnessService;
 use crate::application::service::app_server_prompt_log_query::AppServerPromptLogQueryService;
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::git_graph::GitGraphService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::mcp_hub::McpHubService;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
@@ -416,6 +419,8 @@ pub(crate) struct GatewayBackend {
     pub(crate) kernels: Arc<RepositoryKernelRegistry>,
     pub(crate) mcp_hub: Arc<GatewayMcpHub>,
     pub(crate) work_context: Arc<dyn WorkContextPort>,
+    /// 커밋 그래프 읽기이다 (plan 27 G1).
+    pub(crate) git_graph: Arc<dyn GitGraphPort>,
     /// dot 목록이다. dots 클라우드가 켜졌을 때만 있다 (D-19).
     pub(crate) dots: Option<Arc<dyn DotsPort>>,
 }
@@ -449,6 +454,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         kernels,
         mcp_hub,
         work_context,
+        git_graph: Arc::new(GitGraphService::new(Arc::new(GitHistoryAdapter))),
         dots: build_dots()?,
     })
 }

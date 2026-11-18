@@ -21,6 +21,7 @@ use super::context::{
     spawn_request as spawn_context_request,
 };
 use super::dots::{DOTS_METHOD_PREFIX, DotWatches, spawn_request as spawn_dots_request};
+use super::git::{GIT_METHOD_PREFIX, spawn_request as spawn_git_request};
 use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
@@ -28,6 +29,7 @@ use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::router::{
     ClientTextRoute, refuse_kernel_on_remote_host, respond_to_akra_request, route_client_text,
 };
+use crate::application::port::inbound::git_graph_port::GitGraphPort;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::dots_port::DotsPort;
 use crate::application::port::outbound::gateway_upstream_port::{
@@ -56,6 +58,8 @@ pub(super) fn websocket_config() -> WebSocketConfig {
 pub(super) struct GatewayServices {
     pub(super) mcp_hub: Option<Arc<GatewayMcpHub>>,
     pub(super) work_context: Option<Arc<dyn WorkContextPort>>,
+    /// 커밋 그래프이다 (plan 27). 이 기기의 저장소를 읽으므로 `local` 접속에만 답한다.
+    pub(super) git_graph: Option<Arc<dyn GitGraphPort>>,
     /// dots 가 켜졌을 때만 있다 (D-19). 없으면 `akra/dots/*` 는 모르는 method 이다.
     pub(super) dots: Option<Arc<dyn DotsPort>>,
 }
@@ -171,6 +175,10 @@ where
                             .work_context
                             .as_ref()
                             .filter(|_| method.starts_with(CONTEXT_METHOD_PREFIX));
+                        let git_for_method = services
+                            .git_graph
+                            .as_ref()
+                            .filter(|_| is_local && method.starts_with(GIT_METHOD_PREFIX));
                         let dots_for_method = services
                             .dots
                             .as_ref()
@@ -200,6 +208,16 @@ where
                         } else if let Some(hub) = mcp_hub_for_method {
                             spawn_mcp_request(
                                 hub.clone(),
+                                id,
+                                method,
+                                text.as_str().to_string(),
+                                outbox.clone(),
+                                recording.clone(),
+                            );
+                            None
+                        } else if let Some(graph) = git_for_method {
+                            spawn_git_request(
+                                graph.clone(),
                                 id,
                                 method,
                                 text.as_str().to_string(),

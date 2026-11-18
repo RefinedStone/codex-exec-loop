@@ -129,6 +129,7 @@ function paletteCommands(): PaletteEntry[] {
     { id: "new", icon: "pencil", label: "새 스레드", hint: `${MOD_KEY}N`, run: () => showHome() },
     { id: "fleet", icon: "grid", label: "현황판 열기", hint: "", run: () => showView("fleet") },
     { id: "review", icon: "diff", label: "변경 검토 패널", hint: `${MOD_KEY}\\`, run: () => togglePanel("review") },
+    { id: "graph", icon: "branch", label: "커밋 그래프 패널", hint: "", run: () => togglePanel("graph") },
     { id: "kernel", icon: "bolt", label: "Akra 커널 패널", hint: "", run: () => togglePanel("kernel") },
     { id: "browser", icon: "globe", label: "브라우저 패널", hint: "", run: () => togglePanel("browser") },
     { id: "work", icon: "briefcase", label: "업무 패널 (GitHub, Jira, Notion)", hint: "", run: () => togglePanel("work") },

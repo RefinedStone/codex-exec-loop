@@ -7,6 +7,7 @@
 
 mod context;
 mod dots;
+mod git;
 mod hosts;
 mod kernel;
 mod listener;
@@ -29,8 +30,6 @@ use self::hosts::GatewayHosts;
 use self::listener::GatewayListener;
 pub(crate) use self::mcp::GatewayMcpHub;
 use self::recorder::GatewayRecorder;
-use crate::application::port::inbound::work_context_port::WorkContextPort;
-use crate::application::port::outbound::dots_port::DotsPort;
 use crate::composition::production;
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
@@ -81,6 +80,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         kernels,
         mcp_hub,
         work_context,
+        git_graph,
         dots,
     } = production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
@@ -104,8 +104,12 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         hosts.clone(),
         kernels.clone(),
         mcp_hub.clone(),
-        work_context,
-        dots,
+        session::GatewayServices {
+            mcp_hub: Some(mcp_hub.clone()),
+            work_context: Some(work_context),
+            git_graph: Some(git_graph),
+            dots,
+        },
         recorder,
     )
     .await;
@@ -183,8 +187,7 @@ async fn serve(
     hosts: GatewayHosts,
     kernels: Arc<RepositoryKernelRegistry>,
     mcp_hub: Arc<GatewayMcpHub>,
-    work_context: Arc<dyn WorkContextPort>,
-    dots: Option<Arc<dyn DotsPort>>,
+    services: session::GatewayServices,
     recorder: Option<Arc<GatewayRecorder>>,
 ) {
     let idle_notification = register_idle_notification(&kernels);
@@ -207,11 +210,7 @@ async fn serve(
                 Ok(connection) => {
                     let hosts = hosts.clone();
                     let kernels = kernels.clone();
-                    let services = session::GatewayServices {
-                        mcp_hub: Some(mcp_hub.clone()),
-                        work_context: Some(work_context.clone()),
-                        dots: dots.clone(),
-                    };
+                    let services = services.clone();
                     let recorder = recorder.clone();
                     tokio::spawn(async move {
                         if let Err(error) =

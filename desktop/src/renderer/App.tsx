@@ -33,12 +33,14 @@ import { findFolderForRepository } from "./work/githubProjects";
 import { JiraPanel } from "./work/JiraPanel";
 import type { GatewayRequest } from "./work/notionHub";
 import { NotionPanel } from "./work/NotionPanel";
+import { GitGraphPanel } from "./git/GitGraphPanel";
 import { changedCount, fetchThreadDocuments, markThreadDocumentRead, refreshThreadDocuments, type ThreadDocument, type ThreadDocumentsState } from "./work/threadDocuments";
 
 export const CLIENT_VERSION = "0.0.0-development";
 
 const PANELS: { id: PanelId; label: string; icon: IconName; testId: string }[] = [
   { id: "review", label: "변경", icon: "diff", testId: "review-toggle" },
+  { id: "graph", label: "그래프", icon: "branch", testId: "git-graph-toggle" },
   { id: "kernel", label: "Akra", icon: "bolt", testId: "kernel-toggle" },
   { id: "browser", label: "브라우저", icon: "globe", testId: "browser-toggle" },
   { id: "work", label: "업무", icon: "briefcase", testId: "work-toggle" },
@@ -566,6 +568,7 @@ export function App() {
           {panel && (
             <RightPanel panel={panel}>
               {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)} />}
+              {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} />}
               {panel === "browser" && <BrowserPanel bridge={window.akra.browser} />}
               {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} />}

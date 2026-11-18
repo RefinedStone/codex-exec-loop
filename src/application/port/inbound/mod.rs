@@ -7,6 +7,7 @@ pub mod admin_debug_port;
 pub mod app_server_prompt_log_query_port;
 pub mod kernel_command_port;
 // stored command port 는 저장된 planning 데이터만 바꾸는 커널 명령을 실행한다 (plan 18 K4-9d).
+pub mod git_graph_port;
 pub mod mcp_hub_port;
 pub mod parallel_agent_profile_port;
 pub mod parallel_mode_admin_port;
