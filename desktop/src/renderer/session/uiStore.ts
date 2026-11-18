@@ -23,6 +23,8 @@ export interface UiState {
   terminalOpen: boolean;
   paletteOpen: boolean;
   shortcutsOpen: boolean;
+  /** 설정 화면이 열려 있다 (plan 26 S1). */
+  settingsOpen: boolean;
   /** 대화 안 찾기 막대가 열려 있다 (plan 26 R1). */
   findOpen: boolean;
   /** 이 창의 이동 기록이다 (plan 26 N1). */
@@ -81,6 +83,7 @@ export const useUiStore = create<UiState>(() => ({
   terminalOpen: false,
   paletteOpen: false,
   shortcutsOpen: false,
+  settingsOpen: false,
   findOpen: false,
   nav: INITIAL_NAV,
   zoomNotice: null,

@@ -223,6 +223,13 @@ const bridge: AkraBridge = {
     step: (direction) => ipcRenderer.send(IPC_CHANNELS.zoomStep, direction),
     onChanged: (listener) => listen<[number]>(IPC_CHANNELS.zoomChanged, listener),
   },
+  settings: {
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),
+    set: (settings) => ipcRenderer.invoke(IPC_CHANNELS.settingsSet, settings),
+    onChanged: (listener) => listen(IPC_CHANNELS.settingsChanged, listener),
+    onOpen: (listener) => listen(IPC_CHANNELS.settingsOpen, listener),
+    reportWorking: (working) => ipcRenderer.send(IPC_CHANNELS.reportWorking, working),
+  },
 };
 
 contextBridge.exposeInMainWorld("akra", bridge);

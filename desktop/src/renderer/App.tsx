@@ -22,6 +22,8 @@ import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { DotDock } from "./views/DotDock";
 import { notifyDotReply, notifyOs } from "./views/notify";
+import { SettingsDialog } from "./views/SettingsDialog";
+import { useAppSettings } from "./views/useAppSettings";
 import { useZoom } from "./views/useZoom";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, ZoomNotice } from "./views/Views";
 import { DocumentsPanel } from "./work/DocumentsPanel";
@@ -276,6 +278,13 @@ export function App() {
   const openCwd = useDesktopStore(openThreadCwd);
   const tree = useWorkingTree(window.akra);
   useZoom();
+  useAppSettings();
+  const settingsOpen = useUiStore((state) => state.settingsOpen);
+  // 앱 메뉴의 "설정…" (⌘,) 은 main 이 받아서 이 창에 알린다.
+  useEffect(() => window.akra.settings.onOpen(() => useUiStore.setState({ settingsOpen: true, paletteOpen: false })), []);
+  // 실행 중인 턴이 있는지 main 에 알린다. main 이 "일할 때만 잠자기 방지"에 쓴다 (plan 26 W5).
+  const working = useDesktopStore((state) => state.activeThreadIds.length > 0);
+  useEffect(() => window.akra.settings.reportWorking(working), [working]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -429,24 +438,15 @@ export function App() {
   );
   useShortcuts(navigate);
 
-  // 앱의 창이 모두 뒤에 있는 동안 턴이 끝나거나 승인 요청이 오면 운영체제 알림을 보인다 (plan 26 A1). 누르면 그
-  // 스레드를 연다. 포커스는 main 에 묻는다: 다른 창이나 브라우저 패널을 쓰는 중이면 알리지 않는다.
-  // 알림에는 스레드 이름만 넣는다. 대화의 글은 넣지 않는다.
+  // 턴이 끝나거나 승인 요청이 오면 운영체제 알림을 보인다 (plan 26 A1). 누르면 그 스레드를 연다. 창에 포커스가 있을
+  // 때도 알릴지는 알림 설정이 정한다 (`notifyOs`). 알림에는 스레드 이름만 넣는다. 대화의 글은 넣지 않는다.
   useEffect(
     () =>
       useDesktopStore.subscribe((state, previous) => {
-        const events = attentionEvents(previous, state);
-        if (events.length === 0) return;
-        window.akra.isAppFocused().then(
-          (focused) => {
-            if (focused) return;
-            for (const event of events) {
-              const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";
-              notifyOs(title, ATTENTION_TEXT[event.kind], () => openThread(event.threadId), `akra:${event.kind}:${event.threadId}`);
-            }
-          },
-          () => undefined,
-        );
+        for (const event of attentionEvents(previous, state)) {
+          const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";
+          notifyOs(title, ATTENTION_TEXT[event.kind], () => openThread(event.threadId), `akra:${event.kind}:${event.threadId}`);
+        }
       }),
     [openThread],
   );
@@ -576,6 +576,7 @@ export function App() {
       </div>
       {paletteOpen && <CommandPalette onOpenThread={openThread} />}
       {shortcutsOpen && <ShortcutsDialog />}
+      {settingsOpen && <SettingsDialog />}
       <ZoomNotice />
       <Toasts />
     </div>

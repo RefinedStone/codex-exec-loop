@@ -699,6 +699,16 @@ The Gateway records the external documents that a thread mentions, without a mod
   (`desktop/src/main/windowState.ts`, `desktop/src/main/contextMenuItems.ts`,
   `desktop/src/renderer/session/navHistory.ts`, `desktop/src/renderer/conversation/find.ts`,
   `desktop/src/renderer/session/attention.ts`).
+- Desktop settings (plan 26 U2): the settings dialog opens from the app menu ("설정…", `Cmd/Ctrl+,`), the
+  sidebar footer, and the command palette. It has a search field and these settings: theme, zoom, font size
+  for the UI, the conversation, code and diffs, and the terminal (10–24 px); OS notifications (off, only when
+  no app window has focus, always) and their sound; sleep prevention (off, only while a turn runs, always).
+  main validates the values, saves them in `userData/app-settings.json`, and sends them to every window.
+  Sleep prevention uses Electron `powerSaveBlocker` (`prevent-app-suspension`); each main window reports if it
+  has a running turn. The notification setting also applies to dot replies. The default mode is "only when no
+  app window has focus"
+  (`desktop/src/shared/settings.ts`, `desktop/src/main/appSettings.ts`,
+  `desktop/src/renderer/views/SettingsDialog.tsx`).
   The "Notion" view of the "업무" side panel reads the `notion` server of the
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
   only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).

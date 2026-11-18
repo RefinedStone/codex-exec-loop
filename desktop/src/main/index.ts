@@ -2,15 +2,17 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, safeStorage, screen, shell, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, powerSaveBlocker, safeStorage, screen, shell, type WebContents } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
+import { shouldKeepAwake, validateSettings } from "../shared/settings";
 import { isZoomDirection, nextZoom, type ZoomDirection } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
 import { spawn as spawnPty } from "node-pty";
 
+import { loadAppSettings, saveAppSettings } from "./appSettings";
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { contextMenuItems } from "./contextMenuItems";
@@ -55,6 +57,25 @@ const windowState = PERSIST_WINDOW_STATE ? loadWindowState(windowStatePath) : { 
 
 function persistWindowState(): void {
   if (PERSIST_WINDOW_STATE) saveWindowState(windowStatePath, windowState);
+}
+
+/** 앱 설정이다 (plan 26 U2). 창 상태와 같은 규칙으로 저장한다. */
+const appSettingsPath = join(app.getPath("userData"), "app-settings.json");
+let appSettings = PERSIST_WINDOW_STATE ? loadAppSettings(appSettingsPath) : validateSettings(null);
+
+/** 실행 중인 턴이 있다고 알린 창(webContents id)이다. */
+const workingWindows = new Set<number>();
+let keepAwakeId: number | null = null;
+
+/** 설정과 창들의 상태에 맞춰 잠자기 방지를 켜거나 끈다 (plan 26 W5). 화면은 꺼질 수 있고, 시스템만 깨어 있다. */
+function updateKeepAwake(): void {
+  const wanted = shouldKeepAwake(appSettings.keepAwake, workingWindows.size > 0);
+  if (wanted && keepAwakeId === null) {
+    keepAwakeId = powerSaveBlocker.start("prevent-app-suspension");
+  } else if (!wanted && keepAwakeId !== null) {
+    powerSaveBlocker.stop(keepAwakeId);
+    keepAwakeId = null;
+  }
 }
 
 /** 화면 위 막대의 높이(CSS 픽셀, `app.css` 의 `.top-bar`)와 macOS 창 단추의 높이이다. */
@@ -318,6 +339,8 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     closeRemoteConnections(contentsId);
     terminals.closeAllOf(contentsId);
     browsers.close(contentsId);
+    workingWindows.delete(contentsId);
+    updateKeepAwake();
   });
   if (!HIDDEN_WINDOWS) {
     window.once("ready-to-show", () => window.show());
@@ -512,6 +535,25 @@ ipcMain.on(IPC_CHANNELS.zoomStep, (_event, direction: unknown) => {
   if (isZoomDirection(direction)) stepZoom(direction);
 });
 
+ipcMain.handle(IPC_CHANNELS.settingsGet, () => appSettings);
+ipcMain.handle(IPC_CHANNELS.settingsSet, (_event, settings: unknown) => {
+  appSettings = validateSettings(settings);
+  if (PERSIST_WINDOW_STATE) saveAppSettings(appSettingsPath, appSettings);
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(IPC_CHANNELS.settingsChanged, appSettings);
+  }
+  updateKeepAwake();
+  return appSettings;
+});
+ipcMain.on(IPC_CHANNELS.reportWorking, (event, working: unknown) => {
+  if (working === true) {
+    workingWindows.add(event.sender.id);
+  } else {
+    workingWindows.delete(event.sender.id);
+  }
+  updateKeepAwake();
+});
+
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
   const options = { title: "작업 폴더 선택", properties: ["openDirectory" as const] };
@@ -524,11 +566,42 @@ ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
  * 열면 승인 요청은 모든 창에 오고, 한 창이 답하면 나머지 창에서는 `serverRequest/resolved` 로 사라진다.
  */
 function installApplicationMenu(): void {
+  // 설정 화면은 renderer 가 그린다. 포커스가 있는 본 창에 열라고 알린다 (plan 26 S1).
+  const openSettingsItem: MenuItemConstructorOptions = {
+    id: "open-settings",
+    label: "설정…",
+    accelerator: "CmdOrCtrl+,",
+    click: (_item, window) => {
+      const target = window instanceof BrowserWindow && mainWindows.has(window) ? window : [...mainWindows][0];
+      target?.webContents.send(IPC_CHANNELS.settingsOpen);
+      target?.focus();
+    },
+  };
   const menu = Menu.buildFromTemplate([
-    ...(process.platform === "darwin" ? [{ role: "appMenu" as const }] : []),
+    ...(process.platform === "darwin"
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" as const },
+              { type: "separator" as const },
+              openSettingsItem,
+              { type: "separator" as const },
+              { role: "services" as const },
+              { type: "separator" as const },
+              { role: "hide" as const },
+              { role: "hideOthers" as const },
+              { role: "unhide" as const },
+              { type: "separator" as const },
+              { role: "quit" as const },
+            ],
+          },
+        ]
+      : []),
     {
       label: "파일",
       submenu: [
+        ...(process.platform === "darwin" ? [] : [openSettingsItem, { type: "separator" as const }]),
         { id: "new-window", label: "새 창", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
         { type: "separator" },
         { role: "close", label: "창 닫기" },
