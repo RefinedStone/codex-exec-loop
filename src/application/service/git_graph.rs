@@ -1,5 +1,5 @@
 /*
- * 커밋 그래프 읽기 서비스이다 (plan 27 G1). ref 와 커밋을 port 로 읽고 domain 의 레인 배치로 줄을 만든다.
+ * 커밋 그래프 읽기 서비스이다 (plan 27 G1, G2). ref 와 커밋을 port 로 읽고 domain 의 레인 배치로 줄을 만든다.
  *
  * 상태를 가지지 않는다. 쪽을 이어 읽는 데 필요한 값(읽은 수, 레인 상태, ref 지문)은 자리(`GitGraphCursor`)에 담아
  * 클라이언트가 돌려준다. 그래서 데몬이 다시 시작해도 이어 읽을 수 있고, 접속마다 기억을 지울 일이 없다.
@@ -10,12 +10,12 @@ use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::application::port::inbound::git_graph_port::{
-    GitGraphCursor, GitGraphPage, GitGraphPageRequest, GitGraphPort,
+    GitGraphCursor, GitGraphPage, GitGraphPageRequest, GitGraphPort, GitGraphRefsState,
 };
 use crate::application::port::outbound::git_history_port::{GitHistoryPort, GitHistoryRefs};
 use crate::domain::git_graph::{
-    GIT_GRAPH_LANE_LIMIT, GitGraphCommit, GitGraphLaneState, GitGraphRow,
-    clamp_git_graph_page_limit,
+    GIT_GRAPH_LANE_LIMIT, GitCommitDetail, GitGraphCommit, GitGraphLaneState, GitGraphRefKind,
+    GitGraphRow, clamp_git_graph_page_limit, is_git_commit_id,
 };
 
 pub struct GitGraphService {
@@ -48,20 +48,43 @@ impl GitGraphPort for GitGraphService {
         let limit = clamp_git_graph_page_limit(request.limit);
         let commits = self.read_commits(&request.repository_dir, &refs, skip, limit)?;
         let has_more = commits.len() > limit;
-        let rows = place_rows(&mut lanes, commits, limit);
+        let mut rows = place_rows(&mut lanes, commits, limit);
+        self.mark_backup_only_rows(&request.repository_dir, &refs, &mut rows)?;
         let next = has_more.then(|| GitGraphCursor {
             skip: skip + rows.len(),
             lanes,
-            refs_digest,
+            refs_digest: refs_digest.clone(),
         });
+        let (first_refs, first_worktrees) = if first_page {
+            (refs.refs, refs.worktrees)
+        } else {
+            (Vec::new(), Vec::new())
+        };
         Ok(GitGraphPage {
             repository: true,
             stale: false,
             head: refs.head,
-            refs: if first_page { refs.refs } else { Vec::new() },
+            refs_digest: Some(refs_digest),
+            refs: first_refs,
+            worktrees: first_worktrees,
             rows,
             next,
         })
+    }
+
+    fn refs_state(&self, repository_dir: &str) -> Result<GitGraphRefsState> {
+        let refs = self.history.read_refs(repository_dir)?;
+        Ok(GitGraphRefsState {
+            repository: refs.is_some(),
+            refs_digest: refs.as_ref().map(refs_digest),
+        })
+    }
+
+    fn commit_detail(&self, repository_dir: &str, commit: &str) -> Result<Option<GitCommitDetail>> {
+        if !is_git_commit_id(commit) {
+            bail!("the commit id must be 7 to 64 hexadecimal characters");
+        }
+        self.history.read_commit_detail(repository_dir, commit)
     }
 }
 
@@ -79,6 +102,29 @@ impl GitGraphService {
         }
         self.history
             .read_commits(repository_dir, refs.head.is_some(), skip, limit + 1)
+    }
+
+    /// 백업 ref 에서만 닿는 줄에 표를 한다. 백업 ref 가 없는 저장소에서는 git 을 부르지 않는다.
+    fn mark_backup_only_rows(
+        &self,
+        repository_dir: &str,
+        refs: &GitHistoryRefs,
+        rows: &mut [GitGraphRow],
+    ) -> Result<()> {
+        let has_backup = refs
+            .refs
+            .iter()
+            .any(|reference| reference.kind == GitGraphRefKind::Backup);
+        if !has_backup || rows.is_empty() {
+            return Ok(());
+        }
+        let backup_only = self
+            .history
+            .read_backup_only_commits(repository_dir, refs.head.is_some())?;
+        for row in rows {
+            row.backup_only = backup_only.contains(&row.id);
+        }
+        Ok(())
     }
 }
 
@@ -99,22 +145,32 @@ fn empty_page(repository: bool, stale: bool, head: Option<String>) -> GitGraphPa
         repository,
         stale,
         head,
+        refs_digest: None,
         refs: Vec::new(),
+        worktrees: Vec::new(),
         rows: Vec::new(),
         next: None,
     }
 }
 
-/// ref 들의 지문이다. HEAD 나 ref 하나가 움직이면 값이 바뀐다.
+/// ref 들의 지문이다. HEAD, ref 하나, 작업 트리 하나가 움직이면 값이 바뀐다.
 fn refs_digest(refs: &GitHistoryRefs) -> String {
     let mut hasher = Sha256::new();
     hasher.update(refs.head.as_deref().unwrap_or(""));
     for reference in &refs.refs {
-        hasher.update([0]);
+        hasher.update([0, reference.kind as u8]);
         hasher.update(reference.name.as_bytes());
         hasher.update([0]);
         hasher.update(reference.target.as_bytes());
         hasher.update([u8::from(reference.head)]);
+    }
+    for worktree in &refs.worktrees {
+        hasher.update([1]);
+        hasher.update(worktree.path.as_bytes());
+        hasher.update([0]);
+        hasher.update(worktree.head.as_deref().unwrap_or(""));
+        hasher.update([0]);
+        hasher.update(worktree.branch.as_deref().unwrap_or(""));
     }
     hasher
         .finalize()
@@ -125,16 +181,19 @@ fn refs_digest(refs: &GitHistoryRefs) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Mutex;
 
     use super::*;
-    use crate::domain::git_graph::{GitGraphRef, GitGraphRefKind};
+    use crate::domain::git_graph::{GitGraphRef, GitGraphWorktree};
 
     /// 한 줄 이력 `c3 -> c2 -> c1` 을 가진 가짜 저장소이다.
     struct FakeHistory {
         refs: Mutex<Option<GitHistoryRefs>>,
         commits: Vec<GitGraphCommit>,
         reads: Mutex<Vec<(bool, usize, usize)>>,
+        backup_only: HashSet<String>,
+        backup_reads: Mutex<usize>,
     }
 
     impl FakeHistory {
@@ -157,6 +216,8 @@ mod tests {
                 refs: Mutex::new(Some(refs_at(&format!("c{count}")))),
                 commits,
                 reads: Mutex::new(Vec::new()),
+                backup_only: HashSet::new(),
+                backup_reads: Mutex::new(0),
             }
         }
     }
@@ -170,6 +231,20 @@ mod tests {
                 target: head.to_string(),
                 head: true,
             }],
+            worktrees: vec![GitGraphWorktree {
+                path: "/repo".to_string(),
+                head: Some(head.to_string()),
+                branch: Some("main".to_string()),
+            }],
+        }
+    }
+
+    fn backup_ref(target: &str) -> GitGraphRef {
+        GitGraphRef {
+            name: "main/op-1".to_string(),
+            kind: GitGraphRefKind::Backup,
+            target: target.to_string(),
+            head: false,
         }
     }
 
@@ -194,6 +269,23 @@ mod tests {
                 .cloned()
                 .collect())
         }
+
+        fn read_backup_only_commits(
+            &self,
+            _repository_dir: &str,
+            _include_head: bool,
+        ) -> Result<HashSet<String>> {
+            *self.backup_reads.lock().unwrap() += 1;
+            Ok(self.backup_only.clone())
+        }
+
+        fn read_commit_detail(
+            &self,
+            _repository_dir: &str,
+            _commit: &str,
+        ) -> Result<Option<GitCommitDetail>> {
+            Ok(None)
+        }
     }
 
     fn request(limit: usize, cursor: Option<GitGraphCursor>) -> GitGraphPageRequest {
@@ -213,6 +305,12 @@ mod tests {
         assert!(first.repository);
         assert_eq!(first.head.as_deref(), Some("c3"));
         assert_eq!(first.refs.len(), 1);
+        assert_eq!(first.worktrees.len(), 1);
+        assert!(first.refs_digest.is_some());
+        assert_eq!(
+            first.refs_digest,
+            service.refs_state("/repo").unwrap().refs_digest
+        );
         assert_eq!(
             first
                 .rows
@@ -230,7 +328,11 @@ mod tests {
         // 앞 쪽의 레인 상태를 이어받았다. c1 은 레인 0 에서 c2 의 선을 받는다.
         assert_eq!(second.rows[0].lanes_in, vec![0]);
         assert!(second.refs.is_empty());
+        assert!(second.worktrees.is_empty());
+        assert_eq!(second.refs_digest, first.refs_digest);
         assert_eq!(second.next, None);
+        // 백업 ref 가 없다. 백업 커밋을 찾는 git 을 부르지 않는다.
+        assert_eq!(*history.backup_reads.lock().unwrap(), 0);
         assert_eq!(*history.reads.lock().unwrap(), [(true, 0, 3), (true, 2, 3)]);
     }
 
@@ -246,6 +348,68 @@ mod tests {
         assert!(page.stale);
         assert!(page.rows.is_empty());
         assert_eq!(page.next, None);
+    }
+
+    #[test]
+    fn the_refs_state_changes_when_a_ref_or_a_worktree_moves() {
+        let history = Arc::new(FakeHistory::linear(3));
+        let service = GitGraphService::new(history.clone());
+        let before = service.refs_state("/repo").unwrap();
+        assert!(before.repository);
+
+        let mut with_worktree = refs_at("c3");
+        with_worktree.worktrees.push(GitGraphWorktree {
+            path: "/repo-topic".to_string(),
+            head: Some("c2".to_string()),
+            branch: None,
+        });
+        *history.refs.lock().unwrap() = Some(with_worktree);
+        assert_ne!(
+            service.refs_state("/repo").unwrap().refs_digest,
+            before.refs_digest
+        );
+
+        *history.refs.lock().unwrap() = Some(refs_at("c2"));
+        assert_ne!(
+            service.refs_state("/repo").unwrap().refs_digest,
+            before.refs_digest
+        );
+
+        *history.refs.lock().unwrap() = None;
+        let outside = service.refs_state("/repo").unwrap();
+        assert!(!outside.repository);
+        assert_eq!(outside.refs_digest, None);
+    }
+
+    #[test]
+    fn rows_reached_only_from_a_backup_ref_are_marked() {
+        let mut history = FakeHistory::linear(3);
+        history.backup_only = HashSet::from(["c3".to_string()]);
+        let mut refs = refs_at("c2");
+        refs.refs.push(backup_ref("c3"));
+        *history.refs.lock().unwrap() = Some(refs);
+        let history = Arc::new(history);
+
+        let page = GitGraphService::new(history.clone())
+            .graph_page(request(10, None))
+            .unwrap();
+
+        let marked: Vec<(&str, bool)> = page
+            .rows
+            .iter()
+            .map(|row| (row.id.as_str(), row.backup_only))
+            .collect();
+        assert_eq!(marked, [("c3", true), ("c2", false), ("c1", false)]);
+        assert_eq!(*history.backup_reads.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn commit_detail_refuses_text_that_is_not_a_sha() {
+        let service = GitGraphService::new(Arc::new(FakeHistory::linear(1)));
+
+        assert!(service.commit_detail("/repo", "--all").is_err());
+        assert!(service.commit_detail("/repo", "c1").is_err());
+        assert_eq!(service.commit_detail("/repo", "abcdef1").unwrap(), None);
     }
 
     #[test]
@@ -280,6 +444,7 @@ mod tests {
         *history.refs.lock().unwrap() = Some(GitHistoryRefs {
             head: None,
             refs: Vec::new(),
+            worktrees: Vec::new(),
         });
         let page = GitGraphService::new(history.clone())
             .graph_page(request(10, None))

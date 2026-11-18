@@ -178,7 +178,11 @@ export async function startFakeGateway(
     mcpHub?: FakeMcpHub;
     threadDocuments?: Record<string, FakeThreadDocument[]>;
     /** `akra/git/graph` 의 답이다 (plan 27). 요청의 params 를 받아 쪽 하나를 돌려준다. 없으면 모르는 method 로 답한다. */
-    gitGraph?(params: { cwd?: unknown; cursor?: unknown }): unknown;
+    gitGraph?(params: { cwd?: unknown; cursor?: unknown; limit?: unknown }): unknown;
+    /** `akra/git/refs` 의 답이다 (plan 27 G2). 없으면 모르는 method 로 답한다. */
+    gitRefs?(params: { cwd?: unknown }): unknown;
+    /** `akra/git/commit` 의 답이다 (plan 27 G2). 없으면 모르는 method 로 답한다. */
+    gitCommit?(params: { cwd?: unknown; commit?: unknown }): unknown;
     /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 뒤에는 다시 찾지 않는다. */
     changedThreadDocuments?: Record<string, string[]>;
     /**
@@ -354,9 +358,10 @@ export async function startFakeGateway(
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources } }));
         return;
       }
-      if (options.gitGraph && message.method === "akra/git/graph") {
-        const params = (message as { params?: { cwd?: unknown; cursor?: unknown } }).params ?? {};
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: options.gitGraph(params) }));
+      const gitAnswer = { "akra/git/graph": options.gitGraph, "akra/git/refs": options.gitRefs, "akra/git/commit": options.gitCommit }[message.method];
+      if (gitAnswer) {
+        const params = (message as { params?: Record<string, unknown> }).params ?? {};
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: gitAnswer(params) }));
         return;
       }
       if (options.mcpHub && message.method.startsWith("akra/mcp/")) {

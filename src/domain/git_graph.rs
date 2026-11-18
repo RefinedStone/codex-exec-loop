@@ -1,5 +1,5 @@
 /*
- * git 커밋 그래프(plan 27 G1)의 값 타입과 레인 배치 규칙이다. I/O 가 없다. 커밋 목록은 git 이 정한 순서
+ * git 커밋 그래프(plan 27 G1, G2)의 값 타입과 레인 배치 규칙이다. I/O 가 없다. 커밋 목록은 git 이 정한 순서
  * (자식이 부모보다 먼저)로 들어온다. 이 모듈은 커밋마다 그래프 열에서 어느 레인에 점을 찍고 어느 레인으로 선을
  * 잇는지 정한다.
  *
@@ -15,6 +15,8 @@ pub const GIT_GRAPH_PAGE_LIMIT_MAX: usize = 1000;
 pub const GIT_GRAPH_LANE_LIMIT: usize = 4096;
 /// 요청이 개수를 주지 않을 때 읽는 커밋 수이다.
 pub const GIT_GRAPH_PAGE_LIMIT_DEFAULT: usize = 300;
+/// 백업 ref 의 전체 이름의 앞부분이다 (plan 27 §3.2). 뒤는 `<branch>/<op-id>` 이다.
+pub const GIT_BACKUP_REF_PREFIX: &str = "refs/akra/backup/";
 
 /// git 이 준 커밋 하나이다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,13 +39,15 @@ pub enum GitGraphRefKind {
     LocalBranch,
     RemoteBranch,
     Tag,
+    /// Akra 가 파괴적 작업 전에 쓴 백업 ref 이다 (`refs/akra/backup/*`).
+    Backup,
 }
 
 /// 커밋을 가리키는 ref 하나이다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitGraphRef {
-    /// 짧은 이름이다 (`main`, `origin/main`, `v1.0`).
+    /// 짧은 이름이다 (`main`, `origin/main`, `v1.0`). 백업 ref 는 `<branch>/<op-id>` 이다.
     pub name: String,
     pub kind: GitGraphRefKind,
     /// 가리키는 커밋의 전체 sha 이다. 주석 태그는 태그가 가리키는 커밋이다.
@@ -69,6 +73,51 @@ pub struct GitGraphRow {
     pub lanes_out: Vec<usize>,
     /// 점과 만나지 않고 위에서 아래로 지나가는 레인들이다.
     pub lanes_through: Vec<usize>,
+    /// 백업 ref 에서만 닿는 커밋이다. 브랜치, 태그, HEAD 에서는 닿지 않는다. 화면은 흐리게 그린다.
+    #[serde(skip_serializing_if = "is_false")]
+    pub backup_only: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// 저장소의 작업 트리 하나이다. 화면은 이 값으로 스레드의 폴더를 저장소의 커밋에 잇는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitGraphWorktree {
+    /// 작업 트리의 폴더이다. git 이 쓴 그대로이다 (Windows 에서도 `/` 이다).
+    pub path: String,
+    /// 체크아웃한 커밋의 전체 sha 이다. bare 저장소와 커밋이 없는 작업 트리는 없다.
+    pub head: Option<String>,
+    /// 체크아웃한 브랜치의 짧은 이름이다. 브랜치가 아니면 없다.
+    pub branch: Option<String>,
+}
+
+/// 커밋 하나의 상세이다. 그래프의 줄에 없는 값(본문, 커밋한 사람, 변경)을 가진다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitDetail {
+    pub id: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    /// Unix 초이다.
+    pub author_time: i64,
+    pub committer_name: String,
+    /// Unix 초이다.
+    pub committer_time: i64,
+    /// 커밋 메시지 전체이다. 첫 줄이 제목이다.
+    pub message: String,
+    /// git diff 형식의 변경이다. 병합 커밋은 첫 부모와 비교한다. `diff_too_large` 이면 비어 있다.
+    pub diff: String,
+    /// 변경이 한도를 넘어서 읽지 않았다.
+    pub diff_too_large: bool,
+}
+
+/// 커밋 id 로 받을 수 있는 글이다: 16 진수 7 – 64 자이다. git 의 옵션이나 rev 식으로 읽힐 글을 막는다.
+pub fn is_git_commit_id(text: &str) -> bool {
+    (7..=64).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// 줄과 줄 사이의 레인 상태이다. 레인마다 "다음에 나올 커밋"을 가진다. 빈 레인은 `None` 이다.
@@ -107,6 +156,7 @@ impl GitGraphLaneState {
             lanes_in,
             lanes_out,
             lanes_through,
+            backup_only: false,
         }
     }
 
@@ -288,6 +338,28 @@ mod tests {
         paged.extend(place_all(&mut resumed, &history[2..]));
 
         assert_eq!(paged, whole);
+    }
+
+    #[test]
+    fn commit_id_accepts_only_hex_of_a_sha_length() {
+        assert!(is_git_commit_id("abc1234"));
+        assert!(is_git_commit_id(&"a".repeat(40)));
+        assert!(is_git_commit_id(&"A".repeat(64)));
+        assert!(!is_git_commit_id("abc123"));
+        assert!(!is_git_commit_id(&"a".repeat(65)));
+        assert!(!is_git_commit_id("--output=x"));
+        assert!(!is_git_commit_id("HEAD~1^{tree}"));
+    }
+
+    #[test]
+    fn a_row_writes_the_backup_mark_only_when_it_is_set() {
+        let mut state = GitGraphLaneState::default();
+        let mut row = state.place(commit("a", &[]));
+        let plain = serde_json::to_value(&row).expect("serialize row");
+        assert!(plain.get("backupOnly").is_none());
+        row.backup_only = true;
+        let marked = serde_json::to_value(&row).expect("serialize row");
+        assert_eq!(marked["backupOnly"], serde_json::json!(true));
     }
 
     #[test]
