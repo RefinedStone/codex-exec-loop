@@ -1182,6 +1182,10 @@
     opacity: 0;
     pointer-events: none;
   }
+  /* Tab, arrow navigation, and Escape return still focus these buttons; show the focused one. */
+  .office-board.is-pixi-ready > .scene-object:focus-visible {
+    opacity: 1;
+  }
   .office-board::before {
     background: none;
     opacity: 0;
