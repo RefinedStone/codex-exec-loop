@@ -191,8 +191,16 @@ impl ShellRuntime {
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
                 }
-                BackgroundMessage::ClipboardImageProbed(result) => {
-                    self.app.apply_clipboard_image_probe(result);
+                BackgroundMessage::ClipboardImageProbed {
+                    composer_generation,
+                    transcript_revision,
+                    outcome,
+                } => {
+                    self.app.apply_clipboard_image_probe(
+                        composer_generation,
+                        transcript_revision,
+                        outcome,
+                    );
                 }
             }
         }
