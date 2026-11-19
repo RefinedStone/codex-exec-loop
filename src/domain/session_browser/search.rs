@@ -20,9 +20,9 @@ pub(super) struct RankedSessionIndex {
 pub(super) fn tokenize_search_query(search_query: &str) -> Vec<String> {
     search_query
         .split_whitespace()
-        // token은 lowercase로 저장하지만 실제 field 비교는 ASCII case-insensitive helper를 쓴다.
-        // 이중 방어는 일반 ASCII 입력을 안정적으로 처리하고, 비ASCII는 원문 포함 비교의 보수적 동작을 유지한다.
-        .map(|token| token.trim().to_lowercase())
+        // Field matching folds only ASCII. Preserve non-ASCII bytes in the query too;
+        // Unicode lowercasing here would make an identical Äpfel field fail to match.
+        .map(|token| token.trim().to_ascii_lowercase())
         .filter(|token| !token.is_empty())
         .collect()
 }
@@ -160,8 +160,44 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_ascii_case_insensitive, score_search_field, starts_with_ascii_case_insensitive,
+        contains_ascii_case_insensitive, score_search_field, search_query_score,
+        starts_with_ascii_case_insensitive, tokenize_search_query,
     };
+    use crate::domain::session_summary::SessionSummary;
+
+    #[test]
+    fn non_ascii_uppercase_session_name_matches_identical_query() {
+        let summary = SessionSummary {
+            id: "unrelated-id".to_owned(),
+            name: Some("Äpfel".to_owned()),
+            preview: "unrelated preview".to_owned(),
+            cwd: "/workspace/unrelated".to_owned(),
+            source: "provider".to_owned(),
+            model_provider: "codex".to_owned(),
+            updated_at_epoch: 0,
+            status_type: "idle".to_owned(),
+            path: "/unrelated/path".to_owned(),
+            git_branch: None,
+        };
+        let tokens = tokenize_search_query("Äpfel");
+        assert_eq!(tokens, ["Äpfel"]);
+        assert_eq!(search_query_score(&summary, &tokens, None), Some(210));
+
+        // ASCII letters remain case-insensitive within the same non-ASCII title.
+        let case_variant = tokenize_search_query("ÄPFEL");
+        assert_eq!(case_variant, ["Äpfel"]);
+        assert_eq!(search_query_score(&summary, &case_variant, None), Some(210));
+        assert_eq!(
+            search_query_score(&summary, &tokenize_search_query("Äpf"), None),
+            Some(190),
+        );
+        // Explicit policy: Unicode folding is not performed without the same
+        // normalization on both query and field sides.
+        assert_eq!(
+            search_query_score(&summary, &tokenize_search_query("äpfel"), None),
+            None,
+        );
+    }
 
     #[test]
     fn score_search_field_prefers_exact_match_before_prefix_or_contains() {
