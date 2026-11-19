@@ -2355,6 +2355,169 @@ fn repository_incarnation_marker_rejects_links_and_permissive_files() {
 }
 
 #[test]
+fn individual_authority_snapshots_pin_body_and_revision_under_a_concurrent_writer() {
+    use super::store::{
+        load_direction_authority_snapshot_from_connection, load_direction_catalog_from_connection,
+        load_task_authority_from_connection, load_task_authority_snapshot_from_connection,
+    };
+    use rusqlite::params;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    for kind in ["task", "direction"] {
+        let workspace = temp_workspace(&format!("consistent-{kind}"));
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let tasks = TaskAuthorityDocument {
+            version: 1,
+            tasks: Vec::new(),
+        };
+        let queue = empty_test_queue_projection();
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: "direction-1".to_string(),
+                title: "Direction 1".to_string(),
+                summary: "Snapshot consistency".to_string(),
+                success_criteria: vec!["done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        };
+        adapter
+            .commit_task_authority_snapshot(
+                &workspace,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_authority: &tasks,
+                    queue_projection: &queue,
+                },
+            )
+            .expect("task seed should commit");
+        adapter
+            .commit_direction_authority_snapshot(
+                &workspace,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions: &directions,
+                    authority_mutation_owner_token: None,
+                },
+            )
+            .expect("direction seed should commit");
+
+        let before = adapter
+            .load_task_authority_snapshot(&workspace)
+            .expect("baseline should load")
+            .expect("baseline should exist");
+        let revision_before = before.planning_revision;
+        let location =
+            SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
+                .expect("authority location should resolve");
+        // Opening the second connection before starting the read avoids schema initialization
+        // obtaining a write lock while another connection is already reading.
+        let writer_connection =
+            open_authority_connection(&location).expect("writer connection should open");
+        let (prepared_tx, prepared_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer_go = Arc::new(Barrier::new(2));
+        let worker_go = writer_go.clone();
+        let worker = std::thread::spawn(move || {
+            let transaction = writer_connection
+                .unchecked_transaction()
+                .expect("writer transaction should open");
+            transaction
+                .execute(
+                    "UPDATE authority_metadata SET value = ?1 WHERE key = 'planning_revision'",
+                    params![(revision_before + 1).to_string()],
+                )
+                .expect("writer should stage newer revision");
+            transaction
+                .execute(
+                    "UPDATE authority_metadata SET value = '3' WHERE key = 'task_authority_version'",
+                    [],
+                )
+                .expect("writer should stage newer task document version");
+            transaction
+                .execute(
+                    "UPDATE planning_direction_config SET version = 3 WHERE config_key = 'default'",
+                    [],
+                )
+                .expect("writer should stage newer direction document version");
+            prepared_tx.send(()).expect("reader must still be alive");
+            worker_go.wait();
+            transaction
+                .commit()
+                .expect("writer should commit after reader finishes");
+            done_tx.send(()).expect("reader should wait for writer");
+        });
+
+        // This uses the same transaction helper as the two public snapshot entrypoints, but
+        // provides a barrier between the document SELECT and the revision SELECT.
+        let pinned = SqlitePlanningAuthorityAdapter::with_consistent_authority_read(
+            &workspace,
+            kind,
+            |connection| {
+                let body_version = if kind == "task" {
+                    load_task_authority_from_connection(connection)?
+                        .expect("task document should exist")
+                        .version
+                } else {
+                    load_direction_catalog_from_connection(connection)?
+                        .expect("direction document should exist")
+                        .version
+                };
+                assert_eq!(body_version, 1, "reader must start from the old document");
+                prepared_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("second connection should stage a concurrent write");
+                writer_go.wait(); // Writer now tries to commit while this read transaction is active.
+                let (loaded_revision, loaded_version) = if kind == "task" {
+                    let snapshot = load_task_authority_snapshot_from_connection(connection)?
+                        .expect("task snapshot should exist");
+                    (snapshot.planning_revision, snapshot.task_authority.version)
+                } else {
+                    let snapshot = load_direction_authority_snapshot_from_connection(connection)?
+                        .expect("direction snapshot should exist");
+                    (snapshot.planning_revision, snapshot.directions.version)
+                };
+                assert_eq!(loaded_version, body_version);
+                assert_eq!(loaded_revision, revision_before);
+                assert!(
+                    done_rx.try_recv().is_err(),
+                    "writer must not commit during the read transaction"
+                );
+                Ok(Some(loaded_revision))
+            },
+        )
+        .expect("consistent read transaction should finish");
+        assert_eq!(pinned, Some(revision_before));
+
+        worker.join().expect("concurrent writer should finish");
+        let new_revision = revision_before + 1;
+        if kind == "task" {
+            let after = adapter
+                .load_task_authority_snapshot(&workspace)
+                .expect("new task snapshot should load")
+                .expect("new task document should exist");
+            assert_eq!(
+                (after.planning_revision, after.task_authority.version),
+                (new_revision, 3)
+            );
+        } else {
+            let after = adapter
+                .load_direction_authority_snapshot(&workspace)
+                .expect("new direction snapshot should load")
+                .expect("new direction document should exist");
+            assert_eq!(
+                (after.planning_revision, after.directions.version),
+                (new_revision, 3)
+            );
+        }
+    }
+}
+
+#[test]
 fn task_authority_snapshot_is_committed_to_db_tables() {
     // 빈 workspace로 시작해야 commit path가 schema bootstrap, initial revision 생성, table insert를
     // 모두 지난다. 기존 DB를 재사용하면 load-only 또는 update-only 경로만 검증할 위험이 있다.
