@@ -275,6 +275,9 @@
   };
 
   const syncSelectedDetail = () => {
+    // Evidence is a standalone drawer mode, not a selected entity. A refresh
+    // must never reinstate a previous entity while evidence history is open.
+    if (detailDrawer?.dataset.detailMode === "evidence") return;
     const selectedKey = root.dataset.selectedDetailKey || "";
     if (!selectedKey) return;
     const source = [...root.querySelectorAll(detailSourceSelector)]
@@ -1519,6 +1522,10 @@
 
   const openEvidenceDetailDrawer = ({ focusDrawer = true } = {}) => {
     if (!evidenceDetailTrigger || !detailDrawer || !detailDrawerBody) return;
+    // Drop the former entity identity before entering the evidence mode.
+    // Otherwise periodic syncSelectedDetail() may re-open that entity.
+    setSelectedDetail(null);
+    clearRelated();
     detailTrigger = evidenceDetailTrigger;
     const requestSequence = ++evidenceDetailRequestSequence;
     validationDetailRequestSequence += 1;
