@@ -2267,6 +2267,15 @@ fn stop_effects_from_intents(intents: Vec<StopEffectIntent>) -> Vec<CoreEffect> 
                 correlation,
                 attempt,
             },
+            StopEffectIntent::InterruptTurn {
+                correlation,
+                thread_id,
+                turn_id,
+            } => CoreEffect::InterruptTurn {
+                correlation,
+                thread_id,
+                turn_id,
+            },
             StopEffectIntent::Invalidate { correlation } => {
                 CoreEffect::InvalidateStopRequest { correlation }
             }
@@ -5577,9 +5586,10 @@ mod tests {
         let background_stop = StopRequestCorrelation::new(2, Some(background_turn));
         assert_eq!(
             started.effects,
-            vec![CoreEffect::RequestStopAllSessions {
+            vec![CoreEffect::InterruptTurn {
                 correlation: background_stop,
-                attempt: StopRequestAttempt::AfterTurnStarted,
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
             }],
             "the stop intent stays until the background turn starts"
         );
@@ -5591,6 +5601,64 @@ mod tests {
             },
         ));
         assert!(synchronized.effects.is_empty());
+    }
+
+    #[test]
+    fn held_background_stop_spares_a_viewed_turn_submitted_after_the_stop() {
+        // #2304 review: the held stop interrupts only the background turn, not a newer viewed turn.
+        let mut controller =
+            CoreController::with_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        let background_turn = submit_test_turn(&mut controller, Some("thread-1"));
+        controller.handle_input(test_turn_stream_input(
+            background_turn,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        let stop = StopRequestCorrelation::new(1, None);
+        controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: stop,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+
+        let viewed_turn = start_test_turn(&mut controller, "thread-2", "turn-2");
+        let started = controller.handle_input(test_turn_stream_input(
+            background_turn,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        assert_eq!(
+            started.effects,
+            vec![CoreEffect::InterruptTurn {
+                correlation: StopRequestCorrelation::new(2, Some(background_turn)),
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+            }],
+            "only the background turn is interrupted; no stop reaches every stream"
+        );
+        assert_eq!(
+            started
+                .snapshot
+                .conversation_runtime
+                .active_turn
+                .as_ref()
+                .map(|turn| turn.correlation),
+            Some(viewed_turn),
+            "the viewed turn keeps running"
+        );
     }
 
     #[test]

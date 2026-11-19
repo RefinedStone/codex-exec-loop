@@ -33,6 +33,11 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
     // connection/turn interrupt broadcast 구현을 소유한다.
     fn request_stop_all_sessions(&self) -> Result<()>;
 
+    // 이 thread 의 이 턴 하나에만 중단을 요청한다 (#2304). 다른 턴은 멈추지 않는다.
+    fn request_turn_interrupt(&self, _thread_id: &str, _turn_id: &str) -> Result<()> {
+        anyhow::bail!("targeted turn interrupts are not supported by this runtime")
+    }
+
     fn resolve_approval_request(
         &self,
         _approval_id: &str,

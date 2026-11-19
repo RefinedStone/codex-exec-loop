@@ -417,7 +417,21 @@ impl CoreEffectRunner {
                 attempt,
             } => {
                 let permit = self.stop_request_workers.register(correlation.generation);
-                self.spawn_stop_request_attempt(correlation, attempt, permit);
+                self.spawn_stop_request_attempt(correlation, attempt, None, permit);
+                None
+            }
+            CoreEffect::InterruptTurn {
+                correlation,
+                thread_id,
+                turn_id,
+            } => {
+                let permit = self.stop_request_workers.register(correlation.generation);
+                self.spawn_stop_request_attempt(
+                    correlation,
+                    StopRequestAttempt::AfterTurnStarted,
+                    Some((thread_id, turn_id)),
+                    permit,
+                );
                 None
             }
             CoreEffect::InvalidateStopRequest { correlation } => {
@@ -863,6 +877,8 @@ impl CoreEffectRunner {
         &self,
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
+        // 있으면 그 thread 의 그 턴만 멈춘다 (#2304). 없으면 모든 턴을 멈춘다.
+        target_turn: Option<(String, String)>,
         permit: EffectExecutionPermit,
     ) {
         let conversation_service = self.conversation_service.clone();
@@ -890,7 +906,12 @@ impl CoreEffectRunner {
                             "stop request was superseded before provider execution"
                         ));
                     }
-                    conversation_service.request_stop_all_sessions()
+                    match &target_turn {
+                        Some((thread_id, turn_id)) => {
+                            conversation_service.request_turn_interrupt(thread_id, turn_id)
+                        }
+                        None => conversation_service.request_stop_all_sessions(),
+                    }
                 })
                 .map_err(|_| anyhow::anyhow!("stop request worker panicked"))
                 .and_then(|result| result);

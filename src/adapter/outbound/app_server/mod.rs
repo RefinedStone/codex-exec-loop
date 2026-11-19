@@ -1708,6 +1708,13 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         Ok(())
     }
 
+    fn request_turn_interrupt(&self, thread_id: &str, turn_id: &str) -> Result<()> {
+        // 그 턴의 stream loop 만 interrupt 를 보낸다. 다른 stream 은 멈추지 않는다 (#2304).
+        self.turn_interrupt_signal
+            .request_turn_interrupt(thread_id, turn_id);
+        Ok(())
+    }
+
     fn resolve_approval_request(
         &self,
         approval_id: &str,
