@@ -243,8 +243,11 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
       const others = state.activeThreadIds.filter((id) => id !== threadId);
       const watching = state.threadVisible && state.openThreadId === threadId;
       const finishedUnseen = !active && others.length < state.activeThreadIds.length && !watching;
-      const unread = state.unreadThreadIds.filter((id) => id !== threadId);
-      return { activeThreadIds: active ? [...others, threadId] : others, unreadThreadIds: finishedUnseen ? [...unread, threadId] : unread };
+      // Opening the thread, not a repeated status notification, acknowledges unread turns.
+      const unreadThreadIds = finishedUnseen && !state.unreadThreadIds.includes(threadId)
+        ? [...state.unreadThreadIds, threadId]
+        : state.unreadThreadIds;
+      return { activeThreadIds: active ? [...others, threadId] : others, unreadThreadIds };
     }),
   setActiveThreads: (activeThreadIds) => set((state) => ({ activeThreadIds, activeRefills: state.activeRefills + 1 })),
   setThreadFailed: (threadId, failed) =>
