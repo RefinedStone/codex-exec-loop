@@ -30,6 +30,12 @@ pub(super) struct HubAppServerSession {
 impl HubAppServerSession {
     pub(super) fn open(codex: &TrustedCommand, codex_home: &Path) -> Result<Self> {
         let mut command = Command::new(&codex.program);
+        // The hub must not inherit arbitrary parent credentials while regular app-server
+        // processes use the scrubbed policy. Explicit AKRA_APP_SERVER_PROCESS_ENVIRONMENT=all
+        // retains the same opt-in semantics as ordinary app-server sessions.
+        crate::adapter::outbound::app_server::connection::configure_hub_app_server_process_environment(
+            &mut command,
+        );
         command
             .args(&codex.prefix_args)
             .arg("app-server")
