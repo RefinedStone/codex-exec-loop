@@ -448,6 +448,26 @@ impl SqlitePlanningAuthorityAdapter {
         load_active_document(&connection, relative_path)
     }
 
+    /** Read-only authority snapshots assemble several SQLite rows; their revision must be from the
+     * same transaction as the document, even when another connection commits between SELECTs.
+     */
+    fn with_consistent_authority_read<T>(
+        workspace_dir: &str,
+        label: &str,
+        load: impl FnOnce(&Connection) -> Result<Option<T>>,
+    ) -> Result<Option<T>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection.transaction().with_context(|| {
+            format!("failed to start {label} authority snapshot read transaction")
+        })?;
+        let snapshot = load(&transaction)?;
+        transaction.commit().with_context(|| {
+            format!("failed to finish {label} authority snapshot read transaction")
+        })?;
+        Ok(snapshot)
+    }
+
     /*
     task authority snapshot을 repo-scoped authority DB에서 읽는다.
 
@@ -458,9 +478,11 @@ impl SqlitePlanningAuthorityAdapter {
     pub(crate) fn load_task_authority_snapshot(
         workspace_dir: &str,
     ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
-        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let connection = open_authority_connection(&location)?;
-        load_task_authority_snapshot_from_connection(&connection)
+        Self::with_consistent_authority_read(
+            workspace_dir,
+            "task",
+            load_task_authority_snapshot_from_connection,
+        )
     }
 
     pub(crate) fn load_task_authority_mutations(
@@ -506,9 +528,11 @@ impl SqlitePlanningAuthorityAdapter {
     pub(crate) fn load_direction_authority_snapshot(
         workspace_dir: &str,
     ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
-        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let connection = open_authority_connection(&location)?;
-        load_direction_authority_snapshot_from_connection(&connection)
+        Self::with_consistent_authority_read(
+            workspace_dir,
+            "direction",
+            load_direction_authority_snapshot_from_connection,
+        )
     }
 
     /*
