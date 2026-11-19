@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import { discardCommands, editorUrl, NO_HELPER_PROGRAMS, parseNumstat, parsePorcelainStatus, readGitFileDiff, readGitStatus, resolveGitFile, resolveInside, runGitFileAction } from "../src/main/gitStatus";
+import { discardCommands, editorUrl, executeGitFilePlan, NO_HELPER_PROGRAMS, parseNumstat, parsePorcelainStatus, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile, resolveInside, runGitFileAction } from "../src/main/gitStatus";
 import { isConflictStatus, stageState } from "../src/shared/gitChange";
 
 describe("git status parsing", () => {
@@ -131,6 +131,53 @@ describe("git file actions", () => {
     const result = await runGitFileAction(root, "discard", "a2.txt");
     expect(result.ok).toBe(false);
     expect([text("a.txt"), existsSync(join(root, "a2.txt"))]).toEqual(["new work\n", true]);
+  });
+
+  it("refuses a stale confirmed rename discard when its old path is newly created", async () => {
+    const { root, git, write, text, statuses } = repository();
+    git("mv", "a.txt", "renamed.txt");
+    const planned = await planGitFileAction(root, "discard", "renamed.txt");
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+
+    // The confirmation dialog remains open while the operator creates a new old-path file.
+    write("a.txt", "new content during confirmation\\n".replace("\\n", "\n"));
+    const result = await executeGitFilePlan(planned.plan);
+    expect(result.ok).toBe(false);
+    expect(text("a.txt")).toBe("new content during confirmation\n");
+    expect(text("renamed.txt")).toBe("a\n");
+    expect(await statuses()).toMatchObject({ "renamed.txt": "R ", "a.txt": "??" });
+  });
+
+  it("rejects a discard plan if the renamed file is staged differently after confirmation", async () => {
+    const { root, git, write, text } = repository();
+    git("mv", "a.txt", "renamed.txt");
+    const planned = await planGitFileAction(root, "discard", "renamed.txt");
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+
+    // The staged blob for the selected path is no longer the one the user confirmed.
+    write("renamed.txt", "different staged content\n");
+    git("add", "renamed.txt");
+    expect((await executeGitFilePlan(planned.plan)).ok).toBe(false);
+    expect(text("renamed.txt")).toBe("different staged content\n");
+    expect(existsSync(join(root, "a.txt"))).toBe(false);
+  });
+
+  it("rejects a confirmed discard if HEAD advances or the destination is edited", async () => {
+    const { root, git, write, text } = repository();
+    git("mv", "a.txt", "renamed.txt");
+    const planned = await planGitFileAction(root, "discard", "renamed.txt");
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    write("renamed.txt", "new work while confirming\n");
+    expect((await executeGitFilePlan(planned.plan)).ok).toBe(false);
+    expect(text("renamed.txt")).toBe("new work while confirming\n");
+
+    git("add", "renamed.txt");
+    git("commit", "-q", "-m", "new operator commit");
+    expect((await executeGitFilePlan(planned.plan)).ok).toBe(false);
+    expect(text("renamed.txt")).toBe("new work while confirming\n");
   });
 
   it("refuses every action on a file with a merge conflict", async () => {

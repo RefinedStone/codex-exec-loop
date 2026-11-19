@@ -3,7 +3,7 @@
 // 있는 폴더에서는 응답이 접속 한도를 넘고 Gateway 세션 전체가 끊겼다 (2026-11-06). 여기서는 목록만 먼저 읽고,
 // 파일 diff 는 펼칠 때 하나씩, 크기 한도 안에서 읽는다.
 import { spawn } from "node:child_process";
-import { open, stat } from "node:fs/promises";
+import { lstat, open, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
 import type { GitActionResult, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../shared/bridge";
@@ -235,13 +235,22 @@ const FOLDER_FILE_LIMIT = 200;
 const ATTRIBUTE_BATCH = 50;
 
 /** 확인을 마친 git 동작이다. `planGitFileAction` 만 만든다. */
+interface GitFilePlanGuard {
+  headOid: string | null;
+  indexEntries: string;
+  targetState: string | null;
+  originalState: string | null;
+}
+
 export interface GitFilePlan {
   cwd: string;
+  root: string;
+  action: GitFileAction;
+  status: string;
   commands: string[][];
-  /** 확인 창에 보여 줄 경로이다 (저장소 루트 기준). */
   path: string;
-  /** 이름을 바꾼 파일을 버릴 때 되살리는 이전 경로이다. */
   originalPath: string | null;
+  guard: GitFilePlanGuard;
 }
 
 export type GitFilePlanResult = { ok: true; plan: GitFilePlan } | { ok: false; message: string };
@@ -316,9 +325,18 @@ export async function planGitFileAction(cwdInput: unknown, action: unknown, path
   if (!change) return refuse("바뀐 파일 목록에 없습니다. 목록을 새로 고치십시오.");
   if (isConflictStatus(change.status)) return refuse("충돌 상태의 파일입니다. 터미널에서 해결하십시오.");
   const original = change.originalPath ? await repositoryFile(file.root, change.originalPath) : null;
-  const plan = (commands: string[][]): GitFilePlanResult => ({
+  const plan = async (commands: string[][]): Promise<GitFilePlanResult> => ({
     ok: true,
-    plan: { cwd: file.cwd, commands, path: change.path, originalPath: change.originalPath },
+    plan: {
+      cwd: file.cwd,
+      root: file.root,
+      action: action as GitFileAction,
+      status: change.status,
+      commands,
+      path: change.path,
+      originalPath: change.originalPath,
+      guard: await snapshotGitFilePlan(file, original),
+    },
   });
 
   if (action === "unstage") {
@@ -338,15 +356,66 @@ export async function planGitFileAction(cwdInput: unknown, action: unknown, path
   if (await anyContentFilter(file.root, [file.relativePath, ...(original ? [original.relativePath] : [])])) return refuse(FILTER_MESSAGE);
   if (action === "stage") return plan([["add", "-A", "--", file.pathspec]]);
   // 이전 경로에 새 파일이 생겼으면 되살릴 때 그 파일을 덮어쓴다.
-  if (change.status.startsWith("R") && original && (await stat(original.target).catch(() => null))) {
+  if (change.status.startsWith("R") && original && (await pathFingerprint(original.target))) {
     return refuse(`이전 경로(${change.originalPath})에 다른 파일이 있습니다. 그 파일을 옮긴 뒤에 다시 하십시오.`);
   }
   return plan(discardCommands(change.status, file.pathspec, original?.pathspec ?? null));
 }
 
 /** 확인을 마친 동작을 실행한다. `discard` 는 되돌릴 수 없다. 부르는 쪽이 사용자에게 먼저 확인한다. */
+const CHANGED_SINCE_CONFIRMATION = "파일 상태가 확인 중 변경되었습니다. 목록을 새로 고친 뒤 다시 시도하십시오.";
+
+async function pathFingerprint(path: string): Promise<string | null> {
+  // lstat detects a symlink placed at a missing old name without following it.
+  const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!info) return null;
+  return [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs].join(":");
+}
+
+async function snapshotGitFilePlan(file: RepositoryFile, original: RepositoryFile | null): Promise<GitFilePlanGuard> {
+  const [head, indexEntries, targetState, originalState] = await Promise.all([
+    runGit(file.root, ["rev-parse", "--verify", "-q", "HEAD"], 256),
+    runGit(file.root, ["ls-files", "--stage", "-z", "--", file.pathspec, ...(original ? [original.pathspec] : [])], STATUS_OUTPUT_LIMIT),
+    pathFingerprint(file.target),
+    original ? pathFingerprint(original.target) : Promise.resolve(null),
+  ]);
+  if (head.timedOut || indexEntries.code !== 0 || indexEntries.truncated || indexEntries.timedOut) {
+    throw new Error("git 작업 상태를 안전하게 검증할 수 없습니다.");
+  }
+  return {
+    headOid: head.code === 0 ? head.stdout.trim() : null,
+    indexEntries: indexEntries.stdout,
+    targetState,
+    originalState,
+  };
+}
+
+async function gitFilePlanIsCurrent(plan: GitFilePlan): Promise<boolean> {
+  const file = await repositoryFile(plan.cwd, plan.path);
+  if (file.root !== plan.root) return false;
+  const current = await currentChange(file);
+  if (!current || current.status !== plan.status || current.originalPath !== plan.originalPath) return false;
+  const original = plan.originalPath ? await repositoryFile(file.root, plan.originalPath) : null;
+  const actual = await snapshotGitFilePlan(file, original);
+  return actual.headOid === plan.guard.headOid &&
+    actual.indexEntries === plan.guard.indexEntries &&
+    actual.targetState === plan.guard.targetState &&
+    actual.originalState === plan.guard.originalState;
+}
+
 export async function executeGitFilePlan(plan: GitFilePlan): Promise<GitActionResult> {
+  // The confirmation dialog may have been open while Git and the paths changed.
+  // Reject a stale plan before even the first destructive command executes.
+  if (!(await gitFilePlanIsCurrent(plan))) return { ok: false, message: CHANGED_SINCE_CONFIRMATION };
   for (const args of plan.commands) {
+    if (plan.action === "discard" && plan.originalPath) {
+      const original = await repositoryFile(plan.cwd, plan.originalPath);
+      // A new file at the former name must not be clobbered by rename restore.
+      if (await pathFingerprint(original.target)) return { ok: false, message: CHANGED_SINCE_CONFIRMATION };
+    }
     const output = await runGit(plan.cwd, args, 4096);
     if (output.code !== 0) {
       return { ok: false, message: failureMessage(output, `git ${args[0]} 가 실패했습니다.`) };
