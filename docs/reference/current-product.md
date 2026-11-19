@@ -535,8 +535,9 @@ the desktop app itself is not shipped yet.
   `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
   queue again. The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
-  through the kernel decision log in record order and answers with `records` and `next_after`; send
-  `next_after` as the next `after`. Each new record also arrives live as a `recorded` event with the
+  through the kernel decision log in record order and answers with `records`, `next_after`, and
+  `recorder` (the recorder state; `degraded: true` means this kernel lost records, so a restart
+  restores less); send `next_after` as the next `after`. Each new record also arrives live as a `recorded` event with the
   same `sequence`; after `resync`, read `history` after the last sequence seen. Approval requests and
   their ends are records (`approval_requested`, `approval_resolved` with `accepted`, `declined`,
   `timed_out`, `withdrawn`, or `lost`); a restarted kernel records the approvals of the previous kernel

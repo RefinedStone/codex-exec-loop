@@ -54,5 +54,5 @@ Pass input fields as `--field value`. Use the input schema from `describe` for r
 - `akra kernel query thread_activity --json`: The threads that still have work: a running turn, a pending approval, or automatic follow-up.
 - `akra kernel query planning --json`: The planning queue.
 - `akra kernel query parallel --json`: The parallel mode state: pool, agents, merge queue, and pull request validation.
-- `akra kernel query history --json`: A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`.
+- `akra kernel query history --json`: A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.
 - `akra kernel query operation --json`: The state of one operation and its records. `op_id` comes from the `operation` of a command answer.

@@ -142,6 +142,7 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
         Ok(KernelEventPage {
             records,
             next_after,
+            recorder: None,
         })
     }
 

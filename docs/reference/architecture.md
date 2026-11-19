@@ -178,7 +178,11 @@ it takes the repository lock, it reads that log and restores the open queued pro
 host-only `RestoreQueuedThreadPrompts`, so a restarted kernel submits them once when idle. The
 restore reads only the queue kinds. Each append keeps only the latest 10,000 records of the other
 kinds; the queue kinds stay for the restore. The `history` kernel query pages through the log by
-cursor on the kernel host thread. The repository kernel is the only writer of its log, so it
+cursor on the kernel host thread. The recorder keeps at most 8 MiB of unwritten batches (one larger
+batch is accepted when nothing is pending); at the limit it drops the new batch instead of blocking
+the kernel. Its state (`KernelRecorderHealth`: `degraded`, `saturated`, `pending_bytes`,
+`failed_events`, `dropped_events`) rides on every `history` answer as `recorder`; `degraded` stays
+set for the life of that kernel once a batch fails or is dropped. The repository kernel is the only writer of its log, so it
 numbers the records itself, starting after the stored maximum, and sends each one live as a
 `recorded` kernel event with the same sequence; a client that gets `resync` reads `history` after
 the last sequence it saw. A `turn_ended` record carries the terminal outcome when the dispatch input

@@ -1106,7 +1106,7 @@
     },
     {
       "name": "history",
-      "summary": "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`.",
+      "summary": "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -3003,6 +3003,16 @@
           "format": "int64",
           "type": "integer"
         },
+        "recorder": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KernelRecorderHealth"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "records": {
           "items": {
             "$ref": "#/$defs/RecordedKernelEvent"
@@ -3636,6 +3646,39 @@
           "type": "object"
         }
       ]
+    },
+    "KernelRecorderHealth": {
+      "properties": {
+        "degraded": {
+          "type": "boolean"
+        },
+        "dropped_events": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed_events": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pending_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "saturated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "degraded",
+        "saturated",
+        "pending_bytes",
+        "failed_events",
+        "dropped_events"
+      ],
+      "type": "object"
     },
     "NextStep": {
       "oneOf": [

@@ -1173,6 +1173,7 @@ impl KernelQuery {
                 KernelQueryAnswer::History(history.unwrap_or_else(|| KernelEventPage {
                     records: Vec::new(),
                     next_after: after.unwrap_or(0),
+                    recorder: None,
                 }))
             }
             Self::Operation { op_id } => {
@@ -1200,7 +1201,7 @@ spec_names! {
         Parallel => "parallel",
             "The parallel mode state: pool, agents, merge queue, and pull request validation.";
         History => "history",
-            "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`.";
+            "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.";
         Operation => "operation",
             "The state of one operation and its records. `op_id` comes from the `operation` of a command answer.";
     }

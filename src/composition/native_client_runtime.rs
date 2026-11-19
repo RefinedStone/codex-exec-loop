@@ -1126,6 +1126,7 @@ impl NativeClientRuntime {
             return Ok(KernelEventPage {
                 records: Vec::new(),
                 next_after: after,
+                recorder: None,
             });
         };
         let limit = limit.clamp(1, MAX_KERNEL_EVENT_PAGE);
@@ -1144,6 +1145,7 @@ impl NativeClientRuntime {
                 }
             }
         }
+        page.recorder = self.kernel_events.as_ref().map(KernelEventRecorder::health);
         Ok(page)
     }
 
@@ -2708,6 +2710,7 @@ pub(crate) mod tests {
             Ok(KernelEventPage {
                 records,
                 next_after,
+                recorder: None,
             })
         }
     }
@@ -2814,6 +2817,8 @@ pub(crate) mod tests {
         }
         let first = runtime.kernel_event_history(0, 1).unwrap();
         assert_eq!(first.records.len(), 1);
+        // #2300: the history answer carries the recorder state. Nothing failed here.
+        assert!(first.recorder.is_some_and(|recorder| !recorder.degraded));
         assert_eq!(first.next_after, 1);
         let second = runtime.kernel_event_history(first.next_after, 1).unwrap();
         assert_eq!(second.records.len(), 1);
