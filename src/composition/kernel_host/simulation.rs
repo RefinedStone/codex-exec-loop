@@ -234,6 +234,8 @@ enum PendingCompletion {
     StopAttempt {
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
+        /// 있으면 이 (thread, 턴) 하나만 멈추는 요청이다 (#2304).
+        target: Option<(String, String)>,
     },
     SessionCatalog {
         correlation: SessionCatalogLoadCorrelation,
@@ -1341,6 +1343,23 @@ impl Simulation {
                 self.pending.push(PendingCompletion::StopAttempt {
                     correlation,
                     attempt,
+                    target: None,
+                });
+                Ok(())
+            }
+            CoreEffect::InterruptTurn {
+                correlation,
+                thread_id,
+                turn_id,
+            } => {
+                self.record(format!(
+                    "app-server: stop request {} for {turn_id} on {thread_id}",
+                    correlation.generation
+                ));
+                self.pending.push(PendingCompletion::StopAttempt {
+                    correlation,
+                    attempt: StopRequestAttempt::AfterTurnStarted,
+                    target: Some((thread_id, turn_id)),
                 });
                 Ok(())
             }
@@ -1637,7 +1656,8 @@ impl Simulation {
             PendingCompletion::StopAttempt {
                 correlation,
                 attempt,
-            } => self.complete_stop_attempt(correlation, attempt),
+                target,
+            } => self.complete_stop_attempt(correlation, attempt, target),
             PendingCompletion::SessionCatalog { correlation } => {
                 self.complete_session_catalog(correlation);
             }
@@ -1743,6 +1763,7 @@ impl Simulation {
         &mut self,
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
+        target: Option<(String, String)>,
     ) {
         let invalidated = self
             .invalidated_stop_requests
@@ -1751,13 +1772,13 @@ impl Simulation {
             Err("stop request was superseded before provider execution".to_string())
         } else if invalidated {
             // 무효가 되기 전에 worker 가 이미 요청을 보냈다. 정지는 그대로 app-server 에 닿는다.
-            self.interrupt_running_turn();
+            self.interrupt_running_turn(target.as_ref());
             Ok(())
         } else if self.rng.percent(25) {
             // 기본 seed 들이 실패한 정지를 운에 기대지 않고 지나도록 실패를 자주 낸다 (#2304).
             Err("simulated stop failure".to_string())
         } else {
-            self.interrupt_running_turn();
+            self.interrupt_running_turn(target.as_ref());
             Ok(())
         };
         self.record(format!(
@@ -1774,12 +1795,14 @@ impl Simulation {
     }
 
     /// 실제 app-server adapter 처럼 지금 도는 턴을 중단한다 (모든 스트림). 그 턴은 보지 않는 thread 의 것일 수 있다.
-    fn interrupt_running_turn(&mut self) {
-        if let Some(turn) = self
-            .turn
-            .as_mut()
-            .filter(|turn| turn.stage == TurnStage::Started)
-        {
+    /// `target` 이 있으면 그 (thread, 턴) 만 중단한다 (#2304).
+    fn interrupt_running_turn(&mut self, target: Option<&(String, String)>) {
+        if let Some(turn) = self.turn.as_mut().filter(|turn| {
+            turn.stage == TurnStage::Started
+                && target.is_none_or(|(thread_id, turn_id)| {
+                    &turn.thread_id == thread_id && &turn.turn_id == turn_id
+                })
+        }) {
             turn.interrupt_requested = true;
         }
     }

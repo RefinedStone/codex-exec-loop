@@ -77,6 +77,12 @@ pub enum CoreEffect {
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
     },
+    // 전체 정지 뒤에 시작한 턴 하나만 멈춘다 (#2304). 완료는 `AfterTurnStarted` 정지 시도의 완료이다.
+    InterruptTurn {
+        correlation: StopRequestCorrelation,
+        thread_id: String,
+        turn_id: String,
+    },
     InvalidateStopRequest {
         correlation: StopRequestCorrelation,
     },

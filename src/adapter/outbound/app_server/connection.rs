@@ -201,12 +201,32 @@ pub(super) struct AppServerTurnInterruptSignal {
      * stop 요청이 들어왔는지 lock 없이 판단할 수 있다.
      */
     generation: Arc<AtomicU64>,
+    // 턴 하나에만 보낸 stop 요청이다 (#2304). (thread id, turn id) 의 stream loop 만 interrupt 를 보낸다.
+    targeted_turns: Arc<std::sync::Mutex<std::collections::HashSet<(String, String)>>>,
 }
 
 impl AppServerTurnInterruptSignal {
     pub(super) fn request_stop_all_sessions(&self) {
         // SeqCst를 사용해 UI thread의 stop 요청과 stream loop의 관찰 순서를 가장 보수적으로 맞춘다.
         self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /*
+     * 이 턴 하나에만 stop 을 요청한다. 다른 stream loop 는 이 요청을 보지 않는다. 그 턴의 loop 가 요청을 꺼내 간다.
+     * shortcut: 턴이 이미 끝난 뒤의 요청은 남는다 (작은 쌍 하나). 쌓이는 일이 생기면 stream 종료 때 지운다.
+     */
+    pub(super) fn request_turn_interrupt(&self, thread_id: &str, turn_id: &str) {
+        self.targeted_turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((thread_id.to_string(), turn_id.to_string()));
+    }
+
+    fn take_turn_interrupt(&self, thread_id: &str, turn_id: &str) -> bool {
+        self.targeted_turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(thread_id.to_string(), turn_id.to_string()))
     }
 
     pub(super) fn current_generation(&self) -> u64 {
@@ -1875,8 +1895,9 @@ impl AppServerConnection {
     ) -> Result<()> {
         let interrupt_generation = interrupt_signal.current_generation();
         if !*interrupt_sent
-            && interrupt_generation > observed_interrupt_generation
-            && interrupt_generation > *last_interrupt_generation_attempted
+            && ((interrupt_generation > observed_interrupt_generation
+                && interrupt_generation > *last_interrupt_generation_attempted)
+                || interrupt_signal.take_turn_interrupt(thread_id, turn_id))
         {
             /*
              * The interrupt signal is process-wide, while this loop owns exactly one
@@ -4715,6 +4736,18 @@ mod tests {
         assert_eq!(signal.current_generation(), 1);
         assert!(signal.requested_after(0));
         assert!(!signal.requested_after(1));
+    }
+
+    #[test]
+    fn targeted_turn_interrupt_reaches_only_its_own_stream() {
+        // #2304: a stop for one background turn must not interrupt another stream.
+        let signal = AppServerTurnInterruptSignal::default();
+        signal.request_turn_interrupt("thread-1", "turn-1");
+
+        assert_eq!(signal.current_generation(), 0);
+        assert!(!signal.take_turn_interrupt("thread-2", "turn-2"));
+        assert!(signal.take_turn_interrupt("thread-1", "turn-1"));
+        assert!(!signal.take_turn_interrupt("thread-1", "turn-1"));
     }
 
     #[test]

@@ -236,6 +236,11 @@ impl ConversationService {
 
     // 사용자가 전체 대화 실행을 멈추려 할 때 호출되는 명령 메서드이다.
     // 실제로 어떤 프로세스/세션을 멈출지는 outbound runtime이 알고 있으므로 service는 명령만 전달한다.
+    pub fn request_turn_interrupt(&self, thread_id: &str, turn_id: &str) -> Result<()> {
+        self.interactive_turn_runtime_port
+            .request_turn_interrupt(thread_id, turn_id)
+    }
+
     pub fn request_stop_all_sessions(&self) -> Result<()> {
         self.interactive_turn_runtime_port
             // 실패를 그대로 반환해야 TUI가 "중단 요청 자체가 실패했다"는 상태를 사용자에게 표시할 수 있다.

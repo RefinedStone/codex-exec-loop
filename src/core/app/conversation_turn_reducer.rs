@@ -47,6 +47,8 @@ struct ActiveStopRequest {
     pending_attempt: Option<StopRequestAttempt>,
     synchronize_after_turn_started: bool,
     invalidated: bool,
+    // 이 정지는 턴 하나만 멈춘다 (#2304). 다른 턴에 닿지 않으므로 새 턴을 막지 않는다.
+    targeted: bool,
 }
 
 #[derive(Debug)]
@@ -57,11 +59,17 @@ pub(super) struct LoadedConversationStreamIdentity {
     pub(super) item_lifecycle: ConversationItemLifecycleProjection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum StopEffectIntent {
     Request {
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
+    },
+    // 정지 뒤에 시작한 뒤의 턴 하나만 멈춘다 (#2304). 완료는 `AfterTurnStarted` 시도로 돌아온다.
+    InterruptTurn {
+        correlation: StopRequestCorrelation,
+        thread_id: String,
+        turn_id: String,
     },
     Invalidate {
         correlation: StopRequestCorrelation,
@@ -739,7 +747,7 @@ impl ThreadSession {
         &mut self,
         stop_effects: &mut Vec<StopEffectIntent>,
     ) {
-        let Some(active) = self.active_stop_request.as_mut() else {
+        let Some(active) = self.active_stop_request else {
             return;
         };
         if active.invalidated
@@ -751,12 +759,31 @@ impl ThreadSession {
         {
             return;
         }
+        let intent = if active.targeted {
+            let Some((thread_id, Some(turn_id))) = self
+                .thread_turn()
+                .map(|turn| (turn.thread_id, turn.turn_id))
+            else {
+                return;
+            };
+            StopEffectIntent::InterruptTurn {
+                correlation: active.correlation,
+                thread_id,
+                turn_id,
+            }
+        } else {
+            StopEffectIntent::Request {
+                correlation: active.correlation,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+            }
+        };
+        let active = self
+            .active_stop_request
+            .as_mut()
+            .expect("the checked stop request must remain present");
         active.synchronize_after_turn_started = false;
         active.pending_attempt = Some(StopRequestAttempt::AfterTurnStarted);
-        stop_effects.push(StopEffectIntent::Request {
-            correlation: active.correlation,
-            attempt: StopRequestAttempt::AfterTurnStarted,
-        });
+        stop_effects.push(intent);
     }
 
     fn clear_stop_request_for_turn(
@@ -1043,7 +1070,7 @@ impl ConversationTurnFeatureReducer {
             pending_stop: self.other_sessions(slot).find_map(|session| {
                 session
                     .active_stop_request
-                    .filter(|active| active.pending_attempt.is_some())
+                    .filter(|active| active.pending_attempt.is_some() && !active.targeted)
             }),
         }
     }
@@ -1505,6 +1532,7 @@ impl ConversationTurnFeatureReducer {
             synchronize_after_turn_started: correlation.turn_submission.is_some()
                 && !self.session.turn_stream_state.has_active_turn(),
             invalidated: false,
+            targeted: false,
         });
         self.hold_stop_for_unstarted_background_turns();
         StopRequestAdmission::Accepted { correlation }
@@ -1512,8 +1540,8 @@ impl ConversationTurnFeatureReducer {
 
     /*
      * 정지는 app-server 의 모든 턴에 닿지만, 그 뒤에 시작한 스트림은 막지 못한다. 뒤의 session 에서 받았지만 아직
-     * 시작하지 않은 턴도 정지해야 한다 (#2304). 그 턴마다 정지 의도를 두고, 턴이 시작하면 정지를 다시 낸다. 턴이
-     * 시작 전에 끝나면 의도는 그대로 지운다.
+     * 시작하지 않은 턴도 정지해야 한다 (#2304). 그 턴마다 정지 의도를 두고, 턴이 시작하면 그 턴만 멈춘다. 그 사이에
+     * 사람이 낸 새 턴은 멈추지 않는다. 턴이 시작 전에 끝나면 의도는 그대로 지운다.
      */
     fn hold_stop_for_unstarted_background_turns(&mut self) {
         for session in &mut self.background_sessions {
@@ -1535,6 +1563,7 @@ impl ConversationTurnFeatureReducer {
                 pending_attempt: None,
                 synchronize_after_turn_started: true,
                 invalidated: false,
+                targeted: true,
             });
         }
     }
