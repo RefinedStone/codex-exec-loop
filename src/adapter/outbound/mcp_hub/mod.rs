@@ -144,6 +144,9 @@ impl CodexMcpHubBackend {
     /// A crash before the rename leaves the old registry intact; readers never see
     /// an incomplete TOML document.
     fn write_document(&self, document: &DocumentMut) -> Result<()> {
+        // Registry writers may be called directly by fresh-home initialization
+        // and catalog paths, not only under update_document's lock.
+        crate::private_directory::ensure_private_directory(&self.home)?;
         let path = self.config_path();
         let mut temporary = None;
         for _ in 0..32 {
