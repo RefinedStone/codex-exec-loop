@@ -645,3 +645,27 @@ describe("thread lifecycle notifications from other windows", () => {
     expect(listed()).toEqual([["/w", ["a:Renamed", "b:b"]]]);
   });
 });
+
+describe("thread lifecycle notifications while listing threads", () => {
+  it("keeps a thread deleted or renamed during the list request out of, or renamed in, both list results", async () => {
+    const { state, receive, replyTo, emitState } = harness();
+    emitState("connected");
+    await flush();
+    replyTo("initialize", {});
+    await flush();
+    replyTo("akra/gateway/info", { gatewayVersion: "1", codexVersion: null, startedAt: "", upstreamRestarts: 0 });
+    await flush();
+    // While the state-DB list request is pending, "gone" is deleted and "kept" is renamed.
+    receive({ jsonrpc: "2.0", method: "thread/deleted", params: { threadId: "gone" } });
+    receive({ jsonrpc: "2.0", method: "thread/name/updated", params: { threadId: "kept", threadName: "Renamed" } });
+    const thread = (id: string) => ({ id, cwd: "/w", name: id, preview: "", updatedAt: 1, status: { type: "idle" } });
+    const listed = () => state.folders?.flatMap((folder) => folder.threads.map((item) => `${item.id}:${item.title}`));
+    replyTo("thread/list", { data: [thread("gone"), thread("kept")], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(listed()).toEqual(["kept:Renamed"]);
+    // The rollout scan still finds the deleted thread; it must not come back.
+    replyTo("thread/list", { data: [thread("gone"), thread("kept")], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(listed()).toEqual(["kept:Renamed"]);
+  });
+});
