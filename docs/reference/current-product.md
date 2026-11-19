@@ -584,7 +584,7 @@ the desktop app itself is not shipped yet.
   `preparation_active`, `unknown_thread`, `foreign_workspace`, `parallel_mode`, `parallel_mode_unknown`)
   now also answers with `rejection` and `state: rejected`. The session catalog lists the threads of
   every repository; `foreign_workspace` refuses a thread whose catalog `cwd` is outside the client's
-  workspace, so no planning task of this kernel is made for it. `load_sessions` and `refresh_planning` are not recorded and
+  workspace and outside its parallel pool (`<name>-akra-worktrees/<hash>/akra-pool`), so no planning task of this kernel is made for it. `load_sessions` and `refresh_planning` are not recorded and
   have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
   first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
   check, like the TUI parallel view).

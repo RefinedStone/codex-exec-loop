@@ -1814,7 +1814,7 @@ impl CoreController {
     }
 
     /*
-     * 세션 목록은 모든 저장소의 thread 를 담는다 (#2303). 목록이 적은 그 thread 의 작업 디렉터리가 이 작업 공간 밖이면
+     * 세션 목록은 모든 저장소의 thread 를 담는다 (#2303). 목록이 적은 그 thread 의 작업 디렉터리가 이 작업 공간과 그 병렬 pool 밖이면
      * 이 커널의 planning 으로 준비하지 않는다. 제출은 그 thread 의 디렉터리에서 돌므로 planning 과 실행의 저장소가
      * 갈린다.
      */
@@ -1823,7 +1823,7 @@ impl CoreController {
             .shared_snapshot()
             .session_catalog
             .thread_cwd(thread_id)
-            .is_some_and(|cwd| !super::session::workspace_contains(workspace_directory, cwd))
+            .is_some_and(|cwd| !super::session::workspace_owns(workspace_directory, cwd))
     }
 
     /*

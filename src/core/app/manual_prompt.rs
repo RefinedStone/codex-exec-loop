@@ -46,7 +46,7 @@ pub enum ThreadPromptAdmission {
     },
     // core 가 모르는 thread 이다. 보는 thread, 일이 남은 thread, 읽은 세션 목록 어디에도 없다.
     RejectedUnknownThread,
-    // 세션 목록이 적은 thread 의 작업 디렉터리가 이 작업 공간 밖이다 (#2303). 다른 저장소의 thread 는 그 저장소의
+    // 세션 목록이 적은 thread 의 작업 디렉터리가 이 작업 공간과 그 병렬 pool 밖이다 (#2303). 다른 저장소의 thread 는 그 저장소의
     // 커널이 준비하고 제출한다.
     RejectedForeignWorkspace,
     // 병렬 모드가 켜져 있다. 병렬 모드에서 수동 프롬프트는 병렬 작업 intake 로 가야 하는데, 그 경로는 아직 TUI
