@@ -283,9 +283,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 NODE
 chmod 700 "$fake_codex"
 
-git -C "$workspace" init -q
-git -C "$workspace" config user.name 'Akra Capture'
-git -C "$workspace" config user.email 'capture@example.invalid'
+# An inherited GIT_DIR or GIT_WORK_TREE beats -C and would point init/config at the real repository.
+fixture_git() (
+  for name in $(compgen -e); do [[ $name == GIT_* ]] && unset "$name"; done
+  git "$@"
+)
+fixture_git -C "$workspace" init -q
+fixture_git -C "$workspace" config user.name 'Akra Capture'
+fixture_git -C "$workspace" config user.email 'capture@example.invalid'
 
 cat >"$tmux_config" <<'TMUX'
 set-option -g status off

@@ -262,6 +262,74 @@ fn assert_success(output: &std::process::Output, context: &str) {
     );
 }
 
+#[test]
+fn capture_fixture_git_ignores_inherited_git_dir() {
+    // An inherited GIT_DIR beats `git -C`, so raw fixture git would write the real repository config.
+    for script_rel in [
+        "scripts/capture_fullscreen_interaction_e2e.sh",
+        "scripts/capture_typed_activity_rail_e2e.sh",
+    ] {
+        let script = fs::read_to_string(repo_root().join(script_rel))
+            .unwrap_or_else(|error| panic!("{script_rel} should be readable: {error}"));
+        assert!(
+            !script.contains("\ngit -C \"$workspace\""),
+            "{script_rel} must run fixture git through fixture_git"
+        );
+        let start = script
+            .find("fixture_git() (")
+            .unwrap_or_else(|| panic!("{script_rel} should define fixture_git"));
+        let end = start
+            + script[start..]
+                .find("\n)\n")
+                .unwrap_or_else(|| panic!("{script_rel} fixture_git should close"))
+            + 3;
+
+        let root = make_records_dir();
+        let decoy = root.join("decoy");
+        let workspace = root.join("workspace");
+        fs::create_dir(&workspace).expect("fixture workspace should be created");
+        assert_success(
+            &git_command()
+                .arg("init")
+                .arg("-q")
+                .arg(&decoy)
+                .output()
+                .expect("decoy git init should run"),
+            "decoy git init",
+        );
+        let decoy_config = decoy.join(".git/config");
+        let before = fs::read_to_string(&decoy_config).expect("decoy config should be readable");
+
+        let output = Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "set -euo pipefail\n{}\
+                 fixture_git -C \"$1\" init -q\n\
+                 fixture_git -C \"$1\" config user.name 'Akra Capture'\n",
+                &script[start..end]
+            ))
+            .arg("bash")
+            .arg(&workspace)
+            .env("GIT_DIR", decoy.join(".git"))
+            .env("GIT_WORK_TREE", &decoy)
+            .output()
+            .expect("fixture_git should run");
+        assert_success(&output, script_rel);
+        assert_eq!(
+            fs::read_to_string(&decoy_config).expect("decoy config should stay readable"),
+            before,
+            "{script_rel} fixture git changed the inherited GIT_DIR repository"
+        );
+        assert!(
+            fs::read_to_string(workspace.join(".git/config"))
+                .expect("fixture config should exist")
+                .contains("Akra Capture"),
+            "{script_rel} fixture git should configure the workspace"
+        );
+        fs::remove_dir_all(root).expect("fixture git temp dir should remove");
+    }
+}
+
 #[derive(Debug)]
 struct TarEntry {
     name: String,
