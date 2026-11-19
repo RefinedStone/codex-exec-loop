@@ -1407,7 +1407,6 @@
     top: 63.2%;
     width: 18%;
     height: 20%;
-    cursor: default;
   }
   .speech {
     left: 50%;
@@ -2439,16 +2438,22 @@
           </span>
         </button>
 
-        <div
+        <button
+          type="button"
           class="scene-object rest-area"
           data-standby-rest-area
+          data-detail-type="standby"
+          data-detail-title="대기실 · Standby"
+          data-detail-subtitle="업무 배정 대기 프로필"
+          data-detail-state="작업 미할당"
+          data-detail-severity="normal"
           data-standby-count="{{ dashboard.scene.standby_characters.len() }}"
           data-standby-total-count="{{ dashboard.scene.standby_profile_count }}"
           aria-label="대기 프로필 총 {{ dashboard.scene.standby_profile_count }}명 중 {{ dashboard.scene.standby_characters.len() }}명 표시 · 작업 미할당"
         >
           <span class="speech">{% if dashboard.scene.standby_profile_count == 0 %}대기 프로필 없음{% else %}업무 배정 대기{% endif %}</span>
           <span class="object-label"><strong>대기 프로필 {{ dashboard.scene.standby_characters.len() }}/{{ dashboard.scene.standby_profile_count }}</strong></span>
-        </div>
+        </button>
       </div>
 
       <section class="scene-actor-list" data-scene-actor-list aria-label="현재 활동 요원">

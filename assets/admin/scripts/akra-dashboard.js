@@ -119,6 +119,11 @@
       ["상태", "detailState", "chip"],
       ["운영 메모", "detailNote"]
     ],
+    standby: [
+      ["상태", "detailState", "chip"],
+      ["대기 프로필", "standbyTotalCount"],
+      ["표시 중", "standbyCount"]
+    ],
     event: [
       ["상태", "detailState", "chip"],
       ["시간", "detailTime"],

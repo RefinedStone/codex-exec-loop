@@ -4345,6 +4345,33 @@ fn akra_graphic_dashboard_shows_focused_scene_fallback_after_pixi_ready() {
 }
 
 #[test]
+fn akra_graphic_dashboard_standby_selection_opens_titled_detail_with_counts() {
+    assert!(
+        AKRA_DASHBOARD_JS.contains("standby: \".office-board .rest-area\""),
+        "the Pixi STANDBY POI must still resolve to the rest area"
+    );
+    for token in [
+        "<button\n          type=\"button\"\n          class=\"scene-object rest-area\"",
+        "data-detail-type=\"standby\"",
+        "data-detail-title=\"대기실 · Standby\"",
+        "data-detail-state=\"작업 미할당\"",
+        "data-standby-total-count=\"{{ dashboard.scene.standby_profile_count }}\"",
+    ] {
+        assert!(
+            source_contains(AKRA_DASHBOARD_TEMPLATE, token),
+            "STANDBY rest area must carry a real detail projection: {token}"
+        );
+    }
+    assert!(
+        source_contains(
+            AKRA_DASHBOARD_JS,
+            "standby: [\n      [\"상태\", \"detailState\", \"chip\"],\n      [\"대기 프로필\", \"standbyTotalCount\"],\n      [\"표시 중\", \"standbyCount\"]\n    ]"
+        ),
+        "STANDBY detail must show the standby counts that the scene sync keeps live"
+    );
+}
+
+#[test]
 fn akra_graphic_dashboard_event_status_uses_readable_counts() {
     assert!(
         AKRA_DASHBOARD_TEMPLATE.contains("{{ dashboard.event_feed.status_label }}"),
