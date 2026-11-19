@@ -76,6 +76,29 @@ pub(crate) fn current_branch_name(
     )
 }
 
+/// Integration worktrees are detached, whereas a failed Git query is unknown.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum IntegrationWorktreeHead {
+    Detached,
+    Attached(String),
+    Unknown,
+}
+
+fn classify_integration_worktree_head(branch: Option<&str>) -> IntegrationWorktreeHead {
+    match branch {
+        Some("HEAD") => IntegrationWorktreeHead::Detached,
+        Some(branch) => IntegrationWorktreeHead::Attached(branch.to_string()),
+        None => IntegrationWorktreeHead::Unknown,
+    }
+}
+
+pub(crate) fn integration_worktree_head(
+    runtime: &dyn ParallelModeRuntimePort,
+    worktree_path: &Path,
+) -> IntegrationWorktreeHead {
+    classify_integration_worktree_head(current_branch_name(runtime, worktree_path).as_deref())
+}
+
 /*
 unstarted slot branch discard는 lease 저장 실패나 stream startup failure처럼 agent가
 아직 Running에 들어가기 전의 rollback 경로이다. 먼저 slot worktree를 baseline으로 되돌리고,
@@ -136,4 +159,25 @@ pub(in crate::application::service::parallel_mode) fn discard_unstarted_slot_bra
         && inspect_slot_git_status_with_runtime(runtime, slot_path)
             .is_ok_and(|status| status.is_clean_baseline())
         && delete_cleaned_slot_branch_if_unchanged(runtime, repo_root, branch_name, &source_oid)
+}
+
+#[cfg(test)]
+mod integration_worktree_head_tests {
+    use super::*;
+
+    #[test]
+    fn detached_attached_and_unknown_are_distinct() {
+        assert_eq!(
+            classify_integration_worktree_head(Some("HEAD")),
+            IntegrationWorktreeHead::Detached
+        );
+        assert_eq!(
+            classify_integration_worktree_head(Some("prerelease")),
+            IntegrationWorktreeHead::Attached("prerelease".to_string())
+        );
+        assert_eq!(
+            classify_integration_worktree_head(None),
+            IntegrationWorktreeHead::Unknown
+        );
+    }
 }

@@ -138,7 +138,10 @@ use self::session_detail::{
 };
 use self::supervisor::ParallelModeSupervisorService;
 use self::support::discard_unstarted_slot_branch;
-pub(super) use self::support::{current_branch_name, current_timestamp, ensure_directory_exists};
+pub(super) use self::support::{
+    IntegrationWorktreeHead, current_branch_name, current_timestamp, ensure_directory_exists,
+    integration_worktree_head,
+};
 const AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR: &str = "AKRA_PARALLEL_INTEGRATION_BRANCH";
 const AKRA_PARALLEL_INTEGRATION_BRANCH_CONFIG_KEY: &str = "akra.parallelIntegrationBranch";
 const AKRA_PARALLEL_ALLOW_PUBLIC_REPOSITORY_ENV_VAR: &str = "AKRA_PARALLEL_ALLOW_PUBLIC_REPOSITORY";

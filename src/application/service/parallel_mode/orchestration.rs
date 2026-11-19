@@ -9,7 +9,8 @@ use chrono::DateTime;
 // 하위 pool helper가 repo root 탐색과 git 상태 판정을 맡고, 이 파일은 tick을 막을지 결정한다.
 use super::pool::{PoolRuntimeContext, inspect_slot_git_status_with_runtime};
 use super::{
-    current_branch_name, derive_integration_worktree_path, load_pool_runtime_context_with_runtime,
+    IntegrationWorktreeHead, derive_integration_worktree_path, integration_worktree_head,
+    load_pool_runtime_context_with_runtime,
 };
 
 /*
@@ -138,10 +139,19 @@ pub(super) fn inspect_akra_integration_worktree_blocker(
             status.detail_label()
         ));
     }
-    if let Some(branch_name) = current_branch_name(runtime, &integration_path) {
-        return Some(format!(
-            "orchestrator blocked / dedicated integration worktree must remain detached but is on `{branch_name}`"
-        ));
+    match integration_worktree_head(runtime, &integration_path) {
+        IntegrationWorktreeHead::Detached => {}
+        IntegrationWorktreeHead::Attached(branch_name) => {
+            return Some(format!(
+                "orchestrator blocked / dedicated integration worktree must remain detached but is on `{branch_name}`"
+            ));
+        }
+        IntegrationWorktreeHead::Unknown => {
+            return Some(
+                "orchestrator blocked / dedicated integration worktree branch could not be inspected"
+                    .to_string(),
+            );
+        }
     }
 
     // None은 queue 처리를 막는 integration worktree 문제가 없다는 신호다.

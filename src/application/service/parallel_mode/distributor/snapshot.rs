@@ -1,8 +1,8 @@
 use super::super::supervisor::selected_runtime_session_detail;
 use super::super::{
-    DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH, PoolRuntimeContext, current_branch_name,
+    DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH, IntegrationWorktreeHead, PoolRuntimeContext,
     derive_integration_worktree_path, distributor_integration_branch_for_repo,
-    inspect_slot_git_status_with_runtime, short_sha,
+    inspect_slot_git_status_with_runtime, integration_worktree_head, short_sha,
 };
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
@@ -245,8 +245,15 @@ fn inspect_integration_worktree_readiness(
     if !status.is_clean_baseline() {
         return format!("blocked: {}", status.detail_label());
     }
-    if let Some(branch_name) = current_branch_name(runtime, &integration_path) {
-        return format!("blocked: dedicated worktree is attached to `{branch_name}`");
+    match integration_worktree_head(runtime, &integration_path) {
+        IntegrationWorktreeHead::Detached => {}
+        IntegrationWorktreeHead::Attached(branch_name) => {
+            return format!("blocked: dedicated worktree is attached to `{branch_name}`");
+        }
+        IntegrationWorktreeHead::Unknown => {
+            return "unknown: dedicated integration worktree branch could not be inspected"
+                .to_string();
+        }
     }
     format!(
         "ready: clean detached integration worktree at {}",
