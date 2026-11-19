@@ -88,6 +88,13 @@ fn configured_conversation_turn_options() -> ConversationTurnOptions {
  * ShellRuntime later drains their messages back into reducers.
  */
 #[derive(Debug, Clone)]
+pub(super) struct ClipboardImageProbeCompletion {
+    pub composer_generation: u64,
+    pub transcript_revision: u64,
+    pub outcome: ClipboardImageProbeOutcome,
+}
+
+#[derive(Debug, Clone)]
 pub(super) enum BackgroundMessage {
     #[cfg(test)]
     ConversationRuntimeNotice(String),
@@ -95,11 +102,7 @@ pub(super) enum BackgroundMessage {
     // Clipboard image probes run on a composition-owned worker thread because
     // osascript and PowerShell can take hundreds of milliseconds; the result
     // re-enters the UI loop through this channel instead of blocking keys.
-    ClipboardImageProbed {
-        composer_generation: u64,
-        transcript_revision: u64,
-        outcome: ClipboardImageProbeOutcome,
-    },
+    ClipboardImageProbed(ClipboardImageProbeCompletion),
 }
 
 pub(super) struct NativeTuiAppRuntimeChannels {
@@ -1736,12 +1739,12 @@ impl NativeTuiApp {
             },
             conversation: super::NativeTuiConversationState {
                 lifecycle: ConversationLifecycleState {
+                    clipboard_probe_generation: 0,
                     conversation_state: ConversationState::ready(initial_conversation),
                     turn_control_truth,
                 },
                 pending_manual_prompt_preparation: None,
                 prompt_input_revision: 0,
-                clipboard_composer_generation: 0,
                 turn_steer_confirmation: None,
                 pending_turn_steer: None,
                 transcript_document_revision: 0,
@@ -2478,6 +2481,7 @@ impl NativeTuiApp {
     // reducers decide between loading, failed, and ready session states.
     fn take_conversation_lifecycle_state(&mut self) -> ConversationLifecycleState {
         let replacement = ConversationLifecycleState {
+            clipboard_probe_generation: self.conversation.lifecycle.clipboard_probe_generation,
             turn_control_truth: self.conversation.lifecycle.turn_control_truth,
             conversation_state: ConversationState::Loading,
         };
@@ -2532,10 +2536,6 @@ impl NativeTuiApp {
                 | ConversationLifecycleEvent::SessionChosen { .. }
         );
         if changes_conversation_identity {
-            self.conversation.clipboard_composer_generation = self
-                .conversation
-                .clipboard_composer_generation
-                .wrapping_add(1);
             // 떠난 대화의 steer 결과는 Core 가 이 화면에 보내지 않는다 (plan 18 K2-3, K2-4).
             self.conversation.turn_steer_confirmation = None;
             self.conversation.pending_turn_steer = None;

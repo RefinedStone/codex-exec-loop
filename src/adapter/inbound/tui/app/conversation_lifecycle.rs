@@ -51,6 +51,9 @@ pub(super) struct ConversationLifecycleState {
     pub conversation_state: ConversationState,
     // Stop/interrupt 같은 turn-control truth는 snapshot 재구성 뒤에도 같은 source를 쓴다.
     pub turn_control_truth: ConversationRuntimeControlTruth,
+    // A navigation intent invalidates in-flight clipboard probes immediately,
+    // even before a deferred session selection produces its next Core snapshot.
+    pub clipboard_probe_generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +74,16 @@ pub(super) fn reduce_conversation_lifecycle(
      * loading body를 표시하고, process 결과도 core snapshot event로 되돌아온다.
      */
     let mut effects = Vec::new();
+    if matches!(
+        &event,
+        ConversationLifecycleEvent::NewDraftOpened { .. }
+            | ConversationLifecycleEvent::SessionChosen { .. }
+    ) {
+        state.clipboard_probe_generation = state
+            .clipboard_probe_generation
+            .checked_add(1)
+            .expect("clipboard composer generation overflow");
+    }
 
     match event {
         ConversationLifecycleEvent::NewDraftOpened {
@@ -237,6 +250,7 @@ mod tests {
     fn sample_state() -> ConversationLifecycleState {
         // 기본 fixture는 이미 Ready인 draft에서 lifecycle event만 바꿔 보는 형태다.
         ConversationLifecycleState {
+            clipboard_probe_generation: 0,
             conversation_state: ConversationState::ready(
                 ConversationViewModel::new_draft_with_truth(
                     "/tmp/root".to_string(),
