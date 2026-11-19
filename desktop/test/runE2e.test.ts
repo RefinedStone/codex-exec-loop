@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error -- plain ESM script without type declarations
-import { defaultE2eSpecs, MANUAL_E2E_SPECS } from "../scripts/run-e2e.mjs";
+import { defaultE2eSpecs, MANUAL_E2E_SPECS } from "../scripts/e2e-specs.mjs";
 
 describe("npm run e2e spec list", () => {
   const fileNames = readdirSync(fileURLToPath(new URL("./e2e/", import.meta.url)));
