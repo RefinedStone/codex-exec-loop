@@ -128,10 +128,18 @@ impl GithubReviewFeatureReducer {
                 self.target = Some(target.clone());
                 self.schedule = GithubReviewPollSchedule::DueNow;
             }
-            Ok(GithubReviewPollingSetupResult::Disabled) | Err(_) => {
+            Ok(GithubReviewPollingSetupResult::Disabled) => {
                 self.accepted_setup_correlation = None;
                 self.target = None;
                 self.schedule = GithubReviewPollSchedule::Off;
+            }
+            Err(_) => {
+                self.accepted_setup_correlation = None;
+                self.target = None;
+                self.schedule = GithubReviewPollSchedule::Off;
+                // Failure is not an accepted or in-flight setup. Forget its
+                // deduplication key so retrying identical inputs can recover.
+                self.setup_request = None;
             }
         }
         Some(result)
@@ -424,6 +432,61 @@ mod tests {
                 .is_none()
         );
         assert!(reducer.begin_poll().is_some());
+    }
+
+    #[test]
+    fn failed_setup_can_retry_identical_request_and_reject_stale_completion() {
+        let mut reducer = GithubReviewFeatureReducer::new();
+        let expected = target("owner/repository", 42);
+        let request = setup_request("/workspace", expected.clone());
+        let first = started(reducer.begin_setup(request.clone()));
+        assert_eq!(
+            reducer.begin_setup(request.clone()),
+            GithubReviewPollingSetupAdmission::Coalesced,
+            "an in-flight setup must still coalesce",
+        );
+
+        assert_eq!(
+            reducer.complete_setup(&first, Err("temporary connection failure".to_owned())),
+            Some(Err("temporary connection failure".to_owned()))
+        );
+        assert!(reducer.tick(Instant::now()).is_none());
+
+        let second = started(reducer.begin_setup(request.clone()));
+        assert_ne!(second.generation, first.generation);
+        assert!(
+            reducer
+                .complete_setup(
+                    &first,
+                    Ok(GithubReviewPollingSetupResult::Active {
+                        target: expected.clone(),
+                    })
+                )
+                .is_none(),
+            "the previous failed attempt cannot overwrite its retry",
+        );
+        assert_eq!(
+            reducer.begin_setup(request.clone()),
+            GithubReviewPollingSetupAdmission::Coalesced,
+            "a retry that is in-flight must still coalesce",
+        );
+        assert_eq!(
+            reducer.complete_setup(
+                &second,
+                Ok(GithubReviewPollingSetupResult::Active {
+                    target: expected.clone()
+                })
+            ),
+            Some(Ok(GithubReviewPollingSetupResult::Active {
+                target: expected.clone()
+            }))
+        );
+        assert_eq!(
+            reducer.begin_setup(request),
+            GithubReviewPollingSetupAdmission::Coalesced,
+            "a successful setup must retain its deduplication key",
+        );
+        assert!(reducer.tick(Instant::now()).is_some());
     }
 
     #[test]
