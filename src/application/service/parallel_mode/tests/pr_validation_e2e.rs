@@ -1,7 +1,7 @@
 pub mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -112,6 +112,26 @@ pub mod tests {
             Ok(snapshot_for_request(
                 request,
                 GithubValidationRunStatus::InProgress,
+            ))
+        }
+    }
+
+    /// Holds the provider response until the test releases it.
+    struct HeldGithub {
+        entered: Mutex<mpsc::Sender<()>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl GithubPrValidationPort for HeldGithub {
+        fn load_validation_snapshot(
+            &self,
+            request: &GithubPrValidationObservationRequest,
+        ) -> std::result::Result<GithubPrValidationSnapshot, GithubPrValidationError> {
+            self.entered.lock().unwrap().send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            Ok(snapshot_for_request(
+                request,
+                GithubValidationRunStatus::Failed,
             ))
         }
     }
@@ -1448,6 +1468,83 @@ pub mod tests {
             }
         ));
         assert_eq!(github.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn worker_that_lost_its_lease_during_a_held_provider_response_applies_no_changes() {
+        let repo = temp_repo("pr-validation-lease-fence");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning = planning(authority.clone());
+        bootstrap(authority.as_ref(), &repo.workspace_dir());
+        let (entered_sender, entered) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let github = Arc::new(HeldGithub {
+            entered: Mutex::new(entered_sender),
+            release: Mutex::new(release_receiver),
+        });
+        let service = build_service(authority).with_pr_validation_observation(github);
+        service
+            .persist_pr_validation_record(&repo.workspace_dir(), &repo.pool_root(), None, &record())
+            .unwrap();
+        let mut config = PrValidationSchedulerConfig::default();
+        config.mode = PrValidationSchedulerMode::Remediate;
+        let scheduler = PrValidationSchedulerService::new(
+            service.clone(),
+            planning.queue.clone(),
+            repo.workspace_dir(),
+            config,
+        )
+        .unwrap();
+        let due_at = Utc::now() + TimeDelta::seconds(1);
+        let polling = thread::spawn(move || scheduler.run_due_once_at(due_at));
+        entered
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the scheduler must reach the provider");
+
+        let expired_at = due_at + TimeDelta::seconds(180);
+        SqlitePlanningAuthorityAdapter::try_claim_runtime_pr_validation_poll(
+            &repo.workspace_dir(),
+            PrValidationPollLeaseClaimRequest {
+                record_key: record().key(),
+                owner: "owner-b",
+                token: "token-b",
+                claimed_at: expired_at,
+                expires_at: expired_at + TimeDelta::seconds(180),
+                repository_cooldown_since: expired_at - TimeDelta::seconds(30),
+            },
+        )
+        .unwrap()
+        .expect("another scheduler must take over the expired lease");
+        release.send(()).unwrap();
+
+        assert_eq!(
+            polling.join().unwrap().unwrap(),
+            PrValidationSchedulerRunOutcome::LeaseLost {
+                record_key: record().key().clone(),
+            }
+        );
+        assert!(
+            planning
+                .queue
+                .load_authority_snapshot(&repo.workspace_dir())
+                .unwrap()
+                .tasks
+                .is_empty(),
+            "a superseded worker must not admit remediation"
+        );
+        assert_eq!(
+            service
+                .recover_pr_validation_record(
+                    &repo.workspace_dir(),
+                    &repo.pool_root(),
+                    record().key(),
+                )
+                .unwrap()
+                .unwrap()
+                .observation_revision(),
+            0,
+            "a superseded worker must not write the validation record"
+        );
     }
 
     #[test]
