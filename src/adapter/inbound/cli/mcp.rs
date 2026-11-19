@@ -159,6 +159,39 @@ mod tests {
     }
 
     #[test]
+    fn global_parser_does_not_steal_mcp_child_python_flags() {
+        let invocation = crate::configuration::ParsedInvocation::parse([
+            "-c",
+            "conversation.reasoning_effort=high",
+            "mcp",
+            "add",
+            "demo",
+            "--",
+            "python",
+            "-c",
+            "print(1)",
+            "--config=child-option",
+        ])
+        .unwrap();
+        assert_eq!(invocation.overrides.len(), 1);
+        assert_eq!(
+            parse(&invocation.command_args[1..]).unwrap(),
+            McpCliCommand::Add(
+                McpHubServerSpec::stdio(
+                    "demo",
+                    "python",
+                    vec![
+                        "-c".into(),
+                        "print(1)".into(),
+                        "--config=child-option".into()
+                    ],
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
     fn parses_every_subcommand() {
         assert_eq!(parse_words(&["servers"]).unwrap(), McpCliCommand::Servers);
         assert_eq!(
