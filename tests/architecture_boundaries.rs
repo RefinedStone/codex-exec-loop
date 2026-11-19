@@ -2488,7 +2488,10 @@ fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch()
     assert!(
         run_effect.contains("self.spawn_manual_prompt_preparation(*request, permit);")
             && run_effect
-                .contains("self.spawn_stop_request_attempt(correlation, attempt, permit);"),
+                .contains("self.spawn_stop_request_attempt(correlation, attempt, permit);")
+            && run_effect.contains(
+                "self.spawn_turn_interrupt_attempt(correlation, thread_id, turn_id, permit);"
+            ),
         "manual prompt preparation and stop requests must dispatch their background workers"
     );
     assert!(
@@ -2498,7 +2501,9 @@ fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch()
         "manual cancellation and stop lifecycle invalidation must reach the worker permits"
     );
     assert!(
-        !run_effect.contains(".prepare(") && !run_effect.contains(".request_stop_all_sessions("),
+        !run_effect.contains(".prepare(")
+            && !run_effect.contains(".request_stop_all_sessions(")
+            && !run_effect.contains(".request_turn_interrupt("),
         "core effect dispatch must not execute manual preparation or stop provider I/O inline"
     );
 
@@ -2524,6 +2529,19 @@ fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch()
             && stop_worker.contains("if !permit.is_active()")
             && stop_worker.contains("conversation_service.request_stop_all_sessions()"),
         "stop provider execution must run behind its lifecycle and panic boundary"
+    );
+    let interrupt_worker = runner
+        .split_once("fn spawn_turn_interrupt_attempt(")
+        .and_then(|(_, body)| body.split_once("fn spawn_approval_decision_submission("))
+        .map(|(body, _)| body)
+        .expect("turn interrupt worker should have a bounded source body");
+    assert!(
+        interrupt_worker.contains("spawn_effect_completion_worker_with_recovery(")
+            && interrupt_worker.contains("catch_redacted_worker_unwind(")
+            && interrupt_worker.contains("if !permit.is_active()")
+            && interrupt_worker
+                .contains("conversation_service.request_turn_interrupt(&thread_id, &turn_id)"),
+        "targeted turn interrupts must run behind the same lifecycle and panic boundary"
     );
 }
 
@@ -24235,6 +24253,11 @@ const CORE_EFFECT_LAUNCH_CONTRACTS: &[(&str, &str, &str)] = &[
         "spawn_effect_completion_worker_with_recovery",
     ),
     (
+        "InterruptTurn",
+        "spawn_turn_interrupt_attempt",
+        "spawn_effect_completion_worker_with_recovery",
+    ),
+    (
         "SteerTurn",
         "spawn_turn_steer",
         "spawn_effect_completion_worker",
@@ -24750,7 +24773,10 @@ fn verify_core_effect_dispatch_shape(
             ) && statement_is_exact_launcher(launch_statement, launcher)
                 && statement_is_final_none(none_statement)
         }
-        ("RequestStopAllSessions", [register_statement, launch_statement, none_statement]) => {
+        (
+            "RequestStopAllSessions" | "InterruptTurn",
+            [register_statement, launch_statement, none_statement],
+        ) => {
             statement_is_exact_worker_registration(
                 register_statement,
                 "stop_request_workers",
