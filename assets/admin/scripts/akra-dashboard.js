@@ -2009,6 +2009,13 @@
     }
   });
 
+  // Fallback scene buttons sit at fixed map positions; only the reset camera view matches them.
+  root.addEventListener("focusin", (event) => {
+    if (event.target.matches?.(".office-board.is-pixi-ready > .scene-object:focus-visible")) {
+      window.AkraAdminGame?.resetCamera?.();
+    }
+  });
+
   debugScenario?.addEventListener("change", () => {
     runDebugHarnessCommand("scenario", debugScenario.value);
   });

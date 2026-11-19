@@ -4335,6 +4335,13 @@ fn akra_graphic_dashboard_shows_focused_scene_fallback_after_pixi_ready() {
         ),
         "Pixi hides the fallback scene buttons, but keyboard focus must stay visible on them"
     );
+    assert!(
+        AKRA_DASHBOARD_JS.contains(
+            "event.target.matches?.(\".office-board.is-pixi-ready > .scene-object:focus-visible\")"
+        ) && AKRA_DASHBOARD_JS.contains("window.AkraAdminGame?.resetCamera?.();"),
+        "a focused fallback button must reset the camera so it lines up with its Pixi object"
+    );
+    assert!(AKRA_DIORAMA_JS.contains("resetCamera:()=>"));
 }
 
 #[test]
