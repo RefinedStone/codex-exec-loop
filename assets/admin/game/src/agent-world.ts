@@ -629,7 +629,10 @@ export class AgentWorld {
     }
 
     for (const packet of this.packets.values()) {
-      const travel = ((elapsedMilliseconds / 2700 + packet.phase) % 1 + 1) % 1;
+      // Reduced motion pins every packet at mid-route with full alpha: no travel, no blink.
+      const travel = this.reducedMotion
+        ? 0.5
+        : ((elapsedMilliseconds / 2700 + packet.phase) % 1 + 1) % 1;
       const eased = travel < 0.5 ? 2 * travel * travel : 1 - Math.pow(-2 * travel + 2, 2) / 2;
       packet.graphic.position.set(
         packet.from.x + (packet.to.x - packet.from.x) * eased,

@@ -4825,6 +4825,14 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         );
     }
 
+    // #2308: packet travel and alpha blink stop under reduced motion, like the beacon pulse.
+    assert!(
+        admin_game_source_contains(
+            "const travel = this.reducedMotion\n        ? 0.5\n        : ((elapsedMilliseconds / 2700 + packet.phase) % 1 + 1) % 1;"
+        ),
+        "signal packets must hold a fixed position and alpha under reduced motion"
+    );
+
     for removed_scale_pulse in [
         "Math.sqrt(1 - step.blend)",
         "Math.sqrt(step.blend)",
