@@ -76,6 +76,7 @@
   let detailTrigger = null;
   let validationDetailRequestSequence = 0;
   let evidenceDetailRequestSequence = 0;
+  let detailDrawerGeneration = 0;
   let validationCommandRequest = null;
   let validationCommandFeedback = null;
   let currentValidationEvidence = null;
@@ -329,6 +330,11 @@
       openValidationDetailDrawer(source, { focusDrawer, rememberTrigger, trigger });
       return;
     }
+    // Every mode/identity transition invalidates pending async drawer reads.
+    detailDrawerGeneration += 1;
+    validationDetailRequestSequence += 1;
+    evidenceDetailRequestSequence += 1;
+    delete detailDrawer.dataset.validationRecordKey;
     if (rememberTrigger) detailTrigger = trigger?.isConnected ? trigger : null;
     evidenceDetailTrigger?.setAttribute("aria-expanded", "false");
     const type = source.dataset.detailType;
@@ -356,6 +362,7 @@
     const trigger = detailTrigger;
     detailTrigger = null;
     detailDrawer.classList.remove("is-open");
+    detailDrawerGeneration += 1;
     validationDetailRequestSequence += 1;
     evidenceDetailRequestSequence += 1;
     delete detailDrawer.dataset.detailMode;
@@ -1527,7 +1534,9 @@
     setSelectedDetail(null);
     clearRelated();
     detailTrigger = evidenceDetailTrigger;
+    const drawerGeneration = ++detailDrawerGeneration;
     const requestSequence = ++evidenceDetailRequestSequence;
+    delete detailDrawer.dataset.validationRecordKey;
     validationDetailRequestSequence += 1;
     detailDrawer.dataset.detailMode = "evidence";
     detailDrawerTitle.textContent = "Rollout evidence";
@@ -1548,11 +1557,19 @@
         return response.json();
       })
       .then((page) => {
-        if (requestSequence !== evidenceDetailRequestSequence) return;
+        if (
+          requestSequence !== evidenceDetailRequestSequence
+          || drawerGeneration !== detailDrawerGeneration
+          || detailDrawer.dataset.detailMode !== "evidence"
+        ) return;
         detailDrawerBody.replaceChildren(renderEvidenceHistoryPage(page));
       })
       .catch((error) => {
-        if (requestSequence !== evidenceDetailRequestSequence) return;
+        if (
+          requestSequence !== evidenceDetailRequestSequence
+          || drawerGeneration !== detailDrawerGeneration
+          || detailDrawer.dataset.detailMode !== "evidence"
+        ) return;
         const failure = createText(
           "p",
           "validation-empty severity-danger",
@@ -1571,6 +1588,8 @@
     if (rememberTrigger) detailTrigger = trigger?.isConnected ? trigger : null;
     evidenceDetailTrigger?.setAttribute("aria-expanded", "false");
     const recordKey = source.dataset.validationRecordKey;
+    const drawerGeneration = ++detailDrawerGeneration;
+    evidenceDetailRequestSequence += 1;
     const requestSequence = ++validationDetailRequestSequence;
     detailDrawer.dataset.detailMode = "validation";
     detailDrawer.dataset.validationRecordKey = recordKey || "";
@@ -1596,13 +1615,23 @@
         return response.json();
       })
       .then((record) => {
-        if (requestSequence !== validationDetailRequestSequence) return;
+        if (
+          requestSequence !== validationDetailRequestSequence
+          || drawerGeneration !== detailDrawerGeneration
+          || detailDrawer.dataset.detailMode !== "validation"
+          || detailDrawer.dataset.validationRecordKey !== String(recordKey || "")
+        ) return;
         detailDrawerTitle.textContent = `PR #${record.pullRequestNumber} · ${optionalText(record.akraId)}`;
         detailDrawerSubtitle.textContent = `${optionalText(record.phaseLabel)} · ${optionalText(record.targetShortSha)} · rev ${record.observationRevision}`;
         detailDrawerBody.replaceChildren(renderValidationDetail(record));
       })
       .catch((error) => {
-        if (requestSequence !== validationDetailRequestSequence) return;
+        if (
+          requestSequence !== validationDetailRequestSequence
+          || drawerGeneration !== detailDrawerGeneration
+          || detailDrawer.dataset.detailMode !== "validation"
+          || detailDrawer.dataset.validationRecordKey !== String(recordKey || "")
+        ) return;
         detailDrawerBody.replaceChildren(createText("p", "validation-empty severity-danger", `상세 조회 실패 · ${error.message}`));
       });
   };
