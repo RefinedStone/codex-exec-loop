@@ -34,6 +34,7 @@ npm run dev            # fetch a missing Electron binary, cargo build akra-gatew
                        # (starts the newer of ../target/{release,debug}/akra-gateway if none is running)
 npm run blueprint      # open the UX blueprint screen (src/renderer/blueprint): mock data only, no gateway, no codex
 npm run e2e            # build, then drive the app against the fake gateway (CI runs it under xvfb-run)
+                       # runs every test/e2e/*.mjs except the manual ones in scripts/run-e2e.mjs
 ```
 
 `AKRA_GATEWAY_ENDPOINT` points the app at another gateway endpoint (the fake gateway in tests); `npm run dev` then skips the cargo build.
