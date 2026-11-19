@@ -10,10 +10,6 @@ mod assembly_contract;
 // 각 단계의 helper를 직접 호출하지 않고 조립 순서를 이름 있는 함수로 남긴다.
 #[path = "view/chaining.rs"]
 mod chaining;
-// entry는 simple review view build 요청을 받아 chaining과 assembly를 호출하는 내부 entry point다.
-// 이 index 함수는 다시 그 entry에 위임한다.
-#[path = "view/entry.rs"]
-mod entry;
 // sections는 header, option status, entry/handoff 등 화면 구역별 line 묶음을 수집한다.
 // copy에서 바로 final view를 만들지 않고 section 단위로 나누는 이유가 여기에 있다.
 #[path = "view/sections.rs"]
@@ -25,14 +21,17 @@ use super::super::super::super::super::PlanningInitOverlayView;
 // copy는 text와 옵션 표시 값을 담은 input surface다. view layer는 이 값을 section line들로 바꾸는
 // presentation mapping을 수행한다.
 use super::super::super::super::copy::PlanningSimpleReviewCopy;
+// assembly는 contract-to-view, chaining은 copy-to-contract 변환이다. facade는 이 두 단계를 직접 잇는다.
+use assembly::assemble_simple_review_overlay_view;
+use chaining::build_simple_review_assembly_contract_for_copy;
 
 // 이 함수는 simple review view 내부의 public facade다. 호출자는 `copy`만 넘기고, module 내부가 section
 // 수집, contract 조립, final view assembly 순서를 책임진다.
 pub(super) fn build_simple_review_overlay_view(
-    // `copy`는 값으로 받아 조립 파이프라인이 필요한 데이터를 소유하게 한다. entry 단계에서 필요한 곳에
+    // `copy`는 값으로 받아 조립 파이프라인이 필요한 데이터를 소유하게 한다. facade에서 필요한 곳에
     // borrow하거나 move할 수 있다.
     copy: PlanningSimpleReviewCopy,
 ) -> PlanningInitOverlayView {
-    // entry module에 위임해 index file이 orchestration 세부를 직접 갖지 않게 한다.
-    entry::build_simple_review_overlay_view(copy)
+    // contract 생성은 copy를 읽기만 하므로 borrow를 사용한다. final assembly에는 owned contract가 넘어간다.
+    assemble_simple_review_overlay_view(build_simple_review_assembly_contract_for_copy(&copy))
 }
