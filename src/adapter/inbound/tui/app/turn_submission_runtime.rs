@@ -221,12 +221,19 @@ impl NativeTuiApp {
         // Prompts typed during startup checks are replayed only after the shell is
         // action-ready; blocked startup keeps the text in the buffer for the operator.
         match self.shell_action_availability() {
-            ShellActionAvailability::Ready if operator_prompt.trim().is_empty() => {
+            ShellActionAvailability::Ready
+                if operator_prompt.trim().is_empty() && !self.has_image_attachments() =>
+            {
                 self.dispatch_conversation_input(
                     ConversationComposerEvent::StartupSubmitDisarmed { status_text: None },
                 );
             }
             ShellActionAvailability::Ready => {
+                // Consume queued Enter before async preparation starts, ensuring
+                // repeated readiness notifications cannot replay the same payload.
+                self.dispatch_conversation_input(
+                    ConversationComposerEvent::StartupSubmitDisarmed { status_text: None },
+                );
                 self.submit_manual_prompt_from_text(operator_prompt);
             }
             ShellActionAvailability::Pending => {}
@@ -1584,6 +1591,44 @@ mod tests {
                 .composer
                 .startup_submit_armed
         );
+    }
+
+    #[test]
+    fn startup_replays_an_image_only_submission_exactly_once_when_ready() {
+        let workspace = TempWorkspace::new("turn-submit-startup-image-only");
+        let mut app = make_test_app(&workspace);
+        app.shell.chrome.startup_state = StartupState::Loading;
+        app.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
+            path: "/tmp/queued-shot.png".to_string(),
+        });
+
+        app.start_turn_submission();
+        assert!(ready_conversation(&app).composer.startup_submit_armed);
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
+
+        app.resolve_startup_submit_queue();
+        assert!(ready_conversation(&app).composer.startup_submit_armed);
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
+
+        app.shell.chrome.startup_state =
+            StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
+        app.resolve_startup_submit_queue();
+        assert_eq!(
+            app.conversation
+                .pending_manual_prompt_preparation
+                .as_ref()
+                .expect("queued image should enter manual preparation")
+                .transcript_text,
+            "[image #1: queued-shot.png]"
+        );
+        assert!(!ready_conversation(&app).composer.startup_submit_armed);
+
+        // A second readiness callback must not send the queued image again.
+        app.resolve_startup_submit_queue();
+        poll_manual_prompt_preparation_completion(&mut app);
+        let transcript = ready_conversation(&app);
+        assert_eq!(transcript.messages.len(), 1);
+        assert_eq!(transcript.messages[0].text, "[image #1: queued-shot.png]");
     }
 
     #[test]
