@@ -17,6 +17,8 @@ Options:
                         Allow explicit targets to be removed even when the
                         branch is not merged into --base. Use only for abandoned
                         lanes whose local and remote branch refs are disposable.
+                        The remote branch is still deleted only when its tip
+                        equals the local tip or is merged into --base.
   --force-dirty         Allow explicit targets to be removed even when the
                         worktree is dirty. Use only after the lane is finished
                         and any remaining local changes are disposable.
