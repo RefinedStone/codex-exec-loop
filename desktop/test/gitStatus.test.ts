@@ -32,6 +32,8 @@ describe("git status parsing", () => {
   it("only accepts relative paths inside the folder", () => {
     const root = join(tmpdir(), "akra-root");
     expect(resolveInside(root, "src/a.ts")).toBe(join(root, "src", "a.ts"));
+    expect(resolveInside(root, "..notes")).toBe(join(root, "..notes"));
+    expect(resolveInside(root, "src/..notes")).toBe(join(root, "src", "..notes"));
     for (const bad of ["../outside.txt", "src/../../outside.txt", join(root, "a.ts"), "", ".", 42]) {
       expect(() => resolveInside(root, bad)).toThrow();
     }

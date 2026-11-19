@@ -40,6 +40,22 @@ describe("Git hunk actions", () => {
     return executeGitHunkPlan(result.plan);
   }
 
+  it("accepts a tracked ..notes file while rejecting parent-directory traversal", async () => {
+    const repo = repository();
+    writeFileSync(join(repo.root, "..notes"), "before\n");
+    repo.git("add", "--", "..notes");
+    repo.git("commit", "-q", "-m", "track notes");
+    writeFileSync(join(repo.root, "..notes"), "after\n");
+
+    const diff = await readGitHunks(repo.root, "..notes");
+    expect(diff.message).toBeNull();
+    expect(diff.hunks).toHaveLength(1);
+    expect(diff.hunks[0]?.text).toContain("+after");
+    const escaped = await readGitHunks(repo.root, "../outside.txt");
+    expect(escaped.hunks).toEqual([]);
+    expect(escaped.message).toContain("작업 폴더 밖");
+  });
+
   it.each(["stage", "discard"] as const)("preserves other hunks and pre-staged changes when %s runs", async (action) => {
     // Given a staged first-line change and two distant unstaged replacements.
     const repo = repository();
