@@ -70,6 +70,8 @@ struct AdminAppState {
     graphic: AdminGraphicConfig,
     command_ledger: realtime::AdminCommandLedger,
     security: AdminSecurityConfig,
+    // Every SSE stream subscribes to the same shutdown signal as axum::serve.
+    shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 #[derive(Clone)]
@@ -192,8 +194,13 @@ where
         eprintln!("admin login: {public_origin}/admin/login");
     }
 
+    let shutdown = state.shutdown.clone();
     axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown_signal.wait())
+        .with_graceful_shutdown(async move {
+            shutdown_signal.wait().await;
+            // Notify SSE handlers before graceful shutdown waits for open bodies.
+            shutdown.send_replace(true);
+        })
         .await
         .context("admin server exited unexpectedly")?;
     Ok(())
@@ -232,6 +239,7 @@ fn build_admin_state_with_debug_harness(
         graphic: AdminGraphicConfig::from_env(),
         command_ledger: realtime::AdminCommandLedger::default(),
         security,
+        shutdown: tokio::sync::watch::channel(false).0,
     }
 }
 
