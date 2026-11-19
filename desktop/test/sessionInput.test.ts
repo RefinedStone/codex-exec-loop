@@ -669,3 +669,25 @@ describe("thread lifecycle notifications while listing threads", () => {
     expect(listed()).toEqual(["kept:Renamed"]);
   });
 });
+
+describe("threads added while listing threads", () => {
+  it("keeps a thread started or unarchived during the first list on a host without a rollout scan", async () => {
+    const { state, receive, replyTo, emitState } = harness(true);
+    emitState("connected");
+    await flush();
+    replyTo("initialize", {});
+    await flush();
+    replyTo("akra/gateway/info", { gatewayVersion: "1", codexVersion: null, startedAt: "", upstreamRestarts: 0 });
+    await flush();
+    const thread = (id: string, updatedAt: number) => ({ id, cwd: "/w", name: id, preview: "", updatedAt, ephemeral: false, parentThreadId: null, status: { type: "idle" } });
+    // While the list request is pending, "new" starts and "back" is unarchived.
+    receive({ jsonrpc: "2.0", method: "thread/started", params: { thread: thread("new", 3) } });
+    receive({ jsonrpc: "2.0", method: "thread/unarchived", params: { threadId: "back" } });
+    await flush();
+    replyTo("thread/read", { thread: thread("back", 2) });
+    await flush();
+    replyTo("thread/list", { data: [thread("old", 1)], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(state.folders?.flatMap((folder) => folder.threads.map((item) => item.id))).toEqual(["new", "back", "old"]);
+  });
+});

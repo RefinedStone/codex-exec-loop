@@ -178,6 +178,8 @@ export class DesktopSession {
    */
   private removedThreadIds = new Set<string>();
   private renamedThreads = new Map<string, string>();
+  /** 이 접속에서 생기거나 보관을 푼 스레드이다. 그 전에 읽기 시작한 목록에는 없을 수 있다. */
+  private addedThreads = new Map<string, Thread>();
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
   /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
@@ -492,6 +494,7 @@ export class DesktopSession {
       const generation = ++this.listGeneration;
       this.removedThreadIds.clear();
       this.renamedThreads.clear();
+      this.addedThreads.clear();
       const threads = await this.listAllThreads(true).finally(() => {
         this.statusChangesWhileListing = null;
       });
@@ -623,9 +626,9 @@ export class DesktopSession {
     }
   }
 
-  /** 목록 결과에서 이 접속 중 보관·삭제된 스레드를 빼고, 바뀐 제목을 넣는다. */
+  /** 목록 결과에 이 접속 중 생기거나 보관을 푼 스레드를 더하고, 보관·삭제된 스레드를 빼고, 바뀐 제목을 넣는다. */
   private withLifecycleChanges(threads: readonly Thread[]): Thread[] {
-    return threads
+    return [...threads, ...this.addedThreads.values()]
       .filter((thread) => !this.removedThreadIds.has(thread.id))
       .map((thread) => {
         const name = this.renamedThreads.get(thread.id);
@@ -636,7 +639,11 @@ export class DesktopSession {
   /** 다른 곳에서 보관을 푼 스레드를 읽어 사이드바에 다시 넣는다. 알림에는 스레드 id 만 있다. */
   private async addUnarchivedThread(threadId: string): Promise<void> {
     try {
-      this.store.mergeFolders(groupThreadsByCwd([await this.readThread(threadId)]));
+      const thread = await this.readThread(threadId);
+      // 읽는 동안 다시 보관했으면 넣지 않는다.
+      if (this.removedThreadIds.has(threadId)) return;
+      this.addedThreads.set(threadId, thread);
+      this.store.mergeFolders(groupThreadsByCwd([thread]));
     } catch {
       // 다시 연결할 때 읽는 목록이 채운다.
     }
@@ -695,6 +702,7 @@ export class DesktopSession {
       const thread = (params as { thread?: Thread } | null)?.thread;
       // thread/list 처럼 하위 에이전트와 디스크에 남지 않는 스레드는 목록에 넣지 않는다. 이미 있는 스레드는 그대로 둔다.
       if (thread && !thread.ephemeral && !thread.parentThreadId) {
+        this.addedThreads.set(thread.id, thread);
         this.store.mergeFolders(groupThreadsByCwd([thread]));
       }
       return;
@@ -712,6 +720,7 @@ export class DesktopSession {
     }
     if (method === "thread/archived" || method === "thread/deleted") {
       this.removedThreadIds.add(threadId);
+      this.addedThreads.delete(threadId);
       this.store.removeThread(threadId);
     }
     if (method === "thread/unarchived") {
