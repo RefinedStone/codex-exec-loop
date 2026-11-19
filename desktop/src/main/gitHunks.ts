@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, relative } from "node:path";
+import { relative } from "node:path";
 
 import type { GitActionResult } from "../shared/bridge";
 import { isConflictStatus } from "../shared/gitChange";
 import type { GitHunkAction, GitHunkDiff } from "../shared/gitHunks";
-import { anyContentFilter, failureMessage, parsePorcelainStatus, repositoryFile, runGit } from "./gitStatus";
+import { anyContentFilter, failureMessage, isOutsideRoot, parsePorcelainStatus, repositoryFile, runGit } from "./gitStatus";
 
 const DIFF_LIMIT = 1 << 20;
 const STALE_MESSAGE = "변경 내용이 달라졌습니다. 파일 변경을 새로 고치십시오.";
@@ -60,7 +60,7 @@ async function snapshot(cwdInput: unknown, pathInput: unknown): Promise<HunkSnap
   if (info) {
     const canonicalRoot = await realpath(file.root);
     const fromRoot = relative(canonicalRoot, await realpath(file.target));
-    if (fromRoot.startsWith("..") || isAbsolute(fromRoot)) throw new Error("작업 폴더 밖의 파일입니다.");
+    if (isOutsideRoot(fromRoot)) throw new Error("작업 폴더 밖의 파일입니다.");
   }
   const diff = await runGit(file.root, [
     "-c", "diff.algorithm=myers", "-c", "diff.indentHeuristic=false",

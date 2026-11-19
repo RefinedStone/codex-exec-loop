@@ -152,6 +152,11 @@ export async function requireDirectory(cwd: unknown): Promise<string> {
   return cwd;
 }
 
+/** A parent segment is dangerous; an ordinary filename such as ..notes is not. */
+export function isOutsideRoot(pathFromRoot: string): boolean {
+  return pathFromRoot === ".." || pathFromRoot.startsWith(`..${sep}`) || isAbsolute(pathFromRoot);
+}
+
 /** 작업 폴더 안의 상대 경로만 받는다. renderer 가 보낸 경로로 폴더 밖 파일을 읽지 않게 한다. */
 export function resolveInside(root: string, path: unknown): string {
   if (typeof path !== "string" || path.length === 0 || isAbsolute(path)) {
@@ -159,7 +164,7 @@ export function resolveInside(root: string, path: unknown): string {
   }
   const target = resolve(root, normalize(path));
   const fromRoot = relative(root, target);
-  if (fromRoot === "" || fromRoot.startsWith("..") || isAbsolute(fromRoot) || fromRoot.split(sep).includes("..")) {
+  if (fromRoot === "" || isOutsideRoot(fromRoot)) {
     throw new Error("작업 폴더 밖의 파일입니다.");
   }
   return target;
