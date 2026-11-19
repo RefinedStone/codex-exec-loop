@@ -6,7 +6,7 @@ import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { BROWSER_TOOL_NAMES } from "../src/shared/browserAgent";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession } from "../src/renderer/session/desktopSession";
-import { type DesktopState, mergeWorkspaceFolders, type SessionStore } from "../src/renderer/session/desktopStore";
+import { type DesktopState, mergeWorkspaceFolders, removeWorkspaceThread, renameWorkspaceThread, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Transcript } from "../src/renderer/conversation/transcript";
 
 interface Sent {
@@ -135,6 +135,12 @@ function harness(readOnly = false) {
     },
     mergeFolders: (folders) => {
       state.folders = mergeWorkspaceFolders(state.folders ?? [], folders);
+    },
+    renameThread: (threadId, title) => {
+      state.folders = renameWorkspaceThread(state.folders ?? [], threadId, title);
+    },
+    removeThread: (threadId) => {
+      state.folders = removeWorkspaceThread(state.folders ?? [], threadId);
     },
     getOpenThreadId: () => state.openThreadId ?? null,
     getTranscript: () => state.transcript ?? null,
@@ -601,5 +607,41 @@ describe("status changes while listing threads", () => {
     replyTo("thread/list", { data: [listed("a", true), listed("b", false)], nextCursor: null, backwardsCursor: null });
     await flush();
     expect(state.activeThreadIds).toEqual(["b"]);
+  });
+});
+
+describe("thread lifecycle notifications from other windows", () => {
+  it("adds started threads, renames, removes archived or deleted threads, and restores unarchived ones without a new list", async () => {
+    const { state, receive, replyTo, emitState, sent } = harness();
+    emitState("connected");
+    await flush();
+    replyTo("initialize", {});
+    await flush();
+    replyTo("akra/gateway/info", { gatewayVersion: "1", codexVersion: null, startedAt: "", upstreamRestarts: 0 });
+    await flush();
+    const thread = (id: string, cwd: string, updatedAt: number, extra: object = {}) => ({
+      id, cwd, name: null, preview: id, updatedAt, ephemeral: false, parentThreadId: null, status: { type: "idle" }, ...extra,
+    });
+    replyTo("thread/list", { data: [thread("a", "/w", 2), thread("b", "/w", 1)], nextCursor: null, backwardsCursor: null });
+    await flush();
+    const listed = () => state.folders?.map((folder) => [folder.cwd, folder.threads.map((item) => `${item.id}:${item.title}`)]);
+    const notify = (method: string, params: object) => receive({ jsonrpc: "2.0", method, params });
+
+    notify("thread/started", { thread: thread("c", "/new", 3) });
+    notify("thread/started", { thread: thread("sub", "/new", 4, { parentThreadId: "c" }) });
+    notify("thread/started", { thread: thread("tmp", "/new", 4, { ephemeral: true }) });
+    notify("thread/name/updated", { threadId: "a", threadName: "Renamed" });
+    expect(listed()).toEqual([["/new", ["c:c"]], ["/w", ["a:Renamed", "b:b"]]]);
+
+    notify("thread/archived", { threadId: "b" });
+    notify("thread/deleted", { threadId: "c" });
+    expect(listed()).toEqual([["/w", ["a:Renamed"]]]);
+
+    notify("thread/unarchived", { threadId: "b" });
+    await flush();
+    expect(sent.at(-1)).toMatchObject({ method: "thread/read", params: { threadId: "b", includeTurns: false } });
+    replyTo("thread/read", { thread: thread("b", "/w", 1) });
+    await flush();
+    expect(listed()).toEqual([["/w", ["a:Renamed", "b:b"]]]);
   });
 });

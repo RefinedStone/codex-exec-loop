@@ -82,6 +82,17 @@ describe("transcript from recorded conversations", () => {
     ]);
     expect(unchanged).toEqual(initial);
   });
+
+  it("takes the new title from thread/name/updated and keeps it when the name is missing", () => {
+    const { resume } = loadConversation(APPROVAL_TURN_RECORDING);
+    const initial = transcriptFromResume(resume);
+    const renamed = applyNotifications(initial, [
+      { method: "thread/name/updated", params: { threadId: initial.threadId, threadName: "Renamed" } },
+      { method: "thread/name/updated", params: { threadId: initial.threadId } },
+      { method: "thread/name/updated", params: { threadId: "other", threadName: "Other" } },
+    ]);
+    expect(renamed).toEqual({ ...initial, title: "Renamed" });
+  });
 });
 
 describe("FrameBatcher", () => {

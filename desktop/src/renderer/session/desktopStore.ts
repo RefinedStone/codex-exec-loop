@@ -139,6 +139,18 @@ export function mergeWorkspaceFolders(current: readonly WorkspaceFolder[], incom
   return sortFolders([...byCwd.values()]);
 }
 
+/** `thread/name/updated` 의 새 제목을 그 스레드에 넣는다. */
+export function renameWorkspaceThread(folders: readonly WorkspaceFolder[], threadId: string, title: string): WorkspaceFolder[] {
+  return folders.map((folder) => ({ ...folder, threads: folder.threads.map((thread) => (thread.id === threadId ? { ...thread, title } : thread)) }));
+}
+
+/** 보관하거나 지운 스레드를 뺀다. 작업 폴더는 스레드로 만들므로 빈 폴더도 뺀다 (D-16). */
+export function removeWorkspaceThread(folders: readonly WorkspaceFolder[], threadId: string): WorkspaceFolder[] {
+  return folders
+    .map((folder) => ({ ...folder, threads: folder.threads.filter((thread) => thread.id !== threadId) }))
+    .filter((folder) => folder.threads.length > 0);
+}
+
 export interface DesktopState {
   connection: ConnectionState | null;
   gateway: GatewayInfo | null;
@@ -182,6 +194,10 @@ export interface DesktopState {
   addThreadToFolder(cwd: string, thread: WorkspaceThread): void;
   /** 늦게 끝난 전체 목록에서 처음 보는 스레드만 사이드바에 더한다. */
   mergeFolders(folders: WorkspaceFolder[]): void;
+  /** 다른 곳에서 바뀐 스레드 제목을 사이드바에 반영한다. */
+  renameThread(threadId: string, title: string): void;
+  /** 다른 곳에서 보관하거나 지운 스레드를 사이드바에서 뺀다. */
+  removeThread(threadId: string): void;
   /** 커널 패널이 보는 저장소 커널의 상태이다 (plan 18 K3-6). */
   kernel: KernelView;
   setKernel(kernel: KernelView): void;
@@ -263,6 +279,8 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
       return { folders: [{ cwd, threads }, ...others] };
     }),
   mergeFolders: (folders) => set((state) => ({ folders: mergeWorkspaceFolders(state.folders, folders) })),
+  renameThread: (threadId, title) => set((state) => ({ folders: renameWorkspaceThread(state.folders, threadId, title) })),
+  removeThread: (threadId) => set((state) => ({ folders: removeWorkspaceThread(state.folders, threadId) })),
   kernel: EMPTY_KERNEL_VIEW,
   setKernel: (kernel) => set({ kernel }),
   dots: [],
@@ -315,6 +333,8 @@ export type SessionStore = Pick<
   | "clearApprovals"
   | "addThreadToFolder"
   | "mergeFolders"
+  | "renameThread"
+  | "removeThread"
   | "setKernel"
   | "setDots"
   | "applyDotLive"
@@ -339,6 +359,8 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     clearApprovals: state.clearApprovals,
     addThreadToFolder: state.addThreadToFolder,
     mergeFolders: state.mergeFolders,
+    renameThread: state.renameThread,
+    removeThread: state.removeThread,
     setKernel: state.setKernel,
     setDots: state.setDots,
     applyDotLive: state.applyDotLive,
