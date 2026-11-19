@@ -669,5 +669,52 @@ impl ParallelModePoolBoardSnapshot {
     }
 }
 
+/*
+pool root는 저장소 내부가 아니라 저장소 옆 형제 디렉터리에 둔다. 병렬 slot
+worktree들이 원본 repo 안에 생기면 git status, cargo scan, editor search가 slot 파일까지
+뒤섞어 볼 수 있기 때문이다. repo 이름과 canonical path hash를 함께 쓰면 같은 이름의
+repo가 다른 위치에 있어도 pool root가 충돌하지 않는다.
+*/
+pub(crate) fn default_parallel_pool_root(
+    canonical_repo_root: &std::path::Path,
+) -> std::path::PathBuf {
+    // repository root가 filesystem root처럼 이름을 얻을 수 없는 경로여도 pool
+    // 계산은 계속되어야 하므로 표시 이름만 안전한 fallback으로 바꾼다.
+    let repo_name = canonical_repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace");
+    // sibling directory를 기준으로 잡아 source checkout 내부에 slot worktree가
+    // 생기지 않게 한다. parent가 없으면 root 자체를 기준으로 삼아 path 계산만 유지한다.
+    let parent_dir = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
+
+    parent_dir
+        .join(format!("{repo_name}-akra-worktrees"))
+        .join(stable_short_hash(&canonical_repo_root.to_string_lossy()))
+        .join("akra-pool")
+}
+
+/*
+이 hash는 보안용이 아니라 경로 충돌 방지용 안정 식별자이다. 같은 canonical
+repo path는 항상 같은 pool root를 얻어야 하고, 서로 다른 checkout은 같은 repo 이름이어도
+다른 pool root를 얻어야 한다. 짧은 FNV-1a 값이면 디렉터리 이름을 과하게 길게 만들지
+않으면서 이 목적을 달성할 수 있다.
+*/
+pub(crate) fn stable_short_hash(value: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    // path key만 만들 목적이므로 별도 dependency 없이 고정된 byte 순회로
+    // 플랫폼마다 같은 checkout 경로가 같은 짧은 suffix를 얻도록 한다.
+    let mut hash = FNV_OFFSET;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    format!("{hash:016x}")[..12].to_string()
+}
+
 #[cfg(test)]
 mod tests;

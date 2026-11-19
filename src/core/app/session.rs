@@ -75,6 +75,39 @@ pub(crate) fn workspace_contains(workspace: &str, path: &str) -> bool {
                 .is_some_and(|rest| rest.starts_with('/')))
 }
 
+/// `path` 가 이 작업 공간의 디렉터리이거나 그 저장소의 병렬 pool 안이다 (#2303).
+pub(crate) fn workspace_owns(workspace: &str, path: &str) -> bool {
+    workspace_contains(workspace, path) || inside_workspace_pool(workspace, path)
+}
+
+/*
+ * slot worktree 는 저장소 안이 아니라 옆의 `<name>-akra-worktrees/<hash>/akra-pool` 아래에 있다. 위치는 병렬 모드와
+ * 같은 `default_parallel_pool_root` 로 만든다. hash 는 canonical 경로의 글자로 만들므로 글자가 다른 같은 경로에서
+ * 달라진다. 그래서 hash 자리는 아무 이름이나 받는다: 같은 부모 아래 같은 이름이면 같은 저장소이다.
+ */
+fn inside_workspace_pool(workspace: &str, path: &str) -> bool {
+    let pool_root = crate::domain::parallel_mode::default_parallel_pool_root(std::path::Path::new(
+        workspace.trim(),
+    ));
+    let (Some(worktrees_dir), Some(pool_name)) = (
+        pool_root.parent().and_then(std::path::Path::parent),
+        pool_root.file_name(),
+    ) else {
+        return false;
+    };
+    let worktrees_dir = comparable_path(&worktrees_dir.to_string_lossy());
+    let pool_name = comparable_path(&pool_name.to_string_lossy());
+    let path = comparable_path(path);
+    let Some(rest) = path
+        .strip_prefix(&worktrees_dir)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return false;
+    };
+    let mut segments = rest.split('/');
+    segments.next().is_some_and(|hash| !hash.is_empty()) && segments.next() == Some(&pool_name)
+}
+
 fn comparable_path(path: &str) -> String {
     let path = path.trim();
     // adapter 의 `simplify_windows_verbatim_key` 와 같은 규칙이다: `\\?\UNC\server` 는 `\\server` 이다.
@@ -151,7 +184,7 @@ mod tests {
     #[test]
     fn workspace_contains_only_the_workspace_and_its_subdirectories() {
         assert!(workspace_contains("/repo/a", "/repo/a"));
-        assert!(workspace_contains("/repo/a/", "/repo/a/.akra-pool/slot-1"));
+        assert!(workspace_contains("/repo/a/", "/repo/a/src"));
         assert!(workspace_contains(r"\\?\C:\repo\a", "C:/repo/a/src"));
         assert!(workspace_contains(
             r"\\?\UNC\server\share\repo",
@@ -161,5 +194,35 @@ mod tests {
         assert!(!workspace_contains("/repo/a", "/repo/b"));
         assert!(!workspace_contains("/repo/a", "/repo"));
         assert!(!workspace_contains("/repo/a", ""));
+    }
+
+    #[test]
+    fn a_workspace_owns_the_slot_worktrees_of_its_own_parallel_pool_only() {
+        // Slot worktrees live beside the repository, not under it.
+        let pool = |repo: &str| {
+            crate::domain::parallel_mode::default_parallel_pool_root(std::path::Path::new(repo))
+        };
+        let own_slot = pool("/repo/a").join("slot-1");
+        let own_slot = own_slot.to_string_lossy();
+        assert!(
+            own_slot.contains("a-akra-worktrees"),
+            "the pool is a sibling: {own_slot}"
+        );
+        assert!(!workspace_contains("/repo/a", &own_slot));
+        assert!(workspace_owns("/repo/a", &own_slot));
+        // The hash comes from the canonical spelling, so another spelling of the same root has another hash.
+        assert!(workspace_owns(
+            "/repo/a",
+            "/repo/a-akra-worktrees/0123456789ab/akra-pool/slot-2"
+        ));
+        assert!(!workspace_owns(
+            "/repo/a",
+            &pool("/repo/b").join("slot-1").to_string_lossy()
+        ));
+        assert!(!workspace_owns(
+            "/repo/a",
+            "/repo/a-akra-worktrees/0123456789ab/other/slot-1"
+        ));
+        assert!(!workspace_owns("/repo/a", "/repo/b"));
     }
 }
