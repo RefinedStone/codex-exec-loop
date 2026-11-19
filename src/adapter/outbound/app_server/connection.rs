@@ -222,6 +222,13 @@ impl AppServerTurnInterruptSignal {
             .insert((thread_id.to_string(), turn_id.to_string()));
     }
 
+    fn turn_interrupt_requested(&self, thread_id: &str, turn_id: &str) -> bool {
+        self.targeted_turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&(thread_id.to_string(), turn_id.to_string()))
+    }
+
     fn take_turn_interrupt(&self, thread_id: &str, turn_id: &str) -> bool {
         self.targeted_turns
             .lock()
@@ -928,6 +935,19 @@ struct BoundApprovalContext<'a> {
     thread_id: &'a str,
     turn_id: &'a str,
     interrupt: ApprovalInterruptContext<'a>,
+}
+
+impl BoundApprovalContext<'_> {
+    // 전체 stop 이나 이 턴만 향한 stop 이 왔다 (#2304). 요청은 꺼내지 않는다. stream loop 가 interrupt 를 보낸다.
+    fn interrupted(&self) -> bool {
+        self.interrupt
+            .signal
+            .requested_after(self.interrupt.observed_generation)
+            || self
+                .interrupt
+                .signal
+                .turn_interrupt_requested(self.thread_id, self.turn_id)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2761,11 +2781,7 @@ impl AppServerConnection {
                 None,
             );
         };
-        let interrupt_context = approval_context.interrupt;
-        if interrupt_context
-            .signal
-            .requested_after(interrupt_context.observed_generation)
-        {
+        if approval_context.interrupted() {
             return self.send_pre_ui_approval_decline(
                 request_id,
                 spec,
@@ -2790,11 +2806,7 @@ impl AppServerConnection {
             details: spec.details.clone(),
         };
         let request_identity = request.identity();
-        if interrupt_context
-            .signal
-            .requested_after(interrupt_context.observed_generation)
-            || Instant::now() >= deadline
-        {
+        if approval_context.interrupted() || Instant::now() >= deadline {
             self.approval_broker.cancel(&approval_id);
             return self.send_pre_ui_approval_decline(
                 request_id,
@@ -2831,10 +2843,7 @@ impl AppServerConnection {
                 });
                 return Err(error);
             }
-            if interrupt_context
-                .signal
-                .requested_after(interrupt_context.observed_generation)
-            {
+            if approval_context.interrupted() {
                 self.approval_broker.cancel(&approval_id);
                 break (
                     spec.declined_result.clone(),
@@ -2875,10 +2884,7 @@ impl AppServerConnection {
             match decision_receiver.recv_timeout(wait) {
                 Ok(ConversationApprovalDecision::Accept) => {
                     run_after_approval_decision_received_hook();
-                    if interrupt_context
-                        .signal
-                        .requested_after(interrupt_context.observed_generation)
-                    {
+                    if approval_context.interrupted() {
                         self.approval_broker.cancel(&approval_id);
                         break (
                             spec.declined_result.clone(),
@@ -5590,6 +5596,86 @@ mod tests {
                 .resolve(&approval_id, ConversationApprovalDecision::Accept)
                 .is_err(),
             "the interrupted broker entry must be removed exactly once"
+        );
+    }
+
+    #[test]
+    fn targeted_interrupt_after_ui_delivery_declines_and_cleans_the_exact_broker_entry() {
+        // #2304: a stop aimed at this turn alone ends an open approval like a global stop.
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.approval_timeout = Duration::from_secs(1);
+        let request = json!({
+            "id": "approval-interrupted-by-targeted-stop",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        let signal_for_operator = signal.clone();
+        let (event_sender, event_receiver) = mpsc::channel();
+        let operator = thread::spawn(move || {
+            let requested = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("approval should reach the UI before the interrupt");
+            let ConversationStreamEvent::ApprovalRequested { request } = requested else {
+                panic!("expected approval request, got {requested:?}");
+            };
+            signal_for_operator.request_turn_interrupt("thread-1", "turn-1");
+            let resolved = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("interrupted approval should emit a resolution");
+            (request.approval_id, resolved)
+        });
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(BoundApprovalContext {
+                        thread_id: "thread-1",
+                        turn_id: "turn-1",
+                        interrupt: ApprovalInterruptContext {
+                            signal: &signal,
+                            observed_generation,
+                        },
+                    }),
+                )
+                .expect("a targeted interrupt after delivery should fail-close the approval")
+        );
+
+        let (approval_id, resolved) = operator.join().expect("operator thread should finish");
+        assert!(matches!(
+            resolved,
+            ConversationStreamEvent::ApprovalResolved {
+                resolution: ConversationApprovalResolution::Interrupted,
+                ..
+            }
+        ));
+        assert_eq!(
+            harness.logged_json_lines(1)[0]["result"],
+            json!({ "decision": "decline" })
+        );
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+        assert!(
+            harness
+                .connection
+                .approval_broker
+                .resolve(&approval_id, ConversationApprovalDecision::Accept)
+                .is_err(),
+            "the interrupted broker entry must be removed exactly once"
+        );
+        assert!(
+            signal.take_turn_interrupt("thread-1", "turn-1"),
+            "the approval wait leaves the request for the stream loop to send turn/interrupt"
         );
     }
 
