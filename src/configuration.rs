@@ -603,6 +603,12 @@ impl ParsedInvocation {
         let mut index = 0;
         while index < input.len() {
             let argument = &input[index];
+            if argument == OsStr::new("--") {
+                // The remaining words belong to the subcommand (e.g. MCP
+                // stdio process arguments), even when they resemble -c.
+                command_args.extend(input[index..].iter().cloned());
+                break;
+            }
             if argument == OsStr::new("-c") || argument == OsStr::new("--config") {
                 let value = input
                     .get(index + 1)
@@ -3058,6 +3064,42 @@ mod tests {
 
         assert_eq!(invocation.command_args, vec![OsString::from("status")]);
         assert_eq!(invocation.overrides.len(), 2);
+    }
+
+    #[test]
+    fn invocation_stops_extracting_global_overrides_after_double_dash() {
+        let input = [
+            "-c",
+            "conversation.reasoning_effort=high",
+            "mcp",
+            "add",
+            "demo",
+            "--",
+            "python",
+            "-c",
+            "print(1)",
+            "--config=literal-child-option",
+        ];
+        let invocation = ParsedInvocation::parse(input).unwrap();
+        assert_eq!(invocation.overrides.len(), 1);
+        assert_eq!(
+            invocation.command_args,
+            input[2..].iter().map(OsString::from).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn invocation_preserves_missing_config_value_after_double_dash() {
+        let invocation =
+            ParsedInvocation::parse(["mcp", "add", "demo", "--", "python", "--config"]).unwrap();
+        assert!(invocation.overrides.is_empty());
+        assert_eq!(
+            invocation.command_args,
+            ["mcp", "add", "demo", "--", "python", "--config"]
+                .iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
