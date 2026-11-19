@@ -104,8 +104,22 @@ try {
   const saved = JSON.parse(readFileSync(join(userData, "browser-settings.json"), "utf8"));
   check("profiles are saved in the userData folder", saved.profiles.some((profile) => profile.id === "qa"));
 
-  await page.getByTestId("browser-toggle").click();
-  check("closing the panel removes it", (await page.getByTestId("browser-panel").count()) === 0);
+  // A renderer reload keeps the BrowserWindow / WebContents id alive. Old
+  // native WebContentsView instances nevertheless must be destroyed.
+  const oldViewIds = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    return window.contentView.children
+      .filter((view) => view.webContents)
+      .map((view) => view.webContents.id);
+  });
+  check("reload test begins with a native browser view", oldViewIds.length > 0);
+  await page.reload();
+  await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
+  const remainingOldViews = await app.evaluate(({ BrowserWindow }, ids) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    return window.contentView.children.some((view) => view.webContents && ids.includes(view.webContents.id));
+  }, oldViewIds);
+  check("renderer reload releases the previous native browser view", !remainingOldViews);
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
