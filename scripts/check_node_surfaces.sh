@@ -35,7 +35,8 @@ node --test \
   scripts/ci-scope.test.mjs \
   scripts/agent-plan.test.mjs \
   scripts/npm-audit-gate.test.mjs \
-  scripts/pr-validation-approval-package.test.mjs
+  scripts/pr-validation-approval-package.test.mjs \
+  scripts/pr-validation-rollout-evidence.test.mjs
 
 printf '\n==> npm launcher tests\n'
 npm --prefix npm test

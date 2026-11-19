@@ -222,7 +222,10 @@ export function buildRolloutEvidence(input) {
   ) || null;
   const failureCanary = input.contractEvidence?.canaries?.failure;
   const failureCanaryPassed = failureCanary?.status === "pass";
-  const postMergeSamplePassed = postMergeGates.length > 0 && postMergeFailures === 0;
+  // Every sampled PR needs its own successful Post-Merge Gate; a missing gate is not a pass.
+  const postMergeSamplePassed = rows.every(
+    (row) => row.postMerge?.postMergeGate?.conclusion === "success",
+  );
   const criteriaPassed = Object.values(criteria).every((entry) => entry.status === "pass");
   const readyForRemediate = Boolean(
     criteriaPassed && productionSuccessCanary && failureCanaryPassed && postMergeSamplePassed,
