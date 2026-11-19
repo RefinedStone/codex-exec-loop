@@ -35,11 +35,30 @@ test("Rust changes keep tests, lint, and portable validation together", () => {
 });
 
 test("admin-only changes run Node surfaces without unrelated Rust jobs", () => {
-  const plan = classifyChangedPaths(["assets/admin/game/src/main.ts", "templates/admin/index.html"]);
+  const plan = classifyChangedPaths(["assets/admin/game/src/main.ts", "templates/admin/resources/main-sprite.png"]);
   assert.equal(plan.scope, "admin");
   assert.equal(plan.node, true);
   assert.equal(plan.rust, false);
   assert.equal(plan.portable, false);
+});
+
+test("compiled Askama admin templates require Rust checks and Node surfaces", () => {
+  for (const template of [
+    "templates/admin/akra_dashboard.html",
+    "templates/admin/base.html",
+    "templates/admin/partials/draft_status.html",
+  ]) {
+    const plan = classifyChangedPaths([template]);
+    assert.equal(plan.scope, "mixed", template);
+    assert.equal(plan.rust, true, template);
+    assert.equal(plan.node, true, template);
+    assert.equal(plan.portable, true, template);
+    assert.equal(plan.docs_only, false, template);
+  }
+  // Static images under the same directory are not embedded Askama syntax.
+  const image = classifyChangedPaths(["templates/admin/resources/main-sprite.png"]);
+  assert.equal(image.rust, false);
+  assert.equal(image.node, true);
 });
 
 test("desktop-only changes run the Node surfaces without Rust jobs", () => {
