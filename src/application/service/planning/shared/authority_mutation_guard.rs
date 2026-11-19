@@ -49,9 +49,13 @@ pub(crate) fn with_task_mutation_guard<T>(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     authority.acquire_admin_task_mutation_guard(workspace_dir, task_ids, &owner_token)?;
-    let outcome = operation();
+    let outcome = catch_unwind(AssertUnwindSafe(operation));
     let release =
         authority.release_admin_task_mutation_guard(workspace_dir, task_ids, &owner_token);
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(panic) => resume_unwind(panic),
+    };
     match (outcome, release) {
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) => Err(error),
@@ -99,6 +103,44 @@ mod tests {
         assert_eq!(&acquired[..3], ["acquire", "/workspace", "reset"]);
         assert_eq!(&released[..2], ["release", "/workspace"]);
         assert_eq!(acquired[3], released[2]);
+    }
+
+    #[test]
+    fn task_guard_releases_exact_owner_on_panic_and_allows_next_acquisition() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let owner = Arc::new(Mutex::new(None));
+        let authority = NoopPlanningAuthorityPort::default()
+            .with_admin_task_guard_tracking(events.clone(), owner.clone());
+        let task_ids = vec!["task-17".to_owned()];
+
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let _: Result<()> =
+                with_task_mutation_guard(&authority, "/workspace", &task_ids, || {
+                    panic!("task mutation panic")
+                });
+        }))
+        .expect_err("operation panic must be resumed");
+
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"task mutation panic"));
+        assert!(
+            owner.lock().unwrap().is_none(),
+            "task owner must be released"
+        );
+        {
+            let events = events.lock().unwrap();
+            assert_eq!(events.len(), 2);
+            let acquired: Vec<_> = events[0].split('|').collect();
+            let released: Vec<_> = events[1].split('|').collect();
+            assert_eq!(&acquired[..3], ["acquire", "/workspace", "task-17"]);
+            assert_eq!(&released[..3], ["release", "/workspace", "task-17"]);
+            assert_eq!(acquired[3], released[3]);
+        }
+
+        let value = with_task_mutation_guard(&authority, "/workspace", &task_ids, || Ok(17))
+            .expect("a mutation after the panic should acquire a fresh guard");
+        assert_eq!(value, 17);
+        assert!(owner.lock().unwrap().is_none());
+        assert_eq!(events.lock().unwrap().len(), 4);
     }
 
     #[test]

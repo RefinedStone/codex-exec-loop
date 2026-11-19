@@ -1038,6 +1038,8 @@ pub struct NoopPlanningAuthorityPort {
     clear_parallel_runtime_projections_for_tasks_error: Option<&'static str>,
     apply_parallel_pool_reset_report_error: Option<&'static str>,
     admin_authority_guard_events: Option<Arc<Mutex<Vec<String>>>>,
+    admin_task_guard_events: Option<Arc<Mutex<Vec<String>>>>,
+    admin_task_guard_owner: Option<Arc<Mutex<Option<String>>>>,
     admin_authority_guard_release_error: Option<&'static str>,
 }
 
@@ -1107,6 +1109,16 @@ impl NoopPlanningAuthorityPort {
 
     pub fn with_admin_authority_guard_events(mut self, events: Arc<Mutex<Vec<String>>>) -> Self {
         self.admin_authority_guard_events = Some(events);
+        self
+    }
+
+    pub fn with_admin_task_guard_tracking(
+        mut self,
+        events: Arc<Mutex<Vec<String>>>,
+        owner: Arc<Mutex<Option<String>>>,
+    ) -> Self {
+        self.admin_task_guard_events = Some(events);
+        self.admin_task_guard_owner = Some(owner);
         self
     }
 
@@ -1294,19 +1306,55 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
     // This test-only adapter has no concurrent store, so explicit guard calls are no-ops.
     fn acquire_admin_task_mutation_guard(
         &self,
-        _workspace_dir: &str,
-        _task_ids: &[String],
-        _owner_token: &str,
+        workspace_dir: &str,
+        task_ids: &[String],
+        owner_token: &str,
     ) -> Result<()> {
+        if let Some(owner) = &self.admin_task_guard_owner {
+            let mut held = owner
+                .lock()
+                .map_err(|_| anyhow!("admin task guard owner lock is poisoned"))?;
+            if held.is_some() {
+                anyhow::bail!("task mutation guard is already held");
+            }
+            *held = Some(owner_token.to_owned());
+        }
+        if let Some(events) = &self.admin_task_guard_events {
+            events
+                .lock()
+                .map_err(|_| anyhow!("admin task guard event lock is poisoned"))?
+                .push(format!(
+                    "acquire|{workspace_dir}|{}|{owner_token}",
+                    task_ids.join(",")
+                ));
+        }
         Ok(())
     }
 
     fn release_admin_task_mutation_guard(
         &self,
-        _workspace_dir: &str,
-        _task_ids: &[String],
-        _owner_token: &str,
+        workspace_dir: &str,
+        task_ids: &[String],
+        owner_token: &str,
     ) -> Result<()> {
+        if let Some(owner) = &self.admin_task_guard_owner {
+            let mut held = owner
+                .lock()
+                .map_err(|_| anyhow!("admin task guard owner lock is poisoned"))?;
+            if held.as_deref() != Some(owner_token) {
+                anyhow::bail!("task mutation guard is not owned by caller");
+            }
+            *held = None;
+        }
+        if let Some(events) = &self.admin_task_guard_events {
+            events
+                .lock()
+                .map_err(|_| anyhow!("admin task guard event lock is poisoned"))?
+                .push(format!(
+                    "release|{workspace_dir}|{}|{owner_token}",
+                    task_ids.join(",")
+                ));
+        }
         Ok(())
     }
 

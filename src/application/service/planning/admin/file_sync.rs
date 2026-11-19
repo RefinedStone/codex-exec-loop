@@ -2,6 +2,8 @@
 // 실제 쓰기/읽기는 workspace port를 통해 수행하고, planning 저장소 갱신은 facade helper에 맡긴다.
 // Admin API는 실패 원인을 operator에게 그대로 보여 주므로 `Context`로 어느 파일 작업이 실패했는지 붙이고,
 // parallel busy guard는 `bail!`로 즉시 중단한다.
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
 use anyhow::{Context, Result, anyhow};
 use rand::RngCore;
 
@@ -85,10 +87,14 @@ impl PlanningAdminFacadeService {
                 &owner_token,
                 action,
             )?;
-        let result = operation(&owner_token);
+        let result = catch_unwind(AssertUnwindSafe(|| operation(&owner_token)));
         let release = self
             .planning_authority_port
             .release_admin_authority_mutation_guard(self.workspace_dir.as_str(), &owner_token);
+        let result = match result {
+            Ok(result) => result,
+            Err(panic) => resume_unwind(panic),
+        };
         match (result, release) {
             (Ok(value), Ok(())) => Ok(value),
             (Ok(_), Err(error)) => Err(error.context(
