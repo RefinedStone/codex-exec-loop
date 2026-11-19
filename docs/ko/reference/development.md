@@ -139,6 +139,8 @@ bash scripts/cleanup_merged_worktrees.sh --apply \
   --branch docs/native-platform-reference
 ```
 
-Helper는 clean하고 merge된 non-root worktree만 제거합니다. `--force-dirty`는 남은 churn을 버려도 되는
+Helper는 clean하고 merge된 non-root worktree만 제거합니다. 원격 branch는 실제 원격 tip이 정리한
+local tip과 같거나 base에 merge된 경우에만 그 tip을 lease로 걸고 삭제합니다. 디렉터리가 사라진
+worktree는 branch 삭제 전에 prune하고, lock된 것은 건너뜁니다. `--force-dirty`는 남은 churn을 버려도 되는
 완료 branch 하나에만 명시적으로 사용합니다. `akra-agent/slot-*`에는 사용하지 않습니다. 해당
 worktree, lease, session detail은 parallel runtime이 소유합니다.

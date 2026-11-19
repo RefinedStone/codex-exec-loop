@@ -138,16 +138,50 @@ remote_branch_exists() {
   git show-ref --verify --quiet "refs/remotes/${remote_name}/${branch_name}"
 }
 
+delete_remote_branch_if_integrated() {
+  local branch_name="$1"
+  local local_sha="$2"
+  local remote_sha
+
+  if ! remote_sha="$(git ls-remote "${remote_name}" "refs/heads/${branch_name}")"; then
+    printf 'keeping remote branch %s/%s: could not read the remote tip\n' "${remote_name}" "${branch_name}"
+    return 0
+  fi
+  remote_sha="${remote_sha%%[[:space:]]*}"
+  if [[ -z "${remote_sha}" ]]; then
+    printf 'remote branch %s/%s is already gone\n' "${remote_name}" "${branch_name}"
+    return 0
+  fi
+  # The local tip passed the merge checks; any other remote tip must itself be merged into the base.
+  if [[ "${remote_sha}" != "${local_sha}" ]] \
+    && ! git merge-base --is-ancestor "${remote_sha}" "${base_ref}" 2>/dev/null; then
+    printf 'keeping remote branch %s/%s: remote tip %s differs from the local tip %s and is not merged into %s\n' \
+      "${remote_name}" "${branch_name}" "${remote_sha}" "${local_sha}" "${base_ref}"
+    return 0
+  fi
+  # The lease makes the remote refuse the delete when the tip moved after the check above.
+  if ! git push --force-with-lease="refs/heads/${branch_name}:${remote_sha}" \
+    "${remote_name}" --delete "${branch_name}"; then
+    printf 'keeping remote branch %s/%s: the remote refused to delete tip %s\n' \
+      "${remote_name}" "${branch_name}" "${remote_sha}"
+  fi
+}
+
 apply_cleanup() {
   local path="$1"
   local branch_name="$2"
   local explicit_target="$3"
   local force_remove_path="$4"
+  local local_sha
 
+  local_sha="$(git rev-parse --verify --quiet "refs/heads/${branch_name}")"
   printf 'removing worktree %s (%s)\n' "${path}" "${branch_name}"
   if [[ "${force_remove_path}" == "true" || ("${explicit_target}" == "true" && "${force_dirty}" == "true") ]]; then
     if [[ -d "${path}" ]]; then
       git worktree remove --force "${path}"
+    else
+      # The directory is gone but its registration still holds the branch; drop the stale entry first.
+      git worktree prune
     fi
     git branch -D "${branch_name}"
   else
@@ -161,7 +195,7 @@ apply_cleanup() {
     fi
   fi
   if remote_branch_exists "${branch_name}"; then
-    git push "${remote_name}" --delete "${branch_name}" || true
+    delete_remote_branch_if_integrated "${branch_name}" "${local_sha}"
   fi
 }
 
@@ -282,10 +316,12 @@ fi
 
 current_path=""
 current_branch=""
+current_locked=false
 
 process_entry() {
   local path="$1"
   local branch_ref="$2"
+  local path_locked="$3"
   local branch_name
   local branch_integrated=false
   local explicitly_targeted=false
@@ -356,6 +392,12 @@ process_entry() {
   fi
 
   if [[ "${path_missing}" == "true" ]]; then
+    if [[ "${path_locked}" == "true" ]]; then
+      # `git worktree prune` keeps a locked entry, so its branch cannot be deleted.
+      report_cleanup "skip" "locked worktree with a missing path; unlock it to clean up" "${path}" "${branch_name}"
+      skipped_count=$((skipped_count + 1))
+      return 0
+    fi
     if [[ "${apply_mode}" == "true" ]]; then
       pending_paths+=("${path}")
       pending_branches+=("${branch_name}")
@@ -400,9 +442,10 @@ process_entry() {
 
 while IFS= read -r line || [[ -n "${line}" ]]; do
   if [[ -z "${line}" ]]; then
-    process_entry "${current_path}" "${current_branch}"
+    process_entry "${current_path}" "${current_branch}" "${current_locked}"
     current_path=""
     current_branch=""
+    current_locked=false
     continue
   fi
 
@@ -413,10 +456,13 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
     branch\ refs/heads/*)
       current_branch="${line#branch }"
       ;;
+    locked|locked\ *)
+      current_locked=true
+      ;;
   esac
 done < <(git worktree list --porcelain)
 
-process_entry "${current_path}" "${current_branch}"
+process_entry "${current_path}" "${current_branch}" "${current_locked}"
 
 if [[ "${targeted_mode}" == "true" ]]; then
   for branch_name in "${target_branches[@]+${target_branches[@]}}"; do

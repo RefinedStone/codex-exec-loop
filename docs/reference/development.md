@@ -200,6 +200,9 @@ bash scripts/cleanup_merged_worktrees.sh --apply \
   --branch codex/docs-native-platform-reference
 ```
 
-The helper removes only a clean, merged, non-root worktree. Use `--force-dirty` only for one
+The helper removes only a clean, merged, non-root worktree. It deletes the remote branch only when
+the live remote tip equals the cleaned local tip or is merged into the base, and it leases the
+delete on that tip. It prunes a worktree whose directory is gone before it deletes the branch, and
+skips a locked one. Use `--force-dirty` only for one
 explicit finished branch whose remaining churn is disposable. Never run this cleanup path for
 `akra-agent/slot-*`; parallel runtime owns those worktrees, leases, and session details.
