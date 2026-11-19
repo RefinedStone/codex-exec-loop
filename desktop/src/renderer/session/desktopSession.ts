@@ -160,6 +160,8 @@ export class DesktopSession {
   private readonly skillsChangedListeners = new Set<() => void>();
   /** resume 응답을 기다리는 동안 그 스레드에 온 알림이다. 응답을 반영한 뒤 이어서 반영한다. */
   private loading: ResumeLoading | null = null;
+  /** 탐색/resume 세대는 스트리밍으로 바뀌는 transcript 객체와 분리한다. */
+  private conversationGeneration = 0;
   /** initialize 가 thread/list 를 읽는 동안 받은 진행 상태 변경이다 (스레드 id → 진행 중). */
   private statusChangesWhileListing: Map<string, boolean> | null = null;
   private connected = false;
@@ -222,6 +224,7 @@ export class DesktopSession {
         if (this.connected) {
           void this.initialize();
         } else {
+          this.invalidateConversation();
           this.client.reset(state.phase);
           this.kernel.connectionChanged(false);
           // 끊긴 접속의 승인 요청에는 답할 수 없다. 다시 구독하면 app-server 가 다시 보낸다 (replay).
@@ -243,6 +246,7 @@ export class DesktopSession {
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
+    this.invalidateConversation();
     this.batcher.clear();
     this.client.reset("closed");
     this.dropPendingApprovals();
@@ -321,6 +325,7 @@ export class DesktopSession {
     this.assertWritable();
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
     const transcript = transcriptFromThread(response.thread);
+    this.invalidateConversation();
     this.batcher.clear();
     this.store.setOpenThread(response.thread.id);
     this.store.setTranscript(transcript);
@@ -360,7 +365,8 @@ export class DesktopSession {
       } while (cursor);
       if (!verified) throw new Error("브라우저 도구를 확인할 수 없습니다. 새 브라우저 대화를 만드세요.");
       const transcript = transcriptFromThread(response.thread);
-      this.batcher.clear();
+      this.invalidateConversation();
+    this.batcher.clear();
       this.store.setOpenThread(threadId);
       this.store.setTranscript(transcript);
       this.store.addThreadToFolder(response.thread.cwd, workspaceThread(response.thread, transcript.title));
@@ -491,6 +497,7 @@ export class DesktopSession {
     if (this.canSend() && previousId && previousSubscribed && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
       void this.client.request("thread/unsubscribe", { threadId: previousId }).catch(() => undefined);
     }
+    this.invalidateConversation();
     this.batcher.clear();
     this.store.setOpenThread(threadId);
     await this.resumeOpenThread();
@@ -592,7 +599,13 @@ export class DesktopSession {
     return threads;
   }
 
+  private invalidateConversation(): number {
+    this.loading = null;
+    return ++this.conversationGeneration;
+  }
+
   private async resumeOpenThread(): Promise<void> {
+    const generation = this.invalidateConversation();
     const threadId = this.store.getOpenThreadId();
     if (!threadId || !this.connected) {
       return;
@@ -600,12 +613,14 @@ export class DesktopSession {
     // 요청마다 버퍼를 따로 둔다. 빠르게 스레드를 바꿔 resume 이 겹쳐도 먼저 끝난 요청이 다음 요청의 버퍼를 지우지 않는다.
     const loading: ResumeLoading = { threadId, buffer: [] };
     this.loading = loading;
+    // Thread ids can repeat in an A → B → A navigation, so compare this request's identity too.
+    const isCurrent = () => this.conversationGeneration === generation && this.loading === loading && this.store.getOpenThreadId() === threadId;
     try {
       // 긴 스레드의 전체 resume 은 수십 MB 가 된다. 턴 없이 구독만 하고 최근 턴부터 페이지로 읽는다.
       // 허락 전 원격 호스트는 구독하지 않고 thread/read 로 한 번만 읽는다. 허락하면 로컬과 같이 thread/resume 으로
       // 구독해 실시간으로 받는다 (plan 25 "세션 한 번 허용").
       const opened = this.canSend() ? await this.subscribeOrRead(threadId) : { thread: await this.readThread(threadId), writerElsewhere: false };
-      if (this.store.getOpenThreadId() !== threadId) {
+      if (!isCurrent()) {
         return;
       }
       this.writerElsewhereThreadId = opened.writerElsewhere ? threadId : null;
@@ -614,14 +629,14 @@ export class DesktopSession {
       // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
       if (transcript.turns.length === 0) {
         const page = await this.readTurnPage(threadId, null);
-        if (this.store.getOpenThreadId() !== threadId) {
+        if (!isCurrent()) {
           return;
         }
         transcript = prependOlderTurns(transcript, page.data, page.nextCursor);
       }
       this.store.setTranscript(applyNotifications(transcript, loading.buffer));
     } catch (error) {
-      if (this.store.getOpenThreadId() === threadId) {
+      if (isCurrent()) {
         this.store.setTranscript(null, errorMessage(error));
       }
     } finally {
@@ -676,12 +691,17 @@ export class DesktopSession {
   async loadOlderTurns(): Promise<void> {
     const transcript = this.store.getTranscript();
     const cursor = transcript?.olderTurnsCursor;
-    if (!transcript || !cursor) {
+    const generation = this.conversationGeneration;
+    if (!transcript || !cursor || this.loading !== null) {
       return;
     }
     const page = await this.readTurnPage(transcript.threadId, cursor);
-    if (this.store.getOpenThreadId() === transcript.threadId) {
-      this.store.updateTranscript((current) => prependOlderTurns(current, page.data, page.nextCursor));
+    // 같은 세대의 현재 transcript에 병합한다. 같은 커서의 늦은 중복 응답은 적용하지 않는다.
+    if (this.conversationGeneration === generation && this.store.getOpenThreadId() === transcript.threadId) {
+      this.store.updateTranscript((current) =>
+        current.threadId === transcript.threadId && current.olderTurnsCursor === cursor
+          ? prependOlderTurns(current, page.data, page.nextCursor)
+          : current);
     }
   }
 

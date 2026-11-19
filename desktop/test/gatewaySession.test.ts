@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { GatewayConnection } from "../src/main/gatewayConnection";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
-import { DesktopSession, groupThreadsByCwd, startDesktopSession, isAgentThreadSource } from "../src/renderer/session/desktopSession";
+import { DesktopSession, groupThreadsByCwd, startDesktopSession, isAgentThreadSource, type SessionBridge } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, remoteHostKey, removeWorkspaceThread, renameWorkspaceThread, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Thread } from "../src/shared/protocol/generated/v2/Thread";
 import {
@@ -452,6 +452,162 @@ describe("opening a thread over the fake gateway", () => {
     expect(items.some((item) => item.type === "commandExecution")).toBe(true);
     expect(items.some((item) => item.type === "agentMessage" && item.text.length > 0)).toBe(true);
   });
+});
+
+/** Controllable JSON-RPC transport for out-of-order resume responses (without model calls). */
+function controlledResumeBridge() {
+  type Request = { id: number; method: string; params?: { threadId?: string } };
+  const requests: Request[] = [];
+  const messageListeners = new Set<(text: string) => void>();
+  const stateListeners = new Set<(state: ConnectionState) => void>();
+  const emit = (message: object) => {
+    for (const listener of messageListeners) listener(JSON.stringify({ jsonrpc: "2.0", ...message }));
+  };
+  const respond = (id: number, result: unknown) => emit({ id, result });
+  const fail = (id: number, message: string) => emit({ id, error: { code: -32000, message } });
+  const bridge: SessionBridge = {
+    send: (text) => {
+      const message = JSON.parse(text) as Partial<Request>;
+      if (typeof message.id !== "number" || !message.method) return;
+      const request = message as Request;
+      requests.push(request);
+      if (request.method === "thread/resume" || request.method === "thread/turns/list") return;
+      const result = request.method === "thread/list" ? { data: [], nextCursor: null }
+        : request.method === "akra/gateway/info"
+          ? { gatewayVersion: "test", codexVersion: null, startedAt: "", upstreamRestarts: 0 }
+          : {};
+      queueMicrotask(() => respond(request.id, result));
+    },
+    onMessage: (listener) => {
+      messageListeners.add(listener);
+      return () => messageListeners.delete(listener);
+    },
+    onConnectionState: (listener) => {
+      stateListeners.add(listener);
+      return () => stateListeners.delete(listener);
+    },
+    ready: () => queueMicrotask(() => {
+      for (const listener of stateListeners) listener({ phase: "connected", endpoint: "controlled" });
+    }),
+  };
+  const pending = (method: string) => requests.filter((request) => request.method === method);
+  return { bridge, pending, respond, fail, emit };
+}
+
+function controlledThread(id: string, title: string, turnId?: string): Thread {
+  return {
+    id, name: title, preview: "", cwd: "/work", status: { type: "idle" },
+    turns: turnId ? [{ id: turnId, status: "completed", items: [] }] : [],
+  } as unknown as Thread;
+}
+
+describe("out-of-order resume navigation", () => {
+  async function setup() {
+    const controlled = controlledResumeBridge();
+    const store = sessionStore();
+    const session = new DesktopSession(controlled.bridge, store, "test");
+    session.start();
+    cleanups.push(() => session.stop());
+    await waitFor(() => store.snapshot.gateway !== undefined);
+    return { ...controlled, store, session };
+  }
+
+  it("keeps the second A transcript when the first A response returns after A → B → A", async () => {
+    const { session, store, pending, respond } = await setup();
+    const firstA = session.openThread("A");
+    await waitFor(() => pending("thread/resume").length === 1);
+    const openB = session.openThread("B");
+    await waitFor(() => pending("thread/resume").length === 2);
+    const latestA = session.openThread("A");
+    await waitFor(() => pending("thread/resume").length === 3);
+    const [oldA, b, newA] = pending("thread/resume");
+    respond(newA!.id, { thread: controlledThread("A", "latest", "latest-turn") });
+    await latestA;
+    expect(store.snapshot.transcript?.title).toBe("latest");
+    respond(oldA!.id, { thread: controlledThread("A", "stale", "old-turn") });
+    await firstA;
+    respond(b!.id, { thread: controlledThread("B", "wrong", "b-turn") });
+    await openB;
+    expect(store.snapshot.transcript?.title).toBe("latest");
+    expect(store.snapshot.transcript?.turns.map((turn) => turn.id)).toEqual(["latest-turn"]);
+  });
+
+  it("rejects an old A page and an old error after a new A resume", async () => {
+    const { session, store, pending, respond, fail } = await setup();
+    const firstA = session.openThread("A");
+    await waitFor(() => pending("thread/resume").length === 1);
+    respond(pending("thread/resume")[0]!.id, { thread: controlledThread("A", "old") });
+    await waitFor(() => pending("thread/turns/list").length === 1);
+    const openB = session.openThread("B");
+    await waitFor(() => pending("thread/resume").length === 2);
+    const latestA = session.openThread("A");
+    await waitFor(() => pending("thread/resume").length === 3);
+    respond(pending("thread/resume")[2]!.id, { thread: controlledThread("A", "latest", "latest-turn") });
+    await latestA;
+    respond(pending("thread/turns/list")[0]!.id, {
+      data: [{ id: "stale-page", status: "completed", items: [] }], nextCursor: null,
+    });
+    await firstA;
+    fail(pending("thread/resume")[1]!.id, "stale B failure");
+    await openB;
+    expect(store.snapshot.transcript?.title).toBe("latest");
+    expect(store.snapshot.transcript?.turns.map((turn) => turn.id)).toEqual(["latest-turn"]);
+    expect(store.snapshot.transcriptError).toBeNull();
+  });
+  async function openPaged(fixture: Awaited<ReturnType<typeof setup>>, id: string, title: string) {
+    const { session, pending, respond } = fixture;
+    const open = session.openThread(id);
+    respond(pending("thread/resume").at(-1)!.id, { thread: controlledThread(id, title) });
+    await waitFor(() => pending("thread/turns/list").at(-1)?.params?.threadId === id);
+    respond(pending("thread/turns/list").at(-1)!.id, {
+      data: [{ id: title + "-turn", status: "inProgress", items: [] }], nextCursor: "same-cursor",
+    });
+    await open;
+  }
+
+  it("merges older turns into the latest transcript while streaming changes it", async () => {
+    const fixture = await setup();
+    await openPaged(fixture, "A", "latest");
+    const { session, store, pending, respond, emit } = fixture;
+    const older = session.loadOlderTurns();
+    const page = pending("thread/turns/list").at(-1)!;
+    const plan = [{ step: "new streamed plan", status: "inProgress" }];
+    emit({ method: "turn/plan/updated", params: { threadId: "A", turnId: "latest-turn", explanation: null, plan } });
+    await waitFor(() => store.snapshot.transcript?.turns.at(-1)?.plan?.[0]?.step === "new streamed plan");
+    respond(page.id, { data: [{ id: "older-turn", status: "completed", items: [] }], nextCursor: "next-cursor" });
+    await older;
+    expect(store.snapshot.transcript?.turns.map((turn) => turn.id)).toEqual(["older-turn", "latest-turn"]);
+    expect(store.snapshot.transcript?.turns.at(-1)?.plan).toEqual(plan);
+    expect(store.snapshot.transcript?.olderTurnsCursor).toBe("next-cursor");
+  });
+
+  it("rejects old A pagination after A → B → A even when the cursor repeats", async () => {
+    const fixture = await setup();
+    await openPaged(fixture, "A", "first");
+    const older = fixture.session.loadOlderTurns();
+    const oldPage = fixture.pending("thread/turns/list").at(-1)!;
+    await openPaged(fixture, "B", "B");
+    await openPaged(fixture, "A", "new-A");
+    fixture.respond(oldPage.id, { data: [{ id: "stale-older", status: "completed", items: [] }], nextCursor: null });
+    await older;
+    expect(fixture.store.snapshot.transcript?.turns.map((turn) => turn.id)).toEqual(["new-A-turn"]);
+    expect(fixture.store.snapshot.transcript?.olderTurnsCursor).toBe("same-cursor");
+  });
+
+  it("applies the first response only when two older-page requests use the same cursor", async () => {
+    const fixture = await setup();
+    await openPaged(fixture, "A", "A");
+    const first = fixture.session.loadOlderTurns();
+    const second = fixture.session.loadOlderTurns();
+    const [firstPage, secondPage] = fixture.pending("thread/turns/list").slice(-2);
+    fixture.respond(secondPage!.id, { data: [{ id: "first-result", status: "completed", items: [] }], nextCursor: "next" });
+    await second;
+    fixture.respond(firstPage!.id, { data: [{ id: "duplicate-result", status: "completed", items: [] }], nextCursor: null });
+    await first;
+    expect(fixture.store.snapshot.transcript?.turns.map((turn) => turn.id)).toEqual(["first-result", "A-turn"]);
+    expect(fixture.store.snapshot.transcript?.olderTurnsCursor).toBe("next");
+  });
+
 });
 
 describe("groupThreadsByCwd", () => {
