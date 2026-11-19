@@ -4602,6 +4602,32 @@ fn akra_graphic_dashboard_pauses_background_transport_and_rejects_revision_regre
 }
 
 #[test]
+fn akra_graphic_dashboard_realtime_invalidation_does_not_join_an_in_flight_snapshot() {
+    let frame_start = AKRA_DASHBOARD_JS
+        .find("const applyRealtimeFrame = (frame) => {")
+        .expect("dashboard should apply realtime frames");
+    let frame_end = AKRA_DASHBOARD_JS[frame_start..]
+        .find("const connectRealtimeStream = () => {")
+        .expect("dashboard should connect the realtime stream after the frame handler");
+    let apply_realtime_frame = &AKRA_DASHBOARD_JS[frame_start..frame_start + frame_end];
+
+    assert!(
+        apply_realtime_frame.contains("pollDashboard({ fresh: true });"),
+        "an SSE invalidation should queue a snapshot fetch that starts after it arrives"
+    );
+    assert!(
+        !apply_realtime_frame.contains("pollDashboard();"),
+        "an SSE invalidation must not reuse a snapshot fetch that started before it"
+    );
+    assert!(
+        AKRA_DASHBOARD_JS.contains(
+            "return fresh ? dashboardRequest.then(() => pollDashboard()) : dashboardRequest;"
+        ),
+        "a fresh dashboard poll should run again after the in-flight fetch settles"
+    );
+}
+
+#[test]
 fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     for token in [
         "\"build\": \"vite build --config vite.config.ts && node scripts/promote-build.mjs\"",
