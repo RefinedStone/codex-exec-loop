@@ -223,7 +223,7 @@ export function BrowserPanel({ bridge, threadId, onStartConversation }: {
           {message}
         </div>
       )}
-      <div className="browser-slot" ref={slotRef} data-testid="browser-slot" title={state?.title ?? ""} />
+      <div className="browser-slot" ref={slotRef} data-testid="browser-slot" data-active-profile={state?.profileId ?? ""} title={state?.title ?? ""} />
     </aside>
   );
 }
