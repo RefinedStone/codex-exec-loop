@@ -8,7 +8,11 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 const [codex, clientsArg, sock] = process.argv.slice(2);
-const clients = Number(clientsArg || 2);
+const clients = clientsArg === undefined ? 2 : Number(clientsArg);
+if (!Number.isSafeInteger(clients) || clients < 1) {
+  console.error("clients must be a positive integer");
+  process.exit(2);
+}
 
 function encodeTextFrame(text) {
   const payload = Buffer.from(text, "utf8");

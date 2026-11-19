@@ -199,6 +199,8 @@ def main():
     parser.add_argument("--clients", type=int, default=2, help="number of connections (default 2)")
     parser.add_argument("--socket-dir", default="/tmp", help="directory for the temporary socket (default /tmp)")
     arguments = parser.parse_args()
+    if arguments.clients < 1:
+        parser.error("--clients must be a positive integer")
 
     if arguments.socket:
         success = run_checks(os.path.expanduser(arguments.socket), arguments.clients, ask_gateway_info=True)
