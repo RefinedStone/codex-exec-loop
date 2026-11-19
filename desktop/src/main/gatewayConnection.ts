@@ -102,6 +102,10 @@ export class GatewayConnection {
       if (this.socket === socket) {
         this.socket = undefined;
       }
+      // An intentional close during the WebSocket handshake must not spawn a daemon.
+      if (this.closed) {
+        return;
+      }
       if (code === CLOSE_UNKNOWN_HOST) {
         const detail =
           reason.toString() === LOGIN_REJECTED_REASON
