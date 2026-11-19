@@ -3,7 +3,7 @@
  * adapter 쪽에서 token/config, allow-list, planning control facade를 조립하므로 이 파일은
  * process-level 오류 출력과 exit code 변환만 책임진다.
  */
-fn main() {
+fn main() -> std::process::ExitCode {
     let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
     tracing::info!(
         cwd = ?std::env::current_dir().ok(),
@@ -23,6 +23,6 @@ fn main() {
         }
     };
 
-    // Telegram runner를 감시하는 shell/supervisor가 실패를 숫자 계약 하나로 판단하게 한다.
-    std::process::exit(exit_code);
+    // Preserve the supervisor exit status while dropping the trace WorkerGuard.
+    std::process::ExitCode::from(exit_code as u8)
 }

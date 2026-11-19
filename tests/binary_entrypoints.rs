@@ -47,6 +47,51 @@ fn gateway_binary_shares_help_and_error_contracts() {
     assert_contains(&unsupported.stderr, "unsupported argument: --port");
 }
 
+#[test]
+fn short_lived_error_exits_flush_trace_guard_for_all_standalone_binaries() {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let folder = std::env::temp_dir().join(format!(
+        "akra-standalone-guard-flush-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&folder).unwrap();
+
+    let binaries: [(&str, &[&str], &str); 3] = [
+        (ADMIN_BIN, &["--unknown"], "akra_admin"),
+        (GATEWAY_BIN, &["--port", "0"], "akra_gateway"),
+        (
+            TELEGRAM_BIN,
+            &["--poll-timeout-seconds", "0"],
+            "akra_telegram",
+        ),
+    ];
+    for (index, (binary, args, trace_target)) in binaries.into_iter().enumerate() {
+        let trace_path = folder.join(format!("binary-{index}.jsonl"));
+        let output = Command::new(binary)
+            .args(args)
+            .current_dir(&folder)
+            .env("AKRA_TRACE", "info")
+            .env_remove("RUST_LOG")
+            .env("AKRA_TRACE_FILE", &trace_path)
+            .output()
+            .unwrap_or_else(|error| panic!("{binary} should spawn: {error}"));
+        assert_failure(&output);
+        let body = fs::read_to_string(&trace_path)
+            .unwrap_or_else(|error| panic!("{binary} should flush the trace: {error}"));
+        assert!(
+            body.contains(&format!(r#""target":"{trace_target}""#)),
+            "{binary} must flush its startup event before exiting: {body}"
+        );
+    }
+    fs::remove_dir_all(folder).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn admin_binary_reports_actual_ephemeral_port_and_exits_on_interrupt() {
