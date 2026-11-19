@@ -881,9 +881,35 @@ fn codex_command_with_environment(
 ) -> Command {
     let mut command = Command::new(&config.executable);
     command.args(&config.executable_prefix_args);
+    apply_app_server_process_environment(
+        &mut command,
+        process_environment_policy,
+        config.api_key_auth,
+        process_environment,
+    );
+    command
+}
+
+/// Both ordinary app-server sessions and the MCP hub use the same process environment
+/// filtering and optional explicit API key forwarding. Child-specific CODEX_HOME overrides
+/// must be applied by the caller *after* this policy clears inherited environment variables.
+pub(crate) fn configure_hub_app_server_process_environment(command: &mut Command) {
+    apply_app_server_process_environment(
+        command,
+        configured_process_environment_policy(),
+        configured_api_key_auth(),
+        std::env::vars_os(),
+    );
+}
+
+fn apply_app_server_process_environment(
+    command: &mut Command,
+    process_environment_policy: ProcessEnvironmentPolicy,
+    api_key_auth: bool,
+    process_environment: impl IntoIterator<Item = (OsString, OsString)>,
+) {
     if process_environment_policy == ProcessEnvironmentPolicy::Scrubbed {
-        let filtered =
-            filtered_app_server_process_environment(process_environment, config.api_key_auth);
+        let filtered = filtered_app_server_process_environment(process_environment, api_key_auth);
         for environment_variable in filtered.dropped_credential_variables {
             let warning = format!(
                 "scrubbed app-server process environment dropped unsafe or credential-bearing {environment_variable}; URL details were redacted"
@@ -896,7 +922,6 @@ fn codex_command_with_environment(
         }
         command.env_clear().envs(filtered.variables);
     }
-    command
 }
 
 fn approval_denied_notice(method: &str, reason: &str) -> String {
@@ -3911,9 +3936,9 @@ mod tests {
         SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE, ShellEnvironmentInherit, TransportFailure,
         UNINSPECTABLE_SERVER_REQUEST_METHODS, app_server_api_key_environment_variable_allowed,
         app_server_command_with_environment, app_server_process_environment_key_allowed,
-        canonical_proxy_environment_key, filtered_app_server_process_environment,
-        install_after_approval_decision_received_hook, openai_base_url_is_unsafe,
-        proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
+        apply_app_server_process_environment, canonical_proxy_environment_key,
+        filtered_app_server_process_environment, install_after_approval_decision_received_hook,
+        openai_base_url_is_unsafe, proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
         resolve_process_environment, resolve_shell_environment_inherit, spawn_pipe_reader,
     };
     use crate::adapter::outbound::app_server::approval::{
@@ -4396,6 +4421,45 @@ mod tests {
             .warning
             .expect("invalid API-key auth value should warn");
         assert!(!warning.contains(private_value));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_hub_app_server_child_receives_no_credential_canaries_under_scrubbed_policy() {
+        // /usr/bin/env stands in for the hub app-server executable and reports the actual
+        // child process environment. No process-global environment mutation is required.
+        let mut command = Command::new("/usr/bin/env");
+        command.env("AKRA_CREDENTIAL_CANARY", "must-not-leak-from-parent");
+        apply_app_server_process_environment(
+            &mut command,
+            ProcessEnvironmentPolicy::Scrubbed,
+            false,
+            [
+                ("PATH".into(), "/usr/bin".into()),
+                ("HOME".into(), "/home/operator".into()),
+                ("AWS_SECRET_ACCESS_KEY".into(), "aws-canary".into()),
+                ("GH_TOKEN".into(), "gh-canary".into()),
+                ("OPENAI_API_KEY".into(), "openai-canary".into()),
+            ],
+        );
+        // Production hub applies its private CODEX_HOME after the shared environment policy.
+        command.env("CODEX_HOME", "/home/operator/.akra/mcp-hub");
+        let output = command.output().expect("fake child process should start");
+        assert!(output.status.success());
+        let variables = String::from_utf8(output.stdout).expect("environment should be UTF-8");
+        assert!(variables.contains("HOME=/home/operator"));
+        assert!(variables.contains("CODEX_HOME=/home/operator/.akra/mcp-hub"));
+        for canary in [
+            "AWS_SECRET_ACCESS_KEY",
+            "GH_TOKEN",
+            "OPENAI_API_KEY",
+            "AKRA_CREDENTIAL_CANARY",
+        ] {
+            assert!(
+                !variables.contains(canary),
+                "{canary} must not be forwarded to the MCP hub"
+            );
+        }
     }
 
     #[test]
