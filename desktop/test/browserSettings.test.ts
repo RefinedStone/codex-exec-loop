@@ -1,10 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_SETTINGS, loadSettings, normalizeUrl, profilePartition, saveSettings, validateSettings } from "../src/main/browserSettings";
+import { DEFAULT_SETTINGS, loadSettings, normalizeUrl, profilePartition, saveSettings, validateSettings, type BrowserSettingsWriter } from "../src/main/browserSettings";
 import { profileIdFromName } from "../src/renderer/browser/profileId";
 
 describe("browser address", () => {
@@ -47,6 +48,70 @@ describe("browser profiles and presets", () => {
       presets: [{ name: "login", url: "https://qa.example.com/", profileId: "qa" }],
     });
     expect(validateSettings(null)).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("serializes interleaved saves to the same path and keeps the last submitted settings", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "akra-browser-concurrent-"));
+    const path = join(folder, "settings.json");
+    let unblockFirst!: () => void;
+    let firstWriteStarted!: () => void;
+    const blockedFirst = new Promise<void>((resolve) => { unblockFirst = resolve; });
+    const firstStarted = new Promise<void>((resolve) => { firstWriteStarted = resolve; });
+    const calls: string[] = [];
+    let writes = 0;
+    const writer: BrowserSettingsWriter = {
+      write: async (temporary, content) => {
+        const index = ++writes;
+        calls.push(`write:${index}`);
+        if (index === 1) {
+          firstWriteStarted();
+          await blockedFirst;
+        }
+        await writeFile(temporary, content, "utf8");
+      },
+      replace: async (temporary, target) => {
+        calls.push(`rename:${writes}`);
+        await rename(temporary, target);
+      },
+    };
+    try {
+      const firstSettings = { profiles: [{ id: "first", name: "First" }], presets: [] };
+      const lastSettings = { profiles: [{ id: "last", name: "Last" }], presets: [] };
+      const first = saveSettings(path, firstSettings, writer);
+      await firstStarted;
+      const second = saveSettings(path, lastSettings, writer);
+      try {
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(calls).toEqual(["write:1"]); // The second save cannot overwrite the first temp file.
+      } finally {
+        unblockFirst();
+      }
+      expect(await Promise.all([first, second])).toEqual([firstSettings, lastSettings]);
+      expect(calls).toEqual(["write:1", "rename:1", "write:2", "rename:2"]);
+      expect(await loadSettings(path)).toEqual(lastSettings);
+    } finally {
+      unblockFirst();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("continues queued saves when an earlier write fails", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "akra-browser-recovery-"));
+    const path = join(folder, "settings.json");
+    try {
+      const writer: BrowserSettingsWriter = {
+        write: async () => { throw new Error("disk busy"); },
+        replace: async () => undefined,
+      };
+      const first = saveSettings(path, DEFAULT_SETTINGS, writer);
+      const second = saveSettings(path, { profiles: [{ id: "recovered", name: "Recovered" }], presets: [] });
+      await expect(first).rejects.toThrow("disk busy");
+      await expect(second).resolves.toMatchObject({ profiles: [{ id: "recovered" }] });
+      expect(await loadSettings(path)).toMatchObject({ profiles: [{ id: "recovered" }] });
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 
   it("saves through a temporary file and loads defaults from a broken file", async () => {
