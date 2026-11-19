@@ -193,6 +193,16 @@ test("a wrong Actions target or missing contract evidence holds observe mode", (
   assert.equal(evidence.decision.queueAdmissionEnabled, false);
 });
 
+test("missing Post-Merge Gate jobs in the sample hold observe mode", () => {
+  const input = passingInput();
+  for (const pull of input.pulls.slice(1)) pull.postMergeJobs = [];
+  const evidence = buildRolloutEvidence(input);
+  assert.equal(evidence.postMerge.sampleCount, 1);
+  assert.equal(evidence.decision.status, "hold_observe");
+  assert.equal(evidence.decision.recommendedSchedulerMode, "observe");
+  assert.equal(evidence.decision.queueAdmissionEnabled, false);
+});
+
 test("the Markdown report labels projections and the approval boundary", () => {
   const markdown = renderRolloutMarkdown(buildRolloutEvidence(passingInput()));
   assert.match(markdown, /projected_from_existing_jobs/);
