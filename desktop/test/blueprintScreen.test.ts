@@ -104,6 +104,21 @@ describe("unread threads", () => {
     expect(useDesktopStore.getState().unreadThreadIds).toEqual([]);
   });
 
+  it("preserves unread state across duplicate inactive notifications and a new turn", () => {
+    const store = useDesktopStore.getState();
+    store.setThreadActive("t1", true);
+    store.setThreadActive("t1", false);
+    expect(useDesktopStore.getState().unreadThreadIds).toEqual(["t1"]);
+
+    store.setThreadActive("t1", false);
+    store.setThreadActive("t1", true);
+    store.setThreadActive("t1", false);
+    expect(useDesktopStore.getState().unreadThreadIds).toEqual(["t1"]);
+
+    store.setOpenThread("t1");
+    expect(useDesktopStore.getState().unreadThreadIds).toEqual([]);
+  });
+
   it("does not mark the open thread or a thread that was not running", () => {
     const store = useDesktopStore.getState();
     store.setOpenThread("t1");
