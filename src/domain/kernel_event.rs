@@ -350,7 +350,7 @@ pub struct KernelEventPage {
  * 판단 기록기의 상태이다 (#2300, #2301). 커널은 기록을 기다리지 않으므로 쓰지 못한 사건은 이 값으로만 보인다.
  * `degraded` 는 이 커널이 사건 하나라도 기록하지 못했다는 뜻이다. 그러면 다음 커널의 복구가 그 사건을 모른다.
  * 커널이 끝날 때까지 되돌리지 않는다. `saturated` 는 밀린 기록이 한도에 닿아 새 묶음을 버리는 중이라는 뜻이다.
- * 밀린 기록을 다 쓰면 풀린다.
+ * 다음 묶음을 받거나 밀린 기록을 다 쓰면 풀린다.
  */
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct KernelRecorderHealth {

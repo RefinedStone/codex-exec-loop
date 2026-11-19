@@ -84,6 +84,8 @@ impl KernelEventRecorder {
                 return;
             }
             health.pending_bytes += bytes;
+            // An accepted batch ends the dropping, even while the writer still has a backlog.
+            health.saturated = false;
         }
         if batches.send((records, bytes)).is_err() {
             let mut health = locked(&self.health);
@@ -274,12 +276,33 @@ mod tests {
                 dropped_events: 1,
             }
         );
+        // The writer finishes one batch. A new batch fits again although the backlog is not empty.
+        permit.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while recorder.health().pending_bytes > one_batch {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the writer should finish a batch"
+            );
+            std::thread::yield_now();
+        }
+        recorder.record(vec![started("turn-4")]);
+        assert_eq!(
+            recorder.health(),
+            KernelRecorderHealth {
+                degraded: true,
+                saturated: false,
+                pending_bytes: one_batch * 2,
+                failed_events: 0,
+                dropped_events: 1,
+            }
+        );
         permit.send(()).unwrap();
         permit.send(()).unwrap();
         drop(recorder);
         assert_eq!(
             log.stored.lock().expect("log should lock").as_slice(),
-            [started("turn-1"), started("turn-2")]
+            [started("turn-1"), started("turn-2"), started("turn-4")]
         );
         // The drained backlog is no longer saturated. The lost batch keeps recovery degraded.
         assert_eq!(
