@@ -35,6 +35,7 @@ use crate::domain::planning::RuntimeProjection;
 const HOST_IDLE_WAIT: Duration = Duration::from_secs(30);
 /// 넘친 클라이언트에 `Resync` 를 다시 보내는 간격이다. 그 클라이언트가 비우는 일은 커널을 깨우지 않는다.
 const HOST_RESYNC_RETRY_WAIT: Duration = Duration::from_millis(250);
+/// 한 주기에 처리하는 core 입력 수이고, 한 주기 전에 처리하는 클라이언트 입력 수이다.
 const HOST_MAX_INPUTS_PER_CYCLE: usize = 64;
 /// 저장 명령의 답을 planning 읽기 때문에 미루는 최대 시간이다. 호출자가 답을 기다리는 시간(`KERNEL_CALL_TIMEOUT`)보다 짧다.
 const STORED_COMMAND_REFRESH_WAIT: Duration = Duration::from_secs(5);
@@ -506,6 +507,8 @@ struct KernelHostLoop {
     /// 병렬 보기에 알린 감독 화면 값이다. 조립 때는 화면이 없으므로 `false` 이다.
     supervisor_view_active: bool,
     idle: KernelIdleClock,
+    /// 클라이언트 입력함에 처리하지 못한 입력이 남았다. 다음 주기는 기다리지 않는다.
+    client_inputs_left: bool,
     /// 답을 미룬 저장 명령이다 (`hold_stored_answer`).
     held_stored_answers: Vec<HeldStoredAnswer>,
 }
@@ -583,6 +586,7 @@ impl KernelHostLoop {
             last_supervisor_inspection: None,
             supervisor_view_active: false,
             idle,
+            client_inputs_left: false,
             held_stored_answers: Vec::new(),
         }
     }
@@ -602,6 +606,9 @@ impl KernelHostLoop {
      * 못 받은 클라이언트가 있으면 짧게만 잔다. 마감이 없으면 안전망 시간까지 잔다.
      */
     fn next_wait(&self, now: Instant) -> Duration {
+        if self.client_inputs_left {
+            return Duration::ZERO;
+        }
         let until_deadline = self
             .runtime
             .next_deadline(now)
@@ -623,17 +630,25 @@ impl KernelHostLoop {
         until_deadline.min(limit).min(until_held_answer)
     }
 
-    /// 클라이언트 입력을 모두 처리한다. 끝내라는 입력이 왔거나 보내는 쪽이 모두 사라졌으면 `false` 이다.
+    /*
+     * 클라이언트 입력을 `HOST_MAX_INPUTS_PER_CYCLE` 개까지 처리한다. 끝내라는 입력이 왔거나 보내는 쪽이 모두
+     * 사라졌으면 `false` 이다. 클라이언트가 입력함을 계속 채워도 core 주기(내부 완료, `Tick`)가 돈다 (#2298).
+     */
     fn handle_pending_inputs(&mut self) -> bool {
-        loop {
+        for _ in 0..HOST_MAX_INPUTS_PER_CYCLE {
             match self.inputs.try_recv() {
                 Ok(KernelHostInput::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
                     return false;
                 }
                 Ok(input) => self.handle_input(input),
-                Err(mpsc::TryRecvError::Empty) => return true,
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.client_inputs_left = false;
+                    return true;
+                }
             }
         }
+        self.client_inputs_left = true;
+        true
     }
 
     /*
@@ -1323,6 +1338,74 @@ mod tests {
             "the clock was read {:?} after the cycle started; the wait is {wait:?}",
             read_at.duration_since(started)
         );
+    }
+
+    #[test]
+    fn a_busy_client_inbox_lets_an_internal_input_run_before_the_backlog_drains() {
+        // #2298: the host drained the whole client inbox before each core cycle.
+        struct IgnoredEffects;
+        impl crate::core::runtime::CoreEffectExecutor for IgnoredEffects {
+            fn run_effect(&self, _effect: crate::core::app::CoreEffect) -> Option<CoreInput> {
+                None
+            }
+        }
+        let planning =
+            crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(
+                crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter::new(),
+            ));
+        let parallel =
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_control_plane_composition(
+                planning,
+            );
+        let (runtime, core_inputs) = NativeClientRuntime::new_with_effect_executor_for_test(
+            parallel,
+            Box::new(IgnoredEffects),
+        );
+        let (inbox, inputs) = mpsc::channel();
+        let mut host = KernelHostLoop::new(runtime, inputs, KernelIdleClock::default());
+        let max_auto_turns = |host: &KernelHostLoop| {
+            host.runtime
+                .snapshot()
+                .conversation_runtime
+                .auto_follow
+                .max_auto_turns
+        };
+
+        // An internal completion waits in the core mailbox behind more client inputs than one budget.
+        core_inputs
+            .send(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+                value: 7,
+            }))
+            .expect("the runtime keeps the core mailbox");
+        for _ in 0..HOST_MAX_INPUTS_PER_CYCLE + 5 {
+            inbox
+                .send(KernelHostInput::Inputs(vec![CoreInput::Command(
+                    AppCommand::SetAutoFollowMaxTurns { value: 1 },
+                )]))
+                .expect("the host keeps the inbox");
+        }
+
+        let now = Instant::now();
+        assert!(host.handle_pending_inputs());
+        assert_eq!(
+            host.next_wait(now),
+            Duration::ZERO,
+            "client inputs are left"
+        );
+        host.run_cycle(now, host.next_wait(now));
+        assert_eq!(
+            max_auto_turns(&host),
+            7,
+            "the internal input ran before the client backlog drained"
+        );
+
+        assert!(host.handle_pending_inputs());
+        assert_eq!(
+            max_auto_turns(&host),
+            1,
+            "the rest of the client inputs ran after the internal input"
+        );
+        assert!(!host.client_inputs_left, "the client inbox is empty");
     }
 
     #[test]
