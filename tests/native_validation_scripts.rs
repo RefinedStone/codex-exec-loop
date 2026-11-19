@@ -12,7 +12,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// 폴더가 아니라 실제 작업 저장소에 `init`, `config`, `commit` 이 실행된다 (`src/test_utils.rs::git_command`).
 /// 파일 감시(`core.fsmonitor`)도 끈다. 켜져 있으면 임시 저장소마다 감시 데몬이 뜨고 남는다.
 fn git_command() -> Command {
-    let mut command = Command::new("git");
+    command_without_git_env("git")
+}
+
+/// `git_command` 와 같은 환경으로 `program` 을 실행한다. 안에서 git 을 부르는 script(정리 helper 등)에 쓴다.
+fn command_without_git_env(program: &str) -> Command {
+    let mut command = Command::new(program);
     for (name, _) in std::env::vars_os() {
         if name
             .to_string_lossy()
@@ -478,7 +483,7 @@ fn make_cleanup_worktree_fixture() -> (PathBuf, PathBuf, PathBuf) {
 
 fn run_cleanup(repo: &Path, args: &[&str]) -> std::process::Output {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    Command::new("bash")
+    command_without_git_env("bash")
         .arg(repo_root.join("scripts/cleanup_merged_worktrees.sh"))
         .args(args)
         .current_dir(repo)
@@ -494,6 +499,54 @@ fn branch_exists(repo: &Path, branch_name: &str) -> bool {
     )
     .status
     .success()
+}
+
+/// 정리 fixture 에 bare `origin` 을 붙이고 `main`, `feature` 를 push 한 뒤 `feature` 를 `main` 에 병합한다.
+fn make_cleanup_remote_fixture() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+    let origin = root.join("origin.git");
+    assert_success(
+        &git_command()
+            .arg("init")
+            .arg("--bare")
+            .arg(&origin)
+            .output()
+            .expect("git init --bare should run"),
+        "git init --bare",
+    );
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                origin.to_str().expect("utf-8 path"),
+            ],
+        ),
+        "add origin remote",
+    );
+    assert_success(
+        &run_git(&repo, &["push", "origin", "main", "feature"]),
+        "push fixture branches",
+    );
+    assert_success(
+        &run_git(&repo, &["merge", "--ff-only", "feature"]),
+        "merge feature into main",
+    );
+    (root, repo, feature_worktree, origin)
+}
+
+fn remote_branch_sha(origin: &Path, branch_name: &str) -> Option<String> {
+    let ref_name = format!("refs/heads/{branch_name}");
+    let output = run_git(
+        origin,
+        &["rev-parse", "--verify", "--quiet", ref_name.as_str()],
+    );
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[test]
@@ -3574,6 +3627,131 @@ fn cleanup_apply_dirty_mixed_explicit_targets_stays_atomic_on_failure() {
     assert!(stderr.contains("explicit targets not found: branch:definitely-not-a-real-branch"));
     assert!(feature_worktree.is_dir());
     assert!(branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
+fn cleanup_keeps_remote_branch_whose_tip_is_not_merged() {
+    let (root, repo, feature_worktree, origin) = make_cleanup_remote_fixture();
+    // Another writer pushed a commit to the remote branch; the local branch stays at the merged tip.
+    fs::write(feature_worktree.join("late.txt"), "late\n").expect("late fixture should be written");
+    assert_success(
+        &run_git(&feature_worktree, &["add", "late.txt"]),
+        "stage late commit",
+    );
+    assert_success(
+        &run_git(&feature_worktree, &["commit", "-m", "late"]),
+        "commit late fixture",
+    );
+    assert_success(
+        &run_git(&feature_worktree, &["push", "origin", "feature"]),
+        "push late commit",
+    );
+    let late_sha = remote_branch_sha(&origin, "feature").expect("remote feature should exist");
+    assert_success(
+        &run_git(&feature_worktree, &["reset", "--hard", "HEAD~1"]),
+        "move local feature back to the merged tip",
+    );
+
+    let output = run_cleanup(&repo, &["--apply", "--base", "main"]);
+
+    assert_success(&output, "cleanup with unmerged remote tip");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("keeping remote branch origin/feature: remote tip"));
+    assert!(stdout.contains("cleanup complete: removed 1 worktree(s)"));
+    assert!(!feature_worktree.exists());
+    assert!(!branch_exists(&repo, "feature"));
+    assert_eq!(remote_branch_sha(&origin, "feature"), Some(late_sha));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
+fn cleanup_deletes_remote_branch_at_the_merged_local_tip() {
+    let (root, repo, feature_worktree, origin) = make_cleanup_remote_fixture();
+
+    let output = run_cleanup(&repo, &["--apply", "--base", "main"]);
+
+    assert_success(&output, "cleanup with merged remote tip");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("keeping remote branch"));
+    assert!(stdout.contains("cleanup complete: removed 1 worktree(s)"));
+    assert!(!feature_worktree.exists());
+    assert!(!branch_exists(&repo, "feature"));
+    assert_eq!(remote_branch_sha(&origin, "feature"), None);
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+/// `feature` 를 `main` 에 병합하고, 병합된 두 번째 worktree `later` 를 만든 뒤 `feature` 디렉터리만 지운다.
+fn make_cleanup_vanished_worktree_fixture() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+    let later_worktree = root.join("later-worktree");
+    assert_success(
+        &run_git(&repo, &["merge", "--ff-only", "feature"]),
+        "merge feature into main",
+    );
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "later",
+                later_worktree.to_str().expect("utf-8 path"),
+                "main",
+            ],
+        ),
+        "create later worktree",
+    );
+    fs::remove_dir_all(&feature_worktree).expect("feature worktree dir should be removed");
+    (root, repo, feature_worktree, later_worktree)
+}
+
+#[test]
+fn cleanup_prunes_vanished_worktree_and_continues_with_later_targets() {
+    let (root, repo, _feature_worktree, later_worktree) = make_cleanup_vanished_worktree_fixture();
+
+    let output = run_cleanup(&repo, &["--apply", "--base", "main"]);
+
+    assert_success(&output, "cleanup with a vanished worktree directory");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("cleanup complete: removed 2 worktree(s)"));
+    assert!(!branch_exists(&repo, "feature"));
+    assert!(!branch_exists(&repo, "later"));
+    assert!(!later_worktree.exists());
+    let listing = run_git(&repo, &["worktree", "list", "--porcelain"]);
+    assert!(!String::from_utf8_lossy(&listing.stdout).contains("feature-worktree"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
+fn cleanup_skips_locked_vanished_worktree_and_continues_with_later_targets() {
+    let (root, repo, feature_worktree, later_worktree) = make_cleanup_vanished_worktree_fixture();
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "worktree",
+                "lock",
+                feature_worktree.to_str().expect("utf-8 path"),
+            ],
+        ),
+        "lock the vanished worktree",
+    );
+
+    let output = run_cleanup(&repo, &["--apply", "--base", "main"]);
+
+    assert_success(&output, "cleanup with a locked vanished worktree");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[skip] locked worktree with a missing path"));
+    assert!(stdout.contains("cleanup complete: removed 1 worktree(s)"));
+    assert!(branch_exists(&repo, "feature"));
+    assert!(!branch_exists(&repo, "later"));
+    assert!(!later_worktree.exists());
 
     fs::remove_dir_all(root).expect("cleanup fixture should be removed");
 }
