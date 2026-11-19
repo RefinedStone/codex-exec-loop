@@ -3,7 +3,7 @@
 //! `akra mcp` 명령 하나가 세션 하나를 열고, 끝나면 child 를 정리한다. 줄 단위 JSON 을 주고받고,
 //! app-server 가 먼저 보내는 요청(elicitation 등)은 거절해서 호출이 멈추지 않게 한다.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -17,6 +17,121 @@ use crate::subprocess::{self, ManagedChild};
 use crate::trusted_executable::TrustedCommand;
 
 const STDERR_TAIL_LINES: usize = 20;
+
+const MAX_STDOUT_LINE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_STDERR_LINE_BYTES: usize = 16 * 1024;
+const MAX_PENDING_STDOUT_LINES: usize = 8;
+
+type HubOutputEvent = std::result::Result<String, String>;
+
+// Bound each line before allocating, including lines with no newline delimiter.
+fn read_bounded_line(reader: &mut impl BufRead, limit: usize) -> io::Result<Option<String>> {
+    let mut line = Vec::new();
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            break;
+        }
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let length = newline.map_or(buffer.len(), |position| position + 1);
+        if length > limit.saturating_sub(line.len()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("app-server output line exceeded {limit} bytes"),
+            ));
+        }
+        line.extend_from_slice(&buffer[..length]);
+        reader.consume(length);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if line.is_empty() {
+        return Ok(None);
+    }
+    if line.last() == Some(&b'\n') {
+        line.pop();
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+    }
+    String::from_utf8(line)
+        .map(Some)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 app-server output"))
+}
+
+fn report_transport_error(
+    sender: &SyncSender<HubOutputEvent>,
+    failure: &Arc<Mutex<Option<String>>>,
+    message: String,
+) {
+    if let Ok(mut first_failure) = failure.lock()
+        && first_failure.is_none()
+    {
+        *first_failure = Some(message.clone());
+    }
+    // An error event wakes a blocked receiver. A full queue leaves the shared failure
+    // readable before any previously queued success can be returned.
+    let _ = sender.try_send(Err(message));
+}
+
+fn pump_stdout(
+    stdout: impl Read,
+    sender: SyncSender<HubOutputEvent>,
+    failure: Arc<Mutex<Option<String>>>,
+    line_limit: usize,
+) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        match read_bounded_line(&mut reader, line_limit) {
+            Ok(Some(line)) => match sender.try_send(Ok(line)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    report_transport_error(
+                        &sender,
+                        &failure,
+                        format!(
+                            "stdout queue exceeded {MAX_PENDING_STDOUT_LINES} pending messages"
+                        ),
+                    );
+                    break;
+                }
+                Err(TrySendError::Disconnected(_)) => break,
+            },
+            Ok(None) => break,
+            Err(error) => {
+                report_transport_error(&sender, &failure, format!("stdout: {error}"));
+                break;
+            }
+        }
+    }
+}
+
+fn pump_stderr(
+    stderr: impl Read,
+    tail: Arc<Mutex<Vec<String>>>,
+    sender: SyncSender<HubOutputEvent>,
+    failure: Arc<Mutex<Option<String>>>,
+    line_limit: usize,
+) {
+    let mut reader = BufReader::new(stderr);
+    loop {
+        match read_bounded_line(&mut reader, line_limit) {
+            Ok(Some(line)) => {
+                let Ok(mut tail) = tail.lock() else { break };
+                tail.push(line);
+                if tail.len() > STDERR_TAIL_LINES {
+                    tail.remove(0);
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                report_transport_error(&sender, &failure, format!("stderr: {error}"));
+                break;
+            }
+        }
+    }
+}
 
 // A stalled child stdin must not block the calling RPC thread past its deadline.
 struct WriteRequest {
@@ -77,20 +192,22 @@ fn write_before_deadline(
 }
 
 fn recv_json_message_until(
-    lines: &Receiver<String>,
+    lines: &Receiver<HubOutputEvent>,
     deadline: Instant,
     waiting_for: &str,
+    check_transport: impl Fn() -> Result<()>,
     stderr_context: impl Fn() -> String,
 ) -> Result<Value> {
     loop {
-        // Checking before recv is essential: a continuously non-empty queue can otherwise
-        // make recv_timeout(0) succeed forever and starve an expired deadline.
+        check_transport()?;
+        // A continuously non-empty queue must not extend an expired deadline.
         if Instant::now() >= deadline {
             bail!("MCP hub timed out waiting for {waiting_for}");
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         match lines.recv_timeout(remaining) {
-            Ok(line) => {
+            Ok(Ok(line)) => {
+                check_transport()?;
                 if Instant::now() >= deadline {
                     bail!("MCP hub timed out waiting for {waiting_for}");
                 }
@@ -98,10 +215,18 @@ fn recv_json_message_until(
                     return Ok(message);
                 }
             }
+            Ok(Err(error)) => {
+                bail!(
+                    "MCP hub app-server transport error: {error}{}",
+                    stderr_context()
+                );
+            }
             Err(RecvTimeoutError::Timeout) => {
-                bail!("MCP hub timed out waiting for {waiting_for}")
+                check_transport()?;
+                bail!("MCP hub timed out waiting for {waiting_for}");
             }
             Err(RecvTimeoutError::Disconnected) => {
+                check_transport()?;
                 return Err(anyhow!(
                     "MCP hub app-server exited while waiting for {waiting_for}{}",
                     stderr_context()
@@ -114,7 +239,8 @@ fn recv_json_message_until(
 pub(super) struct HubAppServerSession {
     // child is last so session teardown kills an unresponsive writer after dropping sender.
     writer: SyncSender<WriteRequest>,
-    lines: Receiver<String>,
+    lines: Receiver<HubOutputEvent>,
+    transport_failure: Arc<Mutex<Option<String>>>,
     stderr_tail: Arc<Mutex<Vec<String>>>,
     next_id: u64,
     _child: ManagedChild,
@@ -160,29 +286,24 @@ impl HubAppServerSession {
         let stdout = child.take_stdout().context("MCP hub app-server stdout")?;
         let stderr = child.take_stderr().context("MCP hub app-server stderr")?;
 
-        let (sender, lines) = mpsc::channel();
+        let (sender, lines) = mpsc::sync_channel(MAX_PENDING_STDOUT_LINES);
+        let transport_failure = Arc::new(Mutex::new(None));
+        let stdout_failure = transport_failure.clone();
+        let stdout_sender = sender.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if sender.send(line).is_err() {
-                    break;
-                }
-            }
+            pump_stdout(stdout, stdout_sender, stdout_failure, MAX_STDOUT_LINE_BYTES);
         });
         let stderr_tail = Arc::new(Mutex::new(Vec::new()));
         let tail = stderr_tail.clone();
+        let stderr_failure = transport_failure.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let Ok(mut tail) = tail.lock() else { break };
-                tail.push(line);
-                if tail.len() > STDERR_TAIL_LINES {
-                    tail.remove(0);
-                }
-            }
+            pump_stderr(stderr, tail, sender, stderr_failure, MAX_STDERR_LINE_BYTES);
         });
 
         let mut session = Self {
             writer,
             lines,
+            transport_failure,
             stderr_tail,
             next_id: 1,
             _child: child,
@@ -257,7 +378,28 @@ impl HubAppServerSession {
     }
 
     fn next_message(&mut self, deadline: Instant, waiting_for: &str) -> Result<Value> {
-        recv_json_message_until(&self.lines, deadline, waiting_for, || self.stderr_context())
+        recv_json_message_until(
+            &self.lines,
+            deadline,
+            waiting_for,
+            || self.check_transport_failure(),
+            || self.stderr_context(),
+        )
+    }
+
+    fn check_transport_failure(&self) -> Result<()> {
+        let failure = self
+            .transport_failure
+            .lock()
+            .ok()
+            .and_then(|failure| failure.clone());
+        if let Some(failure) = failure {
+            bail!(
+                "MCP hub app-server transport error: {failure}{}",
+                self.stderr_context()
+            );
+        }
+        Ok(())
     }
 
     /// app-server 가 클라이언트에게 묻는 요청이다. hub 에는 답할 화면이 없으므로 거절한다.
@@ -277,6 +419,7 @@ impl HubAppServerSession {
     }
 
     fn send_until(&mut self, message: &Value, deadline: Instant) -> Result<()> {
+        self.check_transport_failure()?;
         write_before_deadline(&self.writer, message, deadline)
             .with_context(|| format!("MCP hub app-server transport{}", self.stderr_context()))
     }
@@ -309,12 +452,17 @@ mod tests {
         let (sender, lines) = mpsc::channel();
         for _ in 0..100 {
             sender
-                .send(r#"{"method":"notification","params":{}}"#.to_owned())
+                .send(Ok(r#"{"method":"notification","params":{}}"#.to_owned()))
                 .unwrap();
         }
-        let error =
-            recv_json_message_until(&lines, Instant::now(), "target-notification", String::new)
-                .unwrap_err();
+        let error = recv_json_message_until(
+            &lines,
+            Instant::now(),
+            "target-notification",
+            || Ok(()),
+            String::new,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("timed out"));
         // The unread queue proves an already-expired deadline is not extended by messages.
         assert!(lines.try_recv().is_ok());
@@ -364,3 +512,92 @@ mod environment_tests;
 #[cfg(test)]
 #[path = "session_deadline_tests.rs"]
 mod deadline_tests;
+
+#[cfg(test)]
+mod output_tests {
+    use std::io::{BufReader, Cursor};
+    use std::sync::{Arc, Mutex, mpsc};
+
+    use super::{pump_stderr, pump_stdout, read_bounded_line};
+
+    #[test]
+    fn bounded_line_reader_rejects_oversized_unterminated_output() {
+        let mut reader = BufReader::new(Cursor::new(vec![b'x'; 1024]));
+        let error = read_bounded_line(&mut reader, 16).unwrap_err();
+        assert!(error.to_string().contains("16 bytes"));
+    }
+
+    #[test]
+    fn oversized_stdout_is_reported_as_a_transport_failure() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let failure = Arc::new(Mutex::new(None));
+        pump_stdout(Cursor::new(vec![b'x'; 1024]), sender, failure.clone(), 16);
+        assert!(receiver.try_recv().unwrap().unwrap_err().contains("stdout"));
+        assert!(
+            failure
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .contains("16 bytes")
+        );
+    }
+
+    #[test]
+    fn burst_of_short_stdout_lines_cannot_grow_the_queue() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let failure = Arc::new(Mutex::new(None));
+        pump_stdout(
+            Cursor::new(b"one\ntwo\nthree\nfour\n".to_vec()),
+            sender,
+            failure.clone(),
+            16,
+        );
+        assert_eq!(receiver.try_recv().unwrap().unwrap(), "one");
+        assert_eq!(receiver.try_recv().unwrap().unwrap(), "two");
+        assert!(receiver.try_recv().is_err());
+        assert!(
+            failure
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .contains("queue exceeded")
+        );
+    }
+
+    #[test]
+    fn oversized_stderr_does_not_fill_the_tail() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let failure = Arc::new(Mutex::new(None));
+        let tail = Arc::new(Mutex::new(Vec::new()));
+        pump_stderr(
+            Cursor::new(vec![b'e'; 1024]),
+            tail.clone(),
+            sender,
+            failure.clone(),
+            16,
+        );
+        assert!(tail.lock().unwrap().is_empty());
+        assert!(receiver.try_recv().unwrap().unwrap_err().contains("stderr"));
+        assert!(
+            failure
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .contains("16 bytes")
+        );
+    }
+
+    #[test]
+    fn bounded_line_reader_accepts_newline_and_final_line() {
+        let mut reader = BufReader::new(Cursor::new(b"first\r\nlast".to_vec()));
+        assert_eq!(
+            read_bounded_line(&mut reader, 16).unwrap().unwrap(),
+            "first"
+        );
+        assert_eq!(read_bounded_line(&mut reader, 16).unwrap().unwrap(), "last");
+        assert!(read_bounded_line(&mut reader, 16).unwrap().is_none());
+    }
+}
