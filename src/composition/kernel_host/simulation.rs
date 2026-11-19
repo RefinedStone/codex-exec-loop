@@ -1753,7 +1753,8 @@ impl Simulation {
             // 무효가 되기 전에 worker 가 이미 요청을 보냈다. 정지는 그대로 app-server 에 닿는다.
             self.interrupt_running_turn();
             Ok(())
-        } else if self.rng.percent(10) {
+        } else if self.rng.percent(25) {
+            // 기본 seed 들이 실패한 정지를 운에 기대지 않고 지나도록 실패를 자주 낸다 (#2304).
             Err("simulated stop failure".to_string())
         } else {
             self.interrupt_running_turn();
