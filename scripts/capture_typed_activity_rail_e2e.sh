@@ -75,6 +75,8 @@ assert_clean_candidate() {
 assert_clean_candidate before-build
 source "$HOME/.cargo/env"
 capture_target_dir="${CARGO_TARGET_DIR:-$repo_root/target}"
+# The binary later runs from "$workspace", so a relative target dir must be pinned to the repo root.
+[[ "$capture_target_dir" == /* ]] || capture_target_dir="$repo_root/$capture_target_dir"
 cargo build --locked --target-dir "$capture_target_dir" --bin akra >/dev/null
 binary="$capture_target_dir/debug/akra"
 [[ -x "$binary" ]] || { printf 'built Akra binary is unavailable\n' >&2; exit 1; }

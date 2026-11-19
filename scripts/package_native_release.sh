@@ -152,6 +152,11 @@ fi
 # Pass the target dir explicitly so cargo config `build.target-dir` cannot send the build
 # elsewhere while packaging reads a stale binary from the default path (#2317).
 cargo_target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}"
+# Cargo resolves a relative CARGO_TARGET_DIR against the current directory; pin it to an absolute path.
+case "${cargo_target_dir}" in
+  /*|[A-Za-z]:*) ;;
+  *) cargo_target_dir="${PWD}/${cargo_target_dir}" ;;
+esac
 build_args=(cargo build --locked --manifest-path "${manifest_path}" --target-dir "${cargo_target_dir}")
 build_args+=("${cargo_profile_args[@]}")
 if [[ -n "${target}" ]]; then

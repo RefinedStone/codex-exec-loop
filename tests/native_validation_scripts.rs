@@ -1619,37 +1619,47 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 mkdir -p "$target_dir/$triple/release"
+case "$target_dir" in
+  /*) ;;
+  *) echo "fake cargo: relative --target-dir $target_dir" >&2; exit 1 ;;
+esac
+mkdir -p "$target_dir/$triple/release"
 printf 'fresh build\n' > "$target_dir/$triple/release/codex-exec-loop-native"
 "#,
     );
-    let custom_target_out = root.join("out-custom-target-dir");
-    let custom_target_output = Command::new("bash")
-        .arg(repo.join("scripts/package_native_release.sh"))
-        .arg("--target")
-        .arg("x86_64-unknown-linux-gnu")
-        .arg("--out-dir")
-        .arg(&custom_target_out)
-        .env("HOME", &home_dir)
-        .env("PATH", &fixture_path)
-        .env("SOURCE_DATE_EPOCH", SOURCE_DATE_EPOCH.to_string())
-        .env("CARGO_TARGET_DIR", root.join("custom-target"))
-        .current_dir(&repo)
-        .output()
-        .expect("custom target-dir packaging script should run");
-    assert_success(
-        &custom_target_output,
-        "package from a custom CARGO_TARGET_DIR",
-    );
-    assert_eq!(
-        fs::read_to_string(
-            custom_target_out
-                .join(&package_name)
-                .join("codex-exec-loop-native")
-        )
-        .expect("custom target-dir bundle binary should be readable"),
-        "fresh build\n",
-        "packaging must ship the binary cargo just built, not the stale default-target binary"
-    );
+    for (label, cargo_target_dir) in [
+        ("absolute", root.join("custom-target")),
+        ("relative", PathBuf::from("relative-target")),
+    ] {
+        let custom_target_out = root.join(format!("out-{label}-target-dir"));
+        let custom_target_output = Command::new("bash")
+            .arg(repo.join("scripts/package_native_release.sh"))
+            .arg("--target")
+            .arg("x86_64-unknown-linux-gnu")
+            .arg("--out-dir")
+            .arg(&custom_target_out)
+            .env("HOME", &home_dir)
+            .env("PATH", &fixture_path)
+            .env("SOURCE_DATE_EPOCH", SOURCE_DATE_EPOCH.to_string())
+            .env("CARGO_TARGET_DIR", &cargo_target_dir)
+            .current_dir(&repo)
+            .output()
+            .expect("custom target-dir packaging script should run");
+        assert_success(
+            &custom_target_output,
+            &format!("package from a {label} CARGO_TARGET_DIR"),
+        );
+        assert_eq!(
+            fs::read_to_string(
+                custom_target_out
+                    .join(&package_name)
+                    .join("codex-exec-loop-native")
+            )
+            .expect("custom target-dir bundle binary should be readable"),
+            "fresh build\n",
+            "packaging must ship the binary cargo just built from a {label} CARGO_TARGET_DIR"
+        );
+    }
 
     let unsafe_relative_path = "examples/line\n--checkpoint-action=exec=sh";
     fs::write(repo.join(unsafe_relative_path), "must not be archived\n")
