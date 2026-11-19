@@ -1,4 +1,6 @@
 // main 의 GatewayConnection 과 renderer 세션을 가짜 Gateway 에 실제로 연결해서 시험한다. 턴은 쓰지 않는다.
+import { createServer, type Socket } from "node:net";
+
 import { DEFAULT_SETTINGS } from "../src/shared/settings";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -258,6 +260,39 @@ describe("desktop session over the fake gateway", () => {
     connection.start();
     await waitFor(() => states.at(-1)?.phase === "connected");
     expect(daemonStarts).toBe(1);
+  });
+});
+
+describe("Gateway handshake cancellation", () => {
+  it("never starts a daemon when closed before the WebSocket handshake completes", async () => {
+    const endpoint = uniqueTestEndpoint();
+    const server = createServer(); // Accept transport but never answer the WebSocket upgrade.
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(endpoint, resolve);
+    });
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+    let daemonStarts = 0;
+    const connection = new GatewayConnection({
+      endpoint,
+      onMessage: () => undefined,
+      onState: () => undefined,
+      startDaemon: () => { daemonStarts += 1; },
+      reconnectInitialMs: 20,
+    });
+    cleanups.push(() => connection.close());
+
+    const accepted = new Promise<Socket>((resolve) => server.once("connection", resolve));
+    connection.start();
+    const socket = await accepted;
+    const disconnected = new Promise<void>((resolve) => socket.once("close", resolve));
+    connection.close();
+    // Make the peer release its unfinished handshake so both close handlers run.
+    socket.destroy();
+    await disconnected;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(daemonStarts).toBe(0);
   });
 });
 
