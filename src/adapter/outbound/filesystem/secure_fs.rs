@@ -607,12 +607,14 @@ mod platform {
 
     fn open_regular_file(parent: &OwnedFd, name: &OsStr) -> Result<Option<(File, Identity)>> {
         let name_c = c_name(name)?;
+        // O_NONBLOCK prevents a malicious FIFO with no writer from hanging the read
+        // before fstat can reject it. Normal regular-file reads are unaffected.
         // SAFETY: the descriptor and C string are valid; O_NOFOLLOW rejects final symlinks.
         let fd = unsafe {
             libc::openat(
                 parent.as_raw_fd(),
                 name_c.as_ptr(),
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
             )
         };
         if fd < 0 {
@@ -1393,7 +1395,8 @@ mod platform {
         use super::{
             acquire_workspace_mutation_lock, acquire_workspace_mutation_lock_with_timeout,
             classify_readdir_result, compare_and_swap_optional_file,
-            install_before_atomic_replace_hook, open_workspace_root, read_tree, write_file_atomic,
+            install_before_atomic_replace_hook, open_workspace_root, read_optional_file, read_tree,
+            write_file_atomic,
         };
 
         fn workspace(name: &str) -> std::path::PathBuf {
@@ -1407,6 +1410,60 @@ mod platform {
             ));
             std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
             workspace
+        }
+
+        #[test]
+        fn fifo_without_writer_is_rejected_without_hanging() {
+            use std::ffi::CString;
+            use std::os::unix::ffi::OsStrExt;
+
+            let root = workspace("fifo-no-writer");
+            let fifo = root.join("result.md");
+            let fifo_path = CString::new(fifo.as_os_str().as_bytes())
+                .expect("fixture pathname should contain no NUL");
+            // SAFETY: CString has a valid NUL-terminated path; the fixture is private.
+            assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+
+            let (tx, rx) = mpsc::channel();
+            let worker_root = root.clone();
+            let started = Instant::now();
+            let worker = std::thread::spawn(move || {
+                let result = read_optional_file(&worker_root, Path::new("result.md"), 4096);
+                tx.send(result).expect("reader result must be delivered");
+            });
+            // Even an old blocking reader must be released before the test can finish.
+            let result = rx.recv_timeout(Duration::from_secs(2));
+            if result.is_err() {
+                // Opening O_RDWR|O_NONBLOCK supplies a writer for a blocked O_RDONLY open.
+                // SAFETY: the path pointer is valid and no shared state is accessed.
+                let rescue_fd = unsafe {
+                    libc::open(
+                        fifo_path.as_ptr(),
+                        libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                    )
+                };
+                assert!(rescue_fd >= 0, "rescue writer should open");
+                // SAFETY: descriptor was returned by a successful open.
+                unsafe { libc::close(rescue_fd) };
+            }
+            let outcome = match result {
+                Ok(value) => value,
+                Err(_) => rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("reader should finish once the FIFO writer is supplied"),
+            };
+            worker.join().expect("reader should not panic");
+            let elapsed = started.elapsed();
+            std::fs::remove_dir_all(&root).expect("fixture should clean up");
+            assert!(
+                elapsed < Duration::from_secs(2),
+                "FIFO without a writer must be rejected promptly; elapsed: {elapsed:?}"
+            );
+            let error = outcome.expect_err("FIFO cannot impersonate an ordinary planning file");
+            assert!(
+                format!("{error:#}").contains("regular single-link file"),
+                "ordinary-file validation must reject FIFO: {error:#}"
+            );
         }
 
         #[test]
