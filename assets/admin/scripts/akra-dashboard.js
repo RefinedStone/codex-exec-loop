@@ -2210,7 +2210,8 @@
       ? validationRevision.advanced
       : evidenceRevision.advanced;
     if (frame.refreshDashboard && (!revisionDrivenRefresh || revisionAdvanced)) {
-      pollDashboard();
+      // An in-flight fetch may predate this invalidation, so queue a follow-up fetch after it.
+      pollDashboard({ fresh: true });
     }
   };
 
