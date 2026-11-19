@@ -3,10 +3,10 @@
 //! `akra mcp` 명령 하나가 세션 하나를 열고, 끝나면 child 를 정리한다. 줄 단위 JSON 을 주고받고,
 //! app-server 가 먼저 보내는 요청(elicitation 등)은 거절해서 호출이 멈추지 않게 한다.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,9 +18,102 @@ use crate::trusted_executable::TrustedCommand;
 
 const STDERR_TAIL_LINES: usize = 20;
 
+// A stalled child stdin must not block the calling RPC thread past its deadline.
+struct WriteRequest {
+    line: Vec<u8>,
+    response: SyncSender<io::Result<()>>,
+}
+
+fn spawn_stdin_writer(writer: impl Write + Send + 'static) -> SyncSender<WriteRequest> {
+    let (sender, receiver) = mpsc::sync_channel::<WriteRequest>(1);
+    std::thread::spawn(move || {
+        let mut writer = writer;
+        for request in receiver {
+            let result = writer
+                .write_all(&request.line)
+                .and_then(|()| writer.flush());
+            let failed = result.is_err();
+            let _ = request.response.send(result);
+            if failed {
+                break;
+            }
+        }
+    });
+    sender
+}
+
+fn write_before_deadline(
+    writer: &SyncSender<WriteRequest>,
+    message: &Value,
+    deadline: Instant,
+) -> Result<()> {
+    if Instant::now() >= deadline {
+        bail!("MCP hub timed out writing app-server request");
+    }
+    let mut line = serde_json::to_vec(message)?;
+    line.push(b'\n');
+    let (response_sender, response_receiver) = mpsc::sync_channel(1);
+    if Instant::now() >= deadline {
+        bail!("MCP hub timed out writing app-server request");
+    }
+    match writer.try_send(WriteRequest {
+        line,
+        response: response_sender,
+    }) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => bail!("MCP hub app-server write queue is full"),
+        Err(TrySendError::Disconnected(_)) => bail!("MCP hub app-server writer stopped"),
+    }
+    match response_receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(Ok(())) if Instant::now() < deadline => Ok(()),
+        Ok(Ok(())) | Err(RecvTimeoutError::Timeout) => {
+            bail!("MCP hub timed out writing app-server request")
+        }
+        Ok(Err(error)) => Err(anyhow!("MCP hub app-server write failed: {error}")),
+        Err(RecvTimeoutError::Disconnected) => {
+            bail!("MCP hub app-server writer stopped")
+        }
+    }
+}
+
+fn recv_json_message_until(
+    lines: &Receiver<String>,
+    deadline: Instant,
+    waiting_for: &str,
+    stderr_context: impl Fn() -> String,
+) -> Result<Value> {
+    loop {
+        // Checking before recv is essential: a continuously non-empty queue can otherwise
+        // make recv_timeout(0) succeed forever and starve an expired deadline.
+        if Instant::now() >= deadline {
+            bail!("MCP hub timed out waiting for {waiting_for}");
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match lines.recv_timeout(remaining) {
+            Ok(line) => {
+                if Instant::now() >= deadline {
+                    bail!("MCP hub timed out waiting for {waiting_for}");
+                }
+                if let Ok(message) = serde_json::from_str::<Value>(&line) {
+                    return Ok(message);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                bail!("MCP hub timed out waiting for {waiting_for}")
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!(
+                    "MCP hub app-server exited while waiting for {waiting_for}{}",
+                    stderr_context()
+                ));
+            }
+        }
+    }
+}
+
 pub(super) struct HubAppServerSession {
-    // child 는 drop 될 때 process tree 를 정리한다. stdin 보다 늦게 drop 되도록 마지막 필드로 둔다.
-    stdin: ChildStdin,
+    // child is last so session teardown kills an unresponsive writer after dropping sender.
+    writer: SyncSender<WriteRequest>,
     lines: Receiver<String>,
     stderr_tail: Arc<Mutex<Vec<String>>>,
     next_id: u64,
@@ -63,6 +156,7 @@ impl HubAppServerSession {
             )
         })?;
         let stdin = child.take_stdin().context("MCP hub app-server stdin")?;
+        let writer = spawn_stdin_writer(stdin);
         let stdout = child.take_stdout().context("MCP hub app-server stdout")?;
         let stderr = child.take_stderr().context("MCP hub app-server stderr")?;
 
@@ -87,7 +181,7 @@ impl HubAppServerSession {
         });
 
         let mut session = Self {
-            stdin,
+            writer,
             lines,
             stderr_tail,
             next_id: 1,
@@ -101,7 +195,10 @@ impl HubAppServerSession {
             }),
             Duration::from_secs(30),
         )?;
-        session.send(&json!({ "method": "initialized" }))?;
+        session.send_until(
+            &json!({ "method": "initialized" }),
+            Instant::now() + Duration::from_secs(30),
+        )?;
         Ok(session)
     }
 
@@ -113,8 +210,11 @@ impl HubAppServerSession {
     ) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
-        self.send(&json!({ "id": id, "method": method, "params": params }))?;
         let deadline = Instant::now() + timeout;
+        self.send_until(
+            &json!({ "id": id, "method": method, "params": params }),
+            deadline,
+        )?;
         loop {
             let message = self.next_message(deadline, method)?;
             if message.get("id").and_then(Value::as_u64) == Some(id)
@@ -129,7 +229,7 @@ impl HubAppServerSession {
                 }
                 return Ok(message.get("result").cloned().unwrap_or(Value::Null));
             }
-            self.answer_server_request(&message)?;
+            self.answer_server_request(&message, deadline)?;
         }
     }
 
@@ -152,34 +252,16 @@ impl HubAppServerSession {
                 }
                 continue;
             }
-            self.answer_server_request(&message)?;
+            self.answer_server_request(&message, deadline)?;
         }
     }
 
     fn next_message(&mut self, deadline: Instant, waiting_for: &str) -> Result<Value> {
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            match self.lines.recv_timeout(remaining) {
-                Ok(line) => {
-                    if let Ok(message) = serde_json::from_str::<Value>(&line) {
-                        return Ok(message);
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    bail!("MCP hub timed out waiting for `{waiting_for}`")
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(anyhow!(
-                        "MCP hub app-server exited while waiting for `{waiting_for}`{}",
-                        self.stderr_context()
-                    ));
-                }
-            }
-        }
+        recv_json_message_until(&self.lines, deadline, waiting_for, || self.stderr_context())
     }
 
     /// app-server 가 클라이언트에게 묻는 요청이다. hub 에는 답할 화면이 없으므로 거절한다.
-    fn answer_server_request(&mut self, message: &Value) -> Result<()> {
+    fn answer_server_request(&mut self, message: &Value, deadline: Instant) -> Result<()> {
         let (Some(id), Some(method)) = (
             message.get("id").cloned(),
             message.get("method").and_then(Value::as_str),
@@ -191,16 +273,12 @@ impl HubAppServerSession {
         } else {
             json!({ "id": id, "error": { "code": -32601, "message": "the Akra MCP hub cannot answer this request" } })
         };
-        self.send(&reply)
+        self.send_until(&reply, deadline)
     }
 
-    fn send(&mut self, message: &Value) -> Result<()> {
-        let mut line = serde_json::to_string(message)?;
-        line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|()| self.stdin.flush())
-            .with_context(|| format!("MCP hub app-server stopped{}", self.stderr_context()))
+    fn send_until(&mut self, message: &Value, deadline: Instant) -> Result<()> {
+        write_before_deadline(&self.writer, message, deadline)
+            .with_context(|| format!("MCP hub app-server transport{}", self.stderr_context()))
     }
 
     fn stderr_context(&self) -> String {
@@ -214,6 +292,65 @@ impl HubAppServerSession {
         } else {
             format!("\n{tail}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use serde_json::json;
+
+    use super::{recv_json_message_until, spawn_stdin_writer, write_before_deadline};
+
+    #[test]
+    fn expired_deadline_wins_over_queued_unrelated_notifications() {
+        let (sender, lines) = mpsc::channel();
+        for _ in 0..100 {
+            sender
+                .send(r#"{"method":"notification","params":{}}"#.to_owned())
+                .unwrap();
+        }
+        let error =
+            recv_json_message_until(&lines, Instant::now(), "target-notification", String::new)
+                .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        // The unread queue proves an already-expired deadline is not extended by messages.
+        assert!(lines.try_recv().is_ok());
+    }
+
+    #[test]
+    fn expired_write_deadline_does_not_enqueue_work() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let error =
+            write_before_deadline(&sender, &json!({"payload":"test"}), Instant::now()).unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_pipe_backpressure_cannot_extend_the_request_deadline() {
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("sleep")
+            .arg("5")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let writer = spawn_stdin_writer(child.stdin.take().unwrap());
+        let deadline = Instant::now() + Duration::from_millis(150);
+        let result = write_before_deadline(
+            &writer,
+            &json!({"payload":"x".repeat(2 * 1024 * 1024)}),
+            deadline,
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error:?}");
     }
 }
 
