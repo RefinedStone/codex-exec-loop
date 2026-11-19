@@ -1988,6 +1988,70 @@ async fn admin_akra_realtime_stream_is_authenticated_sse_with_resume_cursor() {
 }
 
 #[tokio::test]
+async fn admin_graceful_shutdown_closes_live_capability_sse_without_client_disconnect() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let workspace = TempAdminWorkspace::new("akra-sse-graceful-shutdown");
+    let state = build_admin_state(
+        workspace.path.clone(),
+        AdminSecurityConfig::for_test(TEST_ADMIN_TOKEN, 18442),
+    );
+    let shutdown = state.shutdown.clone();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("test listener");
+    let address = listener.local_addr().unwrap();
+    let (finish, on_finish) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, build_router(state))
+            .with_graceful_shutdown(async move {
+                let _ = on_finish.await;
+                shutdown.send_replace(true);
+            })
+            .await
+    });
+
+    let mut client = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("SSE client connects");
+    let request = format!(
+        "GET /api/admin/akra/stream HTTP/1.1\r\nHost: {TEST_ADMIN_HOST}\r\n{ADMIN_TOKEN_HEADER}: {TEST_ADMIN_TOKEN}\r\nConnection: keep-alive\r\n\r\n"
+    ).replace("\\r\\n", "\r\n");
+    client
+        .write_all(request.as_bytes())
+        .await
+        .expect("SSE request");
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            let mut chunk = [0_u8; 8 * 1024];
+            let bytes = client.read(&mut chunk).await.expect("SSE response read");
+            assert!(bytes > 0, "server closed before first SSE event");
+            response.extend_from_slice(&chunk[..bytes]);
+            if String::from_utf8_lossy(&response).contains("event: update") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("SSE first frame should arrive");
+    assert!(
+        String::from_utf8_lossy(&response).contains("200 OK"),
+        "SSE stream should be authenticated: {}",
+        String::from_utf8_lossy(&response)
+    );
+
+    // The client stays connected and does not drain new SSE chunks, while the
+    // server must still complete graceful shutdown promptly.
+    finish.send(()).expect("request graceful shutdown");
+    let outcome = tokio::time::timeout(Duration::from_secs(4), server)
+        .await
+        .expect("graceful shutdown must not wait for SSE timeout")
+        .expect("server task must not panic");
+    outcome.expect("server must shut down cleanly");
+}
+
+#[tokio::test]
 async fn admin_akra_realtime_stream_ends_after_browser_session_logout() {
     let workspace = TempAdminWorkspace::new("akra-realtime-logout");
     let router = admin_test_router(&workspace);

@@ -241,6 +241,16 @@ pub(super) async fn akra_stream_api(
             .as_deref()
             .is_none_or(|token| security.session_is_active(token))
     });
+    let mut shutdown = state.shutdown.subscribe();
+    // An active SSE response cannot wait for the next interval tick to exit:
+    // graceful shutdown must interrupt the stream even with no client reads.
+    let shutdown_event = async move {
+        if *shutdown.borrow_and_update() {
+            return;
+        }
+        let _ = shutdown.changed().await;
+    };
+    let ticks = futures_util::StreamExt::take_until(ticks, shutdown_event);
 
     let stream = ticks.map(move |_| {
         let control = akra_control_view(&state, "realtime control projection");
