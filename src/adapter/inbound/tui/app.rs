@@ -364,6 +364,9 @@ struct NativeTuiConversationState {
     lifecycle: ConversationLifecycleState,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
     prompt_input_revision: u64,
+    // Updated as soon as a different draft/session is selected, even before its
+    // transcript has loaded. Deferred clipboard callbacks must keep this identity.
+    clipboard_composer_generation: u64,
     turn_steer_confirmation: Option<TurnSteerUiIntent>,
     pending_turn_steer: Option<PendingTurnSteerUiIntent>,
     // Monotonic identity for the app-owned transcript document. A new draft or

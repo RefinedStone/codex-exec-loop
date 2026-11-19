@@ -836,13 +836,37 @@ impl NativeTuiApp {
             return false;
         }
         let sender = self.runtime.tx.clone();
+        let composer_generation = self.conversation.clipboard_composer_generation;
+        let transcript_revision = self.conversation.transcript_document_revision;
         self.runtime
             .clipboard_image_probe_trigger
             .request_probe(Box::new(move |outcome| {
-                let _ = sender.try_send(BackgroundMessage::ClipboardImageProbed(outcome));
+                let _ = sender.try_send(BackgroundMessage::ClipboardImageProbed {
+                    composer_generation,
+                    transcript_revision,
+                    outcome,
+                });
             }))
     }
-    pub(super) fn apply_clipboard_image_probe(&mut self, outcome: ClipboardImageProbeOutcome) {
+    pub(super) fn apply_clipboard_image_probe(
+        &mut self,
+        composer_generation: u64,
+        transcript_revision: u64,
+        outcome: ClipboardImageProbeOutcome,
+    ) {
+        // A completed probe belongs only to the composer that requested it.
+        // Generation changes on session selection even while loading is deferred;
+        // transcript revision also catches accepted runtime identity changes.
+        if self.conversation.clipboard_composer_generation != composer_generation
+            || self.conversation.transcript_document_revision != transcript_revision
+            || !self.can_edit_prompt_input()
+            || !matches!(
+                self.conversation.lifecycle.conversation_state,
+                ConversationState::Ready(_)
+            )
+        {
+            return;
+        }
         match outcome {
             ClipboardImageProbeOutcome::Attached(staged) => {
                 let path = staged.path.display().to_string();
@@ -1893,6 +1917,105 @@ mod tests {
     };
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+
+    type ClipboardCompletion = Box<dyn FnOnce(ClipboardImageProbeOutcome) + Send>;
+
+    #[derive(Default)]
+    struct DeferredClipboardImageProbe {
+        callback: Mutex<Option<ClipboardCompletion>>,
+    }
+
+    impl crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger
+        for DeferredClipboardImageProbe
+    {
+        fn request_probe(
+            &self,
+            on_complete: Box<dyn FnOnce(ClipboardImageProbeOutcome) + Send>,
+        ) -> bool {
+            let mut pending = self.callback.lock().unwrap();
+            if pending.is_some() {
+                return false;
+            }
+            *pending = Some(on_complete);
+            true
+        }
+    }
+
+    impl DeferredClipboardImageProbe {
+        fn complete(&self, path: &str) {
+            let callback = self.callback.lock().unwrap().take().unwrap();
+            callback(ClipboardImageProbeOutcome::Attached(
+                crate::domain::clipboard_image::ClipboardImageAttachment {
+                    path: path.into(),
+                    display_name: "clipboard.png".to_owned(),
+                },
+            ));
+        }
+    }
+
+    fn receive_one_clipboard_image_probe(app: &mut NativeTuiApp) {
+        let result = app.runtime.rx.try_recv().expect("queued probe completion");
+        let BackgroundMessage::ClipboardImageProbed {
+            composer_generation,
+            transcript_revision,
+            outcome,
+        } = result
+        else {
+            panic!("expected clipboard image probe");
+        };
+        app.apply_clipboard_image_probe(composer_generation, transcript_revision, outcome);
+    }
+
+    #[test]
+    fn clipboard_probe_completion_attaches_when_composer_identity_is_unchanged() {
+        let mut app = test_native_tui_app();
+        let deferred = Arc::new(DeferredClipboardImageProbe::default());
+        app.runtime.clipboard_image_probe_trigger = deferred.clone();
+        assert!(app.request_clipboard_image_probe());
+
+        deferred.complete("/tmp/clipboard-current.png");
+        receive_one_clipboard_image_probe(&mut app);
+
+        assert_eq!(
+            app.composer_image_attachment_paths(),
+            ["/tmp/clipboard-current.png"],
+        );
+    }
+
+    #[test]
+    fn clipboard_probe_requested_in_a_is_discarded_after_switching_to_b() {
+        let mut app = test_native_tui_app();
+        let deferred = Arc::new(DeferredClipboardImageProbe::default());
+        app.runtime.clipboard_image_probe_trigger = deferred.clone();
+        assert!(app.request_clipboard_image_probe());
+
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: "/tmp/clipboard-conversation-b".to_owned(),
+        });
+        deferred.complete("/tmp/clipboard-from-a.png");
+        receive_one_clipboard_image_probe(&mut app);
+
+        assert!(app.composer_image_attachment_paths().is_empty());
+    }
+
+    #[test]
+    fn clipboard_probe_from_a_cannot_attach_after_a_to_b_to_a_selection() {
+        let mut app = test_native_tui_app();
+        let deferred = Arc::new(DeferredClipboardImageProbe::default());
+        app.runtime.clipboard_image_probe_trigger = deferred.clone();
+        assert!(app.request_clipboard_image_probe());
+
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: "/tmp/clipboard-conversation-b".to_owned(),
+        });
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: "/tmp/clipboard-conversation-a".to_owned(),
+        });
+        deferred.complete("/tmp/clipboard-stale-a.png");
+        receive_one_clipboard_image_probe(&mut app);
+
+        assert!(app.composer_image_attachment_paths().is_empty());
+    }
 
     fn key(code: KeyCode) -> event::KeyEvent {
         event::KeyEvent::new(code, KeyModifiers::NONE)

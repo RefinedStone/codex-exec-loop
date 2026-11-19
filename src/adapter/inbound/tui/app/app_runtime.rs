@@ -95,7 +95,11 @@ pub(super) enum BackgroundMessage {
     // Clipboard image probes run on a composition-owned worker thread because
     // osascript and PowerShell can take hundreds of milliseconds; the result
     // re-enters the UI loop through this channel instead of blocking keys.
-    ClipboardImageProbed(ClipboardImageProbeOutcome),
+    ClipboardImageProbed {
+        composer_generation: u64,
+        transcript_revision: u64,
+        outcome: ClipboardImageProbeOutcome,
+    },
 }
 
 pub(super) struct NativeTuiAppRuntimeChannels {
@@ -1737,6 +1741,7 @@ impl NativeTuiApp {
                 },
                 pending_manual_prompt_preparation: None,
                 prompt_input_revision: 0,
+                clipboard_composer_generation: 0,
                 turn_steer_confirmation: None,
                 pending_turn_steer: None,
                 transcript_document_revision: 0,
@@ -2527,6 +2532,10 @@ impl NativeTuiApp {
                 | ConversationLifecycleEvent::SessionChosen { .. }
         );
         if changes_conversation_identity {
+            self.conversation.clipboard_composer_generation = self
+                .conversation
+                .clipboard_composer_generation
+                .wrapping_add(1);
             // 떠난 대화의 steer 결과는 Core 가 이 화면에 보내지 않는다 (plan 18 K2-3, K2-4).
             self.conversation.turn_steer_confirmation = None;
             self.conversation.pending_turn_steer = None;
