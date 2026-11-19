@@ -382,22 +382,43 @@ where
         end = upstream_restarted => end,
     };
     drop(provider_session);
-    if end == SessionEnd::UpstreamRestarted {
-        let _ = outbox
-            .send(close_message(
-                CloseCode::Restart,
-                "codex app-server upstream restarted",
-            ))
-            .await;
-    }
-    // 커널 요청 작업과 이벤트 스레드도 보내기 함을 쥔다. 먼저 끝내야 쓰기 작업이 밀린 메시지를 보낸 뒤 바로 끝난다.
+    // Kernel workers can hold additional outbox senders; stop them before flushing.
     if let Some(kernel_requests) = kernel_requests {
         kernel_requests.stop().await;
     }
-    drop(outbox);
-    let _ = tokio::time::timeout(CLIENT_CLOSE_FLUSH_TIMEOUT, writer).await;
+    finish_client_writer(end, outbox, writer).await;
     tracing::debug!(?end, "gateway session ended");
     Ok(())
+}
+
+/// The close enqueue and the writer flush share ONE bounded shutdown deadline.
+/// A blocked client's transport can fill the outbox and stall both operations.
+async fn finish_client_writer(
+    end: SessionEnd,
+    outbox: mpsc::Sender<Message>,
+    mut writer: tokio::task::JoinHandle<()>,
+) {
+    let shutdown = async {
+        if end == SessionEnd::UpstreamRestarted {
+            let _ = outbox
+                .send(close_message(
+                    CloseCode::Restart,
+                    "codex app-server upstream restarted",
+                ))
+                .await;
+        }
+        drop(outbox);
+        let _ = (&mut writer).await;
+    };
+    if tokio::time::timeout(CLIENT_CLOSE_FLUSH_TIMEOUT, shutdown)
+        .await
+        .is_err()
+    {
+        // Dropping a JoinHandle only detaches the task. Abort and await it to
+        // release the client sink even if its write operation never completes.
+        writer.abort();
+        let _ = writer.await;
+    }
 }
 
 fn open_recording(recorder: Option<&GatewayRecorder>) -> Option<SessionRecording> {
@@ -429,4 +450,55 @@ fn close_message(code: CloseCode, reason: &'static str) -> Message {
         code,
         reason: reason.into(),
     }))
+}
+
+#[cfg(test)]
+mod writer_shutdown_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::{mpsc, oneshot};
+    use tokio_tungstenite::tungstenite::Message;
+
+    use super::{CLIENT_CLOSE_FLUSH_TIMEOUT, SessionEnd, finish_client_writer};
+
+    struct WriterDropWitness(Arc<AtomicBool>);
+
+    impl Drop for WriterDropWitness {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn full_outbox_and_blocked_client_writer_are_aborted_at_shutdown_deadline() {
+        let (mut blocked_stream, _unread_client) = tokio::io::duplex(1);
+        let (outbox, mut inbox) = mpsc::channel::<Message>(1);
+        outbox.send(Message::text("queued")).await.unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let writer_dropped = dropped.clone();
+        let (writer_started, started) = oneshot::channel();
+        let writer = tokio::spawn(async move {
+            let _witness = WriterDropWitness(writer_dropped);
+            let _ = writer_started.send(());
+            // A client which never reads holds the writer here permanently.
+            let _ = blocked_stream.write_all(&vec![0u8; 4096]).await;
+            let _ = inbox.recv().await;
+        });
+        started.await.unwrap();
+        let began = Instant::now();
+
+        finish_client_writer(SessionEnd::UpstreamRestarted, outbox, writer).await;
+
+        assert!(
+            began.elapsed() <= CLIENT_CLOSE_FLUSH_TIMEOUT + Duration::from_secs(1),
+            "session shutdown must include close enqueue and writer cancellation"
+        );
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "writer task must be aborted, not detached"
+        );
+    }
 }
