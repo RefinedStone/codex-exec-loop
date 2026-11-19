@@ -72,20 +72,33 @@ impl RepositoryObserver {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Instant;
 
     use super::*;
 
-    /// 읽을 때마다 다음 커밋을 답한다. 두 번째 읽기는 실패한다.
-    #[derive(Default)]
-    struct CountingPort(AtomicUsize);
+    /// Each read is held at its entry until the test explicitly releases it.
+    /// This prevents a fast observer from skipping the intermediate snapshot
+    /// before the test thread has an opportunity to inspect it.
+    struct ControlledPort {
+        next_read: AtomicUsize,
+        read_entered: Sender<usize>,
+        allow_read: Mutex<mpsc::Receiver<()>>,
+        exited: Sender<()>,
+    }
 
-    impl RepositoryStatePort for CountingPort {
+    impl RepositoryStatePort for ControlledPort {
         fn repository_state(
             &self,
             _workspace_dir: &str,
         ) -> anyhow::Result<Option<RepositoryState>> {
-            let read = self.0.fetch_add(1, Ordering::SeqCst);
+            let read = self.next_read.fetch_add(1, Ordering::SeqCst);
+            self.read_entered
+                .send(read)
+                .expect("test read entry receiver");
+            self.allow_read
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .expect("test must release each observer read");
             if read == 1 {
                 anyhow::bail!("git is busy")
             }
@@ -96,30 +109,64 @@ mod tests {
         }
     }
 
-    fn wait_for(observer: &RepositoryObserver, head: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while observer.latest().map(|state| state.head).as_deref() != Some(head) {
-            assert!(Instant::now() < deadline, "the observer never read {head}");
-            std::thread::sleep(Duration::from_millis(1));
+    impl Drop for ControlledPort {
+        fn drop(&mut self) {
+            let _ = self.exited.send(());
         }
     }
 
     #[test]
     fn the_observer_keeps_reading_after_a_failed_read_and_stops_when_dropped() {
-        let port = Arc::new(CountingPort::default());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (allow_tx, allow_rx) = mpsc::channel();
+        let (exited_tx, exited_rx) = mpsc::channel();
+        let port = Arc::new(ControlledPort {
+            next_read: AtomicUsize::new(0),
+            read_entered: entered_tx,
+            allow_read: Mutex::new(allow_rx),
+            exited: exited_tx,
+        });
+
+        // Move our only Arc into the worker. ControlledPort::drop then becomes an
+        // exact worker-exit acknowledgement, not a timed guess after two sleeps.
         let observer = RepositoryObserver::start_with_interval(
-            port.clone(),
-            "/workspace".to_string(),
+            port,
+            "/workspace".to_owned(),
             Duration::from_millis(20),
         );
-        wait_for(&observer, "commit-0");
-        // 실패한 두 번째 읽기는 상태를 지우지 않는다. 세 번째 읽기가 새 상태를 준다.
-        wait_for(&observer, "commit-2");
+        let read_started = |expected: usize| {
+            assert_eq!(
+                entered_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                expected,
+                "observer read order is controlled by explicit channel releases",
+            );
+        };
 
+        read_started(0);
+        assert!(observer.latest().is_none(), "the first read is held");
+        allow_tx.send(()).unwrap();
+        read_started(1);
+        assert_eq!(observer.latest().unwrap().head, "commit-0");
+
+        // Fail the second read. The previous successful snapshot must survive.
+        allow_tx.send(()).unwrap();
+        read_started(2);
+        assert_eq!(observer.latest().unwrap().head, "commit-0");
+
+        allow_tx.send(()).unwrap();
+        read_started(3);
+        assert_eq!(observer.latest().unwrap().head, "commit-2");
+
+        // Drop while the fourth read is held; then release it so the worker
+        // can reach its stop-channel check and terminate deterministically.
         drop(observer);
-        std::thread::sleep(Duration::from_millis(100));
-        let reads = port.0.load(Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(100));
-        assert_eq!(port.0.load(Ordering::SeqCst), reads);
+        allow_tx.send(()).unwrap();
+        exited_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker must drop its port after observer shutdown");
+        assert!(
+            matches!(entered_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+            "no additional read may be started after the observer stops",
+        );
     }
 }
