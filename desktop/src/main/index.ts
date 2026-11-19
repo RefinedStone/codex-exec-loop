@@ -372,16 +372,10 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
     closeRemoteConnections(contentsId);
-    terminals.closeAllOf(contentsId);
-    browsers.close(contentsId);
-    workingWindows.delete(contentsId);
-    updateKeepAwake();
+    closeRendererResources(contentsId);
   });
-  // renderer 가 죽으면 "일하는 중" 보고도 믿을 수 없다. 다시 뜬 화면이 새로 보고한다.
-  contents.on("render-process-gone", () => {
-    workingWindows.delete(contentsId);
-    updateKeepAwake();
-  });
+  // A crashed renderer never sends ready again; close stale native resources.
+  contents.on("render-process-gone", () => closeRendererResources(contentsId));
   if (!HIDDEN_WINDOWS) {
     window.once("ready-to-show", () => window.show());
   }
@@ -402,9 +396,18 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
   }
 });
 
+/** Renderer reinitialization does not destroy WebContents: native PTYs and browser
+ * views must be released by owner before attaching the replacement renderer. */
+function closeRendererResources(contentsId: number): void {
+  terminals.closeAllOf(contentsId);
+  browsers.close(contentsId);
+  workingWindows.delete(contentsId);
+  updateKeepAwake();
+}
+
 // renderer 가 상태 수신 함수를 등록한 뒤 보낸다. 화면을 다시 불러오면 다시 오고, 그때 접속을 새로 연다.
 ipcMain.on(IPC_CHANNELS.ready, (event) => {
-  browsers.close(event.sender.id);
+  closeRendererResources(event.sender.id);
   attachGatewayConnection(event.sender);
 });
 

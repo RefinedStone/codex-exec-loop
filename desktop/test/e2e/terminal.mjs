@@ -73,6 +73,44 @@ try {
   await page.getByTestId("terminal-close").first().click();
   await page.getByTestId("terminal-close").first().click();
   check("closing every tab hides the terminal", (await page.getByTestId("terminal-view").count()) === 0);
+
+  // Reload reuses the same Electron WebContents. The old PTY must not outlive
+  // the renderer that owned it even though the window itself was not closed.
+  await page.getByTestId("terminal-toggle").click();
+  await page.getByTestId("terminal-view").first().waitFor({ timeout: 15_000 });
+  await page.locator('[data-testid="terminal-view"] textarea').first().focus();
+  await page.keyboard.type("echo akra-reload-shell-$$\r");
+  let oldShellPid = null;
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const found = (await bufferText(page, 0)).match(/akra-reload-shell-(\d+)/);
+    if (found) {
+      oldShellPid = Number(found[1]);
+      break;
+    }
+    await page.waitForTimeout(100);
+  }
+  if (process.platform !== "win32") check("reload test recorded the old shell pid", Number.isInteger(oldShellPid) && oldShellPid > 1);
+  await page.reload();
+  await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
+  check("renderer reload clears the old terminal tabs", (await page.getByTestId("terminal-view").count()) === 0);
+  if (process.platform !== "win32" && oldShellPid) {
+    const expired = Date.now() + 5_000;
+    let gone = false;
+    while (Date.now() < expired) {
+      try {
+        process.kill(oldShellPid, 0);
+      } catch (error) {
+        if (error.code === "ESRCH") {
+          gone = true;
+          break;
+        }
+        throw error;
+      }
+      await page.waitForTimeout(100);
+    }
+    check("renderer reload terminates its old PTY process", gone);
+  }
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
