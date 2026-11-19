@@ -417,7 +417,7 @@ impl CoreEffectRunner {
                 attempt,
             } => {
                 let permit = self.stop_request_workers.register(correlation.generation);
-                self.spawn_stop_request_attempt(correlation, attempt, None, permit);
+                self.spawn_stop_request_attempt(correlation, attempt, permit);
                 None
             }
             CoreEffect::InterruptTurn {
@@ -426,12 +426,7 @@ impl CoreEffectRunner {
                 turn_id,
             } => {
                 let permit = self.stop_request_workers.register(correlation.generation);
-                self.spawn_stop_request_attempt(
-                    correlation,
-                    StopRequestAttempt::AfterTurnStarted,
-                    Some((thread_id, turn_id)),
-                    permit,
-                );
+                self.spawn_turn_interrupt_attempt(correlation, thread_id, turn_id, permit);
                 None
             }
             CoreEffect::InvalidateStopRequest { correlation } => {
@@ -877,8 +872,6 @@ impl CoreEffectRunner {
         &self,
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
-        // 있으면 그 thread 의 그 턴만 멈춘다 (#2304). 없으면 모든 턴을 멈춘다.
-        target_turn: Option<(String, String)>,
         permit: EffectExecutionPermit,
     ) {
         let conversation_service = self.conversation_service.clone();
@@ -906,14 +899,51 @@ impl CoreEffectRunner {
                             "stop request was superseded before provider execution"
                         ));
                     }
-                    match &target_turn {
-                        Some((thread_id, turn_id)) => {
-                            conversation_service.request_turn_interrupt(thread_id, turn_id)
-                        }
-                        None => conversation_service.request_stop_all_sessions(),
-                    }
+                    conversation_service.request_stop_all_sessions()
                 })
                 .map_err(|_| anyhow::anyhow!("stop request worker panicked"))
+                .and_then(|result| result);
+                workers.finish(correlation.generation, &permit);
+                stop_request_attempt_completion(correlation, attempt, result)
+            },
+        );
+    }
+
+    /// 전체 정지 뒤에 시작한 턴 하나만 멈춘다 (#2304). 완료는 `AfterTurnStarted` 정지 시도의 완료이다.
+    fn spawn_turn_interrupt_attempt(
+        &self,
+        correlation: StopRequestCorrelation,
+        thread_id: String,
+        turn_id: String,
+        permit: EffectExecutionPermit,
+    ) {
+        let conversation_service = self.conversation_service.clone();
+        let input_sender = self.input_sender.clone();
+        let workers = self.stop_request_workers.clone();
+        let attempt = StopRequestAttempt::AfterTurnStarted;
+        let panic_workers = workers.clone();
+        let panic_permit = permit.clone();
+        let panic_completion = stop_request_attempt_completion(
+            correlation,
+            attempt,
+            Err(anyhow::anyhow!("turn interrupt worker panicked")),
+        );
+        spawn_effect_completion_worker_with_recovery(
+            input_sender,
+            panic_completion,
+            move || {
+                panic_workers.finish(correlation.generation, &panic_permit);
+            },
+            move || {
+                let result = catch_redacted_worker_unwind(|| {
+                    if !permit.is_active() {
+                        return Err(anyhow::anyhow!(
+                            "stop request was superseded before provider execution"
+                        ));
+                    }
+                    conversation_service.request_turn_interrupt(&thread_id, &turn_id)
+                })
+                .map_err(|_| anyhow::anyhow!("turn interrupt worker panicked"))
                 .and_then(|result| result);
                 workers.finish(correlation.generation, &permit);
                 stop_request_attempt_completion(correlation, attempt, result)
