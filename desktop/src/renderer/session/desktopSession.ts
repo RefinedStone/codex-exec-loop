@@ -615,6 +615,15 @@ export class DesktopSession {
     }
   }
 
+  /** 다른 곳에서 보관을 푼 스레드를 읽어 사이드바에 다시 넣는다. 알림에는 스레드 id 만 있다. */
+  private async addUnarchivedThread(threadId: string): Promise<void> {
+    try {
+      this.store.mergeFolders(groupThreadsByCwd([await this.readThread(threadId)]));
+    } catch {
+      // 다시 연결할 때 읽는 목록이 채운다.
+    }
+  }
+
   private async readThread(threadId: string): Promise<Thread> {
     const response = await this.client.request<ThreadReadResponse>("thread/read", { threadId, includeTurns: false });
     return response.thread;
@@ -664,9 +673,27 @@ export class DesktopSession {
       }
       return;
     }
+    if (method === "thread/started") {
+      const thread = (params as { thread?: Thread } | null)?.thread;
+      // thread/list 처럼 하위 에이전트와 디스크에 남지 않는 스레드는 목록에 넣지 않는다. 이미 있는 스레드는 그대로 둔다.
+      if (thread && !thread.ephemeral && !thread.parentThreadId) {
+        this.store.mergeFolders(groupThreadsByCwd([thread]));
+      }
+      return;
+    }
     const threadId = notificationThreadId(params);
     if (!threadId) {
       return;
+    }
+    if (method === "thread/name/updated") {
+      const name = (params as { threadName?: string }).threadName;
+      if (name) this.store.renameThread(threadId, name);
+    }
+    if (method === "thread/archived" || method === "thread/deleted") {
+      this.store.removeThread(threadId);
+    }
+    if (method === "thread/unarchived") {
+      void this.addUnarchivedThread(threadId);
     }
     if (method === "thread/status/changed") {
       const status = (params as { status: ThreadStatus }).status.type;

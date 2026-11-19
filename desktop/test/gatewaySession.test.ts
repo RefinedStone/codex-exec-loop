@@ -6,7 +6,7 @@ import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { GatewayConnection } from "../src/main/gatewayConnection";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession, groupThreadsByCwd, startDesktopSession, isAgentThreadSource } from "../src/renderer/session/desktopSession";
-import { type DesktopState, mergeWorkspaceFolders, remoteHostKey, type SessionStore } from "../src/renderer/session/desktopStore";
+import { type DesktopState, mergeWorkspaceFolders, remoteHostKey, removeWorkspaceThread, renameWorkspaceThread, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Thread } from "../src/shared/protocol/generated/v2/Thread";
 import {
   APPROVAL_TURN_RECORDING,
@@ -192,6 +192,12 @@ function sessionStore() {
     },
     mergeFolders: (folders) => {
       snapshot.folders = mergeWorkspaceFolders(snapshot.folders ?? [], folders);
+    },
+    renameThread: (threadId, title) => {
+      snapshot.folders = renameWorkspaceThread(snapshot.folders ?? [], threadId, title);
+    },
+    removeThread: (threadId) => {
+      snapshot.folders = removeWorkspaceThread(snapshot.folders ?? [], threadId);
     },
     getOpenThreadId: () => snapshot.openThreadId ?? null,
     getTranscript: () => snapshot.transcript ?? null,

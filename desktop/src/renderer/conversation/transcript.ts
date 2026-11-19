@@ -119,6 +119,8 @@ export function applyNotification(transcript: Transcript, notification: Notifica
   switch (notification.method) {
     case "thread/status/changed":
       return { ...transcript, status: params.status as ThreadStatus };
+    case "thread/name/updated":
+      return typeof params.threadName === "string" && params.threadName ? { ...transcript, title: params.threadName } : transcript;
     case "turn/started":
     case "turn/completed":
       return upsertTurn(transcript, params.turn as Turn);
