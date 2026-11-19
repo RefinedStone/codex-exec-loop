@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use anyhow::{Context, Result, anyhow, bail};
 use rand::RngCore;
@@ -364,10 +365,14 @@ impl PlanningAdminFacadeService {
                 task_ids,
                 &owner_token,
             )?;
-        let outcome = operation();
+        let outcome = catch_unwind(AssertUnwindSafe(operation));
         let release = self
             .planning_authority_port
             .release_admin_task_mutation_guard(self.workspace_dir.as_str(), task_ids, &owner_token);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(panic) => resume_unwind(panic),
+        };
         match (outcome, release) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), Ok(())) => Err(error),
@@ -397,10 +402,14 @@ impl PlanningAdminFacadeService {
                 &owner_token,
                 action,
             )?;
-        let outcome = operation(&owner_token);
+        let outcome = catch_unwind(AssertUnwindSafe(|| operation(&owner_token)));
         let release = self
             .planning_authority_port
             .release_admin_authority_mutation_guard(self.workspace_dir.as_str(), &owner_token);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(panic) => resume_unwind(panic),
+        };
         match (outcome, release) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), Ok(())) => Err(error),
