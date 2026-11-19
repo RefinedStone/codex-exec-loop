@@ -3,7 +3,8 @@
 // 있는 폴더에서는 응답이 접속 한도를 넘고 Gateway 세션 전체가 끊겼다 (2026-11-06). 여기서는 목록만 먼저 읽고,
 // 파일 diff 는 펼칠 때 하나씩, 크기 한도 안에서 읽는다.
 import { spawn } from "node:child_process";
-import { lstat, open, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
 import type { GitActionResult, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../shared/bridge";
@@ -184,9 +185,42 @@ export async function readGitStatus(cwdInput: unknown): Promise<GitStatusResult>
   return { ok: true, branch: parsed.branch, files, truncated: status.truncated };
 }
 
-async function readUntrackedFile(path: string): Promise<GitFileDiff> {
-  const handle = await open(path, "r");
+function canonicalFileIsInsideRoot(root: string, target: string): boolean {
+  const fromRoot = relative(root, target);
+  return fromRoot !== "" && fromRoot !== ".." && !fromRoot.startsWith(".." + sep) && !isAbsolute(fromRoot);
+}
+
+async function readUntrackedFile(root: string, path: string): Promise<GitFileDiff> {
+  // A lexical root check is insufficient: a symlink or junction can reach
+  // outside the repository, including through an intermediate directory.
+  const [canonicalRoot, info, canonicalTarget] = await Promise.all([
+    realpath(root),
+    lstat(path),
+    realpath(path),
+  ]);
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error("심볼릭 링크 및 일반 파일이 아닌 경로는 내용을 표시하지 않습니다.");
+  }
+  if (!canonicalFileIsInsideRoot(canonicalRoot, canonicalTarget)) {
+    throw new Error("저장소 외부 경로의 파일은 읽을 수 없습니다.");
+  }
+
+  // Resolve the canonical path before opening and refuse final symlinks on
+  // Unix. Check descriptor identity after opening to detect replacements.
+  const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0));
+  const handle = await open(canonicalTarget, flags);
   try {
+    const [opened, current, currentTarget] = await Promise.all([
+      handle.stat(),
+      lstat(path),
+      realpath(path),
+    ]);
+    if (!opened.isFile() || current.isSymbolicLink() || !current.isFile() ||
+      opened.dev !== info.dev || opened.ino !== info.ino ||
+      current.dev !== info.dev || current.ino !== info.ino ||
+      currentTarget !== canonicalTarget || !canonicalFileIsInsideRoot(canonicalRoot, currentTarget)) {
+      throw new Error("파일 경로가 읽기 도중 변경되어 내용을 표시하지 않습니다.");
+    }
     const buffer = Buffer.alloc(FILE_DIFF_LIMIT + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const content = buffer.subarray(0, Math.min(bytesRead, FILE_DIFF_LIMIT));
@@ -443,9 +477,9 @@ export function editorUrl(target: string): string {
 
 /** 파일 하나의 변경이다. 추적 중인 파일은 HEAD 대비 git diff, 새 파일은 내용이다. */
 export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracked: unknown): Promise<GitFileDiff> {
-  const { cwd, target, pathspec } = await repositoryFile(cwdInput, path);
+  const { cwd, root, target, pathspec } = await repositoryFile(cwdInput, path);
   if (untracked === true) {
-    return readUntrackedFile(target);
+    return readUntrackedFile(root, target);
   }
   // An unborn repository has no HEAD. Git's cached diff compares the index with the empty tree.
   const head = await runGit(cwd, ["rev-parse", "--verify", "-q", "HEAD"], 4096);

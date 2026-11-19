@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -264,6 +264,46 @@ describe("git file actions", () => {
     expect((await runGitFileAction(root, "stage", "top.bin")).ok).toBe(false);
     expect((await runGitFileAction(root, "discard", "top.bin")).ok).toBe(false);
     expect(await statuses()).toMatchObject({ "assets/": "??", "top.bin": "??" });
+  });
+
+  it("never reads content behind an untracked symlink outside the repository", async () => {
+    const { root, write } = repository();
+    const outside = mkdtempSync(join(tmpdir(), "akra-untracked-secret-"));
+    try {
+      writeFileSync(join(outside, "secret.txt"), "PRIVATE_EXTERNAL_CONTENT");
+      try {
+        symlinkSync(join(outside, "secret.txt"), join(root, "linked.txt"), "file");
+      } catch (error) {
+        if (process.platform === "win32" && ["EPERM", "ENOTSUP", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+        throw error;
+      }
+      await expect(readGitFileDiff(root, "linked.txt", true)).rejects.toThrow(/심볼릭 링크|저장소 외부/);
+      write("ordinary.txt", "visible inside repository\n");
+      expect(await readGitFileDiff(root, "ordinary.txt", true)).toEqual({
+        kind: "content",
+        text: "visible inside repository\n",
+        truncated: false,
+      });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects untracked file reads through symlinked parent directories", async () => {
+    const { root } = repository();
+    const outside = mkdtempSync(join(tmpdir(), "akra-untracked-parent-"));
+    try {
+      writeFileSync(join(outside, "secret.txt"), "DO_NOT_DISCLOSE");
+      try {
+        symlinkSync(outside, join(root, "linked-parent"), process.platform === "win32" ? "junction" : "dir");
+      } catch (error) {
+        if (process.platform === "win32" && ["EPERM", "ENOTSUP", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+        throw error;
+      }
+      await expect(readGitFileDiff(root, "linked-parent/secret.txt", true)).rejects.toThrow(/저장소 외부/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("refuses a path outside the repository and an unknown action", async () => {
