@@ -829,6 +829,7 @@ fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
             },
         }],
         next_after: 42,
+        recorder: None,
     };
     let snapshot = crate::core::app::AppSnapshot::initial();
     let answer = next
@@ -854,6 +855,7 @@ fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
         KernelQueryAnswer::History(crate::domain::kernel_event::KernelEventPage {
             records: Vec::new(),
             next_after: 0,
+            recorder: None,
         }),
         "a kernel without a log answers with an empty page"
     );
@@ -2064,6 +2066,13 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
                 .map(|(index, event)| record(index as i64 + 1, event))
                 .collect(),
             next_after: 12,
+            recorder: Some(crate::domain::kernel_event::KernelRecorderHealth {
+                degraded: true,
+                saturated: true,
+                pending_bytes: 1,
+                failed_events: 1,
+                dropped_events: 1,
+            }),
         };
         let answer = query.answer(&snapshot, &[], no_parallel(), Some(page), None);
         assert_matches_spec(&spec, "queries", "output", &to_json(&answer));

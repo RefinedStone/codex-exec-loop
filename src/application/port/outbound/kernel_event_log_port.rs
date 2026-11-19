@@ -34,6 +34,7 @@ pub trait KernelEventLogPort: Send + Sync {
         Ok(KernelEventPage {
             records: Vec::new(),
             next_after: after,
+            recorder: None,
         })
     }
 }

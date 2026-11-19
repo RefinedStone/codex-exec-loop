@@ -1537,6 +1537,7 @@ mod tests {
             Ok(KernelEventPage {
                 records,
                 next_after,
+                recorder: None,
             })
         }
     }
