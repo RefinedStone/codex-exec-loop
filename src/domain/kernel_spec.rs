@@ -161,6 +161,8 @@ spec_names! {
             "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.";
         UnknownThread => "unknown_thread",
             "The kernel does not know the thread. Send `load_sessions` first.";
+        ForeignWorkspace => "foreign_workspace",
+            "The thread runs in a directory outside the workspace of this kernel client. The kernel makes no planning task for it. Send the prompt through the kernel of the thread's repository.";
         ParallelMode => "parallel_mode",
             "Parallel mode is on. The kernel starts no thread prompt until it is off.";
         ParallelModeUnknown => "parallel_mode_unknown",
@@ -310,6 +312,7 @@ impl KernelCommandKind {
                     Reason::Busy,
                     Reason::PreparationActive,
                     Reason::UnknownThread,
+                    Reason::ForeignWorkspace,
                     Reason::ParallelMode,
                     Reason::ParallelModeUnknown,
                 ],
@@ -509,6 +512,7 @@ mod tests {
                 "busy",
                 "preparation_active",
                 "unknown_thread",
+                "foreign_workspace",
                 "parallel_mode",
                 "parallel_mode_unknown",
                 "parallel_mode_started",

@@ -2443,17 +2443,20 @@ pub(crate) mod tests {
     impl crate::application::port::outbound::session_catalog_port::SessionCatalogPort
         for RecordingTurnRuntimePort
     {
-        /// 커널 호스트 시험이 thread 를 지정할 수 있게 `thread-2` 하나를 알린다 (plan 18 K3-3b).
+        /// 커널 호스트 시험이 thread 를 지정할 수 있게 `thread-2` 하나를 알린다 (plan 18 K3-3b). 그 thread 는 요청한
+        /// 작업 공간에서 돈다: 다른 작업 공간의 thread 는 받지 않는다 (#2303).
         fn load_session_catalog(
             &self,
-            _request: SessionCatalogRequest,
+            request: SessionCatalogRequest,
         ) -> anyhow::Result<SessionCatalog> {
             Ok(crate::domain::recent_sessions::RecentSessions {
                 items: vec![crate::domain::session_summary::SessionSummary {
                     id: "thread-2".to_string(),
                     name: Some("Listed thread".to_string()),
                     preview: String::new(),
-                    cwd: "/workspace".to_string(),
+                    cwd: request
+                        .current_workspace_directory
+                        .unwrap_or_else(|| "/workspace".to_string()),
                     source: "test".to_string(),
                     model_provider: "test".to_string(),
                     updated_at_epoch: 1,
