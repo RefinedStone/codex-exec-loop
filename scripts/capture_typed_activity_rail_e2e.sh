@@ -74,8 +74,9 @@ assert_clean_candidate() {
 
 assert_clean_candidate before-build
 source "$HOME/.cargo/env"
-cargo build --locked --bin akra >/dev/null
-binary="$repo_root/target/debug/akra"
+capture_target_dir="${CARGO_TARGET_DIR:-$repo_root/target}"
+cargo build --locked --target-dir "$capture_target_dir" --bin akra >/dev/null
+binary="$capture_target_dir/debug/akra"
 [[ -x "$binary" ]] || { printf 'built Akra binary is unavailable\n' >&2; exit 1; }
 assert_clean_candidate after-build
 
