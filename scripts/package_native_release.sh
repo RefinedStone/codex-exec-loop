@@ -149,21 +149,26 @@ if [[ "${artifact_target}" == *windows* ]]; then
   launcher_file_name="akra.cmd"
 fi
 
-build_args=(cargo build --locked --manifest-path "${manifest_path}")
+# Pass the target dir explicitly so cargo config `build.target-dir` cannot send the build
+# elsewhere while packaging reads a stale binary from the default path (#2317).
+cargo_target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}"
+build_args=(cargo build --locked --manifest-path "${manifest_path}" --target-dir "${cargo_target_dir}")
 build_args+=("${cargo_profile_args[@]}")
 if [[ -n "${target}" ]]; then
   build_args+=(--target "${target}")
 fi
 "${build_args[@]}"
 
-binary_path="${repo_root}/target"
+binary_path="${cargo_target_dir}"
 if [[ -n "${target}" ]]; then
   binary_path="${binary_path}/${target}"
 fi
 binary_path="${binary_path}/${profile_dir}/${binary_file_name}"
 
-if [[ ! -f "${binary_path}" ]]; then
-  echo "package_native_release: built binary not found at ${binary_path}" >&2
+# The target dir may live outside the repository, so check the binary here instead of with
+# require_regular_repo_file.
+if [[ ! -f "${binary_path}" || -L "${binary_path}" ]]; then
+  echo "package_native_release: built binary not found or is a symlink at ${binary_path}" >&2
   exit 1
 fi
 
@@ -243,7 +248,6 @@ copy_tracked_paths() {
   done < <(git -C "${repo_root}" ls-files -z -- "$@")
 }
 
-require_regular_repo_file "${binary_path}" "${binary_path#${repo_root}/}"
 require_regular_repo_file "${repo_root}/README.md" "README.md"
 require_regular_repo_file "${runbook_path}" "${runbook_path#${repo_root}/}"
 require_regular_repo_file "${runtime_scripts_dir}/gh-akra.sh" "scripts/gh-akra.sh"
