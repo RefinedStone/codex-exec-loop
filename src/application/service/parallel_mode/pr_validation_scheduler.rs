@@ -250,13 +250,35 @@ impl PrValidationSchedulerService {
         let service = self.parallel_mode_service.clone();
         let queue = self.queue.clone();
         let mode = self.config.mode;
+        let lease = PollLease {
+            workspace_dir: self.workspace_dir.clone(),
+            record_key: claim.record.key().clone(),
+            owner: claim.owner.clone(),
+            token: claim.token.clone(),
+            ttl: self.config.lease_ttl,
+            state: Arc::new(Mutex::new(PollLeaseState {
+                expires_at: claim.expires_at,
+                lost: false,
+            })),
+        };
+        let worker_lease = lease.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
         thread::Builder::new()
             .name("akra-pr-validation-poll".to_string())
             .spawn(move || {
+                let fence = || {
+                    if worker_lease.renew(&service) {
+                        Ok(())
+                    } else {
+                        Err(PrValidationPollFailure::from(
+                            "PR validation poll lease was lost before applying changes".to_string(),
+                        ))
+                    }
+                };
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    service
-                        .poll_pr_validation_into_normal_queue_for_scheduler(&queue, request, mode)
+                    service.poll_pr_validation_into_normal_queue_for_scheduler(
+                        &queue, request, mode, &fence,
+                    )
                 }))
                 .unwrap_or_else(|_| {
                     Err(PrValidationPollFailure {
@@ -270,35 +292,11 @@ impl PrValidationSchedulerService {
             })
             .map_err(|error| format!("failed to start PR validation poll worker: {error}"))?;
 
-        let mut lease_lost = false;
         let execution = loop {
             match receiver.recv_timeout(self.config.lease_renew_interval) {
                 Ok(result) => break result,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if lease_lost {
-                        continue;
-                    }
-                    let renewed_at = Utc::now();
-                    let renewed_expires_at = renewed_at + self.config.lease_ttl;
-                    let renewed = self
-                        .parallel_mode_service
-                        .planning_authority
-                        .renew_runtime_pr_validation_poll_lease(
-                            &self.workspace_dir,
-                            PrValidationPollLeaseRenewalRequest {
-                                record_key: claim.record.key(),
-                                owner: &claim.owner,
-                                token: &claim.token,
-                                expected_expires_at: claim.expires_at,
-                                renewed_at,
-                                renewed_expires_at,
-                            },
-                        )
-                        .unwrap_or(false);
-                    match renewed {
-                        true => claim.expires_at = renewed_expires_at,
-                        false => lease_lost = true,
-                    }
+                    lease.renew(&self.parallel_mode_service);
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     break Err(PrValidationPollFailure {
@@ -310,6 +308,11 @@ impl PrValidationSchedulerService {
                 }
             }
         };
+        let (expires_at, lease_lost) = {
+            let state = lease.lock_state();
+            (state.expires_at, state.lost)
+        };
+        claim.expires_at = expires_at;
         if lease_lost {
             return Ok(PrValidationSchedulerRunOutcome::LeaseLost {
                 record_key: claim.record.key().clone(),
@@ -467,6 +470,62 @@ fn secure_nonce() -> Result<String, String> {
         .try_fill_bytes(&mut bytes)
         .map_err(|error| format!("OS randomness is required for PR validation leases: {error}"))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// One claimed poll lease generation, shared by the renewing coordinator and the poll worker.
+#[derive(Clone)]
+struct PollLease {
+    workspace_dir: String,
+    record_key: PrValidationRecordKey,
+    owner: String,
+    token: String,
+    ttl: TimeDelta,
+    state: Arc<Mutex<PollLeaseState>>,
+}
+
+struct PollLeaseState {
+    expires_at: DateTime<Utc>,
+    lost: bool,
+}
+
+impl PollLease {
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, PollLeaseState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Extends this lease generation with a compare-and-swap. Once a renewal fails, the lease
+    /// stays lost, so the worker cannot apply changes after another scheduler took over.
+    fn renew(&self, service: &ParallelModeService) -> bool {
+        let mut state = self.lock_state();
+        if state.lost {
+            return false;
+        }
+        let renewed_at = Utc::now();
+        // A claim made at a scheduler clock ahead of the wall clock can already expire later.
+        let renewed_expires_at =
+            (renewed_at + self.ttl).max(state.expires_at + TimeDelta::milliseconds(1));
+        let renewed = service
+            .planning_authority
+            .renew_runtime_pr_validation_poll_lease(
+                &self.workspace_dir,
+                PrValidationPollLeaseRenewalRequest {
+                    record_key: &self.record_key,
+                    owner: &self.owner,
+                    token: &self.token,
+                    expected_expires_at: state.expires_at,
+                    renewed_at,
+                    renewed_expires_at,
+                },
+            )
+            .unwrap_or(false);
+        match renewed {
+            true => state.expires_at = renewed_expires_at,
+            false => state.lost = true,
+        }
+        renewed
+    }
 }
 
 #[derive(Clone, Default)]

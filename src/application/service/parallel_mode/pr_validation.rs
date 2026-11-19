@@ -539,23 +539,27 @@ impl ParallelModeService {
             remediation,
             request,
             PrValidationSchedulerMode::Remediate,
+            &|| Ok(()),
         )
         .map(|execution| execution.result)
         .map_err(|failure| failure.message)
     }
 
+    /// `fence` must prove the caller still owns the poll lease. It runs before every
+    /// remediation admission and record write, after the provider observation returned.
     pub(crate) fn poll_pr_validation_into_normal_queue_for_scheduler(
         &self,
         queue: &PlanningQueueUseCases,
         request: PrValidationPollRequest,
         mode: PrValidationSchedulerMode,
+        fence: &dyn Fn() -> Result<(), PrValidationPollFailure>,
     ) -> Result<PrValidationPollExecution, PrValidationPollFailure> {
         let observation = self.pr_validation_observation.as_ref().ok_or_else(|| {
             PrValidationPollFailure::from("PR validation observation is unavailable".to_string())
         })?;
         let workspace_dir = request.workspace_dir.clone();
         let remediation = PlanningQueuePrValidationRemediationPort::new(queue, &workspace_dir);
-        self.poll_pr_validation_with_mode(observation.as_ref(), &remediation, request, mode)
+        self.poll_pr_validation_with_mode(observation.as_ref(), &remediation, request, mode, fence)
     }
 
     fn poll_pr_validation_with_mode(
@@ -564,6 +568,7 @@ impl ParallelModeService {
         remediation: &dyn PrValidationRemediationPort,
         request: PrValidationPollRequest,
         mode: PrValidationSchedulerMode,
+        fence: &dyn Fn() -> Result<(), PrValidationPollFailure>,
     ) -> Result<PrValidationPollExecution, PrValidationPollFailure> {
         let current = self
             .recover_pr_validation_record(
@@ -583,6 +588,16 @@ impl ParallelModeService {
                 GithubValidationProviderMetadata::default(),
             ));
         }
+        let persist = |next: &PrValidationRecord| -> Result<(), PrValidationPollFailure> {
+            fence()?;
+            self.persist_pr_validation_record(
+                &request.workspace_dir,
+                &request.pool_root,
+                Some(&current),
+                next,
+            )?;
+            Ok(())
+        };
         let was_settled = current.phase() == PrValidationPhase::Settled;
         match current.phase() {
             PrValidationPhase::Blocked => {
@@ -639,12 +654,7 @@ impl ParallelModeService {
                         PrValidationTerminalReason::IdentityViolation,
                     ))
                     .map_err(transition_error)?;
-                self.persist_pr_validation_record(
-                    &request.workspace_dir,
-                    &request.pool_root,
-                    Some(&current),
-                    &next,
-                )?;
+                persist(&next)?;
                 return Ok(poll_execution(
                     PrValidationPollResult::Failed,
                     provider_metadata,
@@ -660,12 +670,7 @@ impl ParallelModeService {
                     PrValidationTerminalReason::IdentityViolation,
                 ))
                 .map_err(transition_error)?;
-            self.persist_pr_validation_record(
-                &request.workspace_dir,
-                &request.pool_root,
-                Some(&current),
-                &next,
-            )?;
+            persist(&next)?;
             return Ok(poll_execution(
                 PrValidationPollResult::Failed,
                 provider_metadata,
@@ -677,12 +682,7 @@ impl ParallelModeService {
                     PrValidationTerminalReason::IntegrationEvidenceMissing,
                 ))
                 .map_err(transition_error)?;
-            self.persist_pr_validation_record(
-                &request.workspace_dir,
-                &request.pool_root,
-                Some(&current),
-                &next,
-            )?;
+            persist(&next)?;
             return Ok(poll_execution(
                 PrValidationPollResult::Blocked,
                 provider_metadata,
@@ -714,12 +714,7 @@ impl ParallelModeService {
                             PrValidationTerminalReason::IntegrationAuthorityConflict,
                         ))
                         .map_err(transition_error)?;
-                    self.persist_pr_validation_record(
-                        &request.workspace_dir,
-                        &request.pool_root,
-                        Some(&current),
-                        &failed,
-                    )?;
+                    persist(&failed)?;
                     return Ok(poll_execution(
                         PrValidationPollResult::Failed,
                         provider_metadata,
@@ -764,6 +759,7 @@ impl ParallelModeService {
                 if !mode.admits_remediation() {
                     continue;
                 }
+                fence()?;
                 let remediation_task_key =
                     remediation.request_remediation(&PrValidationRemediationRequest {
                         idempotency_key: idempotency_key.clone(),
@@ -857,12 +853,7 @@ impl ParallelModeService {
         }
 
         if next != current {
-            self.persist_pr_validation_record(
-                &request.workspace_dir,
-                &request.pool_root,
-                Some(&current),
-                &next,
-            )?;
+            persist(&next)?;
         }
 
         if let Some(idempotency_key) = requested_remediation {
