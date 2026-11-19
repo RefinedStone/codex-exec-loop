@@ -740,6 +740,16 @@
     }
   };
 
+  const syncBossSeat = (workspace) => {
+    const seat = root.querySelector(".office-board .boss-seat");
+    if (!seat || !workspace) return;
+    setDataset(seat, {
+      detailState: workspace.readiness,
+      detailNote: workspace.readinessNotice
+    });
+    seat.title = `사장실 / ${optionalText(workspace.readiness)}`;
+  };
+
   const syncEventBoard = (dashboard) => {
     const board = root.querySelector(".event-board");
     if (!board) return;
@@ -769,6 +779,7 @@
     renderPool(dashboard.pool);
     renderActors(dashboard.scene);
     syncDistributorDesk(dashboard.distributor);
+    syncBossSeat(dashboard.workspace);
     syncEventBoard(dashboard);
   };
 

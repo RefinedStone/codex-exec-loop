@@ -4345,6 +4345,28 @@ fn akra_graphic_dashboard_event_status_uses_readable_counts() {
 }
 
 #[test]
+fn akra_graphic_dashboard_boss_seat_detail_follows_refreshed_readiness() {
+    assert!(
+        AKRA_DASHBOARD_TEMPLATE
+            .contains("data-detail-state=\"{{ dashboard.workspace.readiness }}\"")
+            && AKRA_DASHBOARD_TEMPLATE
+                .contains("data-detail-note=\"{{ dashboard.workspace.readiness_notice }}\""),
+        "boss seat should render the initial workspace readiness on first paint"
+    );
+    for refreshed_field in [
+        "syncBossSeat(dashboard.workspace);",
+        "detailState: workspace.readiness,",
+        "detailNote: workspace.readinessNotice",
+        "seat.title = `사장실 / ${optionalText(workspace.readiness)}`;",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_JS.contains(refreshed_field),
+            "boss seat detail should follow the refreshed dashboard snapshot: {refreshed_field}"
+        );
+    }
+}
+
+#[test]
 fn akra_graphic_dashboard_keeps_one_primary_surface_per_operational_fact() {
     for primary_surface in [
         "class=\"command-summary",
