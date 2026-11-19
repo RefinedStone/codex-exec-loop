@@ -172,6 +172,12 @@ export class DesktopSession {
   private writerElsewhereThreadId: string | null = null;
   /** 접속마다 늘어난다. 이전 접속에서 늦게 끝난 전체 검사는 반영하지 않는다. */
   private listGeneration = 0;
+  /**
+   * 이 접속에서 받은 보관·삭제와 제목 변경이다. 목록 요청보다 늦게 온 알림이 더 새롭다. 그래서 늦게 끝난 목록
+   * 결과(첫 목록, rollout 전체 검사)에 덮어 쓴다. 접속마다 비운다.
+   */
+  private removedThreadIds = new Set<string>();
+  private renamedThreads = new Map<string, string>();
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
   /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
@@ -484,13 +490,15 @@ export class DesktopSession {
       const statusChanges = new Map<string, boolean>();
       this.statusChangesWhileListing = statusChanges;
       const generation = ++this.listGeneration;
+      this.removedThreadIds.clear();
+      this.renamedThreads.clear();
       const threads = await this.listAllThreads(true).finally(() => {
         this.statusChangesWhileListing = null;
       });
       this.store.setSession({
         gateway,
         versionCheck: checkCodexVersion(GENERATED_CODEX_VERSION, gateway.codexVersion),
-        folders: groupThreadsByCwd(threads),
+        folders: groupThreadsByCwd(this.withLifecycleChanges(threads)),
       });
       // 이 창이 아직 구독하지 않은 스레드도 목록의 상태로 진행 중 표시를 채운다.
       this.store.setActiveThreads(activeThreadIds(threads, statusChanges));
@@ -534,7 +542,7 @@ export class DesktopSession {
     try {
       const threads = await this.listAllThreads(false);
       if (generation === this.listGeneration) {
-        this.store.mergeFolders(groupThreadsByCwd(threads));
+        this.store.mergeFolders(groupThreadsByCwd(this.withLifecycleChanges(threads)));
       }
     } catch {
       // 상태 DB 목록은 이미 보인다. 접속이 끊겨서 실패했으면 다시 연결할 때 다시 검사한다.
@@ -615,6 +623,16 @@ export class DesktopSession {
     }
   }
 
+  /** 목록 결과에서 이 접속 중 보관·삭제된 스레드를 빼고, 바뀐 제목을 넣는다. */
+  private withLifecycleChanges(threads: readonly Thread[]): Thread[] {
+    return threads
+      .filter((thread) => !this.removedThreadIds.has(thread.id))
+      .map((thread) => {
+        const name = this.renamedThreads.get(thread.id);
+        return name === undefined ? thread : { ...thread, name };
+      });
+  }
+
   /** 다른 곳에서 보관을 푼 스레드를 읽어 사이드바에 다시 넣는다. 알림에는 스레드 id 만 있다. */
   private async addUnarchivedThread(threadId: string): Promise<void> {
     try {
@@ -687,12 +705,17 @@ export class DesktopSession {
     }
     if (method === "thread/name/updated") {
       const name = (params as { threadName?: string }).threadName;
-      if (name) this.store.renameThread(threadId, name);
+      if (name) {
+        this.renamedThreads.set(threadId, name);
+        this.store.renameThread(threadId, name);
+      }
     }
     if (method === "thread/archived" || method === "thread/deleted") {
+      this.removedThreadIds.add(threadId);
       this.store.removeThread(threadId);
     }
     if (method === "thread/unarchived") {
+      this.removedThreadIds.delete(threadId);
       void this.addUnarchivedThread(threadId);
     }
     if (method === "thread/status/changed") {
