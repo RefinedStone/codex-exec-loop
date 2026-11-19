@@ -22,6 +22,7 @@ use crate::domain::planning::{
 };
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 struct FailingSnapshotTaskRepository;
 
@@ -50,6 +51,70 @@ impl PlanningTaskRepositoryPort for FailingSnapshotTaskRepository {
         _workspace_dir: &str,
     ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
         Err(anyhow!("task authority is temporarily unavailable"))
+    }
+
+    fn commit_task_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+        _commit: PlanningTaskAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        unreachable!("execution snapshot should not commit task authority")
+    }
+
+    fn commit_planning_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+        _commit: PlanningAuthoritySnapshotCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        unreachable!("execution snapshot should not commit planning authority")
+    }
+
+    fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+        unreachable!("execution snapshot should not clear task authority")
+    }
+}
+
+struct RevisionedTaskRepository {
+    revision: Arc<AtomicI64>,
+}
+
+impl PlanningTaskRepositoryPort for RevisionedTaskRepository {
+    fn load_direction_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
+        unreachable!("execution snapshot should not load direction authority")
+    }
+
+    fn commit_direction_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+        _commit: PlanningDirectionAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        unreachable!("execution snapshot should not commit direction authority")
+    }
+
+    fn clear_direction_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+        unreachable!("execution snapshot should not clear direction authority")
+    }
+
+    fn load_task_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
+        Ok(Some(PlanningTaskAuthoritySnapshot {
+            planning_revision: self.revision.load(Ordering::SeqCst),
+            task_authority: TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![],
+            },
+            queue_projection: PriorityQueueProjection {
+                next_task: None,
+                active_tasks: vec![],
+                proposed_tasks: vec![],
+                skipped_tasks: vec![],
+            },
+        }))
     }
 
     fn commit_task_authority_snapshot(
@@ -199,6 +264,134 @@ fn execution_snapshot_keeps_protected_file_when_task_authority_read_fails() {
     assert_eq!(snapshot.planning_revision, None);
     assert_eq!(snapshot.task_authority, None);
     std::fs::remove_dir_all(workspace).expect("snapshot workspace should clean up");
+}
+
+fn revisioned_reconciliation_fixture(
+    prefix: &str,
+) -> (
+    std::path::PathBuf,
+    Arc<FilesystemPlanningWorkspaceAdapter>,
+    PlanningReconciliationService,
+    Arc<AtomicI64>,
+) {
+    let workspace = std::env::temp_dir().join(format!(
+        "akra-reconciliation-{prefix}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let files = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+    let revision = Arc::new(AtomicI64::new(41));
+    let service = PlanningReconciliationService::with_task_repository(
+        files.clone(),
+        PlanningValidationService::new(),
+        crate::domain::planning::PriorityQueueService::new(),
+        Arc::new(RevisionedTaskRepository {
+            revision: revision.clone(),
+        }),
+    );
+    (workspace, files, service, revision)
+}
+
+#[test]
+fn accepted_revision_advancing_during_turn_preserves_operator_document() {
+    let (workspace, files, service, revision) =
+        revisioned_reconciliation_fixture("accepted-revision-advanced");
+    let workspace_dir = workspace.to_string_lossy();
+    files
+        .commit_planning_workspace_files(
+            &workspace_dir,
+            &PlanningWorkspaceLoadRecord {
+                result_output_markdown: Some("# Snapshot A".into()),
+            },
+        )
+        .unwrap();
+    let snapshot = service.load_execution_snapshot(&workspace_dir).unwrap();
+    assert_eq!(snapshot.planning_revision, Some(41));
+
+    // An operator accepts B while the worker still holds captured snapshot A.
+    revision.store(42, Ordering::SeqCst);
+    files
+        .commit_planning_workspace_files(
+            &workspace_dir,
+            &PlanningWorkspaceLoadRecord {
+                result_output_markdown: Some("# Operator accepted B".into()),
+            },
+        )
+        .unwrap();
+    let result = service
+        .reconcile_after_turn(
+            &workspace_dir,
+            "turn-from-snapshot-A",
+            &[crate::domain::planning::RESULT_OUTPUT_FILE_PATH.to_string()],
+            &snapshot,
+        )
+        .unwrap();
+
+    assert!(
+        result
+            .auto_follow_block_reason
+            .as_deref()
+            .unwrap()
+            .contains("accepted planning revision change")
+    );
+    assert!(result.restored_protected_files.is_empty());
+    assert_eq!(
+        files
+            .load_planning_workspace_files(&workspace_dir)
+            .unwrap()
+            .result_output_markdown
+            .as_deref(),
+        Some("# Operator accepted B")
+    );
+    std::fs::remove_dir_all(workspace).unwrap();
+}
+
+#[test]
+fn unchanged_accepted_revision_still_restores_worker_candidate() {
+    let (workspace, files, service, _revision) =
+        revisioned_reconciliation_fixture("unchanged-accepted-revision");
+    let workspace_dir = workspace.to_string_lossy();
+    files
+        .commit_planning_workspace_files(
+            &workspace_dir,
+            &PlanningWorkspaceLoadRecord {
+                result_output_markdown: Some("# Snapshot A".into()),
+            },
+        )
+        .unwrap();
+    let snapshot = service.load_execution_snapshot(&workspace_dir).unwrap();
+    files
+        .commit_planning_workspace_files(
+            &workspace_dir,
+            &PlanningWorkspaceLoadRecord {
+                result_output_markdown: Some("# Accidental worker candidate".into()),
+            },
+        )
+        .unwrap();
+
+    let result = service
+        .reconcile_after_turn(
+            &workspace_dir,
+            "turn-with-accidental-candidate",
+            &[crate::domain::planning::RESULT_OUTPUT_FILE_PATH.to_string()],
+            &snapshot,
+        )
+        .unwrap();
+    assert_eq!(result.restored_protected_files.len(), 1);
+    assert!(result.auto_follow_block_reason.is_none());
+    assert_eq!(
+        files
+            .load_planning_workspace_files(&workspace_dir)
+            .unwrap()
+            .result_output_markdown
+            .as_deref(),
+        Some("# Snapshot A")
+    );
+    std::fs::remove_dir_all(workspace).unwrap();
 }
 
 // 이전 ready handoff를 변경 없이 다시 내보내면 자동 후속 복구 루프가 생긴다.

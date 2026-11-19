@@ -167,6 +167,33 @@ impl PlanningReconciliationService {
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
         let replacement = execution_snapshot_to_workspace_record(execution_snapshot);
+        // The execution snapshot is only safe to restore while the accepted
+        // planning authority is still at the revision captured before the turn.
+        // Operator-approved edits can advance authority while the worker runs;
+        // the file CAS below would otherwise replace those newer edits with A.
+        let current_revision = match self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)
+        {
+            Ok(snapshot) => snapshot.map(|snapshot| snapshot.planning_revision),
+            Err(error) => {
+                let blocked = format!(
+                    "planning reconciliation could not verify the accepted planning revision ({error}); protected files were preserved and automatic continuation was blocked"
+                );
+                result.notices.push(blocked.clone());
+                result.auto_follow_block_reason = Some(blocked);
+                return Ok(result);
+            }
+        };
+        if current_revision != execution_snapshot.planning_revision {
+            let blocked = format!(
+                "planning reconciliation found an accepted planning revision change (turn start {:?}, now {:?}); protected files were preserved and automatic continuation was blocked",
+                execution_snapshot.planning_revision, current_revision
+            );
+            result.notices.push(blocked.clone());
+            result.auto_follow_block_reason = Some(blocked);
+            return Ok(result);
+        }
         if observed == replacement {
             return Ok(result);
         }
