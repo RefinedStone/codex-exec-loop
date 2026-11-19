@@ -14221,11 +14221,11 @@ fn verify_native_client_event_contract(
         || clipboard_fields.unnamed.len() != 1
         || !is_named_path_type(
             &clipboard_fields.unnamed[0].ty,
-            "ClipboardImageProbeOutcome",
+            "ClipboardImageProbeCompletion",
         )
     {
         return Err(
-            "production BackgroundMessage must remain presentation-only as ClipboardImageProbed(ClipboardImageProbeOutcome)"
+            "production BackgroundMessage must remain presentation-only as ClipboardImageProbed(ClipboardImageProbeCompletion)"
                 .to_string(),
         );
     };

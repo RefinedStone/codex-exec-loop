@@ -191,11 +191,12 @@ impl ShellRuntime {
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
                 }
-                BackgroundMessage::ClipboardImageProbed {
-                    composer_generation,
-                    transcript_revision,
-                    outcome,
-                } => {
+                BackgroundMessage::ClipboardImageProbed(completion) => {
+                    let super::app_runtime::ClipboardImageProbeCompletion {
+                        composer_generation,
+                        transcript_revision,
+                        outcome,
+                    } = completion;
                     self.app.apply_clipboard_image_probe(
                         composer_generation,
                         transcript_revision,

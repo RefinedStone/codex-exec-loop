@@ -836,16 +836,18 @@ impl NativeTuiApp {
             return false;
         }
         let sender = self.runtime.tx.clone();
-        let composer_generation = self.conversation.clipboard_composer_generation;
+        let composer_generation = self.conversation.lifecycle.clipboard_probe_generation;
         let transcript_revision = self.conversation.transcript_document_revision;
         self.runtime
             .clipboard_image_probe_trigger
             .request_probe(Box::new(move |outcome| {
-                let _ = sender.try_send(BackgroundMessage::ClipboardImageProbed {
-                    composer_generation,
-                    transcript_revision,
-                    outcome,
-                });
+                let _ = sender.try_send(BackgroundMessage::ClipboardImageProbed(
+                    super::app_runtime::ClipboardImageProbeCompletion {
+                        composer_generation,
+                        transcript_revision,
+                        outcome,
+                    },
+                ));
             }))
     }
     pub(super) fn apply_clipboard_image_probe(
@@ -857,7 +859,7 @@ impl NativeTuiApp {
         // A completed probe belongs only to the composer that requested it.
         // Generation changes on session selection even while loading is deferred;
         // transcript revision also catches accepted runtime identity changes.
-        if self.conversation.clipboard_composer_generation != composer_generation
+        if self.conversation.lifecycle.clipboard_probe_generation != composer_generation
             || self.conversation.transcript_document_revision != transcript_revision
             || !self.can_edit_prompt_input()
             || !matches!(
@@ -1955,11 +1957,13 @@ mod tests {
 
     fn receive_one_clipboard_image_probe(app: &mut NativeTuiApp) {
         let result = app.runtime.rx.try_recv().expect("queued probe completion");
-        let BackgroundMessage::ClipboardImageProbed {
-            composer_generation,
-            transcript_revision,
-            outcome,
-        } = result
+        let BackgroundMessage::ClipboardImageProbed(
+            super::app_runtime::ClipboardImageProbeCompletion {
+                composer_generation,
+                transcript_revision,
+                outcome,
+            },
+        ) = result
         else {
             panic!("expected clipboard image probe");
         };
