@@ -4,7 +4,7 @@
  * 현재 workspace 기준의 planning admin surface를 연다.
  */
 #[tokio::main]
-async fn main() {
+async fn main() -> std::process::ExitCode {
     let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
     tracing::info!(
         cwd = ?std::env::current_dir().ok(),
@@ -26,6 +26,6 @@ async fn main() {
         }
     };
 
-    // async runtime이 정상적으로 내려온 뒤에도 명시적 exit code를 남겨 supervisor 관측을 단순하게 유지한다.
-    std::process::exit(exit_code);
+    // Return an exit status instead of process::exit so the trace WorkerGuard flushes.
+    std::process::ExitCode::from(exit_code as u8)
 }

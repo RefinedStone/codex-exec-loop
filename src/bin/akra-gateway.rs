@@ -4,7 +4,7 @@
  * 오류 출력과 exit code 변환만 책임진다.
  */
 #[tokio::main]
-async fn main() {
+async fn main() -> std::process::ExitCode {
     let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
     #[cfg(windows)]
     attach_windowless_console();
@@ -21,7 +21,7 @@ async fn main() {
             1
         }
     };
-    std::process::exit(exit_code);
+    std::process::ExitCode::from(exit_code as u8)
 }
 
 /// 데스크톱 앱은 gateway 를 콘솔 없이 띄운다. 콘솔이 없는 프로세스가 콘솔 프로그램(codex 의 npm 래퍼 `node.exe` 등)을
