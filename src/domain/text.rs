@@ -23,11 +23,15 @@ pub fn compact_whitespace_detail(text: &str, max_len: usize) -> String {
     }
 
     /*
-     * The ellipsis marker is always preferred over a silent cut. For tiny budgets,
-     * saturating_sub keeps the function total and returns the smallest possible marker
-     * rather than panicking or exposing a misleading partial word.
+     * An ellipsis must also honor the caller's exact character budget.
+     * For tiny limits there is no space for even one content character;
+     * return a shortened marker (or empty for zero) rather than exceeding
+     * max_len with a three-character marker.
      */
-    let keep = max_len.saturating_sub(3);
+    if max_len <= 3 {
+        return ".".repeat(max_len);
+    }
+    let keep = max_len - 3;
     /*
      * Taking chars after compaction preserves UTF-8 boundaries. This helper is used by
      * adapters and presentation code that should never need to reason about byte
@@ -62,5 +66,27 @@ mod tests {
             compact_whitespace_detail("alpha   beta gamma", 10),
             "alpha b..."
         );
+    }
+
+    // 이 test는 max_len 0~3 경계에서 marker도 예산을 넘지 않는다는 엄격한 상한을 고정한다.
+    #[test]
+    fn tiny_budgets_never_exceed_maximum_character_count() {
+        let markers = ["", ".", "..", "..."];
+        for (budget, expected) in markers.iter().enumerate() {
+            let result = compact_whitespace_detail("abcd", budget);
+            assert_eq!(result, *expected, "budget={budget}");
+            assert!(result.chars().count() <= budget);
+        }
+        assert_eq!(compact_whitespace_detail("가나다라", 2), "..");
+        assert_eq!(compact_whitespace_detail("가나다라마", 4), "가...");
+    }
+
+    // 이 test는 예산과 길이가 같은 원문은 marker 없이 그대로 남는다는 경계를 고정한다.
+    #[test]
+    fn exact_budget_preserves_untruncated_text() {
+        assert_eq!(compact_whitespace_detail("a", 1), "a");
+        assert_eq!(compact_whitespace_detail("ab", 2), "ab");
+        assert_eq!(compact_whitespace_detail("abc", 3), "abc");
+        assert_eq!(compact_whitespace_detail("", 0), "");
     }
 }
