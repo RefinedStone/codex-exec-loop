@@ -6,7 +6,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context as TaskContext, Poll};
@@ -31,6 +31,12 @@ const UPSTREAM_PID_FILE_NAME: &str = "gateway-upstream.pid";
 const STALE_UPSTREAM_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 const STALE_UPSTREAM_KILL_WAIT: Duration = Duration::from_secs(2);
+#[cfg(unix)]
+const STALE_UPSTREAM_PS_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(all(unix, target_os = "macos"))]
+const TRUSTED_PS_PATHS: &[&str] = &["/bin/ps", "/usr/bin/ps"];
+#[cfg(all(unix, not(target_os = "macos")))]
+const TRUSTED_PS_PATHS: &[&str] = &["/usr/bin/ps", "/bin/ps"];
 const UPSTREAM_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CODEX_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -357,15 +363,36 @@ fn stop_stale_upstream(socket_path: &Path) {
 }
 
 #[cfg(unix)]
-fn process_serves_socket(pid: libc::pid_t, socket_argument: &str) -> bool {
-    let Ok(output) = std::process::Command::new("ps")
+fn trusted_ps_command(pid: libc::pid_t) -> Option<Command> {
+    // Never consult PATH for a process-identification tool used before sending SIGTERM.
+    let binary = TRUSTED_PS_PATHS
+        .iter()
+        .copied()
+        .find(|candidate| Path::new(candidate).is_file())?;
+    let mut command = Command::new(binary);
+    command
         .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
+        .env_clear()
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null());
+    Some(command)
+}
+
+#[cfg(unix)]
+fn process_serves_socket(pid: libc::pid_t, socket_argument: &str) -> bool {
+    let Some(mut command) = trusted_ps_command(pid) else {
         return false;
     };
+    let Ok(output) = subprocess::command_output_with_timeout(
+        &mut command,
+        "trusted gateway upstream pid probe",
+        STALE_UPSTREAM_PS_TIMEOUT,
+    ) else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
     let command_line = String::from_utf8_lossy(&output.stdout);
     command_line.contains("app-server") && command_line.contains(socket_argument)
 }
@@ -464,7 +491,9 @@ mod tests {
         ensure_socket_path_fits, next_restart_backoff,
     };
     #[cfg(unix)]
-    use super::{codex_socket_argument, stop_stale_upstream, upstream_pid_path};
+    use super::{
+        codex_socket_argument, stop_stale_upstream, trusted_ps_command, upstream_pid_path,
+    };
 
     #[test]
     fn restart_backoff_doubles_until_the_cap_and_resets_after_a_healthy_run() {
@@ -489,6 +518,51 @@ mod tests {
         let too_long = PathBuf::from("/").join("a".repeat(MAX_UNIX_SOCKET_PATH_BYTES));
         let error = ensure_socket_path_fits(&too_long).unwrap_err().to_string();
         assert!(error.contains("Set AKRA_HOME to a shorter path"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_pid_probe_uses_absolute_ps_not_a_fake_path_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let run_dir = unique_run_dir();
+        let fake_ps = run_dir.join("ps");
+        let marker = run_dir.join("fake-ps-was-run");
+        std::fs::write(&fake_ps, format!("#!/bin/sh\n: > '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&fake_ps, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut command = trusted_ps_command(std::process::id() as libc::pid_t)
+            .expect("system ps should be available at a trusted absolute path");
+        assert!(std::path::Path::new(command.get_program()).is_absolute());
+        command.env("PATH", &run_dir);
+        let result = crate::subprocess::command_output_with_timeout(
+            &mut command,
+            "trusted ps path regression",
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(result.status.success());
+        assert!(!marker.exists(), "fake PATH ps must never be invoked");
+        let _ = std::fs::remove_dir_all(run_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_probe_subprocess_does_not_wait_forever() {
+        let mut blocked = std::process::Command::new("/bin/sh");
+        blocked.args(["-c", "sleep 10"]);
+        let started = std::time::Instant::now();
+        let error = crate::subprocess::command_output_with_timeout(
+            &mut blocked,
+            "simulated stalled ps",
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "stalled ps process must be terminated within the timeout"
+        );
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     }
 
     /// 남은 upstream 대신 같은 명령줄 모양의 셸을 띄우고 pid 를 돌려준다. 바깥 셸이 바로 끝나므로 이 셸은 운영의
