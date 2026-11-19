@@ -254,6 +254,11 @@ impl SqlitePlanningAuthorityAdapter {
         baseline: &PlanningFileSyncBaselineRecord,
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        // One authority DB is shared by linked Git worktrees, but their exported files are not.
+        // JSON tuple encoding prevents ambiguous path concatenation and cannot match a legacy
+        // unscoped relative-path entry. Existing exports must be repeated before applying.
+        let scoped_path =
+            file_sync_baseline_scope_key(&location.workspace_root, &baseline.relative_path)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -267,7 +272,7 @@ impl SqlitePlanningAuthorityAdapter {
                  SET observed_planning_revision = excluded.observed_planning_revision,
                      exported_at = excluded.exported_at",
                 params![
-                    baseline.relative_path,
+                    scoped_path,
                     baseline.observed_planning_revision,
                     Utc::now().to_rfc3339()
                 ],
@@ -283,13 +288,14 @@ impl SqlitePlanningAuthorityAdapter {
         relative_path: &str,
     ) -> Result<Option<PlanningFileSyncBaselineRecord>> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let scoped_path = file_sync_baseline_scope_key(&location.workspace_root, relative_path)?;
         let connection = open_authority_connection(&location)?;
         connection
             .query_row(
                 "SELECT observed_planning_revision
                  FROM planning_file_sync_baselines
                  WHERE relative_path = ?1",
-                params![relative_path],
+                params![scoped_path],
                 |row| {
                     Ok(PlanningFileSyncBaselineRecord {
                         relative_path: relative_path.to_string(),
@@ -300,6 +306,14 @@ impl SqlitePlanningAuthorityAdapter {
             .optional()
             .context("failed to load planning file-sync baseline")
     }
+}
+
+/** Export baselines are private to the concrete checkout path, even when authority DB is shared.
+ * Legacy relative-path-only keys deliberately do not match and require a fresh export.
+ */
+fn file_sync_baseline_scope_key(workspace_root: &str, relative_path: &str) -> Result<String> {
+    serde_json::to_string(&[workspace_root, relative_path])
+        .context("failed to encode worktree-scoped planning file-sync baseline key")
 }
 
 /*

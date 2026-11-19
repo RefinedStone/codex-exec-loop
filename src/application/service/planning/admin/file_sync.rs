@@ -305,6 +305,103 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
+    fn linked_worktree_export_does_not_rebase_another_worktree_stale_candidate() {
+        let fixture = TempPlanningWorkspace::new("admin-file-sync-linked-worktrees");
+        let primary = Path::new(&fixture.path).join("primary");
+        let linked = Path::new(&fixture.path).join("linked");
+        fs::create_dir_all(&primary).expect("primary checkout should create");
+        let git = |args: &[&str]| {
+            let output = crate::test_utils::git_command()
+                .current_dir(&primary)
+                .args(args)
+                .output()
+                .expect("git command should run");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "prerelease", "-q"]);
+        git(&["config", "user.name", "Akra Test"]);
+        git(&["config", "user.email", "akra-test@example.com"]);
+        fs::write(primary.join("README.md"), "seed\n").expect("seed should write");
+        git(&["add", "README.md"]);
+        git(&["commit", "-q", "-m", "seed"]);
+        git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature/linked",
+            linked.to_string_lossy().as_ref(),
+            "prerelease",
+        ]);
+
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let facade_for = |path: &Path| {
+            let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+                FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone()),
+            );
+            build_facade_with_sqlite(
+                path.to_string_lossy().to_string(),
+                workspace_port,
+                sqlite.clone(),
+            )
+        };
+        let facade_a = facade_for(&primary);
+        let facade_b = facade_for(&linked);
+
+        let mut documents = facade_a
+            .load_operator_planning_documents()
+            .expect("initial documents should load");
+        documents.result_output_markdown = "# Result Output\n\nRevision one.".to_string();
+        facade_a
+            .commit_operator_planning_documents(documents)
+            .expect("initial revision should commit");
+        facade_a
+            .export_active_files_for_edit()
+            .expect("first worktree should export revision one");
+
+        let mut newer = facade_b
+            .load_operator_planning_documents()
+            .expect("same authority should load from linked worktree");
+        newer.result_output_markdown = "# Result Output\n\nRevision two.".to_string();
+        facade_b
+            .commit_operator_planning_documents(newer)
+            .expect("newer authority should commit");
+        facade_b
+            .export_active_files_for_edit()
+            .expect("linked worktree should export revision two");
+
+        fs::write(
+            primary.join(RESULT_OUTPUT_FILE_PATH),
+            "# Result Output\n\nStale edit from worktree A.",
+        )
+        .expect("older candidate should edit");
+        let error = facade_a
+            .apply_exported_files()
+            .expect_err("A's old export must not adopt B's newer baseline");
+        assert!(
+            format!("{error:#}").contains("planning db changed while editing"),
+            "stale apply must reject the old revision: {error:#}"
+        );
+        assert_eq!(
+            facade_b
+                .load_operator_planning_documents()
+                .expect("newest authority must remain")
+                .result_output_markdown,
+            "# Result Output\n\nRevision two."
+        );
+        assert_eq!(
+            fs::read_to_string(linked.join(RESULT_OUTPUT_FILE_PATH))
+                .expect("B candidate should remain separate"),
+            "# Result Output\n\nRevision two."
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
     fn stale_export_cannot_overwrite_newer_planning_authority() {
         let fixture = TestAdminFixture::new("admin-file-sync-stale-export");
         let mut documents = fixture
