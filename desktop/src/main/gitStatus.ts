@@ -373,7 +373,10 @@ export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracke
   if (untracked === true) {
     return readUntrackedFile(target);
   }
-  const output = await runGit(cwd, ["diff", "HEAD", "--no-color", "--no-ext-diff", "--no-textconv", "--", pathspec], FILE_DIFF_LIMIT);
+  // An unborn repository has no HEAD. Git's cached diff compares the index with the empty tree.
+  const head = await runGit(cwd, ["rev-parse", "--verify", "-q", "HEAD"], 4096);
+  const base = head.code === 0 ? ["HEAD"] : ["--cached"];
+  const output = await runGit(cwd, ["diff", ...base, "--no-color", "--no-ext-diff", "--no-textconv", "--", pathspec], FILE_DIFF_LIMIT);
   if (output.code !== 0) {
     throw new Error(failureMessage(output, "git diff 가 실패했습니다."));
   }

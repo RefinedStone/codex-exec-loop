@@ -164,6 +164,20 @@ describe("git file actions", () => {
     expect(existsSync(join(root, "first.txt"))).toBe(true);
   });
 
+  it("reads a staged file diff before the first commit", async () => {
+    const { root, git, write } = repository({});
+    write("first.txt", "staged content\n");
+    git("add", "first.txt");
+    // The diff should show staged content, not a later unstaged edit.
+    write("first.txt", "unstaged edit\n");
+    const diff = await readGitFileDiff(root, "first.txt", false);
+    expect(diff.kind).toBe("gitDiff");
+    if (diff.kind === "gitDiff") {
+      expect(diff.text).toContain("+staged content");
+      expect(diff.text).not.toContain("+unstaged edit");
+    }
+  });
+
   it("stages a new folder, but not one with a filtered file, and never discards a folder", async () => {
     const { root, write, statuses } = repository();
     mkdirSync(join(root, "docs"));
