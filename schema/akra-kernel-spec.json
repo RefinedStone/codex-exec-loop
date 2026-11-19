@@ -291,6 +291,7 @@
         "busy",
         "preparation_active",
         "unknown_thread",
+        "foreign_workspace",
         "parallel_mode",
         "parallel_mode_unknown"
       ],
@@ -1880,6 +1881,15 @@
         },
         {
           "step": "resend"
+        }
+      ]
+    },
+    {
+      "name": "foreign_workspace",
+      "summary": "The thread runs in a directory outside the workspace of this kernel client. The kernel makes no planning task for it. Send the prompt through the kernel of the thread's repository.",
+      "next": [
+        {
+          "step": "ask_user"
         }
       ]
     },
@@ -4461,6 +4471,7 @@
         "busy",
         "preparation_active",
         "unknown_thread",
+        "foreign_workspace",
         "parallel_mode",
         "parallel_mode_unknown",
         "parallel_mode_started",

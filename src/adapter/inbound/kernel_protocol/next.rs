@@ -92,6 +92,8 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         ReasonCode::UnknownThread => {
             vec![Step::command(KernelCommandKind::LoadSessions), Step::Resend]
         }
+        // 다른 저장소의 커널로 보낼지는 사람이 정한다. 같은 커널에 다시 보내면 같은 거절이다.
+        ReasonCode::ForeignWorkspace => vec![Step::AskUser],
         // 병렬 모드를 끄는 명령은 아직 프로토콜에 없다 (K4-9b). 끌지는 사람이 정한다.
         ReasonCode::ParallelMode => vec![Step::AskUser],
         ReasonCode::ParallelModeUnknown => vec![Step::short_wait(), Step::Resend],

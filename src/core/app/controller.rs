@@ -1765,6 +1765,12 @@ impl CoreController {
                 Vec::new(),
             );
         }
+        if self.thread_runs_outside_workspace(&workspace_directory, thread_id) {
+            return (
+                super::ThreadPromptAdmission::RejectedForeignWorkspace,
+                Vec::new(),
+            );
+        }
         if self.conversation_turn.thread_rejects_new_prompt(thread_id) {
             return (super::ThreadPromptAdmission::RejectedBusy, Vec::new());
         }
@@ -1805,6 +1811,19 @@ impl CoreController {
                 .shared_snapshot()
                 .session_catalog
                 .lists_thread(thread_id)
+    }
+
+    /*
+     * 세션 목록은 모든 저장소의 thread 를 담는다 (#2303). 목록이 적은 그 thread 의 작업 디렉터리가 이 작업 공간 밖이면
+     * 이 커널의 planning 으로 준비하지 않는다. 제출은 그 thread 의 디렉터리에서 돌므로 planning 과 실행의 저장소가
+     * 갈린다.
+     */
+    fn thread_runs_outside_workspace(&self, workspace_directory: &str, thread_id: &str) -> bool {
+        self.state
+            .shared_snapshot()
+            .session_catalog
+            .thread_cwd(thread_id)
+            .is_some_and(|cwd| !super::session::workspace_contains(workspace_directory, cwd))
     }
 
     /*
@@ -10321,6 +10340,48 @@ mod tests {
             );
             assert!(busy.effects.is_empty(), "no planning task is made");
         }
+    }
+
+    #[test]
+    fn a_thread_prompt_is_refused_before_planning_for_a_thread_of_another_repository() {
+        // #2303: the session catalog lists the threads of every repository.
+        let mut controller = hosted_controller(false);
+        controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
+                result: Ok(SessionCatalogReadySnapshot::from_catalog(
+                    RecentSessions {
+                        items: vec![
+                            sample_session_summary("thread-alpha", "Alpha"),
+                            SessionSummary {
+                                cwd: "/tmp/workspace-b".to_string(),
+                                ..sample_session_summary("thread-b", "Other repository")
+                            },
+                        ],
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                )),
+            },
+        ));
+
+        let foreign = controller.handle_input(thread_prompt("thread-b", "hello"));
+        assert_eq!(
+            thread_prompt_admission(&foreign),
+            super::super::ThreadPromptAdmission::RejectedForeignWorkspace
+        );
+        assert!(foreign.effects.is_empty(), "no planning task is made");
+
+        let own = controller.handle_input(thread_prompt("thread-alpha", "hello"));
+        assert_eq!(
+            thread_prompt_admission(&own),
+            super::super::ThreadPromptAdmission::Accepted {
+                correlation: manual_prompt_correlation(1, "/tmp/workspace"),
+            },
+            "the first planning preparation belongs to the thread of this repository"
+        );
     }
 
     #[test]

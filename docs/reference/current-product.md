@@ -581,8 +581,10 @@ the desktop app itself is not shipped yet.
   their record is in the log (the latest 10,000 records), also across a kernel restart that wrote its
   records; a crash can lose the latest keys. A kernel without a log refuses a command with a key
   (`-32015`). A `submit_prompt` that the kernel refuses before preparation (`busy`,
-  `preparation_active`, `unknown_thread`, `parallel_mode`, `parallel_mode_unknown`) now also answers
-  with `rejection` and `state: rejected`. `load_sessions` and `refresh_planning` are not recorded and
+  `preparation_active`, `unknown_thread`, `foreign_workspace`, `parallel_mode`, `parallel_mode_unknown`)
+  now also answers with `rejection` and `state: rejected`. The session catalog lists the threads of
+  every repository; `foreign_workspace` refuses a thread whose catalog `cwd` is outside the client's
+  workspace, so no planning task of this kernel is made for it. `load_sessions` and `refresh_planning` are not recorded and
   have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
   first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
   check, like the TUI parallel view).
