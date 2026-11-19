@@ -15,6 +15,8 @@ mod session;
 mod tool_cache;
 
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -34,6 +36,8 @@ use crate::domain::mcp_hub::{
 
 const HUB_DIRECTORY: &str = "mcp-hub";
 const CONFIG_FILE: &str = "config.toml";
+// Never unlink this file: separate processes must always lock the same inode.
+const CONFIG_LOCK_FILE: &str = ".config.toml.lock";
 // Codex 는 CODEX_HOME/skills 에 자체 시스템 skill 을 설치한다. 그 폴더와 섞이지 않게 따로 둔다.
 const SKILLS_DIRECTORY: &str = "agent-skills";
 const SKILL_NAME: &str = "akra-mcp-hub";
@@ -102,11 +106,96 @@ impl CodexMcpHubBackend {
         }
     }
 
-    fn write_document(&self, document: &DocumentMut) -> Result<()> {
+    /// Hold a process-wide filesystem lock for the entire read-modify-replace operation.
+    /// An in-process mutex alone would lose updates from separate Akra/Gateway processes.
+    fn lock_registry(&self) -> Result<File> {
         crate::private_directory::ensure_private_directory(&self.home)?;
+        let path = self.home.join(CONFIG_LOCK_FILE);
+        let mut options = OpenOptions::new();
+        options.create(true).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = options
+            .open(&path)
+            .with_context(|| format!("failed to open MCP registry lock `{}`", path.display()))?;
+        lock.lock()
+            .with_context(|| format!("failed to lock MCP registry `{}`", path.display()))?;
+        Ok(lock)
+    }
+
+    fn update_document<T>(
+        &self,
+        update: impl FnOnce(&mut DocumentMut) -> Result<(T, bool)>,
+    ) -> Result<T> {
+        let _lock = self.lock_registry()?;
+        // Read only after the lock is held, or two processes can lose one update.
+        let mut document = self.read_document()?;
+        let (result, changed) = update(&mut document)?;
+        if changed {
+            self.write_document(&document)?;
+        }
+        Ok(result)
+    }
+
+    /// Install a fully synced private temporary file with a same-directory rename.
+    /// A crash before the rename leaves the old registry intact; readers never see
+    /// an incomplete TOML document.
+    fn write_document(&self, document: &DocumentMut) -> Result<()> {
         let path = self.config_path();
-        std::fs::write(&path, document.to_string())
-            .with_context(|| format!("failed to write `{}`", path.display()))
+        let mut temporary = None;
+        for _ in 0..32 {
+            let candidate = self.home.join(format!(
+                ".{CONFIG_FILE}.{}.{}.tmp",
+                std::process::id(),
+                rand::random::<u64>()
+            ));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&candidate) {
+                Ok(file) => {
+                    temporary = Some((candidate, file));
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to create `{}`", candidate.display()));
+                }
+            }
+        }
+        let (temporary_path, mut temporary_file) =
+            temporary.context("failed to allocate an MCP registry temporary file")?;
+        let write_result = temporary_file
+            .write_all(document.to_string().as_bytes())
+            .and_then(|()| temporary_file.sync_all());
+        drop(temporary_file);
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&temporary_path);
+            return Err(error)
+                .with_context(|| format!("failed to write `{}`", temporary_path.display()));
+        }
+        if let Err(error) = std::fs::rename(&temporary_path, &path) {
+            let _ = std::fs::remove_file(&temporary_path);
+            return Err(error).with_context(|| format!("failed to replace `{}`", path.display()));
+        }
+        #[cfg(unix)]
+        File::open(&self.home)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| {
+                format!(
+                    "failed to sync MCP registry directory `{}`",
+                    self.home.display()
+                )
+            })?;
+        Ok(())
     }
 
     fn open_session(&self) -> Result<HubAppServerSession> {
@@ -217,32 +306,34 @@ impl McpHubBackendPort for CodexMcpHubBackend {
     }
 
     fn register_server(&self, spec: &McpHubServerSpec) -> Result<()> {
-        let mut document = self.read_document()?;
-        let servers = document
-            .entry("mcp_servers")
-            .or_insert_with(|| {
-                let mut table = Table::new();
-                table.set_implicit(true);
-                Item::Table(table)
-            })
-            .as_table_mut()
-            .context("`mcp_servers` in the MCP hub config is not a table")?;
-        servers.insert(&spec.name, Item::Table(server_table(spec)));
-        self.write_document(&document)?;
+        self.update_document(|document| {
+            let servers = document
+                .entry("mcp_servers")
+                .or_insert_with(|| {
+                    let mut table = Table::new();
+                    table.set_implicit(true);
+                    Item::Table(table)
+                })
+                .as_table_mut()
+                .context("`mcp_servers` in the MCP hub config is not a table")?;
+            servers.insert(&spec.name, Item::Table(server_table(spec)));
+            Ok(((), true))
+        })?;
         write_agent_skill(&self.home)?;
         self.invalidate_tool_catalogs()?;
         self.reload()
     }
 
     fn unregister_server(&self, name: &str) -> Result<bool> {
-        let mut document = self.read_document()?;
-        let removed = document
-            .get_mut("mcp_servers")
-            .and_then(Item::as_table_mut)
-            .and_then(|servers| servers.remove(name))
-            .is_some();
+        let removed = self.update_document(|document| {
+            let removed = document
+                .get_mut("mcp_servers")
+                .and_then(Item::as_table_mut)
+                .and_then(|servers| servers.remove(name))
+                .is_some();
+            Ok((removed, removed))
+        })?;
         if removed {
-            self.write_document(&document)?;
             self.invalidate_tool_catalogs()?;
             self.reload()?;
         }
@@ -596,6 +687,184 @@ mod tests {
         assert!(!backend.unregister_server("local").unwrap());
         assert_eq!(backend.registered_servers().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    // Spawned by the parent test: separate OS processes must coordinate on
+    // the same registry lock, not just a Rust Mutex in one process.
+    #[test]
+    fn registry_subprocess_register_helper() {
+        let Ok(home) = std::env::var("AKRA_TEST_MCP_REGISTRY_HOME") else {
+            return;
+        };
+        let name = std::env::var("AKRA_TEST_MCP_REGISTRY_NAME").unwrap();
+        let home = PathBuf::from(home);
+        std::fs::write(home.join(format!("{name}.ready")), b"ready").unwrap();
+        CodexMcpHubBackend::with_home(home)
+            .register_server(&McpHubServerSpec::http(&name, "https://example.test/mcp").unwrap())
+            .unwrap();
+    }
+
+    #[test]
+    fn registry_interprocess_registers_preserve_both_updates() {
+        use std::process::{Command, Stdio};
+        use std::thread;
+
+        let home = temp_home("interprocess-registry");
+        std::fs::create_dir_all(&home).unwrap();
+        // Ensure the test also preserves hand-edited options in the original.
+        let initial = r#"[mcp_servers.original]
+url = "https://original.test/mcp"
+startup_timeout_sec = 41
+"#;
+        std::fs::write(home.join(CONFIG_FILE), initial).unwrap();
+        write_agent_skill(&home).unwrap();
+
+        let backend = CodexMcpHubBackend::with_home(home.clone());
+        let lock = backend.lock_registry().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut children = Vec::new();
+        for name in ["parallel_a", "parallel_b"] {
+            children.push(
+                Command::new(&executable)
+                    .args([
+                        "--exact",
+                        "adapter::outbound::mcp_hub::tests::registry_subprocess_register_helper",
+                        "--nocapture",
+                    ])
+                    .env("AKRA_TEST_MCP_REGISTRY_HOME", &home)
+                    .env("AKRA_TEST_MCP_REGISTRY_NAME", name)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !["parallel_a", "parallel_b"]
+            .iter()
+            .all(|name| home.join(format!("{name}.ready")).exists())
+        {
+            assert!(
+                Instant::now() < deadline,
+                "child registry processes did not start"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Both subprocesses reached the registration call, but neither may
+        // change the registry while the parent owns the filesystem lock.
+        thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            std::fs::read_to_string(home.join(CONFIG_FILE)).unwrap(),
+            initial
+        );
+        drop(lock);
+
+        for mut child in children {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "registry subprocess failed: {status}");
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("registry subprocess was blocked after lock release");
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let registry = std::fs::read_to_string(home.join(CONFIG_FILE)).unwrap();
+        for name in ["original", "parallel_a", "parallel_b"] {
+            assert!(
+                registry.contains(&format!("[mcp_servers.{name}]")),
+                "{registry}"
+            );
+        }
+        assert!(registry.contains("startup_timeout_sec = 41"), "{registry}");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn registry_atomic_replace_ignores_orphaned_temporary_file() {
+        let home = temp_home("atomic-registry");
+        let backend = CodexMcpHubBackend::with_home(home.clone());
+        backend
+            .register_server(&McpHubServerSpec::http("old", "https://old.test/mcp").unwrap())
+            .unwrap();
+        // A crashed writer may leave an incomplete temporary file behind;
+        // it must not corrupt the installed registry or block later updates.
+        let orphan = home.join(".config.toml.abandoned.tmp");
+        std::fs::write(&orphan, b"[mcp_servers.truncated").unwrap();
+        backend
+            .register_server(&McpHubServerSpec::http("new", "https://new.test/mcp").unwrap())
+            .unwrap();
+        let registry = backend.read_document().unwrap();
+        assert!(registry["mcp_servers"]["old"].is_table());
+        assert!(registry["mcp_servers"]["new"].is_table());
+        assert_eq!(
+            std::fs::read_to_string(&orphan).unwrap(),
+            "[mcp_servers.truncated"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = std::fs::metadata(home.join(CONFIG_FILE))
+                .unwrap()
+                .permissions();
+            assert_eq!(permissions.mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_readers_never_observe_partially_written_documents() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let home = temp_home("atomic-reader");
+        std::fs::create_dir_all(&home).unwrap();
+        let first = format!(
+            r#"[mcp_servers.alpha]
+url = "https://alpha.test/mcp"
+{}"#,
+            "# payload\\n".repeat(20_000)
+        );
+        let second = format!(
+            r#"[mcp_servers.beta]
+url = "https://beta.test/mcp"
+{}"#,
+            "# alternate\\n".repeat(20_000)
+        );
+        std::fs::write(home.join(CONFIG_FILE), &first).unwrap();
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let child_finished = finished.clone();
+        let writer_home = home.clone();
+        let writer_first = first.clone();
+        let writer_second = second.clone();
+        let writer = std::thread::spawn(move || {
+            let backend = CodexMcpHubBackend::with_home(writer_home);
+            for i in 0..40 {
+                let text = if i % 2 == 0 {
+                    &writer_second
+                } else {
+                    &writer_first
+                };
+                backend.write_document(&text.parse().unwrap()).unwrap();
+            }
+            child_finished.store(true, Ordering::Release);
+        });
+        while !finished.load(Ordering::Acquire) {
+            let text = std::fs::read_to_string(home.join(CONFIG_FILE)).unwrap();
+            assert!(
+                text == first || text == second,
+                "observed a partial registry"
+            );
+        }
+        writer.join().unwrap();
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
