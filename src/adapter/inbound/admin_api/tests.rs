@@ -4327,6 +4327,17 @@ fn akra_graphic_dashboard_event_rows_reset_native_button_chrome() {
 }
 
 #[test]
+fn akra_graphic_dashboard_shows_focused_scene_fallback_after_pixi_ready() {
+    assert!(
+        source_contains(
+            AKRA_DASHBOARD_TEMPLATE,
+            ".office-board.is-pixi-ready > .scene-object:focus-visible {\n    opacity: 1;\n  }",
+        ),
+        "Pixi hides the fallback scene buttons, but keyboard focus must stay visible on them"
+    );
+}
+
+#[test]
 fn akra_graphic_dashboard_event_status_uses_readable_counts() {
     assert!(
         AKRA_DASHBOARD_TEMPLATE.contains("{{ dashboard.event_feed.status_label }}"),
