@@ -40,7 +40,7 @@ use crate::domain::turn_terminal::{
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Barrier, Mutex, mpsc};
+use std::sync::{Barrier, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
@@ -51,6 +51,8 @@ use tracing_subscriber::prelude::*;
 // seconds in host Git on a loaded development filesystem; keep the bound
 // finite while leaving enough room for that reviewed integration work.
 const WORKER_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(20);
+// Failure guard only: launch waits return as soon as the fake worker signals entry.
+const WORKER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
     let subscriber = tracing_subscriber::registry()
@@ -62,11 +64,25 @@ fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
 #[derive(Debug, Default)]
 struct CountingParallelAgentWorkerPort {
     launch_count: AtomicUsize,
+    launch_signal: (Mutex<()>, Condvar),
 }
 
 impl CountingParallelAgentWorkerPort {
     fn launch_count(&self) -> usize {
         self.launch_count.load(Ordering::SeqCst)
+    }
+
+    fn wait_for_launches(&self, count: usize) -> bool {
+        let (gate, notification) = &self.launch_signal;
+        let locked = gate
+            .lock()
+            .expect("worker launch mutex should not be poisoned");
+        let (_guard, _result) = notification
+            .wait_timeout_while(locked, WORKER_LAUNCH_TIMEOUT, |_| {
+                self.launch_count() < count
+            })
+            .expect("worker launch notification should not be poisoned");
+        self.launch_count() >= count
     }
 }
 
@@ -76,7 +92,17 @@ impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
         _request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
-        self.launch_count.fetch_add(1, Ordering::SeqCst);
+        // Update under the same mutex that guards the wait predicate to
+        // prevent a lost notification between check and Condvar sleep.
+        {
+            let _guard = self
+                .launch_signal
+                .0
+                .lock()
+                .expect("worker launch mutex should not be poisoned");
+            self.launch_count.fetch_add(1, Ordering::SeqCst);
+            self.launch_signal.1.notify_all();
+        }
         let _ = event_sender.send(ConversationStreamEvent::Failed {
             message: "test worker stops after launch".to_string(),
         });
@@ -94,6 +120,7 @@ struct CapturedParallelWorkerLaunch {
 struct HoldingParallelAgentWorkerPort {
     launch_count: AtomicUsize,
     launches: Mutex<Vec<CapturedParallelWorkerLaunch>>,
+    launch_signal: Condvar,
     release_rx: Mutex<mpsc::Receiver<()>>,
 }
 
@@ -102,6 +129,7 @@ impl HoldingParallelAgentWorkerPort {
         Self {
             launch_count: AtomicUsize::new(0),
             launches: Mutex::new(Vec::new()),
+            launch_signal: Condvar::new(),
             release_rx: Mutex::new(release_rx),
         }
     }
@@ -116,6 +144,18 @@ impl HoldingParallelAgentWorkerPort {
             .expect("captured launches mutex should not be poisoned")
             .clone()
     }
+
+    fn wait_for_captured_launch(&self) -> bool {
+        let locked = self
+            .launches
+            .lock()
+            .expect("captured launches mutex should not be poisoned");
+        let (launches, _result) = self
+            .launch_signal
+            .wait_timeout_while(locked, WORKER_LAUNCH_TIMEOUT, |entries| entries.is_empty())
+            .expect("captured launch notification should not be poisoned");
+        !launches.is_empty()
+    }
 }
 
 impl ParallelAgentWorkerPort for HoldingParallelAgentWorkerPort {
@@ -124,14 +164,18 @@ impl ParallelAgentWorkerPort for HoldingParallelAgentWorkerPort {
         request: ParallelAgentWorkerStreamRequest<'_>,
         _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
-        self.launches
-            .lock()
-            .expect("captured launches mutex should not be poisoned")
-            .push(CapturedParallelWorkerLaunch {
+        {
+            let mut launches = self
+                .launches
+                .lock()
+                .expect("captured launches mutex should not be poisoned");
+            launches.push(CapturedParallelWorkerLaunch {
                 cwd: request.cwd.to_string(),
                 service_name: request.service_name.to_string(),
             });
-        self.launch_count.fetch_add(1, Ordering::SeqCst);
+            self.launch_count.fetch_add(1, Ordering::SeqCst);
+            self.launch_signal.notify_all();
+        }
         let _ = self
             .release_rx
             .lock()
@@ -1199,12 +1243,10 @@ fn dispatch_tick_enqueue_trigger_replaces_stale_epoch_duplicate_command_id() {
     );
     assert_eq!(result.outcome.epoch_id, 224);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 
     let projections = authority
@@ -1274,12 +1316,10 @@ fn dispatch_tick_enqueue_trigger_requeues_after_stale_running_duplicate_command_
     );
     assert_eq!(result.outcome.epoch_id, 224);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 
     let projections = authority
@@ -1325,12 +1365,10 @@ fn dispatch_tick_enqueue_trigger_claims_and_runs_new_command() {
         });
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 
     let projections = authority
@@ -1373,12 +1411,10 @@ fn dispatch_tick_reclaims_stale_running_dispatch_command_after_restart() {
         });
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
     let projections = authority
         .load_runtime_projections(&workspace_dir)
@@ -1439,12 +1475,10 @@ fn dispatch_tick_recovers_fresh_running_command_without_waiting_for_timeout() {
     );
     assert_eq!(result.outcome.epoch_id, 224);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
     let projections = authority
         .load_runtime_projections(&workspace_dir)
@@ -1582,12 +1616,10 @@ fn dispatch_tick_uses_durable_command_epoch_for_recovered_execution() {
     );
     assert_eq!(result.outcome.epoch_id, 224);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
     let projections = authority
         .load_runtime_projections(&workspace_dir)
@@ -1655,12 +1687,10 @@ fn dispatch_tick_skips_stale_epoch_command_and_launches_current_one() {
     );
     assert_eq!(result.outcome.epoch_id, 224);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 
     let projections = authority
@@ -1722,12 +1752,10 @@ fn dispatch_orchestrator_logs_update_failures_after_successful_launch() {
     });
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 }
 
@@ -1802,12 +1830,10 @@ fn dispatch_uses_task_identity_lease_when_agent_profiles_are_disabled() {
     });
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 && !worker_port.launches().is_empty() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_captured_launch(),
+        "worker launch was not captured before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
     let launch = worker_port
         .launches()
@@ -1950,12 +1976,10 @@ fn dispatch_orchestrator_keeps_partial_launch_when_later_slot_lease_fails() {
 
     assert_eq!(partial.outcome.launched_task_ids.len(), 1);
     assert!(partial.outcome.status_copy_input.contains("blocked:"));
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 }
 
@@ -2028,12 +2052,10 @@ fn dispatch_orchestrator_loop_claims_one_durable_command_across_two_ticks() {
             .sum::<usize>(),
         1
     );
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 
     let projections = authority
@@ -2116,12 +2138,10 @@ fn slot_capacity_available_event_dispatches_next_ready_task_when_only_one_slot_i
 
     assert_eq!(result.outcome.idle_slot_count, 1);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        worker_port.wait_for_launches(1),
+        "worker did not enter its launch method before the bounded event wait"
+    );
     assert_eq!(worker_port.launch_count(), 1);
 
     let projections = authority
