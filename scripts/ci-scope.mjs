@@ -44,6 +44,10 @@ const NODE_PATHS = [
   ...DESKTOP_PATHS,
 ];
 
+// Askama compiles HTML templates into the Rust crate. Admin templates also
+// need the Node/admin surfaces, so classifying them as admin-only is unsafe.
+const RUST_EMBEDDED_ADMIN_TEMPLATES = [/^templates\/admin\/.*\.html$/];
+
 const RUST_PATHS = [
   /^src\//,
   /^tests\//,
@@ -133,7 +137,10 @@ export function classifyChangedPaths(inputPaths, requestedScope = "auto") {
     if (matchesAny(path, NODE_PATHS)) {
       node = true;
     }
-    if (!isAdminPath && matchesAny(path, RUST_PATHS)) {
+    if (
+      matchesAny(path, RUST_PATHS)
+      && (!isAdminPath || matchesAny(path, RUST_EMBEDDED_ADMIN_TEMPLATES))
+    ) {
       rust = true;
       portable = true;
     }
