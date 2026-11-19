@@ -2081,6 +2081,8 @@
   let dashboardRequest = null;
   let eventsRequest = null;
   let lastDashboardPollAt = 0;
+  // Set by an SSE invalidation; only a snapshot fetched after it is applied consumes it.
+  let dashboardInvalidated = false;
 
   const pollDashboard = ({ fresh = false } = {}) => {
     if (document.hidden) return Promise.resolve(false);
@@ -2088,6 +2090,8 @@
       return fresh ? dashboardRequest.then(() => pollDashboard()) : dashboardRequest;
     }
     dashboardRequest = (async () => {
+      const coversInvalidation = dashboardInvalidated;
+      dashboardInvalidated = false;
       try {
         const response = await fetch(dashboardUrl, { headers: { "Accept": "application/json" } });
         if (!response.ok) throw new Error(`dashboard ${response.status}`);
@@ -2099,6 +2103,7 @@
         renderPollStatus();
         return true;
       } catch (error) {
+        if (coversInvalidation) dashboardInvalidated = true;
         pollState.snapshot = "error";
         pollState.snapshotError = error.message;
         renderPollStatus();
@@ -2209,9 +2214,14 @@
     const revisionAdvanced = frame.reason === "validation"
       ? validationRevision.advanced
       : evidenceRevision.advanced;
-    if (frame.refreshDashboard && (!revisionDrivenRefresh || revisionAdvanced)) {
+    const refreshRequested = frame.refreshDashboard && (!revisionDrivenRefresh || revisionAdvanced);
+    if (refreshRequested && frame.reason !== "connected") dashboardInvalidated = true;
+    if (dashboardInvalidated) {
       // An in-flight fetch may predate this invalidation, so queue a follow-up fetch after it.
       pollDashboard({ fresh: true });
+    } else if (refreshRequested) {
+      // The connect frame joins the page-load or tab-visible fetch instead of adding one.
+      pollDashboard();
     }
   };
 
@@ -2253,7 +2263,9 @@
       fetchLoopControl().catch(() => {});
       return;
     }
-    if (Date.now() - lastDashboardPollAt >= Math.max(pollIntervalMs * 6, 30_000)) {
+    if (dashboardInvalidated) {
+      pollDashboard({ fresh: true });
+    } else if (Date.now() - lastDashboardPollAt >= Math.max(pollIntervalMs * 6, 30_000)) {
       pollDashboard();
     }
   }, Math.max(pollIntervalMs, 5000));

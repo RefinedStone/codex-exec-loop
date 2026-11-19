@@ -4571,19 +4571,41 @@ fn akra_graphic_dashboard_realtime_invalidation_does_not_join_an_in_flight_snaps
         .expect("dashboard should connect the realtime stream after the frame handler");
     let apply_realtime_frame = &AKRA_DASHBOARD_JS[frame_start..frame_start + frame_end];
 
-    assert!(
-        apply_realtime_frame.contains("pollDashboard({ fresh: true });"),
-        "an SSE invalidation should queue a snapshot fetch that starts after it arrives"
+    // Order matters: a pending invalidation queues a fresh fetch; only the connect frame joins.
+    let position = |token: &str| {
+        apply_realtime_frame
+            .find(token)
+            .unwrap_or_else(|| panic!("realtime frame handler should keep {token}"))
+    };
+    let marks_pending = position(
+        "if (refreshRequested && frame.reason !== \"connected\") dashboardInvalidated = true;",
     );
+    let pending_branch = position("if (dashboardInvalidated) {");
+    let fresh_poll = position("pollDashboard({ fresh: true });");
+    let connect_branch = position("} else if (refreshRequested) {");
+    let joined_poll = position("pollDashboard();");
+    assert!(marks_pending < pending_branch);
+    assert!(pending_branch < fresh_poll && fresh_poll < connect_branch);
+    assert!(connect_branch < joined_poll);
+
+    for token in [
+        "return fresh ? dashboardRequest.then(() => pollDashboard()) : dashboardRequest;",
+        "const coversInvalidation = dashboardInvalidated;",
+        "if (coversInvalidation) dashboardInvalidated = true;",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_JS.contains(token),
+            "a failed follow-up fetch should keep the invalidation pending: {token}"
+        );
+    }
+    let fallback_tick = AKRA_DASHBOARD_JS
+        .split_once("const fallbackPollTimer = window.setInterval(() => {")
+        .and_then(|(_, rest)| rest.split_once("}, Math.max(pollIntervalMs, 5000));"))
+        .map(|(body, _)| body)
+        .expect("dashboard should keep the fallback poll timer");
     assert!(
-        !apply_realtime_frame.contains("pollDashboard();"),
-        "an SSE invalidation must not reuse a snapshot fetch that started before it"
-    );
-    assert!(
-        AKRA_DASHBOARD_JS.contains(
-            "return fresh ? dashboardRequest.then(() => pollDashboard()) : dashboardRequest;"
-        ),
-        "a fresh dashboard poll should run again after the in-flight fetch settles"
+        fallback_tick.contains("if (dashboardInvalidated) {"),
+        "the fallback tick should retry a pending invalidation"
     );
 }
 
