@@ -5548,6 +5548,91 @@ mod tests {
     }
 
     #[test]
+    fn full_stop_reaches_a_background_turn_that_starts_after_the_stop() {
+        // #2304: a background turn accepted before the stop but started after it must still stop.
+        let mut controller = CoreController::new();
+        let background_turn = submit_test_turn(&mut controller, Some("thread-1"));
+        controller.handle_input(test_turn_stream_input(
+            background_turn,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        assert_eq!(controller.conversation_turn.background_session_count(), 1);
+
+        let stop = StopRequestCorrelation::new(1, None);
+        let requested =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        assert_eq!(
+            requested.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation: stop,
+                attempt: StopRequestAttempt::Initial,
+            }]
+        );
+        let initial_completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: stop,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+        assert!(initial_completed.effects.is_empty());
+
+        let started = controller.handle_input(test_turn_stream_input(
+            background_turn,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        let background_stop = StopRequestCorrelation::new(2, Some(background_turn));
+        assert_eq!(
+            started.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation: background_stop,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+            }],
+            "the stop intent stays until the background turn starts"
+        );
+        let synchronized = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: background_stop,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+                result: Ok(()),
+            },
+        ));
+        assert!(synchronized.effects.is_empty());
+    }
+
+    #[test]
+    fn full_stop_intent_ends_when_the_background_turn_fails_before_start() {
+        let mut controller = CoreController::new();
+        let background_turn = submit_test_turn(&mut controller, Some("thread-1"));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+
+        let failed = controller.handle_input(test_turn_stream_input(
+            background_turn,
+            TurnStreamEvent::Failed {
+                message: "launch failed".to_string(),
+            },
+        ));
+        assert!(failed.effects.is_empty());
+        assert_eq!(controller.conversation_turn.background_session_count(), 0);
+    }
+
+    #[test]
     fn pre_start_stop_synchronizes_once_and_fail_closed_stream_error_keeps_the_gate() {
         let mut controller = CoreController::new();
         let turn_submission = submit_test_turn(&mut controller, Some("thread-1"));

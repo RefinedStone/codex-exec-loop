@@ -1506,7 +1506,37 @@ impl ConversationTurnFeatureReducer {
                 && !self.session.turn_stream_state.has_active_turn(),
             invalidated: false,
         });
+        self.hold_stop_for_unstarted_background_turns();
         StopRequestAdmission::Accepted { correlation }
+    }
+
+    /*
+     * 정지는 app-server 의 모든 턴에 닿지만, 그 뒤에 시작한 스트림은 막지 못한다. 뒤의 session 에서 받았지만 아직
+     * 시작하지 않은 턴도 정지해야 한다 (#2304). 그 턴마다 정지 의도를 두고, 턴이 시작하면 정지를 다시 낸다. 턴이
+     * 시작 전에 끝나면 의도는 그대로 지운다.
+     */
+    fn hold_stop_for_unstarted_background_turns(&mut self) {
+        for session in &mut self.background_sessions {
+            let Some(turn) = session.conversation_runtime.active_turn_correlation() else {
+                continue;
+            };
+            if session.active_stop_request.is_some() || session.turn_stream_state.has_active_turn()
+            {
+                continue;
+            }
+            session.active_stop_request = Some(ActiveStopRequest {
+                correlation: StopRequestCorrelation::new(
+                    take_generation(
+                        &mut self.next_stop_request_generation,
+                        "runtime stop request",
+                    ),
+                    Some(turn),
+                ),
+                pending_attempt: None,
+                synchronize_after_turn_started: true,
+                invalidated: false,
+            });
+        }
     }
 
     pub(super) fn complete_stop_request(
