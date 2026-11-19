@@ -61,7 +61,7 @@ impl SessionCatalogSnapshot {
 }
 
 /*
- * `path` 가 `workspace` 이거나 그 안이다 (#2303). 글자로만 비교한다: `\\?\` 머리, `\` 구분자, 끝 구분자를 맞추고
+ * `path` 가 `workspace` 이거나 그 안이다 (#2303). 글자로만 비교한다: `\\?\` 와 `\\?\UNC\` 머리, `\` 구분자, 끝 구분자를 맞추고
  * Windows 에서는 대소문자를 가리지 않는다. 빈 `path` 는 어디에도 속하지 않는다.
  * shortcut: symlink, junction, 8.3 이름은 같은 디렉터리라도 다르다고 본다. 거짓 거절이 보이면 adapter 가 정규화한 값을 넘긴다.
  */
@@ -77,7 +77,12 @@ pub(crate) fn workspace_contains(workspace: &str, path: &str) -> bool {
 
 fn comparable_path(path: &str) -> String {
     let path = path.trim();
-    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+    // adapter 의 `simplify_windows_verbatim_key` 와 같은 규칙이다: `\\?\UNC\server` 는 `\\server` 이다.
+    let path = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+    };
     let path = path.replace('\\', "/");
     let path = path.trim_end_matches('/');
     if cfg!(windows) {
@@ -148,6 +153,10 @@ mod tests {
         assert!(workspace_contains("/repo/a", "/repo/a"));
         assert!(workspace_contains("/repo/a/", "/repo/a/.akra-pool/slot-1"));
         assert!(workspace_contains(r"\\?\C:\repo\a", "C:/repo/a/src"));
+        assert!(workspace_contains(
+            r"\\?\UNC\server\share\repo",
+            r"\\server\share\repo"
+        ));
         assert!(!workspace_contains("/repo/a", "/repo/ab"));
         assert!(!workspace_contains("/repo/a", "/repo/b"));
         assert!(!workspace_contains("/repo/a", "/repo"));
