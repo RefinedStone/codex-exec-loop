@@ -77,11 +77,40 @@ export async function loadSettings(path: string): Promise<BrowserSettings> {
   }
 }
 
-/** 검증한 설정을 임시 파일에 쓰고 바꿔 넣는다. 쓰는 도중에 앱이 끝나도 이전 파일이 남는다. */
-export async function saveSettings(path: string, input: unknown): Promise<BrowserSettings> {
+/**
+ * main 프로세스의 여러 창이 동일한 설정 파일을 저장할 때 쓰는 파일 작업이다.
+ * 테스트에서는 지연된 write/rename 으로 실제 교차 호출을 제어한다.
+ */
+export interface BrowserSettingsWriter {
+  write(path: string, content: string): Promise<void>;
+  replace(temporary: string, target: string): Promise<void>;
+}
+
+const diskWriter: BrowserSettingsWriter = {
+  write: (path, content) => writeFile(path, content, "utf8"),
+  replace: (temporary, target) => rename(temporary, target),
+};
+
+/** 저장 큐는 파일마다 독립적이며 실패한 요청이 이후 저장을 막지 않는다. */
+const pendingSaves = new Map<string, Promise<BrowserSettings>>();
+
+/**
+ * 검증한 설정을 직렬로 저장하고 임시 파일을 원자적으로 교체한다.
+ * 여러 창이 오래된 전체 설정을 저장해도 제출 순서대로 반영하고 마지막 요청의 전체 설정이 남는다
+ * (last-submitted-write-wins). 필드 단위 자동 병합은 하지 않는다.
+ */
+export function saveSettings(path: string, input: unknown, writer: BrowserSettingsWriter = diskWriter): Promise<BrowserSettings> {
   const settings = validateSettings(input);
-  const temporary = `${path}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-  await rename(temporary, path);
-  return settings;
+  const previous = pendingSaves.get(path) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(async () => {
+    const temporary = `${path}.tmp`;
+    await writer.write(temporary, `${JSON.stringify(settings, null, 2)}\n`);
+    await writer.replace(temporary, path);
+    return settings;
+  });
+  pendingSaves.set(path, current);
+  void current.finally(() => {
+    if (pendingSaves.get(path) === current) pendingSaves.delete(path);
+  }).catch(() => undefined);
+  return current;
 }
