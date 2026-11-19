@@ -11,7 +11,7 @@ use super::assembly_contract::{
 use super::sections::collect_simple_review_overlay_sections;
 
 // `build_simple_review_assembly_contract_for_copy`는 copy에서 바로 final view로 가지 않고
-// `copy -> sections -> contract` 순서를 명명한다. 이 작은 함수 덕분에 entry 단계는 조립 순서를 읽기 쉬운
+// `copy -> sections -> contract` 순서를 명명한다. 이 작은 함수 덕분에 view facade는 조립 순서를 읽기 쉬운
 // 한 호출로 표현할 수 있다.
 pub(super) fn build_simple_review_assembly_contract_for_copy(
     // `copy`는 section collector가 읽기만 하므로 borrow로 받는다. final contract는 collector가 만든 owned
