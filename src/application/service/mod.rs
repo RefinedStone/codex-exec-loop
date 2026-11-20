@@ -25,6 +25,8 @@ pub mod issue_masking;
 pub mod issue_policy;
 // issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).
 pub mod issue_validation;
+// issue_review 는 검증된 공유 초안을 모델에 보내고 구조화된 권고를 돌려준다 (#2430).
+pub mod issue_review;
 // issue_template 은 Markdown 템플릿과 YAML Issue Form 의 필수 입력을 해석한다 (#2417).
 pub mod issue_template;
 // parallel_agent_profile은 병렬 agent의 이름, 역할, avatar, persona prompt 설정을 관리한다.

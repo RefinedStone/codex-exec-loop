@@ -33,6 +33,8 @@ pub mod issue_board_field_port;
 pub mod issue_policy_source_port;
 // vault key store port 는 Vault 키를 두는 OS 키 저장소의 계약이다 (#2422).
 pub mod vault_key_store_port;
+// issue review model port 는 이슈 초안 품질 검토에 쓰는 모델의 경계이다 (#2430).
+pub mod issue_review_model_port;
 // issue template source port 는 대상 저장소의 이슈 템플릿 파일을 읽는 경계이다 (#2417).
 pub mod issue_template_source_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
