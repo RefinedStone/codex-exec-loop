@@ -252,6 +252,14 @@ const bridge: AkraBridge = {
     onOpen: (listener) => listen(IPC_CHANNELS.settingsOpen, listener),
     reportWorking: (working) => ipcRenderer.send(IPC_CHANNELS.reportWorking, working),
   },
+  skills: {
+    list: (request) => ipcRenderer.invoke(IPC_CHANNELS.skillsList, request),
+    link: (identity, source) => ipcRenderer.invoke(IPC_CHANNELS.skillsLink, identity, source),
+    check: (identity) => ipcRenderer.invoke(IPC_CHANNELS.skillsCheck, identity),
+    preview: (identity) => ipcRenderer.invoke(IPC_CHANNELS.skillsPreview, identity),
+    apply: (identity, approval) => ipcRenderer.invoke(IPC_CHANNELS.skillsApply, identity, approval),
+    rollback: (identity, localHash) => ipcRenderer.invoke(IPC_CHANNELS.skillsRollback, identity, localHash),
+  },
 };
 
 contextBridge.exposeInMainWorld("akra", bridge);
