@@ -118,15 +118,22 @@ try {
     ipcMain.handle("akra:github-repository", (_event, cwd) => (cwd === "/work/example-app" ? "sample/widgets" : null));
   });
   const page = await app.firstWindow();
-  await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
-  await page.getByTestId("thread-entry").first().click();
-  await page.getByTestId("work-toggle").click();
-  await page.getByTestId("projects-toggle").click();
   const projects = page.getByTestId("github-project-panel");
-  await projects.getByTestId("github-project-form").waitFor({ timeout: 10_000 });
-  await projects.getByLabel("Project").fill("sample/1");
-  await projects.getByRole("button", { name: "저장" }).click();
-  await projects.getByTestId("github-project-edit").first().click();
+  /** 스레드를 고르고 프로젝트 패널에서 이슈 7 의 편집기를 연다. 저장한 프로젝트가 없으면 먼저 저장한다. */
+  const openEditor = async () => {
+    await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
+    await page.getByTestId("thread-entry").first().click();
+    await page.getByTestId("work-toggle").click();
+    await page.getByTestId("projects-toggle").click();
+    const edit = projects.getByTestId("github-project-edit").first();
+    await projects.getByTestId("github-project-form").or(edit).first().waitFor({ timeout: 10_000 });
+    if ((await edit.count()) === 0) {
+      await projects.getByLabel("Project").fill("sample/1");
+      await projects.getByRole("button", { name: "저장" }).click();
+    }
+    await edit.click();
+  };
+  await openEditor();
 
   const panel = page.getByTestId("issue-draft-panel");
   const title = panel.getByTestId("issue-draft-title");
@@ -208,6 +215,15 @@ try {
   check("the needs-confirmation status names its state", (await status.innerText()).includes("게시 결과 확인 필요"));
   check("no new publish can start while the result is unknown", await panel.getByTestId("issue-draft-publish").isDisabled());
   const publishes = issue.requests.filter((request) => request.method === "akra/issue/publish").length;
+
+  // #2429: 창을 다시 불러온다. renderer 의 상태는 모두 없어진다. 다시 연 편집기는 `open` 이 준 의도 상태를 보여주고
+  // 게시를 다시 보내지 않는다.
+  await page.reload();
+  await openEditor();
+  check("after a reload the editor shows the unknown publish result again", await statusIs("needs_confirmation"));
+  check("after a reload no new publish can start", await panel.getByTestId("issue-draft-publish").isDisabled());
+  check("the reload sent no publish", issue.requests.filter((request) => request.method === "akra/issue/publish").length === publishes);
+  check("the local text did not survive the reload", !(await page.locator("body").innerText()).includes(SECRET) && !(await body.inputValue()).includes(LOG_LINE));
 
   await panel.getByTestId("issue-draft-recheck").click();
   check("a recheck that sees the approved copy is publish confirmed", await statusIs("confirmed"));
