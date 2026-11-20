@@ -181,7 +181,7 @@ mod tests {
     fn restore_values_are_redacted_in_debug_output() {
         let restored = seeded_adapter()
             .restore(VaultRestoreRequest {
-                confirmation: VaultUserConfirmation::for_issue(issue("I_1")),
+                confirmation: VaultUserConfirmation::for_issue_in_test(issue("I_1")),
             })
             .expect("restore should succeed");
 
@@ -226,11 +226,11 @@ mod tests {
 
         let restored = adapter
             .restore(VaultRestoreRequest {
-                confirmation: VaultUserConfirmation::for_issue(issue("I_1")),
+                confirmation: VaultUserConfirmation::for_issue_in_test(issue("I_1")),
             })
             .expect("restore should succeed");
         let other = adapter.restore(VaultRestoreRequest {
-            confirmation: VaultUserConfirmation::for_issue(issue("I_2")),
+            confirmation: VaultUserConfirmation::for_issue_in_test(issue("I_2")),
         });
 
         assert_eq!(restored.title.expose(), PLAINTEXT_TITLE);

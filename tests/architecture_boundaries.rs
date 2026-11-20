@@ -525,6 +525,8 @@ fn vault_restore_contract_stays_out_of_general_kernel_and_gateway_surfaces() {
             "VaultKey",
             "VaultRestore",
             "VaultUserConfirmation",
+            "evidence_vault_unlock",
+            "VaultUnlock",
         ],
     );
 }
