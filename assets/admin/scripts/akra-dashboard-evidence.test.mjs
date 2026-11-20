@@ -70,6 +70,7 @@ function fakeSurface() {
     evidenceDetailTrigger: { setAttribute() {} },
     validationDetailRequestSequence: 0,
     evidenceDetailRequestSequence: 0,
+    detailDrawerGeneration: 0,
     validationEvidenceUrl: "/admin/api/validation/evidence",
     createText() { return { setAttribute() {} }; },
     window: { requestAnimationFrame(callback) { callback(); } },

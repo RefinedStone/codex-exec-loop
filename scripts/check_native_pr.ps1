@@ -82,6 +82,10 @@ function Invoke-NodeAdminChecks {
         "scripts/pr-validation-approval-package.test.mjs"
     )
 
+    Invoke-ExternalStep "admin browser behavior tests" "node" @(
+        "--test", "assets/admin/scripts/*.test.mjs"
+    )
+
     Invoke-ExternalStep "Windows-safe npm launcher tests" "node" @(
         "--test",
         "npm/test/bin.test.js",
