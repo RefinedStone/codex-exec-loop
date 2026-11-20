@@ -40,6 +40,13 @@ function issuePage(ids = ["I_first"], revision = 7, nextAfter: string | null = "
   };
 }
 
+function overviewAnswer(type: string | undefined, maxTurns = 1): unknown {
+  if (type === "thread_activity") return { type, threads: [] };
+  if (type === "auto_follow") return { type, max_turns: maxTurns, paused: false };
+  if (type === "planning") return { type, status: "not_ready" };
+  return { type: "parallel", enabled: false };
+}
+
 function harness() {
   const sent: Sent[] = [];
   const listeners = new Set<() => void>();
@@ -86,6 +93,19 @@ function harness() {
     reply(requests("akra/kernel/attach").at(-1), { client_id: "1", protocol_version: 1, kernel });
     await when(() => queries("issues").length > before);
   };
+  const answerOverviewReads = (reads: Sent[], maxTurns = 1) => {
+    for (const request of reads) reply(request, overviewAnswer(request.params.query?.type, maxTurns));
+  };
+  const openOverview = async () => {
+    connection.connectionChanged(true);
+    const shown = connection.show("/repo", ["overview"]);
+    reply(requests("akra/kernel/attach").at(-1), { client_id: "1", protocol_version: 1, kernel: "repo" });
+    await when(() => requests("akra/kernel/query").length === 4);
+    answerOverviewReads(requests("akra/kernel/query"));
+    await when(() => requests("akra/kernel/command").length === 1);
+    reply(requests("akra/kernel/command")[0], { processed: true });
+    await shown;
+  };
   const openIssues = async (page = issuePage(), state = automation(page.revision)) => {
     connection.connectionChanged(true);
     const shown = connection.show("/repo", ["issues"]);
@@ -93,7 +113,7 @@ function harness() {
     answerIssueReads(page, state);
     await shown;
   };
-  return { connection, sent, requests, queries, query, reply, fail, when, answerIssueReads, answerAttach, openIssues, view: () => view };
+  return { connection, sent, requests, queries, query, reply, fail, when, answerIssueReads, answerAttach, answerOverviewReads, openOverview, openIssues, view: () => view };
 }
 
 describe("issue kernel connection", () => {
@@ -141,6 +161,139 @@ describe("issue kernel connection", () => {
     expect(h.requests("akra/kernel/attach")).toHaveLength(1);
     expect(h.view().issues.page).toBeNull();
     expect(h.requests("akra/kernel/command")[0]?.params.command?.type).toBe("refresh_planning");
+  });
+
+  it.each(["refresh-first", "resync-first"] as const)("keeps one planning refresh through resync when four replies are delayed: %s", async (order) => {
+    const h = harness();
+    await h.openOverview();
+    const refreshed = h.connection.refresh();
+    const refreshReads = h.requests("akra/kernel/query").slice(-4);
+    h.connection.handleEvent({ event: { type: "resync" } });
+    const resyncReads = h.requests("akra/kernel/query").slice(-4);
+    expect(h.requests("akra/kernel/query")).toHaveLength(12);
+
+    if (order === "resync-first") {
+      h.answerOverviewReads(resyncReads, 3);
+      await h.when(() => h.view().autoFollow?.max_turns === 3);
+      expect(h.requests("akra/kernel/command")).toHaveLength(1);
+      h.answerOverviewReads(refreshReads, 2);
+    } else {
+      h.answerOverviewReads(refreshReads, 2);
+      await h.when(() => h.requests("akra/kernel/command").length === 2);
+      h.answerOverviewReads(resyncReads, 3);
+    }
+    await h.when(() => h.requests("akra/kernel/command").length === 2);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await refreshed;
+    expect(h.requests("akra/kernel/command").map((request) => request.params)).toEqual([
+      { command: { type: "refresh_planning" } },
+      { command: { type: "refresh_planning" } },
+    ]);
+    expect(h.view().autoFollow?.max_turns).toBe(3);
+    expect(h.view().message).toBeNull();
+  });
+
+  it("coalesces superseded explicit refreshes without letting resync erase the latest intent", async () => {
+    const h = harness();
+    await h.openOverview();
+    const first = h.connection.refresh();
+    const firstReads = h.requests("akra/kernel/query").slice(-4);
+    const latest = h.connection.refresh();
+    const latestReads = h.requests("akra/kernel/query").slice(-4);
+    h.connection.handleEvent({ event: { type: "resync" } });
+    const resyncReads = h.requests("akra/kernel/query").slice(-4);
+    h.answerOverviewReads(firstReads, 2);
+    await first;
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+    h.answerOverviewReads(resyncReads, 4);
+    h.answerOverviewReads(latestReads, 3);
+    await h.when(() => h.requests("akra/kernel/command").length === 2);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await latest;
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+    expect(h.view().autoFollow?.max_turns).toBe(4);
+  });
+
+  it.each(["interests", "workspace", "reconnect"] as const)("does not replay an old overview refresh after changing %s", async (change) => {
+    const h = harness();
+    await h.openOverview();
+    const oldRefresh = h.connection.refresh();
+    const oldReads = h.requests("akra/kernel/query").slice(-4);
+    let fresh: Promise<void> | null = null;
+    if (change === "interests") {
+      const issues = h.connection.show("/repo", ["issues"]);
+      h.answerIssueReads();
+      await issues;
+      fresh = h.connection.show("/repo", ["overview"]);
+      expect(h.requests("akra/kernel/attach")).toHaveLength(1);
+    } else {
+      const before = h.requests("akra/kernel/query").length;
+      if (change === "workspace") {
+        fresh = h.connection.show("/other", ["overview"]);
+      } else {
+        h.connection.connectionChanged(false);
+        h.connection.connectionChanged(true);
+      }
+      h.reply(h.requests("akra/kernel/attach").at(-1), {
+        client_id: "2", protocol_version: 1, kernel: change === "workspace" ? "other" : "repo",
+      });
+      await h.when(() => h.requests("akra/kernel/query").length === before + 4);
+    }
+    const freshReads = h.requests("akra/kernel/query").slice(-4);
+    // 관심 영역이 다시 overview여도 이전 관심/연결 세대의 성공 답은 명령을 만들지 못한다.
+    h.answerOverviewReads(oldReads, 90);
+    await oldRefresh;
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+    h.answerOverviewReads(freshReads, 5);
+    await h.when(() => h.requests("akra/kernel/command").length === 2);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    if (fresh) await fresh;
+    expect(h.view().autoFollow?.max_turns).toBe(5);
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+  });
+
+  it("keeps a planning command failure visible after a newer resync query succeeds", async () => {
+    const h = harness();
+    await h.openOverview();
+    const refreshed = h.connection.refresh();
+    h.answerOverviewReads(h.requests("akra/kernel/query").slice(-4), 2);
+    await h.when(() => h.requests("akra/kernel/command").length === 2);
+    const command = h.requests("akra/kernel/command").at(-1);
+    h.connection.handleEvent({ event: { type: "resync" } });
+    h.answerOverviewReads(h.requests("akra/kernel/query").slice(-4), 3);
+    await h.when(() => h.view().autoFollow?.max_turns === 3);
+    h.fail(command, "planning refresh failed");
+    await refreshed;
+    expect(h.view().message).toContain("planning refresh failed");
+    expect(h.view().autoFollow?.max_turns).toBe(3);
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+  });
+
+  it.each(["refresh", "interests"] as const)("ignores an old planning command failure after a newer %s", async (change) => {
+    const h = harness();
+    await h.openOverview();
+    const oldRefresh = h.connection.refresh();
+    h.answerOverviewReads(h.requests("akra/kernel/query").slice(-4), 2);
+    await h.when(() => h.requests("akra/kernel/command").length === 2);
+    const oldCommand = h.requests("akra/kernel/command").at(-1);
+    let latest: Promise<void>;
+    if (change === "interests") {
+      const issues = h.connection.show("/repo", ["issues"]);
+      h.answerIssueReads();
+      await issues;
+      latest = h.connection.show("/repo", ["overview"]);
+    } else {
+      latest = h.connection.refresh();
+    }
+    h.answerOverviewReads(h.requests("akra/kernel/query").slice(-4), 5);
+    await h.when(() => h.requests("akra/kernel/command").length === 3);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await latest;
+    h.fail(oldCommand, "old planning command failed");
+    await oldRefresh;
+    expect(h.view().message).toBeNull();
+    expect(h.view().autoFollow?.max_turns).toBe(5);
+    expect(h.requests("akra/kernel/command")).toHaveLength(3);
   });
 
   it("keeps an issues state event newer than an in-flight state query", async () => {
