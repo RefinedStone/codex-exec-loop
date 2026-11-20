@@ -8,9 +8,12 @@ pub mod pr_validation;
 pub mod review_poller;
 // resource_version adapter는 작업 컨텍스트 장부의 GitHub 문서가 바뀌었는지 `gh` 로 확인한다 (plan 22).
 pub mod resource_version;
+// issue_snapshot adapter는 이슈 한 건의 안정 ID 와 게시본을 `gh` 로 읽는다. 쓰지 않는다 (#2420).
+pub mod issue_snapshot;
 
 // automation re-export는 wiring code가 하위 파일명을 직접 의존하지 않고 adapter 이름만 import하게 한다.
 pub use self::automation::GithubAutomationAdapter;
+pub use self::issue_snapshot::GithubIssueSnapshotAdapter;
 pub use self::pr_validation::GithubPrValidationAdapter;
 // review poller re-export도 같은 public surface를 제공해 composition이 port 구현체를 직접 주입하게 한다.
 pub use self::resource_version::GithubResourceVersionAdapter;
