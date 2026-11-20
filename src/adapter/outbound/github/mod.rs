@@ -10,6 +10,8 @@ pub mod review_poller;
 pub mod resource_version;
 // issue_snapshot adapter는 이슈 한 건의 안정 ID 와 게시본을 `gh` 로 읽는다. 쓰지 않는다 (#2420).
 pub mod issue_snapshot;
+// issue_source는 열린 이슈 페이지와 안정 ID 재동기화를 읽는다 (#2537).
+pub mod issue_source;
 // issue_board_field adapter는 GitHub Projects 항목 하나의 필드를 `gh` 로 읽고 고친다 (#2435).
 pub mod issue_board_field;
 // issue_update adapter는 이슈 한 건의 제목과 본문을 `gh` 로 고친다. 아직 연결한 곳이 없다 (#2423).

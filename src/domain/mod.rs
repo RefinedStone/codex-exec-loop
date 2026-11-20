@@ -27,6 +27,10 @@ pub(crate) mod issue_automation;
 pub(crate) mod issue_publish_intent;
 // issue_policy 는 프로젝트의 이슈 규약과 대상별 공개 정책이다 (#2416).
 pub(crate) mod issue_policy;
+// 공유본과 복원 위치를 계산하는 순수한 가림 규칙이다 (#2537).
+pub(crate) mod issue_masking;
+// 원문을 보관하지 않고 알려진 비밀값의 위치만 찾는다 (#2537).
+pub(crate) mod issue_secret_spans;
 // issue_validation 은 이슈 필수 규약의 순수한 검증 규칙과 통과 결과이다 (#2418).
 pub(crate) mod issue_validation;
 // issue_review 는 LLM 품질 검토의 권고와 그 적용이다. 검증 통과나 공유본을 만들지 않는다 (#2430).
