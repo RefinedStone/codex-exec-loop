@@ -72,7 +72,7 @@ function ItemRow({
   github: GitHubBridge;
   onHandOff(item: GitHubProjectItem): Promise<void>;
   onEdit?(item: GitHubProjectItem): Promise<void>;
-  onOpenRestore(issueUrl: string): Promise<void>;
+  onOpenRestore?(issueUrl: string): Promise<void>;
 }) {
   const { busy, error, run } = useAction();
   const act = (action: (item: GitHubProjectItem) => Promise<void>) => run(() => action(item));
@@ -103,7 +103,7 @@ function ItemRow({
             수정
           </button>
         )}
-        {item.kind === "issue" && url && (
+        {item.kind === "issue" && url && onOpenRestore && (
           <button type="button" onClick={() => void run(() => onOpenRestore(url))} disabled={busy} data-testid="github-project-open-restore" title="가린 구간을 로컬 전용 창에서 엽니다">
             로컬 복원본
           </button>
@@ -128,7 +128,7 @@ export function GitHubProjectPanel({
   /** 이슈의 제목과 본문을 고치는 패널을 연다 (#2426). 열 수 없으면 오류를 던진다. */
   onEdit?(item: GitHubProjectItem): Promise<void>;
   /** 이슈의 로컬 복원본 창을 연다 (#2427). */
-  onOpenRestore(issueUrl: string): Promise<void>;
+  onOpenRestore?(issueUrl: string): Promise<void>;
 }) {
   const [projectRef, setProjectRef] = useState<string | null>(loadProjectRef);
   const [editing, setEditing] = useState(false);

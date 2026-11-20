@@ -5,24 +5,19 @@ import {
   type VaultField,
   type VaultReconnectReview,
   type VaultRestoreAction,
-  type VaultRestoreBridge,
   type VaultRestoreViewState,
   vaultRestoreView,
 } from "../../shared/vaultRestore";
+import type { AkraVaultRestoreBridge } from "../../shared/bridge";
 import "../design/tokens.css";
 import "./vaultRestore.css";
-
-declare global {
-  interface Window {
-    akraVaultRestore: VaultRestoreBridge;
-  }
-}
 
 const root = document.getElementById("root");
 if (!root) {
   throw new Error("root element is missing");
 }
-const bridge = window.akraVaultRestore;
+// 이 HTML 은 전용 preload 만 읽는다. 일반 화면의 AkraBridge 를 이 창에 적용하지 않는다.
+const bridge = (window as unknown as { readonly akra: AkraVaultRestoreBridge }).akra.vaultRestore;
 const FIELD_LABEL: Record<VaultField, string> = { title: "제목", body: "본문" };
 const ACTION_LABEL: Record<VaultRestoreAction, string> = { unlock: "확인하고 열기", lock: "잠그기", review: "재연결 검토" };
 

@@ -4,7 +4,7 @@ import type { LinearBridge } from "./linear";
 import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings } from "./settings";
 import type { SkillsBridge } from "./skills";
-import type { VaultRestoreOpenerBridge } from "./vaultRestore";
+import type { VaultApprovedMapping, VaultRestoreViewState } from "./vaultRestore";
 import type { ZoomDirection } from "./zoom";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
@@ -512,4 +512,32 @@ export interface DotsBridge {
 /** dot 창의 주소에 넣는 dot id 이다. 주소와 파일 이름에 안전한 글자만 받는다. */
 export function isDotId(dotId: unknown): dotId is string {
   return typeof dotId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(dotId);
+}
+
+
+/** 복원본 창의 window.akra.vaultRestore 에만 허용하는 함수이다. 일반 창에는 이 권한이 없다. */
+export interface VaultRestoreBridge {
+  /** 수신 함수를 등록했다고 알린다. 처음이면 main 이 확인을 시작한다. 다시 오면 (화면을 다시 불러옴) 잠근다. */
+  ready(): void;
+  onState(listener: (state: VaultRestoreViewState) => void): () => void;
+  /** 다시 사용자 확인을 거쳐 연다. */
+  unlock(): void;
+  lock(): void;
+  /** 재연결 검토의 값을 읽는다. */
+  review(): void;
+  reconnect(mappings: VaultApprovedMapping[]): void;
+}
+
+/** 일반 창이 쓰는 함수이다. 창을 열고 닫게 할 뿐이다. 복원본의 상태와 글은 받지 못한다. */
+export interface VaultRestoreOpenerBridge {
+  /** 이슈의 로컬 복원본 창을 연다. 열람은 그 창에서 사용자가 확인한 뒤에만 된다. */
+  open(issueUrl: string): Promise<void>;
+  /** 이 창의 프로젝트(열린 스레드의 폴더)가 바뀌었다. 이 창이 연 복원본을 다시 잠근다. */
+  projectChanged(): void;
+}
+
+
+/** 복원 전용 창의 window.akra 계약. 일반 창의 Gateway, 브라우저, 파일 접근 권한을 포함하지 않는다. */
+export interface AkraVaultRestoreBridge {
+  readonly vaultRestore: VaultRestoreBridge;
 }

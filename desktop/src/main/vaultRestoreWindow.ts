@@ -1,7 +1,7 @@
 // 로컬 복원본 창이다 (#2427). 이슈 한 건마다 전용 창 하나를 연다.
 //
 // 이 창은 일반 표면과 나눈다:
-// - 전용 preload(`vaultRestore.js`)만 쓴다. `window.akra`, Gateway 접속, 대화 IPC 가 없다.
+// - 전용 preload(`vaultRestore.js`)만 쓴다. 제한된 window.akra.vaultRestore 만 있고 Gateway 접속과 대화 IPC 는 없다.
 // - 브라우저 패널(`BrowserPanelService`)에 등록하지 않는다. 스레드의 브라우저 자동화와 캡처는 그 패널의 보기만 쓴다.
 // - DevTools, 다른 주소로의 이동, 새 창을 막는다. 세션은 디스크에 쓰지 않는 전용 partition 이다.
 // - 복원본 채널의 요청은 보낸 webContents 가 이 창의 main frame 일 때만 받는다.

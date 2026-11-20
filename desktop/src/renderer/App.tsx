@@ -283,7 +283,6 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
             if (!target) throw new Error("이 저장소의 작업 폴더가 없습니다. 그 저장소의 폴더를 사이드바에 추가하세요.");
             setEditing(target);
           }}
-          onOpenRestore={(issueUrl) => window.akra.vaultRestore.open(issueUrl)}
         />
       )}
       {source === "Jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => onHandOff(await window.akra.jira.issuePrompt(issue.key))} />}

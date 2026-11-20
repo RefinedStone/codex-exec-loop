@@ -68,6 +68,7 @@ try {
   check("the filter lists each repository once", (await filter.locator("option").count()) === 3);
   check("the current repository shows its two items", (await panel.getByTestId("github-project-item").count()) === 2);
   check("items are grouped by status", (await panel.getByTestId("github-project-group").allInnerTexts()).map((text) => text.split("\n")[0]).join(",") === "Todo (1),In progress (1)");
+  check("unwired local restoration has no product entry point", (await panel.getByTestId("github-project-open-restore").count()) === 0);
   check("closed items are counted", (await panel.innerText()).includes("닫힌 항목 5개"));
 
   await filter.selectOption({ label: "전체" });
