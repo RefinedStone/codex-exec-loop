@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
+import type { TurnStatus } from "../../shared/protocol/generated/v2/TurnStatus";
 import { Icon, type IconName } from "../design/icons";
 import { useConversationStore } from "../session/desktopStore";
 import { openPanel, useUiStore } from "../session/uiStore";
@@ -15,7 +16,7 @@ import { findTurns, matchOffsets } from "./find";
 import { ItemView } from "./ItemView";
 import { Markdown } from "./Markdown";
 import type { TurnView } from "./transcript";
-import { activitySummary, formatDuration, type StepItem, type StepKind, stepKind, stepLabel, stepStatus, turnBlocks, type TurnBlock } from "./turnBlocks";
+import { activitySummary, formatDuration, type StepItem, type StepKind, stepDetail, stepKind, stepStatus, stepSummary, turnBlocks, type TurnBlock } from "./turnBlocks";
 
 const ESTIMATED_TURN_HEIGHT = 320;
 const BOTTOM_THRESHOLD_PX = 64;
@@ -23,35 +24,50 @@ const BOTTOM_THRESHOLD_PX = 64;
 const STEP_ICON: Record<StepKind, IconName> = { read: "file", search: "search", edit: "pencil", command: "terminal", tool: "bolt", web: "globe" };
 const STEP_VERB: Record<StepKind, string> = { read: "읽음", search: "검색", edit: "수정", command: "실행", tool: "도구", web: "웹 검색" };
 
-/** 아이템 객체가 같으면 다시 그리지 않는다. */
-const StepRow = memo(function StepRow({ step }: { step: StepItem }) {
-  const status = stepStatus(step);
-  const [open, setOpen] = useState(status === "failed");
+const STEP_TEST_ID: Partial<Record<StepItem["type"], string>> = { commandExecution: "item-command", fileChange: "item-file-change" };
+
+/** 도구 실행 카드이다 (#2378). 접힌 채로 시작하고, 펼치면 보존된 출력과 오류를 보인다. 아이템 객체와 턴 상태가 같으면 다시 그리지 않는다. */
+const StepRow = memo(function StepRow({ step, turnStatus }: { step: StepItem; turnStatus: TurnStatus }) {
+  const status = stepStatus(step, turnStatus);
+  const [open, setOpen] = useState(false);
   const kind = stepKind(step);
-  const output = step.type === "commandExecution" ? step.aggregatedOutput : null;
-  const hasDetail = step.type === "fileChange" ? step.changes.length > 0 : Boolean(output);
-  const durationMs = step.type === "fileChange" || step.type === "webSearch" ? null : step.durationMs;
+  const detail = stepDetail(step);
+  const hasDetail = step.type === "fileChange" ? step.changes.length > 0 : Boolean(detail.output || detail.error);
+  const durationMs = "durationMs" in step ? step.durationMs : null;
   return (
-    <li className={`step step-${status}`} data-testid={step.type === "commandExecution" ? "item-command" : step.type === "fileChange" ? "item-file-change" : undefined}>
+    <li className={`step step-${status}`} data-testid={STEP_TEST_ID[step.type] ?? "item-tool"} data-status={status}>
       <button type="button" className="step-line" onClick={() => setOpen(!open)} disabled={!hasDetail} aria-expanded={open}>
         <Icon name={STEP_ICON[kind]} size={13} />
         <span className="step-verb">{STEP_VERB[kind]}</span>
-        <code>{stepLabel(step)}</code>
+        <code>{stepSummary(step)}</code>
         {status === "running" && <span className="spinner" />}
+        {/* 웹 검색 아이템에는 상태가 없다. 성공 표시를 하지 않는다. */}
+        {status === "ok" && step.type !== "webSearch" && <span className="badge badge-ok">성공</span>}
         {status === "failed" && <span className="badge badge-bad">{"status" in step && step.status === "declined" ? "거부" : "실패"}</span>}
+        {status === "interrupted" && <span className="badge badge-warn">중단</span>}
+        {status === "unknown" && <span className="badge badge-warn">확인 못 함</span>}
         {durationMs !== null && <span className="step-duration">{formatDuration(durationMs)}</span>}
         {hasDetail && <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />}
       </button>
-      {open && output && <pre className="step-output">{output}</pre>}
-      {open && step.type === "fileChange" && <DiffFileList files={step.changes.map(diffFileFromChange)} defaultOpen />}
+      {open && detail.error && <p className="step-error">{detail.error}</p>}
+      {open && detail.output && <pre className="step-output">{detail.output}</pre>}
+      {open && step.type === "fileChange" && (
+        <>
+          <DiffFileList files={step.changes.map(diffFileFromChange)} defaultOpen />
+          <button type="button" className="ghost step-review" onClick={() => openPanel("review")}>
+            변경 검토 열기
+          </button>
+        </>
+      )}
     </li>
   );
 });
 
 /** 진행 중이거나 실패가 있으면 펼친다. 끝난 작업 묶음은 한 줄로 접는다. */
-function Activity({ steps }: { steps: StepItem[] }) {
-  const live = steps.some((step) => stepStatus(step) === "running");
-  const failed = steps.filter((step) => stepStatus(step) === "failed").length;
+function Activity({ steps, turnStatus }: { steps: StepItem[]; turnStatus: TurnStatus }) {
+  const statuses = steps.map((step) => stepStatus(step, turnStatus));
+  const live = statuses.includes("running");
+  const failed = statuses.filter((status) => status === "failed").length;
   const [open, setOpen] = useState<boolean | null>(null);
   const shown = open ?? (live || failed > 0);
   return (
@@ -64,7 +80,7 @@ function Activity({ steps }: { steps: StepItem[] }) {
       {shown && (
         <ul className="steps">
           {steps.map((step) => (
-            <StepRow key={step.id} step={step} />
+            <StepRow key={step.id} step={step} turnStatus={turnStatus} />
           ))}
         </ul>
       )}
@@ -105,11 +121,11 @@ function Changes({ files }: { files: readonly DiffFile[] }) {
 }
 
 /** `turnBlocks` 는 덩어리 객체를 매번 새로 만든다. 그래서 내용(원본 아이템과 글)으로 비교한다. */
-function sameBlock(previous: { block: TurnBlock }, next: { block: TurnBlock }): boolean {
+function sameBlock(previous: { block: TurnBlock; turnStatus: TurnStatus }, next: { block: TurnBlock; turnStatus: TurnStatus }): boolean {
   const a = previous.block;
   const b = next.block;
   if (a.type === "activity") {
-    return b.type === "activity" && a.steps.length === b.steps.length && a.steps.every((step, index) => step === b.steps[index]);
+    return b.type === "activity" && previous.turnStatus === next.turnStatus && a.steps.length === b.steps.length && a.steps.every((step, index) => step === b.steps[index]);
   }
   if (a.type === "other") {
     return b.type === "other" && a.item === b.item;
@@ -126,7 +142,7 @@ function MessageCopy({ text }: { text: string }) {
   );
 }
 
-const Block = memo(function Block({ block }: { block: TurnBlock }) {
+const Block = memo(function Block({ block, turnStatus }: { block: TurnBlock; turnStatus: TurnStatus }) {
   switch (block.type) {
     case "user":
       return (
@@ -153,7 +169,7 @@ const Block = memo(function Block({ block }: { block: TurnBlock }) {
         </details>
       );
     case "activity":
-      return <Activity steps={block.steps} />;
+      return <Activity steps={block.steps} turnStatus={turnStatus} />;
     case "other":
       return <ItemView item={block.item} />;
   }
@@ -198,7 +214,7 @@ const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
   return (
     <article className="turn" data-testid="turn" data-status={turn.status}>
       {blocks.map((block) => (
-        <Block key={block.id} block={block} />
+        <Block key={block.id} block={block} turnStatus={turn.status} />
       ))}
       {turn.plan && turn.plan.length > 0 && (
         <div className="plan-card">
