@@ -226,7 +226,7 @@ where
                         let chats_for_method = services
                             .chats
                             .as_ref()
-                            .filter(|_| method.starts_with(CHATS_METHOD_PREFIX));
+                            .filter(|_| !is_local && method.starts_with(CHATS_METHOD_PREFIX));
                         let drafts_for_method = services
                             .issue_drafts
                             .as_ref()

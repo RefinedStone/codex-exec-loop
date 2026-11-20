@@ -33,8 +33,8 @@ import { KernelConnection } from "../kernel/kernelConnection";
 import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
-import { type ChatsLimitState, chatsListProblem, isRateLimited, staleNotice } from "./chatsProblem";
-import { type ChatSummary, type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
+import { ChatHistoryList } from "./chatHistoryList";
+import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
 /** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
@@ -126,15 +126,15 @@ const DOTS_LIST_METHOD = "akra/dots/list";
 /** 방의 실시간 상태를 보기 시작한다. 그 뒤 `akra/dots/live` 알림이 온다. */
 const DOTS_WATCH_METHOD = "akra/dots/watch";
 const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
-/** 원격 호스트의 ChatGPT 개인 대화 목록이다 (plan 25). chats 가 꺼진 Gateway 는 모르는 method 로 답한다. */
-const CHATS_LIST_METHOD = "akra/chats/list";
-
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
-export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira">>;
+export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira">> & {
+  readonly chatHistory?: true;
+};
 
 /** 원격 호스트 하나의 메시지 버스이다 (plan 25). `ready` 가 그 호스트의 접속을 연다. */
-export function remoteHostBridge(remote: RemoteHostBridge, host: string): SessionBridge {
+export function remoteHostBridge(remote: RemoteHostBridge, host: string, role: "main" | "dot-window"): SessionBridge {
   return {
+    ...(role === "main" ? { chatHistory: true } : {}),
     send: (text) => remote.send(host, text),
     onMessage: (listener) => remote.onMessage((from, text) => from === host && listener(text)),
     onConnectionState: (listener) => remote.onConnectionState((from, state) => from === host && listener(state)),
@@ -180,10 +180,7 @@ export class DesktopSession {
   private writerElsewhereThreadId: string | null = null;
   /** 접속마다 늘어난다. 이전 접속에서 늦게 끝난 전체 검사는 반영하지 않는다. */
   private listGeneration = 0;
-  /** ChatGPT 대화 목록을 읽는 중이다. 겹친 요청을 막는다. */
-  private chatsLoading = false;
-  /** 서비스가 목록 조회에 한 번 답했다 (목록 또는 제한). 그 뒤의 접속은 스스로 다시 읽지 않는다. */
-  private chatsAnswered = false;
+  private readonly chatHistory: ChatHistoryList | undefined;
   /**
    * 이 접속에서 받은 보관·삭제와 제목 변경이다. 목록 요청보다 늦게 온 알림이 더 새롭다. 그래서 늦게 끝난 목록
    * 결과(첫 목록, rollout 전체 검사)에 덮어 쓴다. 접속마다 비운다.
@@ -206,6 +203,7 @@ export class DesktopSession {
     private readonly readOnly = false,
   ) {
     this.client = new JsonRpcClient((text) => bridge.send(text));
+    this.chatHistory = readOnly && bridge.chatHistory ? new ChatHistoryList(this.client, store) : undefined;
     this.batcher = new FrameBatcher((batch) => this.store.updateTranscript((transcript) => applyNotifications(transcript, batch)), scheduler);
     this.client.setServerRequestHandler((method, params, id) => this.handleServerRequest(method, params, id));
     this.kernel = new KernelConnection(this.client, store);
@@ -542,8 +540,7 @@ export class DesktopSession {
         void this.addThreadsFromRolloutScan(generation);
       } else {
         void this.loadDots();
-        // 다시 접속할 때마다 읽지 않는다: 요청이 계정의 기록 조회 제한을 늘린다. 그 뒤로는 사용자가 읽는다.
-        if (!this.chatsAnswered) void this.reloadChats();
+        this.chatHistory?.connected();
       }
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
@@ -570,33 +567,8 @@ export class DesktopSession {
     }
   }
 
-  /**
-   * 원격 호스트의 ChatGPT 개인 대화 목록을 읽는다 (plan 25). 접속할 때 한 번 읽고, 사용자가 사이드바에서 다시 읽을 수
-   * 있다. chats 가 없는 Gateway 이면 목록을 비운다. 그 밖의 실패(조회 제한 등)는 이유를 남기고 이미 읽은 목록을
-   * 그대로 둔다: 제한이 풀리면 다시 읽을 수 있다. 읽는 중에는 또 보내지 않는다 (요청이 제한을 늘린다).
-   * 서비스가 답했으면(목록이든 제한이든) 다음 접속에서 스스로 다시 읽지 않는다.
-   */
   async reloadChats(): Promise<void> {
-    if (this.chatsLoading) return;
-    this.chatsLoading = true;
-    try {
-      const response = await this.client.request<{ chats: ChatSummary[] } & ChatsLimitState>(CHATS_LIST_METHOD);
-      this.chatsAnswered = true;
-      this.store.setChats(response.chats);
-      // 제한 중이면 Gateway 는 마지막으로 읽은 목록을 준다. 낡은 값이라는 것을 보인다.
-      const stale = staleNotice(response);
-      if (stale !== null) this.store.setChatsProblem(stale);
-    } catch (error) {
-      if (isRateLimited(error)) this.chatsAnswered = true;
-      const problem = chatsListProblem(error);
-      if (problem === null) {
-        this.store.setChats(null);
-      } else {
-        this.store.setChatsProblem(problem);
-      }
-    } finally {
-      this.chatsLoading = false;
-    }
+    if (this.connected) await this.chatHistory?.reload();
   }
 
   /**

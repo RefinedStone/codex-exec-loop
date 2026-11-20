@@ -242,7 +242,7 @@ export function closeChat(): void {
 }
 
 export const DOTS_CLOUD_ENABLE_WARNING =
-  "Dots 를 켭니다. OpenAI 의 비공개 백엔드에 공식 앱 신원으로 붙습니다. 약관과 계정 위험을 확인하세요. 계속합니까?";
+  "Dots 를 켭니다. OpenAI 의 비공개 백엔드에 공식 앱 신원으로 붙어 ChatGPT 대화 기록을 읽습니다. 기록 조회 한도는 공식 ChatGPT 앱과 공유합니다. 약관과 계정 위험을 확인하세요. 계속합니까?";
 
 /**
  * dots 클라우드 활성화 플래그와 사이드바의 원격 구역을 함께 켜고 끈다 (plan 25 §3.2). 켜는 명령은 이것 하나이다.

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type WebSocket, WebSocketServer } from "ws";
+import { FakeChatHistory, type FakeChatOptions } from "./chatHistory.ts";
 
 interface RecordedLine {
   direction: "client" | "gateway";
@@ -16,6 +17,7 @@ interface RecordedLine {
 interface JsonRpcEnvelope {
   id?: number | string | null;
   method?: string;
+  readonly params?: Record<string, unknown>;
   result?: unknown;
   error?: unknown;
 }
@@ -208,13 +210,7 @@ export async function startFakeGateway(
     dots?: unknown[];
     /** 원격 접속의 `akra/dots/messages` 답이다. 방 id 는 보지 않는다. */
     dotMessages?: unknown[];
-    /** 원격 접속의 `akra/chats/list` 답이다 (plan 25). 없으면 모르는 method 로 답한다. */
-    chats?: unknown[];
-    /** 원격 접속의 `akra/chats/read` 답이다. 대화 id 로 고른다. */
-    chatConversations?: Record<string, unknown>;
-    /** true 이면 `akra/chats/*` 가 조회 제한 오류로 답한다 (code -32010). `setChatsRateLimited` 로 바꾼다. */
-    chatsRateLimited?: boolean;
-  } = {},
+  } & FakeChatOptions = {},
 ): Promise<FakeGateway> {
   // 작업 컨텍스트의 바뀜 상태이다: `스레드 id\n문서 키`. 읽은 문서는 같은 버전으로 다시 바뀜이 되지 않는다.
   const changedDocuments = new Set<string>();
@@ -242,7 +238,7 @@ export async function startFakeGateway(
   /** `akra/dots/watch` 로 방을 보는 접속이다. 그 접속에만 `akra/dots/live` 를 민다. */
   const watchedRooms = new Map<WebSocket, string>();
   let dotLiveConnected = true;
-  let chatsRateLimited = options.chatsRateLimited === true;
+  const chats = new FakeChatHistory(options);
   const pushDotLive = (socket: WebSocket, working: boolean) => {
     const roomId = watchedRooms.get(socket);
     if (roomId === undefined || socket.readyState !== socket.OPEN) return;
@@ -320,25 +316,10 @@ export async function startFakeGateway(
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { dots: options.dots } }));
         return;
       }
-      if (remote && hasId && (options.chats || chatsRateLimited) && message.method.startsWith("akra/chats/")) {
-        if (chatsRateLimited) {
-          socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32010, message: "ChatGPT limited history reads; retry later", data: { retryAfterSeconds: 30 } } }));
-          return;
-        }
-        if (message.method === "akra/chats/list") {
-          socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { chats: options.chats ?? [] } }));
-          return;
-        }
-        if (message.method === "akra/chats/read") {
-          const id = String((message as { params?: { id?: unknown } }).params?.id ?? "");
-          const conversation = options.chatConversations?.[id];
-          if (conversation === undefined) {
-            socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "conversation not found" } }));
-          } else {
-            socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: conversation }));
-          }
-          return;
-        }
+      const chatReply = remote && hasId ? chats.reply(message.method, message.params) : undefined;
+      if (chatReply !== undefined) {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...chatReply }));
+        return;
       }
       if (remote && hasId && options.dotMessages && message.method === "akra/dots/messages") {
         // dot 은 가장 새 내 글까지 읽었다고 답한다.
@@ -446,7 +427,7 @@ export async function startFakeGateway(
     receivedMethods,
     remoteReceivedMethods,
     setChatsRateLimited(limited) {
-      chatsRateLimited = limited;
+      chats.rateLimited = limited;
     },
     setDotLiveState(connected, working) {
       dotLiveConnected = connected;

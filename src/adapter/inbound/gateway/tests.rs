@@ -23,6 +23,7 @@ use crate::application::port::outbound::gateway_upstream_port::{
 
 const DUPLEX_BUFFER_BYTES: usize = 64 * 1024;
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+mod chat_routes;
 // 이슈 게시, 복원, 외부 변경 흐름의 검증이다 (#2429). Vault 파일 저장소는 unix 에서만 동작한다.
 #[cfg(unix)]
 mod issue_flow;
@@ -1041,16 +1042,15 @@ impl crate::application::port::inbound::git_graph_port::GitGraphPort for FolderE
     }
 }
 
-async fn connect_with_git_graph(path: &str) -> WebSocketStream<DuplexStream> {
+async fn connect_with_services(
+    path: &str,
+    services: super::session::GatewayServices,
+) -> WebSocketStream<DuplexStream> {
     let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let hosts = GatewayHosts::new(
         EchoUpstream::new(true),
         vec![("cloud".to_string(), EchoUpstream::new(true) as _)],
     );
-    let services = super::session::GatewayServices {
-        git_graph: Some(Arc::new(FolderEchoGraph)),
-        ..Default::default()
-    };
     tokio::spawn(async move {
         let _ = run_session(
             gateway_side,
@@ -1074,12 +1074,16 @@ async fn connect_with_git_graph(path: &str) -> WebSocketStream<DuplexStream> {
 #[tokio::test]
 async fn the_local_host_answers_the_git_graph_and_a_remote_host_does_not() {
     // plan 27 G1. The graph reads repositories of this machine, so a remote host has no such method.
-    let mut local = connect_with_git_graph("/").await;
+    let services = super::session::GatewayServices {
+        git_graph: Some(Arc::new(FolderEchoGraph)),
+        ..Default::default()
+    };
+    let mut local = connect_with_services("/", services.clone()).await;
     let page = kernel_request(&mut local, "g", "akra/git/graph", json!({ "cwd": "/repo" })).await;
     assert_eq!(page["result"]["repository"], json!(true));
     assert_eq!(page["result"]["head"], json!("/repo"));
 
-    let mut remote = connect_with_git_graph("/host/cloud").await;
+    let mut remote = connect_with_services("/host/cloud", services).await;
     let refused = kernel_request(
         &mut remote,
         "g",
@@ -1152,12 +1156,9 @@ impl crate::application::port::outbound::issue_policy_source_port::IssuePolicySo
     }
 }
 
-async fn connect_with_issue_handoff(path: &str) -> WebSocketStream<DuplexStream> {
-    let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
-    let hosts = GatewayHosts::new(
-        EchoUpstream::new(true),
-        vec![("cloud".to_string(), EchoUpstream::new(true) as _)],
-    );
+#[tokio::test]
+async fn the_issue_handoff_answer_is_the_shared_copy_without_the_secret() {
+    // #2428. The remote text has a synthetic secret from an external edit. The answer must not have it.
     let services = super::session::GatewayServices {
         issue_handoff: Some(Arc::new(
             crate::application::service::issue_handoff::IssueHandoffService::new(
@@ -1167,31 +1168,8 @@ async fn connect_with_issue_handoff(path: &str) -> WebSocketStream<DuplexStream>
         )),
         ..Default::default()
     };
-    tokio::spawn(async move {
-        let _ = run_session(
-            gateway_side,
-            hosts,
-            Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
-            services,
-            None,
-        )
-        .await;
-    });
-    let (websocket, _) = tokio_tungstenite::client_async_with_config(
-        format!("ws://localhost{path}"),
-        client_side,
-        Some(websocket_config()),
-    )
-    .await
-    .expect("client handshake through the gateway session should succeed");
-    websocket
-}
-
-#[tokio::test]
-async fn the_issue_handoff_answer_is_the_shared_copy_without_the_secret() {
-    // #2428. The remote text has a synthetic secret from an external edit. The answer must not have it.
     let params = json!({ "owner": "sample", "repository": "widgets", "number": 42 });
-    let mut local = connect_with_issue_handoff("/").await;
+    let mut local = connect_with_services("/", services.clone()).await;
     let answer = kernel_request(&mut local, "i", "akra/issue/handoffCopy", params.clone()).await;
     assert_eq!(
         answer["result"],
@@ -1202,7 +1180,7 @@ async fn the_issue_handoff_answer_is_the_shared_copy_without_the_secret() {
     let invalid = kernel_request(&mut local, "j", "akra/issue/handoffCopy", json!({})).await;
     assert_eq!(invalid["error"]["code"], json!(-32602));
 
-    let mut remote = connect_with_issue_handoff("/host/cloud").await;
+    let mut remote = connect_with_services("/host/cloud", services).await;
     let refused = kernel_request(&mut remote, "i", "akra/issue/handoffCopy", params).await;
     assert_eq!(refused["error"]["code"], json!(-32601));
 }

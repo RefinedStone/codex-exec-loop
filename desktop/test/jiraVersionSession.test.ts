@@ -200,7 +200,7 @@ describe("Desktop Jira reverse version session", () => {
     const bridge = remoteHostBridge({
       open: () => undefined, close: () => undefined, send: () => undefined,
       onMessage: () => () => undefined, onConnectionState: () => () => undefined,
-    }, "remote");
+    }, "remote", "main");
     // Then remote sessions cannot obtain the local Jira bridge.
     expect(bridge.jira).toBeUndefined();
   });

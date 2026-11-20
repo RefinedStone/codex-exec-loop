@@ -343,7 +343,7 @@ export function App() {
     const sessions = remoteSessions.current;
     const hosts = remoteHosts.split(",");
     for (const host of hosts) {
-      const created = new DesktopSession(remoteHostBridge(window.akra.remote, host), desktopSessionStore(remoteHostStore(host)), CLIENT_VERSION, undefined, true);
+      const created = new DesktopSession(remoteHostBridge(window.akra.remote, host, "main"), desktopSessionStore(remoteHostStore(host)), CLIENT_VERSION, undefined, true);
       created.start();
       sessions.set(host, created);
     }
@@ -647,7 +647,7 @@ export function App() {
             </RightPanel>
           )}
           {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} />}
-          {chatDock !== null && chatDockVisible && <ChatDock host={chatDock.host} chatId={chatDock.chatId} request={chatGatewayRequest} />}
+          {chatDock !== null && chatDockVisible && <ChatDock key={JSON.stringify([chatDock.host, chatDock.chatId])} host={chatDock.host} chatId={chatDock.chatId} request={chatGatewayRequest} />}
         </div>
       </div>
       {overlay === "palette" && <CommandPalette onOpenThread={openThread} />}

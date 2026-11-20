@@ -174,11 +174,12 @@ dot 은 사용자의 클라우드 에이전트이고, 이것은 사용자의 평
 - 제한(2026-11-20 실계정 확인): `/conversations` 와 `/conversation/{id}` 는 계정 단위 기록 조회 제한을 건다
   (HTTP 429, 헤더 `x-oai-history-detail-rate-limited`, `Retry-After`). 토큰·헤더를 공식 앱과 똑같이 맞춰도
   사라지지 않는다. 공식 앱(ChatGPT Windows/macOS, Codex)이 켜져 있으면 이 제한을 함께 쓴다. 그래서 어댑터는
-  429 를 `ChatsError::RateLimited` 로 재시도 시각과 함께 올리고(Gateway JSON-RPC 코드 `-32010`, `data.retryAfterSeconds`),
-  한 번이라도 성공했으면 마지막 성공을 그대로 돌려준다(공식 앱이 캐시를 보이는 것과 같다). 캐시는 로그인 계정
+  `Retry-After` 대기 시간 동안 서비스로 요청을 보내지 않는다. 요청한 값이 캐시에 없으면 Gateway 는 오류 코드
+  `-32029` 와 가능한 경우 `data.retryAfterSeconds` 를 돌려준다. 캐시에 있으면 마지막 성공 값에 `limited: true` 와
+  가능한 경우 `retryAfterSeconds` 를 붙인다. Desktop 은 이 값을 마지막으로 읽은 내용이라고 표시한다. 캐시는 로그인 계정
   하나의 것이다: 계정이 바뀌면 비운다. 제한을 피하려 신원을 바꾸지 않는다.
 - 목록을 읽지 못하면(첫 조회의 제한 포함) Desktop 은 "ChatGPT" 구역에 이유를 보이고, 사용자가 머리줄의 단추로
-  다시 읽는다. 자동으로 다시 읽지 않는다: 요청이 제한을 늘린다.
+  다시 읽는다. 본 창의 원격 세션만 처음에 목록을 읽는다. 재접속과 dot 창 열기는 목록을 다시 읽지 않는다.
 - shortcut: 목록은 첫 페이지만(28개), 캐시는 메모리에만. 더 필요해지면 `offset` 으로 페이지를 넘긴다.
 
 ## 7. 위험
