@@ -503,6 +503,9 @@ fn build_issue_drafts()
     use crate::application::service::issue_template::IssueTemplateService;
 
     let akra_home = crate::configuration::akra_home_dir()?;
+    // Vault 저장소는 이미 있는 사용자 전용 폴더만 쓴다. 만들지 못하면 저장이 실패하고 게시는 보류된다.
+    let vault_root = akra_home.join("evidence-vault");
+    let _ = crate::private_directory::ensure_private_directory(&vault_root);
     let snapshot = Arc::new(GithubIssueSnapshotAdapter::new(akra_home.clone()));
     let journal = IssuePublishIntentJournalAdapter::new(|workspace_dir| {
         let location =
@@ -513,10 +516,7 @@ fn build_issue_drafts()
         snapshot.clone(),
         Arc::new(GithubIssueUpdateAdapter::new(akra_home.clone())),
         Arc::new(journal),
-        // 이 서비스는 Vault 키를 주지 않는다. 그래서 게시 경로는 이 저장소를 부르지 않는다 (#2425 가 잇는다).
-        Arc::new(FilesystemEvidenceVaultStoreAdapter::new(
-            akra_home.join("evidence-vault"),
-        )),
+        Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root)),
     );
     Ok(Arc::new(IssueDraftService::new(
         IssuePolicyService::new(Arc::new(FilesystemIssuePolicySourceAdapter::new())),
@@ -525,6 +525,12 @@ fn build_issue_drafts()
         publisher,
         Arc::new(
             crate::adapter::outbound::issue_code_validator::SandboxedIssueCodeValidatorRunnerAdapter::new(),
+        ),
+        // 복원 가능 구간을 암호화할 키는 OS 키 저장소에서 온다 (#2422). 키 저장소가 없으면 게시는 보류된다.
+        Arc::new(
+            crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService::new(
+                Arc::new(crate::adapter::outbound::vault_key_store::OsVaultKeyStoreAdapter::new()),
+            ),
         ),
     )))
 }
