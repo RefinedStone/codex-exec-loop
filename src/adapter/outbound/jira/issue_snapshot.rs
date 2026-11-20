@@ -123,6 +123,7 @@ impl IssueFieldRequirementPort for JiraIssueSnapshotAdapter {
         request: IssueFieldRequirementRequest,
     ) -> Result<IssueFieldRequirementResponse> {
         self.ensure_this_site(&request.issue)?;
+        self.known_issue(&request.issue)?;
         let meta: EditMeta = self.get(&format!(
             "/rest/api/3/issue/{}/editmeta",
             request.issue.issue_id
@@ -590,7 +591,8 @@ mod tests {
 
     #[test]
     fn required_fields_become_validator_requirements_and_unsupported_ones_are_marked() {
-        let (adapter, calls) = adapter_with(vec![tenant(CLOUD_ID), Ok(EDIT_META.to_string())]);
+        let (adapter, calls) =
+            adapter_with(vec![tenant(CLOUD_ID), issue(), Ok(EDIT_META.to_string())]);
 
         let response = adapter
             .read_requirements(IssueFieldRequirementRequest { issue: reference() })
@@ -628,6 +630,27 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(calls.lock().unwrap()[1], "/rest/api/3/issue/10002/editmeta");
+        assert_eq!(calls.lock().unwrap()[1], ISSUE_PATH);
+        assert_eq!(calls.lock().unwrap()[2], "/rest/api/3/issue/10002/editmeta");
+    }
+    #[test]
+    fn requirements_reject_a_moved_issue_before_reading_edit_metadata() {
+        for (field, replacement) in [("project", "10009"), ("issue", "10003")] {
+            let mut moved: Value = serde_json::from_str(ISSUE).unwrap();
+            if field == "project" {
+                moved["fields"]["project"]["id"] = Value::String(replacement.to_string());
+            } else {
+                moved["id"] = Value::String(replacement.to_string());
+            }
+            let (adapter, calls) = adapter_with(vec![tenant(CLOUD_ID), Ok(moved.to_string())]);
+            let error = adapter
+                .read_requirements(IssueFieldRequirementRequest { issue: reference() })
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "the target moved to another project or issue"
+            );
+            assert_eq!(*calls.lock().unwrap(), ["/_edge/tenant_info", ISSUE_PATH]);
+        }
     }
 }
