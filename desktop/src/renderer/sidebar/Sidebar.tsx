@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
-import { closeDot, MOD_KEY, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
+import { closeChat, closeDot, MOD_KEY, showChat, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
 import { DotAvatar } from "../views/DotChat";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
@@ -205,6 +205,45 @@ function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: 
 }
 
 /**
+ * ChatGPT 구역이다 (plan 25). 사용자의 ChatGPT 개인 대화를 최신 것부터 보인다. 누르면 읽기 전용 대화가 옆 칸에
+ * 열리고, 다시 누르면 닫힌다. dot 과 같은 옆 칸을 쓴다. 대화가 없으면(조회 제한 포함) 구역을 숨긴다.
+ */
+function ChatsSection({ host }: { host: string }) {
+  const { useStore, phase } = useRemoteHost(host);
+  const [open, setOpen] = useState(true);
+  const chats = useStore((state) => state.chats);
+  const shownChatId = useUiStore((state) => (state.chatDock?.host === host ? state.chatDock.chatId : null));
+  const toggleChat = (chatId: string) => (shownChatId === chatId ? closeChat() : showChat(host, chatId));
+  if (chats.length === 0) return null;
+  return (
+    <section className="project" data-testid="chats-section">
+      <header className="project-header" title="내 ChatGPT 대화 (읽기 전용)">
+        <button type="button" className="project-name" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
+          <Icon name="message" size={14} />
+          <span>ChatGPT</span>
+        </button>
+        {phase !== "connected" && <span className="connection">{PHASE_LABEL[phase]}</span>}
+      </header>
+      {open && (
+        <ul data-testid="remote-chats">
+          {chats.map((chat) => (
+            <li className="thread-row" key={chat.id}>
+              <button type="button" className={shownChatId === chat.id ? "thread selected" : "thread"} title={`${chat.title} 을(를) 옆에 열거나 닫습니다. (읽기 전용)`} onClick={() => toggleChat(chat.id)} aria-pressed={shownChatId === chat.id} data-testid="remote-chat-entry">
+                <StatusMark mark="idle" />
+                <span className="thread-text">
+                  <span className="thread-title">{chat.title}</span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
  * 원격 호스트(plan 25)의 클라우드 스레드 구역이다. 사용자가 만든 클라우드 스레드를 최근 것부터 보인다. 읽기 전용이다.
  * 원격의 작업 폴더는 이 컴퓨터에 없으므로 폴더로 묶지 않는다.
  */
@@ -278,6 +317,7 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(thr
       <div className="sidebar-scroll">
         {/* 원격 구역은 맨 위에 둔다. 로컬 스레드가 많으면 아래에 둔 구역은 스크롤해야 보여서 없는 것처럼 보인다. */}
         {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <DotsSection key={`dots:${host}`} host={host} onOpenThread={onOpenRemoteThread} />)}
+        {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <ChatsSection key={`chats:${host}`} host={host} />)}
         {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <RemoteSection key={host} host={host} onOpenThread={onOpenRemoteThread} />)}
         {folders.length === 0 && <p className="empty-row">아직 스레드가 없습니다. 새 스레드에서 작업 폴더를 고르세요.</p>}
         {folders.map((folder) => (

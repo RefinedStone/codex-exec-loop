@@ -14,6 +14,8 @@ pub mod planning_reset_route_port;
 pub mod repository_state_port;
 // gateway upstream port는 akra-gateway 세션마다 codex app-server 와 이어진 바이트 스트림을 연다.
 pub mod dots_port;
+// chats port 는 사용자의 ChatGPT 개인 대화를 읽는 경계이다 (D-19, plan 25). dots 와 같은 토큰, 다른 경로이다.
+pub mod chats_port;
 pub mod gateway_upstream_port;
 // git history port 는 저장소의 ref 와 커밋 이력을 읽는 경계다 (plan 27).
 pub mod git_history_port;

@@ -21,6 +21,17 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     { id: "m1", createdAt: "2026-11-14T01:00:00Z", author: "Me", fromDot: false, text: "status?" },
     { id: "m2", createdAt: "2026-11-14T01:00:05Z", author: "Mika", fromDot: true, text: "All **green**." },
   ],
+  chats: [{ id: "chat-1", title: "내 ChatGPT 대화" }],
+  chatConversations: {
+    "chat-1": {
+      id: "chat-1",
+      title: "내 ChatGPT 대화",
+      messages: [
+        { id: "c1", role: "user", text: "날씨 알려줘" },
+        { id: "c2", role: "assistant", text: "오늘은 **맑음**." },
+      ],
+    },
+  },
 });
 // 켜고 끄는 설정을 사용자의 실제 앱 데이터 폴더에 쓰지 않는다.
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-remote-"));
@@ -195,6 +206,18 @@ try {
   console.log(await page.getByTestId("remote-banner").innerText());
   console.log((await page.getByTestId("remote-host").innerText()).split("\n").slice(0, 4).join(" | "));
   console.log("----------------------------");
+
+  // ChatGPT 개인 대화 구역 (plan 25). dot 과 다른 구역이고, 누르면 읽기 전용 대화가 옆 칸에 열린다.
+  check("the sidebar lists the ChatGPT conversations", (await page.getByTestId("remote-chat-entry").filter({ hasText: "내 ChatGPT 대화" }).count()) === 1);
+  check("the ChatGPT list is read over the remote connection", gateway.remoteReceivedMethods.includes("akra/chats/list") && !gateway.receivedMethods.includes("akra/chats/list"));
+  await page.getByTestId("remote-chat-entry").first().click();
+  await page.getByTestId("chat-message").nth(1).waitFor({ timeout: 10_000 });
+  check("the ChatGPT chat opens read-only beside the view", (await page.getByTestId("chat-dock").count()) === 1 && (await page.getByTestId("chat-dock").getByTestId("composer-input").count()) === 0);
+  check("the ChatGPT chat shows the conversation messages", (await page.getByTestId("chat-message").count()) === 2 && (await page.getByTestId("chat-messages").innerText()).includes("맑음"));
+  check("the conversation is read over the remote connection", gateway.remoteReceivedMethods.includes("akra/chats/read") && !gateway.receivedMethods.includes("akra/chats/read"));
+  await page.getByTestId("chat-close").click();
+  await page.getByTestId("chat-dock").waitFor({ state: "detached", timeout: 10_000 });
+  check("closing the ChatGPT chat leaves the list", (await page.getByTestId("remote-chat-entry").count()) === 1);
 
   await toggleRemoteAgents();
   await page.getByTestId("remote-host").waitFor({ state: "detached", timeout: 10_000 });

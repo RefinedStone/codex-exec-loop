@@ -16,6 +16,7 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
+use super::chats::{CHATS_METHOD_PREFIX, spawn_request as spawn_chats_request};
 use super::context::{
     CONTEXT_METHOD_PREFIX, remote_host_response as remote_context_response,
     spawn_request as spawn_context_request,
@@ -37,6 +38,7 @@ use crate::application::port::inbound::git_operation_port::GitOperationPort;
 use crate::application::port::inbound::issue_draft_port::IssueDraftPort;
 use crate::application::port::inbound::issue_handoff_port::IssueHandoffPort;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
+use crate::application::port::outbound::chats_port::ChatsPort;
 use crate::application::port::outbound::dots_port::DotsPort;
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamStream,
@@ -76,6 +78,8 @@ pub(super) struct GatewayServices {
     pub(super) issue_drafts: Option<Arc<dyn IssueDraftPort>>,
     /// dots 가 켜졌을 때만 있다 (D-19). 없으면 `akra/dots/*` 는 모르는 method 이다.
     pub(super) dots: Option<Arc<dyn DotsPort>>,
+    /// ChatGPT 개인 대화 조회이다. dots 와 같은 조건으로 켜진다 (D-19, plan 25). 없으면 `akra/chats/*` 는 모르는 method 이다.
+    pub(super) chats: Option<Arc<dyn ChatsPort>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +223,10 @@ where
                             .dots
                             .as_ref()
                             .filter(|_| method.starts_with(DOTS_METHOD_PREFIX));
+                        let chats_for_method = services
+                            .chats
+                            .as_ref()
+                            .filter(|_| method.starts_with(CHATS_METHOD_PREFIX));
                         let drafts_for_method = services
                             .issue_drafts
                             .as_ref()
@@ -253,6 +261,15 @@ where
                         } else if let Some(dots) = dots_for_method {
                             spawn_dots_request(
                                 dots.clone(),
+                                id,
+                                method,
+                                text.as_str().to_string(),
+                                outbox.clone(),
+                            );
+                            None
+                        } else if let Some(chats) = chats_for_method {
+                            spawn_chats_request(
+                                chats.clone(),
                                 id,
                                 method,
                                 text.as_str().to_string(),

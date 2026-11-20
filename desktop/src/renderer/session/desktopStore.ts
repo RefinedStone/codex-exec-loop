@@ -87,6 +87,26 @@ export interface DotMessage {
   text: string;
 }
 
+/** ChatGPT 개인 대화 하나이다 (plan 25). Gateway 의 `akra/chats/list` 가 준다. */
+export interface ChatSummary {
+  id: string;
+  title: string;
+}
+
+/** 대화 한 건의 메시지 하나이다. Gateway 의 `akra/chats/read` 가 준다. 역할은 `user` 또는 `assistant` 이다. */
+export interface ChatMessage {
+  id: string;
+  role: string;
+  text: string;
+}
+
+/** 대화 한 건의 전체이다. 메시지는 오래된 것부터이다. */
+export interface ChatConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+}
+
 /** `local` 이 아닌 호스트 id 를 쉼표로 이은 값이다. 문자열이므로 목록을 다시 읽어도 값이 같으면 화면이 다시 그리지 않는다. */
 export function remoteHostKey(state: Pick<DesktopState, "gateway">): string {
   return (state.gateway?.hosts ?? [])
@@ -211,6 +231,9 @@ export interface DesktopState {
   applyDotLive(state: DotLiveState): void;
   /** 사용자가 그 방의 대화를 봤다. */
   markDotRoomRead(roomId: string): void;
+  /** 원격 호스트의 ChatGPT 개인 대화 목록이다 (plan 25). chats 가 꺼졌거나 없는 호스트에서는 비어 있다. */
+  chats: ChatSummary[];
+  setChats(chats: ChatSummary[]): void;
 }
 
 /** 열린 스레드의 작업 폴더이다. 사이드바 목록에서 찾으므로 기록을 다시 읽는 동안에도 바뀌지 않는다. */
@@ -294,6 +317,8 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   dotUnreadRooms: [],
   applyDotLive: (next) => set((state) => reduceDotLive(state, next)),
   markDotRoomRead: (roomId) => set((state) => (state.dotUnreadRooms.includes(roomId) ? { dotUnreadRooms: state.dotUnreadRooms.filter((id) => id !== roomId) } : {})),
+  chats: [],
+  setChats: (chats) => set({ chats }),
 }));
 
 /** `local` 호스트의 상태이다. */
@@ -341,6 +366,7 @@ export type SessionStore = Pick<
   | "setKernel"
   | "setDots"
   | "applyDotLive"
+  | "setChats"
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
@@ -367,6 +393,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     setKernel: state.setKernel,
     setDots: state.setDots,
     applyDotLive: state.applyDotLive,
+    setChats: state.setChats,
     getKernel: () => store.getState().kernel,
     getOpenThreadId: () => store.getState().openThreadId,
     getTranscript: () => store.getState().transcript,

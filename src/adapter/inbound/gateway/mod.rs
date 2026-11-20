@@ -5,6 +5,7 @@
 //! 순수 중계는 application use case 가 아니므로 inbound port 없이 composition 이 조립한 outbound port 를
 //! 쓴다. Telegram 입구가 `TelegramBotPort` 를 쓰는 것과 같은 구조이다.
 
+mod chats;
 mod context;
 mod dots;
 mod git;
@@ -95,6 +96,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         git_operations,
         issue_handoff,
         dots,
+        chats,
         issue_drafts,
     } = production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
@@ -125,6 +127,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             git_operations: Some(git_operations),
             issue_handoff: Some(issue_handoff),
             dots,
+            chats,
             issue_drafts: Some(issue_drafts),
         },
         recorder,

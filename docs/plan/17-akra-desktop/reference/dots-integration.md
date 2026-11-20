@@ -160,9 +160,30 @@
   is_dot_managed, attached_at}], cursor}` 를, `GET /tbo/{id}/root-thread` 가 `{root_thread_id}` 를 준다.
   `codex-cloud-backend` 호스트의 `/tbo` 는 404 이다.
 
+### ChatGPT 개인 대화 조회 (dots 아님, 같은 토큰·백엔드, D-19)
+
+dot 은 사용자의 클라우드 에이전트이고, 이것은 사용자의 평범한 ChatGPT 대화이다. 공식 Codex 데스크톱 앱이 ChatGPT
+기록을 보여 주는 것과 같은 경로이다. dots 와 같은 조건(클라우드 플래그)으로 켜지고 같은 `auth.json` 토큰을 쓴다.
+읽기만 한다. 보내기는 만들지 않는다(보내기는 sentinel 토큰·Turnstile 이 필요한 봇 차단이 있다; 우회하지 않는다).
+
+- 됨: 목록과 한 건 읽기. Gateway `akra/chats/list` 가 `GET /backend-api/conversations?offset=0&limit=28&...` 를,
+  `akra/chats/read {id}` 가 `GET /backend-api/conversation/{id}` 를 읽는다. 어댑터는 `cloud_chats.rs` 이다. 헤더는
+  공식 앱과 같다(이 경로에는 `X-OpenAI-Product-Sku` 를 붙이지 않는다). 대화는 `mapping` 을 `current_node` 에서
+  `parent` 로 올라간 뒤 뒤집어 옮긴다; `user`/`assistant` 의 글 메시지만 남긴다. Desktop 은 원격 구역에 "ChatGPT"
+  목록을 보이고, 누르면 읽기 전용 대화를 옆 칸에 연다.
+- 제한(2026-11-20 실계정 확인): `/conversations` 와 `/conversation/{id}` 는 계정 단위 기록 조회 제한을 건다
+  (HTTP 429, 헤더 `x-oai-history-detail-rate-limited`, `Retry-After`). 토큰·헤더를 공식 앱과 똑같이 맞춰도
+  사라지지 않는다. 공식 앱(ChatGPT Windows/macOS, Codex)이 켜져 있으면 이 제한을 함께 쓴다. 그래서 어댑터는
+  429 를 `ChatsError::RateLimited` 로 재시도 시각과 함께 올리고(Gateway JSON-RPC 코드 `-32010`, `data.retryAfterSeconds`),
+  한 번이라도 성공했으면 마지막 성공을 그대로 돌려준다(공식 앱이 캐시를 보이는 것과 같다). 제한을 피하려 신원을
+  바꾸지 않는다.
+- shortcut: 목록은 첫 페이지만(28개), 캐시는 메모리에만. 더 필요해지면 `offset` 으로 페이지를 넘긴다.
+
 ## 7. 위험
 
 - 약관·계정 제재: 공식 앱 신원과 비공개 API 를 흉내 낸다. D0 통과로 줄지 않았고, 증명 생략이 신호가 될 수 있다.
+  ChatGPT 개인 대화 조회는 범위를 Codex 에서 ChatGPT 소비자 제품으로 넓힌다. 제한 요청이 켜 둔 공식 앱의 기록
+  조회를 함께 늦출 수 있다.
 - 안정성: 서버가 증명·신원 검사를 강화하면 바로 막힌다.
 - 공식 허용 경로: 공개 codex CLI 로 ChatGPT 로그인 후 로컬 app-server. dots 와 같은 방향(상주 루프가 대화를
   관찰하고 먼저 말 걸기)은 로컬에서 [plan 20](../../20-akra-observe-and-offer.md)으로도 만든다.
