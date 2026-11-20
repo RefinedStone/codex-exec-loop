@@ -1013,6 +1013,10 @@ strategy in the production TUI.
   constructor of `VaultUserConfirmation`: it gives grants bound to one issue and one viewing
   session. See [evidence-vault-unlock.md](./evidence-vault-unlock.md) for failure states, key-loss
   recovery, and protection limits.
+- `EvidenceVaultBackupService` exports bound records and the device key wrapped under a user-held
+  recovery key (`EvidenceVaultBackupPort`, `FilesystemEvidenceVaultBackupAdapter`), and imports
+  them only with that key, a user approval, and an approved local project. See
+  [evidence-vault-backup.md](./evidence-vault-backup.md) for the archive format and limits.
 - `EvidenceVaultRestoreService` (`application/service/evidence_vault_restore`) implements the
   restore contract. A restore request carries the confirmation and the record key from a live
   unlock grant. The service reads the latest published copy through `issue_snapshot_port` before
