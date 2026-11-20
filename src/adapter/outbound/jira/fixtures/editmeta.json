@@ -1,0 +1,47 @@
+{
+  "fields": {
+    "summary": { "required": true, "name": "Summary", "schema": { "type": "string", "system": "summary" } },
+    "issuetype": { "required": true, "name": "Issue Type", "schema": { "type": "issuetype", "system": "issuetype" } },
+    "description": { "required": true, "name": "Description", "schema": { "type": "string", "system": "description" } },
+    "priority": {
+      "required": true,
+      "name": "Priority",
+      "schema": { "type": "priority", "system": "priority" },
+      "allowedValues": [{ "id": "1", "name": "High" }, { "id": "2", "name": "Low" }]
+    },
+    "customfield_10010": {
+      "required": true,
+      "name": "Customer impact",
+      "schema": { "type": "option", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select", "customId": 10010 },
+      "allowedValues": [{ "id": "20", "value": "Major" }, { "id": "21", "value": "Minor" }]
+    },
+    "customfield_10011": {
+      "required": true,
+      "name": "Build",
+      "schema": { "type": "string", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textfield", "customId": 10011 }
+    },
+    "customfield_10012": {
+      "required": true,
+      "name": "Reproduction",
+      "schema": { "type": "string", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textarea", "customId": 10012 }
+    },
+    "customfield_10013": {
+      "required": true,
+      "name": "Due",
+      "schema": { "type": "date", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:datepicker", "customId": 10013 }
+    },
+    "customfield_10014": {
+      "required": true,
+      "name": "Empty choice",
+      "schema": { "type": "option", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select", "customId": 10014 },
+      "allowedValues": []
+    },
+    "components": {
+      "required": true,
+      "name": "Components",
+      "schema": { "type": "array", "items": "component", "system": "components" },
+      "allowedValues": [{ "id": "30", "name": "Core" }]
+    },
+    "labels": { "required": false, "name": "Labels", "schema": { "type": "array", "items": "string", "system": "labels" } }
+  }
+}
