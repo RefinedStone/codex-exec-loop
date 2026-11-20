@@ -373,21 +373,26 @@ impl McpHubBackendPort for CodexMcpHubBackend {
         self.invalidate_tool_catalogs()?;
         let result = (|| {
             let mut session = self.open_session()?;
-            let response = session.request(
+            let (response, completed) = session.request_with_notification(
                 "mcpServer/oauth/login",
                 json!({ "name": server }),
                 REQUEST_TIMEOUT,
+                "mcpServer/oauthLogin/completed",
+                |params| params.get("name").and_then(Value::as_str) == Some(server),
             )?;
             let url = response
                 .get("authorizationUrl")
                 .and_then(Value::as_str)
                 .context("mcpServer/oauth/login returned no authorization URL")?;
             on_authorization_url(url);
-            let completed = session.wait_for_notification(
-                "mcpServer/oauthLogin/completed",
-                LOGIN_TIMEOUT,
-                |params| params.get("name").and_then(Value::as_str) == Some(server),
-            )?;
+            let completed = match completed {
+                Some(completed) => completed,
+                None => session.wait_for_notification(
+                    "mcpServer/oauthLogin/completed",
+                    LOGIN_TIMEOUT,
+                    |params| params.get("name").and_then(Value::as_str) == Some(server),
+                )?,
+            };
             drop(session);
             if completed.get("success").and_then(Value::as_bool) == Some(true) {
                 return Ok(());
