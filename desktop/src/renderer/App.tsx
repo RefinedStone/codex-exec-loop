@@ -32,6 +32,8 @@ import { GitHubPanel } from "./work/GitHubPanel";
 import { GitHubProjectPanel } from "./work/GitHubProjectPanel";
 import { type IssueDraftTarget, issueDraftTarget } from "./work/issueDraft";
 import { IssueDraftPanel } from "./work/IssueDraftPanel";
+import { IssueCreationPanel } from "./work/IssueCreationPanel";
+import { type IssueCreationTarget, issueCreationTarget } from "./work/issueCreation";
 import { findFolderForRepository, readIssueHandoffPrompt } from "./work/githubProjects";
 import { JiraPanel } from "./work/JiraPanel";
 import { LinearPanel } from "./work/LinearPanel";
@@ -255,6 +257,17 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
   const currentRepository = useGitHubRepository(useDesktopStore(openThreadCwd));
   // 고치는 중인 이슈이다 (#2426). 그 글은 이 패널에만 있고 대화 입력창으로 가지 않는다.
   const [editing, setEditing] = useState<IssueDraftTarget | null>(null);
+  const [creating, setCreating] = useState<IssueCreationTarget | null>(null);
+  const createIssue = async (repository: string) => {
+    const state = useDesktopStore.getState();
+    const openCwd = openThreadCwd(state);
+    const folders = [...(openCwd ? [openCwd] : []), ...state.folders.map((folder) => folder.cwd)];
+    const cwd = await findFolderForRepository(repository, folders, (folder) => window.akra.github.repository(folder));
+    const target = cwd ? issueCreationTarget(cwd, repository) : null;
+    if (!target) throw new Error("이 저장소의 작업 폴더가 없습니다. 그 저장소의 폴더를 사이드바에 추가하세요.");
+    setCreating(target);
+  };
+  if (creating) return <IssueCreationPanel request={request} target={creating} onClose={() => setCreating(null)} openExternal={(url) => window.akra.github.openExternal(url)} />;
   if (editing) return <IssueDraftPanel request={request} target={editing} onClose={() => setEditing(null)} />;
   return (
     <div className="work-tab">
@@ -265,11 +278,14 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
           </button>
         ))}
       </div>
-      {source === "GitHub" && <GitHubPanel github={window.akra.github} onHandOff={async (pull) => onHandOff(await window.akra.github.reviewPrompt(pull.url))} />}
+      {source === "GitHub" && <GitHubPanel github={window.akra.github} currentRepository={currentRepository}
+        onCreate={async () => { if (currentRepository) await createIssue(currentRepository); }}
+        onHandOff={async (pull) => onHandOff(await window.akra.github.reviewPrompt(pull.url))} />}
       {source === "Projects" && (
         <GitHubProjectPanel
           github={window.akra.github}
           currentRepository={currentRepository}
+          onCreate={createIssue}
           onHandOff={async (item) => {
             if (item.url && item.repository && item.number !== null) await handOffIssue(request, item.url, item.repository, item.number);
           }}

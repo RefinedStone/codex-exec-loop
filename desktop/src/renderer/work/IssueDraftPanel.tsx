@@ -6,8 +6,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import "./IssueDraftPanel.css";
+import { IssueDraftRequirements as Requirements, IssueDraftPreviewView as Preview, IssueDraftTextFields } from "./IssueDraftFields";
 import {
-  addSpan,
   intentStatus,
   ISSUE_METHOD,
   type IssueDraftApproval,
@@ -19,26 +19,15 @@ import {
   type IssueDraftSpan,
   type IssueDraftTarget,
   type IssuePublishStatus,
-  type IssueSpanAction,
-  type IssueSpanClass,
   publishStatus,
   sameApproval,
   shiftSpans,
-  validationErrorText,
 } from "./issueDraft";
 import type { GatewayRequest } from "./notionHub";
 
 /** 입력이 멈춘 뒤 미리보기를 다시 만들 때까지의 시간이다. */
 const PREVIEW_DELAY_MS = 300;
 
-const CLASS_LABEL: Record<IssueSpanClass, string> = { secret: "비밀값", name: "이름", path: "경로", log: "로그" };
-const ACTION_LABEL: Record<IssueSpanAction, string> = { remove: "제거", restorable_mask: "표식으로 가림", user_confirm: "사용자가 정함" };
-const FIELD_LABEL: Record<IssueDraftField, string> = { title: "제목", body: "본문" };
-const TEMPLATE_PROBLEM: Record<string, string> = {
-  missing: "정책이 가리킨 템플릿 파일이 없습니다.",
-  unreadable: "템플릿 파일을 읽지 못했습니다.",
-  invalid: "템플릿 파일을 해석하지 못했습니다.",
-};
 const REFUSED_REASON: Record<string, string> = {
   target: "승인한 이슈가 아닙니다.",
   shared_copy: "승인한 뒤에 제목이나 본문이 바뀌었습니다.",
@@ -52,88 +41,11 @@ function message(error: unknown): string {
 
 type OpenState = { phase: "loading" } | { phase: "failed"; message: string } | { phase: "loaded"; opened: IssueDraftOpened };
 
-function Requirements({ opened }: { opened: IssueDraftOpened }) {
-  const { template, requiredSections } = opened;
-  const problem = TEMPLATE_PROBLEM[template.status];
-  return (
-    <section className="work-section" data-testid="issue-draft-requirements">
-      <h3>요구 사항</h3>
-      {problem && (
-        <div className="error" data-testid="issue-draft-template-problem">
-          {problem} 검증할 수 없어서 게시를 막습니다. {template.path} {template.reason}
-        </div>
-      )}
-      {template.status === "not_configured" && requiredSections.length === 0 && <p className="muted">이 프로젝트는 템플릿과 필수 섹션이 없습니다. 제목만 검사합니다.</p>}
-      <ul>
-        {template.requiredInputs.map((input, index) => (
-          <li key={`input-${index}`}>
-            템플릿 필드 "{input.label}"{input.options.length > 0 ? ` (${input.options.join(", ")})` : ""}
-          </li>
-        ))}
-        {requiredSections.map((title) => (
-          <li key={`section-${title}`}>필수 섹션 "{title}"</li>
-        ))}
-        {template.unsupportedInputs.map((input, index) => (
-          <li key={`unsupported-${index}`} className="issue-draft-warning">
-            직접 확인: "{input.label}" ({input.reason})
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function Preview({ preview }: { preview: IssueDraftPreview | null }) {
-  if (!preview) return <p className="muted work-section">미리보기를 만드는 중…</p>;
-  if (preview.status === "needs_confirmation") {
-    return (
-      <p className="error work-section" data-testid="issue-draft-needs-decision">
-        처리를 정하지 않은 민감 구간이 있습니다. 아래 구간에서 "제거" 또는 "표식으로 가림"을 고르세요.
-      </p>
-    );
-  }
-  if (preview.status === "invalid_span") {
-    return <p className="error work-section">민감 구간 {preview.spanIndex + 1}의 범위가 맞지 않습니다. 그 구간을 지우고 다시 지정하세요.</p>;
-  }
-  return (
-    <section className="work-section" data-testid="issue-draft-preview">
-      <h3>게시될 공유본</h3>
-      <div className="issue-draft-shared" data-testid="issue-draft-shared-title">
-        {preview.sharedCopy.title}
-      </div>
-      <pre className="issue-draft-shared" data-testid="issue-draft-shared-body">
-        {preview.sharedCopy.body}
-      </pre>
-      <h3>남는 가림 표식 ({preview.markers.length})</h3>
-      {preview.markers.length === 0 ? (
-        <p className="muted">표식이 없습니다.</p>
-      ) : (
-        <ul data-testid="issue-draft-markers">
-          {preview.markers.map((marker) => (
-            <li key={marker.marker}>
-              <code>{marker.marker}</code> <span className="muted">{FIELD_LABEL[marker.field]}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {preview.validatorAbsent && <div className="error">검증기가 없어서 게시할 수 없습니다. 템플릿을 고치세요.</div>}
-      {preview.errors.length > 0 && (
-        <ul className="error" data-testid="issue-draft-errors">
-          {preview.errors.map((error, index) => (
-            <li key={index}>{validationErrorText(error)}</li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
 export function IssueDraftPanel({ request, target, onClose }: { request: GatewayRequest; target: IssueDraftTarget; onClose(): void }) {
   const [openState, setOpenState] = useState<OpenState>({ phase: "loading" });
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [spans, setSpans] = useState<IssueDraftSpan[]>([]);
-  const [spanClass, setSpanClass] = useState<IssueSpanClass | "">("secret");
   const [preview, setPreview] = useState<IssueDraftPreview | null>(null);
   const [approval, setApproval] = useState<IssueDraftApproval | null>(null);
   const [status, setStatus] = useState<IssuePublishStatus | null>(null);
@@ -146,8 +58,6 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
   const [previewCount, setPreviewCount] = useState(0);
   const approvalRef = useRef<IssueDraftApproval | null>(null);
   approvalRef.current = approval;
-  const titleInput = useRef<HTMLInputElement>(null);
-  const bodyInput = useRef<HTMLTextAreaElement>(null);
 
   /** 원격을 읽는다. `keepDraft` 이면 사용자의 글을 두고 편집 기준만 바꾼다 (외부 변경 뒤). */
   const open = async (keepDraft: boolean) => {
@@ -214,17 +124,6 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
     else setBody(next);
     // 끝난 게시의 결과는 새 글의 상태가 아니다.
     if (status?.kind === "confirmed" || status?.kind === "refused") setStatus(null);
-  };
-
-  const markSelection = (field: IssueDraftField) => {
-    const input = field === "title" ? titleInput.current : bodyInput.current;
-    const next = input && addSpan(spans, { field, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0, class: spanClass || null, decision: null });
-    if (next) {
-      setSpans(next);
-      setNotice(null);
-    } else {
-      setNotice("가릴 글을 먼저 선택하세요. 이미 지정한 구간과 겹치면 지정할 수 없습니다.");
-    }
   };
 
   const run = async (action: () => Promise<void>) => {
@@ -318,68 +217,10 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
       </div>
       <div className="work-scroll">
         <Requirements opened={opened} />
-        <section className="work-section work-form">
-          <p className="muted">이 입력은 대화 초안과 자동 저장에 들어가지 않습니다. 패널을 닫으면 사라집니다.</p>
-          <label>
-            제목
-            <input ref={titleInput} disabled={editingDisabled} value={title} onChange={(event) => edit("title", event.target.value)} data-testid="issue-draft-title" />
-          </label>
-          <label>
-            본문
-            <textarea ref={bodyInput} disabled={editingDisabled} value={body} onChange={(event) => edit("body", event.target.value)} rows={12} data-testid="issue-draft-body" />
-          </label>
-          <div className="issue-draft-mark">
-            <label>
-              민감 구간의 종류
-              <select disabled={editingDisabled} value={spanClass} onChange={(event) => setSpanClass(event.target.value as IssueSpanClass | "")} data-testid="issue-draft-span-class">
-                {(Object.keys(CLASS_LABEL) as IssueSpanClass[]).map((value) => (
-                  <option key={value} value={value}>
-                    {CLASS_LABEL[value]} ({ACTION_LABEL[opened.spanActions[value]]})
-                  </option>
-                ))}
-                <option value="">모름 (직접 정함)</option>
-              </select>
-            </label>
-            <button type="button" disabled={editingDisabled} onClick={() => markSelection("title")} data-testid="issue-draft-mark-title">
-              제목의 선택을 가리기
-            </button>
-            <button type="button" disabled={editingDisabled} onClick={() => markSelection("body")} data-testid="issue-draft-mark-body">
-              본문의 선택을 가리기
-            </button>
-          </div>
-          {spans.length > 0 && (
-            <ul data-testid="issue-draft-spans">
-              {spans.map((span, index) => {
-                const action = span.class ? opened.spanActions[span.class] : "user_confirm";
-                const asks = action === "user_confirm" || needsDecision.includes(index) || span.decision !== null;
-                return (
-                  <li key={`${span.field}-${span.start}`} className={needsDecision.includes(index) ? "issue-draft-warning" : undefined} data-testid="issue-draft-span">
-                    {FIELD_LABEL[span.field]} {span.start}–{span.end} · {span.class ? CLASS_LABEL[span.class] : "모름"} ·{" "}
-                    {asks ? (
-                      <select
-                        disabled={editingDisabled}
-                        value={span.decision ?? ""}
-                        onChange={(event) =>
-                          setSpans(spans.map((other, at) => (at === index ? { ...other, decision: (event.target.value || null) as IssueDraftSpan["decision"] } : other)))
-                        }
-                        data-testid="issue-draft-span-decision"
-                      >
-                        <option value="">처리를 고르세요</option>
-                        <option value="remove">{ACTION_LABEL.remove}</option>
-                        <option value="restorable_mask">{ACTION_LABEL.restorable_mask}</option>
-                      </select>
-                    ) : (
-                      ACTION_LABEL[action]
-                    )}{" "}
-                    <button type="button" disabled={editingDisabled} onClick={() => setSpans(spans.filter((_, at) => at !== index))}>
-                      지정 취소
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
+        <IssueDraftTextFields
+          opened={opened} title={title} body={body} spans={spans} needsDecision={needsDecision}
+          disabled={editingDisabled} onEdit={edit} onSpansChange={setSpans} onNotice={setNotice}
+        />
         {remoteText && (
           <details className="work-section" data-testid="issue-draft-remote">
             <summary>지금 원격의 글 (게시하면 내 글로 바뀝니다)</summary>

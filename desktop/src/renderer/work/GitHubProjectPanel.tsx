@@ -117,6 +117,7 @@ function ItemRow({
 export function GitHubProjectPanel({
   github,
   currentRepository,
+  onCreate,
   onHandOff,
   onEdit,
   onOpenRestore,
@@ -124,12 +125,14 @@ export function GitHubProjectPanel({
   github: GitHubBridge;
   /** 열린 스레드 폴더의 `owner/name` 이다. 모르면 null 이다. */
   currentRepository: string | null;
+  onCreate?(repository: string): Promise<void>;
   onHandOff(item: GitHubProjectItem): Promise<void>;
   /** 이슈의 제목과 본문을 고치는 패널을 연다 (#2426). 열 수 없으면 오류를 던진다. */
   onEdit?(item: GitHubProjectItem): Promise<void>;
   /** 이슈의 로컬 복원본 창을 연다 (#2427). */
   onOpenRestore?(issueUrl: string): Promise<void>;
 }) {
+  const createAction = useAction();
   const [projectRef, setProjectRef] = useState<string | null>(loadProjectRef);
   const [editing, setEditing] = useState(false);
   const [state, setState] = useState<ListState>({ phase: "loading" });
@@ -210,6 +213,11 @@ export function GitHubProjectPanel({
                 ))}
               </select>
             </label>
+            {onCreate && <button type="button" disabled={!repository || createAction.busy}
+              onClick={() => repository && void createAction.run(() => onCreate(repository))}
+              data-testid="github-project-create">새 이슈</button>}
+            {onCreate && !repository && <p className="muted">새 이슈를 만들 저장소를 선택하세요.</p>}
+            {createAction.error && <div className="error">{createAction.error}</div>}
           </div>
           {shown.length === 0 && <p className="muted work-section">열린 항목이 없습니다.</p>}
           {groupByStatus(shown).map((group) => (

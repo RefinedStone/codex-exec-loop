@@ -19,7 +19,8 @@ use zeroize::Zeroize;
 
 use super::secure_fs;
 use crate::application::port::outbound::evidence_vault_port::{
-    EvidenceVaultStorePort, VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey,
+    EvidenceVaultStorePort, VaultCreationLoadRequest, VaultCreationRecordScope,
+    VaultCreationSaveRequest, VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey,
     VaultRecordLoadRequest, VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
 };
 use crate::domain::issue_work::IssueProvider;
@@ -54,6 +55,30 @@ impl FilesystemEvidenceVaultStoreAdapter {
 }
 
 impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
+    fn save_creation(&self, request: VaultCreationSaveRequest) -> Result<(), VaultStoreError> {
+        let scope = creation_scope_bytes(&request.scope);
+        let body = seal_record(&request.key, &scope, &request.plaintext)?;
+        secure_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body)
+            .map_err(|error| {
+                if secure_fs::atomic_replacement_completed(&error) {
+                    VaultStoreError::WriteOutcomeUnknown
+                } else {
+                    storage_error(error)
+                }
+            })
+    }
+
+    fn load_creation(
+        &self,
+        request: VaultCreationLoadRequest,
+    ) -> Result<VaultPlaintext, VaultStoreError> {
+        let scope = creation_scope_bytes(&request.scope);
+        let body = secure_fs::read_optional_file(&self.vault_root, &record_relative_path(&scope))
+            .map_err(storage_error)?
+            .ok_or(VaultStoreError::RecordNotFound)?;
+        open_record(&body, &request.key, &scope)
+    }
+
     fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
         let scope = scope_bytes(&request.scope);
         let body = seal_record(&request.key, &scope, &request.plaintext)?;
@@ -214,6 +239,35 @@ pub(super) fn scope_bytes(scope: &VaultRecordScope) -> Vec<u8> {
         field,
         binding_kind,
         binding_value,
+    ] {
+        push_part(&mut bytes, part);
+    }
+    bytes
+}
+
+/// 생성 전 원문은 실제 이슈 범위와 분리한다. 기존 이슈·백업의 scope_bytes 형식은 바꾸지 않는다.
+fn creation_scope_bytes(scope: &VaultCreationRecordScope) -> Vec<u8> {
+    let repository = &scope.repository;
+    let provider = match repository.provider {
+        IssueProvider::GitHub => "github",
+        IssueProvider::Jira => "jira",
+    };
+    let field = match scope.field {
+        VaultRecordField::Title => "title",
+        VaultRecordField::Body => "body",
+    };
+    let hash_version = scope.approved_hash.version.to_string();
+    let mut bytes = Vec::new();
+    for part in [
+        "akra-evidence-vault-create-scope-v1",
+        repository.project_scope.workspace_dir.as_str(),
+        provider,
+        repository.server_id.as_str(),
+        repository.repository_id.as_str(),
+        scope.intent_id.as_str(),
+        hash_version.as_str(),
+        scope.approved_hash.sha256.as_str(),
+        field,
     ] {
         push_part(&mut bytes, part);
     }
@@ -556,6 +610,161 @@ mod tests {
         );
     }
 
+    fn creation_scope() -> VaultCreationRecordScope {
+        let issue = project_scope().issue;
+        VaultCreationRecordScope {
+            repository: crate::domain::issue_creation::IssueRepositoryReference {
+                provider: issue.provider,
+                server_id: issue.server_id,
+                repository_id: issue.repository_id,
+                project_scope: issue.project_scope,
+            },
+            intent_id: "new-intent-1".to_string(),
+            approved_hash: crate::domain::issue_work::IssueFieldHash::of_fields(
+                "masked title",
+                "masked body",
+            ),
+            field: VaultRecordField::Body,
+        }
+    }
+
+    fn creation_path(root: &Path, scope: &VaultCreationRecordScope) -> PathBuf {
+        root.join(record_relative_path(&creation_scope_bytes(scope)))
+    }
+
+    fn save_creation(
+        adapter: &FilesystemEvidenceVaultStoreAdapter,
+        scope: VaultCreationRecordScope,
+    ) {
+        adapter
+            .save_creation(VaultCreationSaveRequest {
+                scope,
+                key: key(KEY_ID, &KEY),
+                plaintext: VaultPlaintext::new(PLAINTEXT.to_string()),
+            })
+            .expect("save creation staging");
+    }
+
+    fn load_creation(
+        adapter: &FilesystemEvidenceVaultStoreAdapter,
+        scope: VaultCreationRecordScope,
+    ) -> Result<VaultPlaintext, VaultStoreError> {
+        adapter.load_creation(VaultCreationLoadRequest {
+            scope,
+            key: key(KEY_ID, &KEY),
+        })
+    }
+
+    #[test]
+    fn creation_staging_survives_restart_without_plaintext_or_a_fabricated_issue_id() {
+        let root = temp_vault("creation-restart");
+        let adapter = FilesystemEvidenceVaultStoreAdapter::new(root.clone());
+        let scope = creation_scope();
+        save_creation(&adapter, scope.clone());
+        let body = fs::read_to_string(creation_path(&root, &scope)).unwrap();
+        assert!(!body.contains(PLAINTEXT));
+        assert!(!body.contains(&BASE64.encode(PLAINTEXT)));
+        assert!(!body.contains(&scope.intent_id));
+        let restarted = FilesystemEvidenceVaultStoreAdapter::new(root);
+        assert_eq!(
+            load_creation(&restarted, scope).unwrap().expose(),
+            PLAINTEXT
+        );
+    }
+
+    #[test]
+    fn creation_staging_authenticates_repository_intent_approval_and_field() {
+        let root = temp_vault("creation-scope");
+        let adapter = FilesystemEvidenceVaultStoreAdapter::new(root.clone());
+        let original = creation_scope();
+        save_creation(&adapter, original.clone());
+        let mut other_repository = original.clone();
+        other_repository.repository.repository_id = "R_2".to_string();
+        let mut other_server = original.clone();
+        other_server.repository.server_id = "other.example".to_string();
+        let mut other_project = original.clone();
+        other_project.repository.project_scope.workspace_dir = "/work/other".to_string();
+        let mut other_provider = original.clone();
+        other_provider.repository.provider = IssueProvider::Jira;
+        let mut other_intent = original.clone();
+        other_intent.intent_id = "new-intent-2".to_string();
+        let mut other_hash = original.clone();
+        other_hash.approved_hash =
+            crate::domain::issue_work::IssueFieldHash::of_fields("different", "body");
+        let mut other_hash_version = original.clone();
+        other_hash_version.approved_hash.version += 1;
+        let mut other_field = original.clone();
+        other_field.field = VaultRecordField::Title;
+        for other in [
+            other_repository,
+            other_server,
+            other_project,
+            other_provider,
+            other_intent,
+            other_hash,
+            other_hash_version,
+            other_field,
+        ] {
+            assert_eq!(
+                load_creation(&adapter, other.clone()),
+                Err(VaultStoreError::RecordNotFound)
+            );
+            fs::copy(
+                creation_path(&root, &original),
+                creation_path(&root, &other),
+            )
+            .unwrap();
+            assert_eq!(
+                load_creation(&adapter, other),
+                Err(VaultStoreError::IntegrityFailure)
+            );
+        }
+    }
+
+    #[test]
+    fn adopting_creation_staging_requires_reencryption_in_the_real_issue_scope() {
+        let root = temp_vault("creation-adoption");
+        let adapter = FilesystemEvidenceVaultStoreAdapter::new(root.clone());
+        let original = creation_scope();
+        save_creation(&adapter, original.clone());
+        let actual_issue = project_scope();
+        fs::copy(
+            creation_path(&root, &original),
+            record_path(&root, &actual_issue),
+        )
+        .unwrap();
+        assert_eq!(
+            load(&adapter, actual_issue.clone()),
+            Err(VaultStoreError::IntegrityFailure)
+        );
+        let plaintext = load_creation(&adapter, original).unwrap();
+        adapter
+            .save(VaultRecordSaveRequest {
+                scope: actual_issue.clone(),
+                key: key(KEY_ID, &KEY),
+                plaintext,
+            })
+            .unwrap();
+        assert_eq!(load(&adapter, actual_issue).unwrap().expose(), PLAINTEXT);
+    }
+
+    #[test]
+    fn creation_staging_preserves_post_replacement_uncertainty() {
+        let root = temp_vault("creation-post-replace");
+        let adapter = FilesystemEvidenceVaultStoreAdapter::new(root);
+        let scope = creation_scope();
+        secure_fs::install_after_atomic_replace_error_hook(
+            "synthetic creation directory sync failure",
+        );
+        let result = adapter.save_creation(VaultCreationSaveRequest {
+            scope: scope.clone(),
+            key: key(KEY_ID, &KEY),
+            plaintext: VaultPlaintext::new(PLAINTEXT.to_string()),
+        });
+        assert_eq!(result, Err(VaultStoreError::WriteOutcomeUnknown));
+        assert_eq!(load_creation(&adapter, scope).unwrap().expose(), PLAINTEXT);
+    }
+
     // `T: Serialize` 이면 두 impl 이 겹쳐서 `_` 를 정할 수 없다. 그러면 컴파일이 실패한다.
     trait NotSerialize<Marker> {
         fn proven() {}
@@ -568,6 +777,8 @@ mod tests {
         <VaultRecordKey as NotSerialize<_>>::proven();
         <VaultRecordSaveRequest as NotSerialize<_>>::proven();
         <VaultRecordLoadRequest as NotSerialize<_>>::proven();
+        <VaultCreationSaveRequest as NotSerialize<_>>::proven();
+        <VaultCreationLoadRequest as NotSerialize<_>>::proven();
 
         let debug = format!(
             "{:?}",

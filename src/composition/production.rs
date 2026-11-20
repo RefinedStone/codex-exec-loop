@@ -493,31 +493,49 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
 fn build_issue_drafts()
 -> Result<Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>> {
     use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
+    use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJournalAdapter;
     use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
     use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
     use crate::adapter::outbound::filesystem::issue_template::FilesystemIssueTemplateSourceAdapter;
-    use crate::adapter::outbound::github::{GithubIssueSnapshotAdapter, GithubIssueUpdateAdapter};
+    use crate::adapter::outbound::github::{
+        GithubIssueCreateAdapter, GithubIssueSnapshotAdapter, GithubIssueUpdateAdapter,
+    };
+    use crate::application::service::issue_creation::IssueCreationService;
     use crate::application::service::issue_draft::IssueDraftService;
     use crate::application::service::issue_policy::IssuePolicyService;
     use crate::application::service::issue_publish_journal::IssueJournaledPublishService;
     use crate::application::service::issue_template::IssueTemplateService;
 
     let akra_home = crate::configuration::akra_home_dir()?;
-    // Vault 저장소는 이미 있는 사용자 전용 폴더만 쓴다. 만들지 못하면 저장이 실패하고 게시는 보류된다.
     let vault_root = akra_home.join("evidence-vault");
     let _ = crate::private_directory::ensure_private_directory(&vault_root);
+    let vault = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root));
     let snapshot = Arc::new(GithubIssueSnapshotAdapter::new(akra_home.clone()));
     let journal = IssuePublishIntentJournalAdapter::new(|workspace_dir| {
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
         Ok(PathBuf::from(location.runtime_dir))
     });
-    let publisher = IssueJournaledPublishService::new(
+    // Creation and updates share the same ordering owner and restore-link mutex.
+    let publisher = Arc::new(IssueJournaledPublishService::new(
         snapshot.clone(),
         Arc::new(GithubIssueUpdateAdapter::new(akra_home.clone())),
         Arc::new(journal),
-        Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root)),
-    );
+        vault.clone(),
+    ));
+    let creation_journal = IssueCreationJournalAdapter::new(|workspace_dir| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    })
+    .with_workspace_resolver(|cwd| Ok(repository_kernel_target(cwd)?.workspace_root));
+    let creator = Arc::new(IssueCreationService::new(
+        Arc::new(GithubIssueCreateAdapter::new(akra_home)),
+        snapshot.clone(),
+        Arc::new(creation_journal),
+        vault,
+        publisher.clone(),
+    ));
     Ok(Arc::new(IssueDraftService::new(
         IssuePolicyService::new(Arc::new(FilesystemIssuePolicySourceAdapter::new())),
         IssueTemplateService::new(Arc::new(FilesystemIssueTemplateSourceAdapter::new())),
@@ -526,13 +544,12 @@ fn build_issue_drafts()
         Arc::new(
             crate::adapter::outbound::issue_code_validator::SandboxedIssueCodeValidatorRunnerAdapter::new(),
         ),
-        // 복원 가능 구간을 암호화할 키는 OS 키 저장소에서 온다 (#2422). 키 저장소가 없으면 게시는 보류된다.
         Arc::new(
             crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService::new(
                 Arc::new(crate::adapter::outbound::vault_key_store::OsVaultKeyStoreAdapter::new()),
             ),
         ),
-    )))
+    ).with_creation(creator)))
 }
 
 /// git 작업 엔진을 조립한다 (plan 27 G3). 일지는 planning 기준 데이터와 같은 저장소 runtime 디렉터리에 둔다. 그

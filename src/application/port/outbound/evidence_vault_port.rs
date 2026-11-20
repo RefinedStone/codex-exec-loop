@@ -139,7 +139,7 @@ pub trait EvidenceVaultRestorePort: Send + Sync {
  */
 
 /// 저장 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 2;
+pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 3;
 
 /// 가린 구간이 있는 이슈의 필드이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,10 +245,50 @@ impl fmt::Display for VaultStoreError {
 
 impl std::error::Error for VaultStoreError {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VaultCreationRecordScope {
+    pub repository: crate::domain::issue_creation::IssueRepositoryReference,
+    pub intent_id: String,
+    pub approved_hash: crate::domain::issue_work::IssueFieldHash,
+    pub field: VaultRecordField,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultCreationSaveRequest {
+    pub scope: VaultCreationRecordScope,
+    pub key: VaultRecordKey,
+    pub plaintext: VaultPlaintext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultCreationLoadRequest {
+    pub scope: VaultCreationRecordScope,
+    pub key: VaultRecordKey,
+}
+
 pub trait EvidenceVaultStorePort: Send + Sync {
     /// 구현이 따르는 계약의 판이다.
     fn contract_version(&self) -> u32 {
         EVIDENCE_VAULT_STORE_CONTRACT_VERSION
+    }
+
+    /// New-issue staging has no fabricated IssueReference. Legacy adapters fail closed.
+    fn save_creation(
+        &self,
+        _request: VaultCreationSaveRequest,
+    ) -> std::result::Result<(), VaultStoreError> {
+        Err(VaultStoreError::Storage(
+            "new-issue vault staging is unavailable".to_string(),
+        ))
+    }
+
+    fn load_creation(
+        &self,
+        _request: VaultCreationLoadRequest,
+    ) -> std::result::Result<VaultPlaintext, VaultStoreError> {
+        Err(VaultStoreError::Storage(
+            "new-issue vault staging is unavailable".to_string(),
+        ))
     }
 
     /// 평문을 암호화해 이 범위의 레코드로 저장한다. 같은 범위의 레코드는 바꾼다.
