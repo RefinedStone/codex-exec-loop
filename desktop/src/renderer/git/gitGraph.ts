@@ -177,7 +177,17 @@ export async function fetchGraphPage(request: GatewayRequest, cwd: string, curso
   return graphPageFrom(await request(GIT_GRAPH_METHOD, { cwd, ...(cursor === null ? {} : { cursor }), ...(limit === undefined ? {} : { limit }) }));
 }
 
+/** 첫 쪽도 조회 중 바뀔 수 있다. 일시적인 stale은 제한해서 재시도한다. */
+export async function fetchFirstGraphPage(request: GatewayRequest, cwd: string, limit?: number): Promise<GitGraphPage> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const page = await fetchGraphPage(request, cwd, null, limit);
+    if (!page.stale) return page;
+  }
+  throw new Error("커밋 그래프를 읽는 사이에 저장소가 바뀌었습니다. 다시 읽어 주십시오.");
+}
+
 export function loadedFromFirstPage(cwd: string, page: GitGraphPage): LoadedGitGraph {
+  if (page.stale) throw new Error("커밋 그래프를 읽는 사이에 저장소가 바뀌었습니다. 다시 읽어 주십시오.");
   return {
     phase: "loaded",
     cwd,
@@ -199,7 +209,7 @@ export function loadedFromFirstPage(cwd: string, page: GitGraphPage): LoadedGitG
  */
 export async function fetchGraphRows(request: GatewayRequest, cwd: string, atLeast: number): Promise<LoadedGitGraph> {
   const pageRows = Math.min(GIT_GRAPH_PAGE_LIMIT_MAX, atLeast);
-  let loaded = loadedFromFirstPage(cwd, await fetchGraphPage(request, cwd, null, pageRows > 0 ? pageRows : undefined));
+  let loaded = loadedFromFirstPage(cwd, await fetchFirstGraphPage(request, cwd, pageRows > 0 ? pageRows : undefined));
   while (loaded.next !== null && loaded.rows.length < atLeast) {
     const page = await fetchGraphPage(request, cwd, loaded.next, Math.min(GIT_GRAPH_PAGE_LIMIT_MAX, atLeast - loaded.rows.length));
     if (page.stale) throw new Error("커밋 그래프를 읽는 사이에 저장소가 바뀌었습니다.");

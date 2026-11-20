@@ -127,12 +127,24 @@ function operationRecord(opId, operation, undoOf, cwd) {
   };
 }
 
+// 첫 조회와 background 갱신에 stale 응답을 주입한다. 정상 페이지 요청 수는 별도로 센다.
+let initialStalePages = 1;
+let holdFirstPagesStale = false;
+let staleFirstPages = 0;
+let onStaleFirstPage = () => {};
+
 const graphRequests = [];
 const commitRequests = [];
 let refsRequests = 0;
 const endpoint = fake.uniqueTestEndpoint();
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   gitGraph(params) {
+    if (!params.cursor && (initialStalePages > 0 || holdFirstPagesStale)) {
+      initialStalePages = Math.max(0, initialStalePages - 1);
+      staleFirstPages += 1;
+      onStaleFirstPage();
+      return { repository: true, stale: true, head: sha(FIRST_PAGE_ROWS + SECOND_PAGE_ROWS + 1), refs: [], rows: [], next: null };
+    }
     graphRequests.push(params);
     return params.cursor ? secondPage() : firstPage(params.cwd);
   },
@@ -190,6 +202,7 @@ try {
   await page.getByTestId("git-graph-panel").waitFor({ timeout: 10_000 });
   await page.getByTestId("git-graph-row").first().waitFor({ timeout: 15_000 });
   check("the first page is requested with the folder of the open thread", graphRequests.length === 1 && typeof graphRequests[0].cwd === "string" && graphRequests[0].cwd.length > 0 && graphRequests[0].cursor === undefined);
+  check("an initially stale first page is retried before showing the graph", staleFirstPages === 1);
   check("the header shows the checked-out branch", (await page.getByTestId("git-graph-head").innerText()) === "main");
 
   const firstRow = page.getByTestId("git-graph-row").first();
@@ -231,7 +244,23 @@ try {
   await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTo(0, 10 * 28));
   const topBefore = await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTop);
   const polledBefore = refsRequests;
+  // 연속 stale로 첫 polling 시도가 끝나도 기존 DOM과 읽은 줄 수/스크롤을 유지한다.
+  const keptScroll = await page.getByTestId("git-graph-scroll").elementHandle();
+  const staleBefore = staleFirstPages;
+  const repeatedStale = new Promise((resolve) => {
+    onStaleFirstPage = () => { if (staleFirstPages >= staleBefore + 4) resolve(); };
+  });
+  holdFirstPagesStale = true;
   repositoryChanged = true;
+  let staleTimer;
+  await Promise.race([
+    repeatedStale,
+    new Promise((_, reject) => { staleTimer = setTimeout(() => reject(new Error("stale polling did not repeat")), 20_000); }),
+  ]).finally(() => clearTimeout(staleTimer));
+  check("a stale first polling page preserves the existing graph rows and scroll node",
+    (await page.getByTestId("git-graph-count").innerText()) === `${FIRST_PAGE_ROWS}개 읽음`
+      && await keptScroll.evaluate((element, top) => element.isConnected && element.scrollTop === top, topBefore));
+  holdFirstPagesStale = false;
   await page.getByTestId("git-graph-count").filter({ hasText: `${FIRST_PAGE_ROWS + 1}개 읽음` }).waitFor({ timeout: 20_000 });
   check("the panel watches the refs and reads again without a click", refsRequests > polledBefore && graphRequests.length === 4 && graphRequests[3].cursor === undefined && graphRequests[3].limit === FIRST_PAGE_ROWS);
   const topAfter = await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTop);

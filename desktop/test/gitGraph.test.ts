@@ -321,3 +321,29 @@ describe("relativeTime", () => {
     expect(relativeTime(1_700_000_000 + 60, now)).toBe("방금");
   });
 });
+
+describe("stale first graph pages", () => {
+  const stalePage = () => graphPageFrom({ repository: true, stale: true, head: "new", refs: [], rows: [], next: null });
+
+  it("never converts a stale first page into an empty loaded graph", () => {
+    expect(() => loadedFromFirstPage("/repo", stalePage())).toThrow();
+  });
+
+  it("retries a stale first page without changing the requested row budget", async () => {
+    const calls: unknown[] = [];
+    const request = async <T>(_method: string, params: unknown): Promise<T> => {
+      calls.push(params);
+      return (calls.length === 1 ? stalePage() : { repository: true, stale: false, head: "new", refs: [], rows: [row({ id: "new" })], next: null }) as T;
+    };
+    const loaded = await fetchGraphRows(request, "/repo", 200);
+    expect(loaded.rows.map((entry) => entry.id)).toEqual(["new"]);
+    expect(calls).toEqual([{ cwd: "/repo", limit: 200 }, { cwd: "/repo", limit: 200 }]);
+  });
+
+  it("bounds repeated stale first pages so the caller can retain its previous graph", async () => {
+    let calls = 0;
+    const request = async <T>(): Promise<T> => { calls += 1; return stalePage() as T; };
+    await expect(fetchGraphRows(request, "/repo", 200)).rejects.toThrow();
+    expect(calls).toBe(3);
+  });
+});
