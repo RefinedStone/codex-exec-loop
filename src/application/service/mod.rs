@@ -25,6 +25,8 @@ pub mod issue_code_validator;
 pub mod issue_masking;
 // issue_publish 는 승인한 공유본으로 기존 이슈를 고친다. 쓰기 직전에 원격을 다시 읽는다 (#2423).
 pub mod issue_publish;
+// issue_publish_journal 은 게시 의도를 기록한 뒤에만 쓰고, 재조회로 결과를 확인한다 (#2424).
+pub mod issue_publish_journal;
 // issue_policy 는 이슈 정책 파일을 검증하고 사용자 < 프로젝트 순서로 합친다 (#2416).
 pub mod issue_policy;
 // issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).

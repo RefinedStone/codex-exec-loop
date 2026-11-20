@@ -25,8 +25,8 @@ use crate::domain::issue_work::{
  * 남는 경쟁: GitHub 의 쓰기는 조건이 없다. 3의 읽기와 4의 쓰기 사이에 다른 사람이 고친 글은 덮어쓴다. 이 경로는
  * 그 틈을 줄일 뿐이고 없애지 못한다.
  *
- * `Err` 는 "쓰지 않았다"는 뜻이 아니다. 쓰기의 답을 잃으면 결과를 모른다. 게시 의도 기록과 응답 유실 복구(#2424)가
- * 연결될 때까지 composition 은 이 서비스를 만들지 않는다. 실사용 게시 경로는 꺼져 있다.
+ * `Err` 는 "쓰지 않았다"는 뜻이 아니다. 쓰기의 답을 잃으면 결과를 모른다. 그래서 composition 은 이 서비스를
+ * 만들지 않는다. 실사용 게시는 게시 의도를 기록하는 `issue_publish_journal` (#2424)로만 한다.
  */
 
 /// 승인한 공유본으로 이슈를 고치는 요청이다.
@@ -104,7 +104,9 @@ impl IssuePublishService {
     }
 }
 
-fn approval_refusal(request: &IssueApprovedPublishRequest) -> Option<IssuePublishRefusal> {
+pub(crate) fn approval_refusal(
+    request: &IssueApprovedPublishRequest,
+) -> Option<IssuePublishRefusal> {
     let approval = &request.approval;
     let shared_copy = request.validated.shared_copy();
     if !approval
