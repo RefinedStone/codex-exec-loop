@@ -159,9 +159,18 @@ impl EvidenceVaultUnlockService {
         if !granted {
             return Err(VaultSharedCopyReason::SessionExpired);
         }
+        let key = self.existing_key()?;
+        // OS 키 저장소 응답을 기다리는 동안 화면이 닫혔으면 권한을 새로 내주지 않는다.
+        let granted = self
+            .sessions()
+            .get(&grant.session)
+            .is_some_and(|issues| issues.contains(&grant.issue));
+        if !granted {
+            return Err(VaultSharedCopyReason::SessionExpired);
+        }
         Ok(VaultUnlockedAccess {
             confirmation: VaultUserConfirmation::for_issue(grant.issue.clone()),
-            key: self.existing_key()?,
+            key,
         })
     }
 
@@ -335,6 +344,39 @@ mod tests {
         assert_eq!(
             confirm(&service, &session, "I_1"),
             shared_copy_only(VaultSharedCopyReason::SessionExpired)
+        );
+    }
+
+    #[test]
+    fn access_rejects_a_session_ended_during_key_lookup() {
+        struct EndingStore {
+            on_load: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        }
+        impl VaultKeyStorePort for EndingStore {
+            fn load_key(&self) -> Result<Option<VaultKey>, VaultKeyStoreError> {
+                if let Some(on_load) = self.on_load.lock().expect("hook lock").take() {
+                    on_load();
+                }
+                Ok(Some(VaultKey::new(KEY.to_vec())))
+            }
+            fn store_key(&self, _key: &VaultKey) -> Result<(), VaultKeyStoreError> {
+                panic!("access never stores a key");
+            }
+        }
+        let store = Arc::new(EndingStore {
+            on_load: Mutex::new(None),
+        });
+        let service = Arc::new(EvidenceVaultUnlockService::new(store.clone()));
+        let session = service.begin_session();
+        let grant = grant(confirm(&service, &session, "I_1"));
+        let weak = Arc::downgrade(&service);
+        *store.on_load.lock().expect("hook lock") = Some(Box::new(move || {
+            weak.upgrade().expect("service").end_session(&session);
+        }));
+
+        assert_eq!(
+            service.access(&grant).unwrap_err(),
+            VaultSharedCopyReason::SessionExpired
         );
     }
 
