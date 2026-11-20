@@ -32,6 +32,7 @@
 
 다음 문서는 현재 구현 계약이 아닙니다.
 
+- [이슈 자동화: 외부 이슈를 수집하고 정책으로 판정해 계획 큐와 병렬 전달로 실행한다. 자율 수준(관찰, 제안, 반자동, 자동), 사람 관문, 마감이 있는 결정 요청, 중재자 (제안)](../plan/28-akra-issue-automation.md)
 - [Akra git 그래프: 커밋 그래프 화면과 git 작업 엔진(계획, 백업 ref, 되돌리기, hard reset, cherry-pick, sha 를 명시한 lease 의 강제 push, Akra 보호 브랜치 목록)과 Desktop 조작 설계 (제안)](../plan/27-akra-git-graph.md)
 - [Akra Desktop 사용성: Codex 앱·Orca·OmO Desktop 과 비교한 차이(확대, 뒤로 가기, 오른쪽 클릭, 창 복원, 알림, 입력창, 스레드 목록)와 고칠 순서 (제안)](../plan/26-akra-desktop-usability.md)
 - [주의 항목: kernel 이 "사람이 지금 해야 하는 것"을 한 번만 판정하고 client 는 그리기만 한다 (제안)](../plan/23-akra-attention-items.md)

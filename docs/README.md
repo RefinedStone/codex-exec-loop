@@ -35,6 +35,7 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
 The following content is not implementation truth:
 
+- [plan/28-akra-issue-automation.md](plan/28-akra-issue-automation.md): proposed: issue automation; Akra collects issues from external trackers (GitHub first), triages them with a policy file, runs eligible issues through the planning queue and parallel delivery, and returns the result to the issue; autonomy levels (observe, propose, gated, auto), human gates, decision requests with deadlines, and an arbiter for unanswered requests (Korean)
 - [plan/27-akra-git-graph.md](plan/27-akra-git-graph.md): proposed: a commit graph view and a git operation engine in the Akra daemon (plan, backup ref, undo, hard reset, cherry-pick, force push with an explicit lease, Akra-owned protected branch list) and the Desktop interaction design (Korean)
 - [plan/26-akra-desktop-usability.md](plan/26-akra-desktop-usability.md): proposed: Akra Desktop usability gaps against the Codex app, Orca, and OmO Desktop (zoom, back and forward, context menus, window restore, notifications, composer, thread list) and the order to close them (Korean)
 - [plan/24-akra-evidence-harness.md](plan/24-akra-evidence-harness.md): proposed: a task carries acceptance criteria, a criterion passes only with an evidence file that the kernel records against the code tree, unmet criteria block delivery, and Akra Desktop shows the criteria and the evidence (Korean)
