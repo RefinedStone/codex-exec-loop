@@ -969,8 +969,25 @@ strategy in the production TUI.
   The write is `issue_update_port` (`GithubIssueUpdateAdapter`, one GraphQL `updateIssue` with the
   issue ID, title, and body; no create, comment, attachment, or board field). GitHub has no
   conditional update, so a race remains between that read and the write: an edit made in between
-  is overwritten. A failed write has an unknown result. Composition must not build this service or
-  adapter until the publish-intent journal (#2424) lands; the real publish path is disabled.
+  is overwritten. A failed write has an unknown result, so composition must not build this service
+  directly.
+- The journaled path is `IssueJournaledPublishService` (`application/service/issue_publish_journal`).
+  It runs the same approval and conflict checks, and saves an `IssuePublishIntentRecord`
+  (`domain/issue_publish_intent`: target, previous field hash, approved field hash, pending Vault
+  record fields; no text) through `issue_publish_intent_journal_port` before the write. The file
+  adapter (`IssuePublishIntentJournalAdapter`) keeps one JSON line per intent in
+  `issue-publish-intents.jsonl` in the repository runtime directory, replaces the file atomically,
+  and treats a broken line as an error. States: `recorded` -> `sent` -> `confirmed` or
+  `needs_confirmation`; `conflict`, `held`, and `abandoned` send nothing. A publish is `confirmed`
+  only when the write answer and a re-read both equal the approved copy, or, after a lost answer,
+  when the re-read does. An issue with an unresolved intent gets no new write: a duplicate publish
+  returns `AlreadyPending`, and `reconcile` (startup and user re-check) only reads. The user ends a
+  `needs_confirmation` intent with `abandon`. Restorable spans are saved to the Vault under
+  `VaultRecordBinding::PublishIntent` first; without a key or after a failed save the publish is
+  `held` until the user repeats it with `shared_copy_only`. `finalize_restore_link` rebinds the
+  records to `ConfirmedVersion` only for a `confirmed` intent. Composition does not build this
+  service yet: no inbound caller exists, and the boundary test still forbids every `issue_publish`
+  reference there. The first caller wires only the journaled service.
 - The issue policy (`domain/issue_policy`) comes only from `IssuePolicyService`. An invalid or
   unreadable policy file is `IssuePolicyBlocked`; callers must not replace it with the built-in
   policy. See [configuration](./configuration.md#issue-policy-file).
