@@ -33,7 +33,9 @@ use crate::application::service::evidence_vault_unlock::{
 };
 use crate::application::service::issue_masking::{IssueMaskedSpan, IssueTextField};
 use crate::application::service::issue_publish_journal::IssueRestorableField;
-use crate::domain::issue_publish_intent::{IssuePublishVaultField, confirmed_version_name};
+use crate::domain::issue_publish_intent::{
+    IssuePublishVaultField, confirmed_version_matches_hash, confirmed_version_name,
+};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
 
 /// 같은 프로세스의 여러 복원 서비스가 현재 판과 필드 레코드를 교차해서 쓰지 않는다.
@@ -421,7 +423,7 @@ impl EvidenceVaultRestoreService {
         self.key(grant)?;
         let bound_version = self.bound_version(issue, &key)?;
         let new_version = confirmed_version_name(&approval.reviewed_hash);
-        if new_version == bound_version {
+        if confirmed_version_matches_hash(&bound_version, &approval.reviewed_hash) {
             // 이미 이 판에 연결했다 (예: 확정 뒤의 재시도). 살아 있는 레코드를 다시 쓰지 않는다.
             return Ok(());
         }
@@ -487,7 +489,7 @@ impl EvidenceVaultRestoreService {
         let published = self.read_latest(issue)?;
         let version = self.bound_version(issue, key)?;
         let spans = self.bound_spans(issue, &version, key)?;
-        if version != confirmed_version_name(&published.field_hash()) {
+        if !confirmed_version_matches_hash(&version, &published.field_hash()) {
             return Err(changed_cause(&spans, &published));
         }
         Ok(VaultRestoreResponse {

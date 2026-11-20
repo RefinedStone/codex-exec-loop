@@ -111,9 +111,15 @@ impl IssueJournaledPublishService {
         }
         let _publishing = self.lock();
         let workspace_dir = publish.issue.project_scope.workspace_dir.clone();
-        let pending = self
-            .journal
-            .load(&workspace_dir)?
+        let records = self.journal.load(&workspace_dir)?;
+        let sequence = records
+            .iter()
+            .map(|record| record.sequence)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("publish sequence exhausted"))?;
+        let pending = records
             .into_iter()
             .find(|record| record.issue == publish.issue && record.state.is_unresolved());
         if let Some(pending) = pending {
@@ -129,6 +135,8 @@ impl IssueJournaledPublishService {
             state: IssuePublishIntentState::Recorded,
             observed_hash: None,
             restore_link_finalized: false,
+            write_response_mismatch: false,
+            sequence,
         };
         if !shared_copy_only && !restorable.is_empty() {
             match self.save_pending_records(&record, restorable, vault_key) {
@@ -174,11 +182,14 @@ impl IssueJournaledPublishService {
                     &response.published_copy.body,
                 ) != record.approved_hash
         });
-        let observed = self.observe(&record.issue);
-        let mut record = record.reconciled(observed);
+        record.write_response_mismatch = answer_differs;
         if answer_differs {
+            // Keep contradictory evidence even if the subsequent read or process is interrupted.
             record.state = IssuePublishIntentState::NeedsConfirmation;
+            self.journal.save(&workspace_dir, &record)?;
         }
+        let observed = self.observe(&record.issue);
+        let record = record.reconciled(observed);
         self.journal.save(&workspace_dir, &record)?;
         Ok(match record.state {
             IssuePublishIntentState::Confirmed => IssueJournaledPublishOutcome::Confirmed(record),
@@ -233,6 +244,23 @@ impl IssueJournaledPublishService {
         }
         if record.restore_link_finalized {
             return Ok(record);
+        }
+        if self.journal.load(workspace_dir)?.iter().any(|other| {
+            other.issue == record.issue
+                && other.intent_id != record.intent_id
+                && (other.sequence > record.sequence
+                    || (other.sequence == 0 && record.sequence == 0))
+                && matches!(
+                    other.state,
+                    IssuePublishIntentState::Sent
+                        | IssuePublishIntentState::NeedsConfirmation
+                        | IssuePublishIntentState::Confirmed
+                        | IssuePublishIntentState::Abandoned
+                )
+        }) {
+            // Abandoning confirmation does not undo a possible remote write. Legacy
+            // records with no sequence cannot establish which mapping is newest.
+            bail!("a newer or unordered publish intent may own the restore link")
         }
         for field in &record.pending_vault_fields {
             let scope = |binding| VaultRecordScope {
@@ -343,6 +371,7 @@ mod tests {
     enum WriteBehavior {
         /// 쓰고 답을 준다.
         Answer,
+        MismatchedAnswer,
         /// 쓰고 답을 잃는다.
         ApplyAndLoseAnswer,
         /// 쓰지 못하고 오류를 준다. 부르는 쪽은 앞의 경우와 구별하지 못한다.
@@ -393,12 +422,19 @@ mod tests {
             if self.write_behavior != WriteBehavior::FailWithoutApply {
                 *self.fields.lock().unwrap() = request.shared_copy.clone();
             }
-            if self.write_behavior != WriteBehavior::Answer {
+            if matches!(
+                self.write_behavior,
+                WriteBehavior::ApplyAndLoseAnswer | WriteBehavior::FailWithoutApply
+            ) {
                 bail!("the connection closed before the answer")
             }
             Ok(IssueUpdateResponse {
                 issue: request.issue,
-                published_copy: request.shared_copy,
+                published_copy: if self.write_behavior == WriteBehavior::MismatchedAnswer {
+                    copy("Different answer", "different response")
+                } else {
+                    request.shared_copy
+                },
             })
         }
     }
@@ -588,6 +624,8 @@ mod tests {
             state: IssuePublishIntentState::Sent,
             observed_hash: None,
             restore_link_finalized: false,
+            write_response_mismatch: false,
+            sequence: 0,
         }
     }
 
@@ -871,5 +909,127 @@ mod tests {
         );
         assert_eq!((fixture.writes(), fixture.reads()), (0, 0));
         assert!(fixture.saved_states().is_empty());
+    }
+
+    #[test]
+    fn contradictory_write_response_stays_pending_after_service_restart() {
+        let fixture = Fixture::new(WriteBehavior::MismatchedAnswer);
+        let outcome = fixture
+            .service()
+            .publish(restorable_request(Some(key())))
+            .unwrap();
+        let IssueJournaledPublishOutcome::NeedsConfirmation(record) = outcome else {
+            panic!("a contradictory answer must not be confirmed");
+        };
+        assert!(record.write_response_mismatch);
+        let restarted = fixture.service();
+        let reconciled = restarted.reconcile(WORKSPACE).unwrap();
+        assert_eq!(
+            reconciled[0].state,
+            IssuePublishIntentState::NeedsConfirmation
+        );
+        assert!(
+            restarted
+                .finalize_restore_link(WORKSPACE, &record.intent_id, key())
+                .is_err()
+        );
+        assert_eq!(fixture.writes(), 1);
+    }
+
+    #[test]
+    fn older_intent_cannot_overwrite_the_latest_restore_mapping_for_equal_shared_text() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let service = fixture.service();
+        let IssueJournaledPublishOutcome::Confirmed(first) =
+            service.publish(restorable_request(Some(key()))).unwrap()
+        else {
+            panic!("first publish");
+        };
+        let mut next = restorable_request(Some(key()));
+        next.publish.edit_basis = first.approved_hash.clone();
+        next.restorable[0].plaintext = VaultPlaintext::new("newer private text".to_string());
+        let IssueJournaledPublishOutcome::Confirmed(second) = service.publish(next).unwrap() else {
+            panic!("second publish");
+        };
+        assert_eq!(first.approved_hash, second.approved_hash);
+        assert!(second.sequence > first.sequence);
+        assert_ne!(first.confirmed_version(), second.confirmed_version());
+        service
+            .finalize_restore_link(WORKSPACE, &second.intent_id, key())
+            .unwrap();
+        assert!(
+            service
+                .finalize_restore_link(WORKSPACE, &first.intent_id, key())
+                .is_err()
+        );
+        let records = fixture.vault.records.lock().unwrap();
+        assert_eq!(
+            records[&VaultRecordScope::current_version(issue())].expose(),
+            second.confirmed_version()
+        );
+        assert_eq!(
+            records[&VaultRecordScope {
+                issue: issue(),
+                field: VaultRecordField::Body,
+                binding: VaultRecordBinding::ConfirmedVersion(second.confirmed_version()),
+            }]
+                .expose(),
+            "newer private text"
+        );
+    }
+    #[test]
+    fn abandoning_a_newer_uncertain_write_cannot_restore_an_older_mapping() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let service = fixture.service();
+        let IssueJournaledPublishOutcome::Confirmed(first) =
+            service.publish(restorable_request(Some(key()))).unwrap()
+        else {
+            panic!("first publish");
+        };
+        let mut next = restorable_request(Some(key()));
+        next.publish.edit_basis = first.approved_hash.clone();
+        next.restorable[0].plaintext = VaultPlaintext::new("newer private text".to_string());
+        // The next pre-write read succeeds, but its post-write observation fails.
+        *fixture.remote.fail_reads_from.lock().unwrap() = fixture.reads() + 1;
+        let IssueJournaledPublishOutcome::NeedsConfirmation(second) =
+            service.publish(next).unwrap()
+        else {
+            panic!("second publish must need confirmation");
+        };
+        assert_eq!(fixture.writes(), 2);
+        service.abandon(WORKSPACE, &second.intent_id).unwrap();
+        assert!(
+            service
+                .finalize_restore_link(WORKSPACE, &first.intent_id, key())
+                .is_err()
+        );
+        assert!(
+            !fixture
+                .vault
+                .records
+                .lock()
+                .unwrap()
+                .contains_key(&VaultRecordScope::current_version(issue()))
+        );
+    }
+
+    #[test]
+    fn legacy_intents_without_an_order_cannot_replace_each_others_mapping() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let mut first = sent_record();
+        first.state = IssuePublishIntentState::Confirmed;
+        let second = IssuePublishIntentRecord {
+            intent_id: "another-legacy-intent".to_string(),
+            ..first.clone()
+        };
+        fixture.journal.save(WORKSPACE, &first).unwrap();
+        fixture.journal.save(WORKSPACE, &second).unwrap();
+        assert!(
+            fixture
+                .service()
+                .finalize_restore_link(WORKSPACE, &first.intent_id, key())
+                .is_err()
+        );
+        assert!(fixture.vault.records.lock().unwrap().is_empty());
     }
 }
