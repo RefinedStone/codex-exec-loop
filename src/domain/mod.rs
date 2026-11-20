@@ -21,6 +21,8 @@ pub(crate) mod git_graph;
 pub(crate) mod git_operation;
 // issue_work 는 외부 이슈의 참조와 공유본이다. 복원 평문은 가지지 않는다 (#2415).
 pub(crate) mod issue_work;
+// 이슈 자동화의 추적 장부 값과 상태 전이이다 (plan 28 IA1-1).
+pub(crate) mod issue_automation;
 // issue_publish_intent 는 이슈 게시 의도의 기록과 상태 규칙이다 (#2424).
 pub(crate) mod issue_publish_intent;
 // issue_policy 는 프로젝트의 이슈 규약과 대상별 공개 정책이다 (#2416).

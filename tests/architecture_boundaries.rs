@@ -580,6 +580,141 @@ fn issue_publish_goes_only_through_the_publish_intent_journal() {
     );
 }
 
+// 이슈 자동화는 장부만 떼어내어 다른 실행기와 연결할 수 있어야 한다 (#2536).
+const ISSUE_AUTOMATION_BOUNDARY_PATHS: &[&str] = &[
+    "src/domain/issue_automation",
+    "src/application/service/issue_automation",
+    "src/application/port/outbound/issue_automation_store_port.rs",
+    "src/adapter/outbound/db/sqlite_issue_automation_store.rs",
+    "src/adapter/outbound/db/sqlite_issue_automation_store",
+];
+
+fn issue_automation_dependency_violations(source: &str) -> Vec<String> {
+    rust_semantic_references(source)
+        .paths
+        .into_iter()
+        .filter(|path| {
+            let forbidden = semantic_path_is_forbidden(
+                path,
+                &[
+                    "crate::core",
+                    "crate::domain::planning",
+                    "crate::domain::parallel_mode",
+                    "crate::domain::parallel_agent_profile",
+                    "crate::application::port::outbound::issue_snapshot_port",
+                    "crate::application::port::outbound::evidence_vault_port",
+                ],
+                &[
+                    "planning",
+                    "parallel",
+                    "Planning",
+                    "Parallel",
+                    "IssueRawFields",
+                    "IssueSnapshotResponse",
+                    "VaultPlaintext",
+                    "VaultKey",
+                    "VaultRecordKey",
+                ],
+            );
+            // std/core의 순수 값 타입은 허용하고, 상대 경로로 Akra core에 들어가는 우회만 막는다.
+            let mut segments = path.split("::");
+            let relative_core = matches!(segments.next(), Some("crate" | "self" | "super"))
+                && segments.any(|segment| segment == "core");
+            forbidden || relative_core
+        })
+        .collect()
+}
+
+fn issue_automation_untyped_contract_payloads(source: &str) -> Vec<String> {
+    rust_semantic_references(source)
+        .paths
+        .into_iter()
+        .filter(|path| semantic_path_is_forbidden(path, &["serde_json::Value"], &[]))
+        .collect()
+}
+
+#[test]
+fn issue_automation_stays_independent_and_stores_only_shared_issue_types() {
+    let root = repo_root();
+    for required in [
+        "src/domain/issue_automation/mod.rs",
+        "src/application/port/outbound/issue_automation_store_port.rs",
+        "src/adapter/outbound/db/sqlite_issue_automation_store.rs",
+    ] {
+        assert!(
+            root.join(required).is_file(),
+            "missing issue automation boundary: {required}"
+        );
+    }
+    let mut violations = Vec::new();
+    for boundary in ISSUE_AUTOMATION_BOUNDARY_PATHS {
+        for path in rust_files_for_path(&root.join(boundary)) {
+            if is_test_only_path(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            let mut references = issue_automation_dependency_violations(&source);
+            if boundary.starts_with("src/domain/") || boundary.starts_with("src/application/port/")
+            {
+                references.extend(issue_automation_untyped_contract_payloads(&source));
+            }
+            for reference in references {
+                violations.push(format!("{}: {reference}", relative_path(&root, &path)));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "issue automation boundary violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn issue_automation_guard_rejects_grouped_alias_and_relative_dependency_escapes() {
+    for forbidden in [
+        "use crate::domain::{planning as legacy, issue_work::IssueReference}; type Task = legacy::PlanningTask;",
+        "use crate::domain::parallel_mode::ParallelTask;",
+        "use crate::core as runtime; type State = runtime::State;",
+        "use super::super::core::Runtime;",
+        "use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;",
+        "use crate::application::port::outbound::issue_snapshot_port as snapshot; type Raw = snapshot::IssueRawFields;",
+        "use crate::application::port::outbound::{evidence_vault_port as vault}; type Key = vault::VaultKey;",
+    ] {
+        assert!(
+            !issue_automation_dependency_violations(forbidden).is_empty(),
+            "forbidden automation dependency escaped: {forbidden}"
+        );
+    }
+    for untyped in [
+        "use serde_json as json; struct Untyped { payload: json::Value }",
+        "struct Untyped { payload: serde_json::Value }",
+    ] {
+        assert!(
+            !issue_automation_untyped_contract_payloads(untyped).is_empty(),
+            "untyped payload escaped the automation contract: {untyped}"
+        );
+    }
+    assert!(
+        issue_automation_untyped_contract_payloads(
+            "use crate::domain::issue_work::IssueSharedCopy; struct Typed { copy: IssueSharedCopy }"
+        )
+        .is_empty()
+    );
+    for allowed in [
+        "use crate::domain::issue_work::{IssueReference, IssueSharedCopy, IssueFieldHash, IssueComparisonBasis};",
+        "use core::fmt; struct State;",
+        "// use crate::domain::planning::Task;\nfn safe() { let _ = \"IssueRawFields VaultKey\"; }",
+        "#[cfg(test)] mod tests { use crate::domain::planning::Task; }",
+    ] {
+        assert!(
+            issue_automation_dependency_violations(allowed).is_empty(),
+            "safe automation dependency was rejected: {allowed}"
+        );
+    }
+}
+
 #[test]
 fn cli_and_telegram_enter_application_through_inbound_ports() {
     assert_no_forbidden_references_in_paths(
