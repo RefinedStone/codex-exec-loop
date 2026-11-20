@@ -625,3 +625,78 @@ describe("groupThreadsByCwd", () => {
     expect(folders[1]?.threads.map((item) => item.title)).toEqual(["preview", "(제목 없음)"]);
   });
 });
+
+describe("issue interests over the shared Gateway session", () => {
+  it("uses one attach for local issue actions, events and reconnection", async () => {
+    let mode: "off" | "observe" = "off";
+    let revision = 3;
+    const commands: Array<Record<string, unknown>> = [];
+    const state = () => ({
+      type: "issue_automation", status: "ready", mode, epoch: 1, revision,
+      binding: null, binding_id: null, collecting: false, consecutive_failures: 0,
+      last_attempt_at_ms: 100, last_success_at_ms: 90, last_failure: null, next_poll_after_ms: null,
+    });
+    const page = () => ({
+      type: "issues", status: "ready", revision, items: [], next_after: null,
+      groups: [{ id: "collection", label: "수집한 이슈", item_indices: [] }],
+    });
+    const fake = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, {
+      kernel: {
+        kernel: "shared-repository",
+        queries: {},
+        onRequest(method, params) {
+          const query = params.query as { type?: string } | undefined;
+          if (method === "akra/kernel/query" && query?.type === "issue_automation") return { result: state() };
+          if (method === "akra/kernel/query" && query?.type === "issues") return { result: page() };
+          if (method === "akra/kernel/command") {
+            commands.push(params);
+            const command = params.command as { type: string; mode?: "off" | "observe" };
+            if (command.type === "set_issue_automation_mode") {
+              mode = command.mode!;
+              revision += 1;
+            }
+            return { result: { processed: true } };
+          }
+          return undefined;
+        },
+      },
+    });
+    cleanups.push(() => fake.close());
+    const { connection, bridge } = connectBridge(fake.endpoint);
+    const store = sessionStore();
+    const session = new DesktopSession(bridge, store, "test");
+    session.start();
+    cleanups.push(() => session.stop());
+    await session.showKernel("/work/example-app", ["issues"]);
+    connection.start();
+    await waitFor(() => store.getKernel().issues.page?.status === "ready");
+    expect(fake.receivedMethods.filter((method) => method === "akra/kernel/attach")).toHaveLength(1);
+    expect(commands).toHaveLength(0);
+
+    await session.setIssueAutomationMode("observe");
+    expect(commands).toHaveLength(1);
+    expect(commands[0]?.idempotency_key).toMatch(/^[0-9a-f-]{36}$/);
+    expect(store.getKernel().issues.automation).toMatchObject({ mode: "observe", revision: 4 });
+    await session.syncIssues();
+    expect(commands).toHaveLength(2);
+    expect(commands[1]).toEqual({ command: { type: "sync_issues" } });
+
+    revision = 5;
+    fake.sendKernelEvent({ ...state(), type: "issues" });
+    await waitFor(() => {
+      const current = store.getKernel().issues.page;
+      return current?.status === "ready" && current.revision === 5 && !store.getKernel().issues.loading;
+    });
+    fake.disconnectClients();
+    await waitFor(() => fake.receivedMethods.filter((method) => method === "akra/kernel/attach").length === 2);
+    await waitFor(() => store.getKernel().issues.page?.status === "ready");
+    expect(store.getKernel().issues.pageNumber).toBe(1);
+    expect(commands).toHaveLength(2);
+    expect(fake.receivedMethods).not.toContain("turn/start");
+    expect(fake.receivedMethods).not.toContain("turn/steer");
+
+    await session.showKernel(null);
+    expect(fake.receivedMethods.filter((method) => method === "akra/kernel/detach")).toHaveLength(1);
+    expect(store.getKernel()).toEqual(EMPTY_KERNEL_VIEW);
+  });
+});

@@ -29,8 +29,8 @@ import {
   prependOlderTurns,
   transcriptFromThread,
 } from "../conversation/transcript";
-import { KernelConnection } from "../kernel/kernelConnection";
-import { KERNEL_METHOD } from "../kernel/protocol";
+import { KernelConnection, type KernelInterest } from "../kernel/kernelConnection";
+import { KERNEL_METHOD, type IssueAutomationModeRecord } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
@@ -255,18 +255,39 @@ export class DesktopSession {
     this.invalidateConversation();
     this.batcher.clear();
     this.chatHistory?.invalidate(null);
+    this.kernel.connectionChanged(false);
     this.client.reset("closed");
     this.dropPendingApprovals();
   }
 
   /** 커널 패널이 보여 줄 폴더를 정한다. 그 폴더의 저장소 커널에 붙고, null 이면 뗀다. */
-  showKernel(workspace: string | null): Promise<void> {
-    return this.kernel.show(workspace);
+  showKernel(workspace: string | null, interests: readonly KernelInterest[] = ["overview"]): Promise<void> {
+    return this.kernel.show(workspace, interests);
   }
 
   /** 커널 패널의 상태를 다시 읽는다. */
   refreshKernel(): Promise<void> {
     return this.kernel.refresh();
+  }
+
+  refreshIssues(): Promise<void> {
+    return this.kernel.refreshIssues();
+  }
+
+  nextIssuesPage(): Promise<void> {
+    return this.kernel.nextIssuesPage();
+  }
+
+  previousIssuesPage(): Promise<void> {
+    return this.kernel.previousIssuesPage();
+  }
+
+  setIssueAutomationMode(mode: IssueAutomationModeRecord): Promise<void> {
+    return this.kernel.setIssueAutomationMode(mode);
+  }
+
+  syncIssues(): Promise<void> {
+    return this.kernel.syncIssues();
   }
 
   /** Codex 가 찾은 스킬을 읽는다 (#2383). `forceReload` 이면 캐시 대신 디스크를 다시 읽는다. 턴을 쓰지 않는다. */

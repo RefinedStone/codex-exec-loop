@@ -88,6 +88,7 @@ fn observation(content: IssueSourceContent) -> IssueSourceRead {
     };
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
         issue: reference(),
+        web: None,
         remote_state: IssueRemoteState::Closed,
         labels: IssueMetadataList {
             items: vec![label.clone()],

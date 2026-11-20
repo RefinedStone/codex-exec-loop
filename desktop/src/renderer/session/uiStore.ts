@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
 
 export type View = "home" | "thread" | "fleet" | "remote";
-export type PanelId = "review" | "graph" | "kernel" | "browser" | "work" | "docs" | "skills";
+export type PanelId = "review" | "graph" | "kernel" | "issues" | "browser" | "work" | "docs" | "skills";
 export type Theme = "light" | "dark";
 export type Overlay = "palette" | "shortcuts" | "settings";
 
@@ -21,6 +21,8 @@ export interface UiState {
   view: View;
   sidebarOpen: boolean;
   panel: PanelId | null;
+  /** 현재 패널이 작업 본문 영역을 채운다. 패널을 바꾸거나 닫으면 복원한다. */
+  panelMaximized: boolean;
   terminalOpen: boolean;
   /** 화면을 덮는 창은 한 번에 하나만 열린다. */
   overlay: Overlay | null;
@@ -83,6 +85,7 @@ export const useUiStore = create<UiState>(() => ({
   view: "home",
   sidebarOpen: true,
   panel: null,
+  panelMaximized: false,
   terminalOpen: false,
   overlay: null,
   findOpen: false,
@@ -116,13 +119,13 @@ function viewOf(entry: NavEntry): Partial<UiState> {
 
 /** 보기를 바꾸고 이동 기록에 적는다. 보기를 바꾸는 곳은 모두 이것을 쓴다. 스레드의 내용은 부르는 쪽이 연다. */
 export function visit(entry: NavEntry): void {
-  set((state) => ({ ...viewOf(entry), overlay: null, findOpen: false, nav: pushNav(state.nav, entry) }));
+  set((state) => ({ ...viewOf(entry), panelMaximized: false, overlay: null, findOpen: false, nav: pushNav(state.nav, entry) }));
 }
 
 /** 뒤로 가기와 앞으로 가기가 쓴다. 기록의 자리만 옮기고 새로 적지 않는다. */
 export function showNavEntry(nav: NavHistory): NavEntry | null {
   const entry = nav.entries[nav.index] ?? null;
-  if (entry) set({ ...viewOf(entry), overlay: null, findOpen: false, nav });
+  if (entry) set({ ...viewOf(entry), panelMaximized: false, overlay: null, findOpen: false, nav });
   return entry;
 }
 
@@ -193,12 +196,12 @@ export function fitSideColumns(): void {
 
 /** 오른쪽 패널을 연다. 패널을 여는 곳은 모두 이것을 쓴다: 좁은 창에서는 옆 칸을 닫아 자리를 만든다. */
 export function openPanel(panel: PanelId): void {
-  set((state) => ({ panel, overlay: null, dotDock: isNarrowWindow() ? null : state.dotDock, chatDock: isNarrowWindow() ? null : state.chatDock }));
+  set((state) => ({ panel, panelMaximized: false, overlay: null, dotDock: isNarrowWindow() ? null : state.dotDock, chatDock: isNarrowWindow() ? null : state.chatDock }));
 }
 
 export function togglePanel(panel: PanelId): void {
   if (useUiStore.getState().panel === panel) {
-    set({ panel: null, overlay: null });
+    set({ panel: null, panelMaximized: false, overlay: null });
   } else {
     openPanel(panel);
   }

@@ -73,6 +73,7 @@ fn basis() -> IssueComparisonBasis {
 fn observation() -> IssueSourceObservation {
     IssueSourceObservation {
         issue: reference(),
+        web: None,
         remote_state: IssueRemoteState::Open,
         labels: labels(&["akra:auto"], IssueMetadataCompleteness::Complete),
         assignees: IssueMetadataList {
@@ -459,4 +460,39 @@ fn repository_comparison_preserves_the_full_stable_scope() {
     let mut moved_issue = reference();
     moved_issue.repository_id = "R_elsewhere".to_owned();
     assert!(!repository.matches_reference(&moved_issue));
+}
+
+#[test]
+fn observation_web_is_optional_for_old_json_and_never_fills_an_unknown_read() {
+    let legacy = observation();
+    let encoded = serde_json::to_value(&legacy).unwrap();
+    assert!(encoded.get("web").is_none());
+    let restored: IssueSourceObservation = serde_json::from_value(encoded).unwrap();
+    assert_eq!(restored.web, None);
+    assert_eq!(restored, legacy);
+
+    let mut current = legacy;
+    current.web = Some(IssueSourceWeb {
+        number: 17,
+        url: "https://github.com/sample/widgets/issues/17".to_owned(),
+    });
+    let encoded = serde_json::to_value(&current).unwrap();
+    assert_eq!(
+        serde_json::from_value::<IssueSourceObservation>(encoded.clone()).unwrap(),
+        current
+    );
+    let mut unexpected = encoded.clone();
+    unexpected["web"]["rawTitle"] = "must-not-enter-web-metadata".into();
+    assert!(serde_json::from_value::<IssueSourceObservation>(unexpected).is_err());
+    let mut incomplete = encoded;
+    incomplete["web"].as_object_mut().unwrap().remove("url");
+    assert!(serde_json::from_value::<IssueSourceObservation>(incomplete).is_err());
+
+    let unknown = IssueSourceRead::Unknown {
+        issue: reference(),
+        reason: IssueSourceFailure::ProviderUnavailable,
+    };
+    let mut injected = serde_json::to_value(unknown).unwrap();
+    injected["value"]["web"] = serde_json::to_value(current.web.unwrap()).unwrap();
+    assert!(serde_json::from_value::<IssueSourceRead>(injected).is_err());
 }

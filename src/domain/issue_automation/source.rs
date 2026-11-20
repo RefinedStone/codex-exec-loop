@@ -10,6 +10,9 @@ use crate::domain::issue_work::{
 
 use super::IssueAutomationSnapshot;
 
+mod web;
+pub use web::IssueSourceWeb;
+
 pub const ISSUE_SOURCE_CURSOR_VERSION: u32 = 1;
 pub const MAX_ISSUE_SOURCE_PAGE_SIZE: u16 = 100;
 const MAX_CURSOR_BYTES: usize = 4096;
@@ -364,6 +367,9 @@ pub enum IssueSourceContent {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueSourceObservation {
     pub issue: IssueReference,
+    /// 현재 관찰의 표시 번호와 검증한 URL이다. 과거 JSON에 없으면 다른 값으로 채우지 않는다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<IssueSourceWeb>,
     pub remote_state: IssueRemoteState,
     pub labels: IssueMetadataList<IssueSourceLabel>,
     pub assignees: IssueMetadataList<IssueSourceActor>,
