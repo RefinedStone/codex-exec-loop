@@ -3,7 +3,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use crate::application::port::inbound::stored_command_port::{
-    StoredCommand, StoredCommandOutcome, StoredCommandPort,
+    StoredCommand, StoredCommandOutcome, StoredCommandPort, StoredCommandResult,
 };
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 #[cfg(test)]
@@ -13,6 +13,9 @@ use crate::application::port::outbound::repository_state_port::RepositoryStatePo
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::application::service::issue_collection::{
+    IssueCollectionService, IssueCollectionTrackedFact,
+};
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent,
     ParallelModeControlPlaneCommand as ApplicationParallelModeControlPlaneCommand,
@@ -30,6 +33,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
+use crate::composition::issue_observer::{IssueCollectionHostView, IssueObserver};
 use crate::composition::kernel_event_recorder::KernelEventRecorder;
 use crate::composition::repository_observer::RepositoryObserver;
 use crate::core::app::{
@@ -53,6 +57,9 @@ use crate::core::runtime::{CoreEffectExecutor, CoreInputWaker, CoreRuntime, core
 use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
+use crate::domain::issue_automation::collection::{
+    IssueCollectionMode, IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery,
+};
 use crate::domain::kernel_event::{
     APPROVAL_KINDS, AUTO_FOLLOW_KINDS, ApprovalResolution, CALLER_NAME_MAX_CHARS, COMMAND_KINDS,
     CommandMemory, CommandRecall, KernelCommandDescriptor, KernelEvent, KernelEventPage,
@@ -66,14 +73,16 @@ use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::planning::PostTurnContinuationAction;
 
 /*
- * 클라이언트가 커널에 낸 명령이다 (plan 18 K4-9d). core 가 처리하는 명령이거나, 저장된 planning 데이터만 바꾸는
- * 저장 명령이다. 저장 명령은 core 를 지나지 않는다. 런타임이 실행기를 바로 부른다.
+ * 클라이언트가 커널에 낸 명령이다. core 명령, 로컬 데이터를 바꾸는 저장 명령, 관찰을 요청하는 명령을 나눈다.
+ * 저장 명령과 관찰 요청은 core를 지나지 않고 런타임이 해당 실행기를 부른다.
  */
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum KernelClientCommand {
     Core(AppCommand),
     // 저장 명령은 작업의 필드를 모두 가져서 크다. 상자에 넣어 커널의 입력을 작게 둔다.
     Stored(Box<StoredCommand>),
+    /// 이슈 읽기를 요청한다. 진행 중인 읽기가 있으면 그 요청에 합친다.
+    SyncIssues,
 }
 
 /// 저장 명령의 끝이다. 실패는 원인의 글을 가진다. 그 글은 완료 기록의 `detail` 과 같다.
@@ -100,6 +109,8 @@ pub(crate) enum ClientCommandDispatch {
     KeyUnavailable,
     /// 지우는 명령이 확인 없이 왔다 (plan 18 K4-5). 실행하지 않았고 기록하지도 않았다.
     ConfirmationRequired,
+    /// core를 거치지 않는 런타임 명령의 명시적 거절이다.
+    Rejected(ReasonCode),
 }
 
 /// 클라이언트의 명령을 받은 결과이다 (plan 19 Q3-6).
@@ -147,6 +158,9 @@ pub(crate) struct NativeClientRuntime {
     // 작업 공간의 git 관찰자와 마지막으로 기록한 상태이다 (plan 20 §4.1). 기록이 붙은 커널만 관찰한다.
     repository_observer: Option<RepositoryObserver>,
     repository_state: Option<RepositoryState>,
+    issue_collection: Option<Arc<IssueCollectionService>>,
+    issue_observer: Option<IssueObserver>,
+    published_issue_change: bool,
     // 클라이언트에 아직 보내지 않은 기록이다 (plan 19 Q3-3b). 커널 호스트가 꺼내 `recorded` 이벤트로 보낸다.
     published_kernel_records: Vec<RecordedKernelEvent>,
     /*
@@ -588,6 +602,11 @@ impl NativeCoreRuntime {
 /// 저장소 잠금을 푼다. 그렇지 않으면 같은 저장소의 다음 커널과 이전 작업 스레드가 같은 큐를 배분할 수 있다 (K3-5).
 impl Drop for NativeClientRuntime {
     fn drop(&mut self) {
+        // 다른 필드를 버리거나 기록을 flush하기 전에 관찰 commit 경계를 닫는다.
+        if let Some(mut observer) = self.issue_observer.take() {
+            let tracked = observer.cancel_and_take_tracked();
+            self.record_issue_tracked(tracked);
+        }
         self.parallel_control_plane.stop_automation();
     }
 }
@@ -621,6 +640,9 @@ impl NativeClientRuntime {
             last_kernel_sequence: 0,
             repository_observer: None,
             repository_state: None,
+            issue_collection: None,
+            issue_observer: None,
+            published_issue_change: false,
             published_kernel_records: Vec::new(),
             recent_kernel_records: std::collections::VecDeque::new(),
             command_memory: CommandMemory::default(),
@@ -998,7 +1020,7 @@ impl NativeClientRuntime {
     }
 
     /*
-     * 다음 시계 일의 마감 시각이다 (plan 19 Q3-4). core 의 `Tick` 과 병렬 tick 이 다음에 할 일 중 가장 가까운 것이다.
+     * 다음 시계 일의 마감 시각이다. core, 병렬 제어부, 이슈 관찰 중 가장 가까운 마감이다.
      * 커널 호스트는 이 시각까지만 자고, 마감이 없으면 입력이 올 때까지 잔다. 병렬 tick 은 병렬 보기가 있을 때만 돈다.
      */
     pub(crate) fn next_deadline(&self, now: Instant) -> Option<Instant> {
@@ -1010,7 +1032,11 @@ impl NativeClientRuntime {
             self.parallel_control_plane
                 .next_deadline(now, view.supervisor_view_active)
         });
-        [core, parallel].into_iter().flatten().min()
+        let issues = self
+            .issue_observer
+            .as_ref()
+            .and_then(|observer| observer.next_deadline(now));
+        [core, parallel, issues].into_iter().flatten().min()
     }
 
     pub(crate) fn run_host_cycle(
@@ -1061,6 +1087,7 @@ impl NativeClientRuntime {
         {
             self.record_repository_state(current);
         }
+        self.poll_issue_observer(now);
         outcomes
     }
 
@@ -1182,8 +1209,13 @@ impl NativeClientRuntime {
         let command = match command {
             KernelClientCommand::Core(command) => command,
             KernelClientCommand::Stored(stored) => {
-                return self.dispatch_stored_command(*stored, admission);
+                return self.dispatch_stored_command(
+                    *stored,
+                    admission,
+                    descriptor.and_then(|value| value.caller.as_deref()),
+                );
             }
+            KernelClientCommand::SyncIssues => return self.dispatch_issue_sync(),
         };
         // 기록한 명령은 연산 id 를 가진다. core 가 그 명령이 만든 기록에 같은 id 를 싣는다 (plan 18 K4-4).
         let command = match admission {
@@ -1231,15 +1263,17 @@ impl NativeClientRuntime {
      * 동기이다: 돌아올 때 변경은 저장되어 있고 그 끝도 기록되어 있다. 성공과 실패는 `command_completed`, 거절은
      * `command_rejected` 이다.
      *
-     * 끝난 뒤에는 성공이든 거절이든 planning 을 다시 읽는다. 성공이면 클라이언트가 바뀐 큐를 보고, 거절
-     * (낡은 revision)이면 다음 `planning` 조회가 지금의 revision 을 답한다.
+     * planning 명령은 끝난 뒤 그 투영을 다시 읽는다. 이슈 모드는 저장 결과의 epoch를 즉시 적용하며
+     * planning 읽기나 그 완료 대기를 만들지 않는다.
      */
     fn dispatch_stored_command(
         &mut self,
         command: StoredCommand,
         admission: Option<CommandAdmission>,
+        caller: Option<&str>,
     ) -> ClientCommandDispatch {
         let kind = command.kind();
+        let is_issue_mode = matches!(&command, StoredCommand::SetIssueAutomationMode { .. });
         let op_id = match admission {
             Some(CommandAdmission::Recorded(op_id)) => Some(op_id),
             _ => None,
@@ -1261,6 +1295,25 @@ impl NativeClientRuntime {
                 None,
             ),
         };
+        if let StoredCommandEnd::Finished(StoredCommandOutcome::Done(
+            StoredCommandResult::IssueAutomationModeChanged {
+                previous,
+                projection,
+                changed,
+            },
+        )) = &end
+        {
+            self.replace_issue_projection((**projection).clone(), Instant::now());
+            if *changed {
+                self.record_kernel_events(vec![KernelEvent::issue_automation_mode_changed(
+                    *previous,
+                    projection.state.config.mode,
+                    projection.state.epoch,
+                    projection.state.revision,
+                    caller,
+                )]);
+            }
+        }
         let rejection = match &end {
             StoredCommandEnd::Finished(StoredCommandOutcome::Rejected(rejection)) => {
                 // 스펙의 표가 이 명령의 거절 이유를 모두 적어야 한다 (plan 18 K4-1).
@@ -1297,7 +1350,7 @@ impl NativeClientRuntime {
                 }
             }
         }
-        let outcome = match workspace_directory {
+        let outcome = match workspace_directory.filter(|_| !is_issue_mode) {
             Some(workspace_directory) => self.dispatch_client_event(NativeClientEvent::core(
                 CoreInput::Command(AppCommand::RefreshPlanningRuntime {
                     workspace_directory,
@@ -1562,6 +1615,109 @@ impl NativeClientRuntime {
         self.repository_observer = Some(RepositoryObserver::start(port, workspace_dir.clone()));
     }
 
+    /// 공급자 호출 없이 저장된 기본 설정을 읽은 뒤 관찰자를 붙인다.
+    // 이슈 수집은 조립 계층이 소유한다. 호스트/조립용 메서드를 UI에 제공하는 facade로 넓히지 않는다.
+    pub(super) fn attach_issue_collection(
+        &mut self,
+        service: Arc<IssueCollectionService>,
+    ) -> anyhow::Result<()> {
+        self.issue_observer = Some(IssueObserver::new(service.clone(), self.host_waker())?);
+        self.issue_collection = Some(service);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attach_issue_observer_for_test(&mut self, observer: IssueObserver) {
+        self.issue_observer = Some(observer);
+    }
+
+    pub(super) fn issue_collection_view(
+        &self,
+        now: Instant,
+    ) -> anyhow::Result<IssueCollectionHostView> {
+        let mut view = self
+            .issue_observer
+            .as_ref()
+            .map(|observer| observer.view(now))
+            .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?;
+        // 표시와 조회는 실제 장부를 읽는다. 진행 중인 worker의 스케줄러 epoch는 바꾸지 않는다.
+        if let Some(service) = &self.issue_collection {
+            view.projection = service.projection()?;
+        }
+        if view.projection.state.config.mode == IssueCollectionMode::Off {
+            view.collecting = false;
+            view.next_poll_after_ms = None;
+        }
+        Ok(view)
+    }
+
+    pub(super) fn issue_collection_page(
+        &self,
+        query: &IssueCollectionQuery,
+    ) -> anyhow::Result<IssueCollectionPage> {
+        self.issue_collection
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
+            .issues(query)
+    }
+
+    fn replace_issue_projection(&mut self, projection: IssueCollectionProjection, now: Instant) {
+        if let Some(observer) = &mut self.issue_observer {
+            self.published_issue_change |= observer.replace_projection(projection, now);
+        }
+    }
+
+    fn dispatch_issue_sync(&mut self) -> ClientCommandDispatch {
+        let Some(observer) = &mut self.issue_observer else {
+            return ClientCommandDispatch::Rejected(ReasonCode::KernelUnreachable);
+        };
+        if !observer.request_sync(Instant::now()) {
+            return ClientCommandDispatch::Rejected(ReasonCode::IssueAutomationOff);
+        }
+        ClientCommandDispatch::Ran {
+            outcome: NativeClientDispatchOutcome::Parallel(
+                NativeParallelDispatchOutcome::from_events(Vec::new()),
+            ),
+            operation: None,
+            stored: None,
+        }
+    }
+
+    fn poll_issue_observer(&mut self, now: Instant) {
+        let Some(observer) = &mut self.issue_observer else {
+            return;
+        };
+        let at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        let cycle = observer.poll(now, at_unix_ms);
+        self.published_issue_change |= cycle.changed;
+        self.record_issue_tracked(cycle.tracked);
+    }
+
+    fn record_issue_tracked(&mut self, tracked: Vec<IssueCollectionTrackedFact>) {
+        let records = tracked
+            .into_iter()
+            .map(|fact| {
+                KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
+            })
+            .collect();
+        self.record_kernel_events(records);
+    }
+
+    pub(super) fn take_issue_collection_update(
+        &mut self,
+        now: Instant,
+    ) -> Option<IssueCollectionHostView> {
+        if !std::mem::take(&mut self.published_issue_change) {
+            return None;
+        }
+        // 로컬 읽기 실패를 낡은 투영으로 감추지 않는다. 명시 조회는 오류를 반환한다.
+        self.issue_collection_view(now).ok()
+    }
+
     /// 관찰한 상태가 지난 기록과 다르면 사건을 기록한다. 같은 상태는 기록하지 않는다.
     fn record_repository_state(&mut self, current: RepositoryState) {
         if let Some(event) = current.change_from(self.repository_state.as_ref()) {
@@ -1572,6 +1728,7 @@ impl NativeClientRuntime {
 
     /// 커널에 남은 일이 있다 (plan 18 K3-5). core 의 턴·승인·자동 후속·평가·planning 작업, 또는 병렬 제어부의
     /// 일(켜진 병렬 모드, 열린 epoch, 진행 중인 제어 효과, 배분된 작업 스레드)이다. 커널을 내려도 되는지 볼 때 쓴다.
+    /// 이슈 Observe와 그 진행 중 읽기는 포함하지 않는다. 내릴 때 취소하고 다음 커널에서 저장 경계부터 재개한다.
     pub(crate) fn has_remaining_work(&self) -> bool {
         self.core.runtime.has_remaining_work() || self.parallel_control_plane.has_remaining_work()
     }

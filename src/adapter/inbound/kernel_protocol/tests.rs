@@ -67,6 +67,10 @@ fn sample_commands() -> Vec<KernelCommand> {
             expected_planning_revision: 7,
             confirm: true,
         },
+        KernelCommand::SetIssueAutomationMode {
+            mode: IssueAutomationMode::Observe,
+        },
+        KernelCommand::SyncIssues {},
     ]
 }
 
@@ -143,7 +147,7 @@ fn every_command_round_trips_and_is_described() {
 }
 
 #[test]
-fn every_command_maps_to_one_core_command() {
+fn every_command_maps_to_its_own_execution_boundary() {
     for command in sample_commands() {
         let label = format!("{command:?}");
         let kind = command.kind();
@@ -160,6 +164,7 @@ fn every_command_maps_to_one_core_command() {
                 assert_eq!(stored.kind(), kind, "{label}");
                 assert!(CommandResult::name_for(kind).is_some(), "{label}");
             }
+            KernelCommandInput::SyncIssues => assert_eq!(kind, KernelCommandKind::SyncIssues),
         }
     }
     assert_eq!(
@@ -627,7 +632,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 7);
+    assert_eq!(queries.len(), 9);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
@@ -639,6 +644,11 @@ fn events_and_description_have_stable_wire_shapes() {
             limit: None,
         },
         KernelQuery::Operation { op_id: 7 },
+        KernelQuery::IssueAutomation {},
+        KernelQuery::Issues {
+            after: None,
+            limit: None,
+        },
     ]) {
         assert_eq!(
             serde_json::to_value(query).expect("query should serialize")["type"],
@@ -646,7 +656,7 @@ fn events_and_description_have_stable_wire_shapes() {
         );
     }
     let events = describe().events;
-    assert_eq!(events.len(), 8);
+    assert_eq!(events.len(), 9);
     for (name, event) in events.iter().map(|event| event.name).zip([
         KernelEvent::Sessions(SessionsState {
             status: SessionsStatus::Idle,
@@ -670,6 +680,12 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelEvent::Planning(PlanningState::from_core(&RuntimeProjection::uninitialized())),
         KernelEvent::Parallel(ParallelState::from_core(no_parallel())),
         KernelEvent::Resync,
+        KernelEvent::Recorded(RecordedKernelEvent {
+            sequence: 1,
+            recorded_at: "2026-11-20T00:00:00Z".to_string(),
+            event: sample_records().into_iter().next().expect("record fixture"),
+        }),
+        KernelEvent::Issues(IssueAutomationState::unavailable()),
     ]) {
         assert_eq!(
             serde_json::to_value(event).expect("event should serialize")["type"],
@@ -915,6 +931,7 @@ fn an_operation_query_answers_with_the_state_and_the_records_of_one_command() {
     let snapshot = crate::core::app::AppSnapshot::initial();
     let answer = request
         .query
+        .clone()
         .answer(&snapshot, &[], no_parallel(), None, Some(status));
     let answer = serde_json::to_value(&answer).expect("the answer should serialize");
     assert_eq!(answer["type"], json!("operation"));
@@ -1487,7 +1504,14 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
     );
     assert_eq!(
         names_of(&spec["terms"]["scope"]),
-        ["session", "thread", "approval", "auto_follow", "planning"]
+        [
+            "session",
+            "thread",
+            "approval",
+            "auto_follow",
+            "planning",
+            "issue"
+        ]
     );
     let notifications = spec["methods"]
         .as_array()
@@ -1528,7 +1552,12 @@ fn the_kernel_spec_file_matches_the_spec() {
  * `const`, `enum`, `properties`, `required`, `additionalProperties`, `items`. 스키마가 실제 전송 모양과 다르면
  * (schemars 와 serde 가 어긋나면) 여기서 걸린다.
  */
-fn schema_errors(schema: &Value, value: &Value, definitions: &Value, path: &str) -> Vec<String> {
+pub(super) fn schema_errors(
+    schema: &Value,
+    value: &Value,
+    definitions: &Value,
+    path: &str,
+) -> Vec<String> {
     let mut errors = Vec::new();
     let Some(schema) = schema.as_object() else {
         return errors;
@@ -1609,6 +1638,18 @@ fn schema_errors(schema: &Value, value: &Value, definitions: &Value, path: &str)
             }
         }
     }
+    if let Some(number) = value.as_f64()
+        && (schema
+            .get("minimum")
+            .and_then(Value::as_f64)
+            .is_some_and(|minimum| number < minimum)
+            || schema
+                .get("maximum")
+                .and_then(Value::as_f64)
+                .is_some_and(|maximum| number > maximum))
+    {
+        errors.push(format!("{path}: the number {number} is out of range"));
+    }
     if let Some(text) = value.as_str() {
         let length = text.chars().count() as u64;
         if schema
@@ -1641,7 +1682,7 @@ fn schema_errors(schema: &Value, value: &Value, definitions: &Value, path: &str)
 }
 
 /// 스펙의 목록에서 그 이름의 항목이 가진 스키마로 값을 검사한다.
-fn assert_matches_spec(spec: &Value, list: &str, field: &str, value: &Value) {
+pub(super) fn assert_matches_spec(spec: &Value, list: &str, field: &str, value: &Value) {
     let tag = if list == "records" { "kind" } else { "type" };
     let name = value[tag].as_str().expect("a tagged sample");
     let entry = spec[list]
@@ -1818,6 +1859,7 @@ fn the_test_checker_knows_every_schema_keyword_of_the_spec() {
         "maxLength",
         "minLength",
         "minimum",
+        "maximum",
         "oneOf",
         "pattern",
         "properties",
@@ -1829,7 +1871,7 @@ fn the_test_checker_knows_every_schema_keyword_of_the_spec() {
         .filter(|keyword| !known.contains(&keyword.as_str()))
         .collect::<Vec<_>>();
     assert!(unknown.is_empty(), "the checker does not know {unknown:?}");
-    // `format` and `minimum` say only "an unsigned or sized integer". `additionalProperties` is always `false`,
+    // `format` names numeric representations; minimum/maximum also bound issue page sizes. `additionalProperties` is always `false`,
     // and the only pattern is the non-blank rule.
     let text = serde_json::to_string(&spec).expect("the spec should serialize");
     assert!(!text.contains("\"additionalProperties\":{"));
@@ -2003,6 +2045,26 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             previous_head: Some("a".repeat(40)),
             previous_branch: None,
         },
+        Record::issue_tracked(
+            &crate::domain::issue_work::IssueReference {
+                provider: crate::domain::issue_work::IssueProvider::GitHub,
+                server_id: "github.com".to_string(),
+                repository_id: "R_stable".to_string(),
+                issue_id: "I_stable".to_string(),
+                project_scope: crate::domain::issue_work::IssueProjectScope {
+                    workspace_dir: "/workspace".to_string(),
+                },
+            },
+            "binding-1",
+            3,
+        ),
+        Record::issue_automation_mode_changed(
+            Some(crate::domain::issue_automation::collection::IssueCollectionMode::Observe),
+            crate::domain::issue_automation::collection::IssueCollectionMode::Off,
+            2,
+            3,
+            Some("akra-desktop"),
+        ),
     ]
 }
 
@@ -2055,9 +2117,20 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
             after: Some(3),
             limit: None,
         },
+        KernelQuery::Operation { op_id: 7 },
+        KernelQuery::IssueAutomation {},
+        KernelQuery::Issues {
+            after: None,
+            limit: None,
+        },
     ] {
         assert_matches_spec(&spec, "queries", "input", &to_json(&query));
-        matches_type("QueryRequest", to_json(&QueryRequest { query }));
+        matches_type(
+            "QueryRequest",
+            to_json(&QueryRequest {
+                query: query.clone(),
+            }),
+        );
         let page = crate::domain::kernel_event::KernelEventPage {
             records: records
                 .iter()
@@ -2087,6 +2160,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         priority: 3,
     };
     let populated = [
+        KernelEvent::Issues(IssueAutomationState::unavailable()),
         KernelEvent::Resync,
         KernelEvent::Recorded(record(9, records[0].clone())),
         KernelEvent::PromptSubmission(PromptSubmissionState {

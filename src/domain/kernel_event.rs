@@ -4,6 +4,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::issue_automation::collection::IssueCollectionMode;
+use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
 pub use crate::domain::kernel_spec::ReasonCode;
 use crate::domain::kernel_spec::{
     CommandCompletion, KernelCommandKind, KernelRecordKind, OperationState,
@@ -168,6 +170,110 @@ pub struct OperationReceipt {
     pub replayed: bool,
 }
 
+/// 이슈 감사 기록과 조회의 안정 좌표다. 원문·snapshot·provider 오류를 담지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueEventReference {
+    pub provider: IssueEventProvider,
+    pub server_id: String,
+    pub repository_id: String,
+    pub issue_id: String,
+    pub project_scope: IssueEventProjectScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueEventProvider {
+    GitHub,
+    Jira,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueEventProjectScope {
+    pub workspace_dir: String,
+}
+
+impl From<IssueProvider> for IssueEventProvider {
+    fn from(value: IssueProvider) -> Self {
+        match value {
+            IssueProvider::GitHub => Self::GitHub,
+            IssueProvider::Jira => Self::Jira,
+        }
+    }
+}
+
+impl From<IssueEventProvider> for IssueProvider {
+    fn from(value: IssueEventProvider) -> Self {
+        match value {
+            IssueEventProvider::GitHub => Self::GitHub,
+            IssueEventProvider::Jira => Self::Jira,
+        }
+    }
+}
+
+impl From<&IssueReference> for IssueEventReference {
+    fn from(value: &IssueReference) -> Self {
+        Self {
+            provider: value.provider.into(),
+            server_id: value.server_id.clone(),
+            repository_id: value.repository_id.clone(),
+            issue_id: value.issue_id.clone(),
+            project_scope: IssueEventProjectScope {
+                workspace_dir: value.project_scope.workspace_dir.clone(),
+            },
+        }
+    }
+}
+
+impl From<IssueEventReference> for IssueReference {
+    fn from(value: IssueEventReference) -> Self {
+        Self {
+            provider: value.provider.into(),
+            server_id: value.server_id,
+            repository_id: value.repository_id,
+            issue_id: value.issue_id,
+            project_scope: IssueProjectScope {
+                workspace_dir: value.project_scope.workspace_dir,
+            },
+        }
+    }
+}
+
+/// IA1에서 설정할 수 있는 두 수준이다. 이후 단계의 실행 수준은 아직 입력으로 받지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueAutomationModeRecord {
+    Off,
+    Observe,
+}
+
+impl From<IssueCollectionMode> for IssueAutomationModeRecord {
+    fn from(value: IssueCollectionMode) -> Self {
+        match value {
+            IssueCollectionMode::Off => Self::Off,
+            IssueCollectionMode::Observe => Self::Observe,
+        }
+    }
+}
+
+impl From<IssueAutomationModeRecord> for IssueCollectionMode {
+    fn from(value: IssueAutomationModeRecord) -> Self {
+        match value {
+            IssueAutomationModeRecord::Off => Self::Off,
+            IssueAutomationModeRecord::Observe => Self::Observe,
+        }
+    }
+}
+
+/// 변경의 경로다. caller의 자기 소개를 사람·에이전트 인증으로 해석하지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueChangeOrigin {
+    Command,
+    Rule,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[schemars(rename = "KernelRecord")]
@@ -285,6 +391,23 @@ pub enum KernelEvent {
         previous_head: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         previous_branch: Option<String>,
+    },
+    /// 관찰 장부와 기존 tracked 행의 합집합에 처음 들어온 이슈다. 재발견에서는 반복하지 않는다.
+    IssueTracked {
+        issue: IssueEventReference,
+        binding_id: String,
+        revision: u64,
+        by: IssueChangeOrigin,
+    },
+    /// 모드 설정 commit 이후의 감사 기록이다. 설정 복원은 이 기록이 아닌 장부에서 한다.
+    IssueAutomationModeChanged {
+        previous: Option<IssueAutomationModeRecord>,
+        mode: IssueAutomationModeRecord,
+        epoch: u64,
+        revision: u64,
+        by: IssueChangeOrigin,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
     },
 }
 
@@ -491,6 +614,41 @@ impl PendingApproval {
 }
 
 impl KernelEvent {
+    pub fn issue_tracked(issue: &IssueReference, binding_id: &str, revision: u64) -> Self {
+        Self::IssueTracked {
+            issue: issue.into(),
+            binding_id: binding_id.to_string(),
+            revision,
+            by: IssueChangeOrigin::Rule,
+        }
+    }
+
+    pub fn issue_automation_mode_changed(
+        previous: Option<IssueCollectionMode>,
+        mode: IssueCollectionMode,
+        epoch: u64,
+        revision: u64,
+        caller: Option<&str>,
+    ) -> Self {
+        Self::IssueAutomationModeChanged {
+            previous: previous.map(Into::into),
+            mode: mode.into(),
+            epoch,
+            revision,
+            by: IssueChangeOrigin::Command,
+            caller: caller
+                .map(|name| {
+                    name.chars()
+                        .filter(|c| !c.is_control())
+                        .take(CALLER_NAME_MAX_CHARS)
+                        .collect::<String>()
+                })
+                .filter(|name| !name.is_empty()),
+        }
+    }
+}
+
+impl KernelEvent {
     /// 기록 표의 `kind` 열 값이다. 직렬화의 `kind` 와 같다.
     pub fn kind(&self) -> &'static str {
         self.record_kind().name()
@@ -499,6 +657,8 @@ impl KernelEvent {
     /// 이 사건의 종류이다. 종류의 이름과 설명은 `KernelRecordKind` 가 가진다 (plan 18 K4-1).
     pub fn record_kind(&self) -> KernelRecordKind {
         match self {
+            Self::IssueTracked { .. } => KernelRecordKind::IssueTracked,
+            Self::IssueAutomationModeChanged { .. } => KernelRecordKind::IssueAutomationModeChanged,
             Self::AutoFollowConfigured { .. } => KernelRecordKind::AutoFollowConfigured,
             Self::ThreadPromptQueued(_) => KernelRecordKind::ThreadPromptQueued,
             Self::ThreadPromptSettled { .. } => KernelRecordKind::ThreadPromptSettled,
@@ -519,7 +679,10 @@ impl KernelEvent {
     /// 이 사건의 대화이다. 대화가 없는 사건은 비어 있다.
     pub fn thread_id(&self) -> &str {
         match self {
-            Self::RepositoryChanged { .. } | Self::AutoFollowConfigured { .. } => "",
+            Self::RepositoryChanged { .. }
+            | Self::AutoFollowConfigured { .. }
+            | Self::IssueTracked { .. }
+            | Self::IssueAutomationModeChanged { .. } => "",
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
             Self::ApprovalRequested(approval) => &approval.thread_id,
             Self::ApprovalResolved { thread_id, .. }
@@ -553,7 +716,9 @@ impl KernelEvent {
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
             | Self::ApprovalResolved { .. }
-            | Self::RepositoryChanged { .. } => None,
+            | Self::RepositoryChanged { .. }
+            | Self::IssueTracked { .. }
+            | Self::IssueAutomationModeChanged { .. } => None,
         }
     }
 
@@ -597,7 +762,9 @@ impl KernelEvent {
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
             | Self::ApprovalResolved { .. }
-            | Self::RepositoryChanged { .. } => return None,
+            | Self::RepositoryChanged { .. }
+            | Self::IssueTracked { .. }
+            | Self::IssueAutomationModeChanged { .. } => return None,
         };
         Some(state)
     }
@@ -924,6 +1091,57 @@ pub fn open_queued_thread_prompts(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn issue_records_keep_stable_identity_and_do_not_drive_operation_or_mode_recovery() {
+        let issue = super::IssueReference {
+            provider: super::IssueProvider::GitHub,
+            server_id: "github.com".to_string(),
+            repository_id: "R_stable".to_string(),
+            issue_id: "I_stable".to_string(),
+            project_scope: super::IssueProjectScope {
+                workspace_dir: "/work/project".to_string(),
+            },
+        };
+        let tracked = super::KernelEvent::issue_tracked(&issue, "origin-binding", 7);
+        let changed = super::KernelEvent::issue_automation_mode_changed(
+            Some(super::IssueCollectionMode::Observe),
+            super::IssueCollectionMode::Off,
+            3,
+            8,
+            Some("akra-cli"),
+        );
+        for (event, kind) in [
+            (&tracked, "issue_tracked"),
+            (&changed, "issue_automation_mode_changed"),
+        ] {
+            assert_eq!(event.kind(), kind);
+            assert_eq!(event.thread_id(), "");
+            assert_eq!(event.op_id(), None);
+            assert_eq!(event.operation_step(), None);
+            let wire = serde_json::to_value(event).unwrap();
+            assert_eq!(wire["kind"], kind);
+            assert!(wire.get("snapshot").is_none());
+            assert!(wire.get("title").is_none());
+            assert!(wire.get("body").is_none());
+            assert_eq!(
+                serde_json::from_value::<super::KernelEvent>(wire).unwrap(),
+                *event
+            );
+        }
+        let wire = serde_json::to_value(tracked).unwrap();
+        assert_eq!(wire["issue"]["repository_id"], "R_stable");
+        assert_eq!(
+            wire["issue"]["project_scope"]["workspace_dir"],
+            "/work/project"
+        );
+        assert_eq!(wire["by"], "rule");
+        let wire = serde_json::to_value(changed).unwrap();
+        assert_eq!(wire["previous"], "observe");
+        assert_eq!(wire["mode"], "off");
+        assert_eq!(wire["by"], "command");
+        assert_eq!(wire["caller"], "akra-cli");
+    }
+
     use super::*;
 
     fn queued(task_id: &str) -> QueuedThreadPrompt {

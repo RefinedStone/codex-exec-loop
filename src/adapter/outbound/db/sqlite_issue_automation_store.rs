@@ -9,7 +9,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationBindingInsertResult, IssueAutomationBindingSaveResult,
     IssueAutomationIssueInsertResult, IssueAutomationIssueSaveResult, IssueAutomationStorePort,
-    StoredIssueAutomationBinding,
+    IssueCollectionApplyResult, IssueCollectionModeSaveResult, StoredIssueAutomationBinding,
 };
 use crate::domain::issue_automation::{
     IssueAutomationAutonomy, IssueAutomationBinding, IssueAutomationBindingId,
@@ -20,6 +20,16 @@ use crate::domain::issue_work::{
     IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueReference, IssueSharedCopy,
 };
 
+use crate::application::port::outbound::issue_source_port::{
+    IssueDiscoveryPage, IssueDiscoveryRequest,
+};
+use crate::domain::issue_automation::collection::{
+    IssueCollectionFailure, IssueCollectionFence, IssueCollectionMode, IssueCollectionPage,
+    IssueCollectionQuery, IssueResyncBatch, StoredIssueCollection,
+};
+use crate::domain::issue_automation::source::IssueSourceRead;
+
+mod collection;
 mod private_store;
 
 #[cfg(test)]
@@ -28,7 +38,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -264,6 +274,7 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
                         inserted: false,
                     });
                 }
+                collection::validate_new_workflow_binding(transaction, workspace_dir, &record)?;
                 validate_issue_binding(transaction, workspace_dir, &record)?;
                 let mut inserted = record.clone();
                 inserted.revision = 1;
@@ -367,6 +378,77 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
             })
         })
     }
+
+    fn get_collection(&self, workspace_dir: &str) -> Result<Option<StoredIssueCollection>> {
+        collection::get(self, workspace_dir)
+    }
+
+    fn ensure_collection(&self, workspace_dir: &str) -> Result<StoredIssueCollection> {
+        collection::ensure(self, workspace_dir)
+    }
+
+    fn set_collection_mode(
+        &self,
+        workspace_dir: &str,
+        expected_epoch: Option<u64>,
+        mode: IssueCollectionMode,
+    ) -> Result<IssueCollectionModeSaveResult> {
+        collection::set_mode(self, workspace_dir, expected_epoch, mode)
+    }
+
+    fn apply_discovery_page(
+        &self,
+        workspace_dir: &str,
+        expected: IssueCollectionFence,
+        request: &IssueDiscoveryRequest,
+        page: &IssueDiscoveryPage,
+    ) -> Result<IssueCollectionApplyResult> {
+        collection::apply_discovery(self, workspace_dir, expected, request, page)
+    }
+
+    fn reset_discovery_cursor(
+        &self,
+        workspace_dir: &str,
+        expected: IssueCollectionFence,
+    ) -> Result<IssueCollectionApplyResult> {
+        collection::reset_discovery(self, workspace_dir, expected)
+    }
+
+    fn read_resync_batch(
+        &self,
+        workspace_dir: &str,
+        expected: IssueCollectionFence,
+        limit: u16,
+    ) -> Result<Option<IssueResyncBatch>> {
+        collection::read_resync(self, workspace_dir, expected, limit)
+    }
+
+    fn apply_resync_batch(
+        &self,
+        workspace_dir: &str,
+        batch: &IssueResyncBatch,
+        reads: &[IssueSourceRead],
+    ) -> Result<IssueCollectionApplyResult> {
+        collection::apply_resync(self, workspace_dir, batch, reads)
+    }
+
+    fn record_collection_attempt(
+        &self,
+        workspace_dir: &str,
+        expected: IssueCollectionFence,
+        at_unix_ms: u64,
+        failure: Option<IssueCollectionFailure>,
+    ) -> Result<IssueCollectionApplyResult> {
+        collection::record_attempt(self, workspace_dir, expected, at_unix_ms, failure)
+    }
+
+    fn query_collection_issues(
+        &self,
+        workspace_dir: &str,
+        query: &IssueCollectionQuery,
+    ) -> Result<IssueCollectionPage> {
+        collection::query(self, workspace_dir, query)
+    }
 }
 
 fn transaction<T>(
@@ -393,6 +475,15 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
+            (APPLICATION_ID, 1) => {
+                // Validate the exact v1 definitions before the additive migration.
+                // Existing bindings, workflow rows and their revisions remain untouched.
+                validate_schema_version(transaction, 1)?;
+                transaction.execute_batch(collection::CONTROL_SCHEMA)?;
+                transaction.execute_batch(collection::OBSERVATIONS_SCHEMA)?;
+                transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                validate_schema(transaction)
+            }
             (0, 0) => {
                 let count: i64 = transaction.query_row(
                     "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
@@ -404,6 +495,8 @@ fn ensure_schema(
                 }
                 transaction.execute_batch(BINDINGS_SCHEMA)?;
                 transaction.execute_batch(ISSUES_SCHEMA)?;
+                transaction.execute_batch(collection::CONTROL_SCHEMA)?;
+                transaction.execute_batch(collection::OBSERVATIONS_SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -421,14 +514,25 @@ fn schema_identity(connection: &Connection) -> Result<(i64, i64)> {
 }
 
 fn validate_schema(connection: &Connection) -> Result<()> {
+    validate_schema_version(connection, SCHEMA_VERSION)
+}
+
+fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> {
     let mut statement = connection.prepare(
         "SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
     )?;
     let mut rows = statement.query([])?;
-    let expected = [
-        (BINDINGS_TABLE, BINDINGS_SCHEMA),
-        (ISSUES_TABLE, ISSUES_SCHEMA),
-    ];
+    let mut expected = vec![(BINDINGS_TABLE, BINDINGS_SCHEMA)];
+    if version == SCHEMA_VERSION {
+        expected.push((collection::CONTROL_TABLE, collection::CONTROL_SCHEMA));
+        expected.push((
+            collection::OBSERVATIONS_TABLE,
+            collection::OBSERVATIONS_SCHEMA,
+        ));
+    } else if version != 1 {
+        bail!("the issue automation schema version is unsupported")
+    }
+    expected.push((ISSUES_TABLE, ISSUES_SCHEMA));
     for (name, schema) in expected {
         let Some(row) = rows.next()? else {
             bail!("the issue automation database is missing a required table")

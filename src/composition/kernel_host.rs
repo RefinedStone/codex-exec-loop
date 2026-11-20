@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::application::port::inbound::stored_command_port::{
     StoredCommandOutcome, StoredCommandResult,
 };
+use crate::composition::issue_observer::IssueCollectionHostView;
 use crate::composition::native_client_runtime::{
     ClientCommandDispatch, KernelClientCommand, NativeClientRuntime, StoredCommandEnd,
 };
@@ -20,15 +21,16 @@ use crate::core::native_client_port::{
     ParallelModeControlPlanePresentationEvent, ParallelViewState,
 };
 use crate::core::runtime::CoreInputWaker;
+use crate::domain::issue_automation::collection::{IssueCollectionPage, IssueCollectionQuery};
 use crate::domain::kernel_event::{
-    KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus,
+    KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus, ReasonCode,
     RecordedKernelEvent,
 };
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use crate::domain::planning::RuntimeProjection;
 
 /*
- * 커널 스레드는 다음 마감 시각까지만 잔다 (plan 19 Q3-4). 입력함 셋(클라이언트, core, 병렬 완료)은 넣을 때 커널
+ * 커널 스레드는 다음 마감 시각까지만 잔다 (plan 19 Q3-4). 클라이언트, core, 병렬 완료, 이슈 관찰 완료는 커널
  * 스레드를 깨우므로 입력은 기다리지 않는다 (Q2-4). 마감이 없으면 이 시간까지 잔다. 이 값은 시계 일의 주기가 아니라
  * 안전망이다: 마감을 알리지 않는 시계 일이 생겨도 그 일이 멈추지 않고 이 시간 안에 한 번은 돈다.
  */
@@ -68,6 +70,8 @@ pub(crate) enum KernelCommandOutcome {
     KeyUnavailable,
     /// 지우는 명령이 확인 없이 왔다 (plan 18 K4-5). 실행하지 않았다.
     ConfirmationRequired,
+    /// 이슈 수집 등 core 밖 런타임 명령의 거절이다.
+    Rejected(ReasonCode),
 }
 
 /// 커널 호출이 답을 받지 못한 이유이다.
@@ -105,6 +109,8 @@ pub(crate) enum KernelHostEvent {
     Parallel(Box<ParallelHostView>),
     /// planning 투영(큐)이 바뀌었다 (plan 18 K3-6). 바뀐 뒤의 투영 전체이다.
     Planning(Box<RuntimeProjection>),
+    /// 이슈 수집 설정이나 관찰 판이 바뀌었다. 목록은 issues로 다시 읽는다.
+    Issues(Box<IssueCollectionHostView>),
     /// 이벤트가 넘쳐 일부를 버렸다. 클라이언트는 조회로 다시 맞추고, 판단 기록은 마지막으로 받은 sequence 뒤를
     /// `history` 로 읽는다 (plan 19 Q3-3b).
     Resync,
@@ -197,6 +203,13 @@ enum KernelHostInput {
     Inputs(Vec<CoreInput>),
     Query {
         reply: Sender<KernelHostView>,
+    },
+    IssueAutomation {
+        reply: Sender<Result<IssueCollectionHostView, String>>,
+    },
+    Issues {
+        query: IssueCollectionQuery,
+        reply: Sender<Result<IssueCollectionPage, String>>,
     },
     /// 판단 사건 기록을 cursor 로 읽는다 (plan 19 Q3-3).
     History {
@@ -365,7 +378,8 @@ impl KernelCommandSender {
                 KernelCommandOutcome::Replayed(_)
                 | KernelCommandOutcome::KeyReused
                 | KernelCommandOutcome::KeyUnavailable
-                | KernelCommandOutcome::ConfirmationRequired => Vec::new(),
+                | KernelCommandOutcome::ConfirmationRequired
+                | KernelCommandOutcome::Rejected(_) => Vec::new(),
             })
     }
 
@@ -415,6 +429,26 @@ impl KernelCommandSender {
         let (reply, answer) = mpsc::channel();
         self.inbox
             .send(KernelHostInput::Operation { op_id, reply })?;
+        wait_reply(&answer, timeout)
+    }
+
+    pub(crate) fn issue_automation(
+        &self,
+        timeout: Duration,
+    ) -> Result<Result<IssueCollectionHostView, String>, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox
+            .send(KernelHostInput::IssueAutomation { reply })?;
+        wait_reply(&answer, timeout)
+    }
+
+    pub(crate) fn issues(
+        &self,
+        query: IssueCollectionQuery,
+        timeout: Duration,
+    ) -> Result<Result<IssueCollectionPage, String>, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox.send(KernelHostInput::Issues { query, reply })?;
         wait_reply(&answer, timeout)
     }
 
@@ -557,6 +591,9 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             },
         ) => *planning_revision,
         StoredCommandOutcome::Rejected(rejection) => rejection.planning_revision?,
+        StoredCommandOutcome::Done(StoredCommandResult::IssueAutomationModeChanged { .. }) => {
+            return None;
+        }
     };
     events
         .iter()
@@ -663,11 +700,18 @@ impl KernelHostLoop {
 
     /// 커널 한 주기이다. 입력을 최대 `wait` 만큼 기다린 뒤에 `clock` 을 읽는다. 오래 잔 뒤에도 시각이 맞다.
     fn run_cycle_with_clock(&mut self, clock: &dyn Fn() -> Instant, wait: Duration) {
+        let cycle_now = std::cell::Cell::new(None);
+        let read_clock = || {
+            let now = clock();
+            cycle_now.set(Some(now));
+            now
+        };
         let outcomes =
             self.runtime
-                .run_host_cycle_with_clock(clock, wait, HOST_MAX_INPUTS_PER_CYCLE);
+                .run_host_cycle_with_clock(&read_clock, wait, HOST_MAX_INPUTS_PER_CYCLE);
+        let now = cycle_now.get().expect("the host cycle reads its clock");
         for outcome in outcomes {
-            self.publish(outcome);
+            self.publish_at(outcome, now);
         }
         self.sync_parallel_mode();
         self.flush_pending_resyncs();
@@ -741,6 +785,20 @@ impl KernelHostLoop {
                     .map_err(|error| format!("{error:#}"));
                 let _ = reply.send(page);
             }
+            KernelHostInput::IssueAutomation { reply } => {
+                let state = self
+                    .runtime
+                    .issue_collection_view(Instant::now())
+                    .map_err(|_| "issue collection local state could not be read".to_string());
+                let _ = reply.send(state);
+            }
+            KernelHostInput::Issues { query, reply } => {
+                let page = self
+                    .runtime
+                    .issue_collection_page(&query)
+                    .map_err(|_| "issue collection local state could not be read".to_string());
+                let _ = reply.send(page);
+            }
             KernelHostInput::Operation { op_id, reply } => {
                 let status = self
                     .runtime
@@ -770,6 +828,7 @@ impl KernelHostLoop {
             ClientCommandDispatch::Replayed(receipt) => KernelCommandOutcome::Replayed(receipt),
             ClientCommandDispatch::KeyReused => KernelCommandOutcome::KeyReused,
             ClientCommandDispatch::KeyUnavailable => KernelCommandOutcome::KeyUnavailable,
+            ClientCommandDispatch::Rejected(reason) => KernelCommandOutcome::Rejected(reason),
             ClientCommandDispatch::ConfirmationRequired => {
                 KernelCommandOutcome::ConfirmationRequired
             }
@@ -828,6 +887,10 @@ impl KernelHostLoop {
     /// core 이벤트와 병렬 제어부 이벤트를 모든 클라이언트에 나눈다. 원격 클라이언트는 보는 자리가 없고 thread 를
     /// 지정하므로(§3.2) 이벤트는 thread id 를 담고 모두에게 간다. 클라이언트별 대상은 K6 의 클라이언트별 보기와 함께 정한다.
     fn publish(&mut self, outcome: NativeClientDispatchOutcome) {
+        self.publish_at(outcome, Instant::now());
+    }
+
+    fn publish_at(&mut self, outcome: NativeClientDispatchOutcome, now: Instant) {
         let (core, parallel_events) = match outcome {
             NativeClientDispatchOutcome::Core(core) => (Some(core), Vec::new()),
             NativeClientDispatchOutcome::Parallel(parallel) => (None, parallel.presentation_events),
@@ -849,6 +912,9 @@ impl KernelHostLoop {
         }
         for record in self.runtime.take_published_kernel_records() {
             self.broadcast(KernelHostEvent::Recorded(Box::new(record)));
+        }
+        if let Some(state) = self.runtime.take_issue_collection_update(now) {
+            self.broadcast(KernelHostEvent::Issues(Box::new(state)));
         }
         if parallel_events.is_empty() {
             return;

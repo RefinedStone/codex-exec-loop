@@ -129,6 +129,12 @@ struct SpansLayer {
     log: Option<IssueSensitiveSpanAction>,
 }
 
+/// 초안과 수집이 같은 정책 판을 사용한다. 기존 판 계산을 유지한다.
+pub fn issue_policy_version(policy: &IssuePolicy) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(format!("{policy:?}")))
+}
+
 pub struct IssuePolicyService {
     source: Arc<dyn IssuePolicySourcePort>,
 }
@@ -543,8 +549,13 @@ mod tests {
     #[test]
     fn project_file_selects_code_validators_but_only_the_user_file_approves_them() {
         let sha256 = "a".repeat(64);
+        let command = if cfg!(windows) {
+            "C:/validators/team-rules.exe"
+        } else {
+            "/opt/validators/team-rules"
+        };
         let user = format!(
-            "[approved_code_validators.team-rules]\ncommand = \"/opt/validators/team-rules\"\nsha256 = \"{sha256}\"\n"
+            "[approved_code_validators.team-rules]\ncommand = \"{command}\"\nsha256 = \"{sha256}\"\n"
         );
         let project = "[[code_validators]]\nid = \"team-rules\"\n\n[[code_validators]]\nid = \"style\"\ntargets = [\"publish\", \"ai_handoff\"]\nrequired = false\n";
 
@@ -553,7 +564,7 @@ mod tests {
         assert_eq!(policy.approved_code_validators.len(), 1);
         let approved = &policy.approved_code_validators[0];
         assert_eq!(approved.id, "team-rules");
-        assert_eq!(approved.command, "/opt/validators/team-rules");
+        assert_eq!(approved.command, command);
         assert_eq!(approved.timeout_seconds, 10);
         assert_eq!(policy.code_validators.len(), 2);
         assert_eq!(

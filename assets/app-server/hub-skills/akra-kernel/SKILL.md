@@ -44,6 +44,8 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel planning create_direction --json` | write | Add a planning direction as the operator. The answer carries the new direction id and the new planning revision. |
 | `akra kernel planning update_direction --json` | write | Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 | `akra kernel planning delete_direction --json` | destructive | Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
+| `akra kernel issue set_issue_automation_mode --json` | write | Persist the issue collection mode: off or observe. The answer follows the ledger commit; observe only collects while the kernel is running. |
+| `akra kernel issue sync_issues --json` | read | Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.
 
@@ -56,3 +58,5 @@ Pass input fields as `--field value`. Use the input schema from `describe` for r
 - `akra kernel query parallel --json`: The parallel mode state: pool, agents, merge queue, and pull request validation.
 - `akra kernel query history --json`: A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.
 - `akra kernel query operation --json`: The state of one operation and its records. `op_id` comes from the `operation` of a command answer.
+- `akra kernel query issue_automation --json`: The stored off/observe mode, binding, collection revision and polling status. An unavailable store is explicit; an empty list is not substituted.
+- `akra kernel query issues --json`: A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body.

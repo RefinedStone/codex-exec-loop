@@ -11,6 +11,8 @@ type Schema = {
   readonly required?: readonly string[];
   readonly items?: Schema;
   readonly additionalProperties?: boolean;
+  readonly minimum?: number;
+  readonly maximum?: number;
 };
 
 export interface KernelSpec {
@@ -23,7 +25,7 @@ export interface KernelSpec {
 
 const SUPPORTED_KEYS = new Set([
   "$ref", "type", "const", "enum", "oneOf", "anyOf", "properties", "required", "items",
-  "additionalProperties", "format", "minimum", "minLength", "maxLength", "pattern", "default",
+  "additionalProperties", "format", "minimum", "maximum", "minLength", "maxLength", "pattern", "default",
 ]);
 
 export class KernelSchemaError extends Error {
@@ -55,6 +57,17 @@ function schemaType(schema: Schema, definitions: Readonly<Record<string, Schema>
   } else if (schema.oneOf || schema.anyOf) {
     const variants = schema.oneOf ?? schema.anyOf ?? [];
     parts.push(`(${variants.map((value, index) => schemaType(value, definitions, `${location}/${index}`)).join(" | ")})`);
+    // A flattened tagged union carries its discriminator beside oneOf/anyOf.
+    // Both constraints apply; dropping the sibling object would lose the required wire tag.
+    if (schema.type !== undefined || schema.properties !== undefined) {
+      parts.push(schemaType({
+        type: schema.type ?? "object",
+        properties: schema.properties,
+        required: schema.required,
+        additionalProperties: schema.additionalProperties,
+        items: schema.items,
+      }, definitions, `${location}/siblings`));
+    }
   } else if (Array.isArray(schema.type)) {
     parts.push(`(${schema.type.map((type) => schemaType({ ...schema, type }, definitions, location)).join(" | ")})`);
   } else {
