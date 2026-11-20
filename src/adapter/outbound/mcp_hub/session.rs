@@ -84,20 +84,13 @@ fn pump_stdout(
     let mut reader = BufReader::new(stdout);
     loop {
         match read_bounded_line(&mut reader, line_limit) {
-            Ok(Some(line)) => match sender.try_send(Ok(line)) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    report_transport_error(
-                        &sender,
-                        &failure,
-                        format!(
-                            "stdout queue exceeded {MAX_PENDING_STDOUT_LINES} pending messages"
-                        ),
-                    );
+            Ok(Some(line)) => {
+                // A bounded queue applies pipe backpressure during idle notification bursts.
+                // Dropping the session receiver releases a producer blocked in send.
+                if sender.send(Ok(line)).is_err() {
                     break;
                 }
-                Err(TrySendError::Disconnected(_)) => break,
-            },
+            }
             Ok(None) => break,
             Err(error) => {
                 report_transport_error(&sender, &failure, format!("stdout: {error}"));
@@ -107,28 +100,51 @@ fn pump_stdout(
     }
 }
 
-fn pump_stderr(
-    stderr: impl Read,
-    tail: Arc<Mutex<Vec<String>>>,
-    sender: SyncSender<HubOutputEvent>,
-    failure: Arc<Mutex<Option<String>>>,
-    line_limit: usize,
-) {
-    let mut reader = BufReader::new(stderr);
+// Diagnostics may be arbitrarily long. Keep a bounded prefix and drain to the
+// delimiter so stderr never blocks the child or becomes an RPC transport error.
+fn read_truncated_line(reader: &mut impl BufRead, limit: usize) -> io::Result<Option<String>> {
+    let mut prefix = Vec::new();
+    let mut consumed = false;
     loop {
-        match read_bounded_line(&mut reader, line_limit) {
-            Ok(Some(line)) => {
-                let Ok(mut tail) = tail.lock() else { break };
-                tail.push(line);
-                if tail.len() > STDERR_TAIL_LINES {
-                    tail.remove(0);
-                }
-            }
-            Ok(None) => break,
-            Err(error) => {
-                report_transport_error(&sender, &failure, format!("stderr: {error}"));
-                break;
-            }
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            break;
+        }
+        consumed = true;
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let length = newline.map_or(buffer.len(), |position| position + 1);
+        let retained = length.min(limit.saturating_sub(prefix.len()));
+        prefix.extend_from_slice(&buffer[..retained]);
+        reader.consume(length);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if !consumed {
+        return Ok(None);
+    }
+    while prefix
+        .last()
+        .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        prefix.pop();
+    }
+    let mut line = String::from_utf8_lossy(&prefix).into_owned();
+    let mut end = line.len().min(limit);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line.truncate(end);
+    Ok(Some(line))
+}
+
+fn pump_stderr(stderr: impl Read, tail: Arc<Mutex<Vec<String>>>, line_limit: usize) {
+    let mut reader = BufReader::new(stderr);
+    while let Ok(Some(line)) = read_truncated_line(&mut reader, line_limit) {
+        let Ok(mut tail) = tail.lock() else { break };
+        tail.push(line);
+        if tail.len() > STDERR_TAIL_LINES {
+            tail.remove(0);
         }
     }
 }
@@ -289,15 +305,15 @@ impl HubAppServerSession {
         let (sender, lines) = mpsc::sync_channel(MAX_PENDING_STDOUT_LINES);
         let transport_failure = Arc::new(Mutex::new(None));
         let stdout_failure = transport_failure.clone();
-        let stdout_sender = sender.clone();
         std::thread::spawn(move || {
-            pump_stdout(stdout, stdout_sender, stdout_failure, MAX_STDOUT_LINE_BYTES);
+            // stdout owns the sole sender: EOF disconnects after queued complete lines,
+            // independently of a still-open stderr pipe.
+            pump_stdout(stdout, sender, stdout_failure, MAX_STDOUT_LINE_BYTES);
         });
         let stderr_tail = Arc::new(Mutex::new(Vec::new()));
         let tail = stderr_tail.clone();
-        let stderr_failure = transport_failure.clone();
         std::thread::spawn(move || {
-            pump_stderr(stderr, tail, sender, stderr_failure, MAX_STDERR_LINE_BYTES);
+            pump_stderr(stderr, tail, MAX_STDERR_LINE_BYTES);
         });
 
         let mut session = Self {
@@ -544,50 +560,96 @@ mod output_tests {
     }
 
     #[test]
-    fn burst_of_short_stdout_lines_cannot_grow_the_queue() {
+    fn notification_bursts_apply_backpressure_without_failing_transport() {
         let (sender, receiver) = mpsc::sync_channel(2);
         let failure = Arc::new(Mutex::new(None));
-        pump_stdout(
-            Cursor::new(b"one\ntwo\nthree\nfour\n".to_vec()),
-            sender,
-            failure.clone(),
-            16,
-        );
-        assert_eq!(receiver.try_recv().unwrap().unwrap(), "one");
-        assert_eq!(receiver.try_recv().unwrap().unwrap(), "two");
-        assert!(receiver.try_recv().is_err());
-        assert!(
-            failure
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .contains("queue exceeded")
-        );
+        let producer_failure = failure.clone();
+        let producer = std::thread::spawn(move || {
+            pump_stdout(
+                Cursor::new(b"one\ntwo\nthree\nfour\n".to_vec()),
+                sender,
+                producer_failure,
+                16,
+            );
+        });
+        for expected in ["one", "two", "three", "four"] {
+            assert_eq!(
+                receiver
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap()
+                    .unwrap(),
+                expected
+            );
+        }
+        producer.join().unwrap();
+        assert!(failure.lock().unwrap().is_none());
+        assert!(receiver.recv().is_err());
     }
 
     #[test]
-    fn oversized_stderr_does_not_fill_the_tail() {
-        let (sender, receiver) = mpsc::sync_channel(2);
-        let failure = Arc::new(Mutex::new(None));
+    fn dropping_receiver_releases_backpressured_stdout_producer() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (finished, completion) = mpsc::sync_channel(1);
+        let producer = std::thread::spawn(move || {
+            pump_stdout(
+                Cursor::new(b"one\ntwo\nthree\n".to_vec()),
+                sender,
+                Arc::new(Mutex::new(None)),
+                16,
+            );
+            finished.send(()).unwrap();
+        });
+        assert_eq!(receiver.recv().unwrap().unwrap(), "one");
+        drop(receiver);
+        completion
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        producer.join().unwrap();
+    }
+
+    #[test]
+    fn oversized_stderr_keeps_a_bounded_prefix_and_drains_subsequent_lines() {
         let tail = Arc::new(Mutex::new(Vec::new()));
-        pump_stderr(
-            Cursor::new(vec![b'e'; 1024]),
-            tail.clone(),
-            sender,
-            failure.clone(),
-            16,
-        );
-        assert!(tail.lock().unwrap().is_empty());
-        assert!(receiver.try_recv().unwrap().unwrap_err().contains("stderr"));
-        assert!(
-            failure
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .contains("16 bytes")
-        );
+        let mut bytes = vec![b'e'; 1024 * 1024];
+        bytes.extend_from_slice(b"\nnext diagnostic\n");
+        pump_stderr(Cursor::new(bytes), tail.clone(), 16);
+        let tail = tail.lock().unwrap();
+        assert_eq!(*tail, vec!["e".repeat(16), "next diagnostic".to_owned()]);
+    }
+
+    #[test]
+    fn stdout_eof_delivers_final_line_without_waiting_for_stderr() {
+        struct BlockedStderr(mpsc::Receiver<()>);
+        impl std::io::Read for BlockedStderr {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                let _ = self.0.recv();
+                Ok(0)
+            }
+        }
+        let (release, blocked) = mpsc::channel();
+        let (finished, stderr_done) = mpsc::channel();
+        let stderr = std::thread::spawn(move || {
+            pump_stderr(BlockedStderr(blocked), Arc::new(Mutex::new(Vec::new())), 16);
+            let _ = finished.send(());
+        });
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let stdout = std::thread::spawn(move || {
+            pump_stdout(
+                Cursor::new(b"last response\n".to_vec()),
+                sender,
+                Arc::new(Mutex::new(None)),
+                32,
+            );
+        });
+        assert_eq!(receiver.recv().unwrap().unwrap(), "last response");
+        assert!(matches!(
+            receiver.recv_timeout(std::time::Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+        assert!(stderr_done.try_recv().is_err(), "stderr must still be open");
+        drop(release);
+        stdout.join().unwrap();
+        stderr.join().unwrap();
     }
 
     #[test]
@@ -601,3 +663,7 @@ mod output_tests {
         assert!(read_bounded_line(&mut reader, 16).unwrap().is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "session_transport_tests.rs"]
+mod transport_tests;
