@@ -1,6 +1,6 @@
 // 화면 시험 (plan 26 U1): 확대와 저장, 확대 뒤 브라우저 패널의 자리, 이동 기록, 대화 안 찾기, 이전 프롬프트 불러오기,
 // 창 자리 저장. 실제 codex 와 턴은 쓰지 않는다 (가짜 Gateway). userData 는 임시 폴더를 쓴다.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,7 +14,22 @@ const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fake
 
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-basics-"));
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.APPROVAL_TURN_RECORDING]);
+// 합성 응답에 소문자화하면 길이가 늘어나는 문자를 넣어 실제 DOM Range도 검사한다.
+const unicodeRecording = join(userData, "unicode-approval-turn.jsonl");
+function addUnicodeAnswer(value) {
+  if (!value || typeof value !== "object") return;
+  if (value.type === "agentMessage" && typeof value.text === "string" && value.text) value.text += "\nİstanbul";
+  for (const child of Object.values(value)) addUnicodeAnswer(child);
+}
+const recording = readFileSync(fake.APPROVAL_TURN_RECORDING, "utf8").split(/\r?\n/).filter(Boolean).map((line) => {
+  const entry = JSON.parse(line);
+  const message = JSON.parse(entry.text);
+  addUnicodeAnswer(message);
+  entry.text = JSON.stringify(message);
+  return JSON.stringify(entry);
+}).join("\n");
+writeFileSync(unicodeRecording, recording);
+const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, unicodeRecording]);
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
 delete env.ELECTRON_RUN_AS_NODE;
 
@@ -82,6 +97,9 @@ try {
   await page.getByTestId("find-count").filter({ hasText: "턴 1/" }).waitFor({ timeout: 5_000 });
   const marked = await page.evaluate(() => CSS.highlights.get("akra-find-current")?.size ?? 0);
   check("find marks the query in the conversation", word.length > 0 && marked > 0, `word=${word} marked=${marked}`);
+  await page.getByTestId("find-input").fill("bul");
+  await page.waitForFunction(() => [...(CSS.highlights.get("akra-find-current") ?? [])].some((range) => range.toString() === "bul"), null, { timeout: 5_000 });
+  check("Unicode case expansion highlights the original substring without a DOM range error", true);
   await page.getByTestId("find-input").fill("akra-no-such-text");
   check("find reports no match", (await page.getByTestId("find-count").textContent()) === "없음");
   await page.keyboard.press("Escape");

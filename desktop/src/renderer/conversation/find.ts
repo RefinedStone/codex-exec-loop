@@ -27,3 +27,24 @@ export function matchOffsets(text: string, needle: string): number[] {
   }
   return offsets;
 }
+
+/** 검색 결과를 원문 텍스트의 UTF-16 범위로 돌려준다. */
+export function matchRanges(text: string, needle: string): Array<{ start: number; end: number }> {
+  if (needle.length === 0) return [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let originalOffset = 0;
+  for (const character of text) {
+    const nextOffset = originalOffset + character.length;
+    for (let unit = 0; unit < character.toLowerCase().length; unit += 1) {
+      starts.push(originalOffset);
+      ends.push(nextOffset);
+    }
+    originalOffset = nextOffset;
+  }
+  // 전체 문자열을 변환해야 그리스어 어말 시그마 같은 문맥 규칙도 유지된다.
+  return matchOffsets(text.toLowerCase(), needle).map((offset) => ({
+    start: starts[offset]!,
+    end: ends[offset + needle.length - 1]!,
+  }));
+}

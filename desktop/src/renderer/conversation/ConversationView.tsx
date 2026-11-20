@@ -12,7 +12,7 @@ import { openPanel, useUiStore } from "../session/uiStore";
 import { copyText } from "./copyText";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
 import { DiffCounts, DiffFileList } from "./DiffView";
-import { findTurns, matchOffsets } from "./find";
+import { findTurns, matchRanges } from "./find";
 import { ItemView } from "./ItemView";
 import { Markdown } from "./Markdown";
 import type { TurnView } from "./transcript";
@@ -252,10 +252,10 @@ function findRanges(root: HTMLElement, needle: string): Range[] {
     const walker = document.createTreeWalker(message, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement?.closest("button")) continue;
-      for (const offset of matchOffsets((node.nodeValue ?? "").toLowerCase(), needle)) {
+      for (const { start, end } of matchRanges(node.nodeValue ?? "", needle)) {
         const range = document.createRange();
-        range.setStart(node, offset);
-        range.setEnd(node, offset + needle.length);
+        range.setStart(node, start);
+        range.setEnd(node, end);
         ranges.push(range);
       }
     }
