@@ -148,6 +148,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
       apply: () => Promise.resolve({ ok: true }),
       rollback: () => Promise.resolve({ ok: true }),
     },
+    vaultRestore: { open: () => Promise.resolve(), projectChanged: () => undefined },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };

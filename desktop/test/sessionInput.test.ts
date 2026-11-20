@@ -113,6 +113,7 @@ function harness(readOnly = false) {
       apply: () => Promise.resolve({ ok: true }),
       rollback: () => Promise.resolve({ ok: true }),
     },
+    vaultRestore: { open: () => Promise.resolve(), projectChanged: () => undefined },
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {

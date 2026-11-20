@@ -4,6 +4,7 @@ import type { LinearBridge } from "./linear";
 import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings } from "./settings";
 import type { SkillsBridge } from "./skills";
+import type { VaultRestoreOpenerBridge } from "./vaultRestore";
 import type { ZoomDirection } from "./zoom";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
@@ -99,6 +100,8 @@ export const IPC_CHANNELS = {
   settingsChanged: "akra:settings-changed",
   settingsOpen: "akra:settings-open",
   reportWorking: "akra:report-working",
+  vaultRestoreOpen: "akra:vault-restore-open",
+  vaultRestoreProjectChanged: "akra:vault-restore-project-changed",
   skillsList: "akra:skills-list",
   skillsLink: "akra:skills-link",
   skillsCheck: "akra:skills-check",
@@ -451,6 +454,8 @@ export interface AkraBridge {
   isAppFocused(): Promise<boolean>;
   settings: SettingsBridge;
   skills: SkillsBridge;
+  /** 로컬 복원본 창을 연다 (#2427). 복원한 글은 이 버스로 오지 않는다. */
+  vaultRestore: VaultRestoreOpenerBridge;
 }
 
 /** 앱 설정이다 (plan 26 U2). 값은 main 이 가지고 저장한다. */

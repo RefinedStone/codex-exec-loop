@@ -18,7 +18,11 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
-        input: { index: resolve(import.meta.dirname, "src/preload/index.ts") },
+        input: {
+          index: resolve(import.meta.dirname, "src/preload/index.ts"),
+          // 로컬 복원본 창만 쓰는 preload 이다 (#2427). 일반 채널을 노출하지 않는다.
+          vaultRestore: resolve(import.meta.dirname, "src/preload/vaultRestore.ts"),
+        },
       },
     },
   },
@@ -30,6 +34,8 @@ export default defineConfig({
           index: resolve(import.meta.dirname, "src/renderer/index.html"),
           // UX 블루프린트 화면이다 (`npm run blueprint`). mock 데이터만 쓴다.
           blueprint: resolve(import.meta.dirname, "src/renderer/blueprint.html"),
+          // 로컬 복원본 창이다 (#2427). 본 화면의 코드와 `window.akra` 를 쓰지 않는다.
+          "vault-restore": resolve(import.meta.dirname, "src/renderer/vault-restore.html"),
         },
       },
     },

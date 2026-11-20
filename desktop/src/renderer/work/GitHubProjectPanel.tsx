@@ -65,11 +65,13 @@ function ItemRow({
   github,
   onHandOff,
   onEdit,
+  onOpenRestore,
 }: {
   item: GitHubProjectItem;
   github: GitHubBridge;
   onHandOff(item: GitHubProjectItem): Promise<void>;
   onEdit?(item: GitHubProjectItem): Promise<void>;
+  onOpenRestore(issueUrl: string): Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +113,11 @@ function ItemRow({
             수정
           </button>
         )}
+        {item.kind === "issue" && url && (
+          <button type="button" onClick={() => void onOpenRestore(url).catch((cause: unknown) => setError(message(cause)))} data-testid="github-project-open-restore" title="가린 구간을 로컬 전용 창에서 엽니다">
+            로컬 복원본
+          </button>
+        )}
       </div>
       {error && <div className="error">{error}</div>}
     </li>
@@ -122,6 +129,7 @@ export function GitHubProjectPanel({
   currentRepository,
   onHandOff,
   onEdit,
+  onOpenRestore,
 }: {
   github: GitHubBridge;
   /** 열린 스레드 폴더의 `owner/name` 이다. 모르면 null 이다. */
@@ -129,6 +137,8 @@ export function GitHubProjectPanel({
   onHandOff(item: GitHubProjectItem): Promise<void>;
   /** 이슈의 제목과 본문을 고치는 패널을 연다 (#2426). 열 수 없으면 오류를 던진다. */
   onEdit?(item: GitHubProjectItem): Promise<void>;
+  /** 이슈의 로컬 복원본 창을 연다 (#2427). */
+  onOpenRestore(issueUrl: string): Promise<void>;
 }) {
   const [projectRef, setProjectRef] = useState<string | null>(loadProjectRef);
   const [editing, setEditing] = useState(false);
@@ -219,7 +229,7 @@ export function GitHubProjectPanel({
               </h3>
               <ul>
                 {group.items.map((item, index) => (
-                  <ItemRow key={item.url ?? `draft-${index}`} item={item} github={github} onHandOff={onHandOff} onEdit={onEdit} />
+                  <ItemRow key={item.url ?? `draft-${index}`} item={item} github={github} onHandOff={onHandOff} onEdit={onEdit} onOpenRestore={onOpenRestore} />
                 ))}
               </ul>
             </section>
