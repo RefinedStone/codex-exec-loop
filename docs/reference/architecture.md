@@ -974,6 +974,10 @@ strategy in the production TUI.
 - `mask_issue_text` (`application/service/issue_masking`) is the only path from local issue text to
   an `IssueSharedCopy`. Removed values leave it in no output; masked plaintext leaves it only as
   `VaultPlaintext`. Callers write drafts, autosave, and Vault entries from its result only.
+- The issue template convention (`domain/issue_template`) comes only from `IssueTemplateService`.
+  A missing, unreadable, or invalid template and an unsupported required input are separate
+  results; callers must not treat them as "no requirement". A draft keeps the template version
+  (content SHA-256), and `check_issue_template_version` asks for review when it changed.
 
 Verify boundary-sensitive changes with:
 
