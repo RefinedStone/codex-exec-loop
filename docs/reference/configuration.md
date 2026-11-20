@@ -80,6 +80,30 @@ Changing :model, :model default, or :think changes the live selection immediatel
 
 Hidden planning and parallel workers retain their explicit model policy and do not inherit the interactive conversation default.
 
+## Issue policy file
+
+The issue convention and disclosure policy (#2416) live in a separate file, not in config.toml. `IssuePolicyService` reads and validates it and returns a typed `IssuePolicy`. No command or client uses it yet; the validators, masking, and publish path that consume it are proposed work (#2417 to #2419).
+
+| Scope | Path |
+| --- | --- |
+| User | AKRA_HOME/issue-policy.toml (default: ~/.akra/issue-policy.toml) |
+| Project | workspace/.akra/issue-policy.toml |
+
+Each value resolves in this highest-to-lowest order: project file > user file > built-in. A table merges by individual value; `required_sections` is one value and is replaced as a whole. A missing schema_version means 1. Schema: [`schema/akra-issue-policy.schema.json`](../../schema/akra-issue-policy.schema.json). Example: [`schema/akra-issue-policy.example.toml`](../../schema/akra-issue-policy.example.toml).
+
+| Key | Values | Built-in |
+| --- | --- | --- |
+| convention.template | relative path inside the repository, no `..` | none |
+| convention.required_sections | list of section titles | empty |
+| publish.spans.secret, name, path, log | remove, restorable_mask, user_confirm | secret = remove; others = restorable_mask |
+| ai_handoff.spans.secret, name, path, log | remove, restorable_mask, user_confirm | secret = remove; others = restorable_mask |
+| publish.required_validation | true only | true |
+| vault.user_unlock | true only | true |
+
+`publish.spans` applies when text goes to the provider. `ai_handoff.spans` applies when text goes to an AI. The two tables are independent. `remove` discards the value, `restorable_mask` replaces it with a marker that the user can restore from the Vault, and `user_confirm` asks the user for each span.
+
+The mandatory publish validation and the Vault user unlock are always on. No scope can turn them off: `publish.required_validation = false` or `vault.user_unlock = false` makes the file invalid. A file that is unreadable, malformed, has an unknown key, class, or action, an unsupported schema_version, or a template path outside the repository gives `IssuePolicyBlocked` with the scope of the bad file. The caller must then block publish and AI handoff for that project. There is no fallback to the built-in policy. Both files use the same read safety rules as config.toml.
+
 ## Deliberate exclusions and Codex difference
 
 Akra excludes AKRA_HOME, credentials/tokens, allowlists, app-server process or shell environment, API-key forwarding, approval/reviewer/sandbox policy, and public-repository/autonomous-delivery opt-ins. Telegram keeps its private telegram.env; parallel agent profiles keep .akra/parallel-agent-profiles.json.

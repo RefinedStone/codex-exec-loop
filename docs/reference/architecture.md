@@ -949,6 +949,9 @@ strategy in the production TUI.
   only through `IssueSnapshotResponse::verified_shared_copy`, which needs the approved copy's
   versioned field hash (`IssueFieldHash`). The adapter keeps no cache: a failed remote read is an
   error.
+- The issue policy (`domain/issue_policy`) comes only from `IssuePolicyService`. An invalid or
+  unreadable policy file is `IssuePolicyBlocked`; callers must not replace it with the built-in
+  policy. See [configuration](./configuration.md#issue-policy-file).
 
 Verify boundary-sensitive changes with:
 
