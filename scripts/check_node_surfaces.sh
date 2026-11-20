@@ -37,6 +37,9 @@ node --test \
   scripts/npm-audit-gate.test.mjs \
   scripts/pr-validation-approval-package.test.mjs
 
+printf '\n==> admin browser behavior tests\n'
+node --test assets/admin/scripts/*.test.mjs
+
 printf '\n==> npm launcher tests\n'
 npm --prefix npm test
 
