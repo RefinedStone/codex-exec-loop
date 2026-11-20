@@ -44,6 +44,16 @@ const kernel = {
             duration: "2m",
             summary: "editing tests",
           },
+          {
+            agent_id: "agent-2",
+            thread_id: THREAD_ID,
+            task_title: "Show kernel events",
+            slot_id: "slot-2",
+            branch: "akra/task-1",
+            state: "failed",
+            duration: "5m",
+            summary: "tests failed",
+          },
         ],
         merge_head: "head: task-2",
         merge_queue: [{ task_title: "Write the e2e", state: "pr_pending", branch: "akra/task-2", commit: "abc1234" }],
@@ -95,12 +105,33 @@ try {
   await page.getByTestId("kernel-task").first().waitFor({ timeout: 10_000 });
   check("the planning queue renders", (await page.getByTestId("kernel-task").count()) === 2);
   check("parallel mode and agents render", (await page.getByTestId("kernel-parallel-mode").textContent())?.includes("켜짐") === true);
-  check("the parallel agent and merge queue render", (await page.getByTestId("kernel-agent").count()) === 1 && (await page.getByTestId("kernel-merge-item").count()) === 1);
+  check("the parallel agent and merge queue render", (await page.getByTestId("kernel-agent").count()) === 2 && (await page.getByTestId("kernel-merge-item").count()) === 1);
   check("the panel asks the kernel to read the planning queue", gateway.receivedMethods.includes("akra/kernel/command"));
 
   await page.getByTestId("kernel-thread").waitFor({ timeout: 10_000 });
   const threadRow = (await page.getByTestId("kernel-thread").textContent()) ?? "";
   check("a thread_activity event shows the running thread with its approval", threadRow.includes("승인 대기: run tests"));
+
+  // 워커 상태판 (#2378): 두 워커의 상태와 worktree 를 한 화면에서 구분하고, 실패한 워커에서 실패 카드와 로그로 간다.
+  const workers = page.getByTestId("kernel-agent");
+  const workerTexts = await workers.allInnerTexts();
+  check(
+    "two workers show their own status and worktree",
+    (await workers.nth(0).getAttribute("data-status")) === "running" &&
+      (await workers.nth(1).getAttribute("data-status")) === "failed" &&
+      workerTexts[0]?.includes("slot-1 · akra/task-2") === true &&
+      workerTexts[1]?.includes("slot-2 · akra/task-1") === true &&
+      workerTexts[1]?.includes("tests failed") === true,
+  );
+  check("a worker without a thread has no link", (await workers.nth(0).getByRole("button").count()) === 0);
+  await workers.nth(1).getByRole("button").click();
+  const failedCard = page.locator('[data-testid="item-command"][data-status="failed"]');
+  await failedCard.waitFor({ timeout: 10_000 });
+  check("the failed card starts folded", (await failedCard.locator(".step-output").count()) === 0);
+  await failedCard.locator(".step-line").click();
+  check("the open failed card shows the stored log", ((await failedCard.locator(".step-output").innerText()) ?? "").startsWith("$ "));
+  console.log("--- failed tool card text ---");
+  console.log(await failedCard.innerText());
 
   console.log("--- kernel panel text ---");
   console.log(await page.getByTestId("kernel-panel").innerText());

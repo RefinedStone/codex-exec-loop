@@ -600,7 +600,7 @@ export function App() {
             <RightPanel panel={panel}>
               {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)} />}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
-              {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} />}
+              {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} onOpenThread={openThread} />}
               {panel === "browser" && <BrowserPanel bridge={window.akra.browser} threadId={browserThreadId} onStartConversation={async () => {
                 const current = session.current;
                 const cwd = openCwd ?? useUiStore.getState().homeCwd ?? (await window.akra.chooseFolder());
