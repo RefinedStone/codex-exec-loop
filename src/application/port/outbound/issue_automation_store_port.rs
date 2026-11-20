@@ -218,6 +218,16 @@ pub trait IssueAutomationStorePort: Send + Sync {
         mode: IssueCollectionMode,
     ) -> Result<IssueCollectionModeSaveResult>;
 
+    /// 사람 확인이 묶인 이전 mode/epoch/revision을 한 transaction에서 정확히 검사한다.
+    /// conflict는 기존 증거로 새 판을 자동 승인하지 않는다.
+    fn set_collection_mode_exact(
+        &self,
+        workspace_dir: &str,
+        expected: IssueCollectionFence,
+        from: IssueCollectionMode,
+        mode: IssueCollectionMode,
+    ) -> Result<IssueCollectionModeSaveResult>;
+
     /// Observe + fence + 요청 cursor가 모두 일치할 때만 페이지 전체와 다음 cursor를 commit한다.
     /// 최초 binding과 Withheld 관찰도 같은 트랜잭션에서 저장한다.
     fn apply_discovery_page(

@@ -27,7 +27,7 @@ use crate::domain::issue_work::{
 };
 const AUTO_POLICY: &str = r#"
 [binding.github]
-mode = "observe"
+mode = "auto"
 [authority]
 autonomy_cap = "auto"
 [select]
@@ -276,6 +276,7 @@ fn setup(
 
 fn caller() -> StoredCommandContext {
     StoredCommandContext {
+        human_confirmation: None,
         caller: Some("Desktop".into()),
         channel: "gateway".into(),
         at: "2026-11-20T20:00:00Z".into(),
@@ -577,3 +578,255 @@ fn collection_off_does_not_block_an_existing_decision_answer() {
     assert_eq!(result.outcome, IssueDecisionOutcome::Answered);
     assert!(result.commit.changed);
 }
+
+fn human_policy() -> Arc<MutableAutomationPolicy> {
+    let policy = MutableAutomationPolicy::new();
+    *policy.text.lock().unwrap() = AUTO_POLICY.replace("mode = \"auto\"", "mode = \"propose\"");
+    policy
+}
+
+fn human_caller(service: &IssueDecisionService, id: &str, option: &str) -> StoredCommandContext {
+    use crate::application::port::inbound::stored_command_port::issue_confirmation::VerifiedHumanConfirmation;
+    let preview = service.prepare_confirmation(id, option).unwrap();
+    let mut context = caller();
+    context.human_confirmation = Some(
+        VerifiedHumanConfirmation::from_verified(
+            preview.target,
+            format!("desktop-confirmation:{}", "e".repeat(32)),
+        )
+        .unwrap(),
+    );
+    context
+}
+
+#[test]
+fn human_confirmation_preview_uses_one_stored_request_without_changing_it() {
+    let fixture = Fixture::new();
+    let (service, initial) = setup(&fixture, human_policy());
+    let preview = service
+        .prepare_confirmation(initial.record.request.id().as_str(), "accept")
+        .unwrap();
+    let IssueConfirmationTarget::Decision {
+        decision_id,
+        option,
+        basis,
+        decision_revision,
+        workspace,
+    } = preview.target
+    else {
+        panic!("decision target");
+    };
+    assert_eq!(decision_id, *initial.record.request.id());
+    assert_eq!(option, "accept");
+    assert_eq!(basis, initial.record.request.definition().basis);
+    assert_eq!(decision_revision, initial.record.revision);
+    assert_eq!(workspace, fixture.workspace);
+    assert_eq!(
+        preview.display.message,
+        initial.record.request.definition().question.as_str()
+    );
+    assert_eq!(preview.display.confirm_label, "수락");
+    assert!(preview.display.detail.contains("시작 결정을 기록한다"));
+    assert_eq!(
+        fixture
+            .store()
+            .get_issue_decision(&fixture.workspace, &decision_id)
+            .unwrap()
+            .unwrap(),
+        initial.record
+    );
+    let error = service
+        .prepare_confirmation(decision_id.as_str(), "UNKNOWN_OPTION_CANARY")
+        .unwrap_err();
+    assert!(!error.to_string().contains("UNKNOWN_OPTION_CANARY"));
+}
+
+#[test]
+fn a_desktop_caller_without_verified_confirmation_cannot_close_a_human_gate() {
+    let fixture = Fixture::new();
+    let (service, initial) = setup(&fixture, human_policy());
+    let error = service
+        .answer(
+            initial.record.request.id().as_str(),
+            "accept",
+            Some("공유 note"),
+            &caller(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<IssueConfirmationError>(),
+        Some(&IssueConfirmationError::Required)
+    );
+    let after = fixture
+        .store()
+        .get_issue_decision_commit(&fixture.workspace, initial.record.request.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.record, initial.record);
+    assert_eq!(after.catalog_revision, initial.catalog_revision);
+    assert!(!after.changed);
+}
+
+#[test]
+fn a_verified_human_answer_records_a_non_bearer_reference_and_remains_the_first_answer() {
+    let fixture = Fixture::new();
+    let policy = human_policy();
+    let (service, initial) = setup(&fixture, policy.clone());
+    let context = human_caller(&service, initial.record.request.id().as_str(), "accept");
+    let expected_reference = context
+        .human_confirmation
+        .as_ref()
+        .unwrap()
+        .reference()
+        .to_string();
+    let result = service
+        .answer(
+            initial.record.request.id().as_str(),
+            "accept",
+            Some("확인함"),
+            &context,
+        )
+        .unwrap();
+    let answer = result.commit.record.request.answer().unwrap();
+    assert_eq!(answer.by, IssueDecisionAnswerBy::Human);
+    assert_eq!(
+        answer.confirmation.as_deref(),
+        Some(expected_reference.as_str())
+    );
+    assert_eq!(
+        result.commit.record.request.fact().answer_by,
+        Some(IssueDecisionAnswerBy::Human)
+    );
+    assert!(result.commit.changed);
+    let reopened = fixture
+        .store()
+        .get_issue_decision(&fixture.workspace, initial.record.request.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened, result.commit.record);
+    policy.unavailable.store(true, Ordering::Release);
+    let repeated = service
+        .answer(
+            initial.record.request.id().as_str(),
+            "reject",
+            Some("\0invalid second note"),
+            &caller(),
+        )
+        .unwrap();
+    assert_eq!(repeated.outcome, IssueDecisionOutcome::AlreadyResolved);
+    assert_eq!(repeated.commit.record, reopened);
+    assert!(!repeated.commit.changed);
+}
+
+#[test]
+fn verified_confirmation_cannot_move_to_another_choice_request_workspace_or_revision() {
+    use crate::application::port::inbound::stored_command_port::issue_confirmation::VerifiedHumanConfirmation;
+    let fixture = Fixture::new();
+    let (service, initial) = setup(&fixture, human_policy());
+    let original = service
+        .prepare_confirmation(initial.record.request.id().as_str(), "accept")
+        .unwrap()
+        .target;
+    for coordinate in ["option", "decision", "workspace", "basis", "revision"] {
+        let mut altered = original.clone();
+        if let IssueConfirmationTarget::Decision {
+            workspace,
+            decision_id,
+            option,
+            basis,
+            decision_revision,
+        } = &mut altered
+        {
+            match coordinate {
+                "option" => *option = "reject".into(),
+                "decision" => *decision_id = IssueDecisionId::new("another-decision").unwrap(),
+                "workspace" => *workspace = "/different/workspace".into(),
+                "basis" => basis.gate_revision += 1,
+                "revision" => *decision_revision += 1,
+                _ => unreachable!(),
+            }
+        }
+        let mut context = caller();
+        context.human_confirmation = Some(
+            VerifiedHumanConfirmation::from_verified(
+                altered,
+                format!("desktop-confirmation:{}", "f".repeat(32)),
+            )
+            .unwrap(),
+        );
+        let error = service
+            .answer(
+                initial.record.request.id().as_str(),
+                "accept",
+                None,
+                &context,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<IssueConfirmationError>(),
+            Some(&IssueConfirmationError::ScopeMismatch),
+            "{coordinate}"
+        );
+        assert_eq!(
+            fixture
+                .store()
+                .get_issue_decision(&fixture.workspace, initial.record.request.id())
+                .unwrap()
+                .unwrap(),
+            initial.record
+        );
+    }
+}
+
+#[test]
+fn a_stale_human_question_supersedes_with_or_without_its_original_confirmation() {
+    for confirmed in [false, true] {
+        let fixture = Fixture::new();
+        let (service, initial) = setup(&fixture, human_policy());
+        let context = if confirmed {
+            human_caller(&service, initial.record.request.id().as_str(), "accept")
+        } else {
+            caller()
+        };
+        let mut observation = fixture.observation("I_001");
+        if let IssueSourceContent::Shared(snapshot) = &mut observation.content {
+            snapshot.shared_copy.body.push_str("본문 변경\n");
+            snapshot.basis.field_hash =
+                IssueFieldHash::of_fields(&snapshot.shared_copy.title, &snapshot.shared_copy.body);
+        }
+        fixture.seed(vec![observation], &disclosure_version());
+        let result = service
+            .answer(
+                initial.record.request.id().as_str(),
+                "accept",
+                None,
+                &context,
+            )
+            .unwrap();
+        assert_eq!(result.outcome, IssueDecisionOutcome::Superseded);
+        assert_eq!(
+            result.commit.record.request.state(),
+            IssueDecisionState::Superseded
+        );
+        assert!(result.commit.record.request.answer().is_none());
+    }
+}
+
+#[test]
+fn an_agent_can_answer_a_current_nonhuman_gate_but_gets_no_human_confirmation() {
+    let fixture = Fixture::new();
+    let (service, initial) = setup(&fixture, MutableAutomationPolicy::new());
+    let result = service
+        .answer(
+            initial.record.request.id().as_str(),
+            "accept",
+            None,
+            &caller(),
+        )
+        .unwrap();
+    let answer = result.commit.record.request.answer().unwrap();
+    assert_eq!(answer.by, IssueDecisionAnswerBy::Agent);
+    assert_eq!(answer.confirmation, None);
+}
+
+pub(super) mod gateway_fixture;

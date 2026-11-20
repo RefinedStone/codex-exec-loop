@@ -816,3 +816,125 @@ fn committed_facts_are_delivered_before_a_later_local_store_failure() {
 }
 
 mod commit_projection;
+
+fn mode_confirmation(
+    service: &IssueCollectionService,
+    mode: IssueCollectionMode,
+) -> VerifiedHumanConfirmation {
+    let preview = service.prepare_mode_confirmation(mode).unwrap();
+    VerifiedHumanConfirmation::from_verified(
+        preview.target,
+        format!("desktop-confirmation:{}", "d".repeat(32)),
+    )
+    .unwrap()
+}
+
+#[test]
+fn mode_confirmation_prepare_does_not_initialize_or_read_a_provider_policy_or_origin() {
+    let fixture = Fixture::new();
+    let source = no_source();
+    let origin = Arc::new(FakeOrigin::default());
+    let policy = Arc::new(FakePolicy::default());
+    let service = fixture.service(source.clone(), origin.clone(), policy.clone());
+    let preview = service
+        .prepare_mode_confirmation(IssueCollectionMode::Observe)
+        .unwrap();
+    assert!(matches!(
+        preview.target,
+        IssueConfirmationTarget::Mode {
+            from: None,
+            epoch: None,
+            revision: None,
+            ..
+        }
+    ));
+    assert!(
+        fixture
+            .store()
+            .get_collection(&fixture.workspace)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(origin.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(policy.calls.load(Ordering::SeqCst), 0);
+    assert!(source.discoveries.lock().unwrap().is_empty());
+    assert!(source.resyncs.lock().unwrap().is_empty());
+}
+
+#[test]
+fn turning_observation_on_requires_confirmation_but_lowering_and_noop_do_not() {
+    let fixture = Fixture::new();
+    let service = fixture.service(
+        no_source(),
+        Arc::new(FakeOrigin::default()),
+        Arc::new(FakePolicy::default()),
+    );
+    let off = service.set_mode(IssueCollectionMode::Off).unwrap();
+    let error = service.set_mode(IssueCollectionMode::Observe).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<IssueConfirmationError>(),
+        Some(&IssueConfirmationError::Required)
+    );
+    assert_eq!(service.projection().unwrap(), off.projection);
+    let confirmation = mode_confirmation(&service, IssueCollectionMode::Observe);
+    let on = service
+        .set_mode_with_confirmation(IssueCollectionMode::Observe, Some(&confirmation))
+        .unwrap();
+    assert!(on.changed);
+    assert_eq!(on.projection.state.epoch, off.projection.state.epoch + 1);
+    assert_eq!(
+        on.projection.state.revision,
+        off.projection.state.revision + 1
+    );
+    let noop = service.set_mode(IssueCollectionMode::Observe).unwrap();
+    assert!(!noop.changed);
+    assert_eq!(noop.projection, on.projection);
+    assert!(service.set_mode(IssueCollectionMode::Off).unwrap().changed);
+}
+
+#[test]
+fn an_old_mode_confirmation_does_not_authorize_a_later_off_observe_off_cycle() {
+    let fixture = Fixture::new();
+    let service = fixture.service(
+        no_source(),
+        Arc::new(FakeOrigin::default()),
+        Arc::new(FakePolicy::default()),
+    );
+    service.set_mode(IssueCollectionMode::Off).unwrap();
+    let old = mode_confirmation(&service, IssueCollectionMode::Observe);
+    service
+        .set_mode_for_test(IssueCollectionMode::Observe)
+        .unwrap();
+    let off = service.set_mode(IssueCollectionMode::Off).unwrap();
+    let error = service
+        .set_mode_with_confirmation(IssueCollectionMode::Observe, Some(&old))
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<IssueConfirmationError>(),
+        Some(&IssueConfirmationError::ScopeMismatch)
+    );
+    assert_eq!(service.projection().unwrap(), off.projection);
+}
+
+#[test]
+fn a_mismatched_verified_mode_confirmation_is_not_silently_treated_as_an_agent_noop() {
+    let fixture = Fixture::new();
+    let service = fixture.service(
+        no_source(),
+        Arc::new(FakeOrigin::default()),
+        Arc::new(FakePolicy::default()),
+    );
+    service.set_mode(IssueCollectionMode::Off).unwrap();
+    let wrong_target = mode_confirmation(&service, IssueCollectionMode::Observe);
+    let error = service
+        .set_mode_with_confirmation(IssueCollectionMode::Off, Some(&wrong_target))
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<IssueConfirmationError>(),
+        Some(&IssueConfirmationError::ScopeMismatch)
+    );
+    assert_eq!(
+        service.projection().unwrap().state.config.mode,
+        IssueCollectionMode::Off
+    );
+}

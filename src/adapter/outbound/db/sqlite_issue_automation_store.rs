@@ -416,6 +416,16 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
         collection::set_mode(self, workspace_dir, expected_epoch, mode)
     }
 
+    fn set_collection_mode_exact(
+        &self,
+        workspace_dir: &str,
+        expected: IssueCollectionFence,
+        from: IssueCollectionMode,
+        mode: IssueCollectionMode,
+    ) -> Result<IssueCollectionModeSaveResult> {
+        collection::set_mode_exact(self, workspace_dir, expected, from, mode)
+    }
+
     fn apply_discovery_page(
         &self,
         workspace_dir: &str,

@@ -483,3 +483,95 @@ fn different_agent_questions_on_the_same_basis_keep_distinct_identities() {
     assert_eq!(first.definition().basis, second.definition().basis);
     assert_ne!(first.uniqueness_key(), second.uniqueness_key());
 }
+
+#[test]
+fn a_human_gate_rejects_an_unverified_agent_without_closing_the_request() {
+    let request = request();
+    assert_eq!(
+        request.answer_for_gate(
+            &basis(),
+            IssueAutomationGateAction::Human,
+            input("proceed"),
+            None
+        ),
+        Err(IssueDecisionError::HumanConfirmationRequired),
+    );
+    assert_eq!(request.state(), IssueDecisionState::Open);
+    assert_eq!(request.answer(), None);
+}
+
+#[test]
+fn a_verified_human_answer_stores_only_its_audit_reference_and_survives_hydration() {
+    let reference = format!("desktop-confirmation:{}", "c".repeat(32));
+    let request = request();
+    let result = request
+        .answer_for_gate(
+            &basis(),
+            IssueAutomationGateAction::Human,
+            input("proceed"),
+            Some(&reference),
+        )
+        .unwrap();
+    let answer = result.request.answer().unwrap();
+    assert_eq!(answer.by, IssueDecisionAnswerBy::Human);
+    assert_eq!(answer.confirmation.as_deref(), Some(reference.as_str()));
+    assert_eq!(
+        IssueDecisionRequest::hydrate(result.request.to_record()).unwrap(),
+        result.request
+    );
+    result.request.validate_successor(&request).unwrap();
+    let repeated = result
+        .request
+        .answer_agent(&basis(), input("defer"))
+        .unwrap();
+    assert_eq!(repeated.request, result.request);
+    assert!(!repeated.changed);
+}
+
+#[test]
+fn stale_human_requests_are_superseded_without_a_confirmation_or_answer() {
+    let mut current = basis();
+    current.gate_revision += 1;
+    let result = request()
+        .answer_for_gate(
+            &current,
+            IssueAutomationGateAction::Human,
+            input("proceed"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(result.outcome, IssueDecisionOutcome::Superseded);
+    assert!(result.request.answer().is_none());
+}
+
+#[test]
+fn human_history_rejects_missing_or_malformed_audit_references() {
+    let reference = format!("desktop-confirmation:{}", "d".repeat(32));
+    let valid = request()
+        .answer_for_gate(
+            &basis(),
+            IssueAutomationGateAction::Human,
+            input("proceed"),
+            Some(&reference),
+        )
+        .unwrap()
+        .request;
+    for value in [
+        None,
+        Some("raw-proof-canary".into()),
+        Some("desktop-confirmation:wrong".into()),
+    ] {
+        let mut record = valid.to_record();
+        record.answer.as_mut().unwrap().confirmation = value;
+        assert_eq!(
+            IssueDecisionRequest::hydrate(record),
+            Err(IssueDecisionError::UnsupportedAnswerOrigin)
+        );
+    }
+    let mut record = valid.to_record();
+    record.answer.as_mut().unwrap().by = IssueDecisionAnswerBy::Agent;
+    assert_eq!(
+        IssueDecisionRequest::hydrate(record),
+        Err(IssueDecisionError::UnsupportedAnswerOrigin)
+    );
+}

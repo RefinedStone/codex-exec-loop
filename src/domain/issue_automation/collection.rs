@@ -1,6 +1,7 @@
 //! Observe 수집의 영속 설정, 현재 관찰 투영과 다음 페이지 경계다 (#2538).
 //! 공급자 호출, 스케줄링이나 워크플로 전이는 여기서 수행하지 않는다.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::source::{IssueDiscoveryCursor, IssueSourceFailure, IssueSourceRead};
@@ -13,7 +14,7 @@ use crate::domain::issue_work::IssueReference;
 
 pub const MAX_ISSUE_COLLECTION_PAGE_SIZE: u16 = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueCollectionMode {
     Off,

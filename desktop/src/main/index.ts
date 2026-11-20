@@ -1,4 +1,4 @@
-// Electron main: 창을 만들고, 창마다 Gateway 접속을 하나씩 연결한다. 메시지는 해석하지 않는다.
+// Electron main: 창마다 일반 Gateway 메시지를 그대로 중계한다. 사람 확인은 별도 main 전용 연결을 쓴다.
 import { spawn } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -30,6 +30,9 @@ import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, read
 import { readGitHubSummary, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { openIssueAutomationPolicyFile } from "./issueAutomationPolicyFile";
+import { IssueConfirmationConnection } from "./issueConfirmationConnection";
+import { IssueConfirmationQueue, IssueConfirmationService } from "./issueConfirmationService";
+import { IssueConfirmationTransport } from "./issueConfirmationTransport";
 import { LinearService, isLinearIssueUrl } from "./linearService";
 import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
@@ -42,6 +45,8 @@ if (process.env.AKRA_DESKTOP_USER_DATA) {
 }
 
 const connections = new Map<number, GatewayConnection>();
+const issueConfirmations = new Map<number, IssueConfirmationService>();
+const issueConfirmationQueue = new IssueConfirmationQueue();
 /** 원격 호스트(plan 25)의 접속이다. 키는 `창 id:호스트 id` 이다. renderer 가 열라고 한 것만 있다. */
 const remoteConnections = new Map<string, GatewayConnection>();
 const remoteKey = (contentsId: number, host: string) => `${contentsId}:${host}`;
@@ -220,6 +225,7 @@ function attachGatewayConnection(contents: WebContents, host?: string): void {
       }
     },
     onState: (state) => {
+      if (!host) issueConfirmations.get(contents.id)?.invalidate();
       if (!contents.isDestroyed()) {
         contents.send(stateChannel, ...prefix, state);
       }
@@ -370,6 +376,10 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
   });
   // 접속은 renderer 가 수신 함수를 등록하고 `ready` 를 보낸 뒤에 연다 (아래 ipcMain 처리).
   const contentsId = contents.id;
+  window.on("close", () => issueConfirmations.get(contentsId)?.invalidate());
+  contents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) issueConfirmations.get(contentsId)?.invalidate();
+  });
   contents.once("destroyed", () => {
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
@@ -401,6 +411,8 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
 /** Renderer reinitialization does not destroy WebContents: native PTYs and browser
  * views must be released by owner before attaching the replacement renderer. */
 function closeRendererResources(contentsId: number): void {
+  issueConfirmations.get(contentsId)?.invalidate();
+  issueConfirmations.delete(contentsId);
   terminals.closeAllOf(contentsId);
   browsers.close(contentsId);
   workingWindows.delete(contentsId);
@@ -501,6 +513,42 @@ ipcMain.handle(IPC_CHANNELS.gitOpenFile, async (_event, cwd: unknown, path: unkn
   await shell.openExternal(editorUrl(target)).catch(() => shell.showItemInFolder(target));
 });
 
+
+/** 이 두 IPC만 서버가 정한 확인 문구를 해석한다. 일반 JSON-RPC relay는 그대로 둔다. */
+function issueConfirmationOf(event: IpcMainInvokeEvent): IssueConfirmationService {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const frame = event.senderFrame;
+  if (!window || !mainWindows.has(window) || !frame || frame !== event.sender.mainFrame || !isAppUrl(frame.url, event.sender)) {
+    throw new Error("확인을 요청한 앱 창을 확인할 수 없습니다.");
+  }
+  let service = issueConfirmations.get(event.sender.id);
+  if (!service) {
+    service = new IssueConfirmationService({
+      rpc: (onClosed) => new IssueConfirmationConnection(resolveGatewayEndpoint(), onClosed),
+      helper: (onClosed) => new IssueConfirmationTransport(resolveGatewayExecutable(repositoryRoot()), onClosed),
+      ownerAlive: () => !window.isDestroyed() && !event.sender.isDestroyed() && event.sender.mainFrame === frame && mainWindows.has(window),
+      confirm: async (display, signal) => {
+        if (signal.aborted || window.isDestroyed()) return false;
+        const answer = await dialog.showMessageBox(window, {
+          type: "question",
+          message: display.message,
+          detail: display.detail,
+          buttons: [display.confirm_label, "취소"],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+          signal,
+        });
+        return !signal.aborted && answer.response === 0;
+      },
+    }, issueConfirmationQueue);
+    issueConfirmations.set(event.sender.id, service);
+  }
+  return service;
+}
+
+ipcMain.handle(IPC_CHANNELS.confirmIssueDecision, (event, request: unknown) => issueConfirmationOf(event).confirmDecision(request));
+ipcMain.handle(IPC_CHANNELS.confirmIssueAutomationMode, (event, request: unknown) => issueConfirmationOf(event).confirmMode(request));
 
 ipcMain.handle(IPC_CHANNELS.issueAutomationPolicyOpenFile, async (event, request: unknown) => {
   if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {
@@ -813,6 +861,8 @@ void app.whenReady().then(() => {
 // 셸은 앱과 함께 끝난다. Gateway 데몬과 다르다.
 let closingAgents = false;
 app.on("before-quit", (event) => {
+  for (const service of issueConfirmations.values()) service.invalidate();
+  issueConfirmations.clear();
   terminals.closeAll();
   if (closingAgents) return;
   event.preventDefault();

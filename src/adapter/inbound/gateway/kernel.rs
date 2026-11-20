@@ -20,7 +20,11 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_tungstenite::tungstenite::Message;
 
+use super::confirmation::ConfirmationRegistration;
 use super::recorder::{RecordDirection, SessionRecording};
+use crate::adapter::inbound::desktop_confirmation_bridge::{
+    protocol::valid_intent, storage::random_id,
+};
 use crate::adapter::inbound::kernel_protocol::{
     AttachRequest, AttachResponse, CommandRejection, CommandRequest, CommandResponse,
     ERROR_INVALID_PARAMS, ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_METHOD_NOT_FOUND,
@@ -29,6 +33,16 @@ use crate::adapter::inbound::kernel_protocol::{
     KernelQueryAnswer, METHOD_ATTACH, METHOD_COMMAND, METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT,
     METHOD_QUERY, PROTOCOL_VERSION, ParallelSource, ParallelState, PlanningState, QueryRequest,
     describe, reason_next,
+};
+use crate::adapter::inbound::kernel_protocol::{
+    ConfirmationPrepareRequest, ConfirmationPrepareResponse, ConfirmationRegisterRequest,
+    ConfirmationRegisterResponse, ConfirmedCommandRequest, METHOD_COMMAND_CONFIRMED,
+    METHOD_CONFIRMATION_PREPARE, METHOD_CONFIRMATION_REGISTER, is_confirmation_method,
+};
+use crate::application::port::inbound::stored_command_port::StoredCommand;
+use crate::application::port::inbound::stored_command_port::issue_confirmation::{
+    IssueConfirmationBinding, IssueConfirmationIntent, IssueConfirmationTarget,
+    VerifiedHumanConfirmation,
 };
 use crate::composition::kernel_host::{
     KernelCallError, KernelClientHandle, KernelCommandOutcome, KernelCommandSender,
@@ -75,6 +89,8 @@ impl KernelRequests {
             kernels,
             outbox,
             attached: None,
+            connection_id: random_id(16).unwrap_or_default(),
+            confirmation: None,
         };
         let worker = tokio::spawn(serve_kernel_requests(session, requests, recording));
         Self { sender, worker }
@@ -115,7 +131,9 @@ async fn serve_kernel_requests(
         let response = session
             .respond(request.id, &request.method, &request.text)
             .await;
-        if let Some(recording) = &recording {
+        if let Some(recording) = &recording
+            && !is_confirmation_method(&request.method)
+        {
             recording.record(RecordDirection::Gateway, &response);
         }
         if session.outbox.send(Message::text(response)).await.is_err() {
@@ -129,6 +147,8 @@ struct KernelSession {
     kernels: Arc<RepositoryKernelRegistry>,
     outbox: mpsc::Sender<Message>,
     attached: Option<AttachedKernel>,
+    connection_id: String,
+    confirmation: Option<ConfirmationRegistration>,
 }
 
 struct AttachedKernel {
@@ -137,6 +157,8 @@ struct AttachedKernel {
     issue_workspace: String,
     /// 이 접속이 attach 때 밝힌 이름이다. 커널이 명령의 기록에 호출자로 적는다 (plan 18 K4-5).
     client_name: String,
+    client_id: String,
+    attachment_id: String,
     commands: KernelCommandSender,
     stop_events: Arc<AtomicBool>,
     events: Option<JoinHandle<()>>,
@@ -181,11 +203,15 @@ impl KernelSession {
             METHOD_DESCRIBE => to_result(describe()),
             METHOD_ATTACH => self.attach(params).await,
             METHOD_COMMAND => self.command(params).await,
+            METHOD_CONFIRMATION_REGISTER => self.register_confirmation(params).await,
+            METHOD_CONFIRMATION_PREPARE => self.prepare_confirmation(params).await,
+            METHOD_COMMAND_CONFIRMED => self.command_confirmed(params).await,
             METHOD_QUERY => self.query(params).await,
             METHOD_DETACH => {
                 self.detach().await;
                 Ok(json!({}))
             }
+            _ if is_confirmation_method(method) => Err(invalid_confirmation()),
             _ => Err(KernelProtocolError {
                 code: ERROR_METHOD_NOT_FOUND,
                 message: format!("unknown kernel method `{method}`"),
@@ -218,6 +244,8 @@ impl KernelSession {
             protocol_version: PROTOCOL_VERSION,
             kernel,
         };
+        let client_id = response.client_id.clone();
+        let attachment_id = random_id(16).unwrap_or_default();
         let stop_events = Arc::new(AtomicBool::new(false));
         let commands = client.commands();
         let outbox = self.outbox.clone();
@@ -230,6 +258,8 @@ impl KernelSession {
             workspace: request.workspace,
             issue_workspace,
             client_name: request.client_name,
+            client_id,
+            attachment_id,
             commands,
             stop_events,
             events: Some(events),
@@ -237,9 +267,100 @@ impl KernelSession {
         to_result(response)
     }
 
-    async fn command(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
+    async fn register_confirmation(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
+        let request: ConfirmationRegisterRequest = parse_confirmation_params(params)?;
         let attached = self.attached()?;
-        let request = parse_command_params(params)?;
+        let binding = IssueConfirmationBinding {
+            registration_id: request.registration_id,
+            connection_id: self.connection_id.clone(),
+            attachment_id: attached.attachment_id.clone(),
+            client_id: attached.client_id.clone(),
+            workspace: attached.issue_workspace.clone(),
+        };
+        // Replace only after validating a new registration. The old watch is closed on drop.
+        let registration = ConfirmationRegistration::register(
+            binding.clone(),
+            std::path::Path::new(&request.session_file),
+        )
+        .await
+        .map_err(|_| invalid_confirmation())?;
+        self.confirmation = Some(registration);
+        to_result(ConfirmationRegisterResponse { binding })
+    }
+
+    async fn prepare_confirmation(&self, params: Value) -> Result<Value, KernelProtocolError> {
+        let request: ConfirmationPrepareRequest = parse_confirmation_params(params)?;
+        let attached = self.attached()?;
+        let registration = self
+            .confirmation
+            .as_ref()
+            .filter(|registration| registration.available())
+            .ok_or_else(invalid_confirmation)?;
+        let (command, descriptor) = confirmation_command(&request.request, &attached.workspace)?;
+        let workspace = attached.issue_workspace.clone();
+        let preview =
+            blocking(move || crate::composition::issue_confirmation::prepare(&workspace, &command))
+                .await?
+                .map_err(|_| invalid_confirmation())?;
+        if !registration.available() {
+            return Err(invalid_confirmation());
+        }
+        let intent = IssueConfirmationIntent {
+            binding: registration.binding().clone(),
+            target: preview.target,
+            key: descriptor
+                .idempotency_key
+                .ok_or_else(invalid_confirmation)?,
+            fingerprint: descriptor.fingerprint,
+        };
+        if !valid_intent(&intent) {
+            return Err(invalid_confirmation());
+        }
+        to_result(ConfirmationPrepareResponse {
+            intent,
+            display: preview.display,
+        })
+    }
+
+    async fn command_confirmed(&self, params: Value) -> Result<Value, KernelProtocolError> {
+        let submission: ConfirmedCommandRequest = parse_confirmation_params(params)?;
+        let attached = self.attached()?;
+        let registration = self
+            .confirmation
+            .as_ref()
+            .filter(|registration| registration.available())
+            .ok_or_else(invalid_confirmation)?;
+        let (command, descriptor) = confirmation_command(&submission.request, &attached.workspace)?;
+        let evidence = submission.confirmation;
+        if evidence.registration_id != registration.binding().registration_id
+            || evidence.intent.binding != *registration.binding()
+            || descriptor.idempotency_key.as_deref() != Some(evidence.intent.key.as_str())
+            || descriptor.fingerprint != evidence.intent.fingerprint
+            || !target_matches_command(&evidence.intent.target, &command, &attached.issue_workspace)
+        {
+            return Err(invalid_confirmation());
+        }
+        // The original persisted basis stays in the proof. Fresh triage runs in the service,
+        // where a changed basis closes the decision as superseded instead of losing that result here.
+        let confirmation = registration
+            .consume(&evidence.proof_id, &evidence.intent)
+            .await
+            .map_err(|_| invalid_confirmation())?;
+        self.dispatch_command(submission.request, Some(confirmation))
+            .await
+    }
+
+    async fn command(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
+        self.dispatch_command(parse_command_params(params)?, None)
+            .await
+    }
+
+    async fn dispatch_command(
+        &self,
+        request: CommandRequest,
+        confirmation: Option<VerifiedHumanConfirmation>,
+    ) -> Result<Value, KernelProtocolError> {
+        let attached = self.attached()?;
         // 커널은 이 설명으로 명령을 기록하고 멱등 키로 재전송을 가린다 (plan 19 Q3-6).
         let command_name = request.command.kind().name();
         let caller = Some(attached.client_name.clone()).filter(|name| !name.trim().is_empty());
@@ -251,7 +372,13 @@ impl KernelSession {
             });
         let command = match request.command.into_input(&attached.workspace)? {
             KernelCommandInput::Core(command) => KernelClientCommand::Core(command),
-            KernelCommandInput::Stored(command) => KernelClientCommand::Stored(Box::new(command)),
+            KernelCommandInput::Stored(command) => match confirmation {
+                Some(confirmation) => KernelClientCommand::ConfirmedStored {
+                    command: Box::new(command),
+                    confirmation: Box::new(confirmation),
+                },
+                None => KernelClientCommand::Stored(Box::new(command)),
+            },
             KernelCommandInput::SyncIssues => KernelClientCommand::SyncIssues,
         };
         let commands = attached.commands.clone();
@@ -374,6 +501,7 @@ impl KernelSession {
 
     /// 커널에서 떨어지고, 이벤트 스레드가 끝날 때까지 기다린다. 그 뒤에는 이 접속에 커널 이벤트가 가지 않는다.
     async fn detach(&mut self) {
+        self.confirmation = None;
         let Some(mut attached) = self.attached.take() else {
             return;
         };
@@ -523,6 +651,66 @@ fn is_issue_decision_params(params: &Value) -> bool {
     params.pointer("/command/type").and_then(Value::as_str) == Some("answer_issue_decision")
 }
 
+fn confirmation_command(
+    request: &CommandRequest,
+    workspace: &str,
+) -> Result<(StoredCommand, KernelCommandDescriptor), KernelProtocolError> {
+    let descriptor = request
+        .descriptor()
+        .map_err(|_| invalid_confirmation())?
+        .filter(|descriptor| descriptor.idempotency_key.is_some())
+        .ok_or_else(invalid_confirmation)?;
+    let input = request
+        .command
+        .clone()
+        .into_input(workspace)
+        .map_err(|_| invalid_confirmation())?;
+    match input {
+        KernelCommandInput::Stored(
+            command @ (StoredCommand::AnswerIssueDecision { .. }
+            | StoredCommand::SetIssueAutomationMode { .. }),
+        ) => Ok((command, descriptor)),
+        _ => Err(invalid_confirmation()),
+    }
+}
+fn target_matches_command(
+    target: &IssueConfirmationTarget,
+    command: &StoredCommand,
+    workspace: &str,
+) -> bool {
+    if target.workspace() != workspace || target.validate().is_err() {
+        return false;
+    }
+    match (target, command) {
+        (
+            IssueConfirmationTarget::Decision {
+                decision_id,
+                option,
+                ..
+            },
+            StoredCommand::AnswerIssueDecision {
+                decision_id: id,
+                option: choice,
+                ..
+            },
+        ) => decision_id.as_str() == id && option == choice,
+        (
+            IssueConfirmationTarget::Mode { to, .. },
+            StoredCommand::SetIssueAutomationMode { mode },
+        ) => to == mode,
+        _ => false,
+    }
+}
+fn parse_confirmation_params<T: DeserializeOwned>(params: Value) -> Result<T, KernelProtocolError> {
+    serde_json::from_value(params).map_err(|_| invalid_confirmation())
+}
+fn invalid_confirmation() -> KernelProtocolError {
+    KernelProtocolError {
+        code: ERROR_INVALID_PARAMS,
+        message: "human confirmation is unavailable or does not match this action".to_owned(),
+    }
+}
+
 fn parse_command_params(params: Value) -> Result<CommandRequest, KernelProtocolError> {
     let sensitive = is_issue_decision_params(&params);
     parse_params(params).map_err(|error| {
@@ -613,6 +801,8 @@ mod tests {
                 workspace: requested.to_string(),
                 issue_workspace: "/main".to_string(),
                 client_name: "cursor-fixture".to_string(),
+                client_id: client.client_id().to_string(),
+                attachment_id: "a".repeat(32),
                 commands: client.commands(),
                 stop_events: Arc::new(AtomicBool::new(false)),
                 events: None,
@@ -691,10 +881,14 @@ mod tests {
         let mut session = KernelSession {
             kernels: Arc::new(RepositoryKernelRegistry::default()),
             outbox,
+            connection_id: "c".repeat(32),
+            confirmation: None,
             attached: Some(AttachedKernel {
                 workspace: format!("{workspace}/requested-subfolder"),
                 issue_workspace: workspace.clone(),
                 client_name: "policy-query-fixture".into(),
+                client_id: client.client_id().to_string(),
+                attachment_id: "a".repeat(32),
                 commands: client.commands(),
                 stop_events: Arc::new(AtomicBool::new(false)),
                 events: None,

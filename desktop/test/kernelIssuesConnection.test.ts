@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
 import type { IssueEventReference } from "../src/renderer/kernel/protocol";
+import type { ConfirmIssueAutomationModeRequest, IssueConfirmationResponse } from "../src/shared/issueConfirmation";
 
 interface Sent {
   id: number;
@@ -106,7 +107,7 @@ function overviewAnswer(type: string | undefined, maxTurns = 1): unknown {
   return { type: "parallel", enabled: false };
 }
 
-function harness({ autoPolicy = true }: { autoPolicy?: boolean } = {}) {
+function harness({ autoPolicy = true, confirmMode }: { autoPolicy?: boolean; confirmMode?: (request: ConfirmIssueAutomationModeRequest) => Promise<IssueConfirmationResponse> } = {}) {
   let automaticPolicyReplies = autoPolicy;
   const sent: Sent[] = [];
   const listeners = new Set<() => void>();
@@ -123,7 +124,7 @@ function harness({ autoPolicy = true }: { autoPolicy?: boolean } = {}) {
   const connection = new KernelConnection(client, {
     getKernel: () => view,
     setKernel: (next: KernelView) => { view = next; changed(); },
-  });
+  }, confirmMode);
   const when = (condition: () => boolean): Promise<void> => {
     if (condition()) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -535,17 +536,22 @@ describe("issue kernel connection", () => {
     expect(h.requests("akra/kernel/attach")).toHaveLength(2);
   });
 
-  it("serializes mode and sync actions and uses the common sender key contract", async () => {
-    const h = harness();
+  it("serializes native mode confirmation and sync actions and retains the sender key contract", async () => {
+    const confirmations: ConfirmIssueAutomationModeRequest[] = [];
+    let approve!: (response: IssueConfirmationResponse) => void;
+    const h = harness({ confirmMode: (request) => {
+      confirmations.push(request);
+      return new Promise((resolve) => { approve = resolve; });
+    } });
     await h.openIssues(issuePage(), automation(7, "off"));
     const mode = h.connection.setIssueAutomationMode("observe");
     await h.connection.setIssueAutomationMode("observe");
     await h.connection.syncIssues();
-    expect(h.requests("akra/kernel/command")).toHaveLength(1);
-    const command = h.requests("akra/kernel/command")[0];
-    expect(command?.params.command).toEqual({ type: "set_issue_automation_mode", mode: "observe" });
-    expect(command?.params.idempotency_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    h.reply(command, { processed: true });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(confirmations).toHaveLength(1);
+    expect(confirmations[0]).toMatchObject({ workspace: "/repo", mode: "observe" });
+    expect(confirmations[0]?.key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    approve({ cancelled: false, response: { processed: true } });
     await h.when(() => h.queries("issues").length === 2);
     expect(h.view().issues.commandPending).toBe("mode");
     h.answerIssueReads(issuePage(["I_current"], 8, null), automation(8));
@@ -558,8 +564,57 @@ describe("issue kernel connection", () => {
     await sync;
     expect(h.view().issues.error).toContain("관찰로 바꾼 뒤");
     expect(h.view().issues.commandPending).toBeNull();
-    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
     expect(h.sent.every((request) => request.method.startsWith("akra/kernel/"))).toBe(true);
+  });
+
+  it("keeps Off unchanged when native confirmation is cancelled", async () => {
+    const h = harness({ confirmMode: async () => ({ cancelled: true }) });
+    await h.openIssues(issuePage(), automation(7, "off"));
+    await h.connection.setIssueAutomationMode("observe");
+    expect(h.view().issues).toMatchObject({ commandPending: null, error: null, automation: { mode: "off" } });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.queries("issues")).toHaveLength(1);
+  });
+
+  it("requeries the committed mode and reports an unknown confirmation result without resubmitting", async () => {
+    const confirmations: ConfirmIssueAutomationModeRequest[] = [];
+    const h = harness({ confirmMode: async (request) => {
+      confirmations.push(request);
+      return { cancelled: false, outcome: "unknown" };
+    } });
+    await h.openIssues(issuePage(), automation(7, "off"));
+    const mode = h.connection.setIssueAutomationMode("observe");
+    await h.when(() => h.queries("issues").length === 2);
+    expect(h.view().issues.error).toContain("처리 결과");
+    expect(h.view().issues.commandPending).toBe("mode");
+    h.answerIssueReads(issuePage(["I_committed"], 8, null), automation(8, "observe"));
+    await mode;
+    expect(h.view().issues).toMatchObject({ commandPending: null, automation: { mode: "observe", revision: 8 } });
+    expect(h.view().issues.error).toContain("처리 결과를 확인하지 못했습니다");
+    expect(confirmations).toHaveLength(1);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.queries("issue_automation")).toHaveLength(2);
+  });
+
+  it.each(["unknown", "response"] as const)("ignores a late %s confirmation result after the workspace changes", async (outcome) => {
+    let complete!: (response: IssueConfirmationResponse) => void;
+    const h = harness({ confirmMode: () => new Promise((resolve) => { complete = resolve; }) });
+    await h.openIssues(issuePage(), automation(7, "off"));
+    const oldMode = h.connection.setIssueAutomationMode("observe");
+    const replacement = h.connection.show("/second", ["issues"]);
+    await h.answerAttach("second");
+    h.answerIssueReads(issuePage(["I_second"], 9, null), automation(9, "off"));
+    await replacement;
+    const reads = h.queries("issues").length;
+    complete(outcome === "unknown" ? { cancelled: false, outcome: "unknown" } : { cancelled: false, response: { processed: true } });
+    await oldMode;
+    expect(h.view()).toMatchObject({
+      workspace: "/second", kernel: "second",
+      issues: { error: null, commandPending: null, automation: { mode: "off", revision: 9 } },
+    });
+    expect(h.queries("issues")).toHaveLength(reads);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 
   it("does not clear a status read error when the page succeeds", async () => {

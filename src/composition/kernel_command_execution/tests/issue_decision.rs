@@ -105,14 +105,21 @@ fn answer(note: &str) -> Value {
 }
 
 #[test]
-fn offline_decision_answer_reopens_receipts_without_planning_or_duplicate_resolution() {
+fn offline_decision_human_gate_rejection_preserves_open_request_and_replays_receipts() {
     let (_directory, kernel) = fixture();
-    let before = planning_revision(&kernel);
+    let before_planning = planning_revision(&kernel);
     let reference = seed_decision(&kernel);
     let query = json!({"type":"issue", "issue": crate::domain::kernel_event::IssueEventReference::from(&reference)});
     let open = kernel.query(query.clone(), false).unwrap();
     assert_eq!(open["open_decisions"].as_array().unwrap().len(), 1);
-    assert!(!open.to_string().contains("private original body"));
+    let before = store()
+        .get_issue_decision(
+            &kernel.workspace,
+            &IssueDecisionId::new("offline-decision").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+
     let first = kernel
         .command(
             KernelCommandKind::AnswerIssueDecision,
@@ -121,12 +128,10 @@ fn offline_decision_answer_reopens_receipts_without_planning_or_duplicate_resolu
         )
         .unwrap();
     assert_eq!(
-        first["result"]["type"], "issue_decision_resolved",
+        first["rejection"]["reason"], "human_confirmation_required",
         "{first}"
     );
-    assert_eq!(first["result"]["outcome"], "answered", "{first}");
-    assert_eq!(first["result"]["changed"], true);
-    assert_eq!(first["result"]["decision"]["answer_by"], "agent");
+    assert!(first["result"].is_null());
     let reopened = CommandOnlyKernel {
         workspace: kernel.workspace.clone(),
         caller: CALLER_CLI,
@@ -139,13 +144,15 @@ fn offline_decision_answer_reopens_receipts_without_planning_or_duplicate_resolu
         )
         .unwrap();
     assert_eq!(replay["operation"]["replayed"], true);
+    assert_eq!(replay["operation"]["state"], "rejected");
     assert_eq!(replay["operation"]["op_id"], first["operation"]["op_id"]);
+    assert_eq!(replay["rejection"]["reason"], "human_confirmation_required");
     assert!(
         reopened
             .command(
                 KernelCommandKind::AnswerIssueDecision,
                 answer("changed note"),
-                Some("offline-answer-key".into())
+                Some("offline-answer-key".into()),
             )
             .is_err()
     );
@@ -156,33 +163,24 @@ fn offline_decision_answer_reopens_receipts_without_planning_or_duplicate_resolu
             Some("independent-second-key".into()),
         )
         .unwrap();
-    assert_eq!(second["result"]["outcome"], "already_resolved");
-    assert_eq!(second["result"]["changed"], false);
     assert_eq!(
-        second["result"]["catalog_revision"],
-        first["result"]["catalog_revision"]
+        second["rejection"]["reason"], "human_confirmation_required",
+        "{second}"
     );
 
-    let record = store()
-        .get_issue_decision(
-            &kernel.workspace,
-            &IssueDecisionId::new("offline-decision").unwrap(),
-        )
-        .unwrap()
-        .unwrap();
-    let saved = record.request.answer().unwrap();
-    assert_eq!(saved.note.as_ref().unwrap().as_str(), "local note");
-    assert_eq!(saved.caller.as_deref(), Some(CALLER_CLI));
-    assert_eq!(saved.channel, "command_only");
-    assert!(saved.confirmation.is_none());
-    let closed = reopened.query(query, false).unwrap();
-    assert!(
-        closed["open_decisions"]
-            .as_array()
-            .expect("open decisions array")
-            .is_empty()
+    assert_eq!(
+        store()
+            .get_issue_decision(
+                &kernel.workspace,
+                &IssueDecisionId::new("offline-decision").unwrap()
+            )
+            .unwrap()
+            .unwrap(),
+        before
     );
-    assert_eq!(closed["revision"], first["result"]["catalog_revision"]);
+    let still_open = reopened.query(query, false).unwrap();
+    assert_eq!(still_open["revision"], open["revision"]);
+    assert_eq!(still_open["open_decisions"].as_array().unwrap().len(), 1);
     let records = reopened
         .records(crate::composition::production::kernel_event_log_port().as_ref())
         .unwrap();
@@ -191,18 +189,16 @@ fn offline_decision_answer_reopens_receipts_without_planning_or_duplicate_resolu
             .iter()
             .filter(|record| matches!(record.event, KernelEvent::IssueDecisionResolved { .. }))
             .count(),
-        1
+        0
     );
     let encoded = serde_json::to_string(&records).unwrap();
     assert!(!encoded.contains("local note") && !encoded.contains("second note"));
     assert!(!encoded.contains("private original body"));
     assert!(records.iter().all(|record| matches!(
         record.event,
-        KernelEvent::CommandReceived { .. }
-            | KernelEvent::CommandCompleted { .. }
-            | KernelEvent::IssueDecisionResolved { .. }
+        KernelEvent::CommandReceived { .. } | KernelEvent::CommandRejected { .. }
     )));
-    assert_eq!(planning_revision(&kernel), before);
+    assert_eq!(planning_revision(&kernel), before_planning);
 }
 
 #[test]

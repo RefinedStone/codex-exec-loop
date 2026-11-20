@@ -254,6 +254,14 @@ pub(super) fn save(
             };
             request.validate_successor(&existing.request)?;
             let basis_matches = existing.request.definition().basis == current_basis(request, assessment)?;
+            if basis_matches && assessment.gates().iter().any(|gate|
+                gate.gate == existing.request.definition().gate
+                    && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::Human)
+                && request.answer().is_none_or(|answer|
+                    answer.by != crate::domain::issue_automation::decision::IssueDecisionAnswerBy::Human)
+            {
+                bail!("the current issue gate requires a verified human answer")
+            }
             let expected_state = if basis_matches {
                 IssueDecisionState::Answered
             } else {

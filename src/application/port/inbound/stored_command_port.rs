@@ -1,3 +1,6 @@
+/// StoredCommandContext의 확인 증거와 준비 조회 metadata를 이 포트가 소유한다.
+pub mod issue_confirmation;
+
 use anyhow::Result;
 
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
@@ -32,6 +35,7 @@ pub trait StoredCommandPort: Send + Sync {
 /// 저장 명령을 실제로 받은 서버가 정한다. 클라이언트 명령 payload에서 받지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredCommandContext {
+    pub human_confirmation: Option<issue_confirmation::VerifiedHumanConfirmation>,
     pub caller: Option<String>,
     pub channel: String,
     pub at: String,

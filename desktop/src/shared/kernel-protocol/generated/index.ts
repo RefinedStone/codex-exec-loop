@@ -6,6 +6,9 @@ export const KERNEL_METHOD = {
   "attach": "akra/kernel/attach",
   "describe": "akra/kernel/describe",
   "command": "akra/kernel/command",
+  "confirmation/register": "akra/kernel/confirmation/register",
+  "confirmation/prepare": "akra/kernel/confirmation/prepare",
+  "command_confirmed": "akra/kernel/command_confirmed",
   "query": "akra/kernel/query",
   "event": "akra/kernel/event",
   "detach": "akra/kernel/detach"
@@ -68,9 +71,21 @@ export type CommandResponse = { readonly "failure"?: (string | null); readonly "
 
 export type CommandResult = ({ readonly "catalog_revision": number; readonly "changed": boolean; readonly "decision": IssueDecisionFactRecord; readonly "outcome": IssueDecisionOutcome; readonly "reason"?: (ReasonCode | null); readonly "type": "issue_decision_resolved"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_created"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_updated"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_deleted"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_created"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_updated"; } | { readonly "default_retained": boolean; readonly "direction_id": string; readonly "planning_revision": number; readonly "removed_task_count": number; readonly "type": "direction_deleted"; } | { readonly "changed": boolean; readonly "epoch": number; readonly "mode": IssueAutomationModeRecord; readonly "previous"?: (IssueAutomationModeRecord | null); readonly "revision": number; readonly "type": "issue_automation_mode_changed"; });
 
+export type ConfirmationPrepareRequest = { readonly "request": CommandRequest; };
+
+export type ConfirmationPrepareResponse = { readonly "display": IssueConfirmationDisplay; readonly "intent": IssueConfirmationIntent; };
+
+export type ConfirmationRegisterRequest = { readonly "registration_id": string; readonly "session_file": string; };
+
+export type ConfirmationRegisterResponse = { readonly "binding": IssueConfirmationBinding; };
+
+export type ConfirmedCommandRequest = { readonly "confirmation": HumanConfirmationSubmission; readonly "request": CommandRequest; };
+
 export type DirectionFields = { readonly "detail_doc_path"?: (string | null); readonly "scope_hints"?: Array<string>; readonly "state"?: (PlanningDirectionState | null); readonly "success_criteria": Array<string>; readonly "summary"?: (string | null); readonly "title": string; };
 
 export type EventNotification = { readonly "event": KernelEvent; };
+
+export type HumanConfirmationSubmission = { readonly "intent": IssueConfirmationIntent; readonly "proof_id": string; readonly "registration_id": string; };
 
 export type IssueActorState = { readonly "id": string; readonly "login": string; };
 
@@ -102,9 +117,21 @@ export type IssueChangeOrigin = ("command" | "rule");
 
 export type IssueCollectionFailureState = ({ readonly "kind": "source"; readonly "reason": IssueSourceFailureState; } | { readonly "kind": "origin_unavailable"; } | { readonly "kind": "policy_unavailable"; });
 
+export type IssueCollectionMode = ("off" | "observe");
+
+export type IssueConfirmationBinding = { readonly "attachment_id": string; readonly "client_id": string; readonly "connection_id": string; readonly "registration_id": string; readonly "workspace": string; };
+
+export type IssueConfirmationDisplay = { readonly "confirm_label": string; readonly "detail": string; readonly "message": string; };
+
+export type IssueConfirmationIntent = { readonly "binding": IssueConfirmationBinding; readonly "fingerprint": string; readonly "key": string; readonly "target": IssueConfirmationTarget; };
+
+export type IssueConfirmationTarget = ({ readonly "basis": IssueDecisionBasis; readonly "decision_id": IssueDecisionId; readonly "decision_revision": number; readonly "kind": "decision"; readonly "option": string; readonly "workspace": string; } | { readonly "epoch"?: (number | null); readonly "from"?: (IssueCollectionMode | null); readonly "kind": "mode"; readonly "revision"?: (number | null); readonly "to": IssueCollectionMode; readonly "workspace": string; });
+
 export type IssueContentState = ({ readonly "basis": IssueBasisState; readonly "kind": "shared"; readonly "policy_version": string; readonly "shared_copy": IssueSharedCopyState; } | { readonly "basis": IssueBasisState; readonly "kind": "withheld"; readonly "policy_version": string; readonly "reason": IssueWithheldReasonState; });
 
 export type IssueDecisionAnswerBy = ("human" | "agent" | "default" | "arbiter");
+
+export type IssueDecisionBasis = { readonly "fieldHash"?: (IssueFieldHash | null); readonly "gateRevision": number; readonly "policyVersion": string; readonly "workOrderId"?: (string | null); };
 
 export type IssueDecisionBasisRecord = { readonly "field_hash"?: (IssueDecisionFieldHashRecord | null); readonly "gate_revision": number; readonly "policy_version": string; readonly "work_order_id"?: (string | null); };
 
@@ -113,6 +140,8 @@ export type IssueDecisionFactRecord = { readonly "answer_by"?: (IssueDecisionAns
 export type IssueDecisionFieldHashRecord = { readonly "sha256": string; readonly "version": number; };
 
 export type IssueDecisionGateRecord = ("start" | "spec" | "plan" | "delivery" | "merge" | "close");
+
+export type IssueDecisionId = string;
 
 export type IssueDecisionKind = ("start_approval" | "spec_confirmation" | "plan_approval" | "risk_exception" | "issue_changed" | "failure_recovery" | "agent_question");
 
@@ -133,6 +162,8 @@ export type IssueEventProjectScope = { readonly "workspace_dir": string; };
 export type IssueEventProvider = ("github" | "jira");
 
 export type IssueEventReference = { readonly "issue_id": string; readonly "project_scope": IssueEventProjectScope; readonly "provider": IssueEventProvider; readonly "repository_id": string; readonly "server_id": string; };
+
+export type IssueFieldHash = { readonly "sha256": string; readonly "version": number; };
 
 export type IssueHashState = { readonly "sha256": string; readonly "version": number; };
 
@@ -280,7 +311,7 @@ export type QueryRequest = { readonly "query": KernelQuery; };
 
 export type QueuedThreadPrompt = { readonly "op_id"?: (number | null); readonly "task_id": string; readonly "thread_id": string; readonly "workspace_directory": string; };
 
-export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "foreign_workspace" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again" | "planning_revision_stale" | "planning_locked" | "not_yet_observed" | "source_unavailable" | "metadata_incomplete" | "disclosure_policy_stale" | "selection_not_matched" | "issue_closed" | "untrusted_actor" | "already_claimed" | "title_missing" | "required_section_missing" | "criteria_missing" | "criteria_not_list" | "issue_too_large" | "unsupported_content" | "disclosure_confirmation_required" | "masked_content" | "high_risk" | "held_or_manual" | "protected_path" | "policy_human_required" | "human_selection_required" | "budget_exhausted" | "mode_off" | "observation_only" | "execution_grant_required" | "close_disabled" | "decision_superseded" | "issue_automation_off");
+export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "foreign_workspace" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again" | "planning_revision_stale" | "planning_locked" | "not_yet_observed" | "source_unavailable" | "metadata_incomplete" | "disclosure_policy_stale" | "selection_not_matched" | "issue_closed" | "untrusted_actor" | "already_claimed" | "title_missing" | "required_section_missing" | "criteria_missing" | "criteria_not_list" | "issue_too_large" | "unsupported_content" | "disclosure_confirmation_required" | "masked_content" | "high_risk" | "held_or_manual" | "protected_path" | "policy_human_required" | "human_selection_required" | "budget_exhausted" | "mode_off" | "observation_only" | "execution_grant_required" | "close_disabled" | "human_confirmation_required" | "decision_superseded" | "issue_automation_off");
 
 export type RecordedKernelEvent = { readonly "event": KernelRecord; readonly "recorded_at": string; readonly "sequence": number; };
 

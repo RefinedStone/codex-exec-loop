@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from "../src/shared/settings";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
+import type { ConfirmIssueAutomationModeRequest } from "../src/shared/issueConfirmation";
 import { GatewayConnection } from "../src/main/gatewayConnection";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession, groupThreadsByCwd, startDesktopSession, isAgentThreadSource, type SessionBridge } from "../src/renderer/session/desktopSession";
@@ -76,6 +77,8 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     gitFileAction: async () => ({ ok: true as const }),
     gitOpenFile: async () => undefined,
     openIssueAutomationPolicyFile: async () => undefined,
+    confirmIssueDecision: async () => ({ cancelled: true }),
+    confirmIssueAutomationMode: async () => ({ cancelled: true }),
     gitBranchSummary: async () => ({ ok: false as const, message: "" }),
     gitCommitDiff: async () => ({ text: "", truncated: false }),
     gitPush: async () => ({ ok: true as const, url: null }),
@@ -628,10 +631,11 @@ describe("groupThreadsByCwd", () => {
 });
 
 describe("issue interests over the shared Gateway session", () => {
-  it("uses one attach for local issue actions, events and reconnection", async () => {
+  it("keeps one renderer attach across confirmed issue actions, events and reconnection", async () => {
     let mode: "off" | "observe" = "off";
     let revision = 3;
     const commands: Array<Record<string, unknown>> = [];
+    const confirmations: ConfirmIssueAutomationModeRequest[] = [];
     const state = () => ({
       type: "issue_automation", status: "ready", mode, epoch: 1, revision,
       binding: null, binding_id: null, collecting: false, consecutive_failures: 0,
@@ -651,11 +655,6 @@ describe("issue interests over the shared Gateway session", () => {
           if (method === "akra/kernel/query" && query?.type === "issues") return { result: page() };
           if (method === "akra/kernel/command") {
             commands.push(params);
-            const command = params.command as { type: string; mode?: "off" | "observe" };
-            if (command.type === "set_issue_automation_mode") {
-              mode = command.mode!;
-              revision += 1;
-            }
             return { result: { processed: true } };
           }
           return undefined;
@@ -664,6 +663,13 @@ describe("issue interests over the shared Gateway session", () => {
     });
     cleanups.push(() => fake.close());
     const { connection, bridge } = connectBridge(fake.endpoint);
+    // native 확인과 main 전용 전송은 별도 회귀가 검사한다. 여기서는 승인 결과와 서버의 저장 상태를 잇는다.
+    bridge.confirmIssueAutomationMode = async (request) => {
+      confirmations.push(structuredClone(request));
+      mode = request.mode;
+      revision += 1;
+      return { cancelled: false, response: { processed: true } };
+    };
     const store = sessionStore();
     const session = new DesktopSession(bridge, store, "test");
     session.start();
@@ -673,14 +679,16 @@ describe("issue interests over the shared Gateway session", () => {
     await waitFor(() => store.getKernel().issues.page?.status === "ready");
     expect(fake.receivedMethods.filter((method) => method === "akra/kernel/attach")).toHaveLength(1);
     expect(commands).toHaveLength(0);
+    expect(confirmations).toHaveLength(0);
+    expect(store.getKernel().issues.automation).toMatchObject({ mode: "off", revision: 3 });
 
     await session.setIssueAutomationMode("observe");
-    expect(commands).toHaveLength(1);
-    expect(commands[0]?.idempotency_key).toMatch(/^[0-9a-f-]{36}$/);
+    expect(confirmations).toEqual([{ workspace: "/work/example-app", mode: "observe", key: expect.stringMatching(/^[0-9a-f-]{36}$/) }]);
+    expect(commands).toHaveLength(0);
     expect(store.getKernel().issues.automation).toMatchObject({ mode: "observe", revision: 4 });
     await session.syncIssues();
-    expect(commands).toHaveLength(2);
-    expect(commands[1]).toEqual({ command: { type: "sync_issues" } });
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toEqual({ command: { type: "sync_issues" } });
 
     revision = 5;
     fake.sendKernelEvent({ ...state(), type: "issues" });
@@ -692,7 +700,9 @@ describe("issue interests over the shared Gateway session", () => {
     await waitFor(() => fake.receivedMethods.filter((method) => method === "akra/kernel/attach").length === 2);
     await waitFor(() => store.getKernel().issues.page?.status === "ready");
     expect(store.getKernel().issues.pageNumber).toBe(1);
-    expect(commands).toHaveLength(2);
+    expect(commands).toHaveLength(1);
+    expect(confirmations).toHaveLength(1);
+    expect(store.getKernel().issues.automation).toMatchObject({ mode: "observe", revision: 5 });
     expect(fake.receivedMethods).not.toContain("turn/start");
     expect(fake.receivedMethods).not.toContain("turn/steer");
 

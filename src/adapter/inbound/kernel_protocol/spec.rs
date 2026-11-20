@@ -13,9 +13,11 @@ use serde_json::{Map, Value};
 
 use super::{
     AttachRequest, AttachResponse, CommandRequest, CommandResponse, CommandResult,
-    EventNotification, KernelCommand, KernelErrorKind, KernelEvent, KernelEventKind,
-    KernelMethodKind, KernelQuery, KernelQueryAnswer, KernelQueryKind, NextStep, PROTOCOL_VERSION,
-    QueryRequest, error_next, reason_next,
+    ConfirmationPrepareRequest, ConfirmationPrepareResponse, ConfirmationRegisterRequest,
+    ConfirmationRegisterResponse, ConfirmedCommandRequest, EventNotification, KernelCommand,
+    KernelErrorKind, KernelEvent, KernelEventKind, KernelMethodKind, KernelQuery,
+    KernelQueryAnswer, KernelQueryKind, NextStep, PROTOCOL_VERSION, QueryRequest, error_next,
+    reason_next,
 };
 use crate::domain::kernel_event::KernelEvent as KernelRecord;
 use crate::domain::kernel_spec::{
@@ -174,6 +176,18 @@ pub fn describe() -> KernelSpec {
                 ),
                 KernelMethodKind::Command => (
                     Some(schemas.reference::<CommandRequest>()),
+                    Some(command_output.clone()),
+                ),
+                KernelMethodKind::ConfirmationRegister => (
+                    Some(schemas.reference::<ConfirmationRegisterRequest>()),
+                    Some(schemas.reference::<ConfirmationRegisterResponse>()),
+                ),
+                KernelMethodKind::ConfirmationPrepare => (
+                    Some(schemas.reference::<ConfirmationPrepareRequest>()),
+                    Some(schemas.reference::<ConfirmationPrepareResponse>()),
+                ),
+                KernelMethodKind::CommandConfirmed => (
+                    Some(schemas.reference::<ConfirmedCommandRequest>()),
                     Some(command_output.clone()),
                 ),
                 KernelMethodKind::Query => (

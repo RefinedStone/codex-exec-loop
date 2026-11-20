@@ -118,6 +118,38 @@ pub(super) fn set_mode(
     })
 }
 
+/// 확인 창이 보여 준 mode와 두 판을 저장 직전 같은 transaction에서 확인한다.
+pub(super) fn set_mode_exact(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+    expected: IssueCollectionFence,
+    from: IssueCollectionMode,
+    mode: IssueCollectionMode,
+) -> Result<IssueCollectionModeSaveResult> {
+    expected.validate()?;
+    adapter.with_connection(workspace, |connection, guard| {
+        transaction(connection, guard, |transaction| {
+            let Some(current) = read_control(transaction, workspace)? else {
+                return Ok(IssueCollectionModeSaveResult::Conflict { current: None });
+            };
+            if current.fence() != expected || current.config.mode != from {
+                return Ok(IssueCollectionModeSaveResult::Conflict {
+                    current: Some(Box::new(current)),
+                });
+            }
+            if current.config.mode == mode {
+                return saved_mode(transaction, workspace, current, false);
+            }
+            let mut next = current.clone();
+            next.config.mode = mode;
+            next.epoch = next_revision(current.epoch)?;
+            next.revision = next_revision(current.revision)?;
+            save_control(transaction, workspace, current.fence(), &next)?;
+            saved_mode(transaction, workspace, next, true)
+        })
+    })
+}
+
 pub(super) fn apply_discovery(
     adapter: &SqliteIssueAutomationStoreAdapter,
     workspace: &str,

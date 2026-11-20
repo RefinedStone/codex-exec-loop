@@ -1241,3 +1241,127 @@ fn invalid_new_web_metadata_cannot_advance_a_collection_page_or_create_rows() {
             .is_empty()
     );
 }
+
+#[test]
+fn confirmed_mode_cas_checks_mode_epoch_and_revision_and_never_reuses_an_old_scope() {
+    let fixture = Fixture::new("collector-confirmed-mode-cas");
+    let adapter = fixture.adapter();
+    let off = mode(
+        adapter
+            .set_collection_mode(fixture.cwd(), None, IssueCollectionMode::Off)
+            .unwrap(),
+    );
+    let before = adapter
+        .get_collection_projection(fixture.cwd())
+        .unwrap()
+        .unwrap();
+    for (expected, from) in [
+        (
+            IssueCollectionFence {
+                epoch: off.epoch,
+                revision: off.revision + 1,
+            },
+            IssueCollectionMode::Off,
+        ),
+        (off.fence(), IssueCollectionMode::Observe),
+    ] {
+        assert!(matches!(
+            adapter
+                .set_collection_mode_exact(
+                    fixture.cwd(),
+                    expected,
+                    from,
+                    IssueCollectionMode::Observe
+                )
+                .unwrap(),
+            IssueCollectionModeSaveResult::Conflict { .. },
+        ));
+        assert_eq!(
+            adapter
+                .get_collection_projection(fixture.cwd())
+                .unwrap()
+                .unwrap(),
+            before
+        );
+    }
+    let saved = adapter
+        .set_collection_mode_exact(
+            fixture.cwd(),
+            off.fence(),
+            IssueCollectionMode::Off,
+            IssueCollectionMode::Observe,
+        )
+        .unwrap();
+    let observe = match saved {
+        IssueCollectionModeSaveResult::Saved {
+            state,
+            projection,
+            changed: true,
+        } => {
+            assert_eq!(*state, projection.state);
+            assert_eq!(projection.catalog_revision, before.catalog_revision + 1);
+            *state
+        }
+        other => panic!("expected an exact committed mode change, got {other:?}"),
+    };
+    assert_eq!(observe.epoch, off.epoch + 1);
+    assert_eq!(observe.revision, off.revision + 1);
+    assert!(matches!(
+        adapter
+            .set_collection_mode_exact(
+                fixture.cwd(),
+                off.fence(),
+                IssueCollectionMode::Off,
+                IssueCollectionMode::Observe,
+            )
+            .unwrap(),
+        IssueCollectionModeSaveResult::Conflict { .. },
+    ));
+    assert!(matches!(
+        adapter
+            .set_collection_mode_exact(
+                fixture.cwd(),
+                observe.fence(),
+                IssueCollectionMode::Observe,
+                IssueCollectionMode::Observe,
+            )
+            .unwrap(),
+        IssueCollectionModeSaveResult::Saved { changed: false, .. },
+    ));
+    assert_eq!(
+        fixture.adapter().get_collection(fixture.cwd()).unwrap(),
+        Some(observe)
+    );
+}
+
+#[test]
+fn confirmed_mode_cas_rejects_a_revision_change_without_an_epoch_change() {
+    let fixture = Fixture::new("collector-confirmed-revision-cas");
+    let adapter = fixture.adapter();
+    let before = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let after = commit(
+        adapter
+            .record_collection_attempt(fixture.cwd(), before.fence(), 100, None)
+            .unwrap(),
+    );
+    assert_eq!(after.state.epoch, before.epoch);
+    assert_eq!(after.state.revision, before.revision + 1);
+    assert!(matches!(
+        adapter
+            .set_collection_mode_exact(
+                fixture.cwd(),
+                before.fence(),
+                IssueCollectionMode::Observe,
+                IssueCollectionMode::Off,
+            )
+            .unwrap(),
+        IssueCollectionModeSaveResult::Conflict { .. },
+    ));
+    assert_eq!(
+        adapter
+            .get_collection_projection(fixture.cwd())
+            .unwrap()
+            .unwrap(),
+        after.projection
+    );
+}

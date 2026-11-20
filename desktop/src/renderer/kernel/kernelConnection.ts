@@ -1,6 +1,7 @@
 // 같은 Gateway 접속에서 저장소 커널에 한 번 붙고, 열린 패널의 관심 영역만 읽는다.
 // 개요와 이슈 목록은 서로 다른 조회 계약을 쓰며, 이슈를 읽는 동안 모델 턴을 만들지 않는다.
 import { JsonRpcError, type JsonRpcClient } from "../rpc/jsonRpcClient";
+import type { ConfirmIssueAutomationModeRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
 import {
   type AttachResponse,
   type AutoFollowSettings,
@@ -270,6 +271,7 @@ export class KernelConnection {
   constructor(
     private readonly client: JsonRpcClient,
     private readonly store: KernelStore,
+    private readonly confirmIssueAutomationMode?: (request: ConfirmIssueAutomationModeRequest) => Promise<IssueConfirmationResponse>,
   ) {}
 
   /** 같은 폴더에서는 관심 영역만 바꾸고, 관심 영역이 없으면 커널에서 뗀다. */
@@ -731,7 +733,26 @@ export class KernelConnection {
     this.issueCommandError = null;
     this.updateIssues({ commandPending: pending });
     try {
-      const response = await sendKernelCommand(this.client, command);
+      const automation = this.store.getKernel().issues.automation;
+      const needsConfirmation = command.type === "set_issue_automation_mode" && command.mode === "observe"
+        && (automation?.status !== "ready" || automation.mode !== "observe");
+      let response;
+      if (needsConfirmation && command.type === "set_issue_automation_mode") {
+        if (!this.confirmIssueAutomationMode || !this.wanted) throw new Error("이 창에서는 시스템 확인을 열 수 없습니다.");
+        const confirmation = await this.confirmIssueAutomationMode({ workspace: this.wanted, mode: command.mode, key: crypto.randomUUID() });
+        if (!this.issueCurrent(token, this.issueCommandRequest) || confirmation.cancelled) return;
+        if ("outcome" in confirmation) {
+          // 일반 읽기만 시작한다. 확인 요청이나 새 key의 명령을 자동으로 다시 보내지 않는다.
+          const refresh = this.refreshIssues();
+          this.issueCommandError = "승인한 요청의 처리 결과를 확인하지 못했습니다. 명령을 다시 보내기 전에 현재 상태를 확인해 주세요.";
+          this.updateIssues({});
+          await refresh;
+          return;
+        }
+        response = confirmation.response;
+      } else {
+        response = await sendKernelCommand(this.client, command);
+      }
       if (!this.issueCurrent(token, this.issueCommandRequest)) return;
       if (response.rejection) {
         throw new Error(response.rejection.reason === "issue_automation_off"

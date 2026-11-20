@@ -141,9 +141,13 @@ pub(super) fn answer(
     {
         return Err(IssueDecisionError::InvalidOption);
     }
-    // #2545의 확인 경로, 마감, 중재자 구현 전에는 복원도 agent 답만 허용한다.
-    if value.by != IssueDecisionAnswerBy::Agent || value.confirmation.is_some() {
-        return Err(IssueDecisionError::UnsupportedAnswerOrigin);
+    // 저장된 참조는 검증 완료의 감사 metadata다. 전송 증거를 복원하거나 인증하지 않는다.
+    match (value.by, value.confirmation.as_deref()) {
+        (IssueDecisionAnswerBy::Agent, None) => {}
+        (IssueDecisionAnswerBy::Human, Some(reference)) => {
+            super::validate_issue_decision_confirmation_reference(reference)?;
+        }
+        _ => return Err(IssueDecisionError::UnsupportedAnswerOrigin),
     }
     if let Some(note) = &value.note {
         shared_text(note.as_str(), "answer.note", MAX_ISSUE_DECISION_NOTE_BYTES)?;

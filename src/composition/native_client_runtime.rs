@@ -3,6 +3,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use crate::application::port::inbound::issue_automation_policy_query_port::IssueAutomationPolicyInspection;
+use crate::application::port::inbound::stored_command_port::issue_confirmation::VerifiedHumanConfirmation;
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandOutcome, StoredCommandPort, StoredCommandResult,
 };
@@ -84,6 +85,11 @@ pub(crate) enum KernelClientCommand {
     Core(AppCommand),
     // 저장 명령은 작업의 필드를 모두 가져서 크다. 상자에 넣어 커널의 입력을 작게 둔다.
     Stored(Box<StoredCommand>),
+    /// Gateway가 main 확인 증거를 검증한 저장 명령이다. 원문 증거는 커널에 전달하지 않는다.
+    ConfirmedStored {
+        command: Box<StoredCommand>,
+        confirmation: Box<VerifiedHumanConfirmation>,
+    },
     /// 이슈 읽기를 요청한다. 진행 중인 읽기가 있으면 그 요청에 합친다.
     SyncIssues,
 }
@@ -1216,6 +1222,18 @@ impl NativeClientRuntime {
                     *stored,
                     admission,
                     descriptor.and_then(|value| value.caller.as_deref()),
+                    None,
+                );
+            }
+            KernelClientCommand::ConfirmedStored {
+                command,
+                confirmation,
+            } => {
+                return self.dispatch_stored_command(
+                    *command,
+                    admission,
+                    descriptor.and_then(|value| value.caller.as_deref()),
+                    Some(*confirmation),
                 );
             }
             KernelClientCommand::SyncIssues => return self.dispatch_issue_sync(),
@@ -1274,6 +1292,7 @@ impl NativeClientRuntime {
         command: StoredCommand,
         admission: Option<CommandAdmission>,
         caller: Option<&str>,
+        human_confirmation: Option<VerifiedHumanConfirmation>,
     ) -> ClientCommandDispatch {
         let kind = command.kind();
         let is_issue_command = matches!(
@@ -1286,6 +1305,7 @@ impl NativeClientRuntime {
                 caller: caller.map(str::to_string),
                 channel: "kernel".to_string(),
                 at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                human_confirmation,
             };
         let op_id = match admission {
             Some(CommandAdmission::Recorded(op_id)) => Some(op_id),
