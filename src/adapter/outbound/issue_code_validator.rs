@@ -43,6 +43,7 @@ impl IssueCodeValidatorRunnerPort for SandboxedIssueCodeValidatorRunnerAdapter {
 mod macos {
     use std::fs::{self, DirBuilder, File, OpenOptions};
     use std::io::{self, Read, Write};
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     use std::os::unix::process::CommandExt;
     use std::path::{Path, PathBuf};
@@ -59,7 +60,7 @@ mod macos {
 
     const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
     /// 거부 글로 읽는 stdout 의 최대 바이트 수이다.
-    const MESSAGE_LIMIT_BYTES: u64 = 4096;
+    const MESSAGE_LIMIT_BYTES: usize = 4096;
 
     // shortcut: 시스템 경로의 해석기만 읽을 수 있다 (`/bin/sh`, Command Line Tools 의 python3). 다른 자리의
     // 해석기가 필요하면 승인 항목에 읽기 경로를 더한다.
@@ -132,7 +133,6 @@ mod macos {
             .write_all(content)?;
         let input = workspace.join("input.json");
         fs::write(&input, &request.input_json)?;
-        let stdout = workspace.join("stdout.txt");
 
         let mut child = Command::new(SANDBOX_EXEC)
             .arg("-D")
@@ -144,45 +144,74 @@ mod macos {
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .stdin(File::open(&input)?)
-            .stdout(File::create(&stdout)?)
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             // 제한 시간에 검증기와 그 자식을 함께 끝낸다.
             .process_group(0)
             .spawn()?;
 
-        let deadline = Instant::now() + request.timeout;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break Some(status);
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("validator stdout pipe is unavailable"))?;
+        let mut message = Vec::new();
+        let status = (|| -> io::Result<Option<std::process::ExitStatus>> {
+            // The parent keeps this pipe handle; the validator cannot substitute a file or FIFO.
+            let fd = stdout.as_raw_fd();
+            // SAFETY: fd belongs to the live ChildStdout. fcntl changes only its status flags.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+            {
+                return Err(io::Error::last_os_error());
             }
-            if Instant::now() >= deadline {
-                break None;
+            let deadline = Instant::now() + request.timeout;
+            loop {
+                drain_stdout(&mut stdout, &mut message)?;
+                if let Some(status) = child.try_wait()? {
+                    return Ok(Some(status));
+                }
+                if Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                thread::sleep(Duration::from_millis(20));
             }
-            thread::sleep(Duration::from_millis(20));
-        };
-        // SAFETY: kill has no memory preconditions. The negative ID names the process group that
-        // `process_group(0)` created for this child.
+        })();
+        // Always stop descendants, including when collection fails or a descendant keeps stdout open.
+        // SAFETY: the negative PID identifies the process group created above.
         unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
-        let Some(status) = status else {
-            let _ = child.wait();
+        let _ = child.wait();
+        let Some(status) = status? else {
             return Ok(IssueCodeValidatorRunOutcome::NotRun(
                 IssueCodeValidatorNotRun::TimedOut,
             ));
         };
+        drain_stdout(&mut stdout, &mut message)?;
 
         Ok(match status.code() {
             Some(0) => IssueCodeValidatorRunOutcome::Passed,
-            Some(1) => {
-                let mut message = Vec::new();
-                File::open(&stdout)?
-                    .take(MESSAGE_LIMIT_BYTES)
-                    .read_to_end(&mut message)?;
-                IssueCodeValidatorRunOutcome::Rejected {
-                    message: String::from_utf8_lossy(&message).trim().to_string(),
-                }
-            }
+            Some(1) => IssueCodeValidatorRunOutcome::Rejected {
+                message: String::from_utf8_lossy(&message).trim().to_string(),
+            },
             _ => IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::Crashed),
         })
+    }
+
+    /// Drain a bounded slice per cycle so a continuously writing child cannot starve the deadline.
+    fn drain_stdout(stdout: &mut impl Read, message: &mut Vec<u8>) -> io::Result<()> {
+        let mut buffer = [0_u8; 8192];
+        for _ in 0..8 {
+            match stdout.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(length) => {
+                    let keep = length.min(MESSAGE_LIMIT_BYTES.saturating_sub(message.len()));
+                    message.extend_from_slice(&buffer[..keep]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -223,6 +252,77 @@ mod macos {
                 IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::HashMismatch)
             );
             fs::remove_dir_all(directory).expect("cleanup");
+        }
+
+        #[test]
+        fn stdout_path_substitution_cannot_escape_the_pipe_capture() {
+            let directory = create_workspace().unwrap();
+            let outside = directory.join("outside.txt");
+            fs::write(&outside, "synthetic outside secret").unwrap();
+            for replacement in [
+                format!(
+                    "ln -s '{}' stdout.txt && [ -L stdout.txt ]",
+                    outside.display()
+                ),
+                "mkfifo stdout.txt && [ -p stdout.txt ]".to_string(),
+            ] {
+                let script = format!(
+                    "#!/bin/sh\nrm -f stdout.txt\n{replacement} || exit 2\nprintf 'safe result'\nexit 1\n"
+                );
+                let request = IssueCodeValidatorRunRequest {
+                    command: String::new(),
+                    sha256: String::new(),
+                    timeout: Duration::from_secs(10),
+                    input_json: "{}".to_string(),
+                };
+                let workspace = create_workspace().unwrap();
+                assert_eq!(
+                    run_in_workspace(&workspace, script.as_bytes(), &request).unwrap(),
+                    IssueCodeValidatorRunOutcome::Rejected {
+                        message: "safe result".to_string()
+                    }
+                );
+                fs::remove_dir_all(workspace).unwrap();
+            }
+            fs::remove_dir_all(directory).unwrap();
+        }
+
+        #[test]
+        fn large_output_is_drained_without_a_stdout_file_or_unbounded_retention() {
+            let workspace = create_workspace().unwrap();
+            let script = b"#!/bin/sh\nhead -c 2097152 /dev/zero | tr '\\000' x\nexit 1\n";
+            let request = IssueCodeValidatorRunRequest {
+                command: String::new(),
+                sha256: String::new(),
+                timeout: Duration::from_secs(20),
+                input_json: "{}".to_string(),
+            };
+            assert_eq!(
+                run_in_workspace(&workspace, script, &request).unwrap(),
+                IssueCodeValidatorRunOutcome::Rejected {
+                    message: "x".repeat(MESSAGE_LIMIT_BYTES)
+                }
+            );
+            assert!(!workspace.join("stdout.txt").exists());
+            fs::remove_dir_all(workspace).unwrap();
+        }
+
+        #[test]
+        fn endless_output_still_obeys_the_deadline() {
+            let workspace = create_workspace().unwrap();
+            let request = IssueCodeValidatorRunRequest {
+                command: String::new(),
+                sha256: String::new(),
+                timeout: Duration::from_millis(100),
+                input_json: "{}".to_string(),
+            };
+            let started = Instant::now();
+            assert_eq!(
+                run_in_workspace(&workspace, b"#!/bin/sh\nexec yes x\n", &request).unwrap(),
+                IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::TimedOut)
+            );
+            assert!(started.elapsed() < Duration::from_secs(5));
+            fs::remove_dir_all(workspace).unwrap();
         }
     }
 }
