@@ -69,6 +69,8 @@ mod pr_validation_rollout_evidence_store;
 mod store;
 // task authority 문서와 queue projection을 정규화된 task table로 펼치는 모듈이다.
 mod task_authority_rows;
+// Immutable work-order identity and task lineage share task authority transactions.
+mod work_orders;
 // Telegram control-plane polling cursor와 update idempotency inbox를 영속화한다.
 mod telegram_update_ledger;
 // Telegram bot id별 머신 전역 runner ownership과 canonical workspace binding을 영속화한다.
@@ -1067,22 +1069,15 @@ impl SqlitePlanningAuthorityAdapter {
             });
         }
 
-        upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
-        replace_task_authority_tables(
+        let planning_revision = Self::write_task_authority_change_in_transaction(
             &transaction,
-            commit.task_authority,
-            commit.queue_projection,
-        )?;
-        let planning_revision = bump_planning_revision(&transaction)?;
-        let records = task_authority_mutation_records(
+            &location,
+            commit,
             existing_snapshot
                 .as_ref()
                 .map(|snapshot| &snapshot.task_authority),
-            commit.task_authority,
-            planning_revision,
             audit,
-        );
-        insert_task_authority_mutation_records(&transaction, &records)?;
+        )?;
         transaction
             .commit()
             .context("failed to commit task authority transaction")?;
@@ -1091,6 +1086,28 @@ impl SqlitePlanningAuthorityAdapter {
             planning_revision,
             changed: true,
         })
+    }
+
+    /// The caller owns the guard/CAS checks and transaction commit. Keeping all task-side writes
+    /// together lets durable work-order registration add lineage before the same transaction commits.
+    fn write_task_authority_change_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        location: &PlanningAuthorityLocation,
+        commit: PlanningTaskAuthorityCommit<'_>,
+        previous: Option<&TaskAuthorityDocument>,
+        audit: Option<PlanningTaskAuthorityMutationAudit<'_>>,
+    ) -> Result<i64> {
+        upsert_authority_metadata(transaction, location, "last_task_authority_commit_at")?;
+        replace_task_authority_tables(transaction, commit.task_authority, commit.queue_projection)?;
+        let planning_revision = bump_planning_revision(transaction)?;
+        let records = task_authority_mutation_records(
+            previous,
+            commit.task_authority,
+            planning_revision,
+            audit,
+        );
+        insert_task_authority_mutation_records(transaction, &records)?;
+        Ok(planning_revision)
     }
 
     /*

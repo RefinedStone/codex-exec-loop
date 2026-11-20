@@ -143,6 +143,10 @@ pub use self::task_mutation::{
     PlanningTaskMutationCommitResult, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, PlanningTaskUpdateInput, extract_planning_task_commands,
 };
+// 작업 지시 등록과 계보는 기존 task mutation 검증을 재사용하는 중립 서비스다.
+pub use self::task_mutation::work_order::{
+    PlanningWorkOrderAdmission, PlanningWorkOrderRequest, PlanningWorkOrderService,
+};
 // task tool 재수출은 app-server tool schema와 요청/응답 타입을 함께 노출해 adapter가 같은 contract로 JSON tool 호출을
 // 구성하게 한다.
 pub use self::task_tool::PlanningTaskToolService;
