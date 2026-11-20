@@ -1,6 +1,6 @@
 // 화면 시험 (#2539): 이슈 목록은 가짜 저장소 커널이 준 표시와 순서를 그대로 사용한다.
 // 숨긴 Electron 창과 임시 userData만 쓰며 실제 모델, GitHub, 브라우저는 호출하지 않는다.
-// AKRA_QA_SCREENSHOT=<png>이면 정상 세 행과 최대화한 패널을 각각 저장한다.
+// AKRA_QA_SCREENSHOT=<png>이면 목록·최대화·상세·정책 오류 증거를 같은 경로 접두사로 저장한다.
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,6 +8,8 @@ import { dirname, extname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { _electron as electron } from "playwright-core";
+
+const issueScreenshotPath = process.env.AKRA_QA_ISSUES_SCREENSHOT ?? process.env.AKRA_QA_SCREENSHOT;
 
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const electronPath = createRequire(import.meta.url)("electron");
@@ -85,6 +87,133 @@ const firstItems = [
 const secondItems = [
   item(77, "두 번째 페이지의 공유 이슈", "discovered", "발견됨", "이슈를 수집했습니다."),
 ];
+
+// 목록의 세 항목과 의도적으로 다른 전체 연결 보고다. 페이지 전환으로 합산하거나 축소하면 실패한다.
+const globalReport = () => ({
+  binding_id: binding.id,
+  revision: automation.revision,
+  policy_version: "fixture-policy-v1",
+  policy_blocked: false,
+  assumed_mode: "auto",
+  total: 67,
+  automatic_start: 17,
+  human_approval: 23,
+  excluded: 11,
+  blocked: 5,
+  deferred: 4,
+  needs_info: 3,
+  unknown: 2,
+  untriaged: 2,
+  stale: 1,
+  observation_only: 51,
+});
+const SHARED_BODY = "현재 공유본만 표시합니다.\n\n## 요구 사항\n서버가 공유한 본문을 읽습니다.";
+const UPDATED_SHARED_BODY = "새로 관찰한 현재 공유본입니다. 판정은 아직 갱신 전입니다.";
+const triage = (issue) => ({
+  revision: 4,
+  policy_version: "fixture-policy-v1",
+  observation_revision: 3,
+  tracked_revision: 2,
+  field_hash: { version: 1, sha256: "0".repeat(64) },
+  basis: {
+    version: 1,
+    issue,
+    source: "shared",
+    disclosure_policy_version: "fixture-policy-v1",
+    validation_policy_version: "fixture-validation-v1",
+    requirements_sha256: "1".repeat(64),
+    evidence_sha256: "2".repeat(64),
+    pinned_source_commit: null,
+  },
+  stale: false,
+  eligibility: "eligible",
+  readiness: "needs_info",
+  risk_class: "normal",
+  effective_mode: "observe",
+  reasons: [{
+    code: "required_section_missing",
+    summary: "서버 판정 문구: 수락 기준을 더 확인해야 합니다.",
+    next: [{ step: "query", name: "fixture-do-not-convert-into-copy" }],
+    next_summary: "서버 다음 행동: 작성자에게 완료 조건 두 가지를 확인하세요.",
+  }],
+  // 일반적인 단계 순서와 다르게 주어 renderer의 재정렬을 잡는다.
+  gates: [
+    { gate: "merge", action: "human", enabled: true, gate_revision: 4 },
+    { gate: "start", action: "auto", enabled: true, gate_revision: 4 },
+    { gate: "close", action: "human", enabled: false, gate_revision: 4 },
+  ],
+  observation: { assumed_mode: "auto", disposition: "human_approval", observation_only: true },
+});
+for (const value of [...firstItems, ...secondItems]) value.triage = triage(value.issue);
+firstItems[2].current.content.shared_copy.body = SHARED_BODY;
+let detailVariant = "shared";
+let failNextDetailQuery = false;
+let failNextPolicyQuery = false;
+let policyBlocked = false;
+const POLICY_WORKSPACE = "/work";
+const policyFiles = [
+  { scope: "user", label: "사용자 정책", path: "/home/fixture/.akra/issue-automation.toml", status: "readable", open_target: "user" },
+  { scope: "project", label: "프로젝트 정책", path: "/work/.akra/issue-automation.toml", status: "readable", open_target: "project" },
+];
+const policySettings = [
+  {
+    key: "budget.max_parallel",
+    label: "동시 실행 상한",
+    value: "2",
+    origins: [{ scope: "user", label: "서버 사용자 출처" }, { scope: "project", label: "서버 프로젝트 출처" }],
+    resolution: "minimum",
+    resolution_summary: "서버 해석: 사용자와 프로젝트가 정한 상한 중 작은 값입니다.",
+  },
+  {
+    key: "actors.trusted_actors",
+    label: "신뢰하는 사용자",
+    value: "없음",
+    origins: [{ scope: "project", label: "프로젝트에서 명시한 빈 목록" }],
+    resolution: "intersection",
+    resolution_summary: "서버 해석: 명시적 빈 목록을 보존했습니다.",
+  },
+];
+const policyAnswer = () => policyBlocked ? {
+  type: "issue_automation_policy",
+  status: "policy_blocked",
+  workspace: POLICY_WORKSPACE,
+  blocked: {
+    scope: "project",
+    field: "budget.max_parallel",
+    reason: "시험용 허용 범위를 벗어났습니다.",
+    summary: "서버 정책 오류: 프로젝트의 동시 실행 상한을 확인하세요.",
+    next_summary: "서버 복구 안내: 표시한 프로젝트 정책 파일을 수정하고 다시 조회하세요.",
+    file_scopes: ["project"],
+  },
+  files: structuredClone(policyFiles),
+} : {
+  type: "issue_automation_policy",
+  status: "ready",
+  workspace: POLICY_WORKSPACE,
+  version: "fixture-policy-v1",
+  settings: structuredClone(policySettings),
+  files: structuredClone(policyFiles),
+};
+const detailItem = (source) => {
+  const value = structuredClone(source);
+  if (detailVariant === "stale_triage") {
+    value.current.content.shared_copy.body = UPDATED_SHARED_BODY;
+    value.triage.stale = true;
+    value.triage.gates = value.triage.gates.map((gate) => ({ ...gate, enabled: false }));
+  } else if (detailVariant === "unknown") {
+    value.current = { status: "unknown", reason: "provider_unavailable" };
+    value.presentation.title = null;
+  } else if (detailVariant === "withheld") {
+    const { shared_copy: _copy, ...content } = value.current.content;
+    value.current.content = { ...content, kind: "withheld", reason: "user_confirmation_required" };
+    value.presentation.title = null;
+  } else if (detailVariant === "legacy") {
+    value.current = { status: "not_yet_observed" };
+    value.presentation.title = null;
+  }
+  return value;
+};
+
 const serverOrder = [2, 0, 1];
 const expectedRows = serverOrder.map((index) => firstItems[index].presentation);
 const stateEvent = () => ({ type: "issues", ...structuredClone(automation) });
@@ -97,6 +226,23 @@ const kernel = {
     if (method === "akra/kernel/query") {
       if (params.query?.type === "issue_automation") {
         return { result: { type: "issue_automation", ...structuredClone(automation) } };
+      }
+      if (params.query?.type === "issue_automation_policy") {
+        if (failNextPolicyQuery) {
+          failNextPolicyQuery = false;
+          return { error: { code: -32603, message: "시험 정책을 잠시 읽지 못했습니다." } };
+        }
+        return { result: policyAnswer() };
+      }
+      if (params.query?.type === "issue") {
+        if (failNextDetailQuery) {
+          failNextDetailQuery = false;
+          return { error: { code: -32603, message: "시험 상세를 잠시 읽지 못했습니다." } };
+        }
+        const source = [...firstItems, ...secondItems].find((value) => value.issue.issue_id === params.query.issue?.issue_id);
+        return { result: source
+          ? { type: "issue", status: "ready", revision: automation.revision, item: detailItem(source), report: globalReport() }
+          : { type: "issue", status: "not_found", revision: automation.revision, report: globalReport() } };
       }
       if (params.query?.type === "issues") {
         if (failNextIssuesQuery) {
@@ -116,6 +262,7 @@ const kernel = {
             items: structuredClone(next ? secondItems : firstItems),
             groups: [{ id: "collection", label: "수집한 이슈", item_indices: next ? [0] : serverOrder }],
             next_after: next ? null : NEXT_PAGE,
+            report: globalReport(),
           },
         };
       }
@@ -198,8 +345,15 @@ try {
   });
   // main의 URL 검사는 그대로 둔다. OS 브라우저 실행만 관찰 가능한 가짜로 바꾼다.
   await app.evaluate(({ ipcMain, shell }) => {
-    globalThis.issuesFixture = { opened: [], externalRequests: [] };
+    globalThis.issuesFixture = { opened: [], externalRequests: [], policyRequests: [], rejectPolicyFile: false };
     shell.openExternal = async (url) => { globalThis.issuesFixture.opened.push(url); };
+    // 파일 열기의 좁은 intent만 관찰한다. 실제 경로 허용/거부는 main의 별도 시험이 맡는다.
+    ipcMain.removeHandler("issueAutomationPolicy:openFile");
+    ipcMain.handle("issueAutomationPolicy:openFile", (_event, request) => {
+      globalThis.issuesFixture.policyRequests.push(request);
+      if (globalThis.issuesFixture.rejectPolicyFile) throw new Error("시험 정책 파일을 열지 못했습니다.");
+    });
+
     ipcMain.on("akra:open-external", (_event, url) => {
       globalThis.issuesFixture.externalRequests.push(url);
     });
@@ -258,15 +412,23 @@ try {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, Buffer.from(await png(), "base64"));
   };
-  if (process.env.AKRA_QA_SCREENSHOT) await capture(process.env.AKRA_QA_SCREENSHOT);
+
+  const captureVariant = async (suffix) => {
+    const path = issueScreenshotPath;
+    if (!path) return;
+    const extension = extname(path);
+    await capture(`${extension ? path.slice(0, -extension.length) : path}-${suffix}${extension || ".png"}`);
+  };
+
+  if (issueScreenshotPath) await capture(issueScreenshotPath);
   const rightPanel = page.getByTestId("right-panel");
   const beforeMaximize = await rightPanel.boundingBox();
   await page.getByTestId("issues-maximize").click();
   check("maximizing fills the workspace panel", await until(async () => (await rightPanel.getAttribute("data-maximized")) === "true"));
   const maximized = await rightPanel.boundingBox();
   check("the maximized panel is wider than the original panel", beforeMaximize !== null && maximized !== null && maximized.width > beforeMaximize.width);
-  if (process.env.AKRA_QA_SCREENSHOT) {
-    const path = process.env.AKRA_QA_SCREENSHOT;
+  if (issueScreenshotPath) {
+    const path = issueScreenshotPath;
     const extension = extname(path);
     await capture(`${extension ? path.slice(0, -extension.length) : path}-maximized${extension || ".png"}`);
   }
@@ -277,7 +439,91 @@ try {
       && beforeMaximize !== null && Math.abs(bounds.width - beforeMaximize.width) <= 1;
   }));
 
+
   await rows.first().getByTestId("issues-title").click();
+  const detail = panel.getByTestId("issues-detail");
+  check("the title opens the current shared copy inside the issue panel", await until(async () => (await detail.getByTestId("issues-shared-copy").count()) === 1 && (await detail.getByTestId("issues-shared-copy").innerText()).includes("현재 공유본만 표시합니다.")));
+  const detailRequests = () => requests.filter((request) => request.method === "akra/kernel/query" && request.params.query?.type === "issue");
+  check("the detail query sends the complete server issue reference", JSON.stringify(detailRequests()[0]?.params.query.issue) === JSON.stringify(firstItems[2].issue));
+  check("selecting a title does not open an external browser", (await app.evaluate(() => globalThis.issuesFixture.opened)).length === 0);
+  check("detail reasons and next actions are exactly the server's sentences", (await detail.getByTestId("issues-triage-summary").innerText()) === firstItems[2].triage.reasons[0].summary && (await detail.getByTestId("issues-triage-next").innerText()) === firstItems[2].triage.reasons[0].next_summary);
+  check("the gate list preserves server order and enabled flags", JSON.stringify(await detail.getByTestId("issues-triage-gate").evaluateAll((elements) => elements.map((element) => ({ gate: element.dataset.gate, enabled: element.dataset.enabled })))) === JSON.stringify([{ gate: "merge", enabled: "true" }, { gate: "start", enabled: "true" }, { gate: "close", enabled: "false" }]));
+  check("a narrow detail view replaces the list and offers a way back", (await rows.count()) === 0 && await detail.getByTestId("issues-detail-back").isVisible());
+  await captureVariant("detail");
+  await page.getByTestId("issues-maximize").click();
+  check("the existing maximize action also applies to the detail", await until(async () => (await rightPanel.getAttribute("data-maximized")) === "true") && await detail.isVisible());
+  await captureVariant("detail-maximized");
+  await page.getByTestId("issues-restore").click();
+
+  detailVariant = "stale_triage";
+  await panel.getByTestId("issues-refresh").click();
+  check("a current shared copy remains visible when only its saved triage is stale", await until(async () => (await detail.getByTestId("issues-triage-stale").count()) === 1 && (await detail.getByTestId("issues-shared-copy").innerText()) === UPDATED_SHARED_BODY));
+  check("a stale triage keeps the server's disabled gate flags", (await detail.getByTestId("issues-triage-gate").evaluateAll((elements) => elements.every((element) => element.dataset.enabled === "false"))));
+  for (const [variant, expectedMessage] of [
+    ["unknown", "현재 공유본을 확인하지 못했습니다."],
+    ["withheld", "현재 정책에서 공유하지 않은 본문입니다."],
+    ["legacy", "아직 현재 공유본을 관찰하지 않았습니다."],
+  ]) {
+    detailVariant = variant;
+    await panel.getByTestId("issues-refresh").click();
+    check(`${variant} detail does not reuse a previous shared body`, await until(async () => (await detail.getByTestId("issues-shared-unavailable").count()) === 1 && (await detail.getByTestId("issues-shared-unavailable").innerText()) === expectedMessage) && (await detail.getByTestId("issues-shared-copy").count()) === 0 && !(await detail.innerText()).includes(UPDATED_SHARED_BODY));
+  }
+  failNextDetailQuery = true;
+  await panel.getByTestId("issues-refresh").click();
+  check("a detail query failure is visible without recovering an old body", await until(async () => (await detail.getByTestId("issues-detail-error").count()) === 1) && (await detail.getByTestId("issues-shared-copy").count()) === 0);
+  detailVariant = "shared";
+  await panel.getByTestId("issues-refresh").click();
+  check("refresh recovers the selected detail", await until(async () => (await detail.getByTestId("issues-shared-copy").count()) === 1 && (await detail.getByTestId("issues-detail-error").count()) === 0));
+  await detail.getByTestId("issues-detail-back").click();
+  check("returning from detail restores the server's list order", await until(async () => (await rows.count()) === 3 && JSON.stringify(await readRows()) === JSON.stringify(expected)));
+
+  await panel.getByTestId("issues-report-tab").click();
+  const report = panel.getByTestId("issues-report");
+  const readPrimaryCounts = async () => ({
+    automatic_start: await report.getByTestId("issues-report-automatic-start").innerText(),
+    human_approval: await report.getByTestId("issues-report-human-approval").innerText(),
+    excluded: await report.getByTestId("issues-report-excluded").innerText(),
+    total: await report.getByTestId("issues-report-total").innerText(),
+  });
+  const expectedCounts = { automatic_start: "17", human_approval: "23", excluded: "11", total: "67" };
+  check("the report uses whole-binding server counts rather than its three visible rows", JSON.stringify(await readPrimaryCounts()) === JSON.stringify(expectedCounts));
+  check("the report names its current tracked binding and all-page scope", (await report.getByTestId("issues-report-binding").innerText()) === binding.id && (await report.getByTestId("issues-report-scope").innerText()).includes("전체 이슈 · 모든 페이지"));
+  await captureVariant("report");
+  await panel.getByTestId("issues-list-tab").click();
+
+
+  await panel.getByTestId("issues-policy-tab").click();
+  const policy = panel.getByTestId("issues-policy");
+  const settings = policy.getByTestId("issues-policy-setting");
+  check("the policy view displays the server's effective values", await until(async () => (await settings.count()) === policySettings.length) && JSON.stringify(await policy.getByTestId("issues-policy-value").allInnerTexts()) === JSON.stringify(policySettings.map((setting) => setting.value)));
+  const firstSetting = settings.first();
+  check("policy provenance and resolution are not inferred in the renderer", JSON.stringify(await firstSetting.locator("[data-scope]").allInnerTexts()) === JSON.stringify(policySettings[0].origins.map((origin) => origin.label)) && (await firstSetting.getByTestId("issues-policy-resolution").innerText()) === policySettings[0].resolution_summary);
+  check("an explicitly empty policy value retains its server provenance", (await settings.nth(1).getByTestId("issues-policy-value").innerText()) === "없음" && (await settings.nth(1).getByTestId("issues-policy-origins").innerText()).includes("프로젝트에서 명시한 빈 목록"));
+  check("policy file locations are exactly the returned paths", JSON.stringify(await policy.getByTestId("issues-policy-path").allInnerTexts()) === JSON.stringify(policyFiles.map((file) => file.path)));
+  const projectFile = policy.getByTestId("issues-policy-file").filter({ hasText: "프로젝트 정책" });
+  await app.evaluate(() => { globalThis.issuesFixture.rejectPolicyFile = true; });
+  await projectFile.getByTestId("issues-policy-file-open").click();
+  check("a rejected asynchronous file open shows its error", await until(async () => (await policy.getByTestId("issues-policy-open-error").count()) === 1 && (await policy.getByTestId("issues-policy-open-error").innerText()).includes("시험 정책 파일을 열지 못했습니다.")));
+  check("file open uses the server workspace, scope and expected path with a local host", JSON.stringify((await app.evaluate(() => globalThis.issuesFixture.policyRequests))[0]) === JSON.stringify({ workspace: POLICY_WORKSPACE, scope: "project", expectedPath: policyFiles[1].path, host: { kind: "local" } }) && POLICY_WORKSPACE !== WORKSPACE);
+  await app.evaluate(() => { globalThis.issuesFixture.rejectPolicyFile = false; });
+  await projectFile.getByTestId("issues-policy-file-open").click();
+  check("a successful file-open intent clears the previous error", await until(async () => (await app.evaluate(() => globalThis.issuesFixture.policyRequests)).length === 2 && (await policy.getByTestId("issues-policy-open-error").count()) === 0));
+
+  policyBlocked = true;
+  await panel.getByTestId("issues-refresh").click();
+  check("a blocked policy shows the exact cause and next step", await until(async () => (await policy.getByTestId("issues-policy-blocked").count()) === 1) && (await policy.getByTestId("issues-policy-blocked-summary").innerText()) === policyAnswer().blocked.summary && (await policy.getByTestId("issues-policy-blocked-reason").innerText()) === policyAnswer().blocked.reason && (await policy.getByTestId("issues-policy-blocked-next").innerText()) === policyAnswer().blocked.next_summary);
+  check("the blocked policy keeps the exact project file location", (await projectFile.getByTestId("issues-policy-path").innerText()) === policyFiles[1].path && (await projectFile.getAttribute("data-blocked")) === "true" && (await settings.count()) === 0);
+  await captureVariant("policy-blocked");
+  failNextPolicyQuery = true;
+  await panel.getByTestId("issues-refresh").click();
+  check("a failed policy refresh does not present earlier values or causes as current", await until(async () => (await policy.getByTestId("issues-policy-error").count()) === 1) && (await policy.getByTestId("issues-policy-blocked").count()) === 0 && (await settings.count()) === 0);
+  policyBlocked = false;
+  await panel.getByTestId("issues-refresh").click();
+  check("policy refresh recovers independently from the issue list", await until(async () => (await settings.count()) === policySettings.length && (await policy.getByTestId("issues-policy-error").count()) === 0));
+  await panel.getByTestId("issues-list-tab").click();
+
+  await rows.first().getByTestId("issues-external").click();
+
   check("a permitted GitHub URL reaches the OS-opening boundary", await until(async () => (
     await app.evaluate(() => globalThis.issuesFixture.opened)
   ).includes(expectedRows[0].url)));
@@ -299,6 +545,9 @@ try {
   check("the bounded page size is sent to the kernel", issueQueries().every((request) => request.params.query.limit === 50));
   check("the second page has no next-page action", await panel.getByTestId("issues-next-page").isDisabled());
   check("the page counter advances", (await panel.getByTestId("issues-page-count").innerText()).includes("2"));
+  await panel.getByTestId("issues-report-tab").click();
+  check("the next page keeps the same whole-binding counts", JSON.stringify(await readPrimaryCounts()) === JSON.stringify(expectedCounts));
+  await panel.getByTestId("issues-list-tab").click();
   await panel.getByTestId("issues-previous-page").click();
   check("the previous page restores the original server order", await until(async () => (await rows.count()) === 3 && JSON.stringify(await readRows()) === JSON.stringify(expected)));
   check("the first page has no previous-page action", await panel.getByTestId("issues-previous-page").isDisabled());

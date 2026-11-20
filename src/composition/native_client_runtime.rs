@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
+use crate::application::port::inbound::issue_automation_policy_query_port::IssueAutomationPolicyInspection;
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandOutcome, StoredCommandPort, StoredCommandResult,
 };
@@ -1661,6 +1662,12 @@ impl NativeClientRuntime {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
             .issues(query)
+    }
+
+    pub(super) fn issue_automation_policy(&self) -> Option<IssueAutomationPolicyInspection> {
+        self.issue_collection
+            .as_ref()
+            .and_then(|service| service.policy_inspection())
     }
 
     pub(super) fn issue_collection_detail(
@@ -3554,6 +3561,15 @@ pub(crate) mod tests {
             parallel_turns,
             parallel,
         );
+        (runtime, turns)
+    }
+
+    /// 정책 query 경로만 붙인다. 조회 자체가 장부를 초기화하는지 구별하기 위해 관찰자는 시작하지 않는다.
+    pub(crate) fn recording_runtime_with_issue_queries_for_test(
+        service: Arc<IssueCollectionService>,
+    ) -> (NativeClientRuntime, RecordedTurns) {
+        let (mut runtime, turns) = recording_runtime_for_test();
+        runtime.issue_collection = Some(service);
         (runtime, turns)
     }
 

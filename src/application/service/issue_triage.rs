@@ -18,7 +18,9 @@ use crate::domain::issue_automation::{IssueAutomationBindingId, IssueAutomationS
 use crate::domain::issue_validation::IssueRequirements;
 use crate::domain::issue_work::{IssueFieldHash, IssueProvider, IssueReference};
 
-use super::issue_automation_policy::{IssueAutomationPolicyService, ResolvedIssueAutomationPolicy};
+use super::issue_automation_policy::{
+    IssueAutomationPolicyInspection, IssueAutomationPolicyService, ResolvedIssueAutomationPolicy,
+};
 use super::issue_collection::IssueCollectionCancellation;
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
 
@@ -89,6 +91,11 @@ impl IssueTriageService {
             automation_policy,
             validation_policy,
         }
+    }
+
+    /// 장부와 공급자에 접근하지 않고 대표 workspace의 정책 파일만 읽는다.
+    pub fn policy_inspection(&self) -> IssueAutomationPolicyInspection {
+        self.automation_policy.inspect(&self.workspace_dir)
     }
 
     /// callback은 수집과 같은 commit gate 안에서 확정 사실만 전달한다.

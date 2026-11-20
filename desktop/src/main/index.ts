@@ -1,5 +1,6 @@
 // Electron main: 창을 만들고, 창마다 Gateway 접속을 하나씩 연결한다. 메시지는 해석하지 않는다.
 import { spawn } from "node:child_process";
+import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -28,6 +29,7 @@ import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks"
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
 import { readGitHubSummary, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
+import { openIssueAutomationPolicyFile } from "./issueAutomationPolicyFile";
 import { LinearService, isLinearIssueUrl } from "./linearService";
 import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
@@ -497,6 +499,21 @@ ipcMain.handle(IPC_CHANNELS.gitOpenFile, async (_event, cwd: unknown, path: unkn
     return;
   }
   await shell.openExternal(editorUrl(target)).catch(() => shell.showItemInFolder(target));
+});
+
+
+ipcMain.handle(IPC_CHANNELS.issueAutomationPolicyOpenFile, async (event, request: unknown) => {
+  if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {
+    throw new Error("정책 파일 열기 요청을 허용하지 않습니다.");
+  }
+  await openIssueAutomationPolicyFile(request, {
+    platform: process.platform,
+    environment: process.env,
+    lstat,
+    getApplicationNameForProtocol: (protocol) => app.getApplicationNameForProtocol(protocol),
+    openExternal: (url) => shell.openExternal(url),
+    showItemInFolder: (path) => shell.showItemInFolder(path),
+  });
 });
 
 ipcMain.handle(IPC_CHANNELS.terminalOpen, (event, request: unknown) => terminals.open(event.sender, request as TerminalOpenRequest));

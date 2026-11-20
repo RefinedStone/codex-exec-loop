@@ -75,6 +75,8 @@ pub struct IssueTriageObservationState {
 pub struct IssueTriageReasonState {
     pub code: ReasonCode,
     pub summary: String,
+    /// 서버가 정한 다음 행동 설명이다. renderer가 reason code에서 추론하지 않는다.
+    pub next_summary: String,
     pub next: Vec<NextStep>,
 }
 
@@ -237,12 +239,79 @@ fn reason_parts(reason: IssueTriageReasonCode) -> (ReasonCode, &'static str) {
     }
 }
 
+fn reason_next_summary(reason: IssueTriageReasonCode) -> &'static str {
+    match reason {
+        IssueTriageReasonCode::NotYetObserved => "현재 이슈 정보를 동기화한 뒤 다시 확인하세요.",
+        IssueTriageReasonCode::SourceUnavailable => {
+            "공급자 연결과 접근 권한을 확인한 뒤 다시 동기화하세요."
+        }
+        IssueTriageReasonCode::MetadataIncomplete => {
+            "라벨, 담당자와 연결된 PR 정보를 모두 읽을 수 있는지 확인한 뒤 다시 동기화하세요."
+        }
+        IssueTriageReasonCode::DisclosurePolicyStale => {
+            "현재 공개 정책으로 이슈를 다시 동기화한 뒤 판정을 확인하세요."
+        }
+        IssueTriageReasonCode::SelectionNotMatched => {
+            "이슈의 라벨과 정책의 선택 조건을 확인하세요."
+        }
+        IssueTriageReasonCode::IssueClosed => {
+            "원격 이슈의 현재 상태와 후속 작업이 필요한지 확인하세요."
+        }
+        IssueTriageReasonCode::UntrustedActor => {
+            "신뢰하는 작성자 또는 선택 라벨을 붙인 사람의 근거를 확인하세요."
+        }
+        IssueTriageReasonCode::AlreadyClaimed => {
+            "기존 담당자나 연결된 PR의 진행 상황을 먼저 확인하세요."
+        }
+        IssueTriageReasonCode::TitleMissing => "작업을 구별할 수 있는 제목을 보완하세요.",
+        IssueTriageReasonCode::RequiredSectionMissing => {
+            "이슈에 정책이 요구하는 필수 섹션을 보완하세요."
+        }
+        IssueTriageReasonCode::CriteriaMissing => {
+            "완료 여부를 확인할 수 있는 기준을 비어 있지 않은 목록으로 작성하세요."
+        }
+        IssueTriageReasonCode::CriteriaNotList => {
+            "완료 기준을 글머리표, 번호 또는 체크 목록으로 정리하세요."
+        }
+        IssueTriageReasonCode::IssueTooLarge => "이슈를 검토할 수 있는 크기의 작업으로 나누세요.",
+        IssueTriageReasonCode::UnsupportedContent => {
+            "작업 내용을 지원하는 텍스트와 Markdown 형식으로 정리하세요."
+        }
+        IssueTriageReasonCode::DisclosureConfirmationRequired => {
+            "공개 범위를 사람이 확인한 뒤 다시 동기화하세요."
+        }
+        IssueTriageReasonCode::MaskedContent => {
+            "가린 공유본으로 작업 범위를 이해할 수 있는지 사람이 확인하세요."
+        }
+        IssueTriageReasonCode::HighRisk => "작업의 위험과 변경 범위를 사람이 검토하세요.",
+        IssueTriageReasonCode::HeldOrManual => {
+            "보류 또는 수동 처리 조건을 확인하고 사람의 결정을 기다리세요."
+        }
+        IssueTriageReasonCode::ProtectedPath => {
+            "보호 경로의 변경 범위와 필요한 권한을 사람이 확인하세요."
+        }
+        IssueTriageReasonCode::PolicyHumanRequired => "정책이 요구하는 사람의 확인을 기다리세요.",
+        IssueTriageReasonCode::BudgetExhausted => {
+            "예산과 시도 한도를 확인하고 사람의 검토를 기다리세요."
+        }
+        IssueTriageReasonCode::ModeOff => "관찰이 필요하면 정책의 동작 모드를 확인하세요.",
+        IssueTriageReasonCode::ObservationOnly => {
+            "관찰 보고를 확인하고 진행 수준과 사람의 확인 조건을 검토하세요."
+        }
+        IssueTriageReasonCode::ExecutionGrantRequired => {
+            "작업을 실행하기 전에 승인과 실행 권한을 확인하세요."
+        }
+        IssueTriageReasonCode::CloseDisabled => "이슈를 닫아야 한다면 원격 상태를 직접 확인하세요.",
+    }
+}
+
 impl From<IssueTriageReasonCode> for IssueTriageReasonState {
     fn from(reason: IssueTriageReasonCode) -> Self {
         let (code, summary) = reason_parts(reason);
         Self {
             code,
             summary: summary.to_owned(),
+            next_summary: reason_next_summary(reason).to_owned(),
             next: reason_next(code),
         }
     }

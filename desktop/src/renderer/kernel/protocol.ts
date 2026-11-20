@@ -11,3 +11,7 @@ export type KernelViewAnswer = Extract<KernelQueryAnswer, { type: KernelViewQuer
 /** 이슈 이벤트는 수집 상태이고, 같은 이름의 query는 목록 페이지다. 서로 바꾸어 적용하지 않는다. */
 export type IssueAutomationAnswer = Extract<KernelQueryAnswer, { type: "issue_automation" }>;
 export type IssuesPageAnswer = Extract<KernelQueryAnswer, { type: "issues" }>;
+
+/** 상세와 정책은 목록 및 수집 상태와 별도 query 결과다. */
+export type IssueDetailAnswer = Extract<KernelQueryAnswer, { type: "issue" }>;
+export type IssueAutomationPolicyAnswer = Extract<KernelQueryAnswer, { type: "issue_automation_policy" }>;

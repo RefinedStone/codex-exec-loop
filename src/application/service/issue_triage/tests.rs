@@ -550,3 +550,41 @@ fn a_later_invalid_source_cannot_erase_an_earlier_committed_triage_fact() {
     assert_eq!(facts[0].revision, current.revision);
     assert_eq!(current.report.as_ref().unwrap().untriaged, 1);
 }
+
+#[test]
+fn policy_inspection_uses_current_files_without_opening_the_issue_ledger() {
+    let fixture = Fixture::new();
+    let policy = MutableAutomationPolicy::new();
+    let service = fixture.service(policy.clone());
+    let IssueAutomationPolicyInspection::Ready {
+        workspace, version, ..
+    } = service.policy_inspection()
+    else {
+        panic!("valid policy inspection");
+    };
+    assert_eq!(workspace, fixture.workspace);
+    assert_eq!(version.len(), 64);
+    assert_eq!(fs::read_dir(&fixture.runtime).unwrap().count(), 0);
+
+    *policy.text.lock().unwrap() = "[authority]\nautonomy_cap = \"UNSHARED_INVALID_MODE\"".into();
+    let blocked = service.policy_inspection();
+    let IssueAutomationPolicyInspection::PolicyBlocked {
+        workspace,
+        blocked: reason,
+        ..
+    } = &blocked
+    else {
+        panic!("invalid current policy is blocked");
+    };
+    assert_eq!(workspace, &fixture.workspace);
+    assert_eq!(
+        reason.scope,
+        super::super::issue_automation_policy::IssueAutomationPolicyScope::User,
+    );
+    assert!(!format!("{blocked:?}").contains("UNSHARED_INVALID_MODE"));
+    assert_eq!(
+        fs::read_dir(&fixture.runtime).unwrap().count(),
+        0,
+        "policy inspection neither creates nor reads the automation database",
+    );
+}

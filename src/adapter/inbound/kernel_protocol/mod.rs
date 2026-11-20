@@ -45,7 +45,9 @@ mod spec;
 pub use spec::{KernelSpec, describe};
 
 mod issue_automation;
+mod issue_automation_policy;
 pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssueState, IssuesState};
+pub use issue_automation_policy::IssueAutomationPolicyState;
 
 /// 프로토콜 판이다. 전송 모양을 호환되지 않게 바꿀 때만 올린다. 필드를 더하는 것은 올리지 않는다. K4-1 에서
 /// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
@@ -1161,6 +1163,8 @@ pub enum KernelQuery {
     },
     /// 저장된 관찰 모드, 수집 상태와 바인딩이다. 저장 읽기 실패는 unavailable이다.
     IssueAutomation {},
+    /// 현재 효과 정책, 합성 출처와 확인할 파일 위치다. 조회는 파일을 만들거나 작업을 시작하지 않는다.
+    IssueAutomationPolicy {},
     /// 현재 장부 목록이다. 답의 opaque next_after만 다음 조회에 돌려준다.
     Issues {
         #[serde(default)]
@@ -1246,6 +1250,9 @@ impl KernelQuery {
             Self::IssueAutomation {} => {
                 KernelQueryAnswer::IssueAutomation(IssueAutomationState::unavailable())
             }
+            Self::IssueAutomationPolicy {} => {
+                KernelQueryAnswer::IssueAutomationPolicy(IssueAutomationPolicyState::unavailable())
+            }
             Self::Issues { .. } => KernelQueryAnswer::Issues(IssuesState::unavailable()),
             Self::Issue { .. } => KernelQueryAnswer::Issue(IssueState::unavailable()),
         }
@@ -1271,6 +1278,8 @@ spec_names! {
             "The state of one operation and its records. `op_id` comes from the `operation` of a command answer.";
         IssueAutomation => "issue_automation",
             "The stored off/observe mode, binding, catalog revision and polling status. An unavailable store is explicit; an empty list is not substituted.";
+        IssueAutomationPolicy => "issue_automation_policy",
+            "The effective issue automation policy, authoritative merge provenance and known policy files in the representative workspace. Invalid policy is explicit and no file, work or execution grant is created.";
         Issues => "issues",
             "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body. Triage and groups are server projections; report counts cover the complete query scope, not just this page.";
         Issue => "issue",
@@ -1297,6 +1306,7 @@ pub enum KernelQueryAnswer {
     /// 연산 하나의 상태와 그 연산의 기록이다 (plan 18 K4-4).
     Operation(OperationStatus),
     IssueAutomation(IssueAutomationState),
+    IssueAutomationPolicy(IssueAutomationPolicyState),
     Issues(IssuesState),
     Issue(IssueState),
 }

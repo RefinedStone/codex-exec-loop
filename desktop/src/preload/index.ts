@@ -21,6 +21,7 @@ import {
   type GitFileAction,
   type GitFileDiff,
   type GitStatusResult,
+  type IssueAutomationPolicyFileRequest,
   IPC_CHANNELS,
   type JiraConnectRequest,
   type JiraStatus,
@@ -80,6 +81,9 @@ const bridge: AkraBridge = {
   },
   gitOpenFile(cwd: string, path: string): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitOpenFile, cwd, path) as Promise<void>;
+  },
+  openIssueAutomationPolicyFile(request: IssueAutomationPolicyFileRequest): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.issueAutomationPolicyOpenFile, request) as Promise<void>;
   },
   gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitBranchSummary, cwd, fresh) as Promise<GitBranchSummary>;
