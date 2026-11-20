@@ -17,6 +17,7 @@ import {
   type BadgeFolder,
   fetchCommitDetail,
   fetchGraphPage,
+  fetchFirstGraphPage,
   fetchGraphRows,
   fetchRefsDigest,
   findRows,
@@ -80,7 +81,7 @@ export function useGitGraph(request: GatewayRequest, cwd: string | null): GitGra
       return;
     }
     setState({ phase: "loading", cwd });
-    fetchGraphPage(request, cwd, null)
+    fetchFirstGraphPage(request, cwd)
       .then((page) => current === generation.current && setState(loadedFromFirstPage(cwd, page)))
       .catch((error) => current === generation.current && setState({ phase: "failed", cwd, message: errorText(error) }));
   }, [request, cwd]);
