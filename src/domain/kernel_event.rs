@@ -1608,6 +1608,39 @@ mod tests {
 
     #[test]
     fn every_kind_matches_its_json_tag() {
+        use crate::domain::issue_automation::decision::{
+            IssueDecisionAnswerBy, IssueDecisionBasis, IssueDecisionFact, IssueDecisionId,
+            IssueDecisionKind, IssueDecisionState, IssueDecisionSubject,
+        };
+        let open_decision = IssueDecisionFact {
+            decision_id: IssueDecisionId::new("decision-kind-sample").unwrap(),
+            subject: IssueDecisionSubject::Issue(IssueReference {
+                provider: IssueProvider::GitHub,
+                server_id: "github.com".into(),
+                repository_id: "R_stable".into(),
+                issue_id: "I_stable".into(),
+                project_scope: IssueProjectScope {
+                    workspace_dir: "/work/project".into(),
+                },
+            }),
+            gate: crate::domain::issue_automation::policy::IssueAutomationGate::Start,
+            kind: IssueDecisionKind::AgentQuestion,
+            basis: IssueDecisionBasis {
+                policy_version: "a".repeat(64),
+                field_hash: None,
+                work_order_id: None,
+                gate_revision: 1,
+            },
+            state: IssueDecisionState::Open,
+            answer_by: None,
+            option: None,
+        };
+        let answered_decision = IssueDecisionFact {
+            state: IssueDecisionState::Answered,
+            answer_by: Some(IssueDecisionAnswerBy::Agent),
+            option: Some("continue".into()),
+            ..open_decision.clone()
+        };
         let events = [
             KernelEvent::AutoFollowConfigured {
                 max_auto_turns: 3,
@@ -1687,6 +1720,8 @@ mod tests {
                 2,
                 &"a".repeat(64),
             ),
+            KernelEvent::issue_decision_requested(&open_decision, 9),
+            KernelEvent::issue_decision_resolved(&answered_decision, 10),
             KernelEvent::issue_automation_mode_changed(
                 Some(IssueCollectionMode::Observe),
                 IssueCollectionMode::Off,
