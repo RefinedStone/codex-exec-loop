@@ -142,6 +142,7 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         | ReasonCode::BudgetExhausted
         | ReasonCode::ExecutionGrantRequired => vec![Step::AskUser],
         // 수준을 올리는 선택은 사람이 한다. off에서 같은 동기화를 자동 재시도하지 않는다.
+        ReasonCode::HumanConfirmationRequired => vec![Step::AskUser],
         ReasonCode::DecisionSuperseded => vec![Step::query(KernelQueryKind::Issue), Step::AskUser],
         ReasonCode::IssueAutomationOff => {
             vec![Step::query(KernelQueryKind::IssueAutomation), Step::AskUser]

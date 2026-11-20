@@ -8,6 +8,7 @@ import { dirname, extname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { _electron as electron } from "playwright-core";
+import { CONFIRMATION_DISPLAY, confirmationReply, confirmedRequest, createConfirmationFixture } from "../fixtures/confirmationBridge.mjs";
 
 const issueScreenshotPath = process.env.AKRA_QA_ISSUES_SCREENSHOT ?? process.env.AKRA_QA_SCREENSHOT;
 
@@ -223,6 +224,8 @@ const kernel = {
   kernel: "fixture-issues-repository",
   queries: {},
   onRequest(method, params) {
+    const confirmation = confirmationReply(method, params);
+    if (confirmation) return confirmation;
     if (method === "akra/kernel/query") {
       if (params.query?.type === "issue_automation") {
         return { result: { type: "issue_automation", ...structuredClone(automation) } };
@@ -267,8 +270,11 @@ const kernel = {
         };
       }
     }
-    if (method === "akra/kernel/command") {
-      const command = params.command;
+    if (method === "akra/kernel/command" || method === "akra/kernel/command_confirmed") {
+      const command = (method === "akra/kernel/command_confirmed" ? confirmedRequest(params) : params).command;
+      if (command?.type === "set_issue_automation_mode" && command.mode === "observe" && method !== "akra/kernel/command_confirmed") {
+        return { error: { code: -32602, message: "상향에는 main 확인이 필요합니다." } };
+      }
       if (command?.type === "set_issue_automation_mode") {
         const previous = automation.mode;
         automation.mode = command.mode;
@@ -308,11 +314,13 @@ const gateway = await fake.startFakeGateway(
   { kernel, onRequest: (method, params) => requests.push({ method, params: structuredClone(params) }) },
 );
 const userData = await mkdtemp(join(tmpdir(), "akra-issues-panel-ui-"));
+const confirmationFixture = await createConfirmationFixture(userData);
 const env = {
   ...process.env,
   AKRA_GATEWAY_ENDPOINT: endpoint,
   AKRA_DESKTOP_HIDDEN: "1",
   AKRA_DESKTOP_USER_DATA: userData,
+  ...confirmationFixture.environment,
 };
 delete env.ELECTRON_RUN_AS_NODE;
 
@@ -329,9 +337,11 @@ const until = async (condition, timeout = 10_000) => {
   }
   return false;
 };
-const kernelCommands = (type) => requests.filter(
-  (request) => request.method === "akra/kernel/command" && request.params.command?.type === type,
-);
+const kernelCommands = (type) => requests.flatMap((request) => {
+  if (request.method === "akra/kernel/command" && request.params.command?.type === type) return [request];
+  if (request.method === "akra/kernel/command_confirmed" && request.params.request?.command?.type === type) return [{ ...request, params: request.params.request }];
+  return [];
+});
 const countRequests = (method) => requests.filter((request) => request.method === method).length;
 const issueQueries = () => requests.filter(
   (request) => request.method === "akra/kernel/query" && request.params.query?.type === "issues",
@@ -342,10 +352,15 @@ try {
     executablePath: electronPath,
     args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])],
     env,
+    cwd: confirmationFixture.cwd,
   });
   // main의 URL 검사는 그대로 둔다. OS 브라우저 실행만 관찰 가능한 가짜로 바꾼다.
-  await app.evaluate(({ ipcMain, shell }) => {
-    globalThis.issuesFixture = { opened: [], externalRequests: [], policyRequests: [], rejectPolicyFile: false };
+  await app.evaluate(({ ipcMain, shell, dialog }) => {
+    globalThis.issuesFixture = { opened: [], externalRequests: [], policyRequests: [], rejectPolicyFile: false, confirmations: [] };
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.issuesFixture.confirmations.push({ message: options.message, detail: options.detail, buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId });
+      return { response: 0, checkboxChecked: false };
+    };
     shell.openExternal = async (url) => { globalThis.issuesFixture.opened.push(url); };
     // 파일 열기의 좁은 intent만 관찰한다. 실제 경로 허용/거부는 main의 별도 시험이 맡는다.
     ipcMain.removeHandler("issueAutomationPolicy:openFile");
@@ -390,6 +405,9 @@ try {
   const modeRequest = kernelCommands("set_issue_automation_mode")[0]?.params;
   check("a mode mutation carries a UUID idempotency key", typeof modeRequest?.idempotency_key === "string" && UUID.test(modeRequest.idempotency_key));
   check("the mode command contains only the requested mode", modeRequest?.command.type === "set_issue_automation_mode" && modeRequest.command.mode === "observe" && Object.keys(modeRequest.command).sort().join("|") === "mode|type");
+  const confirmationDialogs = await app.evaluate(() => globalThis.issuesFixture.confirmations);
+  check("Observe goes through one native dialog and the main-only confirmed command", confirmationDialogs.length === 1 && kernelCommands("set_issue_automation_mode")[0]?.method === "akra/kernel/command_confirmed");
+  check("native confirmation uses server copy and defaults to cancel", confirmationDialogs[0]?.message === CONFIRMATION_DISPLAY.message && confirmationDialogs[0]?.detail === CONFIRMATION_DISPLAY.detail && confirmationDialogs[0]?.buttons[0] === CONFIRMATION_DISPLAY.confirm_label && confirmationDialogs[0]?.defaultId === 1 && confirmationDialogs[0]?.cancelId === 1);
   await panel.getByTestId("issues-sync").click();
   check("manual sync sends one read command", await until(() => kernelCommands("sync_issues").length === 1));
   const syncRequest = kernelCommands("sync_issues")[0]?.params;
@@ -591,6 +609,7 @@ try {
   check("closing the issue panel detaches its kernel subscription", await until(() => countRequests("akra/kernel/detach") > detaches));
   check("the issues tab sends no planning commands or planning queries", requests.every((request) => {
     if (request.method === "akra/kernel/command") return ["set_issue_automation_mode", "sync_issues"].includes(request.params.command?.type);
+    if (request.method === "akra/kernel/command_confirmed") return request.params.request?.command?.type === "set_issue_automation_mode";
     if (request.method === "akra/kernel/query") return !["planning", "parallel"].includes(request.params.query?.type);
     return true;
   }));

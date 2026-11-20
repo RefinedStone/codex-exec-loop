@@ -3,6 +3,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 
+use crate::application::port::inbound::stored_command_port::issue_confirmation::IssueConfirmationError;
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandContext, StoredCommandOutcome, StoredCommandPort,
     StoredCommandRejection, StoredCommandResult, StoredTaskFields,
@@ -13,6 +14,7 @@ use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskUpdateInput,
 };
+use crate::domain::kernel_spec::ReasonCode;
 use crate::domain::planning::PlanningMutationRefusal;
 
 /*
@@ -75,7 +77,10 @@ impl StoredCommandService {
                     .issues
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
-                    .set_mode(mode)?;
+                    .set_mode_with_confirmation(
+                        mode,
+                        context.and_then(|value| value.human_confirmation.as_ref()),
+                    )?;
                 Ok(StoredCommandResult::IssueAutomationModeChanged {
                     previous: change.previous,
                     projection: Box::new(change.projection),
@@ -169,12 +174,21 @@ impl StoredCommandService {
         match self.run(command, context) {
             Ok(result) => Ok(StoredCommandOutcome::Done(result)),
             // 낡은 revision 과 잡힌 guard 는 실패가 아니라 거절이다. 아무것도 바뀌지 않았다.
-            Err(error) => match PlanningMutationRefusal::find_in(&error) {
-                Some(refusal) => Ok(StoredCommandOutcome::Rejected(
-                    StoredCommandRejection::from(refusal),
-                )),
-                None => Err(error),
-            },
+            Err(error) => {
+                if let Some(reason) = error.downcast_ref::<IssueConfirmationError>() {
+                    return Ok(StoredCommandOutcome::Rejected(StoredCommandRejection {
+                        reason: ReasonCode::HumanConfirmationRequired,
+                        message: reason.to_string(),
+                        planning_revision: None,
+                    }));
+                }
+                match PlanningMutationRefusal::find_in(&error) {
+                    Some(refusal) => Ok(StoredCommandOutcome::Rejected(
+                        StoredCommandRejection::from(refusal),
+                    )),
+                    None => Err(error),
+                }
+            }
         }
     }
 }

@@ -4,15 +4,19 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow, bail};
 
 use crate::application::port::inbound::stored_command_port::StoredCommandContext;
+use crate::application::port::inbound::stored_command_port::issue_confirmation::{
+    IssueConfirmationDisplay, IssueConfirmationError, IssueConfirmationPreview,
+    IssueConfirmationTarget,
+};
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationStorePort, IssueDecisionCommit, IssueDecisionFence, IssueDecisionSaveResult,
     IssueTriageFence,
 };
 use crate::domain::issue_automation::collection::IssueCollectionItem;
 use crate::domain::issue_automation::decision::{
-    IssueDecisionAgentAnswer, IssueDecisionBasis, IssueDecisionDefinition, IssueDecisionId,
-    IssueDecisionOutcome, IssueDecisionRequest, IssueDecisionSharedText, IssueDecisionState,
-    MAX_ISSUE_DECISION_TEXT_BYTES,
+    IssueDecisionAgentAnswer, IssueDecisionBasis, IssueDecisionDefinition, IssueDecisionError,
+    IssueDecisionId, IssueDecisionOutcome, IssueDecisionRequest, IssueDecisionSharedText,
+    IssueDecisionState, MAX_ISSUE_DECISION_TEXT_BYTES, StoredIssueDecision,
 };
 use crate::domain::issue_masking::{IssueTextField, plan_issue_masking};
 use crate::domain::issue_policy::{IssueDisclosureTarget, IssuePolicy};
@@ -50,6 +54,44 @@ impl IssueDecisionService {
             triage,
             policy,
         }
+    }
+
+    /// 한 장부 snapshot의 요청과 판을 준비한다. 새 요청이나 확인 증거를 만들지 않는다.
+    pub fn prepare_confirmation(&self, id: &str, option: &str) -> Result<IssueConfirmationPreview> {
+        let id =
+            IssueDecisionId::new(id).map_err(|_| anyhow!("the decision identifier is invalid"))?;
+        reject_secret_identifier(id.as_str())?;
+        reject_secret_identifier(option)?;
+        let snapshot = self
+            .store
+            .get_issue_decision_commit(&self.workspace_dir, &id)
+            .map_err(ledger_unavailable)?
+            .ok_or_else(|| anyhow!("the decision request was not found"))?;
+        let request = &snapshot.record.request;
+        if request.state() != IssueDecisionState::Open {
+            bail!("the decision request is already closed")
+        }
+        let selected = request
+            .definition()
+            .options
+            .iter()
+            .find(|candidate| candidate.id == option)
+            .ok_or_else(|| anyhow!("the decision option is invalid"))?;
+        let policy = self
+            .policy
+            .resolve(&self.workspace_dir)
+            .map_err(|_| policy_unavailable())?;
+        let question = shared_text(request.definition().question.as_str(), &policy)?;
+        let label = shared_text(selected.label.as_str(), &policy)?;
+        let effect = shared_text(selected.effect.as_str(), &policy)?;
+        Ok(IssueConfirmationPreview {
+            target: confirmation_target(&self.workspace_dir, &snapshot.record, option),
+            display: IssueConfirmationDisplay {
+                message: question.as_str().to_owned(),
+                detail: format!("선택: {}\n효과: {}", label.as_str(), effect.as_str()),
+                confirm_label: label.as_str().to_owned(),
+            },
+        })
     }
 
     /// 요청 생성자는 저장된 triage의 판을 사용한다. 수집이나 자동 요청 생성은 하지 않는다.
@@ -95,7 +137,7 @@ impl IssueDecisionService {
         bail!("the decision basis changed concurrently")
     }
 
-    /// caller 이름으로 by/confirmation을 추정하지 않는다. 이 경로의 답은 항상 agent이다.
+    /// caller는 표시용이다. 비직렬화된 확인 capability의 대상을 검증한 답만 human이다.
     pub fn answer(
         &self,
         decision_id: &str,
@@ -128,6 +170,20 @@ impl IssueDecisionService {
                 None,
             )
             .map_err(|_| anyhow!("the current decision basis is invalid"))?;
+            let confirmation = context.human_confirmation.as_ref();
+            if let Some(confirmation) = confirmation {
+                confirmation.require_target(&confirmation_target(
+                    &self.workspace_dir,
+                    &stored,
+                    option,
+                ))?;
+            }
+            let gate_action = current
+                .gates()
+                .iter()
+                .find(|gate| gate.gate == stored.request.definition().gate)
+                .ok_or_else(|| anyhow!("the current decision gate is unavailable"))?
+                .action;
             let policy = self
                 .policy
                 .resolve(&self.workspace_dir)
@@ -142,8 +198,9 @@ impl IssueDecisionService {
                 .transpose()?;
             let resolution = stored
                 .request
-                .answer_agent(
+                .answer_for_gate(
                     &basis,
+                    gate_action,
                     IssueDecisionAgentAnswer {
                         option: option.to_string(),
                         note: shared_note,
@@ -151,8 +208,14 @@ impl IssueDecisionService {
                         channel: context.channel.clone(),
                         at: context.at.clone(),
                     },
+                    confirmation.map(|value| value.reference()),
                 )
-                .map_err(|_| anyhow!("the decision answer is invalid"))?;
+                .map_err(|error| match error {
+                    IssueDecisionError::HumanConfirmationRequired => {
+                        anyhow::Error::new(IssueConfirmationError::Required)
+                    }
+                    _ => anyhow!("the decision answer is invalid"),
+                })?;
             match self
                 .store
                 .save_issue_decision(
@@ -218,6 +281,20 @@ impl IssueDecisionService {
     }
 }
 
+fn confirmation_target(
+    workspace: &str,
+    stored: &StoredIssueDecision,
+    option: &str,
+) -> IssueConfirmationTarget {
+    IssueConfirmationTarget::Decision {
+        workspace: workspace.to_owned(),
+        decision_id: stored.request.id().clone(),
+        option: option.to_owned(),
+        basis: stored.request.definition().basis.clone(),
+        decision_revision: stored.revision,
+    }
+}
+
 fn sanitize_definition(
     definition: &mut IssueDecisionDefinition,
     policy: &IssuePolicy,
@@ -264,6 +341,9 @@ fn ledger_unavailable(_: anyhow::Error) -> anyhow::Error {
 fn policy_unavailable() -> anyhow::Error {
     anyhow!("the issue decision disclosure policy is unavailable")
 }
+
+#[cfg(test)]
+pub(crate) use tests::gateway_fixture::seed_human_decision_for_gateway;
 
 #[cfg(test)]
 mod tests;

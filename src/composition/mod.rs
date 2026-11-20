@@ -10,6 +10,7 @@ pub(crate) mod core_effect_runner;
 pub(crate) mod core_effect_worker;
 pub(crate) mod core_turn_submission;
 pub(crate) mod issue_collection;
+pub(crate) mod issue_confirmation;
 pub(crate) mod issue_observer;
 pub(crate) mod kernel_command_execution;
 pub(crate) mod kernel_event_recorder;

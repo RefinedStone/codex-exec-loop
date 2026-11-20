@@ -94,9 +94,9 @@ spec_names! {
         DeleteDirection => "delete_direction",
             "Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         SetIssueAutomationMode => "set_issue_automation_mode",
-            "Persist the issue collection mode: off or observe. The answer follows the ledger commit; observe only collects while the kernel is running.";
+            "Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit.";
         AnswerIssueDecision => "answer_issue_decision",
-            "Record an agent answer to one open issue decision. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
+            "Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
         SyncIssues => "sync_issues",
             "Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request.";
     }
@@ -250,6 +250,8 @@ spec_names! {
             "The execution grant boundary is not connected; descriptive gates do not authorize work.";
         CloseDisabled => "close_disabled",
             "Issue closing is not enabled by this assessment.";
+        HumanConfirmationRequired => "human_confirmation_required",
+            "This action requires a current Desktop human confirmation. A client name or confirmation boolean is not evidence. Read the current state and ask the user in Desktop.";
         DecisionSuperseded => "decision_superseded",
             "The decision basis differs from the current issue assessment. The request was closed without applying the submitted answer; read the issue for current open decisions.";
         IssueAutomationOff => "issue_automation_off",
@@ -421,8 +423,18 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::KernelUnreachable],
             ),
-            Self::SetIssueAutomationMode => (CommandScope::Issue, Write, Natural, &[]),
-            Self::AnswerIssueDecision => (CommandScope::Issue, Write, Keyed, &[]),
+            Self::SetIssueAutomationMode => (
+                CommandScope::Issue,
+                Write,
+                Natural,
+                &[Reason::HumanConfirmationRequired],
+            ),
+            Self::AnswerIssueDecision => (
+                CommandScope::Issue,
+                Write,
+                Keyed,
+                &[Reason::HumanConfirmationRequired],
+            ),
             Self::SyncIssues => (
                 CommandScope::Issue,
                 Read,

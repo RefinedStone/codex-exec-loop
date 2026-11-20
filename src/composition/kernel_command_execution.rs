@@ -202,6 +202,7 @@ impl CommandOnlyKernel {
                     caller: Some(self.caller.to_string()),
                     channel: "command_only".to_string(),
                     at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    human_confirmation: None,
                 };
                 match super::production::stored_command_port(&self.workspace)
                     .execute_with_context(command, &context)
@@ -725,6 +726,24 @@ mod tests {
         );
         assert_eq!(again["result"]["changed"], false);
         assert_eq!(again["result"]["epoch"], epoch);
+        let pretender = CommandOnlyKernel {
+            workspace: kernel.workspace.clone(),
+            caller: "Desktop",
+        };
+        let denied = stored(
+            &pretender,
+            KernelCommandKind::SetIssueAutomationMode,
+            json!({"type":"set_issue_automation_mode","mode":"observe"}),
+        );
+        assert_eq!(
+            denied["rejection"]["reason"], "human_confirmation_required",
+            "{denied}"
+        );
+        let still_off = reopened
+            .query(json!({"type":"issue_automation"}), false)
+            .unwrap();
+        assert_eq!(still_off["mode"], "off");
+        assert_eq!(still_off["epoch"], epoch);
         assert_eq!(planning_revision(&kernel), planning_before);
         let log = super::super::production::kernel_event_log_port();
         let changes = log

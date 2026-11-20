@@ -85,6 +85,8 @@ const bridge: AkraBridge = {
   openIssueAutomationPolicyFile(request: IssueAutomationPolicyFileRequest): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.issueAutomationPolicyOpenFile, request) as Promise<void>;
   },
+  confirmIssueDecision: (request) => ipcRenderer.invoke(IPC_CHANNELS.confirmIssueDecision, request),
+  confirmIssueAutomationMode: (request) => ipcRenderer.invoke(IPC_CHANNELS.confirmIssueAutomationMode, request),
   gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitBranchSummary, cwd, fresh) as Promise<GitBranchSummary>;
   },

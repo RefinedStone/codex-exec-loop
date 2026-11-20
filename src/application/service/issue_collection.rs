@@ -5,6 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow, bail};
 
+use crate::application::port::inbound::stored_command_port::issue_confirmation::{
+    IssueConfirmationDisplay, IssueConfirmationError, IssueConfirmationPreview,
+    IssueConfirmationTarget, VerifiedHumanConfirmation,
+};
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationStorePort, IssueCollectionApplyResult, IssueCollectionModeSaveResult,
 };
@@ -182,23 +186,80 @@ impl IssueCollectionService {
             .map_err(ledger_unavailable)
     }
 
-    /// 네트워크와 정책 파일을 읽지 않는 저장 명령이다.
+    /// 준비 조회는 기본 Observe를 저장하지 않는다. 실제 이전 mode/epoch/revision만 묶는다.
+    pub fn prepare_mode_confirmation(
+        &self,
+        mode: IssueCollectionMode,
+    ) -> Result<IssueConfirmationPreview> {
+        let current = self
+            .store
+            .get_collection(&self.workspace_dir)
+            .map_err(ledger_unavailable)?;
+        let previous = current.as_ref().map(|state| state.config.mode);
+        let (message, confirm_label) = match mode {
+            IssueCollectionMode::Observe => ("이슈 관찰을 켤까요?", "관찰 켜기"),
+            IssueCollectionMode::Off => ("이슈 관찰을 끌까요?", "관찰 끄기"),
+        };
+        Ok(IssueConfirmationPreview {
+            target: mode_confirmation_target(&self.workspace_dir, current.as_ref(), mode),
+            display: IssueConfirmationDisplay {
+                message: message.to_owned(),
+                detail: format!(
+                    "현재: {}\n변경 후: {}",
+                    mode_label(previous),
+                    mode_label(Some(mode))
+                ),
+                confirm_label: confirm_label.to_owned(),
+            },
+        })
+    }
+
+    /// 증거 없는 호출도 반드시 같은 인가 경계를 지난다. 하향과 no-op은 확인이 필요 없다.
     pub fn set_mode(&self, mode: IssueCollectionMode) -> Result<IssueCollectionModeChange> {
+        self.set_mode_with_confirmation(mode, None)
+    }
+
+    pub fn set_mode_with_confirmation(
+        &self,
+        mode: IssueCollectionMode,
+        confirmation: Option<&VerifiedHumanConfirmation>,
+    ) -> Result<IssueCollectionModeChange> {
         for _ in 0..MODE_CAS_ATTEMPTS {
             let current = self
                 .store
                 .get_collection(&self.workspace_dir)
                 .map_err(ledger_unavailable)?;
             let previous = current.as_ref().map(|state| state.config.mode);
-            match self
-                .store
-                .set_collection_mode(
-                    &self.workspace_dir,
-                    current.as_ref().map(|state| state.epoch),
-                    mode,
-                )
-                .map_err(ledger_unavailable)?
-            {
+            let target = mode_confirmation_target(&self.workspace_dir, current.as_ref(), mode);
+            if let Some(confirmation) = confirmation {
+                confirmation.require_target(&target)?;
+            }
+            // 미설정의 기본값은 Observe이다. 명시적 Off를 다시 켜는 명령은 상향이다.
+            let raises =
+                previous == Some(IssueCollectionMode::Off) && mode == IssueCollectionMode::Observe;
+            let result = if raises {
+                confirmation.ok_or(IssueConfirmationError::Required)?;
+                let state = current
+                    .as_ref()
+                    .ok_or(IssueConfirmationError::ScopeMismatch)?;
+                self.store
+                    .set_collection_mode_exact(
+                        &self.workspace_dir,
+                        state.fence(),
+                        state.config.mode,
+                        mode,
+                    )
+                    .map_err(ledger_unavailable)?
+            } else {
+                self.store
+                    .set_collection_mode(
+                        &self.workspace_dir,
+                        current.as_ref().map(|state| state.epoch),
+                        mode,
+                    )
+                    .map_err(ledger_unavailable)?
+            };
+            match result {
                 IssueCollectionModeSaveResult::Saved {
                     projection,
                     changed,
@@ -210,10 +271,28 @@ impl IssueCollectionService {
                         changed,
                     });
                 }
+                IssueCollectionModeSaveResult::Conflict { .. } if raises => {
+                    // 사람이 본 mode 판이 바뀌었다. 같은 증거를 새 판으로 옮겨 재시도하지 않는다.
+                    return Err(IssueConfirmationError::ScopeMismatch.into());
+                }
                 IssueCollectionModeSaveResult::Conflict { .. } => continue,
             }
         }
         bail!("the issue collection configuration changed concurrently")
+    }
+
+    /// 기존 fixture가 실제 검증 완료 분기를 거치게 하는 시험 전용 준비다.
+    #[cfg(test)]
+    pub(crate) fn set_mode_for_test(
+        &self,
+        mode: IssueCollectionMode,
+    ) -> Result<IssueCollectionModeChange> {
+        let preview = self.prepare_mode_confirmation(mode)?;
+        let confirmation = VerifiedHumanConfirmation::from_verified(
+            preview.target,
+            format!("desktop-confirmation:{}", "a".repeat(32)),
+        )?;
+        self.set_mode_with_confirmation(mode, Some(&confirmation))
     }
 
     /// 원격 한 페이지와 유한한 재동기화 묶음만 수행한다. 실제 API 호출은 최대 1 + 10회다.
@@ -595,6 +674,28 @@ fn adopt(progress: &mut CollectionProgress, result: Option<IssueCollectionApplyR
 
 fn ledger_unavailable(_: anyhow::Error) -> anyhow::Error {
     anyhow!("the issue collection ledger is unavailable")
+}
+
+fn mode_confirmation_target(
+    workspace: &str,
+    current: Option<&StoredIssueCollection>,
+    to: IssueCollectionMode,
+) -> IssueConfirmationTarget {
+    IssueConfirmationTarget::Mode {
+        workspace: workspace.to_owned(),
+        from: current.map(|state| state.config.mode),
+        epoch: current.map(|state| state.epoch),
+        revision: current.map(|state| state.revision),
+        to,
+    }
+}
+
+fn mode_label(mode: Option<IssueCollectionMode>) -> &'static str {
+    match mode {
+        Some(IssueCollectionMode::Off) => "꺼짐",
+        Some(IssueCollectionMode::Observe) => "관찰",
+        None => "기본 관찰",
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@
  * 공유본은 가린 뒤의 글이다. 가린 구간의 평문과 키는 이 모듈에 없다. 그 값은 Evidence Vault 의 복원 계약
  * (`evidence_vault_port`)에만 있다.
  */
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -107,7 +108,7 @@ pub struct IssueLocator {
 pub const ISSUE_FIELD_HASH_VERSION: u32 = 1;
 
 /// 제목과 본문의 필드 값으로 만든 해시이다. 판이 다른 해시는 서로 다른 값이다.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueFieldHash {
     pub version: u32,

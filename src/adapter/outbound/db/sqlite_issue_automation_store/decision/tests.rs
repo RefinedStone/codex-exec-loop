@@ -93,8 +93,21 @@ fn subject(fixture: &Fixture) -> (IssueTriageFence, IssueCollectionItem) {
     (expected, item)
 }
 
+const AGENT_POLICY: &str = r#"
+[binding.github]
+mode = "auto"
+[authority]
+autonomy_cap = "auto"
+[select]
+mode = "all_open"
+trusted_actors = [{provider="github",server_id="github.com",actor_id="U_author"}]
+[gates.auto.normal]
+start = "auto"
+"#;
+
 fn assess(item: &IssueCollectionItem, policy: Option<&str>) -> IssueTriageAssessment {
-    let policy = resolve_issue_automation_policy(policy, None).unwrap();
+    let policy =
+        resolve_issue_automation_policy(Some(policy.unwrap_or(AGENT_POLICY)), None).unwrap();
     triage_issue(IssueTriageInput {
         issue: &item.issue,
         current: item.current.as_ref(),
@@ -525,4 +538,95 @@ fn distinct_questions_on_the_same_basis_remain_independent_after_the_first_answe
         Some(closed.record)
     );
     assert_eq!(subject(&fixture).1.open_decisions, vec![opened.record]);
+}
+
+#[test]
+fn the_store_rechecks_the_current_human_gate_before_persisting_an_agent_answer() {
+    use crate::domain::issue_automation::policy::IssueAutomationGateAction;
+    let fixture = Fixture::new("decision-human-store-boundary");
+    observe(&fixture, observation(&fixture));
+    let adapter = fixture.adapter();
+    let (fence, item) = subject(&fixture);
+    let human_policy = AGENT_POLICY.replace("mode = \"auto\"", "mode = \"propose\"");
+    let assessment = assess(&item, Some(&human_policy));
+    assert_eq!(
+        assessment
+            .gates()
+            .iter()
+            .find(|gate| gate.gate == IssueAutomationGate::Start)
+            .unwrap()
+            .action,
+        IssueAutomationGateAction::Human,
+    );
+    adapter
+        .save_triage(fixture.cwd(), fence, &assessment)
+        .unwrap();
+    let (fence, item) = subject(&fixture);
+    let assessment = item.triage.unwrap().assessment;
+    let request = request(&assessment, "human-store-decision");
+    let initial = commit(
+        adapter
+            .ensure_issue_decision(fixture.cwd(), fence, &assessment, &request)
+            .unwrap(),
+    );
+    let expected = IssueDecisionFence {
+        triage: fence,
+        decision_revision: initial.record.revision,
+    };
+    let attempted = answered(&request, &assessment, "accept");
+    assert!(
+        adapter
+            .save_issue_decision(fixture.cwd(), expected, &assessment, &attempted)
+            .is_err()
+    );
+    let after_rejected = adapter
+        .get_issue_decision_commit(fixture.cwd(), request.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(after_rejected.record, initial.record);
+    assert_eq!(after_rejected.catalog_revision, initial.catalog_revision);
+    let reference = format!("desktop-confirmation:{}", "c".repeat(32));
+    let confirmed = request
+        .answer_for_gate(
+            &request.definition().basis,
+            IssueAutomationGateAction::Human,
+            IssueDecisionAgentAnswer {
+                option: "accept".into(),
+                note: None,
+                caller: Some("Desktop".into()),
+                channel: "gateway".into(),
+                at: "2026-11-20T20:00:00Z".into(),
+            },
+            Some(&reference),
+        )
+        .unwrap();
+    let saved = commit(
+        adapter
+            .save_issue_decision(fixture.cwd(), expected, &assessment, &confirmed.request)
+            .unwrap(),
+    );
+    assert!(saved.changed);
+    assert_eq!(saved.catalog_revision, initial.catalog_revision + 1);
+    assert_eq!(
+        saved.record.request.answer().unwrap().by,
+        IssueDecisionAnswerBy::Human
+    );
+    assert_eq!(
+        saved
+            .record
+            .request
+            .answer()
+            .unwrap()
+            .confirmation
+            .as_deref(),
+        Some(reference.as_str())
+    );
+    assert_eq!(
+        fixture
+            .adapter()
+            .get_issue_decision(fixture.cwd(), request.id())
+            .unwrap()
+            .unwrap(),
+        saved.record
+    );
 }

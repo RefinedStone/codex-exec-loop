@@ -13,6 +13,7 @@ use crate::domain::issue_automation::{IssueAutomationBinding, TrackedIssue};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RaceAfter {
     Mode,
+    ConfirmedMode,
     Attempt,
     RejectedDiscovery,
 }
@@ -74,6 +75,21 @@ impl IssueAutomationStorePort for RacingStore {
             self.set_competing_mode(workspace, IssueCollectionMode::Observe);
         }
         Ok(result)
+    }
+
+    fn set_collection_mode_exact(
+        &self,
+        workspace: &str,
+        expected: IssueCollectionFence,
+        from: IssueCollectionMode,
+        mode: IssueCollectionMode,
+    ) -> Result<IssueCollectionModeSaveResult> {
+        if self.race == RaceAfter::ConfirmedMode {
+            self.set_competing_mode(workspace, IssueCollectionMode::Observe);
+            self.set_competing_mode(workspace, IssueCollectionMode::Off);
+        }
+        self.inner
+            .set_collection_mode_exact(workspace, expected, from, mode)
     }
 
     fn apply_discovery_page(
@@ -254,4 +270,37 @@ fn a_rejected_page_keeps_the_rejection_snapshot_before_a_later_observe() {
     assert_eq!(latest.state.config.mode, IssueCollectionMode::Observe);
     assert_eq!(latest.state.epoch, 3);
     assert!(latest.catalog_revision > result.projection.catalog_revision);
+}
+
+#[test]
+fn a_verified_mode_scope_is_not_retried_after_a_competing_control_commit() {
+    let fixture = Fixture::new();
+    let store = RacingStore::new(&fixture, RaceAfter::ConfirmedMode);
+    store
+        .inner
+        .set_collection_mode(&fixture.workspace, None, IssueCollectionMode::Off)
+        .unwrap();
+    let service = service_with_store(&fixture, store.clone(), no_source(), Arc::default());
+    let confirmation = mode_confirmation(&service, IssueCollectionMode::Observe);
+    let before = store
+        .inner
+        .get_collection(&fixture.workspace)
+        .unwrap()
+        .unwrap();
+    let error = service
+        .set_mode_with_confirmation(IssueCollectionMode::Observe, Some(&confirmation))
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<IssueConfirmationError>(),
+        Some(&IssueConfirmationError::ScopeMismatch)
+    );
+    let after = store
+        .inner
+        .get_collection(&fixture.workspace)
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.config.mode, IssueCollectionMode::Off);
+    assert_eq!(after.epoch, before.epoch + 2);
+    assert_eq!(after.revision, before.revision + 2);
+    assert_eq!(store.projection_reads.load(Ordering::SeqCst), 0);
 }

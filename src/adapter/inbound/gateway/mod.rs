@@ -6,6 +6,7 @@
 //! 쓴다. Telegram 입구가 `TelegramBotPort` 를 쓰는 것과 같은 구조이다.
 
 mod chats;
+mod confirmation;
 mod context;
 mod dots;
 mod git;
@@ -62,6 +63,7 @@ enum GatewayCommand {
     Run,
     Help,
     DesktopBrowserBridge,
+    DesktopConfirmationBridge,
 }
 
 pub async fn run_from_env() -> Result<()> {
@@ -76,6 +78,9 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         }
         GatewayCommand::DesktopBrowserBridge => {
             return super::desktop_browser_bridge::run().await;
+        }
+        GatewayCommand::DesktopConfirmationBridge => {
+            return super::desktop_confirmation_bridge::run().await;
         }
         GatewayCommand::Run => {}
     }
@@ -159,6 +164,9 @@ fn parse_args(args: &[String]) -> Result<GatewayCommand> {
         [] => Ok(GatewayCommand::Run),
         [command] if command == "desktop-browser-bridge" => {
             Ok(GatewayCommand::DesktopBrowserBridge)
+        }
+        [command] if command == "desktop-confirmation-bridge" => {
+            Ok(GatewayCommand::DesktopConfirmationBridge)
         }
         [flag] if flag == "-h" || flag == "--help" => Ok(GatewayCommand::Help),
         [unsupported, ..] => bail!("unsupported argument: {unsupported}\n\n{USAGE}"),

@@ -46,9 +46,15 @@ pub use next::{NextStep, reason_next};
 mod spec;
 pub use spec::{KernelSpec, describe};
 
+mod confirmation;
 mod issue_automation;
 mod issue_automation_policy;
 mod issue_decision;
+pub use confirmation::{
+    ConfirmationPrepareRequest, ConfirmationPrepareResponse, ConfirmationRegisterRequest,
+    ConfirmationRegisterResponse, ConfirmedCommandRequest, HumanConfirmationSubmission,
+    is_confirmation_frame, is_confirmation_method,
+};
 pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssueState, IssuesState};
 pub use issue_automation_policy::IssueAutomationPolicyState;
 pub use issue_decision::{IssueDecisionChangedState, IssueDecisionRequestState};
@@ -60,6 +66,9 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const METHOD_ATTACH: &str = KernelMethodKind::Attach.name();
 pub const METHOD_DESCRIBE: &str = KernelMethodKind::Describe.name();
 pub const METHOD_COMMAND: &str = KernelMethodKind::Command.name();
+pub const METHOD_CONFIRMATION_REGISTER: &str = KernelMethodKind::ConfirmationRegister.name();
+pub const METHOD_CONFIRMATION_PREPARE: &str = KernelMethodKind::ConfirmationPrepare.name();
+pub const METHOD_COMMAND_CONFIRMED: &str = KernelMethodKind::CommandConfirmed.name();
 pub const METHOD_QUERY: &str = KernelMethodKind::Query.name();
 pub const METHOD_EVENT: &str = KernelMethodKind::Event.name();
 pub const METHOD_DETACH: &str = KernelMethodKind::Detach.name();
@@ -73,6 +82,12 @@ spec_names! {
             "Return this specification.";
         Command => "akra/kernel/command",
             "Send one command. The answer carries the rejection, if any, and the operation receipt.";
+        ConfirmationRegister => "akra/kernel/confirmation/register",
+            "Bind a main-owned private confirmation broker to this connection and attachment. The private session file never crosses the renderer.";
+        ConfirmationPrepare => "akra/kernel/confirmation/prepare",
+            "Read the server-owned action and shared display for a Desktop native confirmation. Requires a registered main connection and an idempotency key.";
+        CommandConfirmed => "akra/kernel/command_confirmed",
+            "Verify the exact main-approved action before sending the unchanged logical command. A normal command with the same key can recover a lost receipt without proof.";
         Query => "akra/kernel/query",
             "Read one current value or a page of the decision log.";
         Event => "akra/kernel/event",

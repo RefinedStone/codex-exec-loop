@@ -127,7 +127,7 @@ const DOTS_LIST_METHOD = "akra/dots/list";
 const DOTS_WATCH_METHOD = "akra/dots/watch";
 const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
-export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira">> & {
+export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira" | "confirmIssueAutomationMode">> & {
   readonly chatHistory?: true;
 };
 
@@ -206,7 +206,7 @@ export class DesktopSession {
     this.chatHistory = readOnly && bridge.chatHistory ? new ChatHistory(this.client, store) : undefined;
     this.batcher = new FrameBatcher((batch) => this.store.updateTranscript((transcript) => applyNotifications(transcript, batch)), scheduler);
     this.client.setServerRequestHandler((method, params, id) => this.handleServerRequest(method, params, id));
-    this.kernel = new KernelConnection(this.client, store);
+    this.kernel = new KernelConnection(this.client, store, readOnly ? undefined : bridge.confirmIssueAutomationMode);
   }
 
   start(): void {

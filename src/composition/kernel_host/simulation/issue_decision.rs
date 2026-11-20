@@ -56,7 +56,7 @@ const READY_BODY: &str = "## 완료 기준\n- [ ] 답은 한 번만 적용된다
 const SECRET: &str = "ghp_SYNTHETIC_DECISION_SECRET_00000000";
 const POLICY: &str = r#"
 [binding.github]
-mode = "propose"
+mode = "auto"
 [authority]
 autonomy_cap = "auto"
 [select]
@@ -65,6 +65,8 @@ mode = "all_open"
 provider = "github"
 server_id = "github.com"
 actor_id = "U_decision"
+[gates.auto.normal]
+start = "auto"
 "#;
 
 struct Fixture {
@@ -94,6 +96,10 @@ impl Fixture {
     }
 
     fn services(&self, source: Arc<Source>) -> Services {
+        self.services_with_policy(source, POLICY)
+    }
+
+    fn services_with_policy(&self, source: Arc<Source>, policy: &'static str) -> Services {
         let runtime = self.runtime.clone();
         let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(move |_| {
             Ok(runtime.clone())
@@ -101,7 +107,7 @@ impl Fixture {
         let triage = Arc::new(IssueTriageService::new(
             self.workspace.clone(),
             store.clone(),
-            IssueAutomationPolicyService::new(Arc::new(AutomationPolicy)),
+            IssueAutomationPolicyService::new(Arc::new(AutomationPolicy(policy))),
             IssuePolicyService::new(Arc::new(DisclosurePolicy)),
         ));
         let decisions = Arc::new(IssueDecisionService::new(
@@ -262,10 +268,10 @@ impl IssuePolicySourcePort for DisclosurePolicy {
     }
 }
 
-struct AutomationPolicy;
+struct AutomationPolicy(&'static str);
 impl IssueAutomationPolicySourcePort for AutomationPolicy {
     fn load_user_policy_toml(&self) -> anyhow::Result<Option<String>> {
-        Ok(Some(POLICY.into()))
+        Ok(Some(self.0.into()))
     }
     fn load_project_policy_toml(&self, _: &str) -> anyhow::Result<Option<String>> {
         Ok(None)
@@ -712,7 +718,7 @@ fn kernel_simulation_issue_decision_supersedes_body_changes_before_retriage() {
     *source.body.lock().unwrap() = "## 완료 기준\n- [ ] 새 완료 기준이다\n".into();
     services
         .issues
-        .set_mode(IssueCollectionMode::Observe)
+        .set_mode_for_test(IssueCollectionMode::Observe)
         .unwrap();
     services
         .issues
@@ -819,3 +825,5 @@ fn kernel_simulation_issue_decision_answers_after_planning_failure_without_refre
     assert_eq!(live_decisions(&events).len(), 1);
     assert_no_work(&mut sim, &fixture);
 }
+
+mod human_confirmation;

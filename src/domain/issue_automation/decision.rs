@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
 
 use super::MAX_ISSUE_AUTOMATION_REVISION;
-use super::policy::IssueAutomationGate;
+use super::policy::{IssueAutomationGate, IssueAutomationGateAction};
 use super::triage::IssueTriageAssessment;
 
 mod validation;
@@ -19,7 +19,9 @@ pub const MAX_ISSUE_DECISION_TEXT_BYTES: usize = 8 * 1024;
 pub const MAX_ISSUE_DECISION_OPTIONS: usize = 32;
 pub const MAX_ISSUE_DECISION_EVIDENCE: usize = 32;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct IssueDecisionId(String);
 
@@ -126,7 +128,7 @@ impl IssueDecisionKind {
     ];
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueDecisionBasis {
     pub policy_version: String,
@@ -304,6 +306,7 @@ pub enum IssueDecisionError {
     DefinitionChanged,
     AlreadyClosed,
     UnsupportedAnswerOrigin,
+    HumanConfirmationRequired,
 }
 
 impl std::fmt::Display for IssueDecisionError {
@@ -319,6 +322,9 @@ impl std::fmt::Display for IssueDecisionError {
                 formatter.write_str("issue decision definition cannot change")
             }
             Self::AlreadyClosed => formatter.write_str("closed issue decision cannot change"),
+            Self::HumanConfirmationRequired => {
+                formatter.write_str("this issue gate requires a verified human answer")
+            }
             Self::UnsupportedAnswerOrigin => {
                 formatter.write_str("unsupported issue decision answer origin")
             }
@@ -327,6 +333,23 @@ impl std::fmt::Display for IssueDecisionError {
 }
 
 impl std::error::Error for IssueDecisionError {}
+
+/// 식별자는 감사용 참조다. 이 값만으로 다음 명령을 인증할 수 없다.
+pub fn validate_issue_decision_confirmation_reference(
+    value: &str,
+) -> Result<(), IssueDecisionError> {
+    let Some(id) = value.strip_prefix("desktop-confirmation:") else {
+        return Err(IssueDecisionError::UnsupportedAnswerOrigin);
+    };
+    if id.len() != 32
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(IssueDecisionError::UnsupportedAnswerOrigin);
+    }
+    Ok(())
+}
 
 impl IssueDecisionRequest {
     pub fn new(
@@ -402,10 +425,23 @@ impl IssueDecisionRequest {
         }
     }
 
+    /// Agent 응답의 순수 전이이다. application/store는 별도로 현재 관문을 확인한다.
     pub fn answer_agent(
         &self,
         current_basis: &IssueDecisionBasis,
         input: IssueDecisionAgentAnswer,
+    ) -> Result<IssueDecisionResolution, IssueDecisionError> {
+        self.answer_for_gate(current_basis, IssueAutomationGateAction::Auto, input, None)
+    }
+
+    /// 확인 참조는 application이 비직렬화 capability의 대상을 검사한 뒤에만 전달한다.
+    /// 낡은 판을 닫는 것은 관문 승인과 별개이므로 human 요구보다 먼저 처리한다.
+    pub(crate) fn answer_for_gate(
+        &self,
+        current_basis: &IssueDecisionBasis,
+        gate_action: IssueAutomationGateAction,
+        input: IssueDecisionAgentAnswer,
+        confirmation_reference: Option<&str>,
     ) -> Result<IssueDecisionResolution, IssueDecisionError> {
         if self.state() != IssueDecisionState::Open {
             return Ok(IssueDecisionResolution {
@@ -415,7 +451,7 @@ impl IssueDecisionRequest {
             });
         }
         current_basis.validate()?;
-        let answer = IssueDecisionAnswer {
+        let mut answer = IssueDecisionAnswer {
             option: input.option,
             note: input.note,
             by: IssueDecisionAnswerBy::Agent,
@@ -426,13 +462,21 @@ impl IssueDecisionRequest {
         };
         validation::answer(&answer, self.definition())?;
         let mut record = self.to_record();
-        let outcome = if self.definition().basis == *current_basis {
+        let outcome = if self.definition().basis != *current_basis {
+            record.state = IssueDecisionState::Superseded;
+            IssueDecisionOutcome::Superseded
+        } else {
+            if let Some(reference) = confirmation_reference {
+                validate_issue_decision_confirmation_reference(reference)?;
+                answer.by = IssueDecisionAnswerBy::Human;
+                answer.confirmation = Some(reference.to_owned());
+            } else if gate_action == IssueAutomationGateAction::Human {
+                return Err(IssueDecisionError::HumanConfirmationRequired);
+            }
+            validation::answer(&answer, self.definition())?;
             record.state = IssueDecisionState::Answered;
             record.answer = Some(answer);
             IssueDecisionOutcome::Answered
-        } else {
-            record.state = IssueDecisionState::Superseded;
-            IssueDecisionOutcome::Superseded
         };
         let request = Self::hydrate(record)?;
         request.validate_successor(self)?;

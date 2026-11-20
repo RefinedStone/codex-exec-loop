@@ -33,6 +33,7 @@ use super::resource_version::{self, ProviderSession};
 use super::router::{
     ClientTextRoute, refuse_kernel_on_remote_host, respond_to_akra_request, route_client_text,
 };
+use crate::adapter::inbound::kernel_protocol::{is_confirmation_frame, is_confirmation_method};
 use crate::application::port::inbound::git_graph_port::GitGraphPort;
 use crate::application::port::inbound::git_operation_port::GitOperationPort;
 use crate::application::port::inbound::issue_draft_port::IssueDraftPort;
@@ -187,6 +188,17 @@ where
             match message {
                 Message::Text(text) => match route_client_text(text.as_str()) {
                     ClientTextRoute::Forward => {
+                        if is_confirmation_frame(text.as_str()) {
+                            let response = serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"invalid human confirmation request"}});
+                            if outbox
+                                .send(Message::text(response.to_string()))
+                                .await
+                                .is_err()
+                            {
+                                return SessionEnd::ClientClosed;
+                            }
+                            continue;
+                        }
                         if let Some(id) = resource_version::response_id(text.as_str()) {
                             if let Some(provider) = &provider_session {
                                 provider.answer(&id, text.as_str());
@@ -199,9 +211,11 @@ where
                         }
                     }
                     ClientTextRoute::AkraRequest { id, method } => {
+                        let sensitive_confirmation = is_confirmation_method(&method);
                         // 초안과 결정 답의 note에는 가리기 전의 로컬 글이 있다. 녹화에 남기지 않는다.
                         if !is_issue_draft_method(&method)
                             && !is_issue_decision_command(&method, text.as_str())
+                            && !sensitive_confirmation
                         {
                             record(RecordDirection::Client, text.as_str());
                         }
@@ -330,14 +344,18 @@ where
                             ))
                         };
                         if let Some(response) = immediate {
-                            record(RecordDirection::Gateway, &response);
+                            if !sensitive_confirmation {
+                                record(RecordDirection::Gateway, &response);
+                            }
                             if outbox.send(Message::text(response)).await.is_err() {
                                 return SessionEnd::ClientClosed;
                             }
                         }
                     }
                     ClientTextRoute::AkraNotification { method } => {
-                        tracing::debug!(method, "ignored gateway notification without an id");
+                        if !is_confirmation_method(&method) {
+                            tracing::debug!(method, "ignored gateway notification without an id");
+                        }
                     }
                 },
                 Message::Binary(bytes) => {
