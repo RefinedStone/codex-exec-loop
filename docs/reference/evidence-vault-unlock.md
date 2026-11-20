@@ -3,8 +3,9 @@
 This page describes the shipped key handling of the Evidence Vault (#2422): where the key lives,
 how an issue is unlocked, what can be recovered after a key loss, and what the Vault does not
 protect against. Backup export and import with a user-held recovery key are in
-[evidence-vault-backup.md](./evidence-vault-backup.md). Nothing wires the unlock service to a
-client yet.
+[evidence-vault-backup.md](./evidence-vault-backup.md). The Desktop restore window (#2427) is
+shipped as a held screen, see [Desktop restore window](#desktop-restore-window). Nothing wires the
+unlock service to a client yet.
 
 ## Key location: device-bound mode
 
@@ -92,3 +93,42 @@ that runs with the same OS user rights on the same device:
   with the same user rights can read them. The types zero their memory on drop, which reduces the
   time window only.
 - An administrator or root user, and malware with user rights, are out of scope.
+
+## Desktop restore window
+
+Akra Desktop has one dedicated window for the local restored copy of one issue (#2427). Code:
+`desktop/src/main/vaultRestoreWindow.ts`, `desktop/src/main/vaultRestoreSession.ts`,
+`desktop/src/shared/vaultRestore.ts`.
+
+- **Separate surface.** The window has its own preload and its own IPC channels
+  (`akra-vault-restore:*`). It has no `window.akra`, no Gateway connection, and no conversation IPC.
+  It is not registered with the browser panel, so thread-owned browser automation and its capture
+  cannot target it. DevTools, navigation, and new windows are off. Main accepts a restore request
+  only from the main frame of a restore window. A general window can only ask to open the window
+  for a `github.com` issue address and to lock it.
+- **Plaintext path.** Restored text goes from main to this window only, on the dedicated state
+  channel. It does not use the Gateway or the kernel protocol. Main does not keep the text after it
+  sends it. The screen writes the text with `textContent` (no Markdown, no HTML).
+- **Not connected yet.** The local restore source (`VaultRestoreSource`, the Desktop end of the
+  restore service) has no shipped implementation. The window shows "viewing held" with the reason
+  `source_unavailable`. A local-only channel from the Akra process to this window is proposed work.
+- **User confirmation.** Each unlock shows a system dialog from main on the restore window. The
+  renderer cannot answer it. After each lock a new confirmation is necessary.
+- **Execution profile.** Main holds viewing when it cannot enforce the boundary: the app runs with
+  remote debugging or an inspector (automation, screen tests), the renderer comes from a dev
+  server, windows are hidden for tests, or a turn runs in a window of this app (the default agent
+  profile has a general shell). Turns of other clients and of background workers are not seen by
+  this check.
+- **Re-lock.** The window locks again when the user locks it, the window closes, hides, or reloads,
+  the viewing session ends (5 minutes), the OS screen locks, the system suspends, the opener window
+  changes its project folder or closes, or a turn starts. A lock closes the restore channel, drops
+  late replies (generation check), and replaces the DOM.
+- **Reconnect review.** When the restore service reports a changed published copy, the window shows
+  the current shared copy and, for each marker, the earlier place and the current places. The user
+  selects a place for each marker; a marker without a selection stays a marker. Main accepts only
+  places that the review gave. The earlier shared copy is not stored, so the full earlier text is
+  not shown.
+- **Limits.** Content protection (`setContentProtection`) is requested, but Akra does not guarantee
+  that capture is blocked (it has no effect on Linux). Selection and copy by the user are possible.
+  The window has no print and no find function. The limits in
+  [Protection limits](#protection-limits) apply.
