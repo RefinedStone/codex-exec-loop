@@ -77,8 +77,15 @@ pub struct VaultUserConfirmation {
 }
 
 impl VaultUserConfirmation {
-    /// 사용자가 `issue` 의 복원을 확인한 뒤에만 부른다.
-    pub fn for_issue(issue: IssueReference) -> Self {
+    /// 사용자가 `issue` 의 복원을 확인한 뒤에만 부른다. application 밖에서는 만들 수 없다: 잠금 해제 서비스
+    /// (`evidence_vault_unlock`)가 살아 있는 열람 세션의 권한에서만 만든다 (#2422).
+    pub(in crate::application) fn for_issue(issue: IssueReference) -> Self {
+        Self { issue }
+    }
+
+    /// 시험에서만 확인 없이 만든다.
+    #[cfg(test)]
+    pub(crate) fn for_issue_in_test(issue: IssueReference) -> Self {
         Self { issue }
     }
 

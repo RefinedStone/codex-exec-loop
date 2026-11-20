@@ -49,3 +49,5 @@ pub mod git_operation;
 // work context service 는 스레드의 외부 문서를 모델 없이 수집한다.
 pub mod resource_version;
 pub mod work_context;
+// evidence_vault_unlock 은 사용자 확인 뒤에 이슈와 열람 세션에 묶인 Vault 잠금 해제 권한을 준다 (#2422).
+pub mod evidence_vault_unlock;
