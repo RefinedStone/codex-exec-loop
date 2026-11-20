@@ -19,6 +19,8 @@ pub(crate) mod kernel_spec;
 pub(crate) mod git_graph;
 // git_operation 은 git 작업 엔진의 계획, 일지 기록, 되돌리기 규칙이다 (plan 27 G3).
 pub(crate) mod git_operation;
+// issue_work 는 외부 이슈의 참조와 공유본이다. 복원 평문은 가지지 않는다 (#2415).
+pub(crate) mod issue_work;
 // github_review는 review thread와 polling 결과를 서비스가 다루기 쉬운 값으로 표현한다.
 pub(crate) mod github_review;
 // MCP hub 는 사용자당 하나인 MCP 서버 등록부와 도구 검색 규칙을 가진다.
