@@ -169,6 +169,7 @@ fn scope_bytes(scope: &VaultRecordScope) -> Vec<u8> {
     let issue = &scope.issue;
     let provider = match issue.provider {
         IssueProvider::GitHub => "github",
+        IssueProvider::Jira => "jira",
     };
     let field = match scope.field {
         VaultRecordField::Title => "title",

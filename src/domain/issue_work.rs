@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 #[serde(rename_all = "lowercase")]
 pub enum IssueProvider {
     GitHub,
+    /// Jira Cloud 이다 (#2433). `server_id` 는 사이트의 cloud ID, `repository_id` 는 프로젝트 ID 이다.
+    Jira,
 }
 
 /// 이슈를 쓰는 로컬 프로젝트이다. 같은 이슈도 프로젝트가 다르면 규약, 정책, Vault 가 다르다.

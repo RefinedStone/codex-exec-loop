@@ -27,6 +27,8 @@ pub mod issue_core_port;
 pub mod evidence_vault_port;
 // issue snapshot port 는 원격 게시본의 원시 값을 읽는다. 신뢰된 처리 경로만 쓴다 (#2420).
 pub mod issue_snapshot_port;
+// issue field requirement port 는 공급자가 이슈 유형마다 요구하는 필수 필드를 읽는다 (#2433).
+pub mod issue_field_requirement_port;
 // issue board field port 는 보드 항목의 필드를 읽고 고친다. 본문 쓰기와 승인이 다르다 (#2435).
 pub mod issue_board_field_port;
 // issue update port 는 기존 이슈의 제목과 본문을 고친다. 승인한 게시 경로만 쓴다 (#2423).
