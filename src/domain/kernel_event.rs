@@ -1596,6 +1596,26 @@ mod tests {
             repository("b", Some("main"))
                 .change_from(Some(&repository("a", None)))
                 .expect("a different state is a change"),
+            KernelEvent::issue_tracked(
+                &IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".to_string(),
+                    repository_id: "R_stable".to_string(),
+                    issue_id: "I_stable".to_string(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".to_string(),
+                    },
+                },
+                "origin-binding",
+                7,
+            ),
+            KernelEvent::issue_automation_mode_changed(
+                Some(IssueCollectionMode::Observe),
+                IssueCollectionMode::Off,
+                3,
+                8,
+                Some("akra-cli"),
+            ),
         ];
         // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.
         assert_eq!(
