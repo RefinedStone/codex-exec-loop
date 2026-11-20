@@ -7,7 +7,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemCons
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
-import { shouldKeepAwake, validateSettings } from "../shared/settings";
+import { mergeSettings, shouldKeepAwake, validateSettings } from "../shared/settings";
 import { isVaultRestoreIssueUrl, vaultRestoreProfileHold } from "../shared/vaultRestore";
 import { isZoomDirection, nextZoom, type ZoomDirection } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
@@ -655,7 +655,7 @@ ipcMain.on(IPC_CHANNELS.zoomStep, (_event, direction: unknown) => {
 ipcMain.handle(IPC_CHANNELS.settingsGet, () => appSettings);
 ipcMain.handle(IPC_CHANNELS.settingsSet, (_event, settings: unknown) => {
   // renderer 는 바꾼 부분만 보낸다. 여기서 합치므로 오래된 사본을 가진 창이 다른 설정을 되돌리지 않는다.
-  appSettings = validateSettings({ ...appSettings, ...(typeof settings === "object" && settings !== null ? settings : {}) });
+  appSettings = mergeSettings(appSettings, settings);
   if (PERSIST_WINDOW_STATE) saveAppSettings(appSettingsPath, appSettings);
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send(IPC_CHANNELS.settingsChanged, appSettings);
