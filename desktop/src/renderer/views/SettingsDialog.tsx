@@ -75,7 +75,7 @@ function useZoomFactor(): number {
 function settingsRows(settings: AppSettings, theme: string, zoom: number): Row[] {
   const fontRows = FONT_ROWS.map<Row>(([area, label, hint]) => {
     const size = settings.fonts[area];
-    const setSize = (next: number) => updateSettings({ fonts: { ...settings.fonts, [area]: next } });
+    const setSize = (next: number) => updateSettings({ fonts: { [area]: next } });
     return {
       id: `font-${area}`,
       section: "글자",
@@ -115,7 +115,7 @@ function settingsRows(settings: AppSettings, theme: string, zoom: number): Row[]
       section: "알림",
       label: "운영체제 알림",
       hint: "턴 완료, 실패, 승인 요청, dot 의 답을 알린다",
-      control: <Segmented value={settings.notifications.mode} options={NOTIFICATION_MODES} onChange={(mode) => updateSettings({ notifications: { ...settings.notifications, mode } })} testId="settings-notify-mode" />,
+      control: <Segmented value={settings.notifications.mode} options={NOTIFICATION_MODES} onChange={(mode) => updateSettings({ notifications: { mode } })} testId="settings-notify-mode" />,
     },
     {
       id: "notify-sound",
@@ -123,7 +123,7 @@ function settingsRows(settings: AppSettings, theme: string, zoom: number): Row[]
       label: "알림 소리",
       hint: "알림을 보일 때 소리를 낸다",
       control: (
-        <input type="checkbox" checked={settings.notifications.sound} onChange={(event) => updateSettings({ notifications: { ...settings.notifications, sound: event.target.checked } })} aria-label="알림 소리" data-testid="settings-notify-sound" />
+        <input type="checkbox" checked={settings.notifications.sound} onChange={(event) => updateSettings({ notifications: { sound: event.target.checked } })} aria-label="알림 소리" data-testid="settings-notify-sound" />
       ),
     },
     {

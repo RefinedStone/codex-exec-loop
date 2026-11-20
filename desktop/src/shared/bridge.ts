@@ -2,7 +2,7 @@
 import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
 import type { LinearBridge } from "./linear";
 import type { BrowserAgentBridge } from "./browserAgent";
-import type { AppSettings } from "./settings";
+import type { AppSettings, AppSettingsPatch } from "./settings";
 import type { SkillsBridge } from "./skills";
 import type { VaultApprovedMapping, VaultRestoreViewState } from "./vaultRestore";
 import type { ZoomDirection } from "./zoom";
@@ -462,7 +462,7 @@ export interface AkraBridge {
 export interface SettingsBridge {
   get(): Promise<AppSettings>;
   /** 설정의 한 부분을 바꾼다. main 이 지금 값에 합치고, 검증하고, 저장한 값을 돌려준다. */
-  set(patch: Partial<AppSettings>): Promise<AppSettings>;
+  set(patch: AppSettingsPatch): Promise<AppSettings>;
   /** 설정이 바뀌면 부른다. 다른 창에서 바꾼 것도 온다. */
   onChanged(listener: (settings: AppSettings) => void): () => void;
   /** 앱 메뉴의 "설정…" 을 고르면 부른다. */

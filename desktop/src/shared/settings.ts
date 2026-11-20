@@ -18,6 +18,13 @@ export interface AppSettings {
   keepAwake: KeepAwakeMode;
 }
 
+/** 부분 변경은 중첩 속성도 바꾼 값만 전달한다. */
+export interface AppSettingsPatch {
+  fonts?: Partial<AppSettings["fonts"]>;
+  notifications?: Partial<AppSettings["notifications"]>;
+  keepAwake?: KeepAwakeMode;
+}
+
 export const FONT_AREAS: readonly FontArea[] = ["ui", "reading", "code", "terminal"];
 export const MIN_FONT_PX = 10;
 export const MAX_FONT_PX = 24;
@@ -66,4 +73,17 @@ export function shouldNotify(mode: NotificationMode, focused: boolean): boolean 
 /** 잠자기를 막을지 정한다 (W5). `working` 은 어느 창에서든 에이전트가 턴을 실행 중이라는 뜻이다. */
 export function shouldKeepAwake(mode: KeepAwakeMode, working: boolean): boolean {
   return mode === "on" || (mode === "working" && working);
+}
+
+/** main의 최신 설정에 변경한 필드만 반영한다. */
+export function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
+  const record = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const changes = record(patch);
+  return validateSettings({
+    ...current,
+    ...changes,
+    fonts: { ...current.fonts, ...record(changes.fonts) },
+    notifications: { ...current.notifications, ...record(changes.notifications) },
+  });
 }

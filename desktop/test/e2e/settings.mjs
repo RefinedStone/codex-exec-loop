@@ -79,6 +79,19 @@ try {
     JSON.stringify(saved()),
   );
 
+  // 두 창이 서로의 사본을 기다리지 않고 별도 중첩 필드를 바꿔도 모두 남는다.
+  const secondWindow = app.waitForEvent("window");
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("new-window")?.click());
+  const second = await secondWindow;
+  await second.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
+  await Promise.all([
+    page.evaluate(() => window.akra.settings.set({ fonts: { code: 18 }, notifications: { mode: "off" } })),
+    second.evaluate(() => window.akra.settings.set({ fonts: { terminal: 16 }, notifications: { sound: true } })),
+  ]);
+  check("independent nested settings from two windows survive in the saved authority",
+    await savedWhen(page, (settings) => settings.fonts.reading === 17 && settings.fonts.code === 18 && settings.fonts.terminal === 16 && settings.notifications.mode === "off" && settings.notifications.sound === true));
+  await second.close();
+
   // 설정 찾기.
   await page.getByTestId("settings-search").fill("터미널");
   check("search keeps only the matching setting", (await page.locator('[data-testid^="settings-row-"]').count()) === 1 && (await page.getByTestId("settings-row-font-terminal").count()) === 1);

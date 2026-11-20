@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { loadAppSettings, saveAppSettings } from "../src/main/appSettings";
 import { fontTokens, matchesSetting } from "../src/renderer/session/settingsView";
-import { DEFAULT_SETTINGS, shouldKeepAwake, shouldNotify, validateSettings } from "../src/shared/settings";
+import { DEFAULT_SETTINGS, mergeSettings, shouldKeepAwake, shouldNotify, validateSettings } from "../src/shared/settings";
 
 describe("app settings", () => {
   it("replaces unknown values with the defaults and clamps font sizes", () => {
@@ -48,5 +48,27 @@ describe("app settings", () => {
   it("finds a setting by its name, hint or section", () => {
     const row = { section: "전원", label: "잠자기 방지", hint: "에이전트가 일하는 동안" };
     expect([matchesSetting(row, ""), matchesSetting(row, "잠자기"), matchesSetting(row, "전원"), matchesSetting(row, "에이전트"), matchesSetting(row, "글자")]).toEqual([true, true, true, true, false]);
+  });
+});
+
+describe("nested setting patches", () => {
+  it("preserves independent font and notification changes from stale windows", () => {
+    let settings = mergeSettings(DEFAULT_SETTINGS, { fonts: { reading: 17 } });
+    settings = mergeSettings(settings, { fonts: { terminal: 16 } });
+    settings = mergeSettings(settings, { notifications: { mode: "always" } });
+    settings = mergeSettings(settings, { notifications: { sound: false } });
+    expect(settings).toEqual({
+      fonts: { ui: 13, reading: 17, code: 13, terminal: 16 },
+      notifications: { mode: "always", sound: false },
+      keepAwake: "off",
+    });
+    expect(DEFAULT_SETTINGS.fonts.reading).toBe(15);
+  });
+
+  it("uses the last submitted value only for the same field and validates changed input", () => {
+    const current = mergeSettings(DEFAULT_SETTINGS, { fonts: { reading: 17, code: 19 }, keepAwake: "on" });
+    expect(mergeSettings(current, { fonts: { reading: 99 } })).toMatchObject({ fonts: { reading: 24, code: 19 }, keepAwake: "on" });
+    expect(mergeSettings(current, { fonts: null, notifications: [] })).toEqual(current);
+    expect(mergeSettings(current, null)).toEqual(current);
   });
 });
