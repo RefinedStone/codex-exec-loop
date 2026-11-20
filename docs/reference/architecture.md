@@ -995,6 +995,12 @@ strategy in the production TUI.
   A missing, unreadable, or invalid template and an unsupported required input are separate
   results; callers must not treat them as "no requirement". A draft keeps the template version
   (content SHA-256), and `check_issue_template_version` asks for review when it changed.
+- User code validators run only through `application/service/issue_code_validator`. The input is an
+  `IssueValidationPassed`; the command and content hash come only from the user policy file.
+  `gate_issue_publish_with_code_validators` blocks publish when a required validator rejects or
+  does not run. `SandboxedIssueCodeValidatorRunnerAdapter` has no unsandboxed path: isolation
+  exists only on macOS, and other platforms return `IsolationUnavailable`. See
+  [configuration](./configuration.md#issue-policy-file).
 
 Verify boundary-sensitive changes with:
 

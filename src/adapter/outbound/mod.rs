@@ -12,6 +12,8 @@ pub mod filesystem;
 pub(crate) mod gateway_kernel_client;
 // git은 worktree, branch, merge 같은 로컬 Git 런타임 조작을 캡슐화한다.
 pub mod git;
+// issue_code_validator 는 승인한 코드 검증기를 격리된 임시 작업 공간에서 실행한다 (#2431).
+pub mod issue_code_validator;
 // issue_work_fake 는 Issue Core 와 Evidence Vault 계약의 메모리 가짜 구현이다 (#2415).
 pub mod issue_work_fake;
 // vault_key_store 는 Vault 키를 OS 키 저장소에 두는 구현과 메모리 가짜 구현이다 (#2422).
