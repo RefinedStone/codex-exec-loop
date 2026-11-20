@@ -63,6 +63,7 @@ export interface FakeGateway {
   readonly remoteReceivedMethods: string[];
   /** 먼저 도착해서 쓰인 서버 요청 답이다. */
   readonly answeredRequests: Array<{ requestId: string; result: unknown }>;
+  setDotLiveState(connected: boolean, working: boolean): void;
   close(): Promise<void>;
 }
 
@@ -221,10 +222,11 @@ export async function startFakeGateway(
   const openServerRequests = new Map<string, { threadId: string; sockets: Set<WebSocket> }>();
   /** `akra/dots/watch` 로 방을 보는 접속이다. 그 접속에만 `akra/dots/live` 를 민다. */
   const watchedRooms = new Map<WebSocket, string>();
+  let dotLiveConnected = true;
   const pushDotLive = (socket: WebSocket, working: boolean) => {
     const roomId = watchedRooms.get(socket);
     if (roomId === undefined || socket.readyState !== socket.OPEN) return;
-    socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/dots/live", params: { roomId, connected: true, working, activityLabel: working ? "Thinking" : null, usingComputer: false } }));
+    socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/dots/live", params: { roomId, connected: dotLiveConnected, working, activityLabel: working ? "Thinking" : null, usingComputer: false } }));
   };
   sockets.on("connection", (socket, request) => {
     const path = request.url ?? "/";
@@ -388,6 +390,10 @@ export async function startFakeGateway(
     endpoint,
     receivedMethods,
     remoteReceivedMethods,
+    setDotLiveState(connected, working) {
+      dotLiveConnected = connected;
+      for (const socket of watchedRooms.keys()) pushDotLive(socket, working);
+    },
     answeredRequests,
     close: async () => {
       for (const client of sockets.clients) {

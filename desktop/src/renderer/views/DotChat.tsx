@@ -13,7 +13,7 @@ import { Icon } from "../design/icons";
 import type { DotLive, DotMessage, DotSummary } from "../session/desktopStore";
 import { dotDraftKey, setDotSending, setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
-import { allowDotSending, dayLabel, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, markDotSendingAllowed, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
+import { allowDotSending, dayLabel, dotStatusLine, nextDotReplyWait, isDotSendingAllowed, isSentDraft, lastReadMessageId, markDotSendingAllowed, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
 
 const DOTS_MESSAGES_METHOD = "akra/dots/messages";
 const DOTS_SEND_METHOD = "akra/dots/send";
@@ -59,8 +59,7 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
   const [sendError, setSendError] = useState<string | null>(null);
   /** 보낸 뒤 답을 기다리기 시작한 시각이다. null 이면 기다리지 않는다. 실시간 통로가 없을 때만 쓴다. */
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
-  /** 보내기 직전의 가장 새 메시지 id 이다. 그 뒤에 온 dot 의 메시지가 답이다. */
-  const newestIdBeforeSend = useRef<string | null>(null);
+  const previousLive = useRef<Pick<DotLive, "connected" | "working"> | undefined>(undefined);
   const scroller = useRef<HTMLElement | null>(null);
   const roomId = dot.messagingRoomId;
   const liveConnected = live?.connected === true;
@@ -70,6 +69,7 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
     setCanSend(isDotSendingAllowed(dot.id));
     setSendError(null);
     setWaitingSince(null);
+    previousLive.current = undefined;
     setState({ phase: "loading" });
     // 다른 창(본 창이나 dot 창)에서 이미 허락했으면 다시 묻지 않는다. 허락은 main 이 앱을 켠 동안 가진다.
     let current = true;
@@ -91,6 +91,15 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
     setCanSend(allowed);
   };
 
+  // 중간 메시지는 완료 근거가 아니다. 연결된 상태의 working → idle 만 대기를 끝낸다.
+  // 작업 도중 live 통로가 끊기면 그때부터 제한 시간 동안 GET을 계속한다.
+  useEffect(() => {
+    const next = { connected: liveConnected, working: live?.working === true };
+    const before = previousLive.current;
+    previousLive.current = next;
+    setWaitingSince((waiting) => nextDotReplyWait(waiting, before, next, Date.now()));
+  }, [roomId, liveConnected, live?.working]);
+
   // dot 이 답을 끝냈다. 바로 읽고, 조금 뒤에 한 번 더 읽는다.
   useEffect(() => {
     if (replies === 0) return;
@@ -110,7 +119,7 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
     return () => window.clearInterval(timer);
   }, [working]);
 
-  // 실시간 통로가 없을 때의 대비이다. 보낸 뒤 답이 올 때까지만 다시 읽는다.
+  // 실시간 통로가 없으면 완료를 판별할 수 없으므로 제한 시간까지 읽는다.
   useEffect(() => {
     if (waitingSince === null || liveConnected) return;
     const timer = window.setInterval(() => {
@@ -155,7 +164,6 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
           const outcome = done();
           if (outcome === "stale") return;
           setState({ phase: "loaded", messages: response.messages, dotReadAt: response.dotReadAt ?? null });
-          if (hasDotRepliedSince(response.messages, newestIdBeforeSend.current)) setWaitingSince(null);
           // 다음 읽기가 밀려 있으면 이 응답은 새 답을 담지 않았을 수 있다. 읽은 것으로 하지 않는다. 다음 읽기가
           // 성공하면 그때 한다.
           if (outcome === "superseded") return;
@@ -209,7 +217,6 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
     const dotId = dot.id;
     setDotSending(dotId, true);
     setSendError(null);
-    newestIdBeforeSend.current = state.phase === "loaded" ? (state.messages.at(-1)?.id ?? null) : null;
     request<{ sent: boolean }>(DOTS_SEND_METHOD, { roomId, text }).then(
       () => {
         // 보낸 글이 아직 초안으로 남아 있을 때만 지운다. 답을 기다리는 사이 다른 화면을 보고 와서 쓴 새 글은 남긴다.
