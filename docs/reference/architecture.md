@@ -993,7 +993,9 @@ strategy in the production TUI.
   publish gate, and returns the shared copy, the markers that stay, per-field errors, and an
   approval value (shared copy hash, policy version, template version). `publish` masks and reads
   the policy and template again, so an approval of other text or of an older policy or template is
-  `refused` with no write. These requests carry text before masking, and `open` returns the remote
+  `refused` with no write. `preview` runs the required-convention gate only; `publish` runs
+  `gate_issue_publish_with_code_validators`, so a required code validator that does not pass
+  blocks the write. These requests carry text before masking, and `open` returns the remote
   text as the edit start: the Gateway keeps both out of the session recording. No Vault key is
   wired yet, so a publish with a restorable mask is `held` until the user repeats it with
   `sharedCopyOnly`.
