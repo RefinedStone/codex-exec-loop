@@ -29,7 +29,7 @@ const RESOLVE_QUERY: &str = "query($owner: String!, $name: String!, $number: Int
 const READ_QUERY: &str = "query($id: ID!) { node(id: $id) { __typename ... on Issue { id number title body updatedAt repository { id } } } }";
 
 /// `gh api --hostname github.com` 뒤의 인자를 받아 stdout 을 준다. 시험은 가짜를 넣는다.
-type GhApiRunner = Box<dyn Fn(&[String]) -> Result<Vec<u8>> + Send + Sync>;
+pub(super) type GhApiRunner = Box<dyn Fn(&[String]) -> Result<Vec<u8>> + Send + Sync>;
 
 pub struct GithubIssueSnapshotAdapter {
     run_gh_api: GhApiRunner,
@@ -106,7 +106,11 @@ fn target_not_found() -> anyhow::Error {
 }
 
 /// `-f` 는 값을 글자 그대로 보낸다. `-F` 는 번호를 정수로 보낸다.
-fn graphql_arguments(query: &str, fields: &[(&str, &str)], number: Option<&str>) -> Vec<String> {
+pub(super) fn graphql_arguments(
+    query: &str,
+    fields: &[(&str, &str)],
+    number: Option<&str>,
+) -> Vec<String> {
     let mut arguments = vec![
         "graphql".to_string(),
         "-f".to_string(),
@@ -121,7 +125,7 @@ fn graphql_arguments(query: &str, fields: &[(&str, &str)], number: Option<&str>)
     arguments
 }
 
-fn run_gh_api(working_directory: &Path, arguments: &[String]) -> Result<Vec<u8>> {
+pub(super) fn run_gh_api(working_directory: &Path, arguments: &[String]) -> Result<Vec<u8>> {
     let gh = crate::trusted_executable::resolve_native_from_current_path("gh", working_directory)
         .context("gh is not available")?;
     let mut command = gh_api_command(working_directory, &gh)?;
@@ -140,7 +144,7 @@ fn run_gh_api(working_directory: &Path, arguments: &[String]) -> Result<Vec<u8>>
 }
 
 /// node ID 는 `gh` 의 인자가 되고 직렬화되는 참조에 들어간다. GitHub 이 쓰는 글자만 받는다.
-fn ensure_node_id(id: &str) -> Result<()> {
+pub(super) fn ensure_node_id(id: &str) -> Result<()> {
     let is_valid = !id.is_empty()
         && id.len() <= MAX_NODE_ID_CHARS
         && id
@@ -185,8 +189,8 @@ struct RemoteIssue {
 
 // 답의 타입은 원시 값을 가진다. `Debug` 를 구현하지 않는다.
 #[derive(Deserialize)]
-struct GraphqlEnvelope<T> {
-    data: Option<T>,
+pub(super) struct GraphqlEnvelope<T> {
+    pub(super) data: Option<T>,
 }
 
 #[derive(Deserialize)]
