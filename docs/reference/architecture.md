@@ -952,6 +952,11 @@ strategy in the production TUI.
 - The issue policy (`domain/issue_policy`) comes only from `IssuePolicyService`. An invalid or
   unreadable policy file is `IssuePolicyBlocked`; callers must not replace it with the built-in
   policy. See [configuration](./configuration.md#issue-policy-file).
+- `evidence_vault_port` also holds the Evidence Vault store contract (`EvidenceVaultStorePort`).
+  `FilesystemEvidenceVaultStoreAdapter` writes one record file for each scope (local project,
+  issue, field, publish intent or confirmed version) with ChaCha20-Poly1305 from `ring`. The record
+  keeps the format version, key identifier, nonce, and ciphertext; the scope is authenticated as
+  associated data. The caller supplies the key and the vault root; nothing wires the adapter yet.
 
 Verify boundary-sensitive changes with:
 
