@@ -17,7 +17,7 @@ use rand::{RngCore, rngs::OsRng};
 use crate::application::port::outbound::evidence_vault_backup_port::{
     EvidenceVaultBackupPort, VAULT_RECOVERY_KEY_LEN, VaultBackupError, VaultBackupExportRequest,
     VaultBackupImportReport, VaultBackupImportRequest, VaultBackupProjectApproval,
-    VaultRecoveryKey,
+    VaultBackupRecoveryMode, VaultRecoveryKey,
 };
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultRecordBinding, VaultRecordField, VaultRecordLoadRequest,
@@ -42,6 +42,7 @@ pub struct VaultBackupApprovedImport {
     pub archive: String,
     pub recovery_key: VaultRecoveryKey,
     pub decision: VaultUserDecision,
+    pub recovery_mode: VaultBackupRecoveryMode,
     /// 사용자가 승인한 프로젝트이다. 여기에 없는 프로젝트의 레코드는 쓰지 않는다.
     pub projects: Vec<VaultBackupProjectApproval>,
 }
@@ -156,6 +157,7 @@ impl EvidenceVaultBackupService {
                 recovery_key: request.recovery_key,
                 local_key,
                 projects: request.projects,
+                recovery_mode: request.recovery_mode,
             })
             .map_err(VaultBackupFailure::Backup)
     }
@@ -291,6 +293,7 @@ mod tests {
                 archive: archive.to_string(),
                 recovery_key: recovery_key.clone(),
                 decision: VaultUserDecision::Confirmed,
+                recovery_mode: VaultBackupRecoveryMode::PreserveLocal,
                 projects: vec![approval()],
             })
         }
@@ -409,6 +412,7 @@ mod tests {
                 archive: export.archive.clone(),
                 recovery_key: export.recovery_key.clone(),
                 decision: VaultUserDecision::Confirmed,
+                recovery_mode: VaultBackupRecoveryMode::PreserveLocal,
                 projects: Vec::new(),
             })
             .expect("preview should succeed");
@@ -465,6 +469,7 @@ mod tests {
             archive: export.archive,
             recovery_key: export.recovery_key,
             decision: VaultUserDecision::Cancelled,
+            recovery_mode: VaultBackupRecoveryMode::PreserveLocal,
             projects: vec![approval()],
         });
 
@@ -592,6 +597,7 @@ mod tests {
                 archive: export.archive,
                 recovery_key: export.recovery_key,
                 decision: VaultUserDecision::Confirmed,
+                recovery_mode: VaultBackupRecoveryMode::PreserveLocal,
                 projects: vec![VaultBackupProjectApproval {
                     source: project(SOURCE_PROJECT),
                     local: project(SOURCE_PROJECT),
@@ -602,6 +608,103 @@ mod tests {
         assert!(report.imported.is_empty());
         assert_eq!(report.kept_local.len(), 2);
         assert_eq!(source.record_files(), before);
+    }
+
+    #[test]
+    fn lost_device_key_requires_explicit_recovery_and_then_restores_the_backup() {
+        let (source, export) = exported("lost-key");
+        let before = source.record_files();
+        source.key_store.lose_key();
+        let request = |recovery_mode| VaultBackupApprovedImport {
+            archive: export.archive.clone(),
+            recovery_key: export.recovery_key.clone(),
+            decision: VaultUserDecision::Confirmed,
+            recovery_mode,
+            projects: vec![VaultBackupProjectApproval {
+                source: project(SOURCE_PROJECT),
+                local: project(SOURCE_PROJECT),
+            }],
+        };
+        assert_eq!(
+            source
+                .service
+                .import(request(VaultBackupRecoveryMode::PreserveLocal)),
+            Err(VaultBackupFailure::Backup(
+                VaultBackupError::LocalRecoveryRequired
+            ))
+        );
+        assert_eq!(source.record_files(), before);
+        let report = source
+            .service
+            .import(request(VaultBackupRecoveryMode::RecoverUnreadable))
+            .expect("approved recovery");
+        assert_eq!(report.recovered.len(), 2);
+        assert_eq!(report.imported.len(), 2);
+        assert!(report.kept_local.is_empty());
+        for id in ["I_1", "I_2"] {
+            let issue = issue(SOURCE_PROJECT, id);
+            assert_eq!(
+                source.load(VaultRecordScope::current_version(issue.clone())),
+                Ok(VERSION.to_string())
+            );
+            assert_eq!(
+                source.load(confirmed(&issue, VaultRecordField::Title, VERSION)),
+                Ok(TITLE_SPANS.to_string())
+            );
+            assert_eq!(
+                source.load(confirmed(&issue, VaultRecordField::Body, VERSION)),
+                Ok(BODY_SPANS.to_string())
+            );
+        }
+        let replay = source
+            .service
+            .import(request(VaultBackupRecoveryMode::RecoverUnreadable))
+            .unwrap();
+        assert!(replay.imported.is_empty());
+        assert!(replay.recovered.is_empty());
+        assert_eq!(replay.kept_local.len(), 2);
+    }
+
+    #[test]
+    fn export_rejects_a_binding_changed_after_its_field_scopes_were_selected() {
+        struct ChangingStore {
+            vault: Arc<FilesystemEvidenceVaultStoreAdapter>,
+        }
+        impl EvidenceVaultStorePort for ChangingStore {
+            fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
+                self.vault.save(request)
+            }
+            fn load(
+                &self,
+                request: VaultRecordLoadRequest,
+            ) -> Result<VaultPlaintext, VaultStoreError> {
+                let original = self.vault.load(request.clone())?;
+                if request.scope.binding == VaultRecordBinding::CurrentVersion {
+                    self.vault.save(VaultRecordSaveRequest {
+                        scope: request.scope,
+                        key: request.key,
+                        plaintext: VaultPlaintext::new("1:changed-after-selection".to_string()),
+                    })?;
+                }
+                Ok(original)
+            }
+        }
+        let source = Device::new("changed-binding", SOURCE_KEY);
+        let source_issue = issue(SOURCE_PROJECT, "I_1");
+        source.bind(&source_issue, VERSION);
+        let service = EvidenceVaultBackupService::new(
+            Arc::new(ChangingStore {
+                vault: source.vault.clone(),
+            }),
+            Arc::new(FilesystemEvidenceVaultBackupAdapter::new(
+                source.vault_root.clone(),
+            )),
+            source.unlock.clone(),
+        );
+        assert_eq!(
+            service.export(&[source_issue]).unwrap_err(),
+            VaultBackupFailure::Backup(VaultBackupError::BindingChanged)
+        );
     }
 
     #[test]

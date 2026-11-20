@@ -15,7 +15,8 @@ Code: `EvidenceVaultBackupService` (`src/application/service/evidence_vault_back
   `CurrentVersion` record and the `ConfirmedVersion` records of that version. Issues without a
   binding and publish-intent records are not exported.
 - Each record is verified with the device key before it goes into the archive. A record that
-  fails stops the export.
+  fails stops the export. The archived `CurrentVersion` must match the selected field scopes;
+  otherwise `BindingChanged` asks the caller to retry with a fresh selection.
 - `export` makes a new recovery key (32 bytes from the OS random source) and returns it together
   with the archive content. Akra does not store the recovery key. The caller shows it one time
   (`VaultRecoveryKey::expose_text`: 64 hexadecimal characters in groups of 8) and the user keeps
@@ -66,9 +67,12 @@ receives its records.
    an empty approval list is a check of the recovery key and a list of the projects in the archive.
 4. The local device key is not replaced. A device without a key gets a new device key. The device
    key of the exporting device is used in memory only and is not stored.
-5. An issue that already has a local `CurrentVersion` record is not changed (`kept_local`). An
-   existing local record file is never overwritten. A repeated import of the same archive writes
-   nothing.
+5. A readable local `CurrentVersion` is never changed (`kept_local`), including in recovery mode.
+   An unreadable binding returns `LocalRecoveryRequired` in `PreserveLocal` mode. Only explicit
+   `RecoverUnreadable` approval replaces that issue's backup field records and installs its binding
+   last; the report lists the issue in `recovered`. This recovers a device whose OS key was lost.
+   An issue without a binding replaces partial field records from an interrupted import.
+   A repeated import with a readable binding writes nothing.
 6. The `CurrentVersion` records are written last. An issue is bound only after its other records
    are in place.
 
@@ -83,7 +87,8 @@ restore is held and the user reconnects on that issue (see [architecture](./arch
   set.
 - An import that stops between two `CurrentVersion` writes leaves some issues bound and the others
   not bound. The import is atomic for each issue, not for the whole archive.
-- The same import can be run again. It skips the records that exist and writes the remaining ones.
+- The same import can be run again. It preserves readable bindings and rewrites all selected
+  fields of incomplete or explicitly approved unreadable bindings before installing CurrentVersion.
 - Restored plaintext and the unwrapped device key exist in process memory only during the import.
   They are not written to a temporary file or a log.
 

@@ -7,11 +7,11 @@
  * 머리말이나 레코드 목록이 바뀌면 장치 키가 풀리지 않는다.
  *
  * 가져오기는 먼저 모든 레코드를 원본 키와 원본 범위로 검증하고, 승인한 프로젝트의 레코드를 로컬 장치 키와 로컬
- * 범위로 다시 암호화한다. 그다음에 쓴다. 이미 있는 로컬 레코드 파일은 바꾸지 않는다. 이슈의 `CurrentVersion`
+ * 범위로 다시 암호화한다. 읽을 수 있는 기존 연결은 보존하고, 읽지 못하는 연결은 명시적 승인으로만 복구한다. 이슈의 `CurrentVersion`
  * 레코드는 마지막에 쓴다. 그 전에 멈추면 그 이슈는 연결이 없는 상태로 남고, 다시 부르면 끝난다.
  */
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -28,7 +28,7 @@ use super::evidence_vault_store::{
 use super::secure_fs;
 use crate::application::port::outbound::evidence_vault_backup_port::{
     EvidenceVaultBackupPort, VaultBackupError, VaultBackupExportRequest, VaultBackupImportReport,
-    VaultBackupImportRequest, VaultRecoveryKey,
+    VaultBackupImportRequest, VaultBackupRecoveryMode, VaultRecoveryKey,
 };
 use crate::application::port::outbound::evidence_vault_port::{
     VaultKey, VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordScope,
@@ -147,12 +147,6 @@ impl FilesystemEvidenceVaultBackupAdapter {
     pub fn new(vault_root: PathBuf) -> Self {
         Self { vault_root }
     }
-
-    fn record_exists(&self, relative_path: &Path) -> Result<bool, VaultBackupError> {
-        secure_fs::read_optional_file(&self.vault_root, relative_path)
-            .map(|body| body.is_some())
-            .map_err(storage_error)
-    }
 }
 
 impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
@@ -166,10 +160,29 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
             )
             .map_err(storage_error)?
             else {
+                if scope.binding == VaultRecordBinding::CurrentVersion {
+                    return Err(VaultBackupError::BindingChanged);
+                }
                 continue;
             };
-            // 열리지 않는 레코드를 담으면 보관 파일 전체를 가져올 수 없다. 평문은 바로 버린다.
-            open_record(&record, &request.key, &scope_bytes).map_err(VaultBackupError::Record)?;
+            // 최초 선택한 판과 실제 담는 연결이 같아야 한다. 연결 파일은 이 한 번 읽은 내용을 담는다.
+            let plaintext = open_record(&record, &request.key, &scope_bytes)
+                .map_err(VaultBackupError::Record)?;
+            if scope.binding == VaultRecordBinding::CurrentVersion
+                && [VaultRecordField::Title, VaultRecordField::Body]
+                    .iter()
+                    .any(|field| {
+                        !request.scopes.contains(&VaultRecordScope {
+                            issue: scope.issue.clone(),
+                            field: *field,
+                            binding: VaultRecordBinding::ConfirmedVersion(
+                                plaintext.expose().to_string(),
+                            ),
+                        })
+                    })
+            {
+                return Err(VaultBackupError::BindingChanged);
+            }
             records.push(StoredBackupRecord::new(scope, record));
         }
         if records.is_empty() {
@@ -259,12 +272,24 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
             });
         }
 
-        // 이미 로컬 연결이 있는 이슈는 건드리지 않는다. 같은 보관 파일을 다시 가져와도 그렇다.
-        // shortcut: 확인과 쓰기 사이에 다른 프로세스가 같은 레코드를 쓰면 나중 쓰기가 남는다, 여러 프로세스가 Vault 를 쓰게 되면 잠근다.
+        // 읽을 수 있는 로컬 연결은 항상 보존한다. 키 분실 등의 복구는 명시적으로 선택한 경우만 허용한다.
+        // shortcut: 다중 프로세스의 확인과 쓰기를 한 트랜잭션으로 묶는 저장 계약은 별도이다.
         let mut kept_local = Vec::new();
+        let mut recovered = Vec::new();
         for record in staged.iter().filter(|record| record.is_current_version) {
-            if self.record_exists(&record.relative_path)? {
-                kept_local.push(record.issue.clone());
+            let Some(current) =
+                secure_fs::read_optional_file(&self.vault_root, &record.relative_path)
+                    .map_err(storage_error)?
+            else {
+                continue;
+            };
+            let scope = scope_bytes(&VaultRecordScope::current_version(record.issue.clone()));
+            match open_record(&current, &request.local_key, &scope) {
+                Ok(_) => kept_local.push(record.issue.clone()),
+                Err(_) if request.recovery_mode == VaultBackupRecoveryMode::RecoverUnreadable => {
+                    recovered.push(record.issue.clone());
+                }
+                Err(_) => return Err(VaultBackupError::LocalRecoveryRequired),
             }
         }
         let kept: HashSet<&IssueReference> = kept_local.iter().collect();
@@ -273,7 +298,7 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
         staged.sort_by_key(|record| record.is_current_version);
         let mut imported = Vec::new();
         for record in &staged {
-            if kept.contains(&record.issue) || self.record_exists(&record.relative_path)? {
+            if kept.contains(&record.issue) {
                 continue;
             }
             secure_fs::write_file_atomic(&self.vault_root, &record.relative_path, &record.body)
@@ -287,6 +312,7 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
             backup_id: archive.backup_id,
             imported,
             kept_local,
+            recovered,
             unapproved_projects,
         })
     }
