@@ -19,6 +19,8 @@ pub mod manual_prompt_preparation;
 pub mod mcp_hub;
 // issue_policy 는 이슈 정책 파일을 검증하고 사용자 < 프로젝트 순서로 합친다 (#2416).
 pub mod issue_policy;
+// issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).
+pub mod issue_validation;
 // parallel_agent_profile은 병렬 agent의 이름, 역할, avatar, persona prompt 설정을 관리한다.
 pub mod parallel_agent_profile;
 // parallel_mode는 여러 worktree/agent lane을 만들고 배분하는 application 흐름이다.
