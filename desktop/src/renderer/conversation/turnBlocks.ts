@@ -94,7 +94,7 @@ export function stepSummary(item: StepItem): string {
 export function stepStatus(item: StepItem, turnStatus: TurnStatus): StepStatus {
   // 웹 검색 아이템에는 상태가 없다.
   if (item.type === "webSearch") return "ok";
-  if (item.status === "completed") return "ok";
+  if (item.status === "completed") return item.type === "dynamicToolCall" && item.success === false ? "failed" : "ok";
   if (item.status === "interrupted") return "interrupted";
   if (item.status !== "inProgress") return "failed";
   if (turnStatus === "inProgress") return "running";
@@ -108,6 +108,7 @@ function textParts(parts: readonly unknown[]): string | null {
 
 /** 펼친 카드에 쓰는 보존된 출력과 오류이다 (#2378). 없으면 null 이다. */
 export function stepDetail(item: StepItem): { output: string | null; error: string | null } {
+  if (item.type === "webSearch") return { output: webSearchLabel(item), error: null };
   if (item.type === "commandExecution") {
     const output = [`$ ${item.command}`, item.aggregatedOutput].filter(Boolean).join("\n");
     return { output, error: item.exitCode ? `종료 코드 ${item.exitCode}` : null };

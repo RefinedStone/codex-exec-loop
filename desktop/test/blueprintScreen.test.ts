@@ -77,6 +77,23 @@ describe("turnBlocks", () => {
     expect(stepDetail(dynamic)).toEqual({ output: "ok", error: null });
   });
 
+  it("keeps completed dynamic tools with an unsuccessful result out of the success state", () => {
+    const dynamic = (success: boolean | null) => item({ type: "dynamicToolCall", id: "d", tool: "run", status: "completed", success, contentItems: [] }) as StepItem;
+    expect(stepStatus(dynamic(false), "completed")).toBe("failed");
+    expect(stepStatus(dynamic(true), "completed")).toBe("ok");
+    expect(stepStatus(dynamic(null), "completed")).toBe("ok");
+  });
+
+  it("preserves the full web search target in the expandable detail", () => {
+    const query = "query ".repeat(40);
+    const url = "https://example.com/" + "segment/".repeat(30) + "?page=last";
+    for (const action of [{ type: "search", query, queries: null }, { type: "openPage", url }, { type: "findInPage", url, pattern: "needle" }]) {
+      const web = item({ type: "webSearch", id: "w", query, action, results: null }) as StepItem;
+      expect(stepSummary(web)).toHaveLength(121);
+      expect(stepDetail(web)).toEqual({ output: stepLabel(web), error: null });
+    }
+  });
+
   it("keeps long text and secret values out of the card summary (#2378)", () => {
     const summary = (text: string) => stepSummary(command("c", { command: text }));
     expect(summary("API_TOKEN=abc123 npm run deploy")).toBe("API_TOKEN=*** npm run deploy");
