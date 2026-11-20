@@ -3,9 +3,8 @@ use std::path::{Component, Path};
 use anyhow::{Result, bail};
 
 use crate::application::port::outbound::issue_template_source_port::IssueTemplateSourcePort;
-use crate::configuration::{ConfigScope, read_config_file_if_present};
 
-/// 이슈 템플릿을 작업 폴더에서 `config.toml` 과 같은 안전 규칙으로 읽는다 (링크, 크기 검사).
+/// 이슈 템플릿을 루트에 고정한 경로에서 읽는다 (모든 부모 링크와 크기 검사).
 #[derive(Debug, Default)]
 pub struct FilesystemIssueTemplateSourceAdapter;
 
@@ -24,11 +23,16 @@ impl IssueTemplateSourcePort for FilesystemIssueTemplateSourceAdapter {
         if template_path.trim().is_empty() || !inside_repository {
             bail!("issue template must be a relative path inside the repository: `{template_path}`")
         }
-        read_config_file_if_present(
-            &Path::new(workspace_dir).join(template_path),
-            ConfigScope::Project,
-        )
+        read_template(Path::new(workspace_dir), Path::new(template_path))
     }
+}
+
+const MAX_TEMPLATE_BYTES: usize = 1024 * 1024;
+
+fn read_template(root: &Path, relative: &Path) -> Result<Option<String>> {
+    // Use the established descriptor-anchored reader. Unsupported platforms
+    // return Unreadable through the service rather than bypassing this boundary.
+    super::secure_fs::read_optional_file_with_limit(root, relative, MAX_TEMPLATE_BYTES)
 }
 
 #[cfg(test)]
@@ -55,6 +59,7 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     #[test]
     fn template_is_read_from_the_workspace_and_a_missing_file_is_none() {
         let workspace = temp_workspace("read");
@@ -106,5 +111,62 @@ mod tests {
 
         assert!(result.is_err());
         fs::remove_dir_all(workspace).expect("cleanup");
+    }
+    #[cfg(unix)]
+    fn directory_link(target: &std::path::Path, link: &std::path::Path) {
+        std::os::unix::fs::symlink(target, link).expect("directory symlink");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_template_directory_rejects_links_outside_the_workspace() {
+        for ancestor in [".github", ".github/ISSUE_TEMPLATE"] {
+            let workspace = temp_workspace("ancestor");
+            let outside = temp_workspace("outside-fixture");
+            fs::write(outside.join(TEMPLATE_PATH), "synthetic outside contents").unwrap();
+            let link = workspace.join(ancestor);
+            fs::remove_dir_all(&link).unwrap();
+            directory_link(&outside.join(ancestor), &link);
+            let result = FilesystemIssueTemplateSourceAdapter::new()
+                .load_template(workspace.to_str().unwrap(), TEMPLATE_PATH);
+            assert!(result.is_err(), "{ancestor}: {result:?}");
+            #[cfg(unix)]
+            fs::remove_file(&link).unwrap();
+            #[cfg(windows)]
+            fs::remove_dir(&link).unwrap();
+            fs::remove_dir_all(workspace).unwrap();
+            fs::remove_dir_all(outside).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn template_reads_keep_the_existing_one_mebibyte_limit() {
+        let workspace = temp_workspace("size");
+        fs::write(
+            workspace.join(TEMPLATE_PATH),
+            "x".repeat(super::MAX_TEMPLATE_BYTES + 1),
+        )
+        .unwrap();
+        assert!(
+            FilesystemIssueTemplateSourceAdapter::new()
+                .load_template(workspace.to_str().unwrap(), TEMPLATE_PATH)
+                .is_err()
+        );
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_template_reads_fail_closed_until_rooted_reads_are_supported() {
+        let workspace = temp_workspace("windows-unsupported");
+        fs::write(workspace.join(TEMPLATE_PATH), "## Summary\n").unwrap();
+        for relative in [TEMPLATE_PATH, ".github/ISSUE_TEMPLATE/missing.md"] {
+            let error = FilesystemIssueTemplateSourceAdapter::new()
+                .load_template(workspace.to_str().unwrap(), relative)
+                .unwrap_err();
+            assert!(error.to_string().contains("unsupported on Windows"));
+        }
+        fs::remove_dir_all(workspace).unwrap();
     }
 }
