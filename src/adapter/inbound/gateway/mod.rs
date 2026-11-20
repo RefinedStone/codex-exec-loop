@@ -130,7 +130,8 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
 }
 
 /// 커널을 먼저 멈추고 그 뒤에 upstream app-server 를 멈춘다. 커널의 app-server 연결과 병렬 작업 턴은 upstream 을
-/// 쓴다. 접속 작업이 목록을 아직 쥐고 있어도 커널은 멈춘다. 프로세스는 이 뒤 `exit` 로 끝나 소멸자가 돌지 않는다.
+/// 쓴다. 접속 작업이 목록을 아직 쥐고 있어도 커널은 멈춘다. main은 ExitCode를 반환하여 진단 로그를 flush한다.
+/// Tokio runtime의 drop은 남은 blocking 작업의 종료를 기다리므로 각 backend의 제한된 종료 계약을 유지한다.
 async fn stop_backend(
     hosts: GatewayHosts,
     kernels: Arc<RepositoryKernelRegistry>,
