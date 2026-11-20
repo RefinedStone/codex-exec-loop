@@ -108,6 +108,93 @@ The mandatory publish validation and the Vault user unlock are always on. No sco
 
 A code validator is an executable that the user approved. `code_validators` selects a validator by ID; the list is one value, and a project list replaces the user list. Only the user file can set `approved_code_validators`: a project file with that table is invalid, so a repository cannot define a command. The validator gets the validated shared copy as JSON on stdin (`schemaVersion`, `target`, `title`, `body`) and an environment with only a fixed PATH. Exit code 0 passes, exit code 1 rejects (stdout is the message), and all other results count as "did not run". A copy of the approved file runs in an isolated temporary directory without network access and without access to user files. The isolation exists only on macOS (`/usr/bin/sandbox-exec`). On other platforms the validator does not run. A required validator that is not approved, is missing, has a different hash, exceeds the time limit, stops abnormally, or has no isolation blocks publish.
 
+## Issue automation policy file
+
+이슈 자동화 정책은 별도 `issue-automation.toml`에 둡니다. 이 파일은 수집 대상, 자율 수준의 상한, 위험 등급 규칙, 관문, 예산과 외부 이슈에 쓸 수 있는 범위를 선언합니다. 현재 구현은 파일을 읽고 병합·검증하여 typed 정책과 정책 판을 반환하는 단계입니다. 기존 observe 수집기, 판정기, 작업 실행기에는 아직 연결하지 않았으므로, 이 파일을 고쳐도 작업 시작이나 GitHub 쓰기가 발생하지 않습니다.
+
+| 범위 | 경로 |
+| --- | --- |
+| 사용자 | `$AKRA_HOME/issue-automation.toml` (기본 `~/.akra/issue-automation.toml`) |
+| 저장소 | `workspace/.akra/issue-automation.toml` |
+
+스키마는 [akra-issue-automation.schema.json](../../schema/akra-issue-automation.schema.json)이며, [사용자 예시](../../schema/akra-issue-automation.user.example.toml)와 [저장소 예시](../../schema/akra-issue-automation.project.example.toml)를 함께 제공합니다. 각 파일은 부분 설정입니다. `schema_version`을 생략하면 1이며, 나머지 값은 아래 병합 규칙을 따릅니다. 비어 있는 목록과 필드 생략은 서로 다른 뜻일 수 있습니다.
+
+### 병합과 사용자 권한
+
+일반 값은 개별 leaf마다 **저장소 > 사용자 > 내장** 순서로 정합니다. 배열은 특별한 규칙이 없는 한 하나의 값입니다. 아래 값은 저장소가 사용자 권한이나 보호 장치를 늘리거나 지우지 못하도록 별도로 병합합니다.
+
+| 값 | 병합 규칙 |
+| --- | --- |
+| `authority.autonomy_cap` | 사용자 상한과 저장소 제한 중 낮은 수준. 요청한 `binding.github.mode`도 이 상한까지 낮춥니다. |
+| `budget.*` | 사용자 최대값과 저장소 제한 중 작은 값. 저장소는 최대값을 늘릴 수 없습니다. |
+| `feedback.comment/labels/transition` | 사용자의 허가와 저장소의 제한을 AND로 결합합니다. 사용자 허가의 기본값은 모두 `false`입니다. 저장소의 `true`만으로 권한을 얻지 못합니다. |
+| `select.trusted_actors` | 사용자가 신뢰한 안정 ID 삼중항과 저장소 목록의 교집합. 저장소에서 생략하면 상속하고, `[]`이면 모두 제외합니다. |
+| `protection.paths` | 내장·사용자·저장소 경로 패턴의 합집합. `[]`으로 이전 보호를 지울 수 없습니다. |
+| `human_required.rules/additional` | 내장·사용자·저장소 규칙의 합집합. 저장소는 사람 승인이 필요한 조건을 더할 수만 있습니다. |
+
+기본 요청 수준은 `observe`, 기본 자율 상한은 `propose`이고 외부 이슈 쓰기 허가는 모두 꺼져 있습니다. 사용자 파일의 상한과 허가는 후속 실행기가 지켜야 하는 정책 값이며, 그 자체로 한 작업의 실행·통합 승인이 되지는 않습니다.
+
+### 키·기본값·범위
+
+| 키 | 허용값과 내장 기본값 |
+| --- | --- |
+| `schema_version` | `1`; 생략해도 1 |
+| `binding.github.repository` | 선택 항목인 `owner/name`. 생략 시 후속 연결에서 origin을 사용 |
+| `binding.github.mode` | `off / observe / propose / gated / auto`; 기본 `observe` |
+| `authority.autonomy_cap` | 같은 5개 수준; 기본 `propose` |
+| `select.mode` | `labels_any / all_open`; 기본 `labels_any` |
+| `select.labels_any` | 정확한 라벨 이름의 OR; 기본 `["akra:auto", "akra:gated", "akra:manual"]`. `[]`은 선택 대상 없음 |
+| `select.trusted_actors` | `{provider, server_id, actor_id}` 배열; 기본 `[]`. provider는 `github / jira` |
+| `classify.rule` | `class = low / normal / high`와 `labels_any`·`paths_any`의 순서 있는 규칙 배열; 기본 `[]`, 미일치는 `normal` |
+| `gates.<mode>.<risk>.<gate>` | 아래 관문 표 참고. 모든 기본값은 `human` |
+| `timeouts.start` | `1s`부터 `30d`까지; 기본 `24h` |
+| `timeouts.remind_before` | `0s`부터 `30d`까지; 기본 `2h`. 유효 정책에서 start보다 작아야 하며, 0은 사전 알림 없음 |
+| `budget.max_running` | 0부터 4,294,967,295까지 정수; 기본 2 |
+| `budget.max_started_per_day` | 같은 범위; 기본 5 |
+| `budget.max_attempts` | 같은 범위; 기본 3 |
+| `feedback.comment/labels/transition` | boolean; 사용자 허가 기본 `false` |
+| `close.when` | `never / integration / provider_link`; 기본 `never` |
+| `protection.paths` | 상대 경로 glob 배열; 아래 내장 보호 경로와 합집합 |
+| `human_required.rules` | 아래 10개 고정 규칙; 내장값은 10개 전부 |
+| `human_required.additional` | 추가 조건·관문 객체의 배열; 기본 `[]` |
+
+`repository`의 owner는 영숫자로 시작·끝나는 1~39자 ASCII 영숫자·하이픈, name은 1~100자 ASCII 영숫자·밑줄·하이픈·점이며 `.`과 `..`는 허용하지 않습니다. 라벨·server ID·actor ID는 비어 있거나 앞뒤 공백·제어문자가 있으면 거절합니다. 내부 공백과 대소문자는 보존합니다. 신뢰 여부는 삼중항 전체의 정확한 일치로 정하며, GitHub의 `actor_id`에는 검증한 GraphQL Node ID를 넣습니다. `login` 키나 로그인 문자열 목록은 허용하지 않습니다. 예시의 Node ID는 실제 계정이 아닌 설명용 값입니다. Jira 식별자 형식을 담을 수 있다는 것은 Jira 수집·쓰기 어댑터가 구현됐다는 뜻이 아닙니다.
+
+분류 규칙에는 `labels_any` 또는 `paths_any`의 조건이 최소 하나 있어야 하며, 두 조건과 각 목록의 항목은 OR입니다. 규칙 배열의 순서는 유지합니다. 시간은 정수와 `s / m / h / d`를 붙여 적습니다. 공백·부호·소수·선행 0은 거절하며, 0은 `remind_before`에서 `0s / 0m / 0h / 0d`로만 적을 수 있습니다. 유효 정책은 초 단위로 정규화하므로 `24h`와 `1d`는 같은 값입니다. JSON Schema는 각 부분 파일의 문법과 단위별 상한을 검사하고, 서비스는 병합 후 서로 다른 단위의 `remind_before < start` 관계를 검사합니다.
+
+### 관문과 사람 필수 규칙
+
+`gates`의 mode는 `propose / gated / auto`, risk는 `low / normal / high`입니다. `off`와 `observe`에는 실행 관문을 설정하지 않습니다. 각 mode·risk·gate를 개별 leaf로 병합합니다.
+
+| 관문 | 일반 허용값 | 추가 제한 |
+| --- | --- | --- |
+| `start` | `human / timeout_default / timeout_arbiter / auto` | `propose`에서는 `human` |
+| `spec` | `human` | 다른 방식은 거절 |
+| `plan` | `human / timeout_arbiter` | 자동 승인·기본값 마감은 거절 |
+| `delivery` | `human / timeout_default / timeout_arbiter / auto` | `propose / gated`에서는 `human` |
+| `merge` | `human / auto` | `propose / gated`에서는 `human` |
+
+닫힘은 `gates.*.*.close`가 아닌 `close.when`으로 정합니다. 사람 필수 규칙은 `high_risk`, `held_or_manual`, `untrusted_actor`, `protected_path`, `large_diff`, `missing_acceptance`, `attempts_exhausted`, `disclosure_confirmation`, `budget_exhausted`, `arbiter_uncertain`입니다. 이름이 다른 임의 규칙을 `rules` 배열에 넣을 수 없습니다. 추가 조건은 `[[human_required.additional]]`로 적습니다.
+
+```toml
+[[human_required.additional]]
+labels_any = ["needs-human"]
+paths_any = ["src/payments/**"]
+gates = ["plan", "merge"]
+```
+
+위 규칙은 라벨이나 경로 중 하나라도 맞으면 지정한 관문에 사람 승인을 요구한다는 선언입니다. 조건은 최소 하나, `gates`는 최소 한 항목이 있어야 합니다. 추가 규칙의 gate는 `start / spec / plan / delivery / merge / close`를 사용할 수 있습니다. 규칙의 이름이나 ID를 붙이는 별도 키는 없습니다.
+
+내장 보호 경로는 `.github/workflows/**`, `scripts/release/**`, `.akra/issue-automation.toml`, `.akra/issue-policy.toml`, `**/AGENTS.md`, `**/.env`, `**/.env.*`, `**/credentials*`, `**/*.pem`, `**/*.key`입니다. glob은 저장소 상대 경로이며 `/`로 구분합니다. `**`는 전체 segment로만 사용하여 0개 이상의 경로 segment, `*`는 segment 안의 0자 이상, `?`는 segment 안의 한 글자를 뜻합니다. 빈·`.`·`..` segment, 앞뒤·중복 slash, 역슬래시, `:`, `[`, `]`, `{`, `}`, `!`, 제어문자와 전체 값의 앞뒤 공백은 거절합니다. 이 단계에서는 glob 문법을 검증하며 실제 diff와의 매칭은 후속 판정 작업입니다.
+
+### 닫힘과 부분 설정의 검증
+
+`close.when`은 `never`, `integration`, `provider_link` 중 하나입니다. 같은 파일에 `feedback.transition = false`와 `close.when = "integration"`을 함께 적으면 JSON Schema가 거절합니다. 프로젝트 파일이 `close.when = "integration"`만 지정하는 것은 허용합니다. 사용자 파일에서 `transition = true`를 상속할 수 있기 때문입니다. 모든 파일을 합친 유효 정책에서 transition이 꺼져 있고 integration 닫힘을 요청하면 서비스가 `policy_blocked`로 거절합니다. `provider_link`는 공급자의 연결 동작을 뜻하며 Akra의 직접 상태 전이 허가를 만들지 않습니다.
+
+파일을 읽을 수 없거나, TOML 구문·키·enum·범위·조합이 잘못되면 해당 범위와 안전한 오류 코드가 있는 `policy_blocked`를 반환합니다. 잘못된 파일을 무시하고 내장 값으로 진행하지 않습니다. 정책 판은 정규화한 **유효 정책 내용**의 SHA-256이며, 주석·키 순서·표현만 달라져 유효 내용이 같으면 같습니다.
+
+이 파일은 이슈 원문의 공개·마스킹 규칙을 담은 `issue-policy.toml`과 독립적입니다. 각 서비스는 자기 파일만 읽고 검증합니다. 신뢰 ID를 로그인 이름으로 자동 조회하거나, 정책을 읽으면서 공급자에 접근하는 동작은 없습니다.
+
 ## Deliberate exclusions and Codex difference
 
 Akra excludes AKRA_HOME, credentials/tokens, allowlists, app-server process or shell environment, API-key forwarding, approval/reviewer/sandbox policy, and public-repository/autonomous-delivery opt-ins. Telegram keeps its private telegram.env; parallel agent profiles keep .akra/parallel-agent-profiles.json.

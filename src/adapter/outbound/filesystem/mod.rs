@@ -10,6 +10,8 @@ pub(crate) mod kernel_lock;
 pub(crate) mod git_operation_journal;
 // issue_policy 는 사용자와 프로젝트의 이슈 정책 파일을 읽는다 (#2416).
 pub mod issue_policy;
+// issue_automation_policy 는 별도 사용자와 프로젝트 자동화 정책 파일을 읽는다 (#2540).
+pub mod issue_automation_policy;
 // evidence_vault_store 는 가린 구간을 암호화한 레코드 파일로 저장한다 (#2421).
 pub mod evidence_vault_store;
 // evidence_vault_backup 은 암호화한 레코드와 복구 키로 감싼 장치 키를 보관 파일로 내보내고 가져온다 (#2432).

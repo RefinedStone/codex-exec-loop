@@ -1,0 +1,541 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Akra issue automation partial policy (issue-automation.toml), schema_version 1",
+  "description": "사용자 또는 저장소의 부분 설정. 일반 leaf는 저장소 > 사용자 > 내장, 권한/예산/신뢰는 사용자 상한 안에서 제한, 보호/사람 필수 규칙은 합집합이다. 최종 병합 및 remind_before < start는 서비스가 검증한다. 이 파일은 issue-policy.toml과 독립적이며 아직 수집·판정·실행에 연결하지 않는다.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "생략하면 1."
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}$",
+              "not": {
+                "pattern": "/\\.{1,2}$"
+              },
+              "description": "owner/name. owner 1..39자, name 1..100자. 생략 시 후속 연결에서 origin을 사용한다."
+            },
+            "mode": {
+              "$ref": "#/$defs/autonomy",
+              "description": "요청 수준. 유효 정책은 authority.autonomy_cap까지 제한하며 기본 observe."
+            }
+          }
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autonomy_cap": {
+          "$ref": "#/$defs/autonomy",
+          "description": "사용자가 승인한 상한. 기본 propose. 저장소는 낮출 수만 있다."
+        }
+      }
+    },
+    "select": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "labels_any",
+            "all_open"
+          ],
+          "description": "기본 labels_any. all_open은 전체 열린 이슈의 명시적 선택."
+        },
+        "labels_any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          },
+          "description": "정확한 이름 중 하나라도 맞으면 선택한다. []는 선택 대상 없음. 일반 leaf 대체 규칙을 따른다."
+        },
+        "trusted_actors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/trusted_actor"
+          },
+          "description": "사용자가 신뢰한 (provider, server_id, actor_id) 삼중항. 저장소 목록은 교집합으로만 제한한다. 생략은 상속, []는 모두 제외. 로그인 이름은 허용하지 않는다."
+        }
+      }
+    },
+    "classify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rule": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/classification_rule"
+          },
+          "description": "위에서부터 적용할 순서 있는 규칙. 기본 [], 미일치는 normal. 배열 전체가 한 leaf이며 조건은 OR."
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "propose": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "low": {
+              "$ref": "#/$defs/propose_gates"
+            },
+            "normal": {
+              "$ref": "#/$defs/propose_gates"
+            },
+            "high": {
+              "$ref": "#/$defs/propose_gates"
+            }
+          }
+        },
+        "gated": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "low": {
+              "$ref": "#/$defs/gated_gates"
+            },
+            "normal": {
+              "$ref": "#/$defs/gated_gates"
+            },
+            "high": {
+              "$ref": "#/$defs/gated_gates"
+            }
+          }
+        },
+        "auto": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "low": {
+              "$ref": "#/$defs/auto_gates"
+            },
+            "normal": {
+              "$ref": "#/$defs/auto_gates"
+            },
+            "high": {
+              "$ref": "#/$defs/auto_gates"
+            }
+          }
+        }
+      }
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "pattern": "^(?:(?:[1-9][0-9]{0,5}|1[0-9]{6}|2[0-4][0-9]{5}|25[0-8][0-9]{4}|259[01][0-9]{3}|2592000)s|(?:[1-9][0-9]{0,3}|[1-3][0-9]{4}|4[0-2][0-9]{3}|43[01][0-9]{2}|43200)m|(?:[1-9][0-9]?|[1-6][0-9]{2}|7[01][0-9]|720)h|(?:[1-9]|[12][0-9]|30)d)$",
+          "description": "1..2592000초(30일). 양의 정수+s|m|h|d, 선행 0/공백/부호/소수 금지. 기본 24h."
+        },
+        "remind_before": {
+          "type": "string",
+          "pattern": "^(?:0[smhd]|(?:[1-9][0-9]{0,5}|1[0-9]{6}|2[0-4][0-9]{5}|25[0-8][0-9]{4}|259[01][0-9]{3}|2592000)s|(?:[1-9][0-9]{0,3}|[1-3][0-9]{4}|4[0-2][0-9]{3}|43[01][0-9]{2}|43200)m|(?:[1-9][0-9]?|[1-6][0-9]{2}|7[01][0-9]|720)h|(?:[1-9]|[12][0-9]|30)d)$",
+          "description": "0..2592000초. 0s/0m/0h/0d는 사전 알림 없음. 기본 2h. 최종 병합 후 start보다 작아야 한다."
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_running": {
+          "$ref": "#/$defs/budget_limit",
+          "description": "동시 실행 상한. 기본 2. 사용자 최대값과 저장소 제한 중 작은 값."
+        },
+        "max_started_per_day": {
+          "$ref": "#/$defs/budget_limit",
+          "description": "하루 시작 상한. 기본 5. 사용자 최대값과 저장소 제한 중 작은 값."
+        },
+        "max_attempts": {
+          "$ref": "#/$defs/budget_limit",
+          "description": "시도 상한. 기본 3. 사용자 최대값과 저장소 제한 중 작은 값."
+        }
+      }
+    },
+    "feedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "comment": {
+          "type": "boolean",
+          "description": "사용자 허가 AND 저장소 제한. 사용자 기본 false, 저장소 생략은 상속. 저장소 true만으로는 허가되지 않는다."
+        },
+        "labels": {
+          "type": "boolean",
+          "description": "사용자 허가 AND 저장소 제한. 사용자 기본 false, 저장소 생략은 상속. 저장소 true만으로는 허가되지 않는다."
+        },
+        "transition": {
+          "type": "boolean",
+          "description": "사용자 허가 AND 저장소 제한. 사용자 기본 false, 저장소 생략은 상속. 저장소 true만으로는 허가되지 않는다."
+        }
+      }
+    },
+    "close": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "when": {
+          "enum": [
+            "never",
+            "integration",
+            "provider_link"
+          ],
+          "description": "기본 never. integration은 최종 유효 feedback.transition=true가 필요하다. provider_link는 직접 상태 전이 권한을 만들지 않는다."
+        }
+      }
+    },
+    "protection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/glob"
+          },
+          "description": "내장·사용자·저장소의 합집합. 저장소 []로 기존 보호를 지울 수 없다."
+        }
+      }
+    },
+    "human_required": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "high_risk",
+              "held_or_manual",
+              "untrusted_actor",
+              "protected_path",
+              "large_diff",
+              "missing_acceptance",
+              "attempts_exhausted",
+              "disclosure_confirmation",
+              "budget_exhausted",
+              "arbiter_uncertain"
+            ]
+          },
+          "description": "내장 기본은 10개 전부. 합집합으로만 추가되므로 []로도 내장 규칙을 지우지 못한다."
+        },
+        "additional": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/additional_human_rule"
+          },
+          "description": "라벨 또는 경로 조건에 해당하는 관문은 사람 필수. 사용자/저장소 규칙은 합집합이며 조건은 OR. 기본 []."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "not": {
+        "required": [
+          "feedback",
+          "close"
+        ],
+        "properties": {
+          "feedback": {
+            "required": [
+              "transition"
+            ],
+            "properties": {
+              "transition": {
+                "const": false
+              }
+            }
+          },
+          "close": {
+            "required": [
+              "when"
+            ],
+            "properties": {
+              "when": {
+                "const": "integration"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "autonomy": {
+      "enum": [
+        "off",
+        "observe",
+        "propose",
+        "gated",
+        "auto"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?$",
+      "not": {
+        "pattern": "[\\x00-\\x1F\\x7F-\\x9F]"
+      },
+      "description": "비어 있지 않고 앞뒤 공백·제어문자가 없는 값. 내부 공백·대소문자·안정 ID 원문은 보존한다."
+    },
+    "glob": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "pattern": "^(?:\\*\\*|(?:(?!\\*\\*)[^/\\\\:\\[\\]{}!\\x00-\\x1F\\x7F-\\x9F])+)(?:/(?:\\*\\*|(?:(?!\\*\\*)[^/\\\\:\\[\\]{}!\\x00-\\x1F\\x7F-\\x9F])+))*$"
+        },
+        {
+          "not": {
+            "pattern": "(^|/)\\.{1,2}(/|$)"
+          }
+        }
+      ],
+      "description": "저장소 상대 경로 glob. **는 전체 segment로만 허용하고 0개 이상 segment, *는 segment 안 0자 이상, ?는 1자를 뜻한다. 빈 segment, . 또는 .. segment, 앞뒤/중복 slash, 역슬래시, :, [, ], {, }, !는 금지."
+    },
+    "trusted_actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "github",
+            "jira"
+          ]
+        },
+        "server_id": {
+          "$ref": "#/$defs/text"
+        },
+        "actor_id": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "provider",
+        "server_id",
+        "actor_id"
+      ]
+    },
+    "classification_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "enum": [
+            "low",
+            "normal",
+            "high"
+          ]
+        },
+        "labels_any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "paths_any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/glob"
+          }
+        }
+      },
+      "required": [
+        "class"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "labels_any"
+          ],
+          "properties": {
+            "labels_any": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "paths_any"
+          ],
+          "properties": {
+            "paths_any": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+    "propose_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "const": "human"
+        },
+        "spec": {
+          "const": "human"
+        },
+        "plan": {
+          "enum": [
+            "human",
+            "timeout_arbiter"
+          ]
+        },
+        "delivery": {
+          "const": "human"
+        },
+        "merge": {
+          "const": "human"
+        }
+      }
+    },
+    "gated_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "enum": [
+            "human",
+            "timeout_default",
+            "timeout_arbiter",
+            "auto"
+          ]
+        },
+        "spec": {
+          "const": "human"
+        },
+        "plan": {
+          "enum": [
+            "human",
+            "timeout_arbiter"
+          ]
+        },
+        "delivery": {
+          "const": "human"
+        },
+        "merge": {
+          "const": "human"
+        }
+      }
+    },
+    "auto_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "enum": [
+            "human",
+            "timeout_default",
+            "timeout_arbiter",
+            "auto"
+          ]
+        },
+        "spec": {
+          "const": "human"
+        },
+        "plan": {
+          "enum": [
+            "human",
+            "timeout_arbiter"
+          ]
+        },
+        "delivery": {
+          "enum": [
+            "human",
+            "timeout_default",
+            "timeout_arbiter",
+            "auto"
+          ]
+        },
+        "merge": {
+          "enum": [
+            "human",
+            "auto"
+          ]
+        }
+      }
+    },
+    "budget_limit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "additional_human_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "labels_any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "paths_any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/glob"
+          }
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "start",
+              "spec",
+              "plan",
+              "delivery",
+              "merge",
+              "close"
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "gates"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "labels_any"
+          ],
+          "properties": {
+            "labels_any": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "paths_any"
+          ],
+          "properties": {
+            "paths_any": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}
