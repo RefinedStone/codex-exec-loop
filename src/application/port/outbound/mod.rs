@@ -106,3 +106,6 @@ pub mod telegram_update_ledger_port;
 pub mod issue_create_port;
 
 pub mod issue_creation_journal_port;
+
+// 이슈 자동화의 독립 장부 계약이다 (#2536).
+pub mod issue_automation_store_port;
