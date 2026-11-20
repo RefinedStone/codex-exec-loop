@@ -136,6 +136,8 @@ export class KernelConnection {
   private generation = 0;
   private overviewGeneration = 0;
   private overviewRequest = 0;
+  /** resync는 조회 응답을 대체하지만, 명시적인 planning 새로 고침 요청을 취소하지 않는다. */
+  private overviewRefreshRequest = 0;
   private readonly eventCounts = new Map<string, number>();
 
   private issuesGeneration = 0;
@@ -170,6 +172,7 @@ export class KernelConnection {
     if (overviewChanged || !sameWorkspace) {
       this.overviewGeneration += 1;
       this.overviewRequest += 1;
+      this.overviewRefreshRequest += 1;
     }
     if (issuesChanged || !sameWorkspace) this.invalidateIssues();
     if (!sameWorkspace) this.generation += 1;
@@ -197,6 +200,7 @@ export class KernelConnection {
     this.generation += 1;
     this.overviewGeneration += 1;
     this.overviewRequest += 1;
+    this.overviewRefreshRequest += 1;
     this.eventCounts.clear();
     this.invalidateIssues();
     void this.attach();
@@ -295,8 +299,16 @@ export class KernelConnection {
     return this.connected && this.wanted !== null && this.interests.has(interest) && this.store.getKernel().phase === "attached";
   }
 
+  private overviewScopeCurrent(generation: number, interest: number): boolean {
+    return this.canRead("overview") && generation === this.generation && interest === this.overviewGeneration;
+  }
+
   private overviewCurrent(generation: number, interest: number, request: number): boolean {
-    return this.canRead("overview") && generation === this.generation && interest === this.overviewGeneration && request === this.overviewRequest;
+    return this.overviewScopeCurrent(generation, interest) && request === this.overviewRequest;
+  }
+
+  private overviewRefreshCurrent(generation: number, interest: number, refresh: number): boolean {
+    return this.overviewScopeCurrent(generation, interest) && refresh === this.overviewRefreshRequest;
   }
 
   private async readOverview(refreshPlanning: boolean): Promise<void> {
@@ -304,6 +316,7 @@ export class KernelConnection {
     const generation = this.generation;
     const interest = this.overviewGeneration;
     const request = ++this.overviewRequest;
+    const refresh = refreshPlanning ? ++this.overviewRefreshRequest : null;
     this.store.setKernel({ ...this.store.getKernel(), message: null });
     try {
       await Promise.all(KERNEL_VIEW_QUERIES.map(async (type) => {
@@ -313,11 +326,21 @@ export class KernelConnection {
           this.applyOverview(event);
         }
       }));
-      if (refreshPlanning && this.overviewCurrent(generation, interest, request)) {
-        await sendKernelCommand(this.client, { type: "refresh_planning" });
-      }
+      if (refresh !== null) await this.refreshPlanningForOverview(generation, interest, refresh);
     } catch (error) {
       if (this.overviewCurrent(generation, interest, request)) {
+        this.store.setKernel({ ...this.store.getKernel(), message: `커널 상태를 읽지 못했습니다: ${failureMessage(error)}` });
+      }
+    }
+  }
+
+  private async refreshPlanningForOverview(generation: number, interest: number, refresh: number): Promise<void> {
+    if (!this.overviewRefreshCurrent(generation, interest, refresh)) return;
+    try {
+      await sendKernelCommand(this.client, { type: "refresh_planning" });
+    } catch (error) {
+      // 명령 실패는 같은 관심 영역의 resync 조회가 끝났더라도 해당 새로 고침에 남긴다.
+      if (this.overviewRefreshCurrent(generation, interest, refresh)) {
         this.store.setKernel({ ...this.store.getKernel(), message: `커널 상태를 읽지 못했습니다: ${failureMessage(error)}` });
       }
     }
