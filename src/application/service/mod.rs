@@ -23,6 +23,8 @@ pub mod issue_masking;
 pub mod issue_policy;
 // issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).
 pub mod issue_validation;
+// issue_template 은 Markdown 템플릿과 YAML Issue Form 의 필수 입력을 해석한다 (#2417).
+pub mod issue_template;
 // parallel_agent_profile은 병렬 agent의 이름, 역할, avatar, persona prompt 설정을 관리한다.
 pub mod parallel_agent_profile;
 // parallel_mode는 여러 worktree/agent lane을 만들고 배분하는 application 흐름이다.
