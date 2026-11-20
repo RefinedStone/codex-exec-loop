@@ -341,3 +341,106 @@ fn sent_and_confirmed_creation_reopen_and_recover_even_when_the_policy_becomes_i
         assert!(fixture.staged().is_empty());
     }
 }
+
+#[test]
+fn creator_enabled_updates_use_the_primary_scope_for_linked_and_subdirectory_targets() {
+    use crate::application::port::inbound::issue_draft_port::{
+        IssueDraftPreviewRequest, IssueDraftPublishRequest, IssueDraftPublished,
+    };
+
+    for cwd in ["/work/project-linked", "/work/project/sub"] {
+        let fixture = CreationFixture::new(false);
+        let mut update_target = super::target();
+        update_target.cwd = cwd.to_string();
+        let opened = fixture.service.open(update_target.clone()).unwrap();
+        let text = text_with_span(Some(IssueSensitiveSpanClass::Log));
+        let (_, approval, publishable) = ready(
+            fixture
+                .service
+                .preview(IssueDraftPreviewRequest {
+                    target: update_target.clone(),
+                    text: text.clone(),
+                })
+                .unwrap(),
+        );
+        assert!(publishable);
+
+        let published = fixture
+            .service
+            .publish(IssueDraftPublishRequest {
+                target: update_target.clone(),
+                text,
+                approval,
+                edit_basis: opened.edit_basis,
+                shared_copy_only: false,
+            })
+            .unwrap();
+        let IssueDraftPublished::Confirmed { intent: published } = published else {
+            panic!("the canonical update should be confirmed: {published:?}");
+        };
+
+        assert_eq!(
+            *fixture.sources.policy_workspaces.lock().unwrap(),
+            vec!["/work/project".to_string(); 3],
+            "open, preview and publish must use the primary checkout's policy"
+        );
+        assert_eq!(
+            *fixture.sources.template_workspaces.lock().unwrap(),
+            vec!["/work/project".to_string(); 3]
+        );
+        let resolutions = fixture.remote.resolves.lock().unwrap();
+        assert_eq!(resolutions.len(), 2);
+        assert!(
+            resolutions
+                .iter()
+                .all(|request| request.project_scope.workspace_dir == "/work/project")
+        );
+        drop(resolutions);
+        let updates = fixture.remote.updates.lock().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0].issue.project_scope.workspace_dir,
+            "/work/project"
+        );
+        drop(updates);
+        assert!(
+            fixture
+                .remote
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|issue| issue.project_scope.workspace_dir == "/work/project")
+        );
+        let vault_scopes = fixture.regular_scopes();
+        assert!(!vault_scopes.is_empty());
+        assert!(
+            vault_scopes
+                .iter()
+                .all(|scope| scope.issue.project_scope.workspace_dir == "/work/project")
+        );
+        assert_eq!(fixture.creates(), 0);
+        assert!(fixture.staged().is_empty());
+
+        assert_eq!(
+            fixture
+                .service
+                .recheck(update_target)
+                .unwrap()
+                .unwrap()
+                .intent_id,
+            published.intent_id
+        );
+        assert_eq!(
+            fixture
+                .service
+                .open(super::target())
+                .unwrap()
+                .intent
+                .unwrap()
+                .intent_id,
+            published.intent_id,
+            "reopening the primary checkout must find the same update intent"
+        );
+    }
+}

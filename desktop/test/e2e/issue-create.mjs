@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { _electron as electron } from "playwright-core";
 
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const electronPath = createRequire(import.meta.url)("electron");
+const electronPath = process.env.AKRA_E2E_ELECTRON_EXECUTABLE ?? createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
 const SECRET = "synthetic-create-secret-0000";
 const LOG = "synthetic-create-log-1111";
@@ -17,7 +17,7 @@ const repository = { provider: "github", serverId: "github.com", repositoryId: "
 const resultUrl = "https://github.com/sample/widgets/issues/501";
 const hash = (copy) => ({ version: 1, sha256: createHash("sha256").update(JSON.stringify(copy)).digest("hex") });
 const clone = (value) => structuredClone(value);
-const issue = { policy: "p1", intent: null, approval: null, sequence: 0, outcome: "held", creates: 0, requests: [], violations: [] };
+const issue = { policy: "p1", intent: null, approval: null, sequence: 0, outcome: "held", creates: 0, loseNextRestartReply: false, requests: [], violations: [] };
 
 function newIntent(predecessorIntentId = null) {
   issue.approval = null;
@@ -74,6 +74,10 @@ function answerCreate(method, params) {
     if (["sent", "needs_confirmation"].includes(issue.intent.state) && !params.acknowledgeUncertain) throw new Error("중복 가능성 확인이 필요합니다.");
     const predecessor = issue.intent.intentId;
     newIntent(predecessor);
+    if (issue.loseNextRestartReply) {
+      issue.loseNextRestartReply = false;
+      throw new Error("새 생성 의도를 저장한 뒤 응답을 읽지 못했습니다.");
+    }
     return opened();
   }
   if (params.intentId !== issue.intent.intentId) throw new Error("현재 생성 의도가 아닙니다.");
@@ -295,8 +299,21 @@ try {
   const uncertainId = issue.intent.intentId;
   check("불확실 생성의 새 초안은 중복 가능성 확인 전에는 막힌다", await panel.getByTestId("issue-create-restart").isDisabled());
   await panel.getByTestId("issue-create-restart-ack").check();
+  const restartCount = issue.requests.filter(({ method }) => method === "akra/issue/create/restart").length;
+  const beforeLostRestart = { sequence: issue.sequence, publishes: publishCount(), creates: issue.creates };
+  issue.loseNextRestartReply = true;
   await panel.getByTestId("issue-create-restart").click();
-  check("중복 가능성 확인 후 이전 의도를 명시하여 새 초안을 시작한다", await statusIs("prepared") && issue.intent.predecessorIntentId === uncertainId);
+  check("새 초안 저장 뒤 응답을 잃으면 생성 기록 재조회로 복구하게 한다",
+    await until(async () => (await panel.getByTestId("issue-create-reopen").count()) === 1) &&
+    issue.sequence === beforeLostRestart.sequence + 1);
+  const successorId = issue.intent.intentId;
+  await panel.getByTestId("issue-create-reopen").click();
+  check("응답을 잃은 재시작은 저장된 새 의도를 다시 열어 복구한다",
+    await statusIs("prepared") && issue.intent.intentId === successorId && issue.intent.predecessorIntentId === uncertainId);
+  check("재시작 복구는 새 의도를 중복 저장하거나 생성 POST를 추가하지 않는다",
+    issue.sequence === beforeLostRestart.sequence + 1 &&
+    issue.requests.filter(({ method }) => method === "akra/issue/create/restart").length === restartCount + 1 &&
+    publishCount() === beforeLostRestart.publishes && issue.creates === beforeLostRestart.creates);
   const finalRestart = issue.requests.filter(({ method }) => method === "akra/issue/create/restart").at(-1).params;
   check("불확실 교체 요청에 사용자 확인이 전달된다", finalRestart.previousIntentId === uncertainId && finalRestart.acknowledgeUncertain === true);
 

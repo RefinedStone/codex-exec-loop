@@ -246,8 +246,9 @@ impl World {
             std::process::id(),
             rand::random::<u32>()
         ));
+        // Production prepares private runtime directories before acquiring a publication lease.
         for directory in ["journal", "vault", "recording"] {
-            std::fs::create_dir_all(root.join(directory)).unwrap();
+            crate::private_directory::ensure_private_directory(&root.join(directory)).unwrap();
         }
         Self {
             root,
@@ -332,6 +333,7 @@ impl World {
     /// 편집을 열고, 미리보고, 승인한 값으로 게시한다. 게시의 답을 준다.
     async fn publish(&mut self, process: &mut Process, number: u64, text: Value) -> Value {
         let opened = self.call(process, "akra/issue/open", target(number)).await;
+        assert!(opened["result"].is_object(), "{opened}");
         let preview = self
             .call(
                 process,
@@ -492,7 +494,7 @@ async fn a_validated_masked_edit_is_published_and_only_an_unlocked_restore_shows
 
     // 템플릿과 필수 섹션을 읽는다.
     let opened = world.call(&mut process, "akra/issue/open", target(7)).await;
-    assert_eq!(opened["result"]["title"], "Old title");
+    assert_eq!(opened["result"]["title"], "Old title", "{opened}");
     assert_eq!(opened["result"]["template"]["status"], "resolved");
     assert_eq!(opened["result"]["requiredSections"], json!(["Impact"]));
     assert_eq!(opened["result"]["spanActions"]["log"], "restorable_mask");
