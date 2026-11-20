@@ -26,18 +26,18 @@ export function installRoot(runtime: SkillRuntime, installPath: string): string 
 export type InstallLocation = { management: "copy"; scope: "user" | "project" } | { management: "symlink" | "external" };
 
 /**
- * 설치 폴더가 Akra 가 바꿀 수 있는 복사본인지 본다. 스킬 폴더에서 설치 폴더까지 링크가 하나라도 있으면 `symlink`
+ * 설치 폴더가 Akra 가 바꿀 수 있는 복사본인지 본다. .claude/.codex/.agents 와 그 상위 경로까지 링크가 있으면 `symlink`
  * 이다: 링크를 고치거나 대체하지 않는다.
  */
 export function classifyInstall(runtime: SkillRuntime, installPath: string, home: string): InstallLocation {
   const root = installRoot(runtime, installPath);
   if (!root) return { management: "external" };
-  const steps = relative(root, installPath).split(sep);
-  for (let index = 0; index <= steps.length; index += 1) {
-    const stat = lstatSync(join(root, ...steps.slice(0, index)), { throwIfNoEntry: false });
+  for (let current = installPath; ; current = dirname(current)) {
+    const stat = lstatSync(current, { throwIfNoEntry: false });
     if (!stat) return { management: "external" };
     if (stat.isSymbolicLink()) return { management: "symlink" };
     if (!stat.isDirectory()) return { management: "external" };
+    if (current === dirname(current)) break;
   }
   const skillFile = lstatSync(join(installPath, "SKILL.md"), { throwIfNoEntry: false });
   if (!skillFile) return { management: "external" };

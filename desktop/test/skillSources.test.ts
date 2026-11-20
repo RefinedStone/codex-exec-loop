@@ -1,5 +1,7 @@
 // 스킬 출처 추적 (#2383). 네트워크는 쓰지 않는다: 가짜 GitHub 이 답한다. 파일은 임시 폴더에만 쓴다.
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -212,6 +214,50 @@ describe("skill sources", () => {
       symlinkSync(dirname(real), join(box.project, ".claude", "skills"));
       expect(classifyInstall("claude", join(box.project, ".claude", "skills", "caveman"), box.home)).toEqual({ management: "symlink" });
       expect(scanClaudeSkills(box.home, box.project).map((item) => `${item.scope}:${item.name}`)).toEqual(["user:caveman", "project:caveman"]);
+    });
+  });
+
+  describe("source path and shared ledger regressions", () => {
+    it.each([[".claude", "claude"], [".codex", "codex"], [".agents", "codex"]] as const)("does not follow a linked %s parent while classifying a writable install", (parent, runtime) => {
+      const box = sandbox();
+      const real = box.install(box.root, "dotfiles", "caveman", { "SKILL.md": "linked source" });
+      mkdirSync(box.home, { recursive: true });
+      symlinkSync(dirname(dirname(real)), join(box.home, parent), process.platform === "win32" ? "junction" : "dir");
+      expect(classifyInstall(runtime, join(box.home, parent, "skills", "caveman"), box.home)).toEqual({ management: "symlink" });
+      expect(tree(real)).toEqual({ "SKILL.md": "linked source" });
+    });
+
+    it("does not update any ledger key while a different process owns the shared ledger lock", async () => {
+      const box = await linkedCaveman();
+      const store = new SkillStore(box.dataDir);
+      const existing = store.readLedger();
+      const entry = existing[skillKey(box.identity)]!;
+      const lock = join(box.dataDir, "locks", "ledger.lock");
+      mkdirSync(dirname(lock), { recursive: true });
+      const child = spawn(process.execPath, ["-e", 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],String(process.pid),{flag:"wx"});console.log("locked");process.stdin.once("data",()=>{fs.unlinkSync(process.argv[1]);process.exit(0)});', lock], { stdio: ["pipe", "pipe", "pipe"] });
+      const exited = once(child, "exit");
+      try {
+        await Promise.race([once(child.stdout, "data"), exited.then(([code]) => { throw new Error("lock owner exited before ready: " + code); })]);
+        expect(() => store.writeEntry("another-skill", entry)).toThrow(/다른 갱신/);
+        expect(store.readLedger()).toEqual(existing);
+      } finally {
+        if (child.exitCode === null) child.stdin.end("release");
+        await exited;
+      }
+      store.writeEntry("another-skill", entry);
+      expect(store.readLedger()).toEqual({ ...existing, "another-skill": entry });
+      expect(readdirSync(box.dataDir).filter((name) => name.includes(".tmp"))).toEqual([]);
+    });
+
+    it("does not reclaim a lock whose owner is still being initialized", async () => {
+      const box = await linkedCaveman();
+      const store = new SkillStore(box.dataDir);
+      const existing = store.readLedger();
+      const lock = join(box.dataDir, "locks", "ledger.lock");
+      mkdirSync(dirname(lock), { recursive: true });
+      writeFileSync(lock, "");
+      expect(() => store.writeEntry("another-skill", existing[skillKey(box.identity)]!)).toThrow(/다른 갱신/);
+      expect(store.readLedger()).toEqual(existing);
     });
   });
 

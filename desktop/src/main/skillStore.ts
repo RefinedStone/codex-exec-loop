@@ -65,15 +65,19 @@ function remove(path: string): void {
 /** 임시 파일에 쓰고 디스크에 내린 뒤 바꿔 넣는다. 실패하면 던진다. */
 function writeJsonAtomic(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
-  const descriptor = openSync(temporary, "w");
+  const temporary = `${path}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
+  const descriptor = openSync(temporary, "wx");
   try {
-    writeSync(descriptor, `${JSON.stringify(value, null, 2)}\n`);
-    fsyncSync(descriptor);
+    try {
+      writeSync(descriptor, `${JSON.stringify(value, null, 2)}\n`);
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    renameSync(temporary, path);
   } finally {
-    closeSync(descriptor);
+    rmSync(temporary, { force: true });
   }
-  renameSync(temporary, path);
 }
 
 function writeFiles(directory: string, files: readonly SkillFile[]): void {
@@ -122,7 +126,10 @@ export class SkillStore {
   }
 
   writeEntry(key: string, entry: SkillLedgerEntry): void {
-    writeJsonAtomic(this.ledgerPath, { version: 1, entries: { ...this.readLedger(), [key]: entry } });
+    // 모든 키가 한 파일을 공유하므로 연결·확인·교체·복구 모두 같은 프로세스 간 잠금을 쓴다.
+    this.withLock("ledger", () => {
+      writeJsonAtomic(this.ledgerPath, { version: 1, entries: { ...this.readLedger(), [key]: entry } });
+    });
   }
 
   /**
@@ -140,11 +147,12 @@ export class SkillStore {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         let owner = Number.NaN;
         try {
-          owner = Number(readFileSync(path, "utf8"));
+          const value = readFileSync(path, "utf8").trim();
+          owner = /^[1-9]\d*$/.test(value) ? Number(value) : Number.NaN;
         } catch {
           // 방금 지워졌다. 다시 시도한다.
         }
-        if (attempt > 0 || (Number.isInteger(owner) && isAlive(owner))) throw new Error("다른 갱신이 이 스킬을 바꾸는 중입니다. 잠시 뒤에 다시 하세요.");
+        if (attempt > 0 || !Number.isSafeInteger(owner) || isAlive(owner)) throw new Error("다른 갱신이 이 스킬을 바꾸는 중입니다. 잠시 뒤에 다시 하세요.");
         remove(path);
       }
     }
