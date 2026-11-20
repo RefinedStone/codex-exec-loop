@@ -2,8 +2,9 @@
 
 This page describes the shipped key handling of the Evidence Vault (#2422): where the key lives,
 how an issue is unlocked, what can be recovered after a key loss, and what the Vault does not
-protect against. The Desktop screen that asks the user (#2427), restore matching (#2425), and
-backup export (#2432) are not shipped; nothing wires the unlock service to a client yet.
+protect against. Backup export and import with a user-held recovery key are in
+[evidence-vault-backup.md](./evidence-vault-backup.md). Nothing wires the unlock service to a
+client yet.
 
 ## Key location: device-bound mode
 
@@ -56,7 +57,8 @@ does not call the key store.
 ## Recovery range after a key loss
 
 In device-bound mode the key exists only in the OS key store of one user on one device. There is
-no second copy and no recovery key.
+no second copy unless the user made a backup archive and kept its recovery key
+([evidence-vault-backup.md](./evidence-vault-backup.md)).
 
 - The key is lost when the key store entry is deleted, the OS user profile or login keychain is
   reset or removed, the OS is reinstalled without a key store restore, or the vault folder is
@@ -68,7 +70,8 @@ no second copy and no recovery key.
   masked.
 - The next sealed record makes a new key with a new key identifier. Old records then fail with
   `KeyMismatch`; they are not overwritten by this.
-- A user-held recovery key and encrypted backup import are proposed work (#2432).
+- Records that are in a backup archive can be imported again with the recovery key of that
+  archive. Records made after the export, and records without an archive, stay lost.
 
 ## Protection limits
 
