@@ -942,7 +942,8 @@ strategy in the production TUI.
   (`issue_core_port`: read shared copy, publish) must not reference the Evidence Vault restore
   contract (`evidence_vault_port`). Restore plaintext and key types have no `Serialize`, so they
   cannot enter a serialized event or response; restore needs a `VaultUserConfirmation` built on the
-  local confirmation path. `FakeIssueWorkAdapter` is the only implementation today.
+  local confirmation path. `FakeIssueWorkAdapter` is the in-memory implementation; the real one is
+  `EvidenceVaultRestoreService` below.
 - The same general surfaces must not reference the raw issue snapshot contract
   (`issue_snapshot_port`, implemented by `GithubIssueSnapshotAdapter` through `gh api graphql`).
   `IssueRawFields` has no `Serialize` and a redacted `Debug`; a remote copy leaves the trusted path
@@ -1001,6 +1002,20 @@ strategy in the production TUI.
   constructor of `VaultUserConfirmation`: it gives grants bound to one issue and one viewing
   session. See [evidence-vault-unlock.md](./evidence-vault-unlock.md) for failure states, key-loss
   recovery, and protection limits.
+- `EvidenceVaultRestoreService` (`application/service/evidence_vault_restore`) implements the
+  restore contract. A restore request carries the confirmation and the record key from a live
+  unlock grant. The service reads the latest published copy through `issue_snapshot_port` before
+  every restore and keeps no copy. The binding is the `VaultRecordBinding::CurrentVersion` record
+  of the issue (the name of the bound version, written last by `finalize_restore_link` and by a
+  reconnect) plus one `ConfirmedVersion` record for each field (a bundle of marker, byte position,
+  and plaintext). A value is returned only when the field hash of the latest copy equals the bound
+  version and each marker is at its stored position. Any other result is a `VaultRestoreHold`
+  without plaintext: `LatestReadFailed`, `NotBound` (another project, server, repository, or
+  issue), `PublishedCopyChanged`, `MarkerMoved`, `MarkerDuplicated`, `MarkerMissing`. A reconnect
+  (`review_reconnect`, then `reconnect`) works only on an issue that has a binding; it commits the
+  user-approved marker positions to the reviewed field hash and refuses when the copy changed after
+  the review. Unapproved markers stay as marker text. Records of earlier versions are not deleted.
+  Nothing wires this service yet.
 - Issue validation is the pure rule `domain/issue_validation::validate_issue`. Draft validation and
   the publish gate (`application/service/issue_validation`) both call it. Only that rule builds
   `IssueValidationPassed` (private fields, no `Deserialize`); an external write must use the text
