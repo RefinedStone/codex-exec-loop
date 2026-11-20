@@ -5,7 +5,7 @@
  * 키 식별자, 레코드의 범위(로컬 프로젝트, 이슈, 필드, 게시 의도 또는 확인된 판)는 연관 데이터로 암호문에 묶는다.
  * 그래서 머리말이나 암호문을 바꾼 레코드, 다른 범위의 자리로 복사한 레코드는 인증에 실패한다.
  *
- * 파일은 `secure_fs` 로 원자적으로 바꾼다. 저장이 중간에 멈추면 이전 레코드가 남는다.
+ * 파일은 `secure_fs` 로 원자적으로 바꾼다. 교체 후 검증 실패는 결과 불확실로 구분한다.
  */
 use std::path::{Path, PathBuf};
 
@@ -58,7 +58,13 @@ impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
         let scope = scope_bytes(&request.scope);
         let body = seal_record(&request.key, &scope, &request.plaintext)?;
         secure_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body)
-            .map_err(storage_error)
+            .map_err(|error| {
+                if secure_fs::atomic_replacement_completed(&error) {
+                    VaultStoreError::WriteOutcomeUnknown
+                } else {
+                    storage_error(error)
+                }
+            })
     }
 
     fn load(&self, request: VaultRecordLoadRequest) -> Result<VaultPlaintext, VaultStoreError> {
@@ -528,6 +534,25 @@ mod tests {
                 .expect("load should succeed")
                 .expose(),
             "synthetic-second-segment"
+        );
+    }
+
+    #[test]
+    fn failure_after_replacement_reports_an_unknown_outcome() {
+        let (_vault_root, adapter) = seeded("post-replace-failure");
+        secure_fs::install_after_atomic_replace_error_hook("synthetic directory sync failure");
+        let result = adapter.save(VaultRecordSaveRequest {
+            scope: project_scope(),
+            key: key(KEY_ID, &KEY),
+            plaintext: VaultPlaintext::new("synthetic-installed-segment".to_string()),
+        });
+
+        assert_eq!(result, Err(VaultStoreError::WriteOutcomeUnknown));
+        assert_eq!(
+            load(&adapter, project_scope())
+                .expect("reload succeeds")
+                .expose(),
+            "synthetic-installed-segment"
         );
     }
 
