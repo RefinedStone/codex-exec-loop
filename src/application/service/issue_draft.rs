@@ -14,6 +14,8 @@ use crate::application::port::outbound::issue_code_validator_runner_port::IssueC
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueSnapshotPort, IssueSnapshotResolveRequest, IssueSnapshotResponse,
 };
+use crate::application::service::evidence_vault_restore::restorable_fields;
+use crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService;
 use crate::application::service::issue_code_validator::gate_issue_publish_with_code_validators;
 use crate::application::service::issue_masking::{
     IssueMaskedSpan, IssueMaskingBlocked, IssueSensitiveSpan, IssueTextField, mask_issue_text,
@@ -24,12 +26,11 @@ use crate::application::service::issue_publish::{
 };
 use crate::application::service::issue_publish_journal::{
     IssueJournaledPublishOutcome, IssueJournaledPublishRequest, IssueJournaledPublishService,
-    IssueRestorableField,
 };
 use crate::application::service::issue_template::IssueTemplateService;
 use crate::application::service::issue_validation::{IssuePublishBlocked, gate_issue_publish};
 use crate::domain::issue_policy::{IssueDisclosureTarget, IssuePolicy};
-use crate::domain::issue_publish_intent::{IssuePublishIntentRecord, IssuePublishVaultField};
+use crate::domain::issue_publish_intent::{IssuePublishIntentRecord, IssuePublishIntentState};
 use crate::domain::issue_template::{IssueTemplateInputKind, IssueTemplateResolution};
 use crate::domain::issue_validation::{
     IssueFieldFormat, IssueFieldRequirement, IssueRequirements, IssueValidationError,
@@ -50,8 +51,9 @@ use crate::domain::issue_work::{
  * 미리보기는 필수 규약 관문만 지난다. 게시는 코드 검증기가 있는 관문(#2431)을 지난다: 검증기는 프로그램을
  * 실행하므로 글자를 칠 때마다 돌리지 않는다.
  *
- * shortcut: Vault 키를 연결하지 않았다. 복원 가능 구간이 있는 게시는 항상 `Held` 이고 사용자가 공유본만 게시할지
- * 정한다. Vault 저장과 복원 연결은 #2425, #2427 에서 잇는다.
+ * 복원 가능 구간은 게시 전에 Vault 에 저장한다 (#2429). 키는 잠금 해제 서비스의 `sealing_key` 이다. 키를 얻지
+ * 못하거나 저장하지 못하면 게시는 `Held` 이고 사용자가 공유본만 게시할지 정한다. 게시가 `Confirmed` 가 되면 복원
+ * 링크를 확정한다. 확정하지 못한 링크는 다음 `open` 또는 `recheck` 가 다시 확정한다.
  */
 pub struct IssueDraftService {
     policy: IssuePolicyService,
@@ -59,6 +61,7 @@ pub struct IssueDraftService {
     snapshot: Arc<dyn IssueSnapshotPort>,
     publisher: IssueJournaledPublishService,
     code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
+    vault_unlock: Arc<EvidenceVaultUnlockService>,
 }
 
 /// 프로젝트의 지금 규약이다.
@@ -75,6 +78,7 @@ impl IssueDraftService {
         snapshot: Arc<dyn IssueSnapshotPort>,
         publisher: IssueJournaledPublishService,
         code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
+        vault_unlock: Arc<EvidenceVaultUnlockService>,
     ) -> Self {
         Self {
             policy,
@@ -82,6 +86,7 @@ impl IssueDraftService {
             snapshot,
             publisher,
             code_validators,
+            vault_unlock,
         }
     }
 
@@ -115,9 +120,30 @@ impl IssueDraftService {
         Ok(self
             .publisher
             .reconcile(cwd)?
-            .iter()
+            .into_iter()
             .rfind(|record| record.issue == *issue)
-            .map(intent))
+            .map(|record| intent(&self.with_restore_link(record))))
+    }
+
+    /// 확인된 게시의 복원 링크를 확정한다. 확정하지 못하면 기록을 그대로 준다: 게시는 이미 확인되었고 다음
+    /// `open` 또는 `recheck` 가 다시 확정한다.
+    fn with_restore_link(&self, record: IssuePublishIntentRecord) -> IssuePublishIntentRecord {
+        if record.state != IssuePublishIntentState::Confirmed
+            || record.restore_link_finalized
+            || record.pending_vault_fields.is_empty()
+        {
+            return record;
+        }
+        let Ok(key) = self.vault_unlock.sealing_key() else {
+            return record;
+        };
+        self.publisher
+            .finalize_restore_link(
+                &record.issue.project_scope.workspace_dir,
+                &record.intent_id,
+                key,
+            )
+            .unwrap_or(record)
     }
 }
 
@@ -160,6 +186,11 @@ impl IssueDraftPort for IssueDraftService {
             return Ok(IssueDraftPublished::Blocked { preview });
         };
         let issue = self.resolve(&request.target)?.issue;
+        let restorable = restorable_fields(&masked_spans);
+        // 가릴 구간이 없거나 공유본만 게시하면 키 저장소를 부르지 않는다.
+        let vault_key = (!restorable.is_empty() && !request.shared_copy_only)
+            .then(|| self.vault_unlock.sealing_key().ok())
+            .flatten();
         let outcome = self.publisher.publish(IssueJournaledPublishRequest {
             publish: IssueApprovedPublishRequest {
                 issue: issue.clone(),
@@ -177,22 +208,13 @@ impl IssueDraftPort for IssueDraftService {
                 policy_version: conventions.policy_version,
                 template_version: conventions.template.version().map(str::to_string),
             },
-            restorable: masked_spans
-                .into_iter()
-                .map(|span| IssueRestorableField {
-                    field: match span.field {
-                        IssueTextField::Title => IssuePublishVaultField::Title,
-                        IssueTextField::Body => IssuePublishVaultField::Body,
-                    },
-                    plaintext: span.plaintext,
-                })
-                .collect(),
-            vault_key: None,
+            restorable,
+            vault_key,
             shared_copy_only: request.shared_copy_only,
         })?;
         Ok(match outcome {
             IssueJournaledPublishOutcome::Confirmed(record) => IssueDraftPublished::Confirmed {
-                intent: intent(&record),
+                intent: intent(&self.with_restore_link(record)),
             },
             IssueJournaledPublishOutcome::NeedsConfirmation(record)
             | IssueJournaledPublishOutcome::AlreadyPending(record) => {
@@ -459,6 +481,7 @@ mod tests {
     use anyhow::bail;
 
     use super::*;
+    use crate::adapter::outbound::vault_key_store::FakeVaultKeyStoreAdapter;
     use crate::application::port::outbound::evidence_vault_port::{
         EvidenceVaultStorePort, VaultPlaintext, VaultRecordLoadRequest, VaultRecordSaveRequest,
         VaultStoreError,
@@ -475,8 +498,8 @@ mod tests {
     use crate::application::port::outbound::issue_update_port::{
         IssueUpdatePort, IssueUpdateRequest, IssueUpdateResponse,
     };
+    use crate::application::port::outbound::vault_key_store_port::VaultKeyStoreError;
     use crate::domain::issue_policy::IssueSensitiveSpanClass;
-    use crate::domain::issue_publish_intent::IssuePublishIntentState;
     use crate::domain::issue_work::{IssueComparisonBasis, IssueProvider, IssueSharedCopy};
 
     const CWD: &str = "/work/project";
@@ -581,7 +604,7 @@ mod tests {
         }
     }
 
-    /// 이 서비스는 Vault 키를 주지 않는다. Vault 를 부르면 시험이 실패한다.
+    /// 시험의 키 저장소는 키를 주지 않는다. Vault 를 부르면 시험이 실패한다.
     struct UnusedVault;
 
     impl EvidenceVaultStorePort for UnusedVault {
@@ -627,6 +650,8 @@ mod tests {
             writes: Mutex::new(0),
             lose_answer,
         });
+        let key_store = FakeVaultKeyStoreAdapter::new();
+        key_store.fail_with(Some(VaultKeyStoreError::Unsupported));
         let service = IssueDraftService::new(
             IssuePolicyService::new(files.clone()),
             IssueTemplateService::new(files.clone()),
@@ -638,6 +663,7 @@ mod tests {
                 Arc::new(UnusedVault),
             ),
             Arc::new(NoCodeValidators),
+            Arc::new(EvidenceVaultUnlockService::new(Arc::new(key_store))),
         );
         Fixture {
             files,
