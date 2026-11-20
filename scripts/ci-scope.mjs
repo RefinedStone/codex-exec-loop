@@ -38,7 +38,13 @@ const ADMIN_PATHS = [
 // Akra Desktop (Electron + TypeScript) is validated by the Node surface job.
 const DESKTOP_PATHS = [/^desktop\//];
 
+// These executable validation tools live beside their design documentation.
+const DOC_VALIDATION_PATHS = [
+  /^docs\/plan\/17-akra-desktop\/scripts\/(?:proxy_ws_check\.mjs|multi_client_check\.py|client_count_validation\.test\.mjs)$/,
+];
+
 const NODE_PATHS = [
+  ...DOC_VALIDATION_PATHS,
   /^npm\//,
   ...ADMIN_PATHS,
   ...DESKTOP_PATHS,
@@ -61,6 +67,10 @@ const RUST_PATHS = [
 
 function matchesAny(path, patterns) {
   return patterns.some((pattern) => pattern.test(path));
+}
+
+function isDocumentationPath(path) {
+  return matchesAny(path, DOC_PATHS) && !matchesAny(path, DOC_VALIDATION_PATHS);
 }
 
 function normalizePaths(paths) {
@@ -122,7 +132,7 @@ export function classifyChangedPaths(inputPaths, requestedScope = "auto") {
     return forcedPlan("full");
   }
 
-  if (paths.every((path) => matchesAny(path, DOC_PATHS))) {
+  if (paths.every(isDocumentationPath)) {
     return forcedPlan("docs");
   }
 
@@ -130,7 +140,7 @@ export function classifyChangedPaths(inputPaths, requestedScope = "auto") {
   let node = false;
   let portable = false;
   for (const path of paths) {
-    if (matchesAny(path, DOC_PATHS)) {
+    if (isDocumentationPath(path)) {
       continue;
     }
     const isAdminPath = matchesAny(path, ADMIN_PATHS);
