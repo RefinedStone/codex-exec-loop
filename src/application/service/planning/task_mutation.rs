@@ -22,6 +22,7 @@ const MAX_TASK_MUTATION_COMMANDS: usize = 16;
 mod commands;
 mod helpers;
 mod validation;
+pub mod work_order;
 pub use self::commands::{
     PlanningTaskCommandExtraction, PlanningTaskCreateInput, PlanningTaskMutationCommand,
     PlanningTaskUpdateInput, extract_planning_task_commands,
