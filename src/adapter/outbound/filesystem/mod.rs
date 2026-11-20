@@ -10,6 +10,8 @@ pub(crate) mod kernel_lock;
 pub(crate) mod git_operation_journal;
 // issue_policy 는 사용자와 프로젝트의 이슈 정책 파일을 읽는다 (#2416).
 pub mod issue_policy;
+// evidence_vault_store 는 가린 구간을 암호화한 레코드 파일로 저장한다 (#2421).
+pub mod evidence_vault_store;
 
 // re-export를 두면 composition/wiring code가 파일명 세부 구조를 몰라도 adapter를 직접 주입할 수 있다.
 pub(crate) use self::kernel_lock::{
