@@ -10,13 +10,13 @@ use crate::domain::issue_work::{IssueProjectScope, IssueReference};
  * 복구 키로 다른 장치의 Vault 에 가져온다.
  *
  * 보관 파일에는 복구 키와 평문이 없다. 가져오기는 사용자가 승인한 프로젝트의 레코드만 로컬 장치 키로 다시
- * 암호화해 쓴다. 원격 이슈의 ID 는 바꾸지 않는다. 이미 있는 로컬 레코드와 로컬 장치 키는 바꾸지 않는다.
+ * 암호화해 쓴다. 원격 이슈의 ID 는 바꾸지 않는다. 읽을 수 있는 로컬 연결과 로컬 장치 키는 바꾸지 않는다.
  *
  * 이 파일의 요청 타입은 `Serialize` 를 구현하지 않고 `Debug` 는 키를 가린다.
  */
 
 /// 백업 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 1;
+pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 2;
 
 /// 복구 키의 길이이다 (256 bit).
 pub const VAULT_RECOVERY_KEY_LEN: usize = 32;
@@ -97,6 +97,13 @@ pub struct VaultBackupProjectApproval {
     pub local: IssueProjectScope,
 }
 
+/// 기존 연결을 새 키로 열 수 없을 때의 처리이다. 복구는 신뢰된 로컬 UI가 명시적으로 승인한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultBackupRecoveryMode {
+    PreserveLocal,
+    RecoverUnreadable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultBackupImportRequest {
     /// 보관 파일의 내용이다.
@@ -106,6 +113,7 @@ pub struct VaultBackupImportRequest {
     pub local_key: VaultRecordKey,
     /// 승인하지 않은 프로젝트의 레코드는 쓰지 않는다.
     pub projects: Vec<VaultBackupProjectApproval>,
+    pub recovery_mode: VaultBackupRecoveryMode,
 }
 
 /// 가져오기의 결과이다. 평문은 없다.
@@ -117,6 +125,8 @@ pub struct VaultBackupImportReport {
     pub imported: Vec<IssueReference>,
     /// 이미 로컬 연결이 있어서 건드리지 않은 이슈이다.
     pub kept_local: Vec<IssueReference>,
+    /// 명시적 복구 승인으로 읽을 수 없는 로컬 연결을 교체한 이슈이다.
+    pub recovered: Vec<IssueReference>,
     /// 보관 파일에 있지만 승인이 없어서 쓰지 않은 프로젝트이다.
     pub unapproved_projects: Vec<IssueProjectScope>,
 }
@@ -126,6 +136,10 @@ pub struct VaultBackupImportReport {
 pub enum VaultBackupError {
     /// 내보낼 레코드가 없다.
     NothingToExport,
+    /// 범위를 고른 뒤 현재 연결이 바뀌었다. 새 범위로 다시 내보내야 한다.
+    BindingChanged,
+    /// 기존 연결을 현재 키로 열 수 없다. 명시적인 백업 복구 승인이 필요하다.
+    LocalRecoveryRequired,
     /// 보관 파일이 크기나 레코드 수의 상한을 넘는다.
     ArchiveTooLarge,
     /// 보관 파일을 해석할 수 없거나, 안의 레코드가 검증에 실패했다.
@@ -144,6 +158,10 @@ impl fmt::Display for VaultBackupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NothingToExport => formatter.write_str("the vault has no record to export"),
+            Self::BindingChanged => formatter.write_str("the vault binding changed; retry the export"),
+            Self::LocalRecoveryRequired => formatter.write_str(
+                "the local vault binding is unreadable; explicit backup recovery approval is required",
+            ),
             Self::ArchiveTooLarge => formatter.write_str("the vault backup exceeds the size limit"),
             Self::CorruptArchive => formatter.write_str("the vault backup is corrupt"),
             Self::UnsupportedFormat => {
