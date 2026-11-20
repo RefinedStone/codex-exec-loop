@@ -1,7 +1,8 @@
-// 로컬 복원본 창의 preload 이다 (#2427). 복원본 채널의 함수만 노출한다. `window.akra` 와 일반 채널은 여기에 없다.
+// 복원 전용 window.akra 계약만 노출한다 (#2427). 일반 창의 Gateway·브라우저·파일 권한은 없다.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
-import { type VaultRestoreBridge, type VaultRestoreViewState, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
+import type { AkraVaultRestoreBridge, VaultRestoreBridge } from "../shared/bridge";
+import { type VaultRestoreViewState, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
 
 const bridge: VaultRestoreBridge = {
   ready: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.ready),
@@ -16,4 +17,5 @@ const bridge: VaultRestoreBridge = {
   reconnect: (mappings) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.reconnect, mappings),
 };
 
-contextBridge.exposeInMainWorld("akraVaultRestore", bridge);
+const surface: AkraVaultRestoreBridge = { vaultRestore: bridge };
+contextBridge.exposeInMainWorld("akra", surface);

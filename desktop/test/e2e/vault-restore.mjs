@@ -44,8 +44,8 @@ try {
   check("no restored text is on the screen", (await restore.getByTestId("vault-restored-body").count()) === 0);
 
   // 그 창에는 일반 메시지 버스가 없고, 일반 창에는 복원본 채널이 없다.
-  check("the restore window has no general bridge", await restore.evaluate(() => typeof window.akra === "undefined" && typeof window.akraVaultRestore === "object"));
-  check("the general window has no restore bridge", await page.evaluate(() => typeof window.akraVaultRestore === "undefined"));
+  check("the restore window has no general bridge", await restore.evaluate(() => typeof window.akra === "object" && typeof window.akra.send === "undefined" && typeof window.akra.vaultRestore.onState === "function"));
+  check("the general window has no restore bridge", await page.evaluate(() => typeof window.akra.vaultRestore.onState === "undefined" && typeof window.akraVaultRestore === "undefined"));
 
   // 같은 이슈를 다시 열면 창을 하나 더 만들지 않는다.
   await page.evaluate((url) => window.akra.vaultRestore.open(url), ISSUE);

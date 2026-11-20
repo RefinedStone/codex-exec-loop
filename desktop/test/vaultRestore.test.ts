@@ -8,10 +8,10 @@ import { VaultRestoreSession, type VaultRestoreChannel, type VaultRestoreSession
 import { IPC_CHANNELS } from "../src/shared/bridge";
 import {
   isVaultRestoreIssueUrl,
+  VAULT_RESTORE_CHANNELS,
   type VaultReconnectReview,
   type VaultRestoreHold,
   type VaultRestoreViewState,
-  VAULT_RESTORE_CHANNELS,
   vaultRestoreProfileHold,
   vaultRestoreView,
 } from "../src/shared/vaultRestore";
@@ -236,7 +236,7 @@ describe("vault restore contract", () => {
     expect(isVaultRestoreIssueUrl(`${ISSUE}?x=1`)).toBe(false);
   });
 
-  it("keeps the restore channels out of the general message bus and the general preload", () => {
+  it("keeps restore capabilities separate within the approved bridge contract", () => {
     const general = new Set<string>(Object.values(IPC_CHANNELS));
     for (const channel of Object.values(VAULT_RESTORE_CHANNELS)) expect(general.has(channel)).toBe(false);
     const source = (path: string) => readFileSync(join(import.meta.dirname, "..", "src", path), "utf8");
@@ -244,8 +244,10 @@ describe("vault restore contract", () => {
     expect(source("preload/vaultRestore.ts")).not.toContain("IPC_CHANNELS.");
     // 복원본 창은 브라우저 패널(자동화와 캡처의 대상)과 Gateway 접속을 쓰지 않는다.
     for (const file of ["main/vaultRestoreWindow.ts", "main/vaultRestoreSession.ts"]) {
-      expect(source(file)).not.toMatch(/from ".*(browserPanel|browserAgent|gatewayConnection|shared\/bridge)/);
+      expect(source(file)).not.toMatch(/from ".*(browserPanel|browserAgent|gatewayConnection)/);
     }
-    expect(source("renderer/vaultRestore/main.ts")).not.toMatch(/window\.akra\b|innerHTML/);
+    expect(source("renderer/vaultRestore/main.ts")).not.toMatch(/innerHTML/);
+    expect(source("preload/vaultRestore.ts")).toContain('exposeInMainWorld("akra", surface)');
+    expect(source("preload/vaultRestore.ts")).not.toContain("akraVaultRestore");
   });
 });

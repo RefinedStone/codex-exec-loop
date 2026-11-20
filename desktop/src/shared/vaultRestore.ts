@@ -1,5 +1,5 @@
-// 로컬 복원본 창의 계약이다 (#2427). 이 창만 쓰는 채널과 상태이다. 일반 메시지 버스(`bridge.ts` 의 `window.akra`)와
-// 대화 IPC 에 넣지 않는다. 복원 평문은 main 에서 이 창의 renderer 로만 간다. Gateway 와 Kernel 프로토콜로 가지 않는다.
+// 로컬 복원본 창의 상태·표시와 채널 값이다 (#2427). window.akra 권한 계약은 bridge.ts 에 있다.
+// 복원 평문은 main 에서 복원 창의 renderer 로만 간다. Gateway 와 Kernel 프로토콜로 가지 않는다.
 
 /** 로컬 복원본 창의 preload 만 쓰는 채널이다. main 은 보낸 창이 복원본 창인지 확인한다. */
 export const VAULT_RESTORE_CHANNELS = {
@@ -86,27 +86,6 @@ export type VaultRestoreViewState =
   | { phase: "held"; reason: VaultRestoreHold }
   | { phase: "restored"; title: string; body: string; expiresAt: number }
   | { phase: "review"; review: VaultReconnectReview };
-
-/** 로컬 복원본 창의 preload 가 노출하는 함수이다. 이것만 있다: `window.akra` 는 이 창에 없다. */
-export interface VaultRestoreBridge {
-  /** 수신 함수를 등록했다고 알린다. 처음이면 main 이 확인을 시작한다. 다시 오면 (화면을 다시 불러옴) 잠근다. */
-  ready(): void;
-  onState(listener: (state: VaultRestoreViewState) => void): () => void;
-  /** 다시 사용자 확인을 거쳐 연다. */
-  unlock(): void;
-  lock(): void;
-  /** 재연결 검토의 값을 읽는다. */
-  review(): void;
-  reconnect(mappings: VaultApprovedMapping[]): void;
-}
-
-/** 일반 창이 쓰는 함수이다. 창을 열고 닫게 할 뿐이다. 복원본의 상태와 글은 받지 못한다. */
-export interface VaultRestoreOpenerBridge {
-  /** 이슈의 로컬 복원본 창을 연다. 열람은 그 창에서 사용자가 확인한 뒤에만 된다. */
-  open(issueUrl: string): Promise<void>;
-  /** 이 창의 프로젝트(열린 스레드의 폴더)가 바뀌었다. 이 창이 연 복원본을 다시 잠근다. */
-  projectChanged(): void;
-}
 
 /** 로컬 복원본을 여는 대상이다: github.com 의 이슈 주소 하나이다. */
 export function isVaultRestoreIssueUrl(url: unknown): url is string {
