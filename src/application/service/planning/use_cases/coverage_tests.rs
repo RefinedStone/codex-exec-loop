@@ -371,7 +371,7 @@ fn queue_refresh_preparation_reports_queue_idle_stop_and_missing_prompt() {
 }
 
 #[test]
-fn reconcile_post_turn_reports_reconciliation_write_failures() {
+fn reconcile_post_turn_preserves_content_when_current_snapshot_cannot_be_read() {
     let workspace = TempPlanningWorkspace::new("planning-use-cases-reconcile-error");
     let planning_parent = workspace.path().join(".codex-exec-loop");
     fs::create_dir_all(&planning_parent).expect("planning parent should exist");
@@ -409,9 +409,21 @@ fn reconcile_post_turn_reports_reconciliation_write_failures() {
             .reconciliation_result
             .auto_follow_block_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("planning reconciliation failed"))
+            .is_some_and(
+                |reason| reason.contains("could not verify the accepted planning revision")
+            )
     );
     assert!(outcome.runtime_projection.blocks_auto_follow());
+    assert!(
+        outcome
+            .reconciliation_result
+            .restored_protected_files
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read_to_string(planning_parent.join("planning")).unwrap(),
+        "not a directory"
+    );
 }
 
 #[test]

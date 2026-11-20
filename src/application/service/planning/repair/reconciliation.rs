@@ -7,7 +7,7 @@
  */
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
@@ -127,21 +127,39 @@ impl PlanningReconciliationService {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningExecutionSnapshot> {
-        let workspace_record = self
+        if let Some(snapshot) = self
             .planning_workspace_port
-            .load_planning_workspace_files(workspace_dir)?;
-        let task_snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)
-            .ok()
-            .flatten();
-        Ok(PlanningExecutionSnapshot {
-            result_output_markdown: workspace_record.result_output_markdown,
-            planning_revision: task_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.planning_revision),
-            task_authority: task_snapshot.map(|snapshot| snapshot.task_authority),
-        })
+            .load_planning_execution_snapshot(workspace_dir)?
+        {
+            return Ok(snapshot);
+        }
+        if self
+            .planning_workspace_port
+            .uses_repo_scoped_authority(workspace_dir)
+        {
+            bail!("repo-scoped planning requires an atomic execution snapshot");
+        }
+        // Legacy files do not share a transaction with task authority.
+        // A monotonic revision bracket rejects a mixed capture and retries it.
+        for _ in 0..3 {
+            let before = self
+                .planning_task_repository_port
+                .load_task_authority_snapshot(workspace_dir)?;
+            let workspace_record = self
+                .planning_workspace_port
+                .load_planning_workspace_files(workspace_dir)?;
+            let after = self
+                .planning_task_repository_port
+                .load_task_authority_snapshot(workspace_dir)?;
+            if before == after {
+                return Ok(PlanningExecutionSnapshot {
+                    result_output_markdown: workspace_record.result_output_markdown,
+                    planning_revision: before.as_ref().map(|snapshot| snapshot.planning_revision),
+                    task_authority: before.map(|snapshot| snapshot.task_authority),
+                });
+            }
+        }
+        bail!("planning authority changed while capturing the execution snapshot; reload and retry")
     }
 
     /*
@@ -163,19 +181,8 @@ impl PlanningReconciliationService {
         }
 
         let mut result = PlanningReconciliationResult::default();
-        let observed = self
-            .planning_workspace_port
-            .load_planning_workspace_files(workspace_dir)?;
-        let replacement = execution_snapshot_to_workspace_record(execution_snapshot);
-        // The execution snapshot is only safe to restore while the accepted
-        // planning authority is still at the revision captured before the turn.
-        // Operator-approved edits can advance authority while the worker runs;
-        // the file CAS below would otherwise replace those newer edits with A.
-        let current_revision = match self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)
-        {
-            Ok(snapshot) => snapshot.map(|snapshot| snapshot.planning_revision),
+        let current = match self.load_execution_snapshot(workspace_dir) {
+            Ok(snapshot) => snapshot,
             Err(error) => {
                 let blocked = format!(
                     "planning reconciliation could not verify the accepted planning revision ({error}); protected files were preserved and automatic continuation was blocked"
@@ -185,6 +192,9 @@ impl PlanningReconciliationService {
                 return Ok(result);
             }
         };
+        let observed = execution_snapshot_to_workspace_record(&current);
+        let replacement = execution_snapshot_to_workspace_record(execution_snapshot);
+        let current_revision = current.planning_revision;
         if current_revision != execution_snapshot.planning_revision {
             let blocked = format!(
                 "planning reconciliation found an accepted planning revision change (turn start {:?}, now {:?}); protected files were preserved and automatic continuation was blocked",
@@ -199,7 +209,12 @@ impl PlanningReconciliationService {
         }
         if self
             .planning_workspace_port
-            .compare_and_swap_planning_workspace_files(workspace_dir, &observed, &replacement)?
+            .compare_and_swap_planning_workspace_files_at_revision(
+                workspace_dir,
+                execution_snapshot.planning_revision,
+                &observed,
+                &replacement,
+            )?
         {
             result
                 .notices
@@ -211,7 +226,7 @@ impl PlanningReconciliationService {
                     archived_candidate_path: None,
                 });
         } else {
-            let blocked = "planning reconciliation detected a concurrent protected-file mutation; current operator content was preserved and automatic continuation was blocked".to_string();
+            let blocked = "planning reconciliation detected a concurrent protected-file mutation or could not atomically verify the accepted revision; current content was preserved and automatic continuation was blocked".to_string();
             result.notices.push(blocked.clone());
             result.auto_follow_block_reason = Some(blocked);
         }

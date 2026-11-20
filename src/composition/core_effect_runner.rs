@@ -5453,6 +5453,7 @@ mod tests {
                 correlation.clone(),
                 PlanningQueueCancellationTransactionResult {
                     mutation: Ok(PlanningTaskMutationCommitResult {
+                        observed_planning_revision: 41,
                         committed_planning_revision: 42,
                         queue_head: None,
                         task_authority_changed: true,

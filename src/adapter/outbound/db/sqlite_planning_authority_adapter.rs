@@ -393,6 +393,39 @@ impl SqlitePlanningAuthorityAdapter {
         observed: &PlanningWorkspaceLoadRecord,
         replacement: &PlanningWorkspaceLoadRecord,
     ) -> Result<bool> {
+        Self::compare_and_swap_active_workspace_files_with_optional_revision(
+            workspace_dir,
+            None,
+            observed,
+            replacement,
+        )
+    }
+
+    pub(crate) fn compare_and_swap_active_workspace_files_at_revision(
+        workspace_dir: &str,
+        expected_planning_revision: Option<i64>,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
+        // Repo-scoped snapshots always carry the global revision, including zero
+        // before authority is initialized. None must never disable the guard.
+        if expected_planning_revision.is_none() {
+            return Ok(false);
+        }
+        Self::compare_and_swap_active_workspace_files_with_optional_revision(
+            workspace_dir,
+            expected_planning_revision,
+            observed,
+            replacement,
+        )
+    }
+
+    fn compare_and_swap_active_workspace_files_with_optional_revision(
+        workspace_dir: &str,
+        expected_planning_revision: Option<i64>,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
@@ -403,6 +436,12 @@ impl SqlitePlanningAuthorityAdapter {
             "active workspace compare-and-swap",
             None,
         )?;
+        if let Some(expected_revision) = expected_planning_revision
+            && read_metadata_i64(&transaction, "planning_revision")?.unwrap_or(0)
+                != expected_revision
+        {
+            return Ok(false);
+        }
         if load_active_workspace_record(&transaction)? != *observed {
             return Ok(false);
         }
@@ -417,13 +456,39 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(true)
     }
 
-    /*
-    active workspace snapshot을 `PlanningWorkspaceLoadRecord`로 읽는다.
+    // Body, optional tasks, and the global revision must come from one read
+    // transaction. Authority absence is part of the captured execution state.
+    pub(crate) fn load_active_execution_snapshot(
+        workspace_dir: &str,
+    ) -> Result<crate::domain::planning::ExecutionSnapshot> {
+        Self::load_active_execution_snapshot_with_body_hook(workspace_dir, || {})
+    }
 
-    이 함수는 commit 함수의 반대 방향 adapter이다. workspace path에서 같은 authority DB 위치를 찾고,
-    store 모듈의 `load_active_workspace_record`로 실제 record 조립을 위임한다. 상위 caller는 SQLite
-    table 구조를 모르고 기존 workspace port의 record만 받는다.
-    */
+    fn load_active_execution_snapshot_with_body_hook(
+        workspace_dir: &str,
+        after_body_read: impl FnOnce(),
+    ) -> Result<crate::domain::planning::ExecutionSnapshot> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to start planning execution snapshot read transaction")?;
+        let workspace = load_active_workspace_record(&transaction)?;
+        after_body_read();
+        let tasks = load_task_authority_snapshot_from_connection(&transaction)?;
+        let snapshot = crate::domain::planning::ExecutionSnapshot {
+            result_output_markdown: workspace.result_output_markdown,
+            planning_revision: Some(
+                read_metadata_i64(&transaction, "planning_revision")?.unwrap_or(0),
+            ),
+            task_authority: tasks.map(|snapshot| snapshot.task_authority),
+        };
+        transaction
+            .commit()
+            .context("failed to finish planning execution snapshot read transaction")?;
+        Ok(snapshot)
+    }
+
     pub(crate) fn load_active_workspace_files(
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {

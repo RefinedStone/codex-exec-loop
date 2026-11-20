@@ -171,6 +171,15 @@ pub trait PlanningWorkspacePort: Send + Sync {
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord>;
 
+    // Repo-scoped adapters capture body, task authority, and revision in one
+    // storage snapshot, including an absent body. None means legacy file mode.
+    fn load_planning_execution_snapshot(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Option<crate::domain::planning::ExecutionSnapshot>> {
+        Ok(None)
+    }
+
     // active가 아니라 candidate 영역의 planning 파일을 읽는다. 승격 전 미리보기/검증에 쓰인다.
     fn load_planning_workspace_candidate_files(
         &self,
@@ -200,6 +209,24 @@ pub trait PlanningWorkspacePort: Send + Sync {
         replacement: &PlanningWorkspaceLoadRecord,
     ) -> Result<bool> {
         let _ = (workspace_dir, observed, replacement);
+        Ok(false)
+    }
+
+    // Revision (including authority absence) and body must match at the write
+    // boundary. Adapters without that atomic contract must preserve current data.
+    fn compare_and_swap_planning_workspace_files_at_revision(
+        &self,
+        workspace_dir: &str,
+        expected_planning_revision: Option<i64>,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
+        let _ = (
+            workspace_dir,
+            expected_planning_revision,
+            observed,
+            replacement,
+        );
         Ok(false)
     }
 
@@ -319,6 +346,11 @@ pub trait RepoScopedPlanningWorkspacePort: Send + Sync {
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord>;
 
+    fn load_active_execution_snapshot(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<crate::domain::planning::ExecutionSnapshot>;
+
     // repo authority의 active workspace에 canonical 파일 스냅샷을 반영한다.
     fn commit_active_workspace_files(
         &self,
@@ -332,6 +364,14 @@ pub trait RepoScopedPlanningWorkspacePort: Send + Sync {
     fn compare_and_swap_active_workspace_files(
         &self,
         workspace_dir: &str,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool>;
+
+    fn compare_and_swap_active_workspace_files_at_revision(
+        &self,
+        workspace_dir: &str,
+        expected_planning_revision: Option<i64>,
         observed: &PlanningWorkspaceLoadRecord,
         replacement: &PlanningWorkspaceLoadRecord,
     ) -> Result<bool>;

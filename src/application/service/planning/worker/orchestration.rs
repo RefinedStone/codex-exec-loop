@@ -722,6 +722,7 @@ impl PlanningWorkerOrchestrationService {
             hook();
         }
         let apply_worker_result = || -> Result<PlanningWorkerRunOutcome> {
+            let mut reconciliation_snapshot = execution_snapshot.clone();
             let task_provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
                 .with_thread_turn(
                     worker_response.thread_id.clone(),
@@ -772,6 +773,15 @@ impl PlanningWorkerOrchestrationService {
                             ) {
                                 Ok(mutation_result) => {
                                     task_authority_changed = mutation_result.task_authority_changed;
+                                    // Only our own CAS from captured authority can advance the
+                                    // restore expectation. Operator commits before or after
+                                    // this mutation must still block restoration.
+                                    if execution_snapshot.planning_revision
+                                        == Some(mutation_result.observed_planning_revision)
+                                    {
+                                        reconciliation_snapshot.planning_revision =
+                                            Some(mutation_result.committed_planning_revision);
+                                    }
                                     if mutation_result.task_authority_changed {
                                         // mutation service가 projection을 이미 다시 만들었다. reconciliation result는 downstream notice를 위해 그 사실만 기록한다.
                                         authority_result.queue_projection_action = Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
@@ -815,7 +825,7 @@ impl PlanningWorkerOrchestrationService {
                 workspace_directory,
                 orchestration_id,
                 &worker_response.changed_planning_file_paths,
-                &execution_snapshot,
+                &reconciliation_snapshot,
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -1498,6 +1508,23 @@ mod tests {
             Ok(true)
         }
 
+        fn compare_and_swap_planning_workspace_files_at_revision(
+            &self,
+            workspace_dir: &str,
+            expected_planning_revision: Option<i64>,
+            observed: &PlanningWorkspaceLoadRecord,
+            replacement: &PlanningWorkspaceLoadRecord,
+        ) -> Result<bool> {
+            // This fixture applies all authority mutation hooks synchronously.
+            let current = NoopPlanningTaskRepositoryPort
+                .load_task_authority_snapshot(workspace_dir)?
+                .map(|snapshot| snapshot.planning_revision);
+            if current != expected_planning_revision {
+                return Ok(false);
+            }
+            self.compare_and_swap_planning_workspace_files(workspace_dir, observed, replacement)
+        }
+
         fn load_optional_planning_file(
             &self,
             _workspace_dir: &str,
@@ -1751,6 +1778,87 @@ mod tests {
         assert_eq!(requests[0].workspace_directory, workspace);
         assert!(requests[0].prompt.contains("please continue"));
         assert!(requests[0].prompt.contains("source_of_truth=accepted DB"));
+    }
+
+    #[test]
+    fn worker_commit_does_not_adopt_operator_revision_from_before_its_mutation() {
+        let workspace = workspace("operator-before-worker-commit");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let files = Arc::new(RecordingPlanningWorkspacePort::new("Accepted A"));
+        let worker_message = r#"Worker planned follow-up.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Preserve operator approval","description":"Apply task command without rolling back newer accepted support files.","direction_relation_note":"covers concurrent approval"}]}}
+```"#;
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-race".to_owned()),
+            turn_id: Some("worker-turn-race".to_owned()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
+            final_agent_message: Some(worker_message.to_owned()),
+            changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_owned()],
+        }));
+        let mut service = orchestration_service(worker, files.clone(), repo.clone());
+        let operator_repo = repo.clone();
+        let operator_files = files.clone();
+        let operator_workspace = workspace.clone();
+        service.before_result_application = Some(Arc::new(move || {
+            let snapshot = operator_repo
+                .load_direction_authority_snapshot(&operator_workspace)
+                .unwrap()
+                .unwrap();
+            let mut approved = snapshot.directions;
+            approved.directions[0].summary = "New operator-approved direction".to_owned();
+            operator_repo
+                .commit_direction_authority_snapshot(
+                    &operator_workspace,
+                    PlanningDirectionAuthorityCommit {
+                        observed_planning_revision: Some(snapshot.planning_revision),
+                        directions: &approved,
+                        authority_mutation_owner_token: None,
+                    },
+                )
+                .unwrap();
+            operator_files
+                .commit_planning_workspace_files(
+                    &operator_workspace,
+                    &PlanningWorkspaceLoadRecord {
+                        result_output_markdown: Some("Accepted B".to_owned()),
+                    },
+                )
+                .unwrap();
+        }));
+        let outcome = service
+            .refresh_queue_from_reply(PlanningQueueRefreshRequest {
+                workspace_directory: &workspace,
+                parent_thread_id: Some("parent-thread-race"),
+                completed_turn_id: "parent-turn-race",
+                latest_user_message: Some("continue"),
+                latest_main_reply: "done",
+                previous_handoff_task: None,
+                mode: PlanningQueueRefreshMode::FromLatestMainReply,
+            })
+            .unwrap();
+        assert!(
+            outcome.task_authority_changed,
+            "the worker command remains valid on the new authority"
+        );
+        assert!(
+            outcome
+                .notices
+                .iter()
+                .any(|notice| notice.contains("accepted planning revision change"))
+        );
+        assert_eq!(
+            files.current_record().result_output_markdown.as_deref(),
+            Some("Accepted B")
+        );
+        assert_eq!(
+            files.commits().len(),
+            1,
+            "only the operator write is allowed"
+        );
     }
 
     #[test]

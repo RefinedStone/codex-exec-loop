@@ -1867,6 +1867,23 @@ mod tests {
             Ok(true)
         }
 
+        fn compare_and_swap_planning_workspace_files_at_revision(
+            &self,
+            workspace_dir: &str,
+            expected_planning_revision: Option<i64>,
+            observed: &PlanningWorkspaceLoadRecord,
+            replacement: &PlanningWorkspaceLoadRecord,
+        ) -> Result<bool> {
+            // This fixture applies all authority mutation hooks synchronously.
+            let current = NoopPlanningTaskRepositoryPort
+                .load_task_authority_snapshot(workspace_dir)?
+                .map(|snapshot| snapshot.planning_revision);
+            if current != expected_planning_revision {
+                return Ok(false);
+            }
+            self.compare_and_swap_planning_workspace_files(workspace_dir, observed, replacement)
+        }
+
         fn load_optional_planning_file(
             &self,
             _workspace_dir: &str,
@@ -2633,13 +2650,17 @@ mod tests {
             updated_at: "2026-04-24T00:00:00Z".to_string(),
             ..sample_queue_head()
         };
-        seed_runtime_authority(repository.as_ref(), "/tmp/workspace", &refreshed_queue_head);
+        seed_runtime_authority(
+            repository.as_ref(),
+            "/tmp/planning-use-cases-restore-protected",
+            &refreshed_queue_head,
+        );
 
         let unchanged =
             planning
                 .runtime
                 .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
-                    workspace_directory: "/tmp/workspace",
+                    workspace_directory: "/tmp/planning-use-cases-restore-protected",
                     completed_turn_id: "turn-1",
                     changed_planning_file_paths: &[],
                     execution_snapshot_capture: None,
@@ -2654,9 +2675,13 @@ mod tests {
         assert!(unchanged.reconciliation_result.notices.is_empty());
 
         let capture = PlanningTurnExecutionSnapshotCapture::ready(
-            "/tmp/workspace",
+            "/tmp/planning-use-cases-restore-protected",
             PlanningExecutionSnapshot {
                 result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+                planning_revision: repository
+                    .load_task_authority_snapshot("/tmp/planning-use-cases-restore-protected")
+                    .unwrap()
+                    .map(|snapshot| snapshot.planning_revision),
                 ..PlanningExecutionSnapshot::default()
             },
         );
@@ -2665,7 +2690,7 @@ mod tests {
             planning
                 .runtime
                 .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
-                    workspace_directory: "/tmp/workspace",
+                    workspace_directory: "/tmp/planning-use-cases-restore-protected",
                     completed_turn_id: "turn-1",
                     changed_planning_file_paths: &changed_paths,
                     execution_snapshot_capture: Some(&capture),
@@ -2707,9 +2732,13 @@ mod tests {
             Some(sample_queue_head()),
         );
         let capture = PlanningTurnExecutionSnapshotCapture::ready(
-            "/tmp/workspace",
+            "/tmp/planning-use-cases-preserve-operator",
             PlanningExecutionSnapshot {
                 result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+                planning_revision: NoopPlanningTaskRepositoryPort
+                    .load_task_authority_snapshot("/tmp/planning-use-cases-preserve-operator")
+                    .unwrap()
+                    .map(|snapshot| snapshot.planning_revision),
                 ..PlanningExecutionSnapshot::default()
             },
         );
@@ -2718,7 +2747,7 @@ mod tests {
         let outcome = planning
             .runtime
             .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
-                workspace_directory: "/tmp/workspace",
+                workspace_directory: "/tmp/planning-use-cases-preserve-operator",
                 completed_turn_id: "late-worker-turn",
                 changed_planning_file_paths: &changed_paths,
                 execution_snapshot_capture: Some(&capture),
@@ -2731,7 +2760,7 @@ mod tests {
             .as_deref()
             .expect("concurrent operator mutation should block continuation");
         assert!(blocked.contains("concurrent protected-file mutation"));
-        assert!(blocked.contains("operator content was preserved"));
+        assert!(blocked.contains("current content was preserved"));
         assert!(
             outcome
                 .reconciliation_result
@@ -2760,7 +2789,7 @@ mod tests {
             Some(sample_queue_head()),
         );
         let capture = PlanningTurnExecutionSnapshotCapture::ready(
-            "/tmp/workspace",
+            "/tmp/planning-use-cases-matching-content",
             PlanningExecutionSnapshot {
                 result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
                 ..PlanningExecutionSnapshot::default()
@@ -2771,7 +2800,7 @@ mod tests {
         let outcome = planning
             .runtime
             .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
-                workspace_directory: "/tmp/workspace",
+                workspace_directory: "/tmp/planning-use-cases-matching-content",
                 completed_turn_id: "no-op-worker-turn",
                 changed_planning_file_paths: &changed_paths,
                 execution_snapshot_capture: Some(&capture),
