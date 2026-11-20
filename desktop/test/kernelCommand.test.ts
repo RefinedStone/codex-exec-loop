@@ -15,6 +15,7 @@ const commands = {
   refresh_planning: { type: "refresh_planning" },
   set_issue_automation_mode: { type: "set_issue_automation_mode", mode: "observe" },
   sync_issues: { type: "sync_issues" },
+  answer_issue_decision: { type: "answer_issue_decision", decision_id: "decision-1", option: "continue", note: "Shared note" },
   rename_session: { type: "rename_session", thread_id: "thread-1", name: "Renamed" },
   submit_prompt: { type: "submit_prompt", thread_id: "thread-1", prompt: "Hello" },
   steer_turn: { type: "steer_turn", thread_id: "thread-1", expected_turn_id: "turn-1", prompt: "Stop here" },

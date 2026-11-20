@@ -95,6 +95,8 @@ spec_names! {
             "Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         SetIssueAutomationMode => "set_issue_automation_mode",
             "Persist the issue collection mode: off or observe. The answer follows the ledger commit; observe only collects while the kernel is running.";
+        AnswerIssueDecision => "answer_issue_decision",
+            "Record an agent answer to one open issue decision. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
         SyncIssues => "sync_issues",
             "Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request.";
     }
@@ -248,6 +250,8 @@ spec_names! {
             "The execution grant boundary is not connected; descriptive gates do not authorize work.";
         CloseDisabled => "close_disabled",
             "Issue closing is not enabled by this assessment.";
+        DecisionSuperseded => "decision_superseded",
+            "The decision basis differs from the current issue assessment. The request was closed without applying the submitted answer; read the issue for current open decisions.";
         IssueAutomationOff => "issue_automation_off",
             "Issue collection is off. No source read was scheduled. Read issue_automation and decide whether to enable observe before sending sync_issues again.";
     }
@@ -349,7 +353,8 @@ impl KernelCommandKind {
             | Self::CreateDirection
             | Self::UpdateDirection
             | Self::DeleteDirection
-            | Self::SetIssueAutomationMode => CommandCompletion::Records,
+            | Self::SetIssueAutomationMode
+            | Self::AnswerIssueDecision => CommandCompletion::Records,
         };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (
@@ -417,6 +422,7 @@ impl KernelCommandKind {
                 &[Reason::KernelUnreachable],
             ),
             Self::SetIssueAutomationMode => (CommandScope::Issue, Write, Natural, &[]),
+            Self::AnswerIssueDecision => (CommandScope::Issue, Write, Keyed, &[]),
             Self::SyncIssues => (
                 CommandScope::Issue,
                 Read,
@@ -460,7 +466,8 @@ impl KernelCommandKind {
                 | Self::CreateDirection
                 | Self::UpdateDirection
                 | Self::DeleteDirection
-                | Self::SetIssueAutomationMode => CommandState::Store,
+                | Self::SetIssueAutomationMode
+                | Self::AnswerIssueDecision => CommandState::Store,
                 Self::LoadSessions
                 | Self::RenameSession
                 | Self::SubmitPrompt
@@ -520,6 +527,10 @@ spec_names! {
             "A stable issue entered the collection ledger for the first time. Metadata-only withheld observations count once; rediscovery does not repeat this record.";
         IssueTriaged => "issue_triaged",
             "A deterministic issue assessment was committed to the local ledger. The record carries stable identity and policy/gate revisions, with no issue text or execution permit.";
+        IssueDecisionRequested => "issue_decision_requested",
+            "An open issue decision was committed to the issue ledger. Only stable identity and decision metadata are recorded; question and note text are excluded.";
+        IssueDecisionResolved => "issue_decision_resolved",
+            "An issue decision was closed by its first answer or superseded by a changed basis. An agent answer is not human confirmation and does not grant execution.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",
             "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
     }
@@ -587,6 +598,13 @@ mod tests {
         assert_eq!(mode.effect, CommandEffect::Write);
         assert_eq!(mode.idempotency, CommandIdempotency::Natural);
         assert_eq!(mode.completion, CommandCompletion::Records);
+        let answer = KernelCommandKind::AnswerIssueDecision.spec();
+        assert_eq!(answer.scope, CommandScope::Issue);
+        assert_eq!(answer.state, CommandState::Store);
+        assert_eq!(answer.effect, CommandEffect::Write);
+        assert_eq!(answer.idempotency, CommandIdempotency::Keyed);
+        assert_eq!(answer.completion, CommandCompletion::Records);
+        assert!(answer.rejections.is_empty());
         let sync = KernelCommandKind::SyncIssues.spec();
         assert_eq!(sync.scope, CommandScope::Issue);
         assert_eq!(sync.state, CommandState::Runtime);
@@ -656,6 +674,7 @@ mod tests {
                 "observation_only",
                 "execution_grant_required",
                 "close_disabled",
+                "decision_superseded",
                 "issue_automation_off",
             ]
         );

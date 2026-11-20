@@ -9,6 +9,9 @@ use crate::domain::issue_automation::collection::{
     IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery, IssueResyncBatch,
     IssueTriageProjection, StoredIssueCollection,
 };
+use crate::domain::issue_automation::decision::{
+    IssueDecisionId, IssueDecisionRequest, StoredIssueDecision,
+};
 use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 use crate::domain::issue_automation::{
@@ -114,6 +117,27 @@ pub enum IssueTriageSaveResult {
         /// 의미가 달라진 새 판정만 true다. 같은 의미의 관찰 CAS 재연결은 false다.
         changed: bool,
     },
+    Conflict,
+}
+
+/// 결정 요청 행과 현재 관찰 판을 함께 검사한다. 모드는 답변 허가가 아니다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IssueDecisionFence {
+    pub triage: IssueTriageFence,
+    pub decision_revision: u64,
+}
+
+/// 저장 transaction에서 확정된 결과다. 최신 조회로 바꾸면 안 된다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueDecisionCommit {
+    pub record: StoredIssueDecision,
+    pub catalog_revision: u64,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueDecisionSaveResult {
+    Saved(Box<IssueDecisionCommit>),
     Conflict,
 }
 
@@ -271,4 +295,36 @@ pub trait IssueAutomationStorePort: Send + Sync {
         expected: IssueTriageFence,
         assessment: &IssueTriageAssessment,
     ) -> Result<IssueTriageSaveResult>;
+
+    fn get_issue_decision(
+        &self,
+        workspace_dir: &str,
+        id: &IssueDecisionId,
+    ) -> Result<Option<StoredIssueDecision>>;
+
+    /// 답이 이미 확정된 경우 정책/원문을 다시 읽지 않고 같은 snapshot 결과를 반환한다.
+    fn get_issue_decision_commit(
+        &self,
+        workspace_dir: &str,
+        id: &IssueDecisionId,
+    ) -> Result<Option<IssueDecisionCommit>>;
+
+    /// 같은 불변 정의와 판의 반복 생성은 기존 요청을 반환한다. 서로 다른 질문은 별개다.
+    /// 기존 닫힌 요청도 재개방하지 않는다.
+    fn ensure_issue_decision(
+        &self,
+        workspace_dir: &str,
+        expected: IssueTriageFence,
+        current: &IssueTriageAssessment,
+        request: &IssueDecisionRequest,
+    ) -> Result<IssueDecisionSaveResult>;
+
+    /// 관찰/판정/결정 행 CAS와 첫 답변을 한 transaction으로 확정한다.
+    fn save_issue_decision(
+        &self,
+        workspace_dir: &str,
+        expected: IssueDecisionFence,
+        current: &IssueTriageAssessment,
+        request: &IssueDecisionRequest,
+    ) -> Result<IssueDecisionSaveResult>;
 }

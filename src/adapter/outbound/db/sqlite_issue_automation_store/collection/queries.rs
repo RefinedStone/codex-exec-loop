@@ -109,6 +109,7 @@ pub(in super::super) fn item(
         observation_revision,
         tracked_revision,
         triage,
+        open_decisions: super::super::decision::open_for_issue(connection, workspace, reference)?,
     }))
 }
 

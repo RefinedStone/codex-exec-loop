@@ -45,6 +45,7 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel planning update_direction --json` | write | Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 | `akra kernel planning delete_direction --json` | destructive | Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 | `akra kernel issue set_issue_automation_mode --json` | write | Persist the issue collection mode: off or observe. The answer follows the ledger commit; observe only collects while the kernel is running. |
+| `akra kernel issue answer_issue_decision --json` | write | Record an agent answer to one open issue decision. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt. |
 | `akra kernel issue sync_issues --json` | read | Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.

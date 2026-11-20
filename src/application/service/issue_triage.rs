@@ -98,6 +98,17 @@ impl IssueTriageService {
         self.automation_policy.inspect(&self.workspace_dir)
     }
 
+    /// 결정 답을 적용하기 직전에 현재 관찰과 현재 정책으로 다시 판정한다.
+    /// 저장된 gate revision만 믿지 않으며, 정책을 읽지 못하면 기존 판으로 대신하지 않는다.
+    pub(crate) fn assess_current(
+        &self,
+        item: &IssueCollectionItem,
+    ) -> Result<IssueTriageAssessment> {
+        self.validate_reference(&item.issue)?;
+        self.context()
+            .ok_or_else(|| anyhow!("the current issue policy could not be assessed"))?
+            .assess(item)
+    }
     /// callback은 수집과 같은 commit gate 안에서 확정 사실만 전달한다.
     /// 취소/후속 실패가 발생해도 이미 보낸 fact는 취소하지 않는다.
     pub fn triage_all(

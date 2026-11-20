@@ -12,6 +12,12 @@ use crate::domain::kernel_spec::{
 };
 use crate::domain::planning::ManualPromptMainSessionHandoff;
 
+mod issue_decision;
+pub use issue_decision::{
+    IssueDecisionBasisRecord, IssueDecisionFactRecord, IssueDecisionGateRecord,
+    IssueDecisionSubjectRecord,
+};
+
 /*
  * 준비가 끝났지만 제출이 거절된 thread 지정 프롬프트이다 (plan 19 Q2-3). 준비가 만든 작업은 이미 큐에 있다. 커널이
  * 쉬면 같은 handoff 로 한 번 다시 낸다. 기록에서 되돌릴 수 있게 직렬화한다 (Q3-1).
@@ -408,6 +414,17 @@ pub enum KernelEvent {
         policy_version: String,
         by: IssueChangeOrigin,
     },
+    /// 결정 요청의 장부 commit이다. 질문과 메모를 복사하지 않는다.
+    IssueDecisionRequested {
+        decision: IssueDecisionFactRecord,
+        revision: u64,
+    },
+    /// 첫 답 또는 기준 변경으로 닫힌 결정이다. 실행 허가나 사람 확인 증명이 아니다.
+    IssueDecisionResolved {
+        decision: IssueDecisionFactRecord,
+        revision: u64,
+        reason: Option<ReasonCode>,
+    },
     /// 모드 설정 commit 이후의 감사 기록이다. 설정 복원은 이 기록이 아닌 장부에서 한다.
     IssueAutomationModeChanged {
         previous: Option<IssueAutomationModeRecord>,
@@ -685,6 +702,8 @@ impl KernelEvent {
         match self {
             Self::IssueTracked { .. } => KernelRecordKind::IssueTracked,
             Self::IssueTriaged { .. } => KernelRecordKind::IssueTriaged,
+            Self::IssueDecisionRequested { .. } => KernelRecordKind::IssueDecisionRequested,
+            Self::IssueDecisionResolved { .. } => KernelRecordKind::IssueDecisionResolved,
             Self::IssueAutomationModeChanged { .. } => KernelRecordKind::IssueAutomationModeChanged,
             Self::AutoFollowConfigured { .. } => KernelRecordKind::AutoFollowConfigured,
             Self::ThreadPromptQueued(_) => KernelRecordKind::ThreadPromptQueued,
@@ -710,6 +729,8 @@ impl KernelEvent {
             | Self::AutoFollowConfigured { .. }
             | Self::IssueTracked { .. }
             | Self::IssueTriaged { .. }
+            | Self::IssueDecisionRequested { .. }
+            | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => "",
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
             Self::ApprovalRequested(approval) => &approval.thread_id,
@@ -747,6 +768,8 @@ impl KernelEvent {
             | Self::RepositoryChanged { .. }
             | Self::IssueTracked { .. }
             | Self::IssueTriaged { .. }
+            | Self::IssueDecisionRequested { .. }
+            | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => None,
         }
     }
@@ -794,6 +817,8 @@ impl KernelEvent {
             | Self::RepositoryChanged { .. }
             | Self::IssueTracked { .. }
             | Self::IssueTriaged { .. }
+            | Self::IssueDecisionRequested { .. }
+            | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => return None,
         };
         Some(state)

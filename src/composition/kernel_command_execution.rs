@@ -21,7 +21,8 @@ use crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter;
 use crate::application::port::inbound::issue_automation_policy_query_port::IssueAutomationPolicyInspection;
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
 use crate::application::port::inbound::stored_command_port::{
-    StoredCommand, StoredCommandOutcome, StoredCommandRejection, StoredCommandResult,
+    StoredCommand, StoredCommandContext, StoredCommandOutcome, StoredCommandRejection,
+    StoredCommandResult,
 };
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::application::port::outbound::planning_reset_route_port::{
@@ -197,7 +198,14 @@ impl CommandOnlyKernel {
                 Err(error) => WorkEnd::Failed(error),
             },
             CommandOnlyWork::Stored(command) => {
-                match super::production::stored_command_port(&self.workspace).execute(command) {
+                let context = StoredCommandContext {
+                    caller: Some(self.caller.to_string()),
+                    channel: "command_only".to_string(),
+                    at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                };
+                match super::production::stored_command_port(&self.workspace)
+                    .execute_with_context(command, &context)
+                {
                     Ok(StoredCommandOutcome::Done(result)) => WorkEnd::Done(Some(result)),
                     Ok(StoredCommandOutcome::Rejected(rejection)) => WorkEnd::Rejected(rejection),
                     Err(error) => WorkEnd::Failed(error),
@@ -215,7 +223,13 @@ impl KernelCommandPort for CommandOnlyKernel {
         idempotency_key: Option<String>,
     ) -> Result<Value> {
         let request = CommandRequest {
-            command: serde_json::from_value(input)?,
+            command: serde_json::from_value(input).map_err(|error| {
+                if kind == KernelCommandKind::AnswerIssueDecision {
+                    anyhow::anyhow!("invalid issue decision answer parameters")
+                } else {
+                    error.into()
+                }
+            })?,
             idempotency_key,
         };
         if request.command.kind() != kind {
@@ -269,6 +283,15 @@ impl KernelCommandPort for CommandOnlyKernel {
         // K6 까지의 예외이다: TUI 가 커널을 쥐 저장소에서는 직접 실행한다. 기록에 남지 않는다.
         let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
         if lock.is_none() {
+            // 결정 답은 영수증과 함께 실행해야 한다. 기존 TUI 직접 실행 예외를 적용하지 않는다.
+            if matches!(
+                &work,
+                CommandOnlyWork::Stored(StoredCommand::AnswerIssueDecision { .. })
+            ) {
+                return unreachable_answer(
+                    "The repository kernel owns this workspace. Send the decision answer through that kernel.",
+                );
+            }
             return work_answer(self.run(work), is_reset, None);
         }
         let mut descriptor = descriptor.context("stored mutation must have a descriptor")?;
@@ -357,6 +380,21 @@ impl KernelCommandPort for CommandOnlyKernel {
                     projection.state.revision,
                     caller.as_deref(),
                 ),
+            ));
+        }
+        if let WorkEnd::Done(Some(StoredCommandResult::IssueDecisionResolved {
+            fact,
+            changed: true,
+            catalog_revision,
+            ..
+        })) = &end
+        {
+            let sequence = completed_sequence
+                .checked_add(1)
+                .context("kernel event sequence exhausted")?;
+            completed.push(record(
+                sequence,
+                KernelEvent::issue_decision_resolved(fact, *catalog_revision),
             ));
         }
         log.append_kernel_events(&self.workspace, &completed)?;
@@ -598,6 +636,7 @@ mod g2_tests;
 
 #[cfg(test)]
 mod tests {
+    mod issue_decision;
     mod issue_queries;
     use super::*;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;

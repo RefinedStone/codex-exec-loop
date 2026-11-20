@@ -9,7 +9,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationBindingInsertResult, IssueAutomationBindingSaveResult,
     IssueAutomationIssueInsertResult, IssueAutomationIssueSaveResult, IssueAutomationStorePort,
-    IssueCollectionApplyResult, IssueCollectionModeSaveResult, IssueTriageBatch, IssueTriageFence,
+    IssueCollectionApplyResult, IssueCollectionModeSaveResult, IssueDecisionCommit,
+    IssueDecisionFence, IssueDecisionSaveResult, IssueTriageBatch, IssueTriageFence,
     IssueTriageSaveResult, StoredIssueAutomationBinding,
 };
 use crate::domain::issue_automation::{
@@ -29,10 +30,14 @@ use crate::domain::issue_automation::collection::{
     IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery, IssueResyncBatch,
     StoredIssueCollection,
 };
+use crate::domain::issue_automation::decision::{
+    IssueDecisionId, IssueDecisionRequest, StoredIssueDecision,
+};
 use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 
 mod collection;
+mod decision;
 mod private_store;
 mod triage;
 
@@ -42,7 +47,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -491,6 +496,41 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
     ) -> Result<IssueTriageSaveResult> {
         triage::save(self, workspace_dir, expected, assessment)
     }
+    fn get_issue_decision(
+        &self,
+        workspace_dir: &str,
+        id: &IssueDecisionId,
+    ) -> Result<Option<StoredIssueDecision>> {
+        decision::get(self, workspace_dir, id)
+    }
+
+    fn get_issue_decision_commit(
+        &self,
+        workspace_dir: &str,
+        id: &IssueDecisionId,
+    ) -> Result<Option<IssueDecisionCommit>> {
+        decision::get_commit(self, workspace_dir, id)
+    }
+
+    fn ensure_issue_decision(
+        &self,
+        workspace_dir: &str,
+        expected: IssueTriageFence,
+        current: &IssueTriageAssessment,
+        request: &IssueDecisionRequest,
+    ) -> Result<IssueDecisionSaveResult> {
+        decision::ensure(self, workspace_dir, expected, current, request)
+    }
+
+    fn save_issue_decision(
+        &self,
+        workspace_dir: &str,
+        expected: IssueDecisionFence,
+        current: &IssueTriageAssessment,
+        request: &IssueDecisionRequest,
+    ) -> Result<IssueDecisionSaveResult> {
+        decision::save(self, workspace_dir, expected, current, request)
+    }
 }
 
 fn transaction<T>(
@@ -517,7 +557,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ (1 | 2)) => {
+            (APPLICATION_ID, version @ 1..=3) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -525,9 +565,12 @@ fn ensure_schema(
                     transaction.execute_batch(collection::CONTROL_SCHEMA)?;
                     transaction.execute_batch(collection::OBSERVATIONS_SCHEMA)?;
                 }
-                transaction.execute_batch(triage::CATALOG_SCHEMA)?;
-                transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
-                triage::seed_catalog(transaction)?;
+                if version < 3 {
+                    transaction.execute_batch(triage::CATALOG_SCHEMA)?;
+                    transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
+                    triage::seed_catalog(transaction)?;
+                }
+                transaction.execute_batch(decision::SCHEMA)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -546,6 +589,7 @@ fn ensure_schema(
                 transaction.execute_batch(collection::OBSERVATIONS_SCHEMA)?;
                 transaction.execute_batch(triage::CATALOG_SCHEMA)?;
                 transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
+                transaction.execute_batch(decision::SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -567,7 +611,7 @@ fn validate_schema(connection: &Connection) -> Result<()> {
 }
 
 fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> {
-    if !matches!(version, 1 | 2 | SCHEMA_VERSION) {
+    if !matches!(version, 1 | 2 | 3 | SCHEMA_VERSION) {
         bail!("the issue automation schema version is unsupported")
     }
     let mut statement = connection.prepare(
@@ -588,6 +632,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     if version >= 3 {
         expected.push((triage::CATALOG_TABLE, triage::CATALOG_SCHEMA));
         expected.push((triage::ASSESSMENTS_TABLE, triage::ASSESSMENTS_SCHEMA));
+    }
+    if version >= 4 {
+        expected.push((decision::TABLE, decision::SCHEMA));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

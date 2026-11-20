@@ -1024,6 +1024,93 @@
       }
     },
     {
+      "name": "answer_issue_decision",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Record an agent answer to one open issue decision. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "decision_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "note": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "option": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "answer_issue_decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "decision_id",
+          "option"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "catalog_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "decision": {
+            "$ref": "#/$defs/IssueDecisionFactRecord"
+          },
+          "outcome": {
+            "$ref": "#/$defs/IssueDecisionOutcome"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "const": "issue_decision_resolved",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "decision",
+          "outcome",
+          "changed",
+          "catalog_revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "sync_issues",
       "scope": "issue",
       "state": "runtime",
@@ -1704,6 +1791,13 @@
               "item": {
                 "$ref": "#/$defs/IssueListItem"
               },
+              "open_decisions": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/IssueDecisionRequestState"
+                },
+                "type": "array"
+              },
               "report": {
                 "anyOf": [
                   {
@@ -2003,6 +2097,43 @@
         },
         "required": [
           "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_decision",
+      "summary": "A decision request was created or resolved in the issue ledger. The event carries committed metadata only; read issue for current open requests.",
+      "payload": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "$ref": "#/$defs/IssueDecisionFactRecord"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "const": "issue_decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "decision",
+          "revision"
         ],
         "type": "object"
       }
@@ -2538,6 +2669,68 @@
           "gate_revision",
           "policy_version",
           "by"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_decision_requested",
+      "summary": "An open issue decision was committed to the issue ledger. Only stable identity and decision metadata are recorded; question and note text are excluded.",
+      "payload": {
+        "properties": {
+          "decision": {
+            "$ref": "#/$defs/IssueDecisionFactRecord"
+          },
+          "kind": {
+            "const": "issue_decision_requested",
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "decision",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_decision_resolved",
+      "summary": "An issue decision was closed by its first answer or superseded by a changed basis. An agent answer is not human confirmation and does not grant execution.",
+      "payload": {
+        "properties": {
+          "decision": {
+            "$ref": "#/$defs/IssueDecisionFactRecord"
+          },
+          "kind": {
+            "const": "issue_decision_resolved",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "decision",
+          "revision"
         ],
         "type": "object"
       }
@@ -3100,6 +3293,19 @@
       ]
     },
     {
+      "name": "decision_superseded",
+      "summary": "The decision basis differs from the current issue assessment. The request was closed without applying the submitted answer; read the issue for current open decisions.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issue"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
       "name": "issue_automation_off",
       "summary": "Issue collection is off. No source read was scheduled. Read issue_automation and decide whether to enable observe before sending sync_issues again.",
       "next": [
@@ -3422,6 +3628,46 @@
     },
     "CommandResult": {
       "oneOf": [
+        {
+          "properties": {
+            "catalog_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "decision": {
+              "$ref": "#/$defs/IssueDecisionFactRecord"
+            },
+            "outcome": {
+              "$ref": "#/$defs/IssueDecisionOutcome"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasonCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "issue_decision_resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision",
+            "outcome",
+            "changed",
+            "catalog_revision"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "planning_revision": {
@@ -4002,6 +4248,270 @@
           "type": "object"
         }
       ]
+    },
+    "IssueDecisionAnswerBy": {
+      "enum": [
+        "human",
+        "agent",
+        "default",
+        "arbiter"
+      ],
+      "type": "string"
+    },
+    "IssueDecisionBasisRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "field_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDecisionFieldHashRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gate_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "work_order_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "policy_version",
+        "gate_revision"
+      ],
+      "type": "object"
+    },
+    "IssueDecisionFactRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "answer_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDecisionAnswerBy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "basis": {
+          "$ref": "#/$defs/IssueDecisionBasisRecord"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "gate": {
+          "$ref": "#/$defs/IssueDecisionGateRecord"
+        },
+        "kind": {
+          "$ref": "#/$defs/IssueDecisionKind"
+        },
+        "option": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/IssueDecisionState"
+        },
+        "subject": {
+          "$ref": "#/$defs/IssueDecisionSubjectRecord"
+        }
+      },
+      "required": [
+        "decision_id",
+        "subject",
+        "gate",
+        "kind",
+        "basis",
+        "state"
+      ],
+      "type": "object"
+    },
+    "IssueDecisionFieldHashRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "IssueDecisionGateRecord": {
+      "enum": [
+        "start",
+        "spec",
+        "plan",
+        "delivery",
+        "merge",
+        "close"
+      ],
+      "type": "string"
+    },
+    "IssueDecisionKind": {
+      "enum": [
+        "start_approval",
+        "spec_confirmation",
+        "plan_approval",
+        "risk_exception",
+        "issue_changed",
+        "failure_recovery",
+        "agent_question"
+      ],
+      "type": "string"
+    },
+    "IssueDecisionOptionState": {
+      "additionalProperties": false,
+      "properties": {
+        "effect": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "IssueDecisionOutcome": {
+      "enum": [
+        "answered",
+        "superseded",
+        "already_resolved"
+      ],
+      "type": "string"
+    },
+    "IssueDecisionRequestState": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/IssueDecisionBasisRecord"
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate": {
+          "$ref": "#/$defs/IssueDecisionGateRecord"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/IssueDecisionKind"
+        },
+        "on_timeout": {
+          "$ref": "#/$defs/IssueDecisionTimeout"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/IssueDecisionOptionState"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/IssueDecisionState"
+        },
+        "subject": {
+          "$ref": "#/$defs/IssueDecisionSubjectRecord"
+        }
+      },
+      "required": [
+        "id",
+        "subject",
+        "gate",
+        "kind",
+        "question",
+        "options",
+        "basis",
+        "on_timeout",
+        "state",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "IssueDecisionState": {
+      "enum": [
+        "open",
+        "answered",
+        "expired",
+        "withdrawn",
+        "superseded"
+      ],
+      "type": "string"
+    },
+    "IssueDecisionSubjectRecord": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "issue"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IssueDecisionTimeout": {
+      "enum": [
+        "wait",
+        "default",
+        "arbiter"
+      ],
+      "type": "string"
     },
     "IssueEventProjectScope": {
       "additionalProperties": false,
@@ -5288,6 +5798,40 @@
         {
           "additionalProperties": false,
           "properties": {
+            "decision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "note": {
+              "maxLength": 4096,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "option": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "answer_issue_decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision_id",
+            "option"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "type": {
               "const": "sync_issues",
               "type": "string"
@@ -5524,6 +6068,39 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/IssueDecisionFactRecord"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasonCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "issue_decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision",
+            "revision"
           ],
           "type": "object"
         }
@@ -6171,6 +6748,13 @@
                 "item": {
                   "$ref": "#/$defs/IssueListItem"
                 },
+                "open_decisions": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/$defs/IssueDecisionRequestState"
+                  },
+                  "type": "array"
+                },
                 "report": {
                   "anyOf": [
                     {
@@ -6680,6 +7264,60 @@
             "gate_revision",
             "policy_version",
             "by"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/IssueDecisionFactRecord"
+            },
+            "kind": {
+              "const": "issue_decision_requested",
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "decision",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/IssueDecisionFactRecord"
+            },
+            "kind": {
+              "const": "issue_decision_resolved",
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasonCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "decision",
+            "revision"
           ],
           "type": "object"
         },
@@ -7631,6 +8269,7 @@
         "observation_only",
         "execution_grant_required",
         "close_disabled",
+        "decision_superseded",
         "issue_automation_off"
       ],
       "type": "string"

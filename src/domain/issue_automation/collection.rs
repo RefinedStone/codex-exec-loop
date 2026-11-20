@@ -180,6 +180,8 @@ pub struct IssueCollectionItem {
     pub observation_revision: Option<u64>,
     pub tracked_revision: Option<u64>,
     pub triage: Option<IssueTriageProjection>,
+    /// 같은 catalog snapshot에서 읽은 열린 결정 요청이다.
+    pub open_decisions: Vec<super::decision::StoredIssueDecision>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

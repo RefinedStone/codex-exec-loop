@@ -239,7 +239,7 @@ impl KernelSession {
 
     async fn command(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
         let attached = self.attached()?;
-        let request: CommandRequest = parse_params(params)?;
+        let request = parse_command_params(params)?;
         // 커널은 이 설명으로 명령을 기록하고 멱등 키로 재전송을 가린다 (plan 19 Q3-6).
         let command_name = request.command.kind().name();
         let caller = Some(attached.client_name.clone()).filter(|name| !name.trim().is_empty());
@@ -453,6 +453,17 @@ fn protocol_event(event: KernelHostEvent) -> Option<KernelEvent> {
             IssueAutomationState::from_domain(&state.projection)
                 .with_runtime(state.collecting, state.next_poll_after_ms),
         )),
+        KernelHostEvent::IssueDecision {
+            decision,
+            revision,
+            reason,
+        } => Some(KernelEvent::IssueDecision(
+            crate::adapter::inbound::kernel_protocol::IssueDecisionChangedState {
+                decision: *decision,
+                revision,
+                reason,
+            },
+        )),
         KernelHostEvent::Resync => Some(KernelEvent::Resync),
         KernelHostEvent::Recorded(record) => Some(KernelEvent::Recorded(*record)),
     }
@@ -498,6 +509,32 @@ async fn read_kernel_log<T: Send + 'static>(
             KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
         })?
         .map_err(unavailable)
+}
+
+/// 결정 답의 가리기 전 note는 녹화 입력에서 제외한다. 실제 검증은 명령 decoder가 맡는다.
+pub(super) fn is_issue_decision_command(method: &str, text: &str) -> bool {
+    method == METHOD_COMMAND
+        && serde_json::from_str::<Value>(text)
+            .ok()
+            .is_some_and(|message| is_issue_decision_params(&message["params"]))
+}
+
+fn is_issue_decision_params(params: &Value) -> bool {
+    params.pointer("/command/type").and_then(Value::as_str) == Some("answer_issue_decision")
+}
+
+fn parse_command_params(params: Value) -> Result<CommandRequest, KernelProtocolError> {
+    let sensitive = is_issue_decision_params(&params);
+    parse_params(params).map_err(|error| {
+        if sensitive {
+            KernelProtocolError {
+                code: ERROR_INVALID_PARAMS,
+                message: "invalid issue decision answer parameters".to_string(),
+            }
+        } else {
+            error
+        }
+    })
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, KernelProtocolError> {
@@ -552,6 +589,7 @@ mod tests {
         IssuesState::from_domain(&IssueCollectionPage {
             revision: 3,
             items: vec![IssueCollectionItem {
+                open_decisions: Vec::new(),
                 issue: reference.clone(),
                 binding_id: IssueAutomationBindingId::new("fixture").expect("binding"),
                 tracked: None,
@@ -685,5 +723,107 @@ mod tests {
         session.detach().await;
         drop(client);
         drop(host);
+    }
+    #[test]
+    fn issue_decision_host_events_reach_the_wire_with_committed_metadata_only() {
+        use crate::domain::issue_automation::decision::{
+            IssueDecisionAgentAnswer, IssueDecisionBasis, IssueDecisionDefinition, IssueDecisionId,
+            IssueDecisionKind, IssueDecisionOption, IssueDecisionRequest, IssueDecisionSharedText,
+            IssueDecisionSubject, IssueDecisionTimeout,
+        };
+        use crate::domain::issue_automation::policy::IssueAutomationGate;
+        use crate::domain::kernel_event::{IssueDecisionFactRecord, ReasonCode};
+
+        let shared = |text: &str| IssueDecisionSharedText::new_shared(text).unwrap();
+        let open = IssueDecisionRequest::new(
+            IssueDecisionId::new("wire-decision").unwrap(),
+            IssueDecisionDefinition {
+                subject: IssueDecisionSubject::Issue(issue("/workspace", "I_decision")),
+                gate: IssueAutomationGate::Start,
+                kind: IssueDecisionKind::StartApproval,
+                question: shared("decision-question-canary"),
+                options: vec![IssueDecisionOption {
+                    id: "continue".to_owned(),
+                    label: shared("계속"),
+                    effect: shared("의사를 기록합니다."),
+                }],
+                recommended: Some("continue".to_owned()),
+                basis: IssueDecisionBasis {
+                    policy_version: "a".repeat(64),
+                    field_hash: None,
+                    work_order_id: None,
+                    gate_revision: 7,
+                },
+                on_timeout: IssueDecisionTimeout::Wait,
+                due_at: None,
+                asked_by: "agent-1".to_owned(),
+                evidence: Vec::new(),
+            },
+        )
+        .unwrap();
+        let answer = || IssueDecisionAgentAnswer {
+            option: "continue".to_owned(),
+            note: Some(shared("decision-note-canary")),
+            caller: Some("Desktop".to_owned()),
+            channel: "kernel".to_owned(),
+            at: "2026-11-20T20:00:00Z".to_owned(),
+        };
+        let answered = open
+            .answer_agent(&open.definition().basis, answer())
+            .unwrap()
+            .request;
+        let mut current_basis = open.definition().basis.clone();
+        current_basis.gate_revision += 1;
+        let superseded = open.answer_agent(&current_basis, answer()).unwrap().request;
+
+        for (request, revision, state, reason) in [
+            (open, 41, "open", None),
+            (answered, 42, "answered", None),
+            (
+                superseded,
+                43,
+                "superseded",
+                Some(ReasonCode::DecisionSuperseded),
+            ),
+        ] {
+            let fact = IssueDecisionFactRecord::from(&request.fact());
+            let expected = serde_json::to_value(&fact).unwrap();
+            let event = protocol_event(KernelHostEvent::IssueDecision {
+                decision: Box::new(fact),
+                revision,
+                reason,
+            })
+            .expect("a committed decision must be forwarded to attached clients");
+            let wire = serde_json::to_value(EventNotification { event }).unwrap();
+
+            assert_eq!(wire["event"]["type"], "issue_decision");
+            assert_eq!(wire["event"]["revision"], revision);
+            assert_eq!(
+                wire["event"]["reason"],
+                serde_json::to_value(reason).unwrap()
+            );
+            assert_eq!(wire["event"]["decision"], expected);
+            assert_eq!(wire["event"]["decision"]["state"], state);
+            assert_eq!(
+                wire["event"]["decision"]["answer_by"],
+                if state == "answered" {
+                    json!("agent")
+                } else {
+                    Value::Null
+                }
+            );
+            let text = wire.to_string();
+            for forbidden in [
+                "decision-question-canary",
+                "decision-note-canary",
+                "Desktop",
+                "\"question\"",
+                "\"note\"",
+                "\"caller\"",
+                "\"confirmation\"",
+            ] {
+                assert!(!text.contains(forbidden), "{forbidden}");
+            }
+        }
     }
 }

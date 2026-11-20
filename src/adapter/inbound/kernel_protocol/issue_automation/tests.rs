@@ -125,6 +125,7 @@ fn page(current: Option<IssueSourceRead>) -> IssueCollectionPage {
         report: None,
         revision: 7,
         items: vec![IssueCollectionItem {
+            open_decisions: Vec::new(),
             observation_revision: None,
             tracked_revision: None,
             triage: None,

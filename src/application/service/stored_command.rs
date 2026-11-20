@@ -4,10 +4,11 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::application::port::inbound::stored_command_port::{
-    StoredCommand, StoredCommandOutcome, StoredCommandPort, StoredCommandRejection,
-    StoredCommandResult, StoredTaskFields,
+    StoredCommand, StoredCommandContext, StoredCommandOutcome, StoredCommandPort,
+    StoredCommandRejection, StoredCommandResult, StoredTaskFields,
 };
 use crate::application::service::issue_collection::IssueCollectionService;
+use crate::application::service::issue_decision::IssueDecisionService;
 use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskUpdateInput,
@@ -21,6 +22,7 @@ use crate::domain::planning::PlanningMutationRefusal;
 pub struct StoredCommandService {
     planning: PlanningAdminFacadeService,
     issues: Option<Arc<IssueCollectionService>>,
+    decisions: Option<Arc<IssueDecisionService>>,
 }
 
 impl StoredCommandService {
@@ -28,6 +30,7 @@ impl StoredCommandService {
         Self {
             planning,
             issues: None,
+            decisions: None,
         }
     }
 
@@ -36,8 +39,37 @@ impl StoredCommandService {
         self
     }
 
-    fn run(&self, command: StoredCommand) -> Result<StoredCommandResult> {
+    pub fn with_issue_decisions(mut self, decisions: Arc<IssueDecisionService>) -> Self {
+        self.decisions = Some(decisions);
+        self
+    }
+
+    fn run(
+        &self,
+        command: StoredCommand,
+        context: Option<&StoredCommandContext>,
+    ) -> Result<StoredCommandResult> {
         match command {
+            StoredCommand::AnswerIssueDecision {
+                decision_id,
+                option,
+                note,
+            } => {
+                let context = context.ok_or_else(|| {
+                    anyhow::anyhow!("issue decision answers require server context")
+                })?;
+                let answer = self
+                    .decisions
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("issue decisions are unavailable"))?
+                    .answer(&decision_id, &option, note.as_deref(), context)?;
+                Ok(StoredCommandResult::IssueDecisionResolved {
+                    fact: Box::new(answer.commit.record.request.fact()),
+                    outcome: answer.outcome,
+                    changed: answer.commit.changed,
+                    catalog_revision: answer.commit.catalog_revision,
+                })
+            }
             StoredCommand::SetIssueAutomationMode { mode } => {
                 let change = self
                     .issues
@@ -128,9 +160,13 @@ impl StoredCommandService {
     }
 }
 
-impl StoredCommandPort for StoredCommandService {
-    fn execute(&self, command: StoredCommand) -> Result<StoredCommandOutcome> {
-        match self.run(command) {
+impl StoredCommandService {
+    fn execute_internal(
+        &self,
+        command: StoredCommand,
+        context: Option<&StoredCommandContext>,
+    ) -> Result<StoredCommandOutcome> {
+        match self.run(command, context) {
             Ok(result) => Ok(StoredCommandOutcome::Done(result)),
             // 낡은 revision 과 잡힌 guard 는 실패가 아니라 거절이다. 아무것도 바뀌지 않았다.
             Err(error) => match PlanningMutationRefusal::find_in(&error) {
@@ -140,6 +176,20 @@ impl StoredCommandPort for StoredCommandService {
                 None => Err(error),
             },
         }
+    }
+}
+
+impl StoredCommandPort for StoredCommandService {
+    fn execute(&self, command: StoredCommand) -> Result<StoredCommandOutcome> {
+        self.execute_internal(command, None)
+    }
+
+    fn execute_with_context(
+        &self,
+        command: StoredCommand,
+        context: &StoredCommandContext,
+    ) -> Result<StoredCommandOutcome> {
+        self.execute_internal(command, Some(context))
     }
 }
 

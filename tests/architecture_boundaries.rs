@@ -598,6 +598,8 @@ const ISSUE_AUTOMATION_BOUNDARY_PATHS: &[&str] = &[
     "src/application/service/issue_collection",
     "src/application/service/issue_triage.rs",
     "src/application/service/issue_triage",
+    "src/application/service/issue_decision.rs",
+    "src/application/service/issue_decision",
     "src/application/port/outbound/issue_collection_origin_port.rs",
     "src/adapter/outbound/git/issue_origin.rs",
     "src/application/port/outbound/issue_automation_store_port.rs",
@@ -668,7 +670,9 @@ fn issue_automation_stays_independent_and_stores_only_shared_issue_types() {
         "src/domain/issue_automation/mod.rs",
         "src/domain/issue_automation/policy.rs",
         "src/domain/issue_automation/triage.rs",
+        "src/domain/issue_automation/decision.rs",
         "src/application/service/issue_triage.rs",
+        "src/application/service/issue_decision.rs",
         "src/application/service/issue_automation_policy.rs",
         "src/application/port/inbound/issue_automation_policy_query_port.rs",
         "src/application/port/outbound/issue_automation_policy_source_port.rs",
@@ -686,6 +690,7 @@ fn issue_automation_stays_independent_and_stores_only_shared_issue_types() {
         "src/adapter/outbound/git/issue_origin.rs",
         "src/adapter/outbound/github/issue_source.rs",
         "src/adapter/outbound/db/sqlite_issue_automation_store.rs",
+        "src/adapter/outbound/db/sqlite_issue_automation_store/decision.rs",
     ] {
         assert!(
             root.join(required).is_file(),
