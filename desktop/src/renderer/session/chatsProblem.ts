@@ -2,7 +2,7 @@
 import { JsonRpcError } from "../rpc/jsonRpcClient";
 
 /** 기록 조회 제한의 JSON-RPC 오류 코드이다. Gateway 의 `akra/chats` 와 같아야 한다. */
-export const CHATS_RATE_LIMITED = -32010;
+export const CHATS_RATE_LIMITED = -32029;
 const METHOD_NOT_FOUND = -32601;
 
 /** Gateway 가 답에 붙이는 제한 상태이다. `limited` 이면 값은 제한 전에 마지막으로 읽은 것이다. */
@@ -23,15 +23,15 @@ export function staleNotice(state: ChatsLimitState): string | null {
   return state.limited === true ? `마지막으로 읽은 내용입니다. ${limitNotice(state.retryAfterSeconds)}` : null;
 }
 
-export function isRateLimited(error: unknown): boolean {
+export function isRateLimited(error: unknown): error is JsonRpcError & { readonly code: typeof CHATS_RATE_LIMITED } {
   return error instanceof JsonRpcError && error.code === CHATS_RATE_LIMITED;
 }
 
 /** 조회 제한 오류이면 재시도 안내 글자를, 아니면 null 을 돌린다. */
 export function rateLimitedMessage(error: unknown): string | null {
   if (!isRateLimited(error)) return null;
-  const data = (error as JsonRpcError).data;
-  return limitNotice(typeof data === "object" && data !== null && "retryAfterSeconds" in data ? (data as { retryAfterSeconds: unknown }).retryAfterSeconds : null);
+  const data = error.data;
+  return limitNotice(typeof data === "object" && data !== null && "retryAfterSeconds" in data ? data.retryAfterSeconds : null);
 }
 
 /**

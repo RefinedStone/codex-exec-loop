@@ -31,6 +31,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
       messages: [
         { id: "c1", role: "user", text: "날씨 알려줘" },
         { id: "c2", role: "assistant", text: "오늘은 **맑음**." },
+        ...Array.from({ length: 24 }, (_, index) => ({ id: `extra-${index}`, role: "user", text: `Follow-up ${index + 1}` })),
       ],
     },
   },
@@ -67,7 +68,7 @@ try {
 
   await toggleRemoteAgents();
   await page.getByTestId("remote-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 15_000 });
-  check("turning it on shows a warning first", warnings.length === 1 && warnings[0].includes("약관"));
+  check("the opt-in warning discloses ChatGPT history reads and the shared limit", warnings.length === 1 && warnings[0].includes("ChatGPT 대화 기록") && warnings[0].includes("공식 ChatGPT 앱과 공유"));
   // 원격 구역은 로컬 작업 폴더보다 위에 있다. 스크롤하지 않아도 보인다.
   const remoteTop = (await page.getByTestId("remote-host").boundingBox())?.y ?? Infinity;
   const firstLocalTop = (await page.getByTestId("thread-entry").first().boundingBox())?.y ?? -Infinity;
@@ -148,6 +149,7 @@ try {
   await page.getByTestId("dot-composer-input").fill("from the side");
   const [dotWindow] = await Promise.all([app.waitForEvent("window"), page.getByTestId("dot-pop-out").click()]);
   await dotWindow.getByTestId("dot-message").nth(1).waitFor({ timeout: 15_000 });
+  check("the detached Dot window does not request another history list", gateway.remoteReceivedMethods.filter((method) => method === "akra/chats/list").length === 1);
   check("moving the chat to a window closes the side chat", (await page.getByTestId("dot-dock").count()) === 0);
   check("the dot window shows only the chat with the dot", (await dotWindow.getByTestId("dot-window").count()) === 1 && (await dotWindow.getByTestId("thread-entry").count()) === 0 && (await dotWindow.getByTestId("dot-pop-out").count()) === 0);
   // 보내기 허락은 앱을 켠 동안 하나이다. 창을 옮겨도 다시 묻지 않는다.
@@ -222,8 +224,24 @@ try {
   await page.getByTestId("remote-chat-entry").first().click();
   await page.getByTestId("chat-message").nth(1).waitFor({ timeout: 10_000 });
   check("the ChatGPT chat opens read-only beside the view", (await page.getByTestId("chat-dock").count()) === 1 && (await page.getByTestId("chat-dock").getByTestId("composer-input").count()) === 0);
-  check("the ChatGPT chat shows the conversation messages", (await page.getByTestId("chat-message").count()) === 2 && (await page.getByTestId("chat-messages").innerText()).includes("맑음"));
+  check("the ChatGPT chat renders the assistant message as Markdown", (await page.getByTestId("chat-message").nth(1).locator("strong").innerText()) === "맑음");
   check("the conversation is read over the remote connection", gateway.remoteReceivedMethods.includes("akra/chats/read") && !gateway.receivedMethods.includes("akra/chats/read"));
+  const messages = page.getByTestId("chat-messages");
+  const readingPosition = await messages.evaluate((element) => {
+    element.scrollTop = 240;
+    return element.scrollTop;
+  });
+  gateway.setChatsRateLimited(true);
+  await page.getByTestId("chats-reload").click();
+  await page.getByTestId("chats-problem").waitFor({ timeout: 10_000 });
+  check("a stale list keeps the selected conversation open", (await page.getByTestId("remote-chat-entry").count()) === 1 && (await messages.evaluate((element) => element.scrollTop)) === readingPosition);
+  await page.getByTestId("chat-refresh").click();
+  await page.getByTestId("chat-stale").waitFor({ timeout: 10_000 });
+  check("a stale conversation keeps its messages and reading position", (await page.getByTestId("chat-stale").innerText()).includes("30초") && (await page.getByTestId("chat-message").count()) === 26 && readingPosition === 240 && (await messages.evaluate((element) => element.scrollTop)) === readingPosition);
+  gateway.setChatsRateLimited(false);
+  await page.getByTestId("chat-refresh").click();
+  await page.getByTestId("chat-stale").waitFor({ state: "detached", timeout: 10_000 });
+  check("a fresh conversation clears the stale notice at the same position", (await messages.evaluate((element) => element.scrollTop)) === readingPosition);
   await page.getByTestId("chat-close").click();
   await page.getByTestId("chat-dock").waitFor({ state: "detached", timeout: 10_000 });
   check("closing the ChatGPT chat leaves the list", (await page.getByTestId("remote-chat-entry").count()) === 1);

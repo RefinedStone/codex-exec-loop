@@ -21,7 +21,7 @@ const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSON_RPC_INVALID_PARAMS: i64 = -32602;
 const CHATS_ERROR: i64 = -32000;
 /// 서비스가 기록 조회를 제한했다. `data.retryAfterSeconds` 로 클라이언트가 백오프한다.
-const CHATS_RATE_LIMITED: i64 = -32010;
+const CHATS_RATE_LIMITED: i64 = -32029;
 
 /// 요청 하나를 블로킹 작업으로 처리하고 답을 접속의 보내기 함으로 보낸다.
 pub(super) fn spawn_request(

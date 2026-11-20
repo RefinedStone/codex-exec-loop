@@ -443,11 +443,18 @@ the desktop app itself is not shipped yet.
   display name, status, kind, paused flag, and current work thread of each cloud agent. The Gateway
   reads them with `GET https://chatgpt.com/backend-api/tbo` through `curl -q --config -`, so the token
   stays out of argv, disk, and logs; it reads the first page only. When the cloud host is off the
-  method is unknown (`-32601`). Desktop asks once per remote connection. The sidebar shows two
-  sections for the host, above the local folders: "Dots" holds the dots and, folded under "작업 대화",
+  method is unknown (`-32601`). Desktop asks once per remote connection. Above the local folders,
+  "Dots" holds the dots and, folded under "작업 대화",
   the work threads that an agent made (`threadSource` starts with `aeon`); "클라우드 · 읽기 전용" holds
   the cloud threads that the user made (`src/adapter/outbound/app_server/cloud_dots.rs`,
   `src/adapter/inbound/gateway/dots.rs`).
+- The same cloud setting enables read-only access to personal ChatGPT history on remote connections.
+  The main window requests `akra/chats/list` once for its remote session. Reconnecting or opening a
+  dot window does not reload this list. The "ChatGPT" section lets the user refresh it manually.
+  Selecting a chat calls `akra/chats/read` and displays text from the active conversation branch.
+  During an account rate limit, a cached list or conversation carries `limited: true` and the
+  optional `retryAfterSeconds`. Desktop identifies this as the last successful read. Without a
+  cached value the Gateway returns `-32029` and, when known, `error.data.retryAfterSeconds`.
 - Dot chat (D-19): `akra/dots/messages` with `{ roomId }` answers `{ messages }`, the latest 30
   messages of that message room, oldest first, each with id, time, author name, a from-dot flag, and
   text; deleted messages are left out. The room id must be letters, digits, `-`, or `_`. Desktop opens

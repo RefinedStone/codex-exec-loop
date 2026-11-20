@@ -18,7 +18,7 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
   useZoom();
   useAppSettings();
   useEffect(() => {
-    const created = new DesktopSession(remoteHostBridge(window.akra.remote, host), desktopSessionStore(useStore), clientVersion, undefined, true);
+    const created = new DesktopSession(remoteHostBridge(window.akra.remote, host, "dot-window"), desktopSessionStore(useStore), clientVersion, undefined, true);
     session.current = created;
     created.start();
     return () => {
