@@ -1,0 +1,38 @@
+# Akra issue policy example. Schema: schema/akra-issue-policy.schema.json
+#
+# Project file: <repository>/.akra/issue-policy.toml
+# User file:    AKRA_HOME/issue-policy.toml (default ~/.akra/issue-policy.toml)
+#
+# Each value resolves as: project file > user file > built-in.
+# An invalid file blocks publish and AI handoff for the project.
+
+schema_version = 1
+
+[convention]
+# The issue template to apply. A relative path inside the repository.
+template = ".github/ISSUE_TEMPLATE/bug_report.md"
+# Section titles the project requires in addition to the template.
+required_sections = ["Steps to reproduce", "Expected result"]
+
+[publish]
+# Locked. Only `true` is valid; `false` makes the file invalid.
+required_validation = true
+
+# Action per sensitive span class when the text goes to the provider.
+# Actions: "remove", "restorable_mask", "user_confirm".
+[publish.spans]
+secret = "remove"
+name = "restorable_mask"
+path = "restorable_mask"
+log = "user_confirm"
+
+# Action per sensitive span class when the text goes to an AI.
+[ai_handoff.spans]
+secret = "remove"
+name = "restorable_mask"
+path = "restorable_mask"
+log = "remove"
+
+[vault]
+# Locked. Only `true` is valid; `false` makes the file invalid.
+user_unlock = true
