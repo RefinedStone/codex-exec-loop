@@ -29,6 +29,8 @@ pub mod evidence_vault_port;
 pub mod issue_snapshot_port;
 // issue board field port 는 보드 항목의 필드를 읽고 고친다. 본문 쓰기와 승인이 다르다 (#2435).
 pub mod issue_board_field_port;
+// issue update port 는 기존 이슈의 제목과 본문을 고친다. 승인한 게시 경로만 쓴다 (#2423).
+pub mod issue_update_port;
 // issue policy source port 는 사용자와 프로젝트의 이슈 정책 파일을 읽는 경계이다 (#2416).
 pub mod issue_policy_source_port;
 // vault key store port 는 Vault 키를 두는 OS 키 저장소의 계약이다 (#2422).

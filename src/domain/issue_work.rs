@@ -67,6 +67,20 @@ impl IssueWriteApproval {
     }
 }
 
+/// 사용자가 미리보기에서 한 게시 승인이다 (#2423). 대상과 동작, 글, 정책 판, 템플릿 판을 하나로 묶는다.
+/// 넷 중 하나라도 보낼 값과 다르면 게시하지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssuePublishApproval {
+    pub write: IssueWriteApproval,
+    /// 승인한 제목과 본문의 필드 해시이다.
+    pub shared_copy_hash: IssueFieldHash,
+    /// 승인할 때의 이슈 정책 판이다.
+    pub policy_version: String,
+    /// 승인할 때의 템플릿 판이다 (`IssueTemplateResolution::version`). 템플릿이 없으면 `None` 이다.
+    pub template_version: Option<String>,
+}
+
 /// 사람이 고르는 이슈의 주소이다. 이름과 번호는 바뀔 수 있다. 안정 ID 를 찾을 때만 쓴다.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
