@@ -1,6 +1,7 @@
 //! Creation must cross the remote-write boundary at most once per durable intent.
 //! These tests use only in-memory ports and synthetic issue/vault values.
 mod concurrency;
+mod scope;
 mod support;
 
 use std::sync::atomic::Ordering;

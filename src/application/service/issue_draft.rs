@@ -119,6 +119,18 @@ impl IssueDraftService {
         })
     }
 
+    fn workspace_dir(&self, cwd: &str) -> Result<String> {
+        match &self.creator {
+            Some(creator) => creator.canonical_workspace(cwd),
+            None => Ok(cwd.to_string()),
+        }
+    }
+
+    fn scoped_target(&self, mut target: IssueDraftTarget) -> Result<IssueDraftTarget> {
+        target.cwd = self.workspace_dir(&target.cwd)?;
+        Ok(target)
+    }
+
     fn resolve(&self, target: &IssueDraftTarget) -> Result<IssueSnapshotResponse> {
         self.snapshot.resolve(IssueSnapshotResolveRequest {
             locator: IssueLocator {
@@ -138,7 +150,7 @@ impl IssueDraftService {
             .publisher
             .reconcile(cwd)?
             .into_iter()
-            .rfind(|record| record.issue == *issue)
+            .rfind(|record| record.issue.same_remote_issue(issue))
             .map(|record| intent(&self.with_restore_link(record))))
     }
 
@@ -202,6 +214,7 @@ impl IssueDraftPort for IssueDraftService {
     }
 
     fn open(&self, target: IssueDraftTarget) -> Result<IssueDraftOpened> {
+        let target = self.scoped_target(target)?;
         let conventions = self.conventions(&target.cwd)?;
         let remote = self.resolve(&target)?;
         let publish = conventions
@@ -224,12 +237,14 @@ impl IssueDraftPort for IssueDraftService {
     }
 
     fn preview(&self, request: IssueDraftPreviewRequest) -> Result<IssueDraftPreview> {
-        let conventions = self.conventions(&request.target.cwd)?;
+        let target = self.scoped_target(request.target)?;
+        let conventions = self.conventions(&target.cwd)?;
         Ok(evaluate(&conventions, &request.text, None).0)
     }
 
     fn publish(&self, request: IssueDraftPublishRequest) -> Result<IssueDraftPublished> {
-        let conventions = self.conventions(&request.target.cwd)?;
+        let target = self.scoped_target(request.target)?;
+        let conventions = self.conventions(&target.cwd)?;
         let (preview, passed) = evaluate(
             &conventions,
             &request.text,
@@ -238,7 +253,7 @@ impl IssueDraftPort for IssueDraftService {
         let Some((validated, masked_spans)) = passed else {
             return Ok(IssueDraftPublished::Blocked { preview });
         };
-        let issue = self.resolve(&request.target)?.issue;
+        let issue = self.resolve(&target)?.issue;
         let restorable = restorable_fields(&masked_spans);
         // 가릴 구간이 없거나 공유본만 게시하면 키 저장소를 부르지 않는다.
         let vault_key = (!restorable.is_empty() && !request.shared_copy_only)
@@ -291,12 +306,17 @@ impl IssueDraftPort for IssueDraftService {
     }
 
     fn recheck(&self, target: IssueDraftTarget) -> Result<Option<IssueDraftIntent>> {
+        let target = self.scoped_target(target)?;
         let issue = self.resolve(&target)?.issue;
         self.latest_intent(&target.cwd, &issue)
     }
 
     fn abandon(&self, cwd: &str, intent_id: &str) -> Result<IssueDraftIntent> {
-        Ok(intent(&self.publisher.abandon(cwd, intent_id)?))
+        Ok(intent(
+            &self
+                .publisher
+                .abandon(&self.workspace_dir(cwd)?, intent_id)?,
+        ))
     }
 }
 

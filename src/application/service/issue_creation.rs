@@ -74,6 +74,11 @@ impl IssueCreationService {
         }
     }
 
+    /// Both creation and updates use the repository kernel's project scope.
+    pub fn canonical_workspace(&self, cwd: &str) -> Result<String> {
+        self.journal.canonical_workspace(cwd)
+    }
+
     /// Opening another window or restarting the process reuses even a completed intent.
     /// Only an explicit restart can create another local attempt.
     pub fn open(&self, target: &IssueCreationTarget) -> Result<IssueCreationIntentRecord> {

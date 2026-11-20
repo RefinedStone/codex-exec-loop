@@ -46,7 +46,10 @@ impl IssueJournaledPublishService {
         }
         // Assigning a fresh sequence after a later update would make an old original
         // appear newest, even when both originals mask to the same public text.
-        if records.iter().any(|r| r.issue == created.issue) {
+        if records
+            .iter()
+            .any(|r| r.issue.same_remote_issue(&created.issue))
+        {
             bail!("another publish intent already owns this issue")
         }
         let key =

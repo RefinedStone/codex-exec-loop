@@ -21,9 +21,19 @@ use crate::application::port::outbound::issue_create_port::{
 use crate::application::port::outbound::issue_creation_journal_port::{
     IssueCreationJournalPort, IssueCreationJournalTransaction,
 };
+use crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort;
+use crate::application::port::outbound::issue_snapshot_port::{
+    IssueSnapshotPort, IssueSnapshotReadRequest, IssueSnapshotResolveRequest, IssueSnapshotResponse,
+};
+use crate::application::port::outbound::issue_template_source_port::IssueTemplateSourcePort;
+use crate::application::port::outbound::issue_update_port::{
+    IssueUpdatePort, IssueUpdateRequest, IssueUpdateResponse,
+};
 use crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService;
 use crate::application::service::issue_creation::IssueCreationService;
+use crate::application::service::issue_policy::IssuePolicyService;
 use crate::application::service::issue_publish_journal::IssueJournaledPublishService;
+use crate::application::service::issue_template::IssueTemplateService;
 use crate::domain::issue_creation::{
     IssueCreatedLocation, IssueCreationIntentRecord, IssueCreationIntentState,
     IssueRepositoryReference,
@@ -43,6 +53,9 @@ pub(super) struct CreationRemote {
     existing: Arc<FakeRemoteIssue>,
     pub(super) creates: AtomicUsize,
     pub(super) posts: Mutex<Vec<IssueCreateRequest>>,
+    pub(super) resolves: Mutex<Vec<IssueSnapshotResolveRequest>>,
+    pub(super) reads: Mutex<Vec<IssueReference>>,
+    pub(super) updates: Mutex<Vec<IssueUpdateRequest>>,
 }
 
 impl IssueCreatePort for CreationRemote {
@@ -92,6 +105,55 @@ impl IssueCreatePort for CreationRemote {
     }
 }
 
+impl IssueSnapshotPort for CreationRemote {
+    fn resolve(&self, request: IssueSnapshotResolveRequest) -> Result<IssueSnapshotResponse> {
+        self.resolves.lock().unwrap().push(request.clone());
+        self.existing.resolve(request)
+    }
+
+    fn read(&self, request: IssueSnapshotReadRequest) -> Result<IssueSnapshotResponse> {
+        self.reads.lock().unwrap().push(request.issue.clone());
+        self.existing.read(request)
+    }
+}
+
+impl IssueUpdatePort for CreationRemote {
+    fn update_title_and_body(&self, request: IssueUpdateRequest) -> Result<IssueUpdateResponse> {
+        self.updates.lock().unwrap().push(request.clone());
+        self.existing.update_title_and_body(request)
+    }
+}
+
+pub(super) struct ScopeSources {
+    files: Arc<FakeProjectFiles>,
+    pub(super) policy_workspaces: Mutex<Vec<String>>,
+    pub(super) template_workspaces: Mutex<Vec<String>>,
+}
+
+impl IssuePolicySourcePort for ScopeSources {
+    fn load_user_policy_toml(&self) -> Result<Option<String>> {
+        self.files.load_user_policy_toml()
+    }
+
+    fn load_project_policy_toml(&self, workspace: &str) -> Result<Option<String>> {
+        self.policy_workspaces
+            .lock()
+            .unwrap()
+            .push(workspace.to_string());
+        self.files.load_project_policy_toml(workspace)
+    }
+}
+
+impl IssueTemplateSourcePort for ScopeSources {
+    fn load_template(&self, workspace: &str, path: &str) -> Result<Option<String>> {
+        self.template_workspaces
+            .lock()
+            .unwrap()
+            .push(workspace.to_string());
+        self.files.load_template(workspace, path)
+    }
+}
+
 #[derive(Default)]
 pub(super) struct CreationJournal {
     pub(super) records: Mutex<Vec<IssueCreationIntentRecord>>,
@@ -129,7 +191,12 @@ impl IssueCreationJournalTransaction for Transaction<'_> {
 
 impl IssueCreationJournalPort for CreationJournal {
     fn canonical_workspace(&self, workspace_dir: &str) -> Result<String> {
-        Ok(workspace_dir.trim_end_matches("/.").to_string())
+        let workspace = workspace_dir.trim_end_matches("/.");
+        Ok(match workspace {
+            "/work/project-linked" | "/work/project/sub" => "/work/project",
+            other => other,
+        }
+        .to_string())
     }
 
     fn begin(&self, _workspace_dir: &str) -> Result<Box<dyn IssueCreationJournalTransaction + '_>> {
@@ -211,6 +278,7 @@ pub(super) struct CreationFixture {
     pub(super) journal: Arc<CreationJournal>,
     pub(super) vault: Arc<CreationVault>,
     pub(super) service: IssueDraftService,
+    pub(super) sources: Arc<ScopeSources>,
 }
 
 impl CreationFixture {
@@ -220,23 +288,34 @@ impl CreationFixture {
             existing: existing.remote.clone(),
             creates: AtomicUsize::new(0),
             posts: Mutex::new(Vec::new()),
+            resolves: Mutex::new(Vec::new()),
+            reads: Mutex::new(Vec::new()),
+            updates: Mutex::new(Vec::new()),
         });
         let journal = Arc::new(CreationJournal::default());
         let vault = Arc::new(CreationVault::default());
         let publisher = Arc::new(IssueJournaledPublishService::new(
-            existing.remote.clone(),
-            existing.remote.clone(),
+            remote.clone(),
+            remote.clone(),
             Arc::new(FakeJournal::default()),
             vault.clone(),
         ));
         let creator = Arc::new(IssueCreationService::new(
             remote.clone(),
-            existing.remote,
+            remote.clone(),
             journal.clone(),
             vault.clone(),
             publisher.clone(),
         ));
+        let sources = Arc::new(ScopeSources {
+            files: existing.files.clone(),
+            policy_workspaces: Mutex::new(Vec::new()),
+            template_workspaces: Mutex::new(Vec::new()),
+        });
         let mut service = existing.service;
+        service.snapshot = remote.clone();
+        service.policy = IssuePolicyService::new(sources.clone());
+        service.template = IssueTemplateService::new(sources.clone());
         service.publisher = publisher;
         service.vault_unlock = Arc::new(EvidenceVaultUnlockService::new(Arc::new(
             FakeVaultKeyStoreAdapter::with_key(VaultKey::new(vec![4; 32])),
@@ -247,11 +326,16 @@ impl CreationFixture {
             journal,
             vault,
             service: service.with_creation(creator),
+            sources,
         }
     }
 
     pub(super) fn creates(&self) -> usize {
         self.remote.creates.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn regular_scopes(&self) -> Vec<VaultRecordScope> {
+        self.vault.records.lock().unwrap().keys().cloned().collect()
     }
 
     pub(super) fn staged(&self) -> StagedRecords {

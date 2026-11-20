@@ -213,7 +213,7 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
     if (!intent || (uncertain && !acknowledgeUncertain)) return;
     return perform<IssueCreationOpened>(ISSUE_CREATE_METHOD.restart, {
       target, previousIntentId: intent.intentId, acknowledgeUncertain: uncertain && acknowledgeUncertain,
-    }, installOpened);
+    }, installOpened, true);
   };
   const reopen = () => perform<IssueCreationOpened>(ISSUE_CREATE_METHOD.open, target, installOpened);
   const name = target.owner + "/" + target.repository;

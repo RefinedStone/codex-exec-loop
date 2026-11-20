@@ -122,9 +122,9 @@ impl IssueJournaledPublishService {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| anyhow!("publish sequence exhausted"))?;
-        let pending = records
-            .into_iter()
-            .find(|record| record.issue == publish.issue && record.state.is_unresolved());
+        let pending = records.into_iter().find(|record| {
+            record.issue.same_remote_issue(&publish.issue) && record.state.is_unresolved()
+        });
         if let Some(pending) = pending {
             return Ok(IssueJournaledPublishOutcome::AlreadyPending(pending));
         }
@@ -262,7 +262,7 @@ impl IssueJournaledPublishService {
             return Ok(record);
         }
         if self.journal.load(workspace_dir)?.iter().any(|other| {
-            other.issue == record.issue
+            other.issue.same_remote_issue(&record.issue)
                 && other.intent_id != record.intent_id
                 && other.sequence >= record.sequence
                 && (matches!(
