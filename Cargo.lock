@@ -355,6 +355,7 @@ dependencies = [
  "quote",
  "rand 0.8.6",
  "ratatui",
+ "ring",
  "rusqlite",
  "rustls",
  "schemars",
@@ -378,6 +379,7 @@ dependencies = [
  "vt100",
  "which",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
