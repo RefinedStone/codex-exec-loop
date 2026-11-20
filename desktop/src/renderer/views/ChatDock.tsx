@@ -6,46 +6,44 @@ import { useEffect, useState } from "react";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import { useResizableWidth } from "../design/useResizableWidth";
-import { rateLimitedMessage, staleNotice } from "../session/chatsProblem";
-import { type ChatConversation, remoteHostStore } from "../session/desktopStore";
+import { staleNotice } from "../session/chatsProblem";
+import { remoteHostStore } from "../session/desktopStore";
 import { closeChat } from "../session/uiStore";
-import type { GatewayRequest } from "../work/notionHub";
 
-const CHATS_READ_METHOD = "akra/chats/read";
 const MIN_DOCK_WIDTH = 320;
 const MAX_DOCK_WIDTH = 640;
 
-export function ChatDock({ host, chatId, request }: { host: string; chatId: string; request: GatewayRequest }) {
+export function ChatDock({ host, chatId, readChat }: { readonly host: string; readonly chatId: string; readonly readChat: (id: string) => Promise<void> }) {
   const useStore = remoteHostStore(host);
   const summary = useStore((state) => state.chats.find((candidate) => candidate.id === chatId) ?? null);
+  const storedConversation = useStore((state) => state.chatConversation?.id === chatId ? state.chatConversation : null);
   const [width, startResize] = useResizableWidth(420, MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
-  const [conversation, setConversation] = useState<ChatConversation | null>(null);
   const [loading, setLoading] = useState(true);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [hasRead, setHasRead] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const available = summary !== null;
 
   useEffect(() => {
+    if (!available) {
+      closeChat();
+      return;
+    }
     let current = true;
-    request<ChatConversation>(CHATS_READ_METHOD, { id: chatId }).then(
-      (conversation) => {
-        if (!current) return;
-        setConversation(conversation);
-        setProblem(staleNotice(conversation));
-        setLoading(false);
-      },
-      (error: unknown) => {
-        if (!current) return;
-        setProblem(rateLimitedMessage(error) ?? (error instanceof Error ? error.message : String(error)));
-        setLoading(false);
-      },
-    );
+    void readChat(chatId).then(() => {
+      if (!current) return;
+      setHasRead(true);
+      setLoading(false);
+    });
     return () => {
       current = false;
     };
-  }, [chatId, request, refresh]);
+  }, [available, chatId, readChat, refresh]);
 
-  const title = conversation?.title ?? summary?.title ?? "대화";
+  if (summary === null) return null;
+  const conversation = hasRead ? storedConversation : null;
+  const title = conversation?.title ?? summary.title;
   const messages = conversation?.messages ?? [];
+  const stale = conversation === null ? null : staleNotice(conversation);
 
   return (
     <aside className="dot-dock" style={{ width }} aria-label={`${title} (ChatGPT 대화)`} data-testid="chat-dock">
@@ -68,7 +66,7 @@ export function ChatDock({ host, chatId, request }: { host: string; chatId: stri
             <Icon name="close" />
           </button>
         </header>
-        {problem !== null && <p className="empty-row error" data-testid={conversation?.limited ? "chat-stale" : "chat-problem"}>{problem}</p>}
+        {stale !== null && <p className="empty-row error" data-testid="chat-stale">{stale}</p>}
         <div className="conversation-wrap">
           <section className="conversation dot-messages" data-testid="chat-messages" aria-busy={loading}>
             <div className="column">

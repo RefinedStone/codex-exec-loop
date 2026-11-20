@@ -431,11 +431,8 @@ export function App() {
     if (chatDock !== null && !chatDockVisible) closeChat();
   }, [chatDock, chatDockVisible]);
   const chatDockHost = chatDock?.host ?? null;
-  const chatGatewayRequest = useMemo<GatewayRequest>(
-    () => (method, params) => {
-      const current = chatDockHost ? remoteSessions.current.get(chatDockHost) : undefined;
-      return current ? current.requestGatewayService(method, params) : Promise.reject(new Error("원격 호스트에 연결되어 있지 않습니다."));
-    },
+  const readChat = useCallback(
+    async (id: string) => { if (chatDockHost) await remoteSessions.current.get(chatDockHost)?.readChat(id); },
     [chatDockHost],
   );
   const reloadChats = useCallback((host: string) => void remoteSessions.current.get(host)?.reloadChats(), []);
@@ -647,7 +644,7 @@ export function App() {
             </RightPanel>
           )}
           {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} />}
-          {chatDock !== null && chatDockVisible && <ChatDock key={JSON.stringify([chatDock.host, chatDock.chatId])} host={chatDock.host} chatId={chatDock.chatId} request={chatGatewayRequest} />}
+          {chatDock !== null && chatDockVisible && <ChatDock key={JSON.stringify([chatDock.host, chatDock.chatId])} host={chatDock.host} chatId={chatDock.chatId} readChat={readChat} />}
         </div>
       </div>
       {overlay === "palette" && <CommandPalette onOpenThread={openThread} />}

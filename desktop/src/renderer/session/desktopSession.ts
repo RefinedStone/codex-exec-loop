@@ -33,7 +33,7 @@ import { KernelConnection } from "../kernel/kernelConnection";
 import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
-import { ChatHistoryList } from "./chatHistoryList";
+import { ChatHistory } from "./chatHistory";
 import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
@@ -120,7 +120,7 @@ function errorMessage(error: unknown): string {
 }
 
 /** 패널이 직접 부를 수 있는 Gateway 메서드이다. app-server 메서드와 커널 명령은 이 길로 보내지 않는다. */
-const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/", "akra/chats/", "akra/git/", "akra/issue/"];
+const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/", "akra/git/", "akra/issue/"];
 /** 원격 호스트의 dot 목록이다 (D-19). dots 가 꺼진 Gateway 는 모르는 method 로 답한다. */
 const DOTS_LIST_METHOD = "akra/dots/list";
 /** 방의 실시간 상태를 보기 시작한다. 그 뒤 `akra/dots/live` 알림이 온다. */
@@ -180,7 +180,7 @@ export class DesktopSession {
   private writerElsewhereThreadId: string | null = null;
   /** 접속마다 늘어난다. 이전 접속에서 늦게 끝난 전체 검사는 반영하지 않는다. */
   private listGeneration = 0;
-  private readonly chatHistory: ChatHistoryList | undefined;
+  private readonly chatHistory: ChatHistory | undefined;
   /**
    * 이 접속에서 받은 보관·삭제와 제목 변경이다. 목록 요청보다 늦게 온 알림이 더 새롭다. 그래서 늦게 끝난 목록
    * 결과(첫 목록, rollout 전체 검사)에 덮어 쓴다. 접속마다 비운다.
@@ -203,7 +203,7 @@ export class DesktopSession {
     private readonly readOnly = false,
   ) {
     this.client = new JsonRpcClient((text) => bridge.send(text));
-    this.chatHistory = readOnly && bridge.chatHistory ? new ChatHistoryList(this.client, store) : undefined;
+    this.chatHistory = readOnly && bridge.chatHistory ? new ChatHistory(this.client, store) : undefined;
     this.batcher = new FrameBatcher((batch) => this.store.updateTranscript((transcript) => applyNotifications(transcript, batch)), scheduler);
     this.client.setServerRequestHandler((method, params, id) => this.handleServerRequest(method, params, id));
     this.kernel = new KernelConnection(this.client, store);
@@ -229,6 +229,7 @@ export class DesktopSession {
         if (this.connected) {
           void this.initialize();
         } else {
+          this.chatHistory?.disconnected();
           this.invalidateConversation();
           this.client.reset(state.phase);
           this.kernel.connectionChanged(false);
@@ -253,6 +254,7 @@ export class DesktopSession {
     }
     this.invalidateConversation();
     this.batcher.clear();
+    this.chatHistory?.invalidate(null);
     this.client.reset("closed");
     this.dropPendingApprovals();
   }
@@ -569,6 +571,14 @@ export class DesktopSession {
 
   async reloadChats(): Promise<void> {
     if (this.connected) await this.chatHistory?.reload();
+  }
+
+  async readChat(id: string): Promise<void> {
+    if (!this.connected) {
+      this.chatHistory?.invalidate("Gateway 에 연결되어 있지 않습니다.");
+      return;
+    }
+    await this.chatHistory?.read(id);
   }
 
   /**

@@ -450,7 +450,9 @@ the desktop app itself is not shipped yet.
   `src/adapter/inbound/gateway/dots.rs`).
 - The same cloud setting enables read-only access to personal ChatGPT history on remote connections.
   The main window requests `akra/chats/list` once for its remote session. Reconnecting or opening a
-  dot window does not reload this list. The "ChatGPT" section lets the user refresh it manually.
+  dot window does not reload this list. Disconnecting clears the displayed titles and conversation
+  because the next connection may use a different account. The "ChatGPT" section lets the user
+  refresh the list manually.
   Selecting a chat calls `akra/chats/read` and displays text from the active conversation branch.
   During an account rate limit, a cached list or conversation carries `limited: true` and the
   optional `retryAfterSeconds`. Desktop identifies this as the last successful read. Without a
