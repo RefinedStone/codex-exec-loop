@@ -298,11 +298,11 @@ impl HubAppServerSession {
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use serde_json::json;
 
-    use super::{recv_json_message_until, spawn_stdin_writer, write_before_deadline};
+    use super::{recv_json_message_until, write_before_deadline};
 
     #[test]
     fn expired_deadline_wins_over_queued_unrelated_notifications() {
@@ -333,6 +333,9 @@ mod tests {
     #[test]
     fn child_pipe_backpressure_cannot_extend_the_request_deadline() {
         use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        use super::spawn_stdin_writer;
         let mut child = Command::new("sleep")
             .arg("5")
             .stdin(Stdio::piped())
@@ -357,3 +360,7 @@ mod tests {
 #[cfg(test)]
 #[path = "session_environment_tests.rs"]
 mod environment_tests;
+
+#[cfg(test)]
+#[path = "session_deadline_tests.rs"]
+mod deadline_tests;
