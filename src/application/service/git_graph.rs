@@ -33,10 +33,10 @@ impl GitGraphPort for GitGraphService {
         let Some(refs) = self.history.read_refs(&request.repository_dir)? else {
             return Ok(empty_page(false, false, None));
         };
-        let refs_digest = refs_digest(&refs);
+        let page_digest = refs_digest(&refs);
         let first_page = request.cursor.is_none();
         let (skip, mut lanes) = match request.cursor {
-            Some(cursor) if cursor.refs_digest != refs_digest => {
+            Some(cursor) if cursor.refs_digest != page_digest => {
                 return Ok(empty_page(true, true, refs.head));
             }
             Some(cursor) if cursor.lanes.lane_count() > GIT_GRAPH_LANE_LIMIT => {
@@ -50,10 +50,18 @@ impl GitGraphPort for GitGraphService {
         let has_more = commits.len() > limit;
         let mut rows = place_rows(&mut lanes, commits, limit);
         self.mark_backup_only_rows(&request.repository_dir, &refs, &mut rows)?;
+        // log와 백업 분류는 움직이는 ref를 읽는다. 읽는 동안 바뀌었으면
+        // 이 쪽과 커서를 버려 서로 다른 이력의 줄을 이어 붙이지 않는다.
+        let Some(current_refs) = self.history.read_refs(&request.repository_dir)? else {
+            return Ok(empty_page(false, true, None));
+        };
+        if refs_digest(&current_refs) != page_digest {
+            return Ok(empty_page(true, true, current_refs.head));
+        }
         let next = has_more.then(|| GitGraphCursor {
             skip: skip + rows.len(),
             lanes,
-            refs_digest: refs_digest.clone(),
+            refs_digest: page_digest.clone(),
         });
         let (first_refs, first_worktrees) = if first_page {
             (refs.refs, refs.worktrees)
@@ -64,7 +72,7 @@ impl GitGraphPort for GitGraphService {
             repository: true,
             stale: false,
             head: refs.head,
-            refs_digest: Some(refs_digest),
+            refs_digest: Some(page_digest),
             refs: first_refs,
             worktrees: first_worktrees,
             rows,
@@ -194,6 +202,7 @@ mod tests {
         reads: Mutex<Vec<(bool, usize, usize)>>,
         backup_only: HashSet<String>,
         backup_reads: Mutex<usize>,
+        refs_after_commit_read: Mutex<Option<Option<GitHistoryRefs>>>,
     }
 
     impl FakeHistory {
@@ -218,6 +227,7 @@ mod tests {
                 reads: Mutex::new(Vec::new()),
                 backup_only: HashSet::new(),
                 backup_reads: Mutex::new(0),
+                refs_after_commit_read: Mutex::new(None),
             }
         }
     }
@@ -261,6 +271,9 @@ mod tests {
             limit: usize,
         ) -> Result<Vec<GitGraphCommit>> {
             self.reads.lock().unwrap().push((include_head, skip, limit));
+            if let Some(changed) = self.refs_after_commit_read.lock().unwrap().take() {
+                *self.refs.lock().unwrap() = changed;
+            }
             Ok(self
                 .commits
                 .iter()
@@ -348,6 +361,44 @@ mod tests {
         assert!(page.stale);
         assert!(page.rows.is_empty());
         assert_eq!(page.next, None);
+    }
+
+    #[test]
+    fn a_ref_change_during_the_first_or_next_commit_read_discards_the_page() {
+        for next_page in [false, true] {
+            let history = Arc::new(FakeHistory::linear(3));
+            let service = GitGraphService::new(history.clone());
+            let cursor = if next_page {
+                service.graph_page(request(1, None)).unwrap().next
+            } else {
+                None
+            };
+            *history.refs_after_commit_read.lock().unwrap() = Some(Some(refs_at("c2")));
+
+            let page = service.graph_page(request(1, cursor)).unwrap();
+
+            assert!(page.repository);
+            assert!(page.stale);
+            assert_eq!(page.head.as_deref(), Some("c2"));
+            assert!(page.rows.is_empty());
+            assert!(page.refs.is_empty());
+            assert!(page.next.is_none());
+            assert!(page.refs_digest.is_none());
+        }
+    }
+
+    #[test]
+    fn a_repository_removed_during_commit_read_discards_the_page() {
+        let history = Arc::new(FakeHistory::linear(3));
+        *history.refs_after_commit_read.lock().unwrap() = Some(None);
+        let page = GitGraphService::new(history)
+            .graph_page(request(1, None))
+            .unwrap();
+
+        assert!(!page.repository);
+        assert!(page.stale);
+        assert!(page.rows.is_empty());
+        assert!(page.next.is_none());
     }
 
     #[test]
