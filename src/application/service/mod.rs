@@ -19,6 +19,8 @@ pub mod manual_prompt_preparation;
 pub mod mcp_hub;
 // issue_handoff 는 원격 이슈를 AI 전달 정책으로 가려 인계의 공유본을 만든다 (#2428).
 pub mod issue_handoff;
+// issue_code_validator 는 사용자가 승인한 코드 검증기를 실행하고 필수 검증기 실패로 게시를 막는다 (#2431).
+pub mod issue_code_validator;
 // issue_masking 은 공개 정책에 따라 제목과 본문의 민감 구간을 버리거나 표식으로 가린다 (#2419).
 pub mod issue_masking;
 // issue_policy 는 이슈 정책 파일을 검증하고 사용자 < 프로젝트 순서로 합친다 (#2416).
