@@ -12,6 +12,8 @@ pub(crate) mod git_operation_journal;
 pub mod issue_policy;
 // evidence_vault_store 는 가린 구간을 암호화한 레코드 파일로 저장한다 (#2421).
 pub mod evidence_vault_store;
+// issue_template 은 작업 폴더의 이슈 템플릿 파일을 읽는다 (#2417).
+pub mod issue_template;
 
 // re-export를 두면 composition/wiring code가 파일명 세부 구조를 몰라도 adapter를 직접 주입할 수 있다.
 pub(crate) use self::kernel_lock::{
