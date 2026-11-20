@@ -6,6 +6,9 @@ import {
   type AutoFollowSettings,
   type IssueAutomationAnswer,
   type IssueAutomationModeRecord,
+  type IssueAutomationPolicyAnswer,
+  type IssueDetailAnswer,
+  type IssueEventReference,
   type IssuesPageAnswer,
   KERNEL_METHOD,
   KERNEL_UNAVAILABLE,
@@ -26,6 +29,15 @@ export interface KernelIssuesView {
   automation: IssueAutomationAnswer | null;
   /** 서버가 정한 순서와 묶음을 가진 현재 한 페이지다. 이전 페이지를 합치지 않는다. */
   page: IssuesPageAnswer | null;
+  selectedIssue: IssueEventReference | null;
+  detail: IssueDetailAnswer | null;
+  detailLoading: boolean;
+  detailError: string | null;
+  /** 현재 선택 또는 catalog 판에 맞는 상세를 다시 읽고 있다. 저장된 triage.stale과는 별개다. */
+  detailStale: boolean;
+  policy: IssueAutomationPolicyAnswer | null;
+  policyLoading: boolean;
+  policyError: string | null;
   loading: boolean;
   pageNumber: number;
   canGoBack: boolean;
@@ -38,6 +50,14 @@ export interface KernelIssuesView {
 export const EMPTY_KERNEL_ISSUES: KernelIssuesView = {
   automation: null,
   page: null,
+  selectedIssue: null,
+  detail: null,
+  detailLoading: false,
+  detailError: null,
+  detailStale: false,
+  policy: null,
+  policyLoading: false,
+  policyError: null,
   loading: false,
   pageNumber: 1,
   canGoBack: false,
@@ -87,6 +107,11 @@ interface IssuePageRequest {
   after: string | null;
 }
 
+interface IssueDetailRequest {
+  token: IssueRequestToken;
+  issue: IssueEventReference;
+}
+
 const CLIENT_NAME = "akra-desktop";
 const ISSUE_PAGE_SIZE = 50;
 
@@ -109,7 +134,7 @@ function isIssuesPageAnswer(value: unknown): value is IssuesPageAnswer {
   if (!Array.isArray(value.items) || !Array.isArray(value.groups)) return false;
   if (value.next_after !== undefined && value.next_after !== null && typeof value.next_after !== "string") return false;
   if (!value.items.every((item: unknown) => {
-    if (!isRecord(item) || !isRecord(item.presentation)) return false;
+    if (!isRecord(item) || !isIssueReference(item.issue) || !isRecord(item.presentation)) return false;
     const shown = item.presentation;
     if (shown.number !== null && (!Number.isSafeInteger(shown.number) || Number(shown.number) < 1)) return false;
     if (shown.title !== null && typeof shown.title !== "string") return false;
@@ -129,6 +154,89 @@ function isIssuesPageAnswer(value: unknown): value is IssuesPageAnswer {
   return indices.size === itemCount;
 }
 
+function isNamedValue(value: unknown, names: readonly string[]): value is string {
+  return typeof value === "string" && names.includes(value);
+}
+
+function isIssueReference(value: unknown): value is IssueEventReference {
+  if (!isRecord(value) || !isNamedValue(value.provider, ["github", "jira"]) || !isRecord(value.project_scope)) return false;
+  return [value.server_id, value.repository_id, value.issue_id, value.project_scope.workspace_dir]
+    .every((part) => typeof part === "string" && part.length > 0 && part.trim() === part && !/[\u0000-\u001f\u007f]/.test(part));
+}
+
+/** 표시 번호나 URL 대신 서버가 반환한 안정 좌표 전체를 비교한다. */
+function sameIssue(left: IssueEventReference | null, right: IssueEventReference): boolean {
+  return left !== null && left.provider === right.provider && left.server_id === right.server_id
+    && left.repository_id === right.repository_id && left.issue_id === right.issue_id
+    && left.project_scope.workspace_dir === right.project_scope.workspace_dir;
+}
+
+function isRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasCoherentReport(value: Record<string, unknown>): boolean {
+  if (value.report === undefined || value.report === null) return true;
+  const report = value.report;
+  return isRecord(report) && report.revision === value.revision
+    && ["total", "automatic_start", "human_approval", "deferred", "excluded", "needs_info", "unknown", "observation_only", "stale", "untriaged", "blocked"]
+      .every((key) => isRevision(report[key]));
+}
+
+function isIssueDetailAnswer(value: unknown): value is IssueDetailAnswer {
+  if (!isRecord(value) || value.type !== "issue") return false;
+  if (value.status === "unavailable") return true;
+  if (!isRevision(value.revision) || !hasCoherentReport(value)) return false;
+  if (value.status === "not_found") return true;
+  if (value.status !== "ready" || !isRecord(value.item)) return false;
+  const item = value.item;
+  // 목록과 같은 표시 계약을 재사용하고, 상세에서 실제로 그릴 공유본의 모양도 확인한다.
+  if (!isIssuesPageAnswer({ type: "issues", status: "ready", revision: value.revision, items: [item], groups: [{ id: "detail", label: "", item_indices: [0] }] })) return false;
+  if (!isRecord(item.current)) return false;
+  if (item.current.status === "observed") {
+    if (!isRecord(item.current.content)) return false;
+    const content = item.current.content;
+    if (content.kind === "shared") {
+      if (!isRecord(content.shared_copy) || typeof content.shared_copy.title !== "string" || typeof content.shared_copy.body !== "string") return false;
+    } else if (content.kind !== "withheld") return false;
+  } else if (!isNamedValue(item.current.status, ["unknown", "not_yet_observed"])) return false;
+  if (item.triage === undefined || item.triage === null) return true;
+  const triage = item.triage;
+  return isRecord(triage) && typeof triage.stale === "boolean"
+    && Array.isArray(triage.gates) && triage.gates.every((gate: unknown) => isRecord(gate)
+      && isNamedValue(gate.gate, ["start", "spec", "plan", "delivery", "merge", "close"])
+      && isNamedValue(gate.action, ["human", "timeout_default", "timeout_arbiter", "auto"])
+      && typeof gate.enabled === "boolean" && isRevision(gate.gate_revision) && gate.gate_revision > 0)
+    && Array.isArray(triage.reasons) && triage.reasons.every((reason: unknown) => isRecord(reason)
+      && typeof reason.code === "string" && typeof reason.summary === "string" && typeof reason.next_summary === "string" && Array.isArray(reason.next));
+}
+
+function isIssueAutomationPolicyAnswer(value: unknown): value is IssueAutomationPolicyAnswer {
+  if (!isRecord(value) || value.type !== "issue_automation_policy") return false;
+  if (value.status === "unavailable") return true;
+  // 서버의 대표 checkout은 attach 요청의 worktree/하위 폴더와 다를 수 있다.
+  if (typeof value.workspace !== "string" || value.workspace.trim().length === 0) return false;
+  if (!Array.isArray(value.files) || !value.files.every((file: unknown) => isRecord(file)
+    && isNamedValue(file.scope, ["user", "project"]) && typeof file.label === "string"
+    && (file.path === null || typeof file.path === "string")
+    && isNamedValue(file.status, ["missing", "readable", "unavailable"])
+    && (file.open_target === null || file.open_target === file.scope))) return false;
+  if (value.status === "policy_blocked") {
+    const blocked = value.blocked;
+    return isRecord(blocked) && isNamedValue(blocked.scope, ["user", "project", "effective"])
+      && typeof blocked.field === "string" && typeof blocked.reason === "string" && typeof blocked.summary === "string"
+      && typeof blocked.next_summary === "string" && Array.isArray(blocked.file_scopes)
+      && blocked.file_scopes.every((scope: unknown) => scope === "user" || scope === "project");
+  }
+  return value.status === "ready" && typeof value.version === "string" && Array.isArray(value.settings)
+    && value.settings.every((setting: unknown) => isRecord(setting) && typeof setting.key === "string"
+      && typeof setting.label === "string" && typeof setting.value === "string"
+      && isNamedValue(setting.resolution, ["default", "override", "minimum", "and", "intersection", "union", "cap"])
+      && typeof setting.resolution_summary === "string" && Array.isArray(setting.origins)
+      && setting.origins.every((origin: unknown) => isRecord(origin)
+        && isNamedValue(origin.scope, ["builtin", "user", "project"]) && typeof origin.label === "string"));
+}
+
 export class KernelConnection {
   private wanted: string | null = null;
   private interests = new Set<KernelInterest>();
@@ -143,8 +251,15 @@ export class KernelConnection {
   private issuesGeneration = 0;
   private issueStateRequest = 0;
   private issuePageRequest = 0;
+  private issueDetailRequest = 0;
+  private issuePolicyRequest = 0;
+  /** 마지막 정책 요청이 시작될 때 알고 있던 catalog 판이다. 목록/상세의 최고 판과 별도로 유지한다. */
+  private policyKnownRevision = -1;
+  private scheduledPolicyRefresh: IssueRequestToken | null = null;
   private issueCommandRequest = 0;
   private activeIssuePage: IssuePageRequest | null = null;
+  private activeIssueDetail: IssueDetailRequest | null = null;
+  private detailKnownRevision = 0;
   private latestIssueRevision = 0;
   private currentIssueCursor: string | null = null;
   private previousIssueCursors: Array<string | null> = [];
@@ -223,12 +338,18 @@ export class KernelConnection {
       return;
     }
     this.issueCommandError = null;
-    await Promise.all([this.readIssueAutomation(), this.readIssuesPage(null, [], null)]);
+    await Promise.all([
+      this.readIssueAutomation(),
+      this.readIssuesPage(null, [], null),
+      this.refreshIssueAutomationPolicy(),
+      this.refreshIssueDetail(),
+    ]);
   }
 
   async nextIssuesPage(): Promise<void> {
     const view = this.store.getKernel().issues;
     if (!this.canNavigateIssues() || view.page?.status !== "ready" || !view.page.next_after) return;
+    this.clearIssueSelection();
     await this.readIssuesPage(view.page.next_after, [...this.previousIssueCursors, this.currentIssueCursor], view.page.revision);
   }
 
@@ -237,7 +358,54 @@ export class KernelConnection {
     const page = this.store.getKernel().issues.page;
     if (page?.status !== "ready") return;
     const after = this.previousIssueCursors.at(-1) ?? null;
+    this.clearIssueSelection();
     await this.readIssuesPage(after, this.previousIssueCursors.slice(0, -1), page.revision);
+  }
+
+  /** 현재 페이지가 실제로 제공한 전체 안정 좌표만 선택한다. worktree 경로를 대표 workspace로 추론하지 않는다. */
+  async selectIssue(issue: IssueEventReference): Promise<void> {
+    const issues = this.store.getKernel().issues;
+    if (!this.canRead("issues") || issues.stale || issues.page?.status !== "ready" || !isIssueReference(issue)) return;
+    const selected = issues.page.items.find((item) => sameIssue(item.issue, issue))?.issue;
+    if (!selected) return;
+    if (sameIssue(issues.selectedIssue, selected) && (issues.detailLoading || (issues.detail !== null && !issues.detailStale))) return;
+    this.clearIssueSelection();
+    const reference = { ...selected, project_scope: { ...selected.project_scope } };
+    this.updateIssues({ selectedIssue: reference });
+    await this.readIssueDetail(reference);
+  }
+
+  clearIssueSelection(): void {
+    this.issueDetailRequest += 1;
+    this.activeIssueDetail = null;
+    this.detailKnownRevision = 0;
+    this.updateIssues({ selectedIssue: null, detail: null, detailLoading: false, detailError: null, detailStale: false });
+  }
+
+  async refreshIssueDetail(): Promise<void> {
+    const issue = this.store.getKernel().issues.selectedIssue;
+    if (issue !== null) await this.readIssueDetail(issue);
+  }
+
+  async refreshIssueAutomationPolicy(): Promise<void> {
+    if (!this.canRead("issues")) return;
+    const token = this.issueToken(++this.issuePolicyRequest);
+    const revision = this.latestIssueRevision;
+    this.policyKnownRevision = revision;
+    this.scheduledPolicyRefresh = null;
+    this.updateIssues({ policy: null, policyLoading: true, policyError: null });
+    try {
+      const policy = await this.client.request<unknown>(KERNEL_METHOD.query, { query: { type: "issue_automation_policy" } });
+      if (!this.policyCurrent(token, revision)) return;
+      if (!isIssueAutomationPolicyAnswer(policy)) throw new Error("정책 표시 계약을 읽을 수 없습니다. Gateway를 업데이트하거나 다시 시작해 주세요.");
+      this.updateIssues({ policy });
+    } catch (error) {
+      if (this.policyCurrent(token, revision)) {
+        this.updateIssues({ policy: null, policyError: "이슈 정책을 읽지 못했습니다: " + failureMessage(error) });
+      }
+    } finally {
+      if (this.policyCurrent(token, revision)) this.updateIssues({ policyLoading: false });
+    }
   }
 
   setIssueAutomationMode(mode: IssueAutomationModeRecord): Promise<void> {
@@ -350,8 +518,14 @@ export class KernelConnection {
     this.issuesGeneration += 1;
     this.issueStateRequest += 1;
     this.issuePageRequest += 1;
+    this.issueDetailRequest += 1;
+    this.issuePolicyRequest += 1;
+    this.policyKnownRevision = -1;
+    this.scheduledPolicyRefresh = null;
     this.issueCommandRequest += 1;
     this.activeIssuePage = null;
+    this.activeIssueDetail = null;
+    this.detailKnownRevision = 0;
     this.latestIssueRevision = 0;
     this.currentIssueCursor = null;
     this.previousIssueCursors = [];
@@ -399,9 +573,10 @@ export class KernelConnection {
     const issues = this.store.getKernel().issues;
     if (automation.status === "ready" && issues.automation?.status === "ready" && automation.revision < issues.automation.revision) return;
     this.issueStateError = null;
-    if (automation.status === "ready") this.latestIssueRevision = Math.max(this.latestIssueRevision, automation.revision);
+    if (automation.status === "ready") this.noteIssueRevision(automation.revision);
     this.updateIssues({ automation });
     if (automation.status !== "ready") return;
+    this.invalidateDetailAtRevision(automation.revision);
     const pageRevision = issues.page?.status === "ready" ? issues.page.revision : -1;
     if (automation.revision <= pageRevision) return;
     this.updateIssues({ stale: issues.page !== null, canGoBack: false });
@@ -431,9 +606,12 @@ export class KernelConnection {
     try {
       const page = await this.client.request<unknown>(KERNEL_METHOD.query, { query: { type: "issues", after, limit: ISSUE_PAGE_SIZE } });
       if (!this.issueCurrent(token, this.issuePageRequest)) return;
-      if (!isIssuesPageAnswer(page)) throw new Error("이슈 표시 계약을 읽을 수 없습니다. Gateway를 업데이트하거나 다시 시작해 주세요.");
+      if (!isIssuesPageAnswer(page) || !hasCoherentReport(page)) throw new Error("이슈 표시 계약을 읽을 수 없습니다. Gateway를 업데이트하거나 다시 시작해 주세요.");
       const outdated = page.status === "ready" && (page.revision < this.latestIssueRevision || (expectedRevision !== null && page.revision !== expectedRevision));
-      if (page.status === "ready") this.latestIssueRevision = Math.max(this.latestIssueRevision, page.revision);
+      if (page.status === "ready") {
+        this.noteIssueRevision(page.revision);
+        this.invalidateDetailAtRevision(page.revision);
+      }
       if (outdated) {
         restart = true;
       } else {
@@ -459,6 +637,90 @@ export class KernelConnection {
         this.updateIssues({});
       } else {
         await this.readIssuesPage(null, [], null, true);
+      }
+    }
+  }
+
+  private policyCurrent(token: IssueRequestToken, revision: number): boolean {
+    return this.issueCurrent(token, this.issuePolicyRequest) && revision >= this.latestIssueRevision;
+  }
+
+  /** state/page/detail 중 먼저 도착한 새 판이 정책도 무효화한다. 이벤트가 나중에 와도 정책 판을 놓치지 않는다. */
+  private noteIssueRevision(revision: number): void {
+    this.latestIssueRevision = Math.max(this.latestIssueRevision, revision);
+    if (this.latestIssueRevision <= this.policyKnownRevision) return;
+    this.updateIssues({ policy: null, policyLoading: true, policyError: null });
+    if (this.scheduledPolicyRefresh !== null) return;
+    const scheduled = this.issueToken(this.issuePolicyRequest);
+    this.scheduledPolicyRefresh = scheduled;
+    // 같은 응답 묶음에서 관찰한 여러 판은 최신 판 하나의 조회로 합친다. 다른 I/O 완료를 기다리지 않는다.
+    queueMicrotask(() => {
+      if (this.scheduledPolicyRefresh !== scheduled) return;
+      this.scheduledPolicyRefresh = null;
+      if (!this.issueCurrent(scheduled, this.issuePolicyRequest)) return;
+      if (this.latestIssueRevision > this.policyKnownRevision) void this.refreshIssueAutomationPolicy();
+    });
+  }
+
+  private detailCurrent(token: IssueRequestToken, issue: IssueEventReference): boolean {
+    return this.issueCurrent(token, this.issueDetailRequest) && sameIssue(this.store.getKernel().issues.selectedIssue, issue);
+  }
+
+  private invalidateDetailAtRevision(revision: number): void {
+    const issues = this.store.getKernel().issues;
+    if (issues.selectedIssue === null || revision <= this.detailKnownRevision) return;
+    this.detailKnownRevision = revision;
+    const detailRevision = issues.detail?.status === "ready" || issues.detail?.status === "not_found" ? issues.detail.revision : -1;
+    if (detailRevision >= revision) return;
+    this.updateIssues({ detail: null, detailStale: true });
+    const pending = this.activeIssueDetail;
+    // 진행 중인 요청은 응답의 catalog 판으로 검사한다. 이벤트마다 같은 요청을 겹치지 않는다.
+    if (pending !== null && this.detailCurrent(pending.token, pending.issue)) return;
+    void this.readIssueDetail(issues.selectedIssue);
+  }
+
+  private async readIssueDetail(issue: IssueEventReference, retried = false): Promise<void> {
+    if (!this.canRead("issues") || !sameIssue(this.store.getKernel().issues.selectedIssue, issue)) return;
+    const token = this.issueToken(++this.issueDetailRequest);
+    this.activeIssueDetail = { token, issue };
+    this.detailKnownRevision = this.latestIssueRevision;
+    this.updateIssues({ detail: null, detailLoading: true, detailError: null, detailStale: true });
+    let restart = false;
+    try {
+      const detail = await this.client.request<unknown>(KERNEL_METHOD.query, { query: { type: "issue", issue } });
+      if (!this.detailCurrent(token, issue)) return;
+      if (!isIssueDetailAnswer(detail) || (detail.status === "ready" && !sameIssue(detail.item.issue, issue))) {
+        throw new Error("이슈 상세 표시 계약이나 저장소 좌표가 일치하지 않습니다. Gateway를 업데이트하거나 다시 시작해 주세요.");
+      }
+      if (detail.status !== "unavailable" && detail.revision < this.latestIssueRevision) {
+        restart = true;
+      } else {
+        if (detail.status !== "unavailable") {
+          this.noteIssueRevision(detail.revision);
+          this.detailKnownRevision = Math.max(this.detailKnownRevision, detail.revision);
+        }
+        this.updateIssues({ detail, detailStale: false });
+        const page = this.store.getKernel().issues.page;
+        if (detail.status !== "unavailable" && page?.status === "ready" && page.revision < detail.revision) {
+          this.updateIssues({ stale: true, canGoBack: false });
+          if (this.activeIssuePage?.after !== null) void this.readIssuesPage(null, [], null);
+        }
+      }
+    } catch (error) {
+      if (this.detailCurrent(token, issue)) {
+        this.updateIssues({ detail: null, detailError: "이슈 상세를 읽지 못했습니다: " + failureMessage(error), detailStale: true });
+      }
+    } finally {
+      if (this.detailCurrent(token, issue)) {
+        this.activeIssueDetail = null;
+        this.updateIssues({ detailLoading: false });
+      }
+    }
+    if (restart && this.detailCurrent(token, issue)) {
+      if (retried) {
+        this.updateIssues({ detailError: "이슈 상세가 조회 중 바뀌었습니다. 다시 읽어 주세요.", detailStale: true });
+      } else {
+        await this.readIssueDetail(issue, true);
       }
     }
   }

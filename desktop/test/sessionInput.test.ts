@@ -38,6 +38,7 @@ function harness(readOnly = false) {
     gitFileDiff: async () => ({ kind: "binary" }),
     gitFileAction: async () => ({ ok: true as const }),
     gitOpenFile: async () => undefined,
+    openIssueAutomationPolicyFile: async () => undefined,
     gitBranchSummary: async () => ({ ok: false as const, message: "" }),
     gitCommitDiff: async () => ({ text: "", truncated: false }),
     gitPush: async () => ({ ok: true as const, url: null }),

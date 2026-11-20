@@ -8,25 +8,17 @@ use crate::domain::issue_automation::policy::{
     IssueAutomationPolicy, IssueAutomationPolicyValueError,
 };
 
+mod inspection;
 mod layer;
 mod merge;
+mod provenance;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IssueAutomationPolicyScope {
-    User,
-    Project,
-    Effective,
-}
-
-impl IssueAutomationPolicyScope {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Project => "project",
-            Self::Effective => "effective",
-        }
-    }
-}
+pub use crate::application::port::inbound::issue_automation_policy_query_port::{
+    IssueAutomationPolicyFile, IssueAutomationPolicyFileScope, IssueAutomationPolicyFileStatus,
+    IssueAutomationPolicyInspection, IssueAutomationPolicyInspectionBlocked,
+    IssueAutomationPolicyOrigin, IssueAutomationPolicyOriginScope, IssueAutomationPolicyResolution,
+    IssueAutomationPolicyScope, IssueAutomationPolicySetting,
+};
 
 /// 원문, 파일 경로, 공급자가 보낸 오류는 이 값에 넣지 않는다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +76,15 @@ impl IssueAutomationPolicyService {
         Self { source }
     }
 
+    /// 파일을 바꾸지 않고 같은 source snapshot의 효과값·출처·파일 상태를 표시한다.
+    /// workspace_dir는 composition이 정한 대표 workspace이며 이 값에서 경로를 추론하지 않는다.
+    pub fn inspect(&self, workspace_dir: &str) -> IssueAutomationPolicyInspection {
+        inspection::inspect(
+            workspace_dir,
+            self.source.read_policy_snapshot(workspace_dir),
+        )
+    }
+
     pub fn resolve(
         &self,
         workspace_dir: &str,
@@ -101,14 +102,32 @@ impl IssueAutomationPolicyService {
     }
 }
 
+impl crate::application::port::inbound::issue_automation_policy_query_port::IssueAutomationPolicyQueryPort
+    for IssueAutomationPolicyService
+{
+    fn inspect(&self, workspace_dir: &str) -> IssueAutomationPolicyInspection {
+        IssueAutomationPolicyService::inspect(self, workspace_dir)
+    }
+}
+
 /// 파일이 없을 때만 None이다. 하나라도 잘못되면 기본값이나 다른 파일로 대신하지 않는다.
 pub fn resolve_issue_automation_policy(
     user_toml: Option<&str>,
     project_toml: Option<&str>,
 ) -> Result<ResolvedIssueAutomationPolicy, IssueAutomationPolicyBlocked> {
+    resolve_with_provenance(user_toml, project_toml).map(|(resolved, _)| resolved)
+}
+
+fn resolve_with_provenance(
+    user_toml: Option<&str>,
+    project_toml: Option<&str>,
+) -> Result<
+    (ResolvedIssueAutomationPolicy, provenance::PolicyProvenance),
+    IssueAutomationPolicyBlocked,
+> {
     let user = layer::parse(user_toml, IssueAutomationPolicyScope::User)?;
     let project = layer::parse(project_toml, IssueAutomationPolicyScope::Project)?;
-    let mut policy = merge::merge(user, project);
+    let (mut policy, origins) = merge::merge(user, project);
     policy.normalize();
     policy.validate().map_err(|error| {
         IssueAutomationPolicyBlocked::invalid(IssueAutomationPolicyScope::Effective, error)
@@ -120,7 +139,7 @@ pub fn resolve_issue_automation_policy(
         reason: "canonical_encoding_failed",
     })?;
     let version = format!("{:x}", Sha256::digest(canonical_json));
-    Ok(ResolvedIssueAutomationPolicy { policy, version })
+    Ok((ResolvedIssueAutomationPolicy { policy, version }, origins))
 }
 
 #[cfg(test)]

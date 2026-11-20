@@ -632,7 +632,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 10);
+    assert_eq!(queries.len(), 11);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
@@ -645,6 +645,7 @@ fn events_and_description_have_stable_wire_shapes() {
         },
         KernelQuery::Operation { op_id: 7 },
         KernelQuery::IssueAutomation {},
+        KernelQuery::IssueAutomationPolicy {},
         KernelQuery::Issues {
             after: None,
             limit: None,
@@ -2148,6 +2149,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         },
         KernelQuery::Operation { op_id: 7 },
         KernelQuery::IssueAutomation {},
+        KernelQuery::IssueAutomationPolicy {},
         KernelQuery::Issues {
             after: None,
             limit: None,

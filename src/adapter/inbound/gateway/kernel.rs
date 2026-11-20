@@ -24,11 +24,11 @@ use super::recorder::{RecordDirection, SessionRecording};
 use crate::adapter::inbound::kernel_protocol::{
     AttachRequest, AttachResponse, CommandRejection, CommandRequest, CommandResponse,
     ERROR_INVALID_PARAMS, ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_METHOD_NOT_FOUND,
-    ERROR_NOT_ATTACHED, EventNotification, IssueAutomationState, IssueState, IssuesState,
-    KernelCommandInput, KernelEvent, KernelProtocolError, KernelQuery, KernelQueryAnswer,
-    METHOD_ATTACH, METHOD_COMMAND, METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY,
-    PROTOCOL_VERSION, ParallelSource, ParallelState, PlanningState, QueryRequest, describe,
-    reason_next,
+    ERROR_NOT_ATTACHED, EventNotification, IssueAutomationPolicyState, IssueAutomationState,
+    IssueState, IssuesState, KernelCommandInput, KernelEvent, KernelProtocolError, KernelQuery,
+    KernelQueryAnswer, METHOD_ATTACH, METHOD_COMMAND, METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT,
+    METHOD_QUERY, PROTOCOL_VERSION, ParallelSource, ParallelState, PlanningState, QueryRequest,
+    describe, reason_next,
 };
 use crate::composition::kernel_host::{
     KernelCallError, KernelClientHandle, KernelCommandOutcome, KernelCommandSender,
@@ -306,6 +306,20 @@ impl KernelSession {
     async fn query(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
         let attached = self.attached()?;
         let request: QueryRequest = parse_params(params)?;
+        if matches!(&request.query, KernelQuery::IssueAutomationPolicy {}) {
+            let commands = attached.commands.clone();
+            let inspection = read_kernel_log(move || {
+                commands
+                    .issue_automation_policy(KERNEL_CALL_TIMEOUT)
+                    .map(Ok)
+            })
+            .await?;
+            let state = inspection
+                .as_ref()
+                .map(IssueAutomationPolicyState::from_domain)
+                .unwrap_or_else(IssueAutomationPolicyState::unavailable);
+            return to_result(KernelQueryAnswer::IssueAutomationPolicy(state));
+        }
         if matches!(&request.query, KernelQuery::IssueAutomation {}) {
             let commands = attached.commands.clone();
             let state =
@@ -611,5 +625,65 @@ mod tests {
                 "command and planning keep the requested workspace"
             );
         }
+    }
+    #[tokio::test]
+    async fn policy_query_uses_the_host_workspace_without_starting_collection_or_turns() {
+        use crate::composition::native_client_runtime::tests::recording_runtime_with_issue_queries_for_test;
+
+        struct Workspace(std::path::PathBuf);
+        impl Drop for Workspace {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "akra-gateway-policy-query-{}-{:016x}",
+            std::process::id(),
+            rand::random::<u64>(),
+        ));
+        crate::private_directory::ensure_private_directory(&root).unwrap();
+        let _cleanup = Workspace(root.clone());
+        let workspace = std::fs::canonicalize(&root).unwrap();
+        let workspace = workspace.to_str().unwrap().to_owned();
+        let service = crate::composition::issue_collection::build_for_kernel_test(&workspace);
+        let (runtime, turns) = recording_runtime_with_issue_queries_for_test(service);
+        let host = KernelHost::start(runtime).expect("query-only host");
+        let client = host.attach_with_lifetime(true).expect("query-only client");
+        let (outbox, _messages) = mpsc::channel(1);
+        let mut session = KernelSession {
+            kernels: Arc::new(RepositoryKernelRegistry::default()),
+            outbox,
+            attached: Some(AttachedKernel {
+                workspace: format!("{workspace}/requested-subfolder"),
+                issue_workspace: workspace.clone(),
+                client_name: "policy-query-fixture".into(),
+                commands: client.commands(),
+                stop_events: Arc::new(AtomicBool::new(false)),
+                events: None,
+            }),
+        };
+        let answer = session
+            .query(json!({
+                "query": { "type": "issue_automation_policy" },
+            }))
+            .await
+            .expect("host policy query");
+        assert_eq!(answer["type"], "issue_automation_policy");
+        assert_eq!(answer["status"], "ready");
+        assert_eq!(answer["workspace"], workspace);
+        assert_eq!(answer["settings"].as_array().unwrap().len(), 65);
+        assert_eq!(answer["files"].as_array().unwrap().len(), 2);
+        assert!(
+            turns.lock().unwrap().is_empty(),
+            "a policy read does not submit a model turn",
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            0,
+            "the host query does not initialize the issue or planning ledger",
+        );
+        session.detach().await;
+        drop(client);
+        drop(host);
     }
 }

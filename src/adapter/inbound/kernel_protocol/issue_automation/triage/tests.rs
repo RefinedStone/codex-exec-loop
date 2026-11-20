@@ -199,6 +199,7 @@ fn every_triage_reason_has_a_stable_code_summary_and_non_mutating_next_step() {
             json!(reason.as_str())
         );
         assert!(!wire.summary.trim().is_empty());
+        assert!(!wire.next_summary.trim().is_empty());
         assert!(!wire.next.is_empty());
         assert_eq!(wire.next, reason_next(wire.code));
         let declared = spec

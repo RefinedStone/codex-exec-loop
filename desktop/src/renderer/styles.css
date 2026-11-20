@@ -1529,3 +1529,390 @@ button.issues-title:hover {
   opacity: 0.5;
   cursor: default;
 }
+
+/* 이슈의 읽기 화면: 서버 판정, 전체 관찰 보고, 정책 출처 (#2542). */
+.issues-panel {
+  container-type: inline-size;
+}
+
+.issues-tabs {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+}
+
+.issues-tabs > button {
+  padding: 7px 12px;
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.issues-tabs > button:hover {
+  background: var(--bg-hover);
+}
+
+.issues-tabs > button[aria-pressed="true"] {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.issues-external {
+  flex: none;
+  margin-left: auto;
+}
+
+.issues-detail,
+.issues-report,
+.issues-policy {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.issues-detail h2,
+.issues-report h2,
+.issues-policy h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-l);
+  line-height: 1.6;
+}
+
+.issues-back,
+.issues-file-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.issues-back:hover,
+.issues-file-open:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.issues-back {
+  margin-bottom: var(--space-4);
+}
+
+.issues-detail-heading {
+  margin-bottom: var(--space-5);
+}
+
+.issues-detail-reason,
+.issues-section-description,
+.issues-report-assumption {
+  margin: 0 0 var(--space-3);
+  color: var(--text-2);
+  font-size: var(--text-s);
+  line-height: 1.6;
+}
+
+.issues-detail-columns {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.issues-detail-section {
+  min-width: 0;
+  font-size: var(--text-m);
+  line-height: 1.6;
+}
+
+.issues-detail-section h3,
+.issues-policy h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-m);
+  font-weight: 600;
+}
+
+.issues-detail-section h4 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--text-s);
+  color: var(--text-2);
+}
+
+.issues-shared-copy {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--bg-elevated);
+}
+
+.issues-shared-copy .markdown {
+  font-size: var(--text-m);
+}
+
+.issues-shared-copy .markdown > :first-child {
+  margin-top: 0;
+}
+
+.issues-shared-copy .markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.issues-inline-notice {
+  margin: var(--space-3) 0;
+  font-size: var(--text-s);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.issues-facts,
+.issues-report-counts {
+  margin: 0;
+}
+
+.issues-facts > div,
+.issues-report-counts > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-s);
+}
+
+.issues-facts dt,
+.issues-report-counts dt {
+  flex: none;
+  color: var(--text-2);
+}
+
+.issues-facts dd,
+.issues-report-counts dd {
+  margin: 0;
+  text-align: right;
+}
+
+.issues-reasons,
+.issues-gates,
+.issues-policy-files ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.issues-reasons > li {
+  padding: var(--space-3);
+  border-left: 2px solid var(--line-strong);
+  background: var(--bg-sidebar);
+}
+
+.issues-reasons > li + li {
+  margin-top: var(--space-2);
+}
+
+.issues-reasons p,
+.issues-policy-blocked > p {
+  margin: 0;
+}
+
+.issues-next-summary {
+  margin-top: var(--space-2) !important;
+  color: var(--text-2);
+  font-size: var(--text-s);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.issues-gates > li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-s);
+}
+
+.issues-gates > li > strong {
+  min-width: 56px;
+  font-weight: 500;
+}
+
+.issues-gates > li > span {
+  color: var(--text-2);
+}
+
+.issues-gate-state {
+  margin-left: auto;
+}
+
+.issues-gates > li[data-enabled="false"] {
+  color: var(--text-2);
+}
+
+.issues-report-binding {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.issues-report-binding > span {
+  flex: none;
+}
+
+.issues-report-primary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+
+.issues-report-primary > div {
+  padding: var(--space-3) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--bg-sidebar);
+}
+
+.issues-report-primary dt {
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.issues-report-primary dd {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.issues-report-counts dd {
+  font-variant-numeric: tabular-nums;
+}
+
+.issues-policy-settings {
+  margin: 0 0 var(--space-5);
+}
+
+.issues-policy-setting {
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.issues-policy-setting dt {
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.issues-policy-setting dd {
+  margin: var(--space-2) 0 0;
+}
+
+.issues-policy-value {
+  font-size: var(--text-m);
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+.issues-policy-origins {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.issues-origin {
+  padding: 2px 6px;
+  border-radius: var(--radius-s);
+  background: var(--bg-sunken);
+}
+
+.issues-policy-resolution {
+  color: var(--text-2);
+  font-size: var(--text-s);
+  line-height: 1.6;
+}
+
+.issues-policy-blocked {
+  padding: var(--space-3);
+  margin: var(--space-4) 0 var(--space-5);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--warn-bg);
+  font-size: var(--text-s);
+  line-height: 1.6;
+}
+
+.issues-policy-blocked h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--warn);
+}
+
+.issues-policy-file {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.issues-policy-file[data-blocked="true"] {
+  border-color: var(--warn);
+}
+
+.issues-policy-file-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-s);
+}
+
+.issues-file-open {
+  margin-left: auto;
+}
+
+.issues-policy-path {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--text-s);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@container (min-width: 760px) {
+  .issues-detail,
+  .issues-report,
+  .issues-policy {
+    padding: var(--space-5);
+  }
+
+  .issues-detail h2,
+  .issues-report h2,
+  .issues-policy h2 {
+    font-size: var(--text-xl);
+  }
+
+  .issues-detail-columns {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 32px;
+  }
+
+  .issues-report-counts,
+  .issues-policy-settings {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--space-5);
+  }
+}

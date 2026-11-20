@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::application::port::inbound::issue_automation_policy_query_port::IssueAutomationPolicyInspection;
 use crate::application::port::inbound::stored_command_port::{
     StoredCommandOutcome, StoredCommandResult,
 };
@@ -209,6 +210,9 @@ enum KernelHostInput {
     },
     IssueAutomation {
         reply: Sender<Result<IssueCollectionHostView, String>>,
+    },
+    IssueAutomationPolicy {
+        reply: Sender<Option<IssueAutomationPolicyInspection>>,
     },
     Issues {
         query: IssueCollectionQuery,
@@ -446,6 +450,16 @@ impl KernelCommandSender {
         let (reply, answer) = mpsc::channel();
         self.inbox
             .send(KernelHostInput::IssueAutomation { reply })?;
+        wait_reply(&answer, timeout)
+    }
+
+    pub(crate) fn issue_automation_policy(
+        &self,
+        timeout: Duration,
+    ) -> Result<Option<IssueAutomationPolicyInspection>, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox
+            .send(KernelHostInput::IssueAutomationPolicy { reply })?;
         wait_reply(&answer, timeout)
     }
 
@@ -808,6 +822,9 @@ impl KernelHostLoop {
                     .issue_collection_view(Instant::now())
                     .map_err(|_| "issue collection local state could not be read".to_string());
                 let _ = reply.send(state);
+            }
+            KernelHostInput::IssueAutomationPolicy { reply } => {
+                let _ = reply.send(self.runtime.issue_automation_policy());
             }
             KernelHostInput::Issues { query, reply } => {
                 let page = self

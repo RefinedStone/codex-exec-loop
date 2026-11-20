@@ -135,6 +135,15 @@ impl IssueCollectionService {
         self.triage.clone()
     }
 
+    /// 조회로 기본 Observe를 저장하거나 수집을 시작하지 않는다.
+    pub fn policy_inspection(
+        &self,
+    ) -> Option<super::issue_automation_policy::IssueAutomationPolicyInspection> {
+        self.triage
+            .as_ref()
+            .map(|triage| triage.policy_inspection())
+    }
+
     pub fn issue(
         &self,
         reference: &IssueReference,
