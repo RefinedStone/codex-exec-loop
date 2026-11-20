@@ -6,7 +6,7 @@
 //! 그 밖의 노드는 글에 `[unsupported: <type>]` 을 남기고 `unsupported` 에 적는다. 그 밖의 표시는 글을 그대로 두고
 //! `unsupported` 에 `mark:<type>` 으로 적는다. 버리지 않는다.
 //!
-//! Markdown 은 비교하는 표현이다 (1판, `JIRA_BODY_REPRESENTATION_VERSION`). 필드 해시는 이 글로 만든다. 그래서
+//! Markdown 은 비교하는 표현이다 (2판, `JIRA_BODY_REPRESENTATION_VERSION`). 필드 해시는 이 글로 만든다. 그래서
 //! 읽기는 공급자가 바꿀 수 있는 것(표시의 순서, 글 노드의 나눔, 표현에 없는 속성)에 기대지 않는다. Markdown 의
 //! 문법 글자가 Jira 의 글에 있으면 `\` 를 붙인다. 쓰기(`writable_adf`)는 ADF 로 옮긴 뒤 다시 읽은 글이 처음 글과
 //! 같을 때만 문서를 준다. 같지 않은 글은 쓰지 않는다.
@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 /// 본문 표현의 판이다. 같은 ADF 가 다른 Markdown 이 되게 바꾸면 올린다.
 // shortcut: 판이 필드 해시와 승인에 들어 있지 않다, 표현을 바꾸는 날에 `IssueFieldHash` 와 함께 묶는다.
-pub const JIRA_BODY_REPRESENTATION_VERSION: u32 = 1;
+pub const JIRA_BODY_REPRESENTATION_VERSION: u32 = 2;
 
 /// 쓰기가 `\` 뒤에서 글자 그대로 읽는 글자이다.
 const ESCAPABLE: &str = "\\*`~[(#-.";
@@ -85,6 +85,11 @@ fn block(node: &Value, unsupported: &mut BTreeSet<String>) -> String {
                 .iter()
                 .filter_map(|child| child["text"].as_str())
                 .collect();
+            if code.lines().any(|line| line == "\x60\x60\x60")
+                || language.contains([char::from(0x60), '\n', '\r'])
+            {
+                unsupported.insert("codeBlock:delimiter".to_string());
+            }
             format!("```{language}\n{code}\n```")
         }
         other => unsupported_node(other, unsupported),
@@ -120,13 +125,30 @@ fn list(node: &Value, first: Option<u64>, unsupported: &mut BTreeSet<String>) ->
 
 fn inline(node: &Value, unsupported: &mut BTreeSet<String>) -> String {
     let mut text = String::new();
-    for child in children(node) {
-        let piece = match node_type(child) {
-            "text" => marked_text(child, unsupported),
-            "hardBreak" => "\n".to_string(),
-            other => unsupported_node(other, unsupported),
+    let children = children(node);
+    let mut index = 0;
+    while index < children.len() {
+        let child = &children[index];
+        let piece = if node_type(child) == "text" {
+            // Provider normalization may split or merge a text run at any character.
+            let marks = canonical_marks(child);
+            let mut raw = child["text"].as_str().unwrap_or_default().to_string();
+            index += 1;
+            while let Some(next) = children.get(index) {
+                if node_type(next) != "text" || canonical_marks(next) != marks {
+                    break;
+                }
+                raw.push_str(next["text"].as_str().unwrap_or_default());
+                index += 1;
+            }
+            marked_text(&text_node(raw, &marks), unsupported)
+        } else {
+            index += 1;
+            match node_type(child) {
+                "hardBreak" => "\n".to_string(),
+                other => unsupported_node(other, unsupported),
+            }
         };
-        // 이웃한 두 노드가 링크의 `](` 를 만들지 않게 한다.
         if text.ends_with(']') && piece.starts_with('(') {
             text.push('\\');
         }
@@ -135,12 +157,21 @@ fn inline(node: &Value, unsupported: &mut BTreeSet<String>) -> String {
     text
 }
 
+fn canonical_marks(node: &Value) -> Vec<Value> {
+    let mut marks = node["marks"].as_array().cloned().unwrap_or_default();
+    marks.sort_by_key(Value::to_string);
+    marks
+}
+
 fn marked_text(node: &Value, unsupported: &mut BTreeSet<String>) -> String {
     let marks = node["marks"].as_array().map_or(&[][..], Vec::as_slice);
     let has = |kind: &str| marks.iter().find(|mark| node_type(mark) == kind);
     let raw = node["text"].as_str().unwrap_or_default();
     // 코드 표시 안의 글은 글자 그대로이다.
     let mut text = if has("code").is_some() {
+        if raw.contains(char::from(0x60)) {
+            unsupported.insert("code:delimiter".to_string());
+        }
         raw.to_string()
     } else {
         escape_text(raw)
@@ -531,7 +562,7 @@ mod tests {
 
     #[test]
     fn the_supported_subset_is_written_as_adf_and_reads_back_the_same() {
-        assert_eq!(JIRA_BODY_REPRESENTATION_VERSION, 1);
+        assert_eq!(JIRA_BODY_REPRESENTATION_VERSION, 2);
         let document = writable_adf(SUPPORTED_MARKDOWN).expect("writable");
         assert_eq!(adf_to_markdown(&document).markdown, SUPPORTED_MARKDOWN);
 
@@ -656,5 +687,52 @@ mod tests {
         ] {
             assert_eq!(writable_adf(body), None, "{body:?}");
         }
+    }
+
+    #[test]
+    fn text_node_boundaries_do_not_change_escape_context() {
+        for raw in ["~~", "\\*", "[unsupported: x]", "](x)", "한글 ~~value~~"] {
+            let whole = paragraph(json!([{ "type": "text", "text": raw }]));
+            let split = paragraph(Value::Array(
+                raw.chars()
+                    .map(|character| json!({ "type": "text", "text": character.to_string() }))
+                    .collect(),
+            ));
+            let converted = adf_to_markdown(&whole);
+            assert_eq!(adf_to_markdown(&split), converted, "{raw}");
+            assert!(writable_adf(&converted.markdown).is_some(), "{raw}");
+        }
+        let whole =
+            paragraph(json!([{ "type": "text", "text": "bold", "marks": [{"type": "strong"}] }]));
+        let split = paragraph(json!([
+            { "type": "text", "text": "bo", "marks": [{"type": "strong"}] },
+            { "type": "text", "text": "ld", "marks": [{"type": "strong"}] }
+        ]));
+        assert_eq!(adf_to_markdown(&whole), adf_to_markdown(&split));
+    }
+
+    #[test]
+    fn ambiguous_code_delimiters_are_reported_before_any_write() {
+        let inline = paragraph(json!([{
+            "type": "text", "text": "a\x60 b \x60c", "marks": [{"type": "code"}]
+        }]));
+        assert_eq!(adf_to_markdown(&inline).unsupported, ["code:delimiter"]);
+        let block = json!({
+            "type": "doc", "version": 1, "content": [{
+                "type": "codeBlock", "content": [{"type": "text", "text": "a\n\x60\x60\x60\nb"}]
+            }]
+        });
+        assert_eq!(adf_to_markdown(&block).unsupported, ["codeBlock:delimiter"]);
+    }
+    #[test]
+    fn code_lines_with_a_fence_prefix_remain_writable() {
+        let raw = "a\n\x60\x60\x60example\nb";
+        let document = json!({"type":"doc","version":1,"content":[{
+            "type":"codeBlock","content":[{"type":"text","text":raw}]
+        }]});
+        let converted = adf_to_markdown(&document);
+        assert!(converted.unsupported.is_empty());
+        let rewritten = writable_adf(&converted.markdown).unwrap();
+        assert_eq!(rewritten["content"][0]["content"][0]["text"], raw);
     }
 }
