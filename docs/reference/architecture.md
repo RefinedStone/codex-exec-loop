@@ -954,6 +954,16 @@ strategy in the production TUI.
   `IssueWriteOperation::BoardField` for the same issue. The adapter re-reads the issue's project
   items, then sends one `updateProjectV2ItemFieldValue` with one project, item, field, and option
   ID. No caller is wired to it yet.
+- An issue title and body write goes through `IssuePublishService`
+  (`application/service/issue_publish`). It sends the text of an `IssueValidationPassed` only when
+  the `IssuePublishApproval` matches the target, the field hash of that text, the policy version,
+  and the template version; a mismatch is `Refused` with no remote call. It then reads the remote
+  through `issue_snapshot_port`; a field hash other than the edit basis is `Conflict` with no write.
+  The write is `issue_update_port` (`GithubIssueUpdateAdapter`, one GraphQL `updateIssue` with the
+  issue ID, title, and body; no create, comment, attachment, or board field). GitHub has no
+  conditional update, so a race remains between that read and the write: an edit made in between
+  is overwritten. A failed write has an unknown result. Composition must not build this service or
+  adapter until the publish-intent journal (#2424) lands; the real publish path is disabled.
 - The issue policy (`domain/issue_policy`) comes only from `IssuePolicyService`. An invalid or
   unreadable policy file is `IssuePolicyBlocked`; callers must not replace it with the built-in
   policy. See [configuration](./configuration.md#issue-policy-file).
