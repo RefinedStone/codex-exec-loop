@@ -1294,7 +1294,7 @@
     },
     {
       "name": "issue_automation",
-      "summary": "The stored off/observe mode, binding, collection revision and polling status. An unavailable store is explicit; an empty list is not substituted.",
+      "summary": "The stored off/observe mode, binding, catalog revision and polling status. An unavailable store is explicit; an empty list is not substituted.",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -1427,7 +1427,7 @@
     },
     {
       "name": "issues",
-      "summary": "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body.",
+      "summary": "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body. Triage and groups are server projections; report counts cover the complete query scope, not just this page.",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -1492,6 +1492,16 @@
                   "null"
                 ]
               },
+              "report": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueTriageObserveReportState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "revision": {
                 "format": "uint64",
                 "minimum": 0,
@@ -1514,6 +1524,113 @@
         "properties": {
           "type": {
             "const": "issues",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue",
+      "summary": "One local issue selected by its full stable reference in the attached representative workspace. Ready, not_found and unavailable are distinct. The result contains only current disclosed content, stored assessment and global observation report; it never creates work.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "report": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueTriageObserveReportState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "const": "not_found",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "revision"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "item": {
+                "$ref": "#/$defs/IssueListItem"
+              },
+              "report": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueTriageObserveReportState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "const": "ready",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "revision",
+              "item"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "type": {
+            "const": "issue",
             "type": "string"
           }
         },
@@ -2278,6 +2395,50 @@
       }
     },
     {
+      "name": "issue_triaged",
+      "summary": "A deterministic issue assessment was committed to the local ledger. The record carries stable identity and policy/gate revisions, with no issue text or execution permit.",
+      "payload": {
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "by": {
+            "$ref": "#/$defs/IssueChangeOrigin"
+          },
+          "gate_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_triaged",
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "binding_id",
+          "revision",
+          "gate_revision",
+          "policy_version",
+          "by"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issue_automation_mode_changed",
       "summary": "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.",
       "payload": {
@@ -2573,6 +2734,255 @@
         },
         {
           "step": "resend"
+        }
+      ]
+    },
+    {
+      "name": "not_yet_observed",
+      "summary": "The issue has no current provider observation.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issues"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "source_unavailable",
+      "summary": "The current issue could not be read; missing data is not proof of eligibility.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issues"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "metadata_incomplete",
+      "summary": "Required source metadata is incomplete or unavailable.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issues"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "disclosure_policy_stale",
+      "summary": "The shared observation was produced under an older disclosure policy.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issues"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "selection_not_matched",
+      "summary": "The issue does not match the configured selection.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
+    },
+    {
+      "name": "issue_closed",
+      "summary": "The provider reports that the issue is closed.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
+    },
+    {
+      "name": "untrusted_actor",
+      "summary": "No trusted author or qualifying current label actor establishes trust.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "already_claimed",
+      "summary": "The issue already has an assignee or a linked pull request.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "title_missing",
+      "summary": "The current shared issue has no usable title.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "required_section_missing",
+      "summary": "The current shared issue does not satisfy a required section.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "criteria_missing",
+      "summary": "The issue has no acceptance criteria.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "criteria_not_list",
+      "summary": "The acceptance criteria cannot be read as a supported Markdown list.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "issue_too_large",
+      "summary": "The shared issue exceeds the deterministic assessment size bound.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "unsupported_content",
+      "summary": "The issue contains content that cannot be assessed deterministically.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "disclosure_confirmation_required",
+      "summary": "Disclosure requires explicit user confirmation; withheld content is not assessed as shared text.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "masked_content",
+      "summary": "Masking prevents a complete deterministic assessment.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "high_risk",
+      "summary": "High risk requires a person at every gate.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "held_or_manual",
+      "summary": "The issue is held or explicitly marked for manual handling.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "protected_path",
+      "summary": "The declared scope includes a protected repository path.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "policy_human_required",
+      "summary": "An additional policy rule requires a person at the affected gates.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "budget_exhausted",
+      "summary": "A zero static budget cap prevents an automatic start and requires a person to review the budget.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "mode_off",
+      "summary": "The effective automation policy is off.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issue_automation"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "observation_only",
+      "summary": "This assessment is observational and creates no work or execution permission.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issue_automation"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "execution_grant_required",
+      "summary": "The execution grant boundary is not connected; descriptive gates do not authorize work.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "close_disabled",
+      "summary": "Issue closing is not enabled by this assessment.",
+      "next": [
+        {
+          "step": "stop"
         }
       ]
     },
@@ -3452,7 +3862,13 @@
     },
     "IssueListGroupId": {
       "enum": [
-        "collection"
+        "collection",
+        "my_turn",
+        "upcoming",
+        "running",
+        "in_review",
+        "done",
+        "excluded"
       ],
       "type": "string"
     },
@@ -3475,6 +3891,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/IssueTrackedState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "triage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueTriageState"
             },
             {
               "type": "null"
@@ -3551,7 +3977,8 @@
         "held",
         "stale",
         "remote_closed",
-        "workflow"
+        "workflow",
+        "triage"
       ],
       "type": "string"
     },
@@ -3655,6 +4082,18 @@
         "completeness"
       ],
       "type": "object"
+    },
+    "IssueObservationDispositionState": {
+      "enum": [
+        "automatic_start",
+        "human_approval",
+        "deferred",
+        "excluded",
+        "needs_info",
+        "unknown",
+        "observation_only"
+      ],
+      "type": "string"
     },
     "IssueObservationState": {
       "oneOf": [
@@ -3801,6 +4240,376 @@
         "held",
         "stale",
         "unknown"
+      ],
+      "type": "object"
+    },
+    "IssueTriageBasisState": {
+      "additionalProperties": false,
+      "properties": {
+        "disclosure_policy_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_sha256": {
+          "type": "string"
+        },
+        "issue": {
+          "$ref": "#/$defs/IssueEventReference"
+        },
+        "pinned_source_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requirements_sha256": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/IssueTriageSourceStateValue"
+        },
+        "validation_policy_version": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "issue",
+        "source",
+        "validation_policy_version",
+        "evidence_sha256",
+        "requirements_sha256"
+      ],
+      "type": "object"
+    },
+    "IssueTriageEligibilityState": {
+      "enum": [
+        "eligible",
+        "ineligible",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "IssueTriageGateActionState": {
+      "enum": [
+        "human",
+        "timeout_default",
+        "timeout_arbiter",
+        "auto"
+      ],
+      "type": "string"
+    },
+    "IssueTriageGateKind": {
+      "enum": [
+        "start",
+        "spec",
+        "plan",
+        "delivery",
+        "merge",
+        "close"
+      ],
+      "type": "string"
+    },
+    "IssueTriageGateState": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/IssueTriageGateActionState"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "gate": {
+          "$ref": "#/$defs/IssueTriageGateKind"
+        },
+        "gate_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gate",
+        "action",
+        "enabled",
+        "gate_revision"
+      ],
+      "type": "object"
+    },
+    "IssueTriageModeState": {
+      "enum": [
+        "off",
+        "observe",
+        "propose",
+        "gated",
+        "auto"
+      ],
+      "type": "string"
+    },
+    "IssueTriageObservationState": {
+      "additionalProperties": false,
+      "properties": {
+        "assumed_mode": {
+          "$ref": "#/$defs/IssueTriageModeState"
+        },
+        "disposition": {
+          "$ref": "#/$defs/IssueObservationDispositionState"
+        },
+        "observation_only": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "observation_only",
+        "assumed_mode",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    "IssueTriageObserveReportState": {
+      "additionalProperties": false,
+      "properties": {
+        "assumed_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueTriageModeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "automatic_start": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocked": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deferred": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "excluded": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "human_approval": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "needs_info": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observation_only": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "policy_blocked": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stale": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "untriaged": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "policy_blocked",
+        "total",
+        "automatic_start",
+        "human_approval",
+        "deferred",
+        "excluded",
+        "needs_info",
+        "unknown",
+        "observation_only",
+        "stale",
+        "untriaged",
+        "blocked"
+      ],
+      "type": "object"
+    },
+    "IssueTriageReadinessState": {
+      "enum": [
+        "ready",
+        "needs_info",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "IssueTriageReasonState": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ReasonCode"
+        },
+        "next": {
+          "items": {
+            "$ref": "#/$defs/NextStep"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary",
+        "next"
+      ],
+      "type": "object"
+    },
+    "IssueTriageRiskState": {
+      "enum": [
+        "low",
+        "normal",
+        "high"
+      ],
+      "type": "string"
+    },
+    "IssueTriageSourceStateValue": {
+      "enum": [
+        "not_yet_observed",
+        "unknown",
+        "shared",
+        "withheld"
+      ],
+      "type": "string"
+    },
+    "IssueTriageState": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/IssueTriageBasisState"
+        },
+        "effective_mode": {
+          "$ref": "#/$defs/IssueTriageModeState"
+        },
+        "eligibility": {
+          "$ref": "#/$defs/IssueTriageEligibilityState"
+        },
+        "field_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueHashState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gates": {
+          "items": {
+            "$ref": "#/$defs/IssueTriageGateState"
+          },
+          "type": "array"
+        },
+        "observation": {
+          "$ref": "#/$defs/IssueTriageObservationState"
+        },
+        "observation_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "readiness": {
+          "$ref": "#/$defs/IssueTriageReadinessState"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/IssueTriageReasonState"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "risk_class": {
+          "$ref": "#/$defs/IssueTriageRiskState"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "tracked_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "revision",
+        "stale",
+        "eligibility",
+        "readiness",
+        "risk_class",
+        "effective_mode",
+        "policy_version",
+        "basis",
+        "gates",
+        "reasons",
+        "observation"
       ],
       "type": "object"
     },
@@ -4623,6 +5432,23 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -4875,6 +5701,16 @@
                     "null"
                   ]
                 },
+                "report": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueTriageObserveReportState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "revision": {
                   "format": "uint64",
                   "minimum": 0,
@@ -4897,6 +5733,92 @@
           "properties": {
             "type": {
               "const": "issues",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "const": "unavailable",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "report": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueTriageObserveReportState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "status": {
+                  "const": "not_found",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "revision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "item": {
+                  "$ref": "#/$defs/IssueListItem"
+                },
+                "report": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueTriageObserveReportState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "status": {
+                  "const": "ready",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "revision",
+                "item"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "type": {
+              "const": "issue",
               "type": "string"
             }
           },
@@ -5334,6 +6256,46 @@
             "issue",
             "binding_id",
             "revision",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "binding_id": {
+              "type": "string"
+            },
+            "by": {
+              "$ref": "#/$defs/IssueChangeOrigin"
+            },
+            "gate_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_triaged",
+              "type": "string"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "binding_id",
+            "revision",
+            "gate_revision",
+            "policy_version",
             "by"
           ],
           "type": "object"
@@ -6260,6 +7222,31 @@
         "rejected_again",
         "planning_revision_stale",
         "planning_locked",
+        "not_yet_observed",
+        "source_unavailable",
+        "metadata_incomplete",
+        "disclosure_policy_stale",
+        "selection_not_matched",
+        "issue_closed",
+        "untrusted_actor",
+        "already_claimed",
+        "title_missing",
+        "required_section_missing",
+        "criteria_missing",
+        "criteria_not_list",
+        "issue_too_large",
+        "unsupported_content",
+        "disclosure_confirmation_required",
+        "masked_content",
+        "high_risk",
+        "held_or_manual",
+        "protected_path",
+        "policy_human_required",
+        "budget_exhausted",
+        "mode_off",
+        "observation_only",
+        "execution_grant_required",
+        "close_disabled",
         "issue_automation_off"
       ],
       "type": "string"

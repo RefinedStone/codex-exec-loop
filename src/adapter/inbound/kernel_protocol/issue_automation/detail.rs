@@ -1,0 +1,90 @@
+//! 같은 저장소의 안정 ID 한 건을 조회한다. 없음과 저장 읽기 실패는 다른 상태다.
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use super::super::{KernelProtocolError, KernelQuery};
+use super::{IssueListItem, IssueTriageObserveReportState};
+use crate::domain::issue_automation::collection::IssueCollectionDetail;
+use crate::domain::issue_work::IssueReference;
+
+const MAX_ISSUE_COORDINATE_BYTES: usize = 4096;
+const MAX_ISSUE_REFERENCE_BYTES: usize = 16 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum IssueState {
+    Unavailable {},
+    NotFound {
+        revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report: Option<IssueTriageObserveReportState>,
+    },
+    Ready(Box<IssueDetailState>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueDetailState {
+    pub revision: u64,
+    pub item: IssueListItem,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<IssueTriageObserveReportState>,
+}
+
+impl IssueState {
+    pub fn unavailable() -> Self {
+        Self::Unavailable {}
+    }
+
+    pub fn from_domain(detail: &IssueCollectionDetail) -> Self {
+        let report = detail.report.as_ref().map(Into::into);
+        match &detail.item {
+            Some(item) => Self::Ready(Box::new(IssueDetailState {
+                revision: detail.revision,
+                item: item.into(),
+                report,
+            })),
+            None => Self::NotFound {
+                revision: detail.revision,
+                report,
+            },
+        }
+    }
+}
+
+impl KernelQuery {
+    /// 표시 번호/URL로 다시 찾지 않는다. 대표 workspace와 전체 안정 좌표를 그대로 검증한다.
+    pub fn issue_reference(
+        &self,
+        workspace: &str,
+    ) -> Result<Option<IssueReference>, KernelProtocolError> {
+        let Self::Issue { issue } = self else {
+            return Ok(None);
+        };
+        let reference: IssueReference = issue.clone().into();
+        let coordinates = [
+            reference.server_id.as_str(),
+            reference.repository_id.as_str(),
+            reference.issue_id.as_str(),
+            reference.project_scope.workspace_dir.as_str(),
+        ];
+        if reference.project_scope.workspace_dir != workspace
+            || coordinates.iter().any(|value| {
+                value.is_empty()
+                    || value.len() > MAX_ISSUE_COORDINATE_BYTES
+                    || value.trim() != *value
+                    || value.chars().any(char::is_control)
+            })
+            || coordinates.iter().map(|value| value.len()).sum::<usize>()
+                > MAX_ISSUE_REFERENCE_BYTES
+        {
+            return Err(KernelProtocolError::invalid_params(
+                "invalid issue reference",
+            ));
+        }
+        Ok(Some(reference))
+    }
+}
+
+#[cfg(test)]
+mod tests;

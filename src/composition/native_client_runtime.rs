@@ -13,9 +13,7 @@ use crate::application::port::outbound::repository_state_port::RepositoryStatePo
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::issue_collection::{
-    IssueCollectionService, IssueCollectionTrackedFact,
-};
+use crate::application::service::issue_collection::IssueCollectionService;
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent,
     ParallelModeControlPlaneCommand as ApplicationParallelModeControlPlaneCommand,
@@ -33,7 +31,9 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
-use crate::composition::issue_observer::{IssueCollectionHostView, IssueObserver};
+use crate::composition::issue_observer::{
+    IssueCollectionHostView, IssueObserver, IssueObserverCommittedFact,
+};
 use crate::composition::kernel_event_recorder::KernelEventRecorder;
 use crate::composition::repository_observer::RepositoryObserver;
 use crate::core::app::{
@@ -58,8 +58,10 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::issue_automation::collection::{
-    IssueCollectionMode, IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery,
+    IssueCollectionDetail, IssueCollectionMode, IssueCollectionPage, IssueCollectionProjection,
+    IssueCollectionQuery,
 };
+use crate::domain::issue_work::IssueReference;
 use crate::domain::kernel_event::{
     APPROVAL_KINDS, AUTO_FOLLOW_KINDS, ApprovalResolution, CALLER_NAME_MAX_CHARS, COMMAND_KINDS,
     CommandMemory, CommandRecall, KernelCommandDescriptor, KernelEvent, KernelEventPage,
@@ -604,8 +606,8 @@ impl Drop for NativeClientRuntime {
     fn drop(&mut self) {
         // 다른 필드를 버리거나 기록을 flush하기 전에 관찰 commit 경계를 닫는다.
         if let Some(mut observer) = self.issue_observer.take() {
-            let tracked = observer.cancel_and_take_tracked();
-            self.record_issue_tracked(tracked);
+            let committed = observer.cancel_and_take_committed();
+            self.record_issue_committed(committed);
         }
         self.parallel_control_plane.stop_automation();
     }
@@ -1661,6 +1663,16 @@ impl NativeClientRuntime {
             .issues(query)
     }
 
+    pub(super) fn issue_collection_detail(
+        &self,
+        issue: &IssueReference,
+    ) -> anyhow::Result<IssueCollectionDetail> {
+        self.issue_collection
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
+            .issue(issue)
+    }
+
     fn replace_issue_projection(&mut self, projection: IssueCollectionProjection, now: Instant) {
         if let Some(observer) = &mut self.issue_observer {
             self.published_issue_change |= observer.replace_projection(projection, now);
@@ -1694,14 +1706,23 @@ impl NativeClientRuntime {
             .min(u128::from(u64::MAX)) as u64;
         let cycle = observer.poll(now, at_unix_ms);
         self.published_issue_change |= cycle.changed;
-        self.record_issue_tracked(cycle.tracked);
+        self.record_issue_committed(cycle.committed);
     }
 
-    fn record_issue_tracked(&mut self, tracked: Vec<IssueCollectionTrackedFact>) {
-        let records = tracked
+    fn record_issue_committed(&mut self, committed: Vec<IssueObserverCommittedFact>) {
+        let records = committed
             .into_iter()
-            .map(|fact| {
-                KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
+            .map(|fact| match fact {
+                IssueObserverCommittedFact::Tracked(fact) => {
+                    KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
+                }
+                IssueObserverCommittedFact::Triaged(fact) => KernelEvent::issue_triaged(
+                    &fact.issue,
+                    fact.binding_id.as_str(),
+                    fact.revision,
+                    fact.gate_revision,
+                    &fact.policy_version,
+                ),
             })
             .collect();
         self.record_kernel_events(records);

@@ -5,10 +5,12 @@ use anyhow::Result;
 
 use super::issue_source_port::{IssueDiscoveryPage, IssueDiscoveryRequest};
 use crate::domain::issue_automation::collection::{
-    IssueCollectionFailure, IssueCollectionFence, IssueCollectionMode, IssueCollectionPage,
-    IssueCollectionQuery, IssueResyncBatch, StoredIssueCollection,
+    IssueCollectionFailure, IssueCollectionFence, IssueCollectionItem, IssueCollectionMode,
+    IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery, IssueResyncBatch,
+    IssueTriageProjection, StoredIssueCollection,
 };
 use crate::domain::issue_automation::source::IssueSourceRead;
+use crate::domain::issue_automation::triage::IssueTriageAssessment;
 use crate::domain::issue_automation::{
     IssueAutomationBinding, IssueAutomationBindingId, TrackedIssue,
 };
@@ -58,6 +60,8 @@ pub enum IssueAutomationIssueSaveResult {
 pub enum IssueCollectionModeSaveResult {
     Saved {
         state: Box<StoredIssueCollection>,
+        /// 이 저장 transaction이 확정한 state/binding/catalog다. 반환 뒤 최신 조회로 대체하지 않는다.
+        projection: Box<IssueCollectionProjection>,
         changed: bool,
     },
     Conflict {
@@ -68,6 +72,8 @@ pub enum IssueCollectionModeSaveResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueCollectionCommit {
     pub state: StoredIssueCollection,
+    /// 페이지/실패/커서 변경과 같은 transaction에서 읽은 확정 snapshot이다.
+    pub projection: IssueCollectionProjection,
     /// observation + legacy tracked 합집합에 전체 안정 ID가 처음 생긴 경우만 포함한다.
     pub newly_tracked: Vec<IssueReference>,
 }
@@ -75,7 +81,40 @@ pub struct IssueCollectionCommit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueCollectionApplyResult {
     Applied(Box<IssueCollectionCommit>),
-    Discarded { current: Box<StoredIssueCollection> },
+    Discarded {
+        current: Box<StoredIssueCollection>,
+        /// fence를 거절한 transaction에서 관측한 snapshot이다.
+        projection: Box<IssueCollectionProjection>,
+    },
+}
+
+/// 파일 정책 판과 독립적인 저장 CAS다. collection epoch와 Observe도 같은 transaction에서 검사한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IssueTriageFence {
+    pub collection_epoch: u64,
+    pub observation_revision: Option<u64>,
+    pub tracked_revision: Option<u64>,
+    pub assessment_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueTriageBatch {
+    pub collection: Option<StoredIssueCollection>,
+    pub revision: u64,
+    pub items: Vec<IssueCollectionItem>,
+    pub next_after: Option<IssueReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueTriageSaveResult {
+    Saved {
+        record: Box<IssueTriageProjection>,
+        binding_id: IssueAutomationBindingId,
+        catalog_revision: u64,
+        /// 의미가 달라진 새 판정만 true다. 같은 의미의 관찰 CAS 재연결은 false다.
+        changed: bool,
+    },
+    Conflict,
 }
 
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
@@ -136,6 +175,12 @@ pub trait IssueAutomationStorePort: Send + Sync {
     ) -> Result<IssueAutomationIssueSaveResult>;
 
     fn get_collection(&self, workspace_dir: &str) -> Result<Option<StoredIssueCollection>>;
+
+    /// control/binding/catalog는 한 read transaction의 snapshot이다.
+    fn get_collection_projection(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<IssueCollectionProjection>>;
 
     /// 없을 때 Observe를 먼저 commit한다. 기존 Off 설정은 그대로 보존한다.
     fn ensure_collection(&self, workspace_dir: &str) -> Result<StoredIssueCollection>;
@@ -200,4 +245,30 @@ pub trait IssueAutomationStorePort: Send + Sync {
         workspace_dir: &str,
         query: &IssueCollectionQuery,
     ) -> Result<IssueCollectionPage>;
+
+    /// 같은 read transaction에서 전체 합집합을 안정 ID 순서로 유한 페이지씩 순회한다.
+    /// visitor는 순수 계산만 하고 파일/네트워크 I/O나 이 Store에 재진입하지 않는다.
+    /// 실패 시 부분 집계는 호출자가 폐기한다. 반환값은 같은 snapshot의 catalog revision이다.
+    fn scan_collection_issues(
+        &self,
+        workspace_dir: &str,
+        binding_id: Option<&IssueAutomationBindingId>,
+        visitor: &mut dyn FnMut(IssueCollectionItem) -> Result<()>,
+    ) -> Result<u64>;
+
+    fn read_triage_batch(
+        &self,
+        workspace_dir: &str,
+        after: Option<&IssueReference>,
+        limit: u16,
+    ) -> Result<IssueTriageBatch>;
+
+    /// 별도 판정만 저장한다. workflow 상태/flags/snapshot을 갱신하는 우회 경로가 아니다.
+    /// source 증거와 checked gate successor를 검증하고 모든 fence가 맞을 때만 commit한다.
+    fn save_triage(
+        &self,
+        workspace_dir: &str,
+        expected: IssueTriageFence,
+        assessment: &IssueTriageAssessment,
+    ) -> Result<IssueTriageSaveResult>;
 }

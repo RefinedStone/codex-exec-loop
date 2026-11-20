@@ -3,11 +3,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::issue_automation::IssueAutomationState;
 use crate::domain::issue_automation::collection::IssueCollectionItem;
+use crate::domain::issue_automation::policy::{IssueAutomationGate, IssueAutomationGateAction};
 use crate::domain::issue_automation::source::{
     IssueRemoteState, IssueSourceContent, IssueSourceRead,
 };
+use crate::domain::issue_automation::triage::{IssueTriageEligibility, IssueTriageReadiness};
+use crate::domain::issue_automation::{IssueAutomationAutonomy, IssueAutomationState};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +106,7 @@ pub enum IssueListReasonCode {
     Stale,
     RemoteClosed,
     Workflow,
+    Triage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -119,15 +122,111 @@ pub struct IssueListGroup {
 #[serde(rename_all = "snake_case")]
 pub enum IssueListGroupId {
     Collection,
+    MyTurn,
+    Upcoming,
+    Running,
+    InReview,
+    Done,
+    Excluded,
 }
 
 impl IssueListGroup {
+    pub(super) fn from_items(items: &[IssueCollectionItem]) -> Vec<Self> {
+        if items.is_empty() {
+            return vec![Self::collection(0)];
+        }
+        [
+            (IssueListGroupId::MyTurn, "내 차례"),
+            (IssueListGroupId::Upcoming, "곧 시작"),
+            (IssueListGroupId::Running, "실행 중"),
+            (IssueListGroupId::InReview, "리뷰 중"),
+            (IssueListGroupId::Done, "끝남"),
+            (IssueListGroupId::Excluded, "제외"),
+            (IssueListGroupId::Collection, "수집한 이슈"),
+        ]
+        .into_iter()
+        .filter_map(|(id, label)| {
+            let item_indices: Vec<_> = items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| (group_id(item) == id).then_some(index))
+                .collect();
+            (!item_indices.is_empty()).then(|| Self {
+                id,
+                label: label.to_owned(),
+                item_indices,
+            })
+        })
+        .collect()
+    }
+
     pub(super) fn collection(item_count: usize) -> Self {
         Self {
             id: IssueListGroupId::Collection,
             label: "수집한 이슈".to_owned(),
             item_indices: (0..item_count).collect(),
         }
+    }
+}
+
+/// 실행 중/종료된 워크플로의 위치는 판정으로 되돌리지 않는다.
+fn group_id(item: &IssueCollectionItem) -> IssueListGroupId {
+    if let Some(tracked) = &item.tracked {
+        match tracked.state {
+            IssueAutomationState::Running => return IssueListGroupId::Running,
+            IssueAutomationState::InReview => return IssueListGroupId::InReview,
+            IssueAutomationState::Done | IssueAutomationState::Cancelled => {
+                return IssueListGroupId::Done;
+            }
+            _ => {}
+        }
+        if tracked.flags.held || tracked.flags.stale || tracked.flags.unknown {
+            return IssueListGroupId::MyTurn;
+        }
+        match tracked.state {
+            IssueAutomationState::Queued => return IssueListGroupId::Upcoming,
+            IssueAutomationState::AwaitingDecision | IssueAutomationState::Failed => {
+                return IssueListGroupId::MyTurn;
+            }
+            _ => {}
+        }
+    }
+    let Some(triage) = &item.triage else {
+        return IssueListGroupId::Collection;
+    };
+    if triage.stale {
+        return IssueListGroupId::MyTurn;
+    }
+    let assessment = &triage.assessment;
+    match assessment.eligibility() {
+        IssueTriageEligibility::Ineligible => return IssueListGroupId::Excluded,
+        IssueTriageEligibility::Unknown => return IssueListGroupId::MyTurn,
+        IssueTriageEligibility::Eligible => {}
+    }
+    if assessment.readiness() != IssueTriageReadiness::Ready {
+        return IssueListGroupId::MyTurn;
+    }
+    if assessment.effective_mode() <= IssueAutomationAutonomy::Observe {
+        return IssueListGroupId::Collection;
+    }
+    // 관찰 보고의 가정 수준은 실제 시작 관문이나 목록의 진행 약속이 아니다.
+    match assessment
+        .gates()
+        .iter()
+        .find(|gate| gate.gate == IssueAutomationGate::Start)
+    {
+        Some(gate)
+            if gate.enabled
+                && matches!(
+                    gate.action,
+                    IssueAutomationGateAction::Auto
+                        | IssueAutomationGateAction::TimeoutDefault
+                        | IssueAutomationGateAction::TimeoutArbiter
+                ) =>
+        {
+            IssueListGroupId::Upcoming
+        }
+        _ => IssueListGroupId::MyTurn,
     }
 }
 
@@ -172,6 +271,30 @@ fn current_fields(item: &IssueCollectionItem) -> (Option<u64>, Option<String>, O
 }
 
 fn status_code(item: &IssueCollectionItem) -> IssueListStatusCode {
+    if let Some(tracked) = &item.tracked
+        && !matches!(
+            tracked.state,
+            IssueAutomationState::Discovered
+                | IssueAutomationState::Ineligible
+                | IssueAutomationState::NeedsInfo
+                | IssueAutomationState::Ready
+        )
+    {
+        return tracked.state.into();
+    }
+    if let Some(triage) = &item.triage
+        && !triage.stale
+    {
+        return match triage.assessment.eligibility() {
+            IssueTriageEligibility::Ineligible => IssueListStatusCode::Ineligible,
+            IssueTriageEligibility::Unknown => IssueListStatusCode::Unknown,
+            IssueTriageEligibility::Eligible => match triage.assessment.readiness() {
+                IssueTriageReadiness::Ready => IssueListStatusCode::Ready,
+                IssueTriageReadiness::NeedsInfo => IssueListStatusCode::NeedsInfo,
+                IssueTriageReadiness::Unknown => IssueListStatusCode::Unknown,
+            },
+        };
+    }
     if let Some(tracked) = &item.tracked {
         return tracked.state.into();
     }
@@ -218,10 +341,24 @@ fn reason(item: &IssueCollectionItem) -> (IssueListReasonCode, &'static str) {
             );
         }
     }
+    if item.triage.as_ref().is_some_and(|triage| triage.stale) {
+        return (
+            IssueListReasonCode::Stale,
+            "판정의 근거가 바뀌어 다시 확인해야 합니다.",
+        );
+    }
     if observation.remote_state == IssueRemoteState::Closed {
         return (
             IssueListReasonCode::RemoteClosed,
             "원격 이슈가 닫혀 있습니다.",
+        );
+    }
+    if let Some(triage) = &item.triage
+        && let Some(reason) = triage.assessment.reasons().first()
+    {
+        return (
+            IssueListReasonCode::Triage,
+            super::triage::reason_summary(*reason),
         );
     }
     match &item.tracked {

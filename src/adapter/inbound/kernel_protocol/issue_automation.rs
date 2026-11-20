@@ -21,8 +21,14 @@ use crate::domain::kernel_event::{
     IssueEventProjectScope, IssueEventProvider, IssueEventReference,
 };
 
+mod detail;
 mod presentation;
+mod triage;
+pub use detail::IssueState;
 pub use presentation::{IssueListGroup, IssueListPresentation};
+#[cfg(test)]
+pub use triage::IssueTriageReasonState;
+pub use triage::{IssueTriageObserveReportState, IssueTriageState};
 
 const DEFAULT_ISSUES_LIMIT: u16 = 50;
 const MAX_ISSUES_LIMIT: u16 = 100;
@@ -40,7 +46,7 @@ pub enum IssueAutomationState {
 pub struct IssueAutomationReadyState {
     pub mode: IssueAutomationMode,
     pub epoch: u64,
-    /// 목록과 수집 상태의 저장 판이다. 이벤트를 놓치면 조회로 이 판을 다시 읽는다.
+    /// 목록과 같은 catalog 판이다. 수집 control의 CAS 판과는 별개다.
     pub revision: u64,
     pub binding_id: Option<String>,
     pub binding: Option<IssueBindingState>,
@@ -87,7 +93,7 @@ impl IssueAutomationState {
         Self::Ready(Box::new(IssueAutomationReadyState {
             mode: state.config.mode.into(),
             epoch: state.epoch,
-            revision: state.revision,
+            revision: projection.catalog_revision,
             binding_id: state.binding_id.as_ref().map(ToString::to_string),
             binding: projection.binding.as_ref().map(Into::into),
             last_attempt_at_ms: state.status.last_attempt_at_ms,
@@ -161,7 +167,7 @@ impl From<IssueSourceFailure> for IssueSourceFailureState {
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IssuesState {
     Unavailable {},
-    Ready(IssuesPageState),
+    Ready(Box<IssuesPageState>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -171,6 +177,8 @@ pub struct IssuesPageState {
     pub items: Vec<IssueListItem>,
     pub groups: Vec<IssueListGroup>,
     pub next_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<IssueTriageObserveReportState>,
 }
 
 impl IssuesState {
@@ -179,12 +187,13 @@ impl IssuesState {
     }
 
     pub fn from_domain(page: &IssueCollectionPage) -> Self {
-        Self::Ready(IssuesPageState {
+        Self::Ready(Box::new(IssuesPageState {
             revision: page.revision,
             items: page.items.iter().map(Into::into).collect(),
-            groups: vec![IssueListGroup::collection(page.items.len())],
+            groups: IssueListGroup::from_items(&page.items),
             next_after: page.next_after.as_ref().map(encode_issue_cursor),
-        })
+            report: page.report.as_ref().map(Into::into),
+        }))
     }
 }
 
@@ -196,6 +205,8 @@ pub struct IssueListItem {
     pub tracked: Option<IssueTrackedState>,
     pub current: IssueObservationState,
     pub presentation: IssueListPresentation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage: Option<IssueTriageState>,
 }
 
 impl From<&IssueCollectionItem> for IssueListItem {
@@ -204,6 +215,7 @@ impl From<&IssueCollectionItem> for IssueListItem {
             issue: (&item.issue).into(),
             binding_id: item.binding_id.as_str().to_string(),
             presentation: IssueListPresentation::from_domain(item),
+            triage: item.triage.as_ref().map(Into::into),
             tracked: item.tracked.as_ref().map(|tracked| IssueTrackedState {
                 state: tracked.state.into(),
                 held: tracked.flags.held,
