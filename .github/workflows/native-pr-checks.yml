@@ -99,7 +99,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-rust-tests-${{ hashFiles('Cargo.lock') }}-v1
+          key: ${{ runner.os }}-rust-tests-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
           restore-keys: |
             ${{ runner.os }}-rust-tests-
             ${{ runner.os }}-rust-
@@ -132,7 +132,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-rust-lint-${{ hashFiles('Cargo.lock') }}-v1
+          key: ${{ runner.os }}-rust-lint-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
           restore-keys: |
             ${{ runner.os }}-rust-lint-
             ${{ runner.os }}-rust-
@@ -232,7 +232,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-portable-${{ hashFiles('Cargo.lock') }}-v1
+          key: ${{ runner.os }}-${{ matrix.target }}-portable-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-portable-
 
@@ -283,7 +283,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-rust-smoke-${{ hashFiles('Cargo.lock') }}-v1
+          key: ${{ runner.os }}-rust-smoke-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
           restore-keys: |
             ${{ runner.os }}-rust-smoke-
             ${{ runner.os }}-rust-

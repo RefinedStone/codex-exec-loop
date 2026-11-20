@@ -123,6 +123,48 @@ exception only when no patched version exists. Each entry names one advisory id 
 package, the date, and the reason. After the date the check fails again; then update the package
 and remove the entry, or look at the advisory again and set a new date.
 
+## Cargo build storage and iteration speed
+
+Normal `cargo build`, `cargo run`, and `cargo test` use an incremental development profile with
+line-table debug information for Akra and no debug information for dependencies. The test profile
+inherits dev. Akra panic backtraces retain source filenames and line numbers; local variables and
+function arguments are unavailable in a debugger, and dependency frames may lack source locations.
+Optimization, debug assertions, overflow checks, and release settings keep Cargo's defaults.
+
+For variable inspection or stepping into dependencies, opt into full debug information:
+
+```text
+cargo build --locked --profile debugging
+cargo test --locked --profile debugging --no-run
+```
+
+The `debugging` profile restores debug information for both Akra and its dependencies. It builds in
+`target/debugging/` (under `CARGO_TARGET_DIR` when set), so returning to the normal commands reuses
+`target/debug/`. The first use compiles a separate set of artifacts and uses additional space;
+enable it only when that debugging session needs it.
+
+Keep the active lane's target directory between edits, tests, and clippy runs. Keep its toolchain,
+feature selection, and `RUSTFLAGS` stable where possible: changing build conditions creates different
+artifacts. Honor an existing `CARGO_TARGET_DIR`; do not force parallel worktrees into one shared
+target because Cargo's build lock can serialize them and source-path-specific artifacts still
+differ. CI retains its existing `CARGO_INCREMENTAL=0` setting for ephemeral runners; local development
+keeps incremental compilation. CI target cache keys include the manifest, lockfile, and toolchain so
+a profile change can save and reuse a new cache rather than repeatedly restoring an incompatible one.
+
+Changing the default profile causes a one-time rebuild of affected artifacts; it does not delete
+old artifacts or impose a disk quota. Do not put `cargo clean`, age-based eviction, or a cache-size
+purge in build/test/startup hooks. Preserve active caches and use the existing merged-worktree
+cleanup below after integration. Retire old targets explicitly when their lane or toolchain is no
+longer needed; a full clean makes the next build cold.
+
+When evaluating further storage changes, compare `cargo test --locked --no-run` on the same source,
+toolchain, and feature set in separate measurement targets. Record target size and elapsed time for
+the cold build, unchanged repeat, and a single-source incremental rebuild. Keep those measurement
+targets separate from active development caches.
+
+See Cargo's [build performance guide](https://doc.rust-lang.org/cargo/guide/build-performance.html)
+and [profile reference](https://doc.rust-lang.org/cargo/reference/profiles.html).
+
 ## Worktree Lane
 
 Read-only diagnosis, review, and planning use the current checkout. Create a dedicated worktree only

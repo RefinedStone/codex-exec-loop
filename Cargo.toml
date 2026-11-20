@@ -70,3 +70,21 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 syn = { version = "2", features = ["full", "visit", "visit-mut"] }
 vt100 = "0.16.2"
+
+# Keep the default edit/test loop incremental without full type/variable debug data.
+# The test profile inherits dev; release keeps Cargo's independent defaults.
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
+[profile.dev.package."*"]
+debug = false
+
+# Opt in when inspecting variables or stepping into dependencies.
+# A separate output directory preserves the everyday target/debug cache.
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+[profile.debugging.package."*"]
+debug = true
