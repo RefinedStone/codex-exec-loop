@@ -143,8 +143,14 @@ fn secret_ranges(text: &str) -> Vec<Range<usize>> {
 
     for (start, matched) in text.match_indices("://") {
         let authority_start = start + matched.len();
-        let authority = &text[authority_start..value_range(text, authority_start).end];
-        let authority = authority.split('/').next().unwrap_or_default();
+        let authority = &text[authority_start..];
+        let end = authority
+            .find(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, '/' | '?' | '#' | '"' | '\'' | '`' | '<' | '>')
+            })
+            .unwrap_or(authority.len());
+        let authority = &authority[..end];
         if let Some(at) = authority.rfind('@')
             && authority[..at].contains(':')
         {
@@ -158,12 +164,9 @@ fn secret_ranges(text: &str) -> Vec<Range<usize>> {
             let Some(after_separator) = after_key.strip_prefix(['=', ':']) else {
                 continue;
             };
-            let value_text = after_separator.trim_start_matches([' ', '"', '\'']);
-            let value = value_range(text, text.len() - value_text.len());
-            let has_digit = text[value.clone()]
-                .bytes()
-                .any(|byte| byte.is_ascii_digit());
-            if value.len() >= MIN_SECRET_VALUE_CHARS && has_digit {
+            let value_text = after_separator.trim_start();
+            let value = quoted_value_range(text, text.len() - value_text.len());
+            if text[value.clone()].chars().count() >= MIN_SECRET_VALUE_CHARS {
                 ranges.push(value);
             }
         }
@@ -190,6 +193,25 @@ fn secret_ranges(text: &str) -> Vec<Range<usize>> {
     }
 
     ranges
+}
+
+/// 인용 값은 공백이나 쉼표를 포함할 수 있다. 닫히지 않은 인용 값은 나머지 전체를 가린다.
+fn quoted_value_range(text: &str, start: usize) -> Range<usize> {
+    let Some(quote @ ('"' | '\'')) = text[start..].chars().next() else {
+        return value_range(text, start);
+    };
+    let value_start = start + quote.len_utf8();
+    let mut escaped = false;
+    for (offset, character) in text[value_start..].char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == quote {
+            return value_start..value_start + offset;
+        }
+    }
+    value_start..text.len()
 }
 
 /// `start` 에서 시작하는 값의 범위이다. 공백, 따옴표, 쉼표, 쌍반점 앞에서 끝난다.
@@ -342,5 +364,40 @@ mod tests {
         assert!(!format!("{error:#}").contains(SYNTHETIC_TOKEN));
 
         assert!(handoff("Crash", "본문", Some("not toml ["), None).is_err());
+    }
+    #[test]
+    fn explicit_secrets_preserve_no_quoted_or_url_suffixes() {
+        for (raw, expected) in [
+            (
+                r#"password="synthetic123 remaining-private-phrase""#,
+                r#"password="[removed]""#,
+            ),
+            (
+                r#"password='synthetic phrase, with spaces'"#,
+                r#"password='[removed]'"#,
+            ),
+            (
+                r#"password="synthetic\" still-private""#,
+                r#"password="[removed]""#,
+            ),
+            ("password=correcthorsebatterystaple", "password=[removed]"),
+            ("api_key=alphabeticsecret", "api_key=[removed]"),
+            (
+                "https://user:synthetic123,private@example.invalid/repo",
+                "https://[removed]@example.invalid/repo",
+            ),
+            (
+                "https://user:synthetic;private@example.invalid/repo?key=value",
+                "https://[removed]@example.invalid/repo?key=value",
+            ),
+            (
+                r#"password="unterminated private value"#,
+                r#"password="[removed]"#,
+            ),
+        ] {
+            let copy = handoff(raw, raw, None, None).expect("handoff");
+            assert_eq!(copy.title, expected, "{raw}");
+            assert_eq!(copy.body, expected, "{raw}");
+        }
     }
 }
