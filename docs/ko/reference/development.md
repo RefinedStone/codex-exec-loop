@@ -66,6 +66,47 @@ bash scripts/check_native_pr.sh
 이 gate는 TUI layering, Node surface, rustfmt, Rust test, clippy를 실행합니다. Primitive-sensitive
 terminal 변경은 [검증 가이드](validation.md)도 따르고 필요한 실제 terminal evidence를 첨부합니다.
 
+## Cargo 빌드 용량과 반복 개발 속도
+
+일반 `cargo build`, `cargo run`, `cargo test`는 증분 컴파일을 유지하면서 Akra 코드에는 줄 정보만,
+의존성에는 디버그 정보를 생성하지 않습니다. Test 프로필은 dev를 상속합니다. Akra의 panic
+백트레이스에는 파일명과 줄 번호가 남지만, 디버거에서 지역 변수와 함수 인자를 확인할 수 없고
+의존성 프레임의 소스 위치는 표시되지 않을 수 있습니다. 최적화, debug assertion, overflow 검사,
+release 설정은 Cargo 기본값을 유지합니다.
+
+변수 확인이나 의존성 내부 디버깅이 필요하면 상세 디버깅 프로필을 명시합니다.
+
+```text
+cargo build --locked --profile debugging
+cargo test --locked --profile debugging --no-run
+```
+
+`debugging` 프로필은 Akra와 의존성 모두의 상세 디버그 정보를 복원합니다. 산출물은
+`target/debugging/`에 저장되며, `CARGO_TARGET_DIR`이 있으면 그 아래에 저장됩니다. 일반 명령으로
+돌아오면 기존 `target/debug/`를 재사용합니다. 첫 실행은 별도 산출물을 컴파일하므로 시간과 공간이
+추가로 필요합니다. 필요한 디버깅 세션에서만 사용합니다.
+
+진행 중인 lane의 target은 수정, 테스트, clippy 실행 사이에 유지합니다. 가능하면 toolchain,
+feature 조합, `RUSTFLAGS`도 일정하게 유지합니다. 빌드 조건이 달라지면 별도 산출물이 생깁니다.
+기존 `CARGO_TARGET_DIR`을 존중하고 병렬 worktree를 단일 target으로 강제하지 않습니다. Cargo의
+빌드 lock이 병렬 작업을 직렬화할 수 있고 소스 경로에 따른 산출물 차이도 남기 때문입니다.
+CI는 일회성 runner를 위한 기존 `CARGO_INCREMENTAL=0`을 유지하고, 로컬은 증분 컴파일을 유지합니다.
+CI target 캐시 키에는 manifest, lockfile, toolchain을 포함해 프로필 변경 후의 캐시도 저장하고
+재사용합니다.
+
+기본 프로필 변경 직후에는 영향을 받는 산출물을 한 번 다시 빌드합니다. 과거 산출물을 자동으로
+삭제하거나 디스크 상한을 설정하는 변경은 아닙니다. 빌드·테스트·시작 hook에 `cargo clean`,
+기간 기준 삭제, 용량 기준 일괄 삭제를 넣지 않습니다. 활성 캐시는 보존하고 통합 후 아래의 기존
+merged-worktree 정리 절차를 사용합니다. 오래된 target은 해당 lane이나 toolchain을 더 사용하지
+않을 때 명시적으로 정리합니다. 전체 clean 다음 빌드는 처음부터 수행합니다.
+
+추가 용량 개선을 검토할 때는 동일 소스, toolchain, feature 조건에서 측정 전용 target을 나눠
+`cargo test --locked --no-run`을 비교합니다. 최초 빌드, 변경 없는 재실행, 소스 한 파일 변경 후
+증분 재빌드의 시간과 target 크기를 기록합니다. 측정용 target은 실제 개발 캐시와 분리합니다.
+
+근거: Cargo [빌드 성능 가이드](https://doc.rust-lang.org/cargo/guide/build-performance.html),
+[프로필 문서](https://doc.rust-lang.org/cargo/reference/profiles.html).
+
 ## Worktree lane
 
 모든 변경은 최신 `origin/prerelease`에서 만든 전용 worktree에서 진행합니다.
