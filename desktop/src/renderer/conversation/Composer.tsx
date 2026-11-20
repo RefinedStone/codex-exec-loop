@@ -8,6 +8,7 @@ import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
 import { isSendKey, recallCursor } from "./composerKeys";
+import { isSentComposerDraft, runComposerAction, useComposerRequests } from "./composerAction";
 import { PlanList } from "./ConversationView";
 import { loadPrompts, rememberPrompt } from "./promptHistory";
 import { contextPercent, isTurnInProgress } from "./transcript";
@@ -57,7 +58,6 @@ function ContextRing({ percent }: { percent: number }) {
 
 export function Composer({ actions, home = false, above }: { actions: ComposerActions; home?: boolean; above?: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const transcript = useDesktopStore((state) => (home ? null : state.transcript));
@@ -69,6 +69,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   // 초안은 화면 저장소에 둔다. 보기를 바꾸거나 업무 패널이 글을 넘겨도 같은 값을 본다.
   const draftKey = home ? HOME_DRAFT : (transcript?.threadId ?? "");
   const draft = useUiStore((state) => state.drafts[draftKey] ?? "");
+  const sending = useComposerRequests((state) => state.pendingKeys.includes(draftKey));
   const setDraft = (text: string) => setDraftFor(draftKey, text);
   const disabled = !connected || (!home && !transcript) || writerElsewhere || sending;
 
@@ -86,13 +87,10 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
 
   const run = async (action: () => Promise<void>) => {
     setError(null);
-    setSending(true);
     try {
-      await action();
+      await runComposerAction(draftKey, action);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSending(false);
     }
   };
 
@@ -108,7 +106,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         await actions.sendMessage(text);
       }
       rememberPrompt(text);
-      setDraft("");
+      if (isSentComposerDraft(useUiStore.getState().drafts[draftKey], text)) setDraft("");
     });
   };
 
@@ -163,7 +161,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
             <span className="bar-spacer" />
             {percent !== null && <ContextRing percent={percent} />}
             {inProgress && (
-              <button type="button" className="round-button stop" title="중단" onClick={() => void run(actions.interrupt)} disabled={!connected} data-testid="composer-interrupt">
+              <button type="button" className="round-button stop" title="중단" onClick={() => void run(actions.interrupt)} disabled={!connected || sending} data-testid="composer-interrupt">
                 <span className="stop-square" />
               </button>
             )}
