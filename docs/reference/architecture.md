@@ -943,6 +943,12 @@ strategy in the production TUI.
   contract (`evidence_vault_port`). Restore plaintext and key types have no `Serialize`, so they
   cannot enter a serialized event or response; restore needs a `VaultUserConfirmation` built on the
   local confirmation path. `FakeIssueWorkAdapter` is the only implementation today.
+- The same general surfaces must not reference the raw issue snapshot contract
+  (`issue_snapshot_port`, implemented by `GithubIssueSnapshotAdapter` through `gh api graphql`).
+  `IssueRawFields` has no `Serialize` and a redacted `Debug`; a remote copy leaves the trusted path
+  only through `IssueSnapshotResponse::verified_shared_copy`, which needs the approved copy's
+  versioned field hash (`IssueFieldHash`). The adapter keeps no cache: a failed remote read is an
+  error.
 
 Verify boundary-sensitive changes with:
 
