@@ -8,18 +8,22 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
+use super::private_runtime_lease::PrivateRuntimeLease;
 use super::secure_fs;
-use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
+use crate::application::port::outbound::issue_publish_intent_journal_port::{
+    IssuePublicationLease, IssuePublishIntentJournalPort,
+};
 use crate::domain::issue_publish_intent::IssuePublishIntentRecord;
 
 const JOURNAL_FILE_NAME: &str = "issue-publish-intents.jsonl";
+const PUBLICATION_LOCK_NAME: &str = "issue-publish-intents.lock";
 
 /// 작업 폴더에서 그 저장소의 runtime 디렉터리를 찾는 함수이다.
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 pub struct IssuePublishIntentJournalAdapter {
     resolve_runtime_dir: Box<RuntimeDirectoryResolver>,
-    // 읽고 고쳐 쓰는 사이에 다른 쓰기가 끼지 않게 한다. 일지를 쓰는 프로세스는 Gateway 하나이다.
+    // 단일 파일 read-modify-write를 직렬화한다. 전체 게시의 프로세스 공유 lease는 서비스가 보관한다.
     write: Mutex<()>,
 }
 
@@ -45,7 +49,26 @@ fn read_records(runtime_dir: &Path) -> Result<Vec<IssuePublishIntentRecord>> {
         .collect()
 }
 
+impl IssuePublicationLease for PrivateRuntimeLease {
+    fn verify_identity(&self) -> Result<()> {
+        PrivateRuntimeLease::verify_identity(self)
+    }
+}
+
 impl IssuePublishIntentJournalPort for IssuePublishIntentJournalAdapter {
+    fn acquire_publication_lease(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Box<dyn IssuePublicationLease + '_>> {
+        let runtime_dir = (self.resolve_runtime_dir)(workspace_dir)?;
+        let lease = PrivateRuntimeLease::acquire(
+            runtime_dir,
+            PUBLICATION_LOCK_NAME,
+            std::time::Duration::from_secs(30),
+        )?;
+        Ok(Box::new(lease))
+    }
+
     fn save(&self, workspace_dir: &str, record: &IssuePublishIntentRecord) -> Result<()> {
         let runtime_dir = (self.resolve_runtime_dir)(workspace_dir)?;
         let _write = self
@@ -119,6 +142,57 @@ mod tests {
             write_attempted: None,
             sequence: 0,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_lease_is_shared_across_adapters_and_separate_from_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let directory = temp_runtime_dir("publication-lease");
+        let directory = std::fs::canonicalize(directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let first = journal(&directory);
+        let lease = first.acquire_publication_lease("/work/project").unwrap();
+        lease.verify_identity().unwrap();
+        assert!(
+            PrivateRuntimeLease::acquire(directory.clone(), PUBLICATION_LOCK_NAME, Duration::ZERO)
+                .is_err()
+        );
+        let creation = PrivateRuntimeLease::acquire(
+            directory.clone(),
+            "issue-create-intents.lock",
+            Duration::ZERO,
+        )
+        .unwrap();
+        creation.verify_identity().unwrap();
+        drop(lease);
+        let second = journal(&directory);
+        let lease = second.acquire_publication_lease("/work/project").unwrap();
+        lease.verify_identity().unwrap();
+        drop(lease);
+        drop(creation);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_lease_detects_replaced_lock_before_mutation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = temp_runtime_dir("publication-lease-replacement");
+        let directory = std::fs::canonicalize(directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let adapter = journal(&directory);
+        let lease = adapter.acquire_publication_lease("/work/project").unwrap();
+        let lock = directory.join(PUBLICATION_LOCK_NAME);
+        std::fs::rename(&lock, directory.join("old-lock")).unwrap();
+        std::fs::write(&lock, "").unwrap();
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(lease.verify_identity().is_err());
+        drop(lease);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

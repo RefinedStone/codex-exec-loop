@@ -83,7 +83,7 @@ pub struct IssueDraftUnsupportedInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueDraftTemplate {
-    /// `not_configured`, `resolved`, `missing`, `unreadable`, `invalid` 중 하나이다.
+    /// `not_configured`, `resolved`, `missing`, `unreadable`, `invalid` 또는 생성 결과 전용 `recovery_only` 이다.
     pub status: &'static str,
     pub path: Option<String>,
     pub reason: Option<String>,
@@ -208,6 +208,48 @@ pub enum IssueDraftPublished {
 }
 
 pub trait IssueDraftPort: Send + Sync {
+    fn creation_open(
+        &self,
+        _target: super::issue_creation_draft::IssueCreationTarget,
+    ) -> Result<super::issue_creation_draft::IssueCreationOpened> {
+        anyhow::bail!("new-issue creation is unavailable")
+    }
+
+    fn creation_preview(
+        &self,
+        _request: super::issue_creation_draft::IssueCreationPreviewRequest,
+    ) -> Result<super::issue_creation_draft::IssueCreationPreview> {
+        anyhow::bail!("new-issue creation is unavailable")
+    }
+
+    fn creation_publish(
+        &self,
+        _request: super::issue_creation_draft::IssueCreationPublishRequest,
+    ) -> Result<super::issue_creation_draft::IssueCreationPublished> {
+        anyhow::bail!("new-issue creation is unavailable")
+    }
+
+    fn creation_recheck(
+        &self,
+        _request: super::issue_creation_draft::IssueCreationIntentRequest,
+    ) -> Result<super::issue_creation_draft::IssueCreationIntent> {
+        anyhow::bail!("new-issue creation is unavailable")
+    }
+
+    fn creation_confirm(
+        &self,
+        _request: super::issue_creation_draft::IssueCreationConfirmRequest,
+    ) -> Result<super::issue_creation_draft::IssueCreationIntent> {
+        anyhow::bail!("new-issue creation is unavailable")
+    }
+
+    fn creation_restart(
+        &self,
+        _request: super::issue_creation_draft::IssueCreationRestartRequest,
+    ) -> Result<super::issue_creation_draft::IssueCreationOpened> {
+        anyhow::bail!("new-issue creation is unavailable")
+    }
+
     /// 편집을 시작한다. 원격 글, 요구 사항, 이 이슈의 게시 의도 상태를 준다. 쓰지 않는다.
     fn open(&self, target: IssueDraftTarget) -> Result<IssueDraftOpened>;
 

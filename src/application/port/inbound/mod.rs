@@ -30,3 +30,5 @@ pub mod resource_version_provider_port;
 pub mod review_center_query_port;
 pub mod stored_command_port;
 pub mod work_context_port;
+
+pub mod issue_creation_draft;

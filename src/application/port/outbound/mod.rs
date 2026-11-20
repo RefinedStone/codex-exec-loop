@@ -100,3 +100,7 @@ pub mod telegram_bot_port;
 pub mod telegram_global_runner_lease_port;
 // telegram update ledger port는 workspace별 polling cursor와 명령 idempotency를 영속화한다.
 pub mod telegram_update_ledger_port;
+
+pub mod issue_create_port;
+
+pub mod issue_creation_journal_port;

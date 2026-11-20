@@ -48,7 +48,13 @@ function PullRequestRow({
   );
 }
 
-export function GitHubPanel({ github, onHandOff }: { github: GitHubBridge; onHandOff(pull: GitHubPullRequest): Promise<void> }) {
+export function GitHubPanel({ github, onHandOff, currentRepository, onCreate }: {
+  github: GitHubBridge;
+  onHandOff(pull: GitHubPullRequest): Promise<void>;
+  currentRepository?: string | null;
+  onCreate?(): Promise<void>;
+}) {
+  const createAction = useAction();
   const [state, setState] = useState<PanelState>({ phase: "loading" });
 
   const refresh = () => {
@@ -64,11 +70,15 @@ export function GitHubPanel({ github, onHandOff }: { github: GitHubBridge; onHan
     <aside className="work-panel" data-testid="github-panel">
       <div className="work-header">
         <strong>GitHub</strong>
+        {onCreate && <button type="button" disabled={!currentRepository || createAction.busy}
+          title={currentRepository ? currentRepository + "에 새 이슈 작성" : "저장소의 작업 폴더를 먼저 선택하세요"}
+          onClick={() => void createAction.run(onCreate)} data-testid="github-create-issue">새 이슈</button>}
         {state.phase === "loaded" && <span className="muted">{state.summary.login}</span>}
         <button type="button" onClick={refresh} disabled={state.phase === "loading"}>
           {state.phase === "loading" ? "읽는 중…" : "새로 고침"}
         </button>
       </div>
+      {createAction.error && <div className="error work-section">{createAction.error}</div>}
       {state.phase === "failed" && (
         <div className="error work-section" data-testid="github-error">
           GitHub 정보를 읽을 수 없습니다. gh 설치와 `gh auth login` 을 확인하세요. {state.message}

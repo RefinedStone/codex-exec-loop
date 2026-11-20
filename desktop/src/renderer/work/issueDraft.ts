@@ -52,7 +52,7 @@ export interface IssueDraftIntent {
 }
 
 export interface IssueDraftTemplate {
-  status: "not_configured" | "resolved" | "missing" | "unreadable" | "invalid";
+  status: "not_configured" | "resolved" | "missing" | "unreadable" | "invalid" | "recovery_only";
   path: string | null;
   reason: string | null;
   requiredInputs: { label: string; kind: string; options: string[] }[];

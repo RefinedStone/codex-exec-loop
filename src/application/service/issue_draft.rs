@@ -1,3 +1,7 @@
+mod creation;
+
+use crate::application::port::inbound::issue_creation_draft::*;
+use crate::application::service::issue_creation::IssueCreationService;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -59,7 +63,8 @@ pub struct IssueDraftService {
     policy: IssuePolicyService,
     template: IssueTemplateService,
     snapshot: Arc<dyn IssueSnapshotPort>,
-    publisher: IssueJournaledPublishService,
+    publisher: Arc<IssueJournaledPublishService>,
+    creator: Option<Arc<IssueCreationService>>,
     code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
     vault_unlock: Arc<EvidenceVaultUnlockService>,
 }
@@ -76,7 +81,7 @@ impl IssueDraftService {
         policy: IssuePolicyService,
         template: IssueTemplateService,
         snapshot: Arc<dyn IssueSnapshotPort>,
-        publisher: IssueJournaledPublishService,
+        publisher: impl Into<Arc<IssueJournaledPublishService>>,
         code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
         vault_unlock: Arc<EvidenceVaultUnlockService>,
     ) -> Self {
@@ -84,10 +89,22 @@ impl IssueDraftService {
             policy,
             template,
             snapshot,
-            publisher,
+            publisher: publisher.into(),
+            creator: None,
             code_validators,
             vault_unlock,
         }
+    }
+
+    pub fn with_creation(mut self, creator: Arc<IssueCreationService>) -> Self {
+        self.creator = Some(creator);
+        self
+    }
+
+    fn creator(&self) -> Result<&IssueCreationService> {
+        self.creator
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("new-issue creation is unavailable"))
     }
 
     fn conventions(&self, cwd: &str) -> Result<Conventions> {
@@ -148,6 +165,42 @@ impl IssueDraftService {
 }
 
 impl IssueDraftPort for IssueDraftService {
+    fn creation_open(&self, target: IssueCreationTarget) -> Result<IssueCreationOpened> {
+        creation::open(self, target)
+    }
+
+    fn creation_preview(
+        &self,
+        request: IssueCreationPreviewRequest,
+    ) -> Result<IssueCreationPreview> {
+        creation::preview(self, request)
+    }
+
+    fn creation_publish(
+        &self,
+        request: IssueCreationPublishRequest,
+    ) -> Result<IssueCreationPublished> {
+        creation::publish(self, request)
+    }
+
+    fn creation_recheck(&self, request: IssueCreationIntentRequest) -> Result<IssueCreationIntent> {
+        creation::recheck(self, request)
+    }
+
+    fn creation_confirm(
+        &self,
+        request: IssueCreationConfirmRequest,
+    ) -> Result<IssueCreationIntent> {
+        creation::confirm(self, request)
+    }
+
+    fn creation_restart(
+        &self,
+        request: IssueCreationRestartRequest,
+    ) -> Result<IssueCreationOpened> {
+        creation::restart(self, request)
+    }
+
     fn open(&self, target: IssueDraftTarget) -> Result<IssueDraftOpened> {
         let conventions = self.conventions(&target.cwd)?;
         let remote = self.resolve(&target)?;
@@ -481,6 +534,8 @@ fn template_view(template: &IssueTemplateResolution) -> IssueDraftTemplate {
 
 #[cfg(test)]
 mod tests {
+    mod creation;
+
     use std::sync::Mutex;
 
     use anyhow::bail;
