@@ -632,7 +632,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 9);
+    assert_eq!(queries.len(), 10);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
@@ -648,6 +648,9 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::Issues {
             after: None,
             limit: None,
+        },
+        KernelQuery::Issue {
+            issue: (&sample_issue_reference()).into(),
         },
     ]) {
         assert_eq!(
@@ -1366,7 +1369,7 @@ fn every_reason_and_error_tells_the_next_steps_by_name() {
 
 #[test]
 fn every_reason_reaches_a_client() {
-    // A reason is either an immediate command rejection or a `prompt_submission` reason. None is dead.
+    // 명령 거절, prompt_submission 또는 저장된 이슈 판정으로 모든 이유가 클라이언트에 도달한다.
     let mut reached = KernelCommandKind::ALL
         .iter()
         .flat_map(|kind| kind.spec().rejections.iter().copied())
@@ -1423,6 +1426,13 @@ fn every_reason_reaches_a_client() {
             reached.extend(state.reason);
         }
     }
+    reached.extend(
+        crate::domain::issue_automation::triage::IssueTriageReasonCode::ALL
+            .iter()
+            .copied()
+            .map(super::issue_automation::IssueTriageReasonState::from)
+            .map(|reason| reason.code),
+    );
     for reason in ReasonCode::ALL {
         assert!(
             reached.contains(reason),
@@ -1953,6 +1963,18 @@ fn a_destructive_command_needs_confirm_in_the_schema_and_in_the_code() {
 }
 
 /// 값이 채워진 기록 표본이다. 종류마다 하나이다.
+fn sample_issue_reference() -> crate::domain::issue_work::IssueReference {
+    crate::domain::issue_work::IssueReference {
+        provider: crate::domain::issue_work::IssueProvider::GitHub,
+        server_id: "github.com".to_owned(),
+        repository_id: "R_stable".to_owned(),
+        issue_id: "I_stable".to_owned(),
+        project_scope: crate::domain::issue_work::IssueProjectScope {
+            workspace_dir: "/workspace".to_owned(),
+        },
+    }
+}
+
 fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
     use crate::domain::kernel_event::{
         ApprovalRequestKind, ApprovalResolution, KernelEvent as Record, PendingApproval,
@@ -2058,6 +2080,13 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             "binding-1",
             3,
         ),
+        Record::issue_triaged(
+            &sample_issue_reference(),
+            "binding-1",
+            4,
+            1,
+            &"a".repeat(64),
+        ),
         Record::issue_automation_mode_changed(
             Some(crate::domain::issue_automation::collection::IssueCollectionMode::Observe),
             crate::domain::issue_automation::collection::IssueCollectionMode::Off,
@@ -2122,6 +2151,9 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         KernelQuery::Issues {
             after: None,
             limit: None,
+        },
+        KernelQuery::Issue {
+            issue: (&sample_issue_reference()).into(),
         },
     ] {
         assert_matches_spec(&spec, "queries", "input", &to_json(&query));

@@ -8,9 +8,9 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::adapter::inbound::kernel_protocol::{
-    CommandRejection, CommandRequest, CommandResponse, IssueAutomationState, IssuesState,
-    KernelCommand, KernelCommandInput, KernelProtocolError, KernelQuery, KernelQueryAnswer,
-    PlanningState, ResetTarget, reason_next,
+    CommandRejection, CommandRequest, CommandResponse, IssueAutomationState, IssueState,
+    IssuesState, KernelCommand, KernelCommandInput, KernelProtocolError, KernelQuery,
+    KernelQueryAnswer, PlanningState, ResetTarget, reason_next,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::{
@@ -364,6 +364,15 @@ impl KernelCommandPort for CommandOnlyKernel {
 
     fn query(&self, input: Value, wait: bool) -> Result<Value> {
         let query: KernelQuery = serde_json::from_value(input)?;
+        if let Some(issue) = query
+            .issue_reference(&self.workspace)
+            .map_err(protocol_error)?
+        {
+            let detail = super::issue_collection::build(&self.workspace).issue(&issue)?;
+            return Ok(serde_json::to_value(KernelQueryAnswer::Issue(
+                IssueState::from_domain(&detail),
+            ))?);
+        }
         if let Some((after, limit)) = query
             .issues_range(&self.workspace)
             .map_err(protocol_error)?
@@ -565,6 +574,7 @@ mod g2_tests;
 
 #[cfg(test)]
 mod tests {
+    mod issue_queries;
     use super::*;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::service::planning::PlanningServices;

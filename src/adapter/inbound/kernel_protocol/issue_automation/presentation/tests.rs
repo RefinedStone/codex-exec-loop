@@ -25,6 +25,9 @@ fn item(id: &str, state: Option<IssueAutomationState>) -> IssueCollectionItem {
         },
     };
     IssueCollectionItem {
+        observation_revision: None,
+        tracked_revision: None,
+        triage: None,
         issue: issue.clone(),
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),
         tracked: state.map(|state| IssueTrackedSummary {
@@ -281,6 +284,7 @@ fn issue_list_groups_repeat_per_page_and_preserve_every_item_and_the_stable_curs
     let second = item("I_B", Some(IssueAutomationState::Discovered));
     let after = second.issue.clone();
     let page = IssueCollectionPage {
+        report: None,
         revision: 7,
         items: vec![first, second],
         next_after: Some(after.clone()),
@@ -291,7 +295,8 @@ fn issue_list_groups_repeat_per_page_and_preserve_every_item_and_the_stable_curs
     assert_eq!(
         serde_json::to_value(&projected.groups).unwrap(),
         json!([
-            {"id":"collection","label":"수집한 이슈","item_indices":[0,1]}
+            {"id":"done","label":"끝남","item_indices":[0]},
+            {"id":"collection","label":"수집한 이슈","item_indices":[1]}
         ])
     );
     assert_eq!(
@@ -317,6 +322,7 @@ fn issue_list_groups_repeat_per_page_and_preserve_every_item_and_the_stable_curs
     ] {
         let count = items.len();
         let IssuesState::Ready(projected) = IssuesState::from_domain(&IssueCollectionPage {
+            report: None,
             revision: 7,
             items,
             next_after: None,
@@ -324,7 +330,14 @@ fn issue_list_groups_repeat_per_page_and_preserve_every_item_and_the_stable_curs
             panic!("ready")
         };
         assert_eq!(projected.groups.len(), 1);
-        assert_eq!(projected.groups[0].id, IssueListGroupId::Collection);
+        assert_eq!(
+            projected.groups[0].id,
+            if count == 0 {
+                IssueListGroupId::Collection
+            } else {
+                IssueListGroupId::Running
+            }
+        );
         assert_eq!(
             projected.groups[0].item_indices,
             (0..count).collect::<Vec<_>>()
@@ -337,5 +350,6 @@ fn issue_list_groups_repeat_per_page_and_preserve_every_item_and_the_stable_curs
 fn issue_list_presentation_and_group_codes_are_closed_enums() {
     assert!(serde_json::from_value::<IssueListStatusCode>(json!("triage_pending")).is_err());
     assert!(serde_json::from_value::<IssueListReasonCode>(json!("provider_raw_error")).is_err());
-    assert!(serde_json::from_value::<IssueListGroupId>(json!("my_turn")).is_err());
+    assert!(serde_json::from_value::<IssueListGroupId>(json!("my_turn")).is_ok());
+    assert!(serde_json::from_value::<IssueListGroupId>(json!("provider_custom_group")).is_err());
 }

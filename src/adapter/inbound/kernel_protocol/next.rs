@@ -112,6 +112,34 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         }
         // 다른 변경이나 병렬 작업이 끝나는 것을 알리는 이벤트는 없다.
         ReasonCode::PlanningLocked => vec![Step::short_wait(), Step::Resend],
+        ReasonCode::NotYetObserved
+        | ReasonCode::SourceUnavailable
+        | ReasonCode::MetadataIncomplete
+        | ReasonCode::DisclosurePolicyStale => {
+            vec![Step::query(KernelQueryKind::Issues), Step::AskUser]
+        }
+        ReasonCode::SelectionNotMatched | ReasonCode::IssueClosed | ReasonCode::CloseDisabled => {
+            vec![Step::Stop]
+        }
+        ReasonCode::ModeOff | ReasonCode::ObservationOnly => {
+            vec![Step::query(KernelQueryKind::IssueAutomation), Step::AskUser]
+        }
+        ReasonCode::UntrustedActor
+        | ReasonCode::AlreadyClaimed
+        | ReasonCode::TitleMissing
+        | ReasonCode::RequiredSectionMissing
+        | ReasonCode::CriteriaMissing
+        | ReasonCode::CriteriaNotList
+        | ReasonCode::IssueTooLarge
+        | ReasonCode::UnsupportedContent
+        | ReasonCode::DisclosureConfirmationRequired
+        | ReasonCode::MaskedContent
+        | ReasonCode::HighRisk
+        | ReasonCode::HeldOrManual
+        | ReasonCode::ProtectedPath
+        | ReasonCode::PolicyHumanRequired
+        | ReasonCode::BudgetExhausted
+        | ReasonCode::ExecutionGrantRequired => vec![Step::AskUser],
         // 수준을 올리는 선택은 사람이 한다. off에서 같은 동기화를 자동 재시도하지 않는다.
         ReasonCode::IssueAutomationOff => {
             vec![Step::query(KernelQueryKind::IssueAutomation), Step::AskUser]

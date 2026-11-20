@@ -10,7 +10,6 @@ use crate::domain::issue_work::{IssueProjectScope, IssueReference};
 
 use super::super::{decode_enum, enum_name, read_binding, read_issue, validate_reference_scope};
 use super::observations;
-use super::read_control;
 
 type IssueKey = (String, String, String, String, String);
 
@@ -31,12 +30,12 @@ pub(super) fn validate_limit(limit: u16) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn page(
+pub(in super::super) fn page(
     connection: &Connection,
     workspace: &str,
     query: &IssueCollectionQuery,
 ) -> Result<IssueCollectionPage> {
-    let revision = read_control(connection, workspace)?.map_or(0, |state| state.revision);
+    let revision = super::super::triage::catalog_revision(connection, workspace)?;
     let mut references = select_references(
         connection,
         workspace,
@@ -53,27 +52,10 @@ pub(super) fn page(
     references.truncate(usize::from(query.limit));
     let mut items = Vec::with_capacity(references.len());
     for reference in references {
-        let tracked = read_issue(connection, workspace, &reference)?;
-        let observation = observations::read(connection, workspace, &reference)?;
-        if let (Some(tracked), Some(observation)) = (&tracked, &observation)
-            && *tracked.binding_id() != observation.binding_id
-        {
-            bail!("the current issue observation and workflow row have different bindings")
-        }
-        let binding_id = tracked
-            .as_ref()
-            .map(|issue| issue.binding_id().clone())
-            .or_else(|| observation.as_ref().map(|item| item.binding_id.clone()))
-            .context("the selected issue disappeared from the collection")?;
-        items.push(IssueCollectionItem {
-            issue: reference,
-            binding_id,
-            tracked: tracked.map(|issue| IssueTrackedSummary {
-                state: issue.state(),
-                flags: issue.flags(),
-            }),
-            current: observation.map(|item| item.current),
-        });
+        items.push(
+            item(connection, workspace, &reference)?
+                .context("the selected issue disappeared from the collection")?,
+        );
     }
     let next_after = has_more
         .then(|| items.last().map(|item| item.issue.clone()))
@@ -82,7 +64,52 @@ pub(super) fn page(
         revision,
         items,
         next_after,
+        report: None,
     })
+}
+
+pub(in super::super) fn item(
+    connection: &Connection,
+    workspace: &str,
+    reference: &IssueReference,
+) -> Result<Option<IssueCollectionItem>> {
+    validate_reference_scope(workspace, reference)?;
+    let tracked = read_issue(connection, workspace, reference)?;
+    let observation = observations::read(connection, workspace, reference)?;
+    if tracked.is_none() && observation.is_none() {
+        return Ok(None);
+    }
+    if let (Some(tracked), Some(observation)) = (&tracked, &observation)
+        && *tracked.binding_id() != observation.binding_id
+    {
+        bail!("the current issue observation and workflow row have different bindings")
+    }
+    let binding_id = tracked
+        .as_ref()
+        .map(|issue| issue.binding_id().clone())
+        .or_else(|| observation.as_ref().map(|item| item.binding_id.clone()))
+        .context("the selected issue disappeared from the collection")?;
+    let observation_revision = observation.as_ref().map(|item| item.revision);
+    let tracked_revision = tracked.as_ref().map(|issue| issue.revision());
+    let triage = super::super::triage::read(connection, workspace, reference, &binding_id)?.map(
+        |mut triage| {
+            triage.stale = triage.observation_revision != observation_revision
+                || triage.tracked_revision != tracked_revision;
+            triage
+        },
+    );
+    Ok(Some(IssueCollectionItem {
+        issue: reference.clone(),
+        binding_id,
+        tracked: tracked.map(|issue| IssueTrackedSummary {
+            state: issue.state(),
+            flags: issue.flags(),
+        }),
+        current: observation.map(|item| item.current),
+        observation_revision,
+        tracked_revision,
+        triage,
+    }))
 }
 
 pub(super) fn resync_batch(

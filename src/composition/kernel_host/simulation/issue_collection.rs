@@ -9,7 +9,8 @@ use crate::application::port::inbound::stored_command_port::{
 use crate::application::service::issue_collection::{
     IssueCollectionRunOutcome, IssueCollectionTrackedFact,
 };
-use crate::composition::issue_observer::IssueObserver;
+use crate::application::service::issue_triage::IssueTriagedFact;
+use crate::composition::issue_observer::{IssueObserver, IssueObserverCommittedFact};
 use crate::composition::native_client_runtime::{KernelClientCommand, StoredCommandEnd};
 use crate::domain::issue_automation::collection::{
     IssueCollectionConfig, IssueCollectionMode, IssueCollectionProjection, IssueCollectionStatus,
@@ -76,6 +77,7 @@ fn projection(mode: IssueCollectionMode, epoch: u64, revision: u64) -> IssueColl
             status: IssueCollectionStatus::default(),
         },
         binding: Some(binding),
+        catalog_revision: revision,
     }
 }
 
@@ -130,6 +132,7 @@ fn install(sim: &mut SimKernel, mode: IssueCollectionMode) -> Collector {
                                 .expect("committed binding"),
                             revision: outcome.projection.state.revision,
                         })
+                        .map(IssueObserverCommittedFact::Tracked)
                         .collect(),
                 );
             }
@@ -488,6 +491,21 @@ fn install_committed_read(sim: &mut SimKernel) -> CommittedRead {
                             .expect("binding"),
                         revision: 2,
                     })
+                    .flat_map(|fact| {
+                        let triaged = IssueTriagedFact {
+                            issue: fact.issue.clone(),
+                            binding_id: fact.binding_id.clone(),
+                            revision: fact.revision,
+                            assessment_revision: 1,
+                            gate_revision: 1,
+                            policy_version: "a".repeat(64),
+                            field_hash: None,
+                        };
+                        [
+                            IssueObserverCommittedFact::Tracked(fact),
+                            IssueObserverCommittedFact::Triaged(triaged),
+                        ]
+                    })
                     .collect(),
             );
             committed_send.send(()).expect("commit acknowledged");
@@ -556,6 +574,7 @@ fn kernel_simulation_committed_issue_facts_survive_off_and_a_later_store_error()
             .iter()
             .all(|record| matches!(&record.event, KernelEvent::IssueTracked { revision: 2, .. }))
     );
+    assert_committed_audit_order(&records);
 }
 
 #[test]
@@ -593,6 +612,7 @@ fn kernel_simulation_unload_drains_committed_facts_before_journal_shutdown() {
                 .count(),
             3
         );
+        assert_committed_audit_order(&records);
     }
     worker
         .finish
@@ -706,4 +726,27 @@ fn kernel_simulation_issue_queries_and_events_read_fresh_ledger_mode_and_binding
         }
     }
     panic!("the completion event must use the actual stored revision, mode and binding");
+}
+
+fn assert_committed_audit_order(records: &[RecordedKernelEvent]) {
+    let facts: Vec<_> = records
+        .iter()
+        .filter(|record| matches!(record.event.kind(), "issue_tracked" | "issue_triaged"))
+        .collect();
+    assert_eq!(
+        facts
+            .iter()
+            .map(|record| record.event.kind())
+            .collect::<Vec<_>>(),
+        [
+            "issue_tracked",
+            "issue_triaged",
+            "issue_tracked",
+            "issue_triaged",
+            "issue_tracked",
+            "issue_triaged"
+        ]
+    );
+    assert!(facts.iter().filter(|record| record.event.kind() == "issue_triaged").all(|record|
+        matches!(&record.event, KernelEvent::IssueTriaged { revision: 2, gate_revision: 1, policy_version, .. } if policy_version == &"a".repeat(64))));
 }

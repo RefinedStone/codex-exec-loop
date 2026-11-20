@@ -140,6 +140,88 @@ fn resync_one(
 }
 
 #[test]
+fn write_results_keep_their_committed_projection_after_later_mode_and_binding_changes() {
+    let fixture = Fixture::new("collector-commit-projection");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let discovered = commit(
+        adapter
+            .apply_discovery_page(
+                fixture.cwd(),
+                initial.fence(),
+                &request,
+                &page(
+                    &fixture,
+                    &request,
+                    vec![observed(&fixture, "I_1", "shared")],
+                    None,
+                ),
+            )
+            .unwrap(),
+    );
+    assert_eq!(discovered.projection.state, discovered.state);
+    let discovery_projection = discovered.projection.clone();
+
+    let (off_state, off_projection) = match adapter
+        .set_collection_mode(
+            fixture.cwd(),
+            Some(discovered.state.epoch),
+            IssueCollectionMode::Off,
+        )
+        .unwrap()
+    {
+        IssueCollectionModeSaveResult::Saved {
+            state,
+            projection,
+            changed: true,
+        } => {
+            assert_eq!(*state, projection.state);
+            (*state, *projection)
+        }
+        result => panic!("expected an Off commit, got {result:?}"),
+    };
+    let mut changed_binding = off_projection.binding.clone().unwrap();
+    changed_binding.set_autonomy(IssueAutomationAutonomy::Propose);
+    adapter
+        .save_binding(fixture.cwd(), 1, &changed_binding)
+        .unwrap();
+    let resumed = mode(
+        adapter
+            .set_collection_mode(
+                fixture.cwd(),
+                Some(off_state.epoch),
+                IssueCollectionMode::Observe,
+            )
+            .unwrap(),
+    );
+    let latest = adapter
+        .get_collection_projection(fixture.cwd())
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(off_projection.state.config.mode, IssueCollectionMode::Off);
+    assert_eq!(off_projection.state.epoch, initial.epoch + 1);
+    assert_eq!(
+        off_projection.binding.as_ref().unwrap().autonomy(),
+        IssueAutomationAutonomy::Observe
+    );
+    assert_eq!(latest.state, resumed);
+    assert_eq!(latest.binding, Some(changed_binding));
+    assert!(latest.catalog_revision > off_projection.catalog_revision);
+    assert!(off_projection.catalog_revision > discovery_projection.catalog_revision);
+    assert_eq!(discovered.projection, discovery_projection);
+    assert_eq!(
+        discovered.projection.state.config.mode,
+        IssueCollectionMode::Observe
+    );
+    assert_eq!(
+        discovered.projection.binding.as_ref().unwrap().autonomy(),
+        IssueAutomationAutonomy::Observe
+    );
+}
+
+#[test]
 fn an_explicit_off_is_durable_before_repository_resolution_and_survives_default_initialization() {
     let fixture = Fixture::new("collector-off-first");
     let adapter = fixture.adapter();
@@ -679,6 +761,10 @@ fn catalog_pagination_is_a_binary_union_and_never_fills_unobserved_rows_from_leg
             .unwrap(),
     );
     assert_eq!(result.newly_tracked.len(), 2);
+    let catalog_revision = adapter
+        .read_triage_batch(fixture.cwd(), None, 1)
+        .unwrap()
+        .revision;
     let mut query = IssueCollectionQuery {
         binding_id: Some(binding.id().clone()),
         after: None,
@@ -689,7 +775,7 @@ fn catalog_pagination_is_a_binary_union_and_never_fills_unobserved_rows_from_leg
         let page = adapter
             .query_collection_issues(fixture.cwd(), &query)
             .unwrap();
-        assert_eq!(page.revision, result.state.revision);
+        assert_eq!(page.revision, catalog_revision);
         query.after = page.next_after;
         items.extend(page.items);
         if query.after.is_none() {

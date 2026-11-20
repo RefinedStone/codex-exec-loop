@@ -45,7 +45,7 @@ mod spec;
 pub use spec::{KernelSpec, describe};
 
 mod issue_automation;
-pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssuesState};
+pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssueState, IssuesState};
 
 /// 프로토콜 판이다. 전송 모양을 호환되지 않게 바꿀 때만 올린다. 필드를 더하는 것은 올리지 않는다. K4-1 에서
 /// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
@@ -1169,6 +1169,10 @@ pub enum KernelQuery {
         #[schemars(range(min = 1, max = 100))]
         limit: Option<u16>,
     },
+    /// 대표 workspace의 전체 안정 좌표 한 건이다. 표시 번호나 URL은 받지 않는다.
+    Issue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+    },
 }
 
 /// 기록 조회의 한 쪽 기본 크기이다.
@@ -1243,6 +1247,7 @@ impl KernelQuery {
                 KernelQueryAnswer::IssueAutomation(IssueAutomationState::unavailable())
             }
             Self::Issues { .. } => KernelQueryAnswer::Issues(IssuesState::unavailable()),
+            Self::Issue { .. } => KernelQueryAnswer::Issue(IssueState::unavailable()),
         }
     }
 }
@@ -1265,9 +1270,11 @@ spec_names! {
         Operation => "operation",
             "The state of one operation and its records. `op_id` comes from the `operation` of a command answer.";
         IssueAutomation => "issue_automation",
-            "The stored off/observe mode, binding, collection revision and polling status. An unavailable store is explicit; an empty list is not substituted.";
+            "The stored off/observe mode, binding, catalog revision and polling status. An unavailable store is explicit; an empty list is not substituted.";
         Issues => "issues",
-            "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body.";
+            "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body. Triage and groups are server projections; report counts cover the complete query scope, not just this page.";
+        Issue => "issue",
+            "One local issue selected by its full stable reference in the attached representative workspace. Ready, not_found and unavailable are distinct. The result contains only current disclosed content, stored assessment and global observation report; it never creates work.";
     }
 }
 
@@ -1291,6 +1298,7 @@ pub enum KernelQueryAnswer {
     Operation(OperationStatus),
     IssueAutomation(IssueAutomationState),
     Issues(IssuesState),
+    Issue(IssueState),
 }
 
 // event -------------------------------------------------------------------------------------------

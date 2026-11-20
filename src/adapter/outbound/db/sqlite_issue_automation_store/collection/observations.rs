@@ -27,6 +27,7 @@ const MAX_OBSERVATION_BYTES: usize = 4 * 1024 * 1024;
 pub(super) struct StoredObservation {
     pub binding_id: IssueAutomationBindingId,
     pub current: IssueSourceRead,
+    pub revision: u64,
 }
 
 pub(super) fn reference(read: &IssueSourceRead) -> &IssueReference {
@@ -232,6 +233,13 @@ pub(super) fn apply(
             }
         }
     }
+    // Repeated identical observations do not invalidate a semantic triage result.
+    if previous
+        .as_ref()
+        .is_some_and(|previous| previous.current == *value)
+    {
+        return Ok(newly_tracked);
+    }
     let encoded = serde_json::to_string(value)?;
     if encoded.len() > MAX_OBSERVATION_BYTES {
         bail!("the shared issue observation exceeds its storage bound")
@@ -271,7 +279,7 @@ pub(super) fn read(
     };
     let binding_id = IssueAutomationBindingId::new(row.get::<_, String>(0)?)?;
     let encoded: String = row.get(1)?;
-    read_revision(row, 2)?;
+    let revision = read_revision(row, 2)?;
     if encoded.len() > MAX_OBSERVATION_BYTES {
         bail!("the stored issue observation exceeds its storage bound")
     }
@@ -287,6 +295,7 @@ pub(super) fn read(
     Ok(Some(StoredObservation {
         binding_id,
         current,
+        revision,
     }))
 }
 

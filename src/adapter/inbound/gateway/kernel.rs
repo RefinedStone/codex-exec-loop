@@ -24,10 +24,11 @@ use super::recorder::{RecordDirection, SessionRecording};
 use crate::adapter::inbound::kernel_protocol::{
     AttachRequest, AttachResponse, CommandRejection, CommandRequest, CommandResponse,
     ERROR_INVALID_PARAMS, ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_METHOD_NOT_FOUND,
-    ERROR_NOT_ATTACHED, EventNotification, IssueAutomationState, IssuesState, KernelCommandInput,
-    KernelEvent, KernelProtocolError, KernelQuery, KernelQueryAnswer, METHOD_ATTACH,
-    METHOD_COMMAND, METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION,
-    ParallelSource, ParallelState, PlanningState, QueryRequest, describe, reason_next,
+    ERROR_NOT_ATTACHED, EventNotification, IssueAutomationState, IssueState, IssuesState,
+    KernelCommandInput, KernelEvent, KernelProtocolError, KernelQuery, KernelQueryAnswer,
+    METHOD_ATTACH, METHOD_COMMAND, METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY,
+    PROTOCOL_VERSION, ParallelSource, ParallelState, PlanningState, QueryRequest, describe,
+    reason_next,
 };
 use crate::composition::kernel_host::{
     KernelCallError, KernelClientHandle, KernelCommandOutcome, KernelCommandSender,
@@ -314,6 +315,12 @@ impl KernelSession {
                     .with_runtime(state.collecting, state.next_poll_after_ms),
             ));
         }
+        if let Some(issue) = request.query.issue_reference(&attached.issue_workspace)? {
+            let commands = attached.commands.clone();
+            let detail =
+                read_kernel_log(move || commands.issue(issue, KERNEL_CALL_TIMEOUT)).await?;
+            return to_result(KernelQueryAnswer::Issue(IssueState::from_domain(&detail)));
+        }
         if let Some(query) = attached.issue_query(&request.query)? {
             let commands = attached.commands.clone();
             let page = read_kernel_log(move || commands.issues(query, KERNEL_CALL_TIMEOUT)).await?;
@@ -535,8 +542,12 @@ mod tests {
                 binding_id: IssueAutomationBindingId::new("fixture").expect("binding"),
                 tracked: None,
                 current: None,
+                observation_revision: None,
+                tracked_revision: None,
+                triage: None,
             }],
             next_after: more.then_some(reference),
+            report: None,
         })
     }
 

@@ -44,6 +44,7 @@ fn projection(mode: IssueCollectionMode, epoch: u64) -> IssueCollectionProjectio
             status: IssueCollectionStatus::default(),
         },
         binding: None,
+        catalog_revision: epoch,
     }
 }
 
@@ -208,7 +209,7 @@ fn local_store_failures_also_back_off_without_publishing_a_success() {
         Err(anyhow::anyhow!("synthetic local failure")),
         now,
     );
-    assert!(cycle.tracked.is_empty());
+    assert!(cycle.committed.is_empty());
     assert_eq!(
         h.observer.next_deadline(now),
         Some(now + Duration::from_secs(600))
@@ -255,7 +256,7 @@ fn off_discards_the_old_response_and_preserves_the_saved_epoch() {
         Ok(success(projection(IssueCollectionMode::Observe, 1))),
         now,
     );
-    assert!(cycle.tracked.is_empty());
+    assert!(cycle.committed.is_empty());
     assert!(h.cancelled.load(Ordering::SeqCst));
     assert_eq!(
         h.observer.view(now).projection,
@@ -283,7 +284,7 @@ fn reenable_waits_for_the_cancelled_worker_instead_of_overlapping_reads() {
         Ok(success(projection(IssueCollectionMode::Observe, 1))),
         now,
     );
-    assert!(cycle.tracked.is_empty());
+    assert!(cycle.committed.is_empty());
     let restarted = h.read();
     h.finish(
         restarted,
@@ -338,7 +339,7 @@ fn a_panicked_worker_wakes_the_host_and_enters_backoff() {
     let _ = core.wait_pending_input(WAIT);
     let cycle = observer.poll(now, 1_000);
     assert!(cycle.changed);
-    assert!(cycle.tracked.is_empty());
+    assert!(cycle.committed.is_empty());
     assert!(!observer.view(now).collecting);
     assert_eq!(
         observer.next_deadline(now),

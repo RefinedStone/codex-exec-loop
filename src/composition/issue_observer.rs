@@ -11,12 +11,18 @@ use crate::application::service::issue_collection::{
     IssueCollectionCancellation, IssueCollectionRunOutcome, IssueCollectionService,
     IssueCollectionTrackedFact,
 };
+use crate::application::service::issue_triage::IssueTriagedFact;
 use crate::composition::core_effect_worker::try_spawn_worker_with_panic_fallback;
 use crate::core::runtime::CoreInputWaker;
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
 
 const COLLECTION_INTERVAL: Duration = Duration::from_secs(5 * 60);
-type Reporter = dyn Fn(Vec<IssueCollectionTrackedFact>) + Send + Sync;
+pub(crate) enum IssueObserverCommittedFact {
+    Tracked(IssueCollectionTrackedFact),
+    Triaged(IssueTriagedFact),
+}
+
+type Reporter = dyn Fn(Vec<IssueObserverCommittedFact>) + Send + Sync;
 type Collect = dyn Fn(&IssueCollectionCancellation, u64, &Reporter) -> Result<IssueCollectionRunOutcome>
     + Send
     + Sync;
@@ -46,14 +52,14 @@ pub(crate) struct IssueObserver {
     in_flight: Option<InFlight>,
     next_run: Option<Instant>,
     consecutive_failures: u32,
-    tracked_sender: Sender<Vec<IssueCollectionTrackedFact>>,
-    tracked_receiver: Receiver<Vec<IssueCollectionTrackedFact>>,
+    committed_sender: Sender<Vec<IssueObserverCommittedFact>>,
+    committed_receiver: Receiver<Vec<IssueObserverCommittedFact>>,
 }
 
 /// 이번 주기에 투영 또는 작업 상태가 바뀌었는지와, 저장을 마친 결과다.
 pub(crate) struct IssueObserverCycle {
     pub(crate) changed: bool,
-    pub(crate) tracked: Vec<IssueCollectionTrackedFact>,
+    pub(crate) committed: Vec<IssueObserverCommittedFact>,
 }
 
 impl IssueObserver {
@@ -63,7 +69,30 @@ impl IssueObserver {
         Ok(Self::with_collector(
             projection,
             Arc::new(move |cancel, at, committed| {
-                service.collect_once_with_committed(cancel, at, committed)
+                let tracked = |facts: Vec<IssueCollectionTrackedFact>| {
+                    committed(
+                        facts
+                            .into_iter()
+                            .map(IssueObserverCommittedFact::Tracked)
+                            .collect(),
+                    );
+                };
+                let outcome = service.collect_once_with_committed(cancel, at, &tracked)?;
+                if !outcome.discarded
+                    && !cancel.is_cancelled()
+                    && let Some(triage) = service.triage_service()
+                {
+                    let triaged = |facts: Vec<IssueTriagedFact>| {
+                        committed(
+                            facts
+                                .into_iter()
+                                .map(IssueObserverCommittedFact::Triaged)
+                                .collect(),
+                        );
+                    };
+                    triage.triage_all(cancel, &triaged)?;
+                }
+                Ok(outcome)
             }),
             waker,
         ))
@@ -74,10 +103,10 @@ impl IssueObserver {
         collect: Arc<Collect>,
         waker: CoreInputWaker,
     ) -> Self {
-        let (tracked_sender, tracked_receiver) = mpsc::channel();
+        let (committed_sender, committed_receiver) = mpsc::channel();
         Self {
-            tracked_sender,
-            tracked_receiver,
+            committed_sender,
+            committed_receiver,
             consecutive_failures: projection.state.status.consecutive_failures,
             projection,
             collect,
@@ -168,7 +197,7 @@ impl IssueObserver {
     pub(crate) fn poll(&mut self, now: Instant, at_unix_ms: u64) -> IssueObserverCycle {
         let mut cycle = IssueObserverCycle {
             changed: false,
-            tracked: self.take_tracked(),
+            committed: self.take_committed(),
         };
         let completion =
             self.in_flight
@@ -218,21 +247,22 @@ impl IssueObserver {
             self.start(now, at_unix_ms);
             cycle.changed = true;
         }
-        cycle.tracked.extend(self.take_tracked());
-        cycle.changed |= !cycle.tracked.is_empty();
+        cycle.committed.extend(self.take_committed());
+        cycle.changed |= !cycle.committed.is_empty();
         cycle
     }
 
     /// 취소보다 먼저 끝난 commit은 완료 응답과 무관하게 감사 기록으로 옮긴다.
-    pub(crate) fn cancel_and_take_tracked(&mut self) -> Vec<IssueCollectionTrackedFact> {
+    pub(crate) fn cancel_and_take_committed(&mut self) -> Vec<IssueObserverCommittedFact> {
         if let Some(flight) = &self.in_flight {
             flight.cancel.cancel();
         }
-        self.take_tracked()
+        self.take_committed()
     }
 
-    fn take_tracked(&self) -> Vec<IssueCollectionTrackedFact> {
-        self.tracked_receiver.try_iter().flatten().collect()
+    fn take_committed(&self) -> Vec<IssueObserverCommittedFact> {
+        // 채널 순서를 보존한다. 종류별로 나누면 서로 다른 commit의 감사 순서가 바뀔 수 있다.
+        self.committed_receiver.try_iter().flatten().collect()
     }
 
     fn start(&mut self, now: Instant, at_unix_ms: u64) {
@@ -240,17 +270,17 @@ impl IssueObserver {
         let worker_cancel = cancel.clone();
         let collect = self.collect.clone();
         let waker = self.waker.clone();
-        let tracked = self.tracked_sender.clone();
-        let tracked_waker = self.waker.clone();
+        let committed_sender = self.committed_sender.clone();
+        let committed_waker = self.waker.clone();
         let (send, completion) = mpsc::channel();
         let epoch = self.projection.state.epoch;
         let panic_completion = send.clone();
         let panic_waker = self.waker.clone();
         let spawned = try_spawn_worker_with_panic_fallback(
             move || {
-                let report = move |facts: Vec<IssueCollectionTrackedFact>| {
-                    if !facts.is_empty() && tracked.send(facts).is_ok() {
-                        tracked_waker.wake();
+                let report = move |facts: Vec<IssueObserverCommittedFact>| {
+                    if !facts.is_empty() && committed_sender.send(facts).is_ok() {
+                        committed_waker.wake();
                     }
                 };
                 let result = collect(&worker_cancel, at_unix_ms, &report);

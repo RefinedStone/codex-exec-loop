@@ -595,6 +595,8 @@ const ISSUE_AUTOMATION_BOUNDARY_PATHS: &[&str] = &[
     "src/adapter/outbound/filesystem/issue_automation_policy",
     "src/application/service/issue_collection.rs",
     "src/application/service/issue_collection",
+    "src/application/service/issue_triage.rs",
+    "src/application/service/issue_triage",
     "src/application/port/outbound/issue_collection_origin_port.rs",
     "src/adapter/outbound/git/issue_origin.rs",
     "src/application/port/outbound/issue_automation_store_port.rs",
@@ -655,6 +657,8 @@ fn issue_automation_stays_independent_and_stores_only_shared_issue_types() {
     for required in [
         "src/domain/issue_automation/mod.rs",
         "src/domain/issue_automation/policy.rs",
+        "src/domain/issue_automation/triage.rs",
+        "src/application/service/issue_triage.rs",
         "src/application/service/issue_automation_policy.rs",
         "src/application/port/outbound/issue_automation_policy_source_port.rs",
         "src/adapter/outbound/filesystem/issue_automation_policy.rs",
