@@ -72,6 +72,7 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 insta = "1"
+jsonschema = { version = "0.61.2", default-features = false }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 syn = { version = "2", features = ["full", "visit", "visit-mut"] }

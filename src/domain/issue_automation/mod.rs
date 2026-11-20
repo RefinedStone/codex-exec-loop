@@ -4,6 +4,8 @@
 mod binding;
 // Observe 수집 설정과 현재 관찰 투영이다 (#2538).
 pub mod collection;
+// 수집/실행과 독립된 자동화 정책의 typed 효과값이다 (#2540).
+pub mod policy;
 mod state;
 mod tracked;
 // 출처의 공유 관찰 값과 페이지 커서다 (#2537).

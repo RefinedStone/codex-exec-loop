@@ -41,6 +41,8 @@ pub mod issue_update_port;
 pub mod issue_publish_intent_journal_port;
 // issue policy source port 는 사용자와 프로젝트의 이슈 정책 파일을 읽는 경계이다 (#2416).
 pub mod issue_policy_source_port;
+// 자동화 정책의 독립된 사용자/프로젝트 파일 읽기 경계다 (#2540).
+pub mod issue_automation_policy_source_port;
 // vault key store port 는 Vault 키를 두는 OS 키 저장소의 계약이다 (#2422).
 pub mod vault_key_store_port;
 // issue review model port 는 이슈 초안 품질 검토에 쓰는 모델의 경계이다 (#2430).

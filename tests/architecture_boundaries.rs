@@ -584,6 +584,11 @@ fn issue_publish_goes_only_through_the_publish_intent_journal() {
 const ISSUE_AUTOMATION_BOUNDARY_PATHS: &[&str] = &[
     "src/domain/issue_automation",
     "src/application/service/issue_automation",
+    "src/application/service/issue_automation_policy.rs",
+    "src/application/service/issue_automation_policy",
+    "src/application/port/outbound/issue_automation_policy_source_port.rs",
+    "src/adapter/outbound/filesystem/issue_automation_policy.rs",
+    "src/adapter/outbound/filesystem/issue_automation_policy",
     "src/application/service/issue_collection.rs",
     "src/application/service/issue_collection",
     "src/application/port/outbound/issue_collection_origin_port.rs",
@@ -645,6 +650,10 @@ fn issue_automation_stays_independent_and_stores_only_shared_issue_types() {
     let root = repo_root();
     for required in [
         "src/domain/issue_automation/mod.rs",
+        "src/domain/issue_automation/policy.rs",
+        "src/application/service/issue_automation_policy.rs",
+        "src/application/port/outbound/issue_automation_policy_source_port.rs",
+        "src/adapter/outbound/filesystem/issue_automation_policy.rs",
         "src/application/port/outbound/issue_automation_store_port.rs",
         "src/application/port/outbound/issue_source_port.rs",
         "src/application/port/outbound/issue_collection_origin_port.rs",

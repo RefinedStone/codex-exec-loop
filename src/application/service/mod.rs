@@ -32,6 +32,8 @@ pub mod issue_publish;
 pub mod issue_publish_journal;
 // issue_policy 는 이슈 정책 파일을 검증하고 사용자 < 프로젝트 순서로 합친다 (#2416).
 pub mod issue_policy;
+// 자동화 정책은 별도 파일과 사용자 권한 제한으로 해석한다 (#2540).
+pub mod issue_automation_policy;
 // issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).
 pub mod issue_validation;
 // issue_review 는 검증된 공유 초안을 모델에 보내고 구조화된 권고를 돌려준다 (#2430).
