@@ -588,6 +588,10 @@ fn issue_publish_goes_only_through_the_publish_intent_journal() {
 const ISSUE_AUTOMATION_BOUNDARY_PATHS: &[&str] = &[
     "src/domain/issue_automation",
     "src/application/service/issue_automation",
+    "src/application/service/issue_collection.rs",
+    "src/application/service/issue_collection",
+    "src/application/port/outbound/issue_collection_origin_port.rs",
+    "src/adapter/outbound/git/issue_origin.rs",
     "src/application/port/outbound/issue_automation_store_port.rs",
     "src/application/port/outbound/issue_source_port.rs",
     "src/adapter/outbound/github/issue_source.rs",
@@ -647,6 +651,9 @@ fn issue_automation_stays_independent_and_stores_only_shared_issue_types() {
         "src/domain/issue_automation/mod.rs",
         "src/application/port/outbound/issue_automation_store_port.rs",
         "src/application/port/outbound/issue_source_port.rs",
+        "src/application/port/outbound/issue_collection_origin_port.rs",
+        "src/application/service/issue_collection.rs",
+        "src/adapter/outbound/git/issue_origin.rs",
         "src/adapter/outbound/github/issue_source.rs",
         "src/adapter/outbound/db/sqlite_issue_automation_store.rs",
     ] {

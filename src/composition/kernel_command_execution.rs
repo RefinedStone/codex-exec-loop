@@ -8,8 +8,9 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::adapter::inbound::kernel_protocol::{
-    CommandRejection, CommandRequest, CommandResponse, KernelCommand, KernelCommandInput,
-    KernelProtocolError, KernelQuery, KernelQueryAnswer, PlanningState, ResetTarget, reason_next,
+    CommandRejection, CommandRequest, CommandResponse, IssueAutomationState, IssuesState,
+    KernelCommand, KernelCommandInput, KernelProtocolError, KernelQuery, KernelQueryAnswer,
+    PlanningState, ResetTarget, reason_next,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::{
@@ -29,6 +30,7 @@ use crate::application::service::kernel_command::{KernelCommandService, Unreacha
 use crate::application::service::planning::PlanningBootstrapService;
 use crate::application::service::planning::repair::reset::PlanningResetService;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::domain::issue_automation::collection::IssueCollectionQuery;
 use crate::domain::kernel_event::{
     COMMAND_KINDS, CommandMemory, CommandRecall, KernelEvent, MAX_KERNEL_EVENT_PAGE, OperationEnd,
     OperationReceipt, OperationStatus, RecordedKernelEvent, command_failure_detail,
@@ -296,6 +298,7 @@ impl KernelCommandPort for CommandOnlyKernel {
             recorded_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             event,
         };
+        let caller = descriptor.caller.clone();
         log.append_kernel_events(
             &self.workspace,
             &[record(
@@ -334,12 +337,47 @@ impl KernelCommandPort for CommandOnlyKernel {
                 detail: Some(failure_text(error)),
             },
         };
-        log.append_kernel_events(&self.workspace, &[record(completed_sequence, closing)])?;
+        let mut completed = vec![record(completed_sequence, closing)];
+        if let WorkEnd::Done(Some(StoredCommandResult::IssueAutomationModeChanged {
+            previous,
+            projection,
+            changed: true,
+        })) = &end
+        {
+            let sequence = completed_sequence
+                .checked_add(1)
+                .context("kernel event sequence exhausted")?;
+            completed.push(record(
+                sequence,
+                KernelEvent::issue_automation_mode_changed(
+                    *previous,
+                    projection.state.config.mode,
+                    projection.state.epoch,
+                    projection.state.revision,
+                    caller.as_deref(),
+                ),
+            ));
+        }
+        log.append_kernel_events(&self.workspace, &completed)?;
         work_answer(end, is_reset, Some(op_id))
     }
 
     fn query(&self, input: Value, wait: bool) -> Result<Value> {
         let query: KernelQuery = serde_json::from_value(input)?;
+        if let Some((after, limit)) = query
+            .issues_range(&self.workspace)
+            .map_err(protocol_error)?
+        {
+            let page =
+                super::issue_collection::build(&self.workspace).issues(&IssueCollectionQuery {
+                    binding_id: None,
+                    after,
+                    limit,
+                })?;
+            return Ok(serde_json::to_value(KernelQueryAnswer::Issues(
+                IssuesState::from_domain(&page),
+            ))?);
+        }
         let log = super::production::kernel_event_log_port();
         let answer = match query {
             KernelQuery::History { .. } => {
@@ -360,6 +398,11 @@ impl KernelCommandPort for CommandOnlyKernel {
                 KernelQueryAnswer::Operation(status)
             }
             // planning 은 저장된 데이터이다. 커널이 없어도 저장소에서 읽는다 (plan 18 K4-9d).
+            KernelQuery::IssueAutomation {} => {
+                KernelQueryAnswer::IssueAutomation(IssueAutomationState::from_domain(
+                    &super::issue_collection::build(&self.workspace).projection()?,
+                ))
+            }
             KernelQuery::Planning {} => KernelQueryAnswer::Planning(PlanningState::from_core(
                 &super::production::stored_planning_projection(&self.workspace),
             )),
@@ -568,6 +611,60 @@ mod tests {
                 caller: CALLER_CLI,
             },
         )
+    }
+
+    #[test]
+    fn issue_mode_and_issue_queries_work_without_a_running_kernel_or_planning_refresh() {
+        let (_directory, kernel) = fixture();
+        let planning_before = planning_revision(&kernel);
+        let off = stored(
+            &kernel,
+            KernelCommandKind::SetIssueAutomationMode,
+            json!({"type":"set_issue_automation_mode","mode":"off"}),
+        );
+        assert_eq!(off["result"]["type"], "issue_automation_mode_changed");
+        assert_eq!(off["result"]["mode"], "off");
+        assert_eq!(off["result"]["changed"], true);
+        let epoch = off["result"]["epoch"].clone();
+        let reopened = CommandOnlyKernel {
+            workspace: kernel.workspace.clone(),
+            caller: CALLER_CLI,
+        };
+        let state = reopened
+            .query(json!({"type":"issue_automation"}), false)
+            .expect("stored mode");
+        assert_eq!(state["status"], "ready");
+        assert_eq!(state["mode"], "off");
+        assert_eq!(state["epoch"], epoch);
+        assert!(
+            state["collecting"].is_null(),
+            "an offline query does not invent runtime activity"
+        );
+        let issues = reopened
+            .query(json!({"type":"issues","limit":1}), false)
+            .expect("stored issues");
+        assert_eq!(issues["status"], "ready");
+        assert_eq!(issues["items"].as_array().expect("issue items").len(), 0);
+        let again = stored(
+            &reopened,
+            KernelCommandKind::SetIssueAutomationMode,
+            json!({"type":"set_issue_automation_mode","mode":"off"}),
+        );
+        assert_eq!(again["result"]["changed"], false);
+        assert_eq!(again["result"]["epoch"], epoch);
+        assert_eq!(planning_revision(&kernel), planning_before);
+        let log = super::super::production::kernel_event_log_port();
+        let changes = log
+            .load_kernel_events(&kernel.workspace, &["issue_automation_mode_changed"])
+            .expect("stored issue mode audit");
+        assert_eq!(
+            changes.len(),
+            1,
+            "a no-op mode command does not write another mode event"
+        );
+        let audit = serde_json::to_value(&changes[0]).expect("audit serializes");
+        assert_eq!(audit["caller"], CALLER_CLI);
+        assert_eq!(audit["by"], "command");
     }
 
     /// A port that answers with prepared values. It stands for the Gateway kernel.

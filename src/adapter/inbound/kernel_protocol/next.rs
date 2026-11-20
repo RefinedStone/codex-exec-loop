@@ -112,6 +112,10 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         }
         // 다른 변경이나 병렬 작업이 끝나는 것을 알리는 이벤트는 없다.
         ReasonCode::PlanningLocked => vec![Step::short_wait(), Step::Resend],
+        // 수준을 올리는 선택은 사람이 한다. off에서 같은 동기화를 자동 재시도하지 않는다.
+        ReasonCode::IssueAutomationOff => {
+            vec![Step::query(KernelQueryKind::IssueAutomation), Step::AskUser]
+        }
     }
 }
 

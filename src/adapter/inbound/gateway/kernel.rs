@@ -22,11 +22,12 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::recorder::{RecordDirection, SessionRecording};
 use crate::adapter::inbound::kernel_protocol::{
-    AttachRequest, AttachResponse, CommandRequest, CommandResponse, ERROR_INVALID_PARAMS,
-    ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_METHOD_NOT_FOUND, ERROR_NOT_ATTACHED,
-    EventNotification, KernelCommandInput, KernelEvent, KernelProtocolError, METHOD_ATTACH,
+    AttachRequest, AttachResponse, CommandRejection, CommandRequest, CommandResponse,
+    ERROR_INVALID_PARAMS, ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_METHOD_NOT_FOUND,
+    ERROR_NOT_ATTACHED, EventNotification, IssueAutomationState, IssuesState, KernelCommandInput,
+    KernelEvent, KernelProtocolError, KernelQuery, KernelQueryAnswer, METHOD_ATTACH,
     METHOD_COMMAND, METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION,
-    ParallelSource, ParallelState, PlanningState, QueryRequest, describe,
+    ParallelSource, ParallelState, PlanningState, QueryRequest, describe, reason_next,
 };
 use crate::composition::kernel_host::{
     KernelCallError, KernelClientHandle, KernelCommandOutcome, KernelCommandSender,
@@ -34,6 +35,7 @@ use crate::composition::kernel_host::{
 };
 use crate::composition::native_client_runtime::{KernelClientCommand, StoredCommandEnd};
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
+use crate::domain::issue_automation::collection::IssueCollectionQuery;
 use crate::domain::kernel_event::KernelCommandDescriptor;
 
 pub(super) const KERNEL_METHOD_PREFIX: &str = "akra/kernel/";
@@ -130,6 +132,8 @@ struct KernelSession {
 
 struct AttachedKernel {
     workspace: String,
+    /// 이슈 장부와 커서의 project scope다. 요청한 worktree와 다를 수 있다.
+    issue_workspace: String,
     /// 이 접속이 attach 때 밝힌 이름이다. 커널이 명령의 기록에 호출자로 적는다 (plan 18 K4-5).
     client_name: String,
     commands: KernelCommandSender,
@@ -138,6 +142,19 @@ struct AttachedKernel {
 }
 
 impl AttachedKernel {
+    fn issue_query(
+        &self,
+        query: &KernelQuery,
+    ) -> Result<Option<IssueCollectionQuery>, KernelProtocolError> {
+        Ok(query
+            .issues_range(&self.issue_workspace)?
+            .map(|(after, limit)| IssueCollectionQuery {
+                binding_id: None,
+                after,
+                limit,
+            }))
+    }
+
     /// 이벤트 스레드를 멈추게 하고 커널에서 뗀다. 스레드가 끝나기를 기다리지 않는다.
     fn signal_detach(&self) {
         self.stop_events.store(true, Ordering::SeqCst);
@@ -184,17 +201,12 @@ impl KernelSession {
         let workspace = request.workspace.clone();
         let attached = tokio::time::timeout(
             KERNEL_ATTACH_TIMEOUT,
-            blocking(move || {
-                if request.transient {
-                    kernels.attach_with_lifetime(&workspace, true)
-                } else {
-                    kernels.attach(&workspace)
-                }
-            }),
+            blocking(move || kernels.attach_with_workspace_root(&workspace, request.transient)),
         )
         .await
         .map_err(|_| timed_out("attach", KERNEL_ATTACH_TIMEOUT))?;
-        let (client, kernel) = attached?.map_err(|error| unavailable(format!("{error:#}")))?;
+        let (client, kernel, issue_workspace) =
+            attached?.map_err(|error| unavailable(format!("{error:#}")))?;
         tracing::info!(
             client_name = %request.client_name,
             client_id = client.client_id(),
@@ -215,6 +227,7 @@ impl KernelSession {
             .map_err(|error| unavailable(format!("failed to start the event thread: {error}")))?;
         self.attached = Some(AttachedKernel {
             workspace: request.workspace,
+            issue_workspace,
             client_name: request.client_name,
             commands,
             stop_events,
@@ -238,6 +251,7 @@ impl KernelSession {
         let command = match request.command.into_input(&attached.workspace)? {
             KernelCommandInput::Core(command) => KernelClientCommand::Core(command),
             KernelCommandInput::Stored(command) => KernelClientCommand::Stored(Box::new(command)),
+            KernelCommandInput::SyncIssues => KernelClientCommand::SyncIssues,
         };
         let commands = attached.commands.clone();
         let sent = blocking(move || {
@@ -261,6 +275,15 @@ impl KernelSession {
                     None => response,
                 }
             }
+            Ok(KernelCommandOutcome::Rejected(reason)) => {
+                let mut response = CommandResponse::from_core(Some(&[]));
+                response.rejection = Some(CommandRejection {
+                    reason,
+                    message: reason.summary().to_string(),
+                    next: reason_next(reason),
+                });
+                response
+            }
             Ok(KernelCommandOutcome::Replayed(receipt)) => CommandResponse::replayed(receipt),
             Ok(KernelCommandOutcome::KeyReused) => {
                 return Err(KernelProtocolError::idempotency_key_reused());
@@ -282,6 +305,20 @@ impl KernelSession {
     async fn query(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
         let attached = self.attached()?;
         let request: QueryRequest = parse_params(params)?;
+        if matches!(&request.query, KernelQuery::IssueAutomation {}) {
+            let commands = attached.commands.clone();
+            let state =
+                read_kernel_log(move || commands.issue_automation(KERNEL_CALL_TIMEOUT)).await?;
+            return to_result(KernelQueryAnswer::IssueAutomation(
+                IssueAutomationState::from_domain(&state.projection)
+                    .with_runtime(state.collecting, state.next_poll_after_ms),
+            ));
+        }
+        if let Some(query) = attached.issue_query(&request.query)? {
+            let commands = attached.commands.clone();
+            let page = read_kernel_log(move || commands.issues(query, KERNEL_CALL_TIMEOUT)).await?;
+            return to_result(KernelQueryAnswer::Issues(IssuesState::from_domain(&page)));
+        }
         let history = match request.query.history_range() {
             Some((after, limit)) => {
                 let commands = attached.commands.clone();
@@ -391,6 +428,10 @@ fn protocol_event(event: KernelHostEvent) -> Option<KernelEvent> {
         KernelHostEvent::Planning(projection) => {
             Some(KernelEvent::Planning(PlanningState::from_core(&projection)))
         }
+        KernelHostEvent::Issues(state) => Some(KernelEvent::Issues(
+            IssueAutomationState::from_domain(&state.projection)
+                .with_runtime(state.collecting, state.next_poll_after_ms),
+        )),
         KernelHostEvent::Resync => Some(KernelEvent::Resync),
         KernelHostEvent::Recorded(record) => Some(KernelEvent::Recorded(*record)),
     }
@@ -462,5 +503,102 @@ fn timed_out(call: &str, timeout: Duration) -> KernelProtocolError {
         message: format!(
             "the kernel did not answer the {call} within {timeout:?}; query the kernel to see whether it ran"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composition::kernel_host::KernelHost;
+    use crate::composition::native_client_runtime::tests::recording_runtime_for_test;
+    use crate::domain::issue_automation::IssueAutomationBindingId;
+    use crate::domain::issue_automation::collection::{IssueCollectionItem, IssueCollectionPage};
+    use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
+
+    fn issue(workspace: &str, id: &str) -> IssueReference {
+        IssueReference {
+            provider: IssueProvider::GitHub,
+            server_id: "github.com".to_string(),
+            repository_id: "R_fixture".to_string(),
+            issue_id: id.to_string(),
+            project_scope: IssueProjectScope {
+                workspace_dir: workspace.to_string(),
+            },
+        }
+    }
+
+    fn page(reference: IssueReference, more: bool) -> IssuesState {
+        IssuesState::from_domain(&IssueCollectionPage {
+            revision: 3,
+            items: vec![IssueCollectionItem {
+                issue: reference.clone(),
+                binding_id: IssueAutomationBindingId::new("fixture").expect("binding"),
+                tracked: None,
+                current: None,
+            }],
+            next_after: more.then_some(reference),
+        })
+    }
+
+    #[test]
+    fn issue_pagination_from_a_worktree_or_subfolder_uses_the_kernel_workspace() {
+        let (runtime, _turns) = recording_runtime_for_test();
+        let host = KernelHost::start(runtime).expect("fake kernel host");
+        for requested in ["/main/subfolder", "/worktrees/feature"] {
+            let client = host.attach().expect("fake client");
+            let attached = AttachedKernel {
+                workspace: requested.to_string(),
+                issue_workspace: "/main".to_string(),
+                client_name: "cursor-fixture".to_string(),
+                commands: client.commands(),
+                stop_events: Arc::new(AtomicBool::new(false)),
+                events: None,
+            };
+            let first_query = KernelQuery::Issues {
+                after: None,
+                limit: Some(1),
+            };
+            let first_request = attached
+                .issue_query(&first_query)
+                .expect("first page")
+                .expect("issue query");
+            assert!(first_request.after.is_none());
+            let first = issue("/main", "I_first");
+            let IssuesState::Ready(first_page) = page(first.clone(), true) else {
+                panic!("ready page")
+            };
+            let second_query = KernelQuery::Issues {
+                after: first_page.next_after,
+                limit: Some(1),
+            };
+            let second_request = attached
+                .issue_query(&second_query)
+                .expect("next page")
+                .expect("issue query");
+            assert_eq!(second_request.after, Some(first));
+            let IssuesState::Ready(second_page) = page(issue("/main", "I_second"), false) else {
+                panic!("ready page")
+            };
+            assert_eq!(second_page.items[0].issue.issue_id, "I_second");
+            assert!(second_page.next_after.is_none());
+
+            let IssuesState::Ready(other_page) =
+                page(issue("/different-repository", "I_other"), true)
+            else {
+                panic!("ready page")
+            };
+            let foreign = KernelQuery::Issues {
+                after: other_page.next_after,
+                limit: Some(1),
+            };
+            assert!(
+                attached.issue_query(&foreign).is_err(),
+                "a different repository scope remains invalid"
+            );
+            assert_eq!(
+                attached.workspace, requested,
+                "command and planning keep the requested workspace"
+            );
+        }
     }
 }

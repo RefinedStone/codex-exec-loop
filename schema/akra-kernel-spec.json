@@ -22,12 +22,16 @@
       {
         "name": "planning",
         "summary": "The planning queue and directions."
+      },
+      {
+        "name": "issue",
+        "summary": "Issue collection settings and observations."
       }
     ],
     "state": [
       {
         "name": "store",
-        "summary": "Stored planning data. A command-only kernel can execute this command."
+        "summary": "Stored repository data. A command-only kernel can execute this command."
       },
       {
         "name": "runtime",
@@ -946,6 +950,107 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "set_issue_automation_mode",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Persist the issue collection mode: off or observe. The answer follows the ledger commit; observe only collects while the kernel is running.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "$ref": "#/$defs/IssueAutomationModeRecord"
+          },
+          "type": {
+            "const": "set_issue_automation_mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/$defs/IssueAutomationModeRecord"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IssueAutomationModeRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "const": "issue_automation_mode_changed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "mode",
+          "epoch",
+          "revision",
+          "changed"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "sync_issues",
+      "scope": "issue",
+      "state": "runtime",
+      "summary": "Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request.",
+      "effect": "read",
+      "idempotency": "natural",
+      "rejections": [
+        "kernel_unreachable",
+        "issue_automation_off"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "sync_issues",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
     }
   ],
   "queries": [
@@ -1186,6 +1291,230 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "issue_automation",
+      "summary": "The stored off/observe mode, binding, collection revision and polling status. An unavailable store is explicit; an empty list is not substituted.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "issue_automation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "binding": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueBindingState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "binding_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "collecting": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "consecutive_failures": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_attempt_at_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "last_failure": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueCollectionFailureState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "last_success_at_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/IssueAutomationModeRecord"
+              },
+              "next_poll_after_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "const": "ready",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "mode",
+              "epoch",
+              "revision",
+              "consecutive_failures"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "type": {
+            "const": "issue_automation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issues",
+      "summary": "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "format": "uint16",
+            "maximum": 100,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "issues",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/IssueListItem"
+                },
+                "type": "array"
+              },
+              "next_after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "const": "ready",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "revision",
+              "items"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "type": {
+            "const": "issues",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
     }
   ],
   "events": [
@@ -1321,6 +1650,126 @@
         "properties": {
           "type": {
             "const": "recorded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issues",
+      "summary": "The issue collection state or revision changed. Read issue_automation and issues to recover the local projection after an event gap.",
+      "payload": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "binding": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueBindingState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "binding_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "collecting": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "consecutive_failures": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_attempt_at_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "last_failure": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueCollectionFailureState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "last_success_at_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/IssueAutomationModeRecord"
+              },
+              "next_poll_after_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "const": "ready",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "mode",
+              "epoch",
+              "revision",
+              "consecutive_failures"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "type": {
+            "const": "issues",
             "type": "string"
           }
         },
@@ -1786,6 +2235,92 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "issue_tracked",
+      "summary": "A stable issue entered the collection ledger for the first time. Metadata-only withheld observations count once; rediscovery does not repeat this record.",
+      "payload": {
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "by": {
+            "$ref": "#/$defs/IssueChangeOrigin"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_tracked",
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "binding_id",
+          "revision",
+          "by"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_automation_mode_changed",
+      "summary": "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.",
+      "payload": {
+        "properties": {
+          "by": {
+            "$ref": "#/$defs/IssueChangeOrigin"
+          },
+          "caller": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "issue_automation_mode_changed",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/$defs/IssueAutomationModeRecord"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IssueAutomationModeRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "mode",
+          "epoch",
+          "revision",
+          "by"
+        ],
+        "type": "object"
+      }
     }
   ],
   "reasons": [
@@ -2031,6 +2566,19 @@
         },
         {
           "step": "resend"
+        }
+      ]
+    },
+    {
+      "name": "issue_automation_off",
+      "summary": "Issue collection is off. No source read was scheduled. Read issue_automation and decide whether to enable observe before sending sync_issues again.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issue_automation"
+        },
+        {
+          "step": "ask_user"
         }
       ]
     }
@@ -2479,6 +3027,48 @@
             "planning_revision"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            },
+            "epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "$ref": "#/$defs/IssueAutomationModeRecord"
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IssueAutomationModeRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "issue_automation_mode_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode",
+            "epoch",
+            "revision",
+            "changed"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -2541,6 +3131,557 @@
         "event"
       ],
       "type": "object"
+    },
+    "IssueActorState": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "login": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "login"
+      ],
+      "type": "object"
+    },
+    "IssueAutomationModeRecord": {
+      "enum": [
+        "off",
+        "observe"
+      ],
+      "type": "string"
+    },
+    "IssueBasisState": {
+      "additionalProperties": false,
+      "properties": {
+        "field_hash": {
+          "$ref": "#/$defs/IssueHashState"
+        },
+        "provider_updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_hash",
+        "provider_updated_at"
+      ],
+      "type": "object"
+    },
+    "IssueBindingState": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "project_scope": {
+          "$ref": "#/$defs/IssueEventProjectScope"
+        },
+        "provider": {
+          "$ref": "#/$defs/IssueEventProvider"
+        },
+        "repository_id": {
+          "type": "string"
+        },
+        "server_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "server_id",
+        "repository_id",
+        "project_scope"
+      ],
+      "type": "object"
+    },
+    "IssueChangeOrigin": {
+      "enum": [
+        "command",
+        "rule"
+      ],
+      "type": "string"
+    },
+    "IssueCollectionFailureState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "source",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/IssueSourceFailureState"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "origin_unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "policy_unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IssueContentState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "$ref": "#/$defs/IssueBasisState"
+            },
+            "kind": {
+              "const": "shared",
+              "type": "string"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "shared_copy": {
+              "$ref": "#/$defs/IssueSharedCopyState"
+            }
+          },
+          "required": [
+            "kind",
+            "basis",
+            "policy_version",
+            "shared_copy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "$ref": "#/$defs/IssueBasisState"
+            },
+            "kind": {
+              "const": "withheld",
+              "type": "string"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/IssueWithheldReasonState"
+            }
+          },
+          "required": [
+            "kind",
+            "basis",
+            "policy_version",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IssueEventProjectScope": {
+      "additionalProperties": false,
+      "properties": {
+        "workspace_dir": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_dir"
+      ],
+      "type": "object"
+    },
+    "IssueEventProvider": {
+      "enum": [
+        "github",
+        "jira"
+      ],
+      "type": "string"
+    },
+    "IssueEventReference": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_id": {
+          "type": "string"
+        },
+        "project_scope": {
+          "$ref": "#/$defs/IssueEventProjectScope"
+        },
+        "provider": {
+          "$ref": "#/$defs/IssueEventProvider"
+        },
+        "repository_id": {
+          "type": "string"
+        },
+        "server_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "server_id",
+        "repository_id",
+        "issue_id",
+        "project_scope"
+      ],
+      "type": "object"
+    },
+    "IssueHashState": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "IssueLabelActorState": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueActorState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "label": {
+          "$ref": "#/$defs/IssueLabelState"
+        }
+      },
+      "required": [
+        "label",
+        "event_id",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "IssueLabelState": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "IssueListItem": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_id": {
+          "type": "string"
+        },
+        "current": {
+          "$ref": "#/$defs/IssueObservationState"
+        },
+        "issue": {
+          "$ref": "#/$defs/IssueEventReference"
+        },
+        "tracked": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueTrackedState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "issue",
+        "binding_id",
+        "current"
+      ],
+      "type": "object"
+    },
+    "IssueMetadataCompletenessState": {
+      "enum": [
+        "complete",
+        "truncated",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "IssueMetadataState": {
+      "additionalProperties": false,
+      "properties": {
+        "completeness": {
+          "$ref": "#/$defs/IssueMetadataCompletenessState"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/IssueLabelState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "completeness"
+      ],
+      "type": "object"
+    },
+    "IssueMetadataState2": {
+      "additionalProperties": false,
+      "properties": {
+        "completeness": {
+          "$ref": "#/$defs/IssueMetadataCompletenessState"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/IssueActorState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "completeness"
+      ],
+      "type": "object"
+    },
+    "IssueMetadataState3": {
+      "additionalProperties": false,
+      "properties": {
+        "completeness": {
+          "$ref": "#/$defs/IssueMetadataCompletenessState"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/IssueLabelActorState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "completeness"
+      ],
+      "type": "object"
+    },
+    "IssueObservationState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "not_yet_observed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/IssueSourceFailureState"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignees": {
+              "$ref": "#/$defs/IssueMetadataState2"
+            },
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IssueActorState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "content": {
+              "$ref": "#/$defs/IssueContentState"
+            },
+            "label_actors": {
+              "$ref": "#/$defs/IssueMetadataState3"
+            },
+            "labels": {
+              "$ref": "#/$defs/IssueMetadataState"
+            },
+            "linked_pull_request": {
+              "$ref": "#/$defs/IssuePrPresenceState"
+            },
+            "remote_state": {
+              "$ref": "#/$defs/IssueRemoteStateValue"
+            },
+            "status": {
+              "const": "observed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "remote_state",
+            "labels",
+            "assignees",
+            "label_actors",
+            "linked_pull_request",
+            "content"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IssuePrPresenceState": {
+      "enum": [
+        "present",
+        "absent",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "IssueRemoteStateValue": {
+      "enum": [
+        "open",
+        "closed"
+      ],
+      "type": "string"
+    },
+    "IssueSharedCopyState": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "IssueSourceFailureState": {
+      "enum": [
+        "invalid_request",
+        "unsupported_provider",
+        "invalid_cursor",
+        "provider_unavailable",
+        "malformed_response",
+        "identity_mismatch",
+        "metadata_incomplete"
+      ],
+      "type": "string"
+    },
+    "IssueTrackedState": {
+      "additionalProperties": false,
+      "properties": {
+        "held": {
+          "type": "boolean"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/IssueWorkflowState"
+        },
+        "unknown": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "held",
+        "stale",
+        "unknown"
+      ],
+      "type": "object"
+    },
+    "IssueWithheldReasonState": {
+      "enum": [
+        "user_confirmation_required"
+      ],
+      "type": "string"
+    },
+    "IssueWorkflowState": {
+      "enum": [
+        "discovered",
+        "ineligible",
+        "needs_info",
+        "awaiting_decision",
+        "ready",
+        "queued",
+        "running",
+        "in_review",
+        "done",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
     },
     "KernelCommand": {
       "oneOf": [
@@ -2891,6 +4032,36 @@
             "expected_planning_revision"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/IssueAutomationModeRecord"
+            },
+            "type": {
+              "const": "set_issue_automation_mode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "sync_issues",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -2997,6 +4168,122 @@
           "properties": {
             "type": {
               "const": "recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "const": "unavailable",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "binding": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueBindingState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "binding_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "collecting": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "consecutive_failures": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "epoch": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "last_attempt_at_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "last_failure": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueCollectionFailureState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "last_success_at_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mode": {
+                  "$ref": "#/$defs/IssueAutomationModeRecord"
+                },
+                "next_poll_after_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "status": {
+                  "const": "ready",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "mode",
+                "epoch",
+                "revision",
+                "consecutive_failures"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "type": {
+              "const": "issues",
               "type": "string"
             }
           },
@@ -3150,6 +4437,49 @@
             "op_id"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "issue_automation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "default": null,
+              "format": "uint16",
+              "maximum": 100,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "issues",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -3244,6 +4574,179 @@
           "properties": {
             "type": {
               "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "const": "unavailable",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "binding": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueBindingState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "binding_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "collecting": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "consecutive_failures": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "epoch": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "last_attempt_at_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "last_failure": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueCollectionFailureState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "last_success_at_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mode": {
+                  "$ref": "#/$defs/IssueAutomationModeRecord"
+                },
+                "next_poll_after_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "status": {
+                  "const": "ready",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "mode",
+                "epoch",
+                "revision",
+                "consecutive_failures"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "type": {
+              "const": "issue_automation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "const": "unavailable",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "items": {
+                  "items": {
+                    "$ref": "#/$defs/IssueListItem"
+                  },
+                  "type": "array"
+                },
+                "next_after": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "status": {
+                  "const": "ready",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "revision",
+                "items"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "type": {
+              "const": "issues",
               "type": "string"
             }
           },
@@ -3652,6 +5155,84 @@
           "required": [
             "kind",
             "head"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "binding_id": {
+              "type": "string"
+            },
+            "by": {
+              "$ref": "#/$defs/IssueChangeOrigin"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_tracked",
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "binding_id",
+            "revision",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "by": {
+              "$ref": "#/$defs/IssueChangeOrigin"
+            },
+            "caller": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "issue_automation_mode_changed",
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/$defs/IssueAutomationModeRecord"
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IssueAutomationModeRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "mode",
+            "epoch",
+            "revision",
+            "by"
           ],
           "type": "object"
         }
@@ -4528,7 +6109,8 @@
         "task_finished",
         "rejected_again",
         "planning_revision_stale",
-        "planning_locked"
+        "planning_locked",
+        "issue_automation_off"
       ],
       "type": "string"
     },

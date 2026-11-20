@@ -752,6 +752,13 @@ pub(crate) fn recorded_commands_for_test(workspace_dir: &str) -> Vec<(String, Op
  * 자기에게 돌아온다. 저장소와 파일만 쓴다. app-server 를 시작하지 않고 planning worker 를 부르지 않는다.
  */
 pub(crate) fn stored_command_port(workspace_dir: &str) -> Arc<dyn StoredCommandPort> {
+    stored_command_port_with_issues(workspace_dir, super::issue_collection::build(workspace_dir))
+}
+
+pub(crate) fn stored_command_port_with_issues(
+    workspace_dir: &str,
+    issues: Arc<crate::application::service::issue_collection::IssueCollectionService>,
+) -> Arc<dyn StoredCommandPort> {
     struct NoPlanningWorker;
     impl PlanningWorkerPort for NoPlanningWorker {
         fn run_planning_session(
@@ -763,15 +770,16 @@ pub(crate) fn stored_command_port(workspace_dir: &str) -> Arc<dyn StoredCommandP
         }
     }
     let (planning, workspace, store) = store_planning_services(Arc::new(NoPlanningWorker));
-    Arc::new(StoredCommandService::new(
-        PlanningAdminFacadeService::from_planning_with_authority(
+    Arc::new(
+        StoredCommandService::new(PlanningAdminFacadeService::from_planning_with_authority(
             workspace_dir,
             planning,
             workspace,
             store.clone(),
             store,
-        ),
-    ))
+        ))
+        .with_issue_collection(issues),
+    )
 }
 
 /// 저장소와 파일만 쓰는 planning 서비스이다. app-server 를 시작하지 않는다.

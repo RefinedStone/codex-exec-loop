@@ -65,6 +65,22 @@ where
     })
 }
 
+/// OS 스레드를 만들지 못한 경우 호출자가 재시도할 수 있는 공용 panic 경계다.
+pub(crate) fn try_spawn_worker_with_panic_fallback<Work, Recover>(
+    work: Work,
+    recover: Recover,
+) -> std::io::Result<JoinHandle<()>>
+where
+    Work: FnOnce() + Send + 'static,
+    Recover: FnOnce() + Send + 'static,
+{
+    try_spawn_guarded_job(work, move |result| {
+        if result.is_err() {
+            let _ = catch_redacted_worker_unwind(recover);
+        }
+    })
+}
+
 pub(crate) fn spawn_joinable_redacted_worker<Work, Output>(
     work: Work,
 ) -> RedactedWorkerHandle<Output>
@@ -112,7 +128,19 @@ where
     Work: FnOnce() -> Output + Send + 'static,
     Settle: FnOnce(Result<Output, RedactedWorkerPanic>) + Send + 'static,
 {
-    thread::spawn(move || {
+    try_spawn_guarded_job(work, settle).expect("failed to spawn a redacted worker")
+}
+
+fn try_spawn_guarded_job<Output, Work, Settle>(
+    work: Work,
+    settle: Settle,
+) -> std::io::Result<JoinHandle<()>>
+where
+    Output: Send + 'static,
+    Work: FnOnce() -> Output + Send + 'static,
+    Settle: FnOnce(Result<Output, RedactedWorkerPanic>) + Send + 'static,
+{
+    thread::Builder::new().spawn(move || {
         let result = catch_redacted_worker_unwind(work).map_err(|_| RedactedWorkerPanic);
         let _ = catch_redacted_worker_unwind(|| settle(result));
     })

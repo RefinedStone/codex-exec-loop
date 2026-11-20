@@ -23,6 +23,10 @@ use anyhow::{Context, Result, bail};
 use crate::adapter::outbound::app_server::GatewayUpstreamSocket;
 
 use crate::adapter::outbound::filesystem::{RepositoryKernelLock, RepositoryKernelOwner};
+#[cfg(not(test))]
+use crate::composition::issue_collection::build as build_issue_collection;
+#[cfg(test)]
+use crate::composition::issue_collection::build_for_kernel_test as build_issue_collection;
 use crate::composition::kernel_host::{KernelCallError, KernelClientHandle, KernelHost};
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::production;
@@ -139,15 +143,27 @@ impl RepositoryKernelRegistry {
     /// `workspace_dir` 가 속한 저장소의 커널에 클라이언트 하나를 붙이고, 커널의 저장소 신원과 함께 돌려준다. 그
     /// 저장소의 커널이 없으면 만든다. 같은 저장소의 다른 worktree 는 같은 커널에 붙는다. 다른 프로세스가 그
     /// 저장소의 커널을 돌리면 `RepositoryKernelLockHeld` 오류이다.
+    #[cfg(test)]
     pub(crate) fn attach(&self, workspace_dir: &str) -> Result<(KernelClientHandle, String)> {
         self.attach_with_lifetime(workspace_dir, false)
     }
 
+    #[cfg(test)]
     pub(crate) fn attach_with_lifetime(
         &self,
         workspace_dir: &str,
         transient: bool,
     ) -> Result<(KernelClientHandle, String)> {
+        self.attach_with_workspace_root(workspace_dir, transient)
+            .map(|(client, key, _)| (client, key))
+    }
+
+    /// 커널이 실제 사용하는 대표 checkout도 반환한다. 입구의 worktree 경로를 바꾸지는 않는다.
+    pub(crate) fn attach_with_workspace_root(
+        &self,
+        workspace_dir: &str,
+        transient: bool,
+    ) -> Result<(KernelClientHandle, String, String)> {
         let target = production::repository_kernel_target(workspace_dir)?;
         let entry = self.entry(&target.repository_key)?;
         let mut kernel = entry.lock();
@@ -155,7 +171,13 @@ impl RepositoryKernelRegistry {
         self.ensure_running()?;
         if let Some(running) = kernel.as_ref() {
             match running.attach_with_lifetime(transient) {
-                Ok(client) => return Ok((client, target.repository_key)),
+                Ok(client) => {
+                    return Ok((
+                        client,
+                        target.repository_key,
+                        running.workspace_root().to_string(),
+                    ));
+                }
                 Err(KernelCallError::TimedOut) => {
                     bail!("the repository kernel did not answer the attach request in time")
                 }
@@ -177,12 +199,13 @@ impl RepositoryKernelRegistry {
             built.host.notify_when_idle(notification);
         }
         let repository_key = built.repository_key().to_string();
+        let workspace_root = built.workspace_root().to_string();
         tracing::info!(
             workspace = built.workspace_root(),
             "repository kernel started"
         );
         *kernel = Some(built);
-        Ok((client, repository_key))
+        Ok((client, repository_key, workspace_root))
     }
 
     /// 모든 커널을 멈춘다 (Gateway 종료). 커널마다 병렬 작업 스레드를 멈추고, 호스트 스레드가 끝날 때까지 기다리고,
@@ -258,9 +281,12 @@ pub(crate) fn build_kernel_for_workspace(
     // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     runtime.attach_repository_observer(production::repository_state_port());
-    // 이 커널이 잠금을 쥐고 있으므로 저장 명령을 여기서 실행한다 (plan 18 K4-9d).
+    // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
+    let issues = build_issue_collection(workspace_dir);
+    runtime.attach_issue_collection(issues.clone())?;
+    // 같은 서비스 인스턴스가 모드 저장과 진행 중인 읽기의 epoch 경계를 공유한다.
     runtime.attach_stored_commands(
-        production::stored_command_port(workspace_dir),
+        production::stored_command_port_with_issues(workspace_dir, issues),
         workspace_dir,
     );
     start_repository_kernel(lock, runtime, workspace_dir)
@@ -476,9 +502,26 @@ pub(crate) mod tests {
         assert!(output.status.success(), "git {args:?}: {output:?}");
     }
 
+    /// 테스트 fixture의 절대 경로를 Git 인자로 표현한다. 검증에 쓰는 원래 Path는 유지한다.
+    fn fixture_git_path(path: &std::path::Path) -> String {
+        assert!(path.is_absolute(), "fixture Git arguments must be absolute");
+        let path = path.to_str().expect("fixture path is Unicode");
+        #[cfg(not(windows))]
+        return path.to_string();
+        #[cfg(windows)]
+        {
+            // parallel_mode의 git_command_directory와 같은 drive/UNC 표현 규칙이다.
+            if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+                return format!(r"\\{rest}");
+            }
+            path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+        }
+    }
+
     fn add_worktree(repo: &std::path::Path, path: &std::path::Path, branch: &str) -> String {
         let path_text = path.display().to_string();
-        run_git(repo, &["worktree", "add", "-q", "-b", branch, &path_text]);
+        let argument = fixture_git_path(path);
+        run_git(repo, &["worktree", "add", "-q", "-b", branch, &argument]);
         path_text
     }
 
@@ -517,7 +560,17 @@ pub(crate) mod tests {
         );
         let registry = RepositoryKernelRegistry::default();
 
-        let (_from_linked, kernel) = registry.attach(&linked).expect("linked worktree attaches");
+        let (_from_linked, kernel, issue_workspace) = registry
+            .attach_with_workspace_root(&linked, false)
+            .expect("linked worktree attaches");
+        assert_eq!(issue_workspace, repo.display().to_string());
+        let nested = PathBuf::from(&linked).join("nested");
+        std::fs::create_dir_all(&nested).expect("nested worktree folder");
+        let (_from_nested, nested_kernel, nested_scope) = registry
+            .attach_with_workspace_root(&nested.display().to_string(), false)
+            .expect("nested folder attaches");
+        assert_eq!(nested_kernel, kernel);
+        assert_eq!(nested_scope, issue_workspace);
         let (_from_primary, same_kernel) = registry
             .attach(&repo.display().to_string())
             .expect("the primary checkout shares the kernel");
@@ -565,16 +618,11 @@ pub(crate) mod tests {
         let folder = temp_folder("bare-repository");
         let source = git_repository(&folder);
         let bare = PathBuf::from(&folder.path).join("bare.git");
-        let bare_text = bare.display().to_string();
+        let bare_text = fixture_git_path(&bare);
+        let source_text = fixture_git_path(&source);
         run_git(
             &source,
-            &[
-                "clone",
-                "-q",
-                "--bare",
-                &source.display().to_string(),
-                &bare_text,
-            ],
+            &["clone", "-q", "--bare", &source_text, &bare_text],
         );
         let worktree = add_worktree(&bare, &PathBuf::from(&folder.path).join("work"), "work");
         let registry = RepositoryKernelRegistry::default();

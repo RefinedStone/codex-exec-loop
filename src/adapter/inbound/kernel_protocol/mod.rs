@@ -44,6 +44,9 @@ pub use next::{NextStep, reason_next};
 mod spec;
 pub use spec::{KernelSpec, describe};
 
+mod issue_automation;
+pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssuesState};
+
 /// 프로토콜 판이다. 전송 모양을 호환되지 않게 바꿀 때만 올린다. 필드를 더하는 것은 올리지 않는다. K4-1 에서
 /// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -244,7 +247,9 @@ impl CommandRequest {
             | KernelCommand::DeleteTask { .. }
             | KernelCommand::CreateDirection { .. }
             | KernelCommand::UpdateDirection { .. }
-            | KernelCommand::DeleteDirection { .. } => String::new(),
+            | KernelCommand::DeleteDirection { .. }
+            | KernelCommand::SetIssueAutomationMode { .. }
+            | KernelCommand::SyncIssues {} => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
             KernelProtocolError::invalid_params(format!("command cannot be described: {error}"))
@@ -381,6 +386,13 @@ pub enum CommandResult {
         default_retained: bool,
         planning_revision: i64,
     },
+    IssueAutomationModeChanged {
+        previous: Option<IssueAutomationMode>,
+        mode: IssueAutomationMode,
+        epoch: u64,
+        revision: u64,
+        changed: bool,
+    },
 }
 
 impl CommandResult {
@@ -432,6 +444,17 @@ impl CommandResult {
                 default_retained,
                 planning_revision,
             },
+            StoredCommandResult::IssueAutomationModeChanged {
+                previous,
+                projection,
+                changed,
+            } => Self::IssueAutomationModeChanged {
+                previous: previous.map(Into::into),
+                mode: projection.state.config.mode.into(),
+                epoch: projection.state.epoch,
+                revision: projection.state.revision,
+                changed,
+            },
         }
     }
 
@@ -445,6 +468,7 @@ impl CommandResult {
             KernelCommandKind::CreateDirection => Some("direction_created"),
             KernelCommandKind::UpdateDirection => Some("direction_updated"),
             KernelCommandKind::DeleteDirection => Some("direction_deleted"),
+            KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::LoadSessions
             | KernelCommandKind::RenameSession
             | KernelCommandKind::SubmitPrompt
@@ -454,7 +478,8 @@ impl CommandResult {
             | KernelCommandKind::SetAutoFollowMaxTurns
             | KernelCommandKind::PauseAutoFollow
             | KernelCommandKind::ResetPlanning
-            | KernelCommandKind::RefreshPlanning => None,
+            | KernelCommandKind::RefreshPlanning
+            | KernelCommandKind::SyncIssues => None,
         }
     }
 }
@@ -693,6 +718,12 @@ pub enum KernelCommand {
         #[serde(default)]
         confirm: bool,
     },
+    /// 이슈 관찰 모드만 바꾼다. 저장 성공 뒤에만 원격 수집을 허용한다.
+    SetIssueAutomationMode {
+        mode: IssueAutomationMode,
+    },
+    /// Observe 모드에서 원격 읽기를 요청한다. 실행 완료 영수증을 만들지 않는다.
+    SyncIssues {},
 }
 
 /*
@@ -823,12 +854,13 @@ impl TaskFields {
     }
 }
 
-/// 커널이 명령으로 받는 입력이다 (plan 18 K4-9d). core 가 처리하는 명령이거나, 저장소 잠금을 쥐 쪽이 바로
-/// 실행하는 저장 명령이다.
+/// 커널이 명령으로 받는 입력이다. core 명령, 저장소 잠금을 쥔 쪽이 실행하는 저장 명령,
+/// 또는 호스트의 이슈 관찰 요청이다.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KernelCommandInput {
     Core(AppCommand),
     Stored(StoredCommand),
+    SyncIssues,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -866,6 +898,8 @@ impl KernelCommand {
             Self::CreateDirection { .. } => KernelCommandKind::CreateDirection,
             Self::UpdateDirection { .. } => KernelCommandKind::UpdateDirection,
             Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
+            Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
+            Self::SyncIssues {} => KernelCommandKind::SyncIssues,
         }
     }
 
@@ -879,7 +913,8 @@ impl KernelCommand {
             Self::CreateTask { .. }
             | Self::UpdateTask { .. }
             | Self::CreateDirection { .. }
-            | Self::UpdateDirection { .. } => false,
+            | Self::UpdateDirection { .. }
+            | Self::SetIssueAutomationMode { .. } => false,
             Self::LoadSessions {}
             | Self::RenameSession { .. }
             | Self::SubmitPrompt { .. }
@@ -888,7 +923,8 @@ impl KernelCommand {
             | Self::DecideApproval { .. }
             | Self::SetAutoFollowMaxTurns { .. }
             | Self::PauseAutoFollow {}
-            | Self::RefreshPlanning {} => false,
+            | Self::RefreshPlanning {}
+            | Self::SyncIssues {} => false,
         }
     }
 
@@ -938,6 +974,9 @@ impl KernelCommand {
                 expected_planning_revision,
                 confirm: true,
             },
+            StoredCommand::SetIssueAutomationMode { mode } => {
+                Self::SetIssueAutomationMode { mode: mode.into() }
+            }
         }
     }
 
@@ -950,6 +989,10 @@ impl KernelCommand {
         workspace_directory: &str,
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
+            Self::SyncIssues {} => return Ok(KernelCommandInput::SyncIssues),
+            Self::SetIssueAutomationMode { mode } => {
+                StoredCommand::SetIssueAutomationMode { mode: mode.into() }
+            }
             Self::CreateTask { task } => StoredCommand::CreateTask {
                 task: task.into_stored()?,
             },
@@ -1068,9 +1111,11 @@ impl KernelCommand {
             | Self::DeleteTask { .. }
             | Self::CreateDirection { .. }
             | Self::UpdateDirection { .. }
-            | Self::DeleteDirection { .. } => {
+            | Self::DeleteDirection { .. }
+            | Self::SetIssueAutomationMode { .. }
+            | Self::SyncIssues {} => {
                 return Err(KernelProtocolError::invalid_params(
-                    "a stored command is not a core command",
+                    "a host or stored command is not a core command",
                 ));
             }
         };
@@ -1089,7 +1134,7 @@ fn non_blank(field: &str, value: String) -> Result<String, KernelProtocolError> 
 
 // query -------------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelQuery {
     Sessions {},
@@ -1113,6 +1158,16 @@ pub enum KernelQuery {
      */
     Operation {
         op_id: i64,
+    },
+    /// 저장된 관찰 모드, 수집 상태와 바인딩이다. 저장 읽기 실패는 unavailable이다.
+    IssueAutomation {},
+    /// 현재 장부 목록이다. 답의 opaque next_after만 다음 조회에 돌려준다.
+    Issues {
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default)]
+        #[schemars(range(min = 1, max = 100))]
+        limit: Option<u16>,
     },
 }
 
@@ -1183,6 +1238,11 @@ impl KernelQuery {
                     records: Vec::new(),
                 }))
             }
+            // 이 값은 snapshot에 없다. 실제 저장 조회는 호스트/명령 전용 입구가 먼저 처리한다.
+            Self::IssueAutomation {} => {
+                KernelQueryAnswer::IssueAutomation(IssueAutomationState::unavailable())
+            }
+            Self::Issues { .. } => KernelQueryAnswer::Issues(IssuesState::unavailable()),
         }
     }
 }
@@ -1204,6 +1264,10 @@ spec_names! {
             "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.";
         Operation => "operation",
             "The state of one operation and its records. `op_id` comes from the `operation` of a command answer.";
+        IssueAutomation => "issue_automation",
+            "The stored off/observe mode, binding, collection revision and polling status. An unavailable store is explicit; an empty list is not substituted.";
+        Issues => "issues",
+            "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body.";
     }
 }
 
@@ -1225,6 +1289,8 @@ pub enum KernelQueryAnswer {
     History(KernelEventPage),
     /// 연산 하나의 상태와 그 연산의 기록이다 (plan 18 K4-4).
     Operation(OperationStatus),
+    IssueAutomation(IssueAutomationState),
+    Issues(IssuesState),
 }
 
 // event -------------------------------------------------------------------------------------------
@@ -1255,6 +1321,8 @@ pub enum KernelEvent {
      * `history` 와 겹칠 수 있으므로 클라이언트는 `sequence` 로 겹침을 지운다.
      */
     Recorded(RecordedKernelEvent),
+    /// 이슈 수집 상태가 바뀌었다. revision에 맞는 목록은 issues 조회로 다시 읽는다.
+    Issues(IssueAutomationState),
 }
 
 /// `akra/kernel/event` 알림의 params 이다.
@@ -1282,6 +1350,8 @@ spec_names! {
             "Events for this client were dropped. Read the current values with queries and `history` after the last sequence seen.";
         Recorded => "recorded",
             "The kernel wrote one decision record. `sequence` is the cursor for `history`.";
+        Issues => "issues",
+            "The issue collection state or revision changed. Read issue_automation and issues to recover the local projection after an event gap.";
     }
 }
 
