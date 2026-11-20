@@ -21,11 +21,13 @@
 
 수용한 변경은 **22개 후속 PR**에 나누어 제출했다. 원본 #2468과 #2480의 첫 키 생성 경쟁은 #2486으로, #2464와 #2467의 필수 폼 검증 조건은 #2503으로 함께 연결했다. 새로운 PR은 모두 열어 두며 이 작업에서 머지하지 않았다.
 
+반려 판단은 **27개 원본별 문서 PR**로 각각 남겼다. 수정 PR 22개와 종합 감사 PR을 포함하여 새 PR은 총 50개다.
+
 판단 기록 113개는 같은 지적을 인라인·일반 리뷰가 각각 확인한 중복 출처를 포함한다. 결함 개수로 사용하지 않는다.
 
 ## 수용 후속 PR
 
-CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 대한 관측 결과다.
+CI 확인 시각: 2026-11-20T09:37:09.576Z. 검증 상태는 표의 커밋에 대한 관측 결과다.
 
 | 원본 | 후속 PR | 현재 커밋 | 기반 | 검증 상태 |
 | --- | --- | --- | --- | --- |
@@ -37,7 +39,7 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 | [#2464](https://github.com/RefinedStone/codex-exec-loop/pull/2464) | [#2488](https://github.com/RefinedStone/codex-exec-loop/pull/2488) | `2af55ad9d8ba` | `prerelease` | CI Gate 성공 |
 | [#2468](https://github.com/RefinedStone/codex-exec-loop/pull/2468) | [#2489](https://github.com/RefinedStone/codex-exec-loop/pull/2489) | `d931d83763e1` | `codex/review-vault-first-key` | 현재 head CI Gate 성공 |
 | [#2370](https://github.com/RefinedStone/codex-exec-loop/pull/2370) | [#2490](https://github.com/RefinedStone/codex-exec-loop/pull/2490) | `74592b0eec1d` | `prerelease` | CI Gate 성공 |
-| [#2373](https://github.com/RefinedStone/codex-exec-loop/pull/2373) | [#2491](https://github.com/RefinedStone/codex-exec-loop/pull/2491) | `47d3a66c1eba` | `prerelease` | CI 진행 중 |
+| [#2373](https://github.com/RefinedStone/codex-exec-loop/pull/2373) | [#2491](https://github.com/RefinedStone/codex-exec-loop/pull/2491) | `47d3a66c1eba` | `prerelease` | CI Gate 성공 |
 | [#2413](https://github.com/RefinedStone/codex-exec-loop/pull/2413) | [#2492](https://github.com/RefinedStone/codex-exec-loop/pull/2492) | `013452bbd348` | `prerelease` | CI Gate 성공 |
 | [#2475](https://github.com/RefinedStone/codex-exec-loop/pull/2475) | [#2493](https://github.com/RefinedStone/codex-exec-loop/pull/2493) | `76fb9a08005b` | `codex/review-vault-access-recheck` | 현재 head CI Gate 성공 |
 | [#2476](https://github.com/RefinedStone/codex-exec-loop/pull/2476) | [#2494](https://github.com/RefinedStone/codex-exec-loop/pull/2494) | `dc926bd79947` | `prerelease` | CI Gate 성공 |
@@ -48,9 +50,9 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 | [#2371](https://github.com/RefinedStone/codex-exec-loop/pull/2371) | [#2499](https://github.com/RefinedStone/codex-exec-loop/pull/2499) | `3eccf720d89c` | `prerelease` | CI Gate 성공 |
 | [#2463](https://github.com/RefinedStone/codex-exec-loop/pull/2463) | [#2500](https://github.com/RefinedStone/codex-exec-loop/pull/2500) | `f29979bca9aa` | `prerelease` | CI Gate 성공 |
 | [#2471](https://github.com/RefinedStone/codex-exec-loop/pull/2471) | [#2501](https://github.com/RefinedStone/codex-exec-loop/pull/2501) | `c4774d2a662b` | `prerelease` | CI Gate 성공 |
-| [#2474](https://github.com/RefinedStone/codex-exec-loop/pull/2474) | [#2502](https://github.com/RefinedStone/codex-exec-loop/pull/2502) | `026c2e1212c2` | `codex/review-vault-restore-session` | 현재 head CI 진행 중 |
-| [#2464](https://github.com/RefinedStone/codex-exec-loop/pull/2464), [#2467](https://github.com/RefinedStone/codex-exec-loop/pull/2467) | [#2503](https://github.com/RefinedStone/codex-exec-loop/pull/2503) | `35a7166e7577` | `codex/review-2464-markdown-validation` | 현재 head CI 진행 중 |
-| [#2479](https://github.com/RefinedStone/codex-exec-loop/pull/2479) | [#2504](https://github.com/RefinedStone/codex-exec-loop/pull/2504) | `c99c162d447b` | `prerelease` | CI 진행 중 |
+| [#2474](https://github.com/RefinedStone/codex-exec-loop/pull/2474) | [#2502](https://github.com/RefinedStone/codex-exec-loop/pull/2502) | `5e5859fe2128` | `codex/review-vault-restore-session` | 현재 head CI Gate 성공 |
+| [#2464](https://github.com/RefinedStone/codex-exec-loop/pull/2464), [#2467](https://github.com/RefinedStone/codex-exec-loop/pull/2467) | [#2503](https://github.com/RefinedStone/codex-exec-loop/pull/2503) | `35a7166e7577` | `codex/review-2464-markdown-validation` | 현재 head CI Gate 성공 |
+| [#2479](https://github.com/RefinedStone/codex-exec-loop/pull/2479) | [#2504](https://github.com/RefinedStone/codex-exec-loop/pull/2504) | `c99c162d447b` | `prerelease` | CI Gate 성공 |
 
 ## 적용 순서와 제한
 
@@ -66,42 +68,42 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 반려 항목은 아래 근거에 따라 이번 코드 변경을 하지 않는다. 재검토 조건은 미구현 상태이며, 완료된 수정으로 계산하지 않는다.
 
-| 원본 | 제안 | 반려 근거 | 재검토 조건 |
-| --- | --- | --- | --- |
-| [#2466](https://github.com/RefinedStone/codex-exec-loop/pull/2466#issuecomment-7029574850) | 보드 동작 권한을 개별 변경 승인 영수증으로 확대 | 현재 IssueWriteApproval은 이슈·동작 권한이고 보드 쓰기의 제품 UI/서비스 호출자는 연결되지 않았다. 리뷰도 현 계약의 확정 결함으로 분류하지 않았다. 이 타입을 개별 선택 승인으로 간주하는 동작을 새로 만들지 않는다. | 보드 편집 UI를 연결하기 전에 issue/project/item/field/option/정책 판과 필요 시 기존 값을 묶은 Kernel 승인 객체, 유효한 다른 조합 교체 시 mutation=0 회귀를 구현한다. |
-| [#2466](https://github.com/RefinedStone/codex-exec-loop/pull/2466#issuecomment-7029574850) | 보드 mutation 결과 불명 상태와 자동 재전송 정책 | 현재 연결된 제품 호출자나 자동 재전송 경로가 없다. adapter 오류를 미수정의 증거라고 문서화하지 않는다. 결과 불명 상태·재조회 UI는 보드 쓰기 호출자를 추가할 때 함께 정할 통합 계약이다. | 보드 쓰기 UI/Kernel 연결 시 전송 후 오류를 결과 불명으로 표현하고 새 승인 없는 자동 재시도를 차단한다. |
-| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465#issuecomment-7029574322) | 마스킹 함수에 탐지 완료 프로토콜 추가 | mask_issue_text는 명시적으로 전달된 구간의 치환만 담당한다. 현재 게시 UI의 사용자 구간과 AI 인계의 패턴 탐지는 각 호출자가 제공한다. 이 함수의 성공을 임의의 비밀값 탐지 완료 증명으로 재정의하지 않는다. 실제 AI 탐지 누락은 #2469 후속 PR에서 별도 수정한다. | 자동 탐지기의 부분 완료/실패 상태를 연결하는 기능이 생기면 그 경계에 별도 완료 상태와 보류 계약을 추가한다. |
-| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465#issuecomment-7029574322) | 모든 secret의 복원 가능 정책 강제 금지 | 현재 정책은 secret의 Remove/RestorableMask/UserConfirm을 명시적으로 구분한다. Remove는 사용자 결정으로 약화할 수 없다. 모든 정책을 강제 Remove로 바꾸는 것은 기존 설정 의미를 바꾸는 제품 정책 변경이므로 이번 버그 수정에 포함하지 않는다. | 제품 규칙을 모든 자격 증명 영구 폐기로 확정하면 정책 파서와 처리기의 불변식을 함께 바꾼다. |
-| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465#issuecomment-7029574322) | 추가 입력 크기/구간 수 상한 및 순열 시험 | 추가 한도는 현재 API에 없는 입력 허용 정책이다. 이번 검토에서 좌표 오류가 확인되지 않았고 실제 누락은 별도 회귀로 고쳤다. 근거 없는 수치 제한이나 동일 구현을 반복하는 순열 시험을 추가하지 않는다. | 대표적인 대형 로그와 구간 수의 측정으로 허용 크기·지연 목표를 정하면 경계에서 한도를 검증한다. |
-| [#2412](https://github.com/RefinedStone/codex-exec-loop/pull/2412#issuecomment-7029544279) | client 상한·Node/Python 입력 표현 통일 추가 | 현재 완료 계약은 연결 전 잘못된 0/음수/비정수 수를 거절하는 것이다. 별도 제품 상한과 표현식 허용 정책은 정해지지 않았으며 기존 유효 입력을 축소하는 변경이므로 이번 버그 대응에서 추가하지 않는다. | 운영 가능한 동시 client 상한 또는 플랫폼 간 표현 동등성 요구가 정해질 때 별도 계약·시험으로 진행. |
-| [#2411](https://github.com/RefinedStone/codex-exec-loop/pull/2411#issuecomment-7029543789) | A→B→A·같은 key 재열기 추가 coverage | 현재 generation/mode/recordKey 검사는 모든 async 결과 적용 전에 존재한다. 리뷰도 추가 차단 결함으로 판단하지 않았고 필수 통합 실패는 이미 고쳐졌으므로 별도 순열 시험 확대는 이번 범위에서 하지 않는다. | generation 검사가 없는 새 응답 경로나 재현 가능한 역순 적용이 추가되면 해당 시나리오를 회귀로 고정. |
-| [#2408](https://github.com/RefinedStone/codex-exec-loop/pull/2408#issuecomment-7029542054) | 추가 retry/coalesce/Disabled 순열 시험 | 현재 active_setup correlation을 확인한 완료만 처리하고 실패한 동일 setup_request만 지운다. Disabled 유지와 자동 네트워크 backoff는 다른 계약이다. 새 실패 재현 없이 비차단 순열 coverage를 확대하지 않는다. | 늦은 완료가 새 성공/Disabled를 덮는 재현 또는 자동 재시도 요구가 생길 때. |
-| [#2407](https://github.com/RefinedStone/codex-exec-loop/pull/2407#issuecomment-7029541440) | Unicode 정규화·비ASCII case-fold 추가 정책 | query와 field 비교는 모두 명시된 ASCII 대소문자 정책이다. NFC/NFD 통합이나 비ASCII case-fold는 검색 결과·점수를 바꾸는 기능 확장이며 현재 동일 원문 누락 수정에 필요하지 않다. | 전체 name/preview/path/branch 비교와 점수에 공통 Unicode 정책을 적용하기로 결정할 때. |
-| [#2406](https://github.com/RefinedStone/codex-exec-loop/pull/2406#issuecomment-7029526987) | 지연 show·관계없는 WebContents 추가 주입 시험 | 현재 E2E는 main이 반환한 profileId와 별도 제목/cookie 완료를 기다린다. #2405 통합 browser E2E도 이번 전체 실행에서 통과했다. 제안은 추가 fault permutation이며 현재 실패가 없어 추가 구현을 하지 않는다. | 실제 목표 profile 전에 탐색되는 재현이 생기면 제어된 show 지연 회귀로 고정. |
-| [#2405](https://github.com/RefinedStone/codex-exec-loop/pull/2405#issuecomment-7029526509) | 다중 창 reload·자식 장기 프로세스 종료 정책 확대 | ready/render-process-gone/destroyed는 같은 ownerId 정리 경로를 사용한다. 다른 창 보존·반복 reload 추가 coverage 및 shell 자손 종료 보장은 현재 수정과 다른 확대 계약이며 검증되지 않은 보장으로 쓰지 않는다. | 두 창 소유권 누수 재현 또는 터미널 자손 종료 정책 확정 시 해당 통합 시험 추가. |
-| [#2403](https://github.com/RefinedStone/codex-exec-loop/pull/2403#issuecomment-7029525408) | 다중 Git 명령 실패의 자동 복구·부분 실행 상태 확대 | rename discard의 rm/restore를 원자 트랜잭션으로 만들거나 자동 롤백하는 계약은 기존 Git 동작 범위를 바꾼다. #2377의 작성자 판단과 plan 27 §9.3은 자동 복구 미제공 및 git status 확인을 이미 명시한다. 부분 실행 가능성을 없다고 주장하지 않으며 이번에 자동 복구를 추가하지 않는다. | 제어된 두 번째 명령 실패 시나리오와 사용자 변경을 보존하는 복구 소유권/저널 계약이 정해질 때. |
-| [#2402](https://github.com/RefinedStone/codex-exec-loop/pull/2402#issuecomment-7029537956) | 정상 SIGINT 마지막 로그·모든 producer 종료 시간 추가 시험 | 이번 수정은 main guard의 drop 실행이다. 실제 장기 blocking 회귀가 확인되지 않은 상태에서 모든 producer의 종료 정책까지 확대하지 않는다. flush와 프로세스 전체 종료 기한을 동일 보장으로 주장하지 않는다. | 정상 종료 마지막 로그 누락이나 deadline 초과 재현이 생기면 해당 producer를 대상으로 시험. |
-| [#2400](https://github.com/RefinedStone/codex-exec-loop/pull/2400#issuecomment-7029540097) | guard helper 공통화 및 복제 경로 추가 panic 시험 | 현재 task/admin CRUD/file-sync 모두 catch→원래 owner release→resume_unwind 순서로 정리한다. helper 통합과 추가 경로 시험은 비차단 유지보수 권고이며 새 결함 재현이 없다. abort/강제 종료의 lease 복구까지 이번 unwind 수정에 포함하지 않는다. | 경로 간 의미 차이가 생기거나 owner 해제 누락 재현이 있을 때 공통 계약으로 묶기. |
-| [#2399](https://github.com/RefinedStone/codex-exec-loop/pull/2399#issuecomment-7029539557) | 같은 target의 두 연속 delivery 전체 통합 시험 | 현재 orchestrator/distributor는 공통 integration_worktree_head 분류를 사용하고 Git 조회 실패를 정상 detached로 보지 않는다. 리뷰의 전체 admission 시나리오는 유용하지만 분류 버그 재현은 아니므로 이번 코드 후속 범위에서는 추가하지 않는다. 기존 분류 시험만으로 전체 delivery 검증 완료라고 주장하지 않는다. | queue delivery 통합 하네스에서 clean→dirty/attached/조회 실패 전환을 제어할 계약을 정할 때. |
-| [#2398](https://github.com/RefinedStone/codex-exec-loop/pull/2398#issuecomment-7029537411) | 정상 close·producer 종료 교차 순열 추가 | close enqueue와 writer 종료는 동일 deadline이고 만료 뒤 abort를 await한다. 제안은 정상 flush·종료 경쟁·별도 producer 통합 coverage 확대이며 기존 문제를 재현하는 blocked queue/drop 시험이 있다. 실제 새 실패 없이 종료 정책을 변경하지 않는다. | producer가 session 종료 뒤 남거나 정상 close 전달이 누락되는 재현이 나올 때. |
-| [#2397](https://github.com/RefinedStone/codex-exec-loop/pull/2397#issuecomment-7029536894) | SSE TCP backpressure 전체 연결 종료 기한 확대 | watch/take_until은 SSE body가 poll될 때 종료를 관찰한다. 기존 시험은 실제 꽉 찬 TCP 송신 버퍼까지 보장하지 않는다. 별도 소켓 최종 deadline 추가는 비재현 계약 확대라 이번 패치에 넣지 않으며 모든 비읽기 클라이언트 즉시 종료를 검증했다고 주장하지 않는다. 테스트의 무효한 CRLF replace 제거 제안은 동작에 영향 없는 정리이므로 이번 수정 범위에서 제외한다. | 송신 버퍼 포화와 shutdown을 제어한 재현에서 정해진 최종 종료 기한을 넘으면 서버/연결 deadline 검토. |
-| [#2396](https://github.com/RefinedStone/codex-exec-loop/pull/2396#issuecomment-7029536364) | stale clipboard staged 파일 정리 및 submit 경계 확대 | 현재 stale 결과는 generation/transcript/Ready 검증에서 버리지만 staged 파일 소유권 토큰을 전달하지 않아 파일 정리는 미구현 상태다. 경로만으로 삭제하는 방식은 사용자 원본을 지울 수 있다. staging 생성·참조·폐기 소유권과 동일 스레드 submit 뒤 probe 허용 정책을 함께 정하는 별도 계약으로 두고 이번 변경에 추가하지 않는다. | owned staging handle과 공유 첨부 수명 규약을 도입한 뒤 stale/completion/drop 모두에서 자신이 만든 파일만 정리하는 회귀로 구현. |
-| [#2394](https://github.com/RefinedStone/codex-exec-loop/pull/2394#issuecomment-7029535155) | Ready 전 첨부 제거·실패 후 재제출 추가 순열 | 현재 텍스트와 이미지가 모두 비어야 예약을 취소하고 준비 전에 예약을 소비하므로 반복 Ready 중복 제출은 막는다. 제안된 상태 순열은 비차단 추가 시험이며 현재 재현되지 않은 동작 변경을 넣지 않는다. | 입력 보존/중복 submit에 대한 실제 반례가 나오면 fake port의 제출 횟수로 검증. |
-| [#2393](https://github.com/RefinedStone/codex-exec-loop/pull/2393#issuecomment-7029530271) | 추가 child argv 표현·비UTF-8 순열 시험 | 첫 --부터 OsString을 그대로 넘기고 shell 재분해를 하지 않는 현재 계약이 보존된다. 빈 실행 파일 오류·빈 문자열·두 번째 delimiter·Unix 비UTF-8 추가 coverage는 별도 확장으로 남긴다. | 문자열 변환 계층이 추가되거나 실제 인자 손실 사례가 발생할 때. |
-| [#2392](https://github.com/RefinedStone/codex-exec-loop/pull/2392#issuecomment-7029529736) | rename 후 fsync 실패 의미·프로세스 잠금 대기 정책 | 현재 rename 이후 directory sync 실패는 새 문서 설치 가능성을 가진 Err다. 단계별 fault injection이나 불확실한 결과 상태를 추가하는 것은 별도 장애 계약이며 실제 재현이 없는 권고로 분류한다. 저장되지 않았다고 단정하지 말고 재조회해야 하며 이번 코드에서 원자 롤백을 추가하지 않는다. write_document의 fresh-home 호출자 주석 정리도 비차단 문구 개선으로 이번 수정 범위에서 제외한다. | fsync 단계별 실패 재현과 catalog invalidation/재조회 결과 표현을 함께 설계할 때. |
-| [#2391](https://github.com/RefinedStone/codex-exec-loop/pull/2391#issuecomment-7029529139) | resident mutex를 포함한 사용자 요청 전체 deadline | 현재 한도는 세션 RPC 하나이며 resident mutex 대기나 여러 RPC의 총시간이 아니다. 전체 사용자 요청 120초 보장과 admission 상한은 현재 계약에 없으므로 이번 수정에서 확대하지 않는다. | UI/서비스가 전체 요청 기한을 약속하게 될 때 admission deadline·동시 요청 상한과 함께 구현. |
-| [#2388](https://github.com/RefinedStone/codex-exec-loop/pull/2388#issuecomment-7029527441) | FIFO writer 있음·descriptor 누수 추가 조합 시험 | O_NONBLOCK 뒤 동일 fd 정규파일/identity 검증을 유지하므로 writer 없는 FIFO의 선행 open 정체 원인은 해결된다. 추가 객체 조합과 실패 진단은 비차단 coverage이며 현재 새 반례 없이 범위를 넓히지 않는다. | read API의 다른 객체 처리 변경 또는 fd 누수 재현이 생기면 추가. |
-| [#2387](https://github.com/RefinedStone/codex-exec-loop/pull/2387#issuecomment-7029539034) | 구형 baseline 재-export의 편집본 보존 UX | workspace_root+relative_path 키로 worktree가 분리되며 구형 baseline은 자동 채택하지 않는다. 재-export는 candidate를 덮어쓸 수 있으므로 편집본 보관이 필요하다. dirty candidate 보호와 자동 migration은 별도 전환/복구 정책으로 남기고 이번에 자동 덮어쓰기나 DB 키 회귀 수정에 섞지 않는다. | 재-export 전 백업/복사 안내와 dirty candidate 처리 UX를 별도 완료 기준으로 정할 때. 현재 사용자 편집본은 먼저 보관해야 한다. |
-| [#2386](https://github.com/RefinedStone/codex-exec-loop/pull/2386#issuecomment-7029538449) | 문서 부재·실제 queue 내용 추가 회귀 | 현재 개별 authority snapshot은 한 읽기 트랜잭션이며 호출자 혼합 문제도 별도 수정되었다. 추가 데이터 조합 coverage는 비차단 권고라 이번에 확대하지 않는다. | snapshot schema/port가 바뀌거나 본문·revision 불일치 반례가 발견되면 추가. |
-| [#2385](https://github.com/RefinedStone/codex-exec-loop/pull/2385#issuecomment-7029524796) | ..notes와 symlink/junction의 추가 조합 시험 | lexical 판정은 실제 .. 세그먼트·절대 경로만 거절하며 실제 대상 검증은 gitStatus의 descriptor/realpath 경계다. #2404의 FIFO 보완까지 이미 반영되었다. 새 경로 우회 재현이 없는 추가 조합은 이번 수정에서 확대하지 않는다. | Windows 드라이브/UNC 또는 junction 우회 사례가 확인되면 해당 OS에서 회귀 추가. |
-| [#2384](https://github.com/RefinedStone/codex-exec-loop/pull/2384#issuecomment-7029524310) | 다중 프로세스 잠금 및 browser 전체 설정 대체 정책 변경 | pendingSaves는 고정 userData 경로를 사용하는 단일 main의 요청을 직렬화하며 마지막 제출 전체 설정 우선 정책이 명시되어 있다. 다중 인스턴스/별칭 경로 잠금과 필드별 병합은 별도 제품 계약이므로 현재 저장 경쟁 수정에 추가하지 않는다. | 다중 앱 인스턴스 또는 창별 browser 설정 병합 지원이 결정될 때. |
-| [#2382](https://github.com/RefinedStone/codex-exec-loop/pull/2382#issuecomment-7029523827) | 반복 close·후속 onState·정상 backoff 추가 coverage | close handler는 closed를 daemon 시작과 scheduleReconnect 전에 확인한다. 실제 취소된 handshake 재현을 막는 기존 시험이 있다. 나머지 순열은 비차단 추가 시험이며 새 동작을 넣지 않는다. | 취소 뒤 callback/reconnect가 남는 실제 재현이 생길 때. |
-| [#2381](https://github.com/RefinedStone/codex-exec-loop/pull/2381#issuecomment-7029523272) | unborn index 비교 UI 표기 및 첫 commit 전환 추가 | HEAD 없음에서는 --cached로 index 대 빈 트리를 읽고 HEAD 있는 경로는 그대로다. staged 내용만 보여주는 동작은 기존 완료 계약에 맞는다. 비교 대상 UI 확대와 commit 직후 추가 시나리오는 비차단 권고로 이번 범위에서 제외한다. | 사용자에게 worktree 전체 diff로 잘못 표기되는 구체 경로나 HEAD 전환 오류가 확인되면 진행. |
-| [#2379](https://github.com/RefinedStone/codex-exec-loop/pull/2379#issuecomment-7029522142) | 여러 unread·재연결 오프라인 완료 복원 추가 범위 | 현재 active→inactive 실제 전환에서만 unread를 추가하고 명시적 열기에서 읽음 처리한다. snapshot 재연결로 오프라인 완료까지 복원하는 기능은 현재 계약에 없으며 비차단 조합 시험을 확대하지 않는다. | 오프라인 완료 복원 요구가 정해지거나 현재 읽음 항목 외 항목을 지우는 재현이 생기면 진행. |
+| 원본 | 판단 PR | 제안 | 반려 근거 | 재검토 조건 |
+| --- | --- | --- | --- | --- |
+| [#2466](https://github.com/RefinedStone/codex-exec-loop/pull/2466#issuecomment-7029574850) | [#2509](https://github.com/RefinedStone/codex-exec-loop/pull/2509) | 보드 동작 권한을 개별 변경 승인 영수증으로 확대 | 현재 IssueWriteApproval은 이슈·동작 권한이고 보드 쓰기의 제품 UI/서비스 호출자는 연결되지 않았다. 리뷰도 현 계약의 확정 결함으로 분류하지 않았다. 이 타입을 개별 선택 승인으로 간주하는 동작을 새로 만들지 않는다. | 보드 편집 UI를 연결하기 전에 issue/project/item/field/option/정책 판과 필요 시 기존 값을 묶은 Kernel 승인 객체, 유효한 다른 조합 교체 시 mutation=0 회귀를 구현한다. |
+| [#2466](https://github.com/RefinedStone/codex-exec-loop/pull/2466#issuecomment-7029574850) | [#2509](https://github.com/RefinedStone/codex-exec-loop/pull/2509) | 보드 mutation 결과 불명 상태와 자동 재전송 정책 | 현재 연결된 제품 호출자나 자동 재전송 경로가 없다. adapter 오류를 미수정의 증거라고 문서화하지 않는다. 결과 불명 상태·재조회 UI는 보드 쓰기 호출자를 추가할 때 함께 정할 통합 계약이다. | 보드 쓰기 UI/Kernel 연결 시 전송 후 오류를 결과 불명으로 표현하고 새 승인 없는 자동 재시도를 차단한다. |
+| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465#issuecomment-7029574322) | [#2511](https://github.com/RefinedStone/codex-exec-loop/pull/2511) | 마스킹 함수에 탐지 완료 프로토콜 추가 | mask_issue_text는 명시적으로 전달된 구간의 치환만 담당한다. 현재 게시 UI의 사용자 구간과 AI 인계의 패턴 탐지는 각 호출자가 제공한다. 이 함수의 성공을 임의의 비밀값 탐지 완료 증명으로 재정의하지 않는다. 실제 AI 탐지 누락은 #2469 후속 PR에서 별도 수정한다. | 자동 탐지기의 부분 완료/실패 상태를 연결하는 기능이 생기면 그 경계에 별도 완료 상태와 보류 계약을 추가한다. |
+| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465#issuecomment-7029574322) | [#2511](https://github.com/RefinedStone/codex-exec-loop/pull/2511) | 모든 secret의 복원 가능 정책 강제 금지 | 현재 정책은 secret의 Remove/RestorableMask/UserConfirm을 명시적으로 구분한다. Remove는 사용자 결정으로 약화할 수 없다. 모든 정책을 강제 Remove로 바꾸는 것은 기존 설정 의미를 바꾸는 제품 정책 변경이므로 이번 버그 수정에 포함하지 않는다. | 제품 규칙을 모든 자격 증명 영구 폐기로 확정하면 정책 파서와 처리기의 불변식을 함께 바꾼다. |
+| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465#issuecomment-7029574322) | [#2511](https://github.com/RefinedStone/codex-exec-loop/pull/2511) | 추가 입력 크기/구간 수 상한 및 순열 시험 | 추가 한도는 현재 API에 없는 입력 허용 정책이다. 이번 검토에서 좌표 오류가 확인되지 않았고 실제 누락은 별도 회귀로 고쳤다. 근거 없는 수치 제한이나 동일 구현을 반복하는 순열 시험을 추가하지 않는다. | 대표적인 대형 로그와 구간 수의 측정으로 허용 크기·지연 목표를 정하면 경계에서 한도를 검증한다. |
+| [#2412](https://github.com/RefinedStone/codex-exec-loop/pull/2412#issuecomment-7029544279) | [#2513](https://github.com/RefinedStone/codex-exec-loop/pull/2513) | client 상한·Node/Python 입력 표현 통일 추가 | 현재 완료 계약은 연결 전 잘못된 0/음수/비정수 수를 거절하는 것이다. 별도 제품 상한과 표현식 허용 정책은 정해지지 않았으며 기존 유효 입력을 축소하는 변경이므로 이번 버그 대응에서 추가하지 않는다. | 운영 가능한 동시 client 상한 또는 플랫폼 간 표현 동등성 요구가 정해질 때 별도 계약·시험으로 진행. |
+| [#2411](https://github.com/RefinedStone/codex-exec-loop/pull/2411#issuecomment-7029543789) | [#2515](https://github.com/RefinedStone/codex-exec-loop/pull/2515) | A→B→A·같은 key 재열기 추가 coverage | 현재 generation/mode/recordKey 검사는 모든 async 결과 적용 전에 존재한다. 리뷰도 추가 차단 결함으로 판단하지 않았고 필수 통합 실패는 이미 고쳐졌으므로 별도 순열 시험 확대는 이번 범위에서 하지 않는다. | generation 검사가 없는 새 응답 경로나 재현 가능한 역순 적용이 추가되면 해당 시나리오를 회귀로 고정. |
+| [#2408](https://github.com/RefinedStone/codex-exec-loop/pull/2408#issuecomment-7029542054) | [#2519](https://github.com/RefinedStone/codex-exec-loop/pull/2519) | 추가 retry/coalesce/Disabled 순열 시험 | 현재 active_setup correlation을 확인한 완료만 처리하고 실패한 동일 setup_request만 지운다. Disabled 유지와 자동 네트워크 backoff는 다른 계약이다. 새 실패 재현 없이 비차단 순열 coverage를 확대하지 않는다. | 늦은 완료가 새 성공/Disabled를 덮는 재현 또는 자동 재시도 요구가 생길 때. |
+| [#2407](https://github.com/RefinedStone/codex-exec-loop/pull/2407#issuecomment-7029541440) | [#2521](https://github.com/RefinedStone/codex-exec-loop/pull/2521) | Unicode 정규화·비ASCII case-fold 추가 정책 | query와 field 비교는 모두 명시된 ASCII 대소문자 정책이다. NFC/NFD 통합이나 비ASCII case-fold는 검색 결과·점수를 바꾸는 기능 확장이며 현재 동일 원문 누락 수정에 필요하지 않다. | 전체 name/preview/path/branch 비교와 점수에 공통 Unicode 정책을 적용하기로 결정할 때. |
+| [#2406](https://github.com/RefinedStone/codex-exec-loop/pull/2406#issuecomment-7029526987) | [#2522](https://github.com/RefinedStone/codex-exec-loop/pull/2522) | 지연 show·관계없는 WebContents 추가 주입 시험 | 현재 E2E는 main이 반환한 profileId와 별도 제목/cookie 완료를 기다린다. #2405 통합 browser E2E도 이번 전체 실행에서 통과했다. 제안은 추가 fault permutation이며 현재 실패가 없어 추가 구현을 하지 않는다. | 실제 목표 profile 전에 탐색되는 재현이 생기면 제어된 show 지연 회귀로 고정. |
+| [#2405](https://github.com/RefinedStone/codex-exec-loop/pull/2405#issuecomment-7029526509) | [#2523](https://github.com/RefinedStone/codex-exec-loop/pull/2523) | 다중 창 reload·자식 장기 프로세스 종료 정책 확대 | ready/render-process-gone/destroyed는 같은 ownerId 정리 경로를 사용한다. 다른 창 보존·반복 reload 추가 coverage 및 shell 자손 종료 보장은 현재 수정과 다른 확대 계약이며 검증되지 않은 보장으로 쓰지 않는다. | 두 창 소유권 누수 재현 또는 터미널 자손 종료 정책 확정 시 해당 통합 시험 추가. |
+| [#2403](https://github.com/RefinedStone/codex-exec-loop/pull/2403#issuecomment-7029525408) | [#2524](https://github.com/RefinedStone/codex-exec-loop/pull/2524) | 다중 Git 명령 실패의 자동 복구·부분 실행 상태 확대 | rename discard의 rm/restore를 원자 트랜잭션으로 만들거나 자동 롤백하는 계약은 기존 Git 동작 범위를 바꾼다. #2377의 작성자 판단과 plan 27 §9.3은 자동 복구 미제공 및 git status 확인을 이미 명시한다. 부분 실행 가능성을 없다고 주장하지 않으며 이번에 자동 복구를 추가하지 않는다. | 제어된 두 번째 명령 실패 시나리오와 사용자 변경을 보존하는 복구 소유권/저널 계약이 정해질 때. |
+| [#2402](https://github.com/RefinedStone/codex-exec-loop/pull/2402#issuecomment-7029537956) | [#2525](https://github.com/RefinedStone/codex-exec-loop/pull/2525) | 정상 SIGINT 마지막 로그·모든 producer 종료 시간 추가 시험 | 이번 수정은 main guard의 drop 실행이다. 실제 장기 blocking 회귀가 확인되지 않은 상태에서 모든 producer의 종료 정책까지 확대하지 않는다. flush와 프로세스 전체 종료 기한을 동일 보장으로 주장하지 않는다. | 정상 종료 마지막 로그 누락이나 deadline 초과 재현이 생기면 해당 producer를 대상으로 시험. |
+| [#2400](https://github.com/RefinedStone/codex-exec-loop/pull/2400#issuecomment-7029540097) | [#2526](https://github.com/RefinedStone/codex-exec-loop/pull/2526) | guard helper 공통화 및 복제 경로 추가 panic 시험 | 현재 task/admin CRUD/file-sync 모두 catch→원래 owner release→resume_unwind 순서로 정리한다. helper 통합과 추가 경로 시험은 비차단 유지보수 권고이며 새 결함 재현이 없다. abort/강제 종료의 lease 복구까지 이번 unwind 수정에 포함하지 않는다. | 경로 간 의미 차이가 생기거나 owner 해제 누락 재현이 있을 때 공통 계약으로 묶기. |
+| [#2399](https://github.com/RefinedStone/codex-exec-loop/pull/2399#issuecomment-7029539557) | [#2528](https://github.com/RefinedStone/codex-exec-loop/pull/2528) | 같은 target의 두 연속 delivery 전체 통합 시험 | 현재 orchestrator/distributor는 공통 integration_worktree_head 분류를 사용하고 Git 조회 실패를 정상 detached로 보지 않는다. 리뷰의 전체 admission 시나리오는 유용하지만 분류 버그 재현은 아니므로 이번 코드 후속 범위에서는 추가하지 않는다. 기존 분류 시험만으로 전체 delivery 검증 완료라고 주장하지 않는다. | queue delivery 통합 하네스에서 clean→dirty/attached/조회 실패 전환을 제어할 계약을 정할 때. |
+| [#2398](https://github.com/RefinedStone/codex-exec-loop/pull/2398#issuecomment-7029537411) | [#2529](https://github.com/RefinedStone/codex-exec-loop/pull/2529) | 정상 close·producer 종료 교차 순열 추가 | close enqueue와 writer 종료는 동일 deadline이고 만료 뒤 abort를 await한다. 제안은 정상 flush·종료 경쟁·별도 producer 통합 coverage 확대이며 기존 문제를 재현하는 blocked queue/drop 시험이 있다. 실제 새 실패 없이 종료 정책을 변경하지 않는다. | producer가 session 종료 뒤 남거나 정상 close 전달이 누락되는 재현이 나올 때. |
+| [#2397](https://github.com/RefinedStone/codex-exec-loop/pull/2397#issuecomment-7029536894) | [#2530](https://github.com/RefinedStone/codex-exec-loop/pull/2530) | SSE TCP backpressure 전체 연결 종료 기한 확대 | watch/take_until은 SSE body가 poll될 때 종료를 관찰한다. 기존 시험은 실제 꽉 찬 TCP 송신 버퍼까지 보장하지 않는다. 별도 소켓 최종 deadline 추가는 비재현 계약 확대라 이번 패치에 넣지 않으며 모든 비읽기 클라이언트 즉시 종료를 검증했다고 주장하지 않는다. 테스트의 무효한 CRLF replace 제거 제안은 동작에 영향 없는 정리이므로 이번 수정 범위에서 제외한다. | 송신 버퍼 포화와 shutdown을 제어한 재현에서 정해진 최종 종료 기한을 넘으면 서버/연결 deadline 검토. |
+| [#2396](https://github.com/RefinedStone/codex-exec-loop/pull/2396#issuecomment-7029536364) | [#2506](https://github.com/RefinedStone/codex-exec-loop/pull/2506) | stale clipboard staged 파일 정리 및 submit 경계 확대 | 현재 stale 결과는 generation/transcript/Ready 검증에서 버리지만 staged 파일 소유권 토큰을 전달하지 않아 파일 정리는 미구현 상태다. 경로만으로 삭제하는 방식은 사용자 원본을 지울 수 있다. staging 생성·참조·폐기 소유권과 동일 스레드 submit 뒤 probe 허용 정책을 함께 정하는 별도 계약으로 두고 이번 변경에 추가하지 않는다. | owned staging handle과 공유 첨부 수명 규약을 도입한 뒤 stale/completion/drop 모두에서 자신이 만든 파일만 정리하는 회귀로 구현. |
+| [#2394](https://github.com/RefinedStone/codex-exec-loop/pull/2394#issuecomment-7029535155) | [#2507](https://github.com/RefinedStone/codex-exec-loop/pull/2507) | Ready 전 첨부 제거·실패 후 재제출 추가 순열 | 현재 텍스트와 이미지가 모두 비어야 예약을 취소하고 준비 전에 예약을 소비하므로 반복 Ready 중복 제출은 막는다. 제안된 상태 순열은 비차단 추가 시험이며 현재 재현되지 않은 동작 변경을 넣지 않는다. | 입력 보존/중복 submit에 대한 실제 반례가 나오면 fake port의 제출 횟수로 검증. |
+| [#2393](https://github.com/RefinedStone/codex-exec-loop/pull/2393#issuecomment-7029530271) | [#2508](https://github.com/RefinedStone/codex-exec-loop/pull/2508) | 추가 child argv 표현·비UTF-8 순열 시험 | 첫 --부터 OsString을 그대로 넘기고 shell 재분해를 하지 않는 현재 계약이 보존된다. 빈 실행 파일 오류·빈 문자열·두 번째 delimiter·Unix 비UTF-8 추가 coverage는 별도 확장으로 남긴다. | 문자열 변환 계층이 추가되거나 실제 인자 손실 사례가 발생할 때. |
+| [#2392](https://github.com/RefinedStone/codex-exec-loop/pull/2392#issuecomment-7029529736) | [#2510](https://github.com/RefinedStone/codex-exec-loop/pull/2510) | rename 후 fsync 실패 의미·프로세스 잠금 대기 정책 | 현재 rename 이후 directory sync 실패는 새 문서 설치 가능성을 가진 Err다. 단계별 fault injection이나 불확실한 결과 상태를 추가하는 것은 별도 장애 계약이며 실제 재현이 없는 권고로 분류한다. 저장되지 않았다고 단정하지 말고 재조회해야 하며 이번 코드에서 원자 롤백을 추가하지 않는다. write_document의 fresh-home 호출자 주석 정리도 비차단 문구 개선으로 이번 수정 범위에서 제외한다. | fsync 단계별 실패 재현과 catalog invalidation/재조회 결과 표현을 함께 설계할 때. |
+| [#2391](https://github.com/RefinedStone/codex-exec-loop/pull/2391#issuecomment-7029529139) | [#2512](https://github.com/RefinedStone/codex-exec-loop/pull/2512) | resident mutex를 포함한 사용자 요청 전체 deadline | 현재 한도는 세션 RPC 하나이며 resident mutex 대기나 여러 RPC의 총시간이 아니다. 전체 사용자 요청 120초 보장과 admission 상한은 현재 계약에 없으므로 이번 수정에서 확대하지 않는다. | UI/서비스가 전체 요청 기한을 약속하게 될 때 admission deadline·동시 요청 상한과 함께 구현. |
+| [#2388](https://github.com/RefinedStone/codex-exec-loop/pull/2388#issuecomment-7029527441) | [#2514](https://github.com/RefinedStone/codex-exec-loop/pull/2514) | FIFO writer 있음·descriptor 누수 추가 조합 시험 | O_NONBLOCK 뒤 동일 fd 정규파일/identity 검증을 유지하므로 writer 없는 FIFO의 선행 open 정체 원인은 해결된다. 추가 객체 조합과 실패 진단은 비차단 coverage이며 현재 새 반례 없이 범위를 넓히지 않는다. | read API의 다른 객체 처리 변경 또는 fd 누수 재현이 생기면 추가. |
+| [#2387](https://github.com/RefinedStone/codex-exec-loop/pull/2387#issuecomment-7029539034) | [#2516](https://github.com/RefinedStone/codex-exec-loop/pull/2516) | 구형 baseline 재-export의 편집본 보존 UX | workspace_root+relative_path 키로 worktree가 분리되며 구형 baseline은 자동 채택하지 않는다. 재-export는 candidate를 덮어쓸 수 있으므로 편집본 보관이 필요하다. dirty candidate 보호와 자동 migration은 별도 전환/복구 정책으로 남기고 이번에 자동 덮어쓰기나 DB 키 회귀 수정에 섞지 않는다. | 재-export 전 백업/복사 안내와 dirty candidate 처리 UX를 별도 완료 기준으로 정할 때. 현재 사용자 편집본은 먼저 보관해야 한다. |
+| [#2386](https://github.com/RefinedStone/codex-exec-loop/pull/2386#issuecomment-7029538449) | [#2517](https://github.com/RefinedStone/codex-exec-loop/pull/2517) | 문서 부재·실제 queue 내용 추가 회귀 | 현재 개별 authority snapshot은 한 읽기 트랜잭션이며 호출자 혼합 문제도 별도 수정되었다. 추가 데이터 조합 coverage는 비차단 권고라 이번에 확대하지 않는다. | snapshot schema/port가 바뀌거나 본문·revision 불일치 반례가 발견되면 추가. |
+| [#2385](https://github.com/RefinedStone/codex-exec-loop/pull/2385#issuecomment-7029524796) | [#2518](https://github.com/RefinedStone/codex-exec-loop/pull/2518) | ..notes와 symlink/junction의 추가 조합 시험 | lexical 판정은 실제 .. 세그먼트·절대 경로만 거절하며 실제 대상 검증은 gitStatus의 descriptor/realpath 경계다. #2404의 FIFO 보완까지 이미 반영되었다. 새 경로 우회 재현이 없는 추가 조합은 이번 수정에서 확대하지 않는다. | Windows 드라이브/UNC 또는 junction 우회 사례가 확인되면 해당 OS에서 회귀 추가. |
+| [#2384](https://github.com/RefinedStone/codex-exec-loop/pull/2384#issuecomment-7029524310) | [#2520](https://github.com/RefinedStone/codex-exec-loop/pull/2520) | 다중 프로세스 잠금 및 browser 전체 설정 대체 정책 변경 | pendingSaves는 고정 userData 경로를 사용하는 단일 main의 요청을 직렬화하며 마지막 제출 전체 설정 우선 정책이 명시되어 있다. 다중 인스턴스/별칭 경로 잠금과 필드별 병합은 별도 제품 계약이므로 현재 저장 경쟁 수정에 추가하지 않는다. | 다중 앱 인스턴스 또는 창별 browser 설정 병합 지원이 결정될 때. |
+| [#2382](https://github.com/RefinedStone/codex-exec-loop/pull/2382#issuecomment-7029523827) | [#2527](https://github.com/RefinedStone/codex-exec-loop/pull/2527) | 반복 close·후속 onState·정상 backoff 추가 coverage | close handler는 closed를 daemon 시작과 scheduleReconnect 전에 확인한다. 실제 취소된 handshake 재현을 막는 기존 시험이 있다. 나머지 순열은 비차단 추가 시험이며 새 동작을 넣지 않는다. | 취소 뒤 callback/reconnect가 남는 실제 재현이 생길 때. |
+| [#2381](https://github.com/RefinedStone/codex-exec-loop/pull/2381#issuecomment-7029523272) | [#2531](https://github.com/RefinedStone/codex-exec-loop/pull/2531) | unborn index 비교 UI 표기 및 첫 commit 전환 추가 | HEAD 없음에서는 --cached로 index 대 빈 트리를 읽고 HEAD 있는 경로는 그대로다. staged 내용만 보여주는 동작은 기존 완료 계약에 맞는다. 비교 대상 UI 확대와 commit 직후 추가 시나리오는 비차단 권고로 이번 범위에서 제외한다. | 사용자에게 worktree 전체 diff로 잘못 표기되는 구체 경로나 HEAD 전환 오류가 확인되면 진행. |
+| [#2379](https://github.com/RefinedStone/codex-exec-loop/pull/2379#issuecomment-7029522142) | [#2532](https://github.com/RefinedStone/codex-exec-loop/pull/2532) | 여러 unread·재연결 오프라인 완료 복원 추가 범위 | 현재 active→inactive 실제 전환에서만 unread를 추가하고 명시적 열기에서 읽음 처리한다. snapshot 재연결로 오프라인 완료까지 복원하는 기능은 현재 계약에 없으며 비차단 조합 시험을 확대하지 않는다. | 오프라인 완료 복원 요구가 정해지거나 현재 읽음 항목 외 항목을 지우는 재현이 생기면 진행. |
 
 ## 전체 대상 목록
 
-| 원본 PR | 머지 시각(KST) | 판단 | 후속 PR |
+| 원본 PR | 머지 시각(KST) | 판단 | 수정/판단 PR |
 | --- | --- | --- | --- |
 | [#2482](https://github.com/RefinedStone/codex-exec-loop/pull/2482) fix(runtime): release kernel locks and retain completion observations | 2026-11-20 16:00:14 | 조치 대상 지적 없음 | — |
 | [#2480](https://github.com/RefinedStone/codex-exec-loop/pull/2480) WIP | 2026-11-20 14:34:30 | 수용·후속 PR 제출 | [#2486](https://github.com/RefinedStone/codex-exec-loop/pull/2486) |
@@ -118,8 +120,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 | [#2469](https://github.com/RefinedStone/codex-exec-loop/pull/2469) WIP | 2026-11-20 13:14:34 | 수용·후속 PR 제출 | [#2497](https://github.com/RefinedStone/codex-exec-loop/pull/2497) |
 | [#2468](https://github.com/RefinedStone/codex-exec-loop/pull/2468) WIP | 2026-11-20 12:10:03 | 수용·후속 PR 제출 | [#2486](https://github.com/RefinedStone/codex-exec-loop/pull/2486), [#2489](https://github.com/RefinedStone/codex-exec-loop/pull/2489) |
 | [#2467](https://github.com/RefinedStone/codex-exec-loop/pull/2467) WIP | 2026-11-20 13:14:03 | 수용·후속 PR 제출 | [#2503](https://github.com/RefinedStone/codex-exec-loop/pull/2503) |
-| [#2466](https://github.com/RefinedStone/codex-exec-loop/pull/2466) WIP | 2026-11-20 12:25:04 | 반려·판단 문서 | — |
-| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465) WIP | 2026-11-20 12:46:25 | 반려·판단 문서 | — |
+| [#2466](https://github.com/RefinedStone/codex-exec-loop/pull/2466) WIP | 2026-11-20 12:25:04 | 반려·판단 문서 | [#2509](https://github.com/RefinedStone/codex-exec-loop/pull/2509) |
+| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465) WIP | 2026-11-20 12:46:25 | 반려·판단 문서 | [#2511](https://github.com/RefinedStone/codex-exec-loop/pull/2511) |
 | [#2464](https://github.com/RefinedStone/codex-exec-loop/pull/2464) WIP | 2026-11-20 12:33:12 | 수용·후속 PR 제출 | [#2488](https://github.com/RefinedStone/codex-exec-loop/pull/2488), [#2503](https://github.com/RefinedStone/codex-exec-loop/pull/2503) |
 | [#2463](https://github.com/RefinedStone/codex-exec-loop/pull/2463) WIP | 2026-11-20 11:57:55 | 수용·후속 PR 제출 | [#2500](https://github.com/RefinedStone/codex-exec-loop/pull/2500) |
 | [#2462](https://github.com/RefinedStone/codex-exec-loop/pull/2462) WIP | 2026-11-20 11:45:50 | 조치 대상 지적 없음 | — |
@@ -148,39 +150,39 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 | [#2438](https://github.com/RefinedStone/codex-exec-loop/pull/2438) fix(kernel): keep a full stop for background turns that start later (#2304) | 2026-11-20 09:01:12 | 조치 대상 지적 없음 | — |
 | [#2437](https://github.com/RefinedStone/codex-exec-loop/pull/2437) fix(kernel): bound the recorder backlog and expose its health (#2300, #2301) | 2026-11-20 08:46:52 | 조치 대상 지적 없음 | — |
 | [#2413](https://github.com/RefinedStone/codex-exec-loop/pull/2413) fix(ci): compile Rust-embedded Admin Askama templates in PR gate (#2315) | 2026-11-20 15:21:15 | 수용·후속 PR 제출 | [#2492](https://github.com/RefinedStone/codex-exec-loop/pull/2492) |
-| [#2412](https://github.com/RefinedStone/codex-exec-loop/pull/2412) fix(validation): reject invalid proxy client counts before any connections (#2309) | 2026-11-20 15:37:13 | 반려·판단 문서 | — |
-| [#2411](https://github.com/RefinedStone/codex-exec-loop/pull/2411) fix(admin): reject stale async detail responses across drawer transitions (#2305) | 2026-11-20 15:37:05 | 반려·판단 문서 | — |
+| [#2412](https://github.com/RefinedStone/codex-exec-loop/pull/2412) fix(validation): reject invalid proxy client counts before any connections (#2309) | 2026-11-20 15:37:13 | 반려·판단 문서 | [#2513](https://github.com/RefinedStone/codex-exec-loop/pull/2513) |
+| [#2411](https://github.com/RefinedStone/codex-exec-loop/pull/2411) fix(admin): reject stale async detail responses across drawer transitions (#2305) | 2026-11-20 15:37:05 | 반려·판단 문서 | [#2515](https://github.com/RefinedStone/codex-exec-loop/pull/2515) |
 | [#2410](https://github.com/RefinedStone/codex-exec-loop/pull/2410) fix(admin): preserve evidence history drawer across refreshes (#2306) | 2026-11-20 15:36:57 | 기대응 | — |
 | [#2409](https://github.com/RefinedStone/codex-exec-loop/pull/2409) test(observer): use controlled read barriers instead of polling snapshots (#2299) | 2026-11-20 15:40:16 | 기대응 | — |
-| [#2408](https://github.com/RefinedStone/codex-exec-loop/pull/2408) fix(polling): retry identical GitHub review setup after failure (#2297) | 2026-11-20 15:21:11 | 반려·판단 문서 | — |
-| [#2407](https://github.com/RefinedStone/codex-exec-loop/pull/2407) fix(search): preserve non-ASCII characters in session search tokens (#2296) | 2026-11-20 15:21:06 | 반려·판단 문서 | — |
-| [#2406](https://github.com/RefinedStone/codex-exec-loop/pull/2406) test(desktop): wait for applied browser profile before navigating (#2294) | 2026-11-20 15:21:00 | 반려·판단 문서 | — |
-| [#2405](https://github.com/RefinedStone/codex-exec-loop/pull/2405) fix(desktop): release native PTYs and browser views on renderer reload (#2293) | 2026-11-20 15:20:55 | 반려·판단 문서 | — |
+| [#2408](https://github.com/RefinedStone/codex-exec-loop/pull/2408) fix(polling): retry identical GitHub review setup after failure (#2297) | 2026-11-20 15:21:11 | 반려·판단 문서 | [#2519](https://github.com/RefinedStone/codex-exec-loop/pull/2519) |
+| [#2407](https://github.com/RefinedStone/codex-exec-loop/pull/2407) fix(search): preserve non-ASCII characters in session search tokens (#2296) | 2026-11-20 15:21:06 | 반려·판단 문서 | [#2521](https://github.com/RefinedStone/codex-exec-loop/pull/2521) |
+| [#2406](https://github.com/RefinedStone/codex-exec-loop/pull/2406) test(desktop): wait for applied browser profile before navigating (#2294) | 2026-11-20 15:21:00 | 반려·판단 문서 | [#2522](https://github.com/RefinedStone/codex-exec-loop/pull/2522) |
+| [#2405](https://github.com/RefinedStone/codex-exec-loop/pull/2405) fix(desktop): release native PTYs and browser views on renderer reload (#2293) | 2026-11-20 15:20:55 | 반려·판단 문서 | [#2523](https://github.com/RefinedStone/codex-exec-loop/pull/2523) |
 | [#2404](https://github.com/RefinedStone/codex-exec-loop/pull/2404) fix(desktop): block external symlink targets in untracked diff (#2292) | 2026-11-20 15:58:06 | 기대응 | — |
-| [#2403](https://github.com/RefinedStone/codex-exec-loop/pull/2403) fix(desktop): revalidate discard plans after confirmation (#2291) | 2026-11-20 15:35:49 | 반려·판단 문서 | — |
-| [#2402](https://github.com/RefinedStone/codex-exec-loop/pull/2402) fix(diagnostics): flush standalone binary trace logs before exit (#2290) | 2026-11-20 15:47:36 | 반려·판단 문서 | — |
+| [#2403](https://github.com/RefinedStone/codex-exec-loop/pull/2403) fix(desktop): revalidate discard plans after confirmation (#2291) | 2026-11-20 15:35:49 | 반려·판단 문서 | [#2524](https://github.com/RefinedStone/codex-exec-loop/pull/2524) |
+| [#2402](https://github.com/RefinedStone/codex-exec-loop/pull/2402) fix(diagnostics): flush standalone binary trace logs before exit (#2290) | 2026-11-20 15:47:36 | 반려·판단 문서 | [#2525](https://github.com/RefinedStone/codex-exec-loop/pull/2525) |
 | [#2401](https://github.com/RefinedStone/codex-exec-loop/pull/2401) fix(planning): preserve newer accepted authority during post-turn reconciliation (#2287) | 2026-11-20 15:54:08 | 기대응 | — |
-| [#2400](https://github.com/RefinedStone/codex-exec-loop/pull/2400) fix(planning): release task/admin/file-sync mutation guards on panic (#2289) | 2026-11-20 15:20:49 | 반려·판단 문서 | — |
-| [#2399](https://github.com/RefinedStone/codex-exec-loop/pull/2399) fix(parallel): recognize detached integration HEAD as ready (#2286) | 2026-11-20 15:20:43 | 반려·판단 문서 | — |
-| [#2398](https://github.com/RefinedStone/codex-exec-loop/pull/2398) fix(gateway): bound close enqueue and abort stalled client writer (#2282) | 2026-11-20 15:20:38 | 반려·판단 문서 | — |
-| [#2397](https://github.com/RefinedStone/codex-exec-loop/pull/2397) fix(admin): terminate live SSE streams during graceful shutdown (#2283) | 2026-11-20 15:20:32 | 반려·판단 문서 | — |
-| [#2396](https://github.com/RefinedStone/codex-exec-loop/pull/2396) fix(tui): discard stale clipboard probes when composer identity changes (#2280) | 2026-11-20 15:20:27 | 반려·판단 문서 | — |
+| [#2400](https://github.com/RefinedStone/codex-exec-loop/pull/2400) fix(planning): release task/admin/file-sync mutation guards on panic (#2289) | 2026-11-20 15:20:49 | 반려·판단 문서 | [#2526](https://github.com/RefinedStone/codex-exec-loop/pull/2526) |
+| [#2399](https://github.com/RefinedStone/codex-exec-loop/pull/2399) fix(parallel): recognize detached integration HEAD as ready (#2286) | 2026-11-20 15:20:43 | 반려·판단 문서 | [#2528](https://github.com/RefinedStone/codex-exec-loop/pull/2528) |
+| [#2398](https://github.com/RefinedStone/codex-exec-loop/pull/2398) fix(gateway): bound close enqueue and abort stalled client writer (#2282) | 2026-11-20 15:20:38 | 반려·판단 문서 | [#2529](https://github.com/RefinedStone/codex-exec-loop/pull/2529) |
+| [#2397](https://github.com/RefinedStone/codex-exec-loop/pull/2397) fix(admin): terminate live SSE streams during graceful shutdown (#2283) | 2026-11-20 15:20:32 | 반려·판단 문서 | [#2530](https://github.com/RefinedStone/codex-exec-loop/pull/2530) |
+| [#2396](https://github.com/RefinedStone/codex-exec-loop/pull/2396) fix(tui): discard stale clipboard probes when composer identity changes (#2280) | 2026-11-20 15:20:27 | 반려·판단 문서 | [#2506](https://github.com/RefinedStone/codex-exec-loop/pull/2506) |
 | [#2395](https://github.com/RefinedStone/codex-exec-loop/pull/2395) fix(gateway): probe stale upstream with absolute trusted ps and deadline (#2279) | 2026-11-20 15:52:10 | 기대응 | — |
-| [#2394](https://github.com/RefinedStone/codex-exec-loop/pull/2394) fix(tui): replay queued image-only startup submissions once (#2284) | 2026-11-20 15:20:22 | 반려·판단 문서 | — |
-| [#2393](https://github.com/RefinedStone/codex-exec-loop/pull/2393) fix(cli): preserve MCP child flags after -- (#2281) | 2026-11-20 15:20:17 | 반려·판단 문서 | — |
-| [#2392](https://github.com/RefinedStone/codex-exec-loop/pull/2392) fix(mcp): serialize and atomically persist hub registry updates (#2278) | 2026-11-20 15:20:11 | 반려·판단 문서 | — |
-| [#2391](https://github.com/RefinedStone/codex-exec-loop/pull/2391) fix(mcp): apply one deadline to hub writes and response loops (#2277) | 2026-11-20 16:15:20 | 반려·판단 문서 | — |
+| [#2394](https://github.com/RefinedStone/codex-exec-loop/pull/2394) fix(tui): replay queued image-only startup submissions once (#2284) | 2026-11-20 15:20:22 | 반려·판단 문서 | [#2507](https://github.com/RefinedStone/codex-exec-loop/pull/2507) |
+| [#2393](https://github.com/RefinedStone/codex-exec-loop/pull/2393) fix(cli): preserve MCP child flags after -- (#2281) | 2026-11-20 15:20:17 | 반려·판단 문서 | [#2508](https://github.com/RefinedStone/codex-exec-loop/pull/2508) |
+| [#2392](https://github.com/RefinedStone/codex-exec-loop/pull/2392) fix(mcp): serialize and atomically persist hub registry updates (#2278) | 2026-11-20 15:20:11 | 반려·판단 문서 | [#2510](https://github.com/RefinedStone/codex-exec-loop/pull/2510) |
+| [#2391](https://github.com/RefinedStone/codex-exec-loop/pull/2391) fix(mcp): apply one deadline to hub writes and response loops (#2277) | 2026-11-20 16:15:20 | 반려·판단 문서 | [#2512](https://github.com/RefinedStone/codex-exec-loop/pull/2512) |
 | [#2390](https://github.com/RefinedStone/codex-exec-loop/pull/2390) fix(mcp): bound hub app-server output lines and pending queue (#2276) | 2026-11-20 16:38:31 | 기대응 | — |
 | [#2389](https://github.com/RefinedStone/codex-exec-loop/pull/2389) fix(mcp): scrub inherited credentials for hub app-server processes (#2275) | 2026-11-20 15:54:16 | 기대응 | — |
-| [#2388](https://github.com/RefinedStone/codex-exec-loop/pull/2388) fix(filesystem): reject writerless FIFOs without hanging on open (#2274) | 2026-11-20 15:20:06 | 반려·판단 문서 | — |
-| [#2387](https://github.com/RefinedStone/codex-exec-loop/pull/2387) fix(planning): isolate export baselines for linked worktrees (#2273) | 2026-11-20 15:20:00 | 반려·판단 문서 | — |
-| [#2386](https://github.com/RefinedStone/codex-exec-loop/pull/2386) fix(planning): keep task/direction authority bodies and revisions atomic (#2272) | 2026-11-20 15:19:52 | 반려·판단 문서 | — |
-| [#2385](https://github.com/RefinedStone/codex-exec-loop/pull/2385) fix(desktop): allow legitimate ..-prefixed filenames without traversal (#2271) | 2026-11-20 15:19:47 | 반려·판단 문서 | — |
-| [#2384](https://github.com/RefinedStone/codex-exec-loop/pull/2384) fix(desktop): serialize concurrent browser settings writes (#2270) | 2026-11-20 15:19:41 | 반려·판단 문서 | — |
-| [#2382](https://github.com/RefinedStone/codex-exec-loop/pull/2382) fix(desktop): stop cancelled handshakes from starting gateway daemons (#2269) | 2026-11-20 15:19:36 | 반려·판단 문서 | — |
-| [#2381](https://github.com/RefinedStone/codex-exec-loop/pull/2381) fix(desktop): support staged diff before initial commit (#2268) | 2026-11-20 15:19:31 | 반려·판단 문서 | — |
+| [#2388](https://github.com/RefinedStone/codex-exec-loop/pull/2388) fix(filesystem): reject writerless FIFOs without hanging on open (#2274) | 2026-11-20 15:20:06 | 반려·판단 문서 | [#2514](https://github.com/RefinedStone/codex-exec-loop/pull/2514) |
+| [#2387](https://github.com/RefinedStone/codex-exec-loop/pull/2387) fix(planning): isolate export baselines for linked worktrees (#2273) | 2026-11-20 15:20:00 | 반려·판단 문서 | [#2516](https://github.com/RefinedStone/codex-exec-loop/pull/2516) |
+| [#2386](https://github.com/RefinedStone/codex-exec-loop/pull/2386) fix(planning): keep task/direction authority bodies and revisions atomic (#2272) | 2026-11-20 15:19:52 | 반려·판단 문서 | [#2517](https://github.com/RefinedStone/codex-exec-loop/pull/2517) |
+| [#2385](https://github.com/RefinedStone/codex-exec-loop/pull/2385) fix(desktop): allow legitimate ..-prefixed filenames without traversal (#2271) | 2026-11-20 15:19:47 | 반려·판단 문서 | [#2518](https://github.com/RefinedStone/codex-exec-loop/pull/2518) |
+| [#2384](https://github.com/RefinedStone/codex-exec-loop/pull/2384) fix(desktop): serialize concurrent browser settings writes (#2270) | 2026-11-20 15:19:41 | 반려·판단 문서 | [#2520](https://github.com/RefinedStone/codex-exec-loop/pull/2520) |
+| [#2382](https://github.com/RefinedStone/codex-exec-loop/pull/2382) fix(desktop): stop cancelled handshakes from starting gateway daemons (#2269) | 2026-11-20 15:19:36 | 반려·판단 문서 | [#2527](https://github.com/RefinedStone/codex-exec-loop/pull/2527) |
+| [#2381](https://github.com/RefinedStone/codex-exec-loop/pull/2381) fix(desktop): support staged diff before initial commit (#2268) | 2026-11-20 15:19:31 | 반려·판단 문서 | [#2531](https://github.com/RefinedStone/codex-exec-loop/pull/2531) |
 | [#2380](https://github.com/RefinedStone/codex-exec-loop/pull/2380) fix(desktop): discard stale A → B → A resume results (#2267) | 2026-11-20 15:44:03 | 기대응 | — |
-| [#2379](https://github.com/RefinedStone/codex-exec-loop/pull/2379) fix(desktop): preserve unread status on duplicate inactive events (#2266) | 2026-11-20 15:18:40 | 반려·판단 문서 | — |
+| [#2379](https://github.com/RefinedStone/codex-exec-loop/pull/2379) fix(desktop): preserve unread status on duplicate inactive events (#2266) | 2026-11-20 15:18:40 | 반려·판단 문서 | [#2532](https://github.com/RefinedStone/codex-exec-loop/pull/2532) |
 | [#2377](https://github.com/RefinedStone/codex-exec-loop/pull/2377) feat(git): add the operation engine of plan 27 G3 | 2026-11-19 06:47:49 | 기대응 | — |
 | [#2376](https://github.com/RefinedStone/codex-exec-loop/pull/2376) fix(desktop): show an interim dot message while the dot still works | 2026-11-20 15:40:30 | 기대응 | — |
 | [#2375](https://github.com/RefinedStone/codex-exec-loop/pull/2375) fix(desktop): show the query and the page of a web search step | 2026-11-19 04:35:35 | 조치 대상 지적 없음 | — |
@@ -326,18 +328,18 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 판단: **수용** (후속 PR 제출).
 - 리뷰: [4638557725](https://github.com/RefinedStone/codex-exec-loop/pull/2474#discussion_r4638557725).
 - 근거: write_response_mismatch를 일지에 보존해 재시작·재조회만으로 Confirmed로 전이하지 않게 한다.
-- 코드: [src/domain/issue_publish_intent.rs](https://github.com/RefinedStone/codex-exec-loop/blob/026c2e1212c26c7f7c41b2afd7af5e441a7dab10/src/domain/issue_publish_intent.rs), [src/application/service/issue_publish_journal.rs](https://github.com/RefinedStone/codex-exec-loop/blob/026c2e1212c26c7f7c41b2afd7af5e441a7dab10/src/application/service/issue_publish_journal.rs).
+- 코드: [src/domain/issue_publish_intent.rs](https://github.com/RefinedStone/codex-exec-loop/blob/5e5859fe21287ddbf978a9da6a530297ccf03023/src/domain/issue_publish_intent.rs), [src/application/service/issue_publish_journal.rs](https://github.com/RefinedStone/codex-exec-loop/blob/5e5859fe21287ddbf978a9da6a530297ccf03023/src/application/service/issue_publish_journal.rs).
 - 후속 PR: [#2502](https://github.com/RefinedStone/codex-exec-loop/pull/2502).
-- 검증: journal 15 + domain 4 + restore 13 passed; combined Windows Rust gate passed; git diff --check passed.
+- 검증: journal 19 + domain 4 + restore 13 passed; combined Windows Rust gate passed; git diff --check passed.
 
 #### 동일 공유본 해시의 서로 다른 복원 매핑 충돌
 
 - 판단: **수용** (후속 PR 제출).
 - 리뷰: [4638557730](https://github.com/RefinedStone/codex-exec-loop/pull/2474#discussion_r4638557730).
 - 근거: intent별 복원 판과 게시 순서를 사용한다. 더 최신 전송/확인 포기 기록 또는 순서를 모르는 복수 legacy 기록이 있으면 과거 finalize를 거절한다.
-- 코드: [src/domain/issue_publish_intent.rs](https://github.com/RefinedStone/codex-exec-loop/blob/026c2e1212c26c7f7c41b2afd7af5e441a7dab10/src/domain/issue_publish_intent.rs), [src/application/service/issue_publish_journal.rs](https://github.com/RefinedStone/codex-exec-loop/blob/026c2e1212c26c7f7c41b2afd7af5e441a7dab10/src/application/service/issue_publish_journal.rs), [src/application/service/evidence_vault_restore.rs](https://github.com/RefinedStone/codex-exec-loop/blob/026c2e1212c26c7f7c41b2afd7af5e441a7dab10/src/application/service/evidence_vault_restore.rs).
+- 코드: [src/domain/issue_publish_intent.rs](https://github.com/RefinedStone/codex-exec-loop/blob/5e5859fe21287ddbf978a9da6a530297ccf03023/src/domain/issue_publish_intent.rs), [src/application/service/issue_publish_journal.rs](https://github.com/RefinedStone/codex-exec-loop/blob/5e5859fe21287ddbf978a9da6a530297ccf03023/src/application/service/issue_publish_journal.rs), [src/application/service/evidence_vault_restore.rs](https://github.com/RefinedStone/codex-exec-loop/blob/5e5859fe21287ddbf978a9da6a530297ccf03023/src/application/service/evidence_vault_restore.rs).
 - 후속 PR: [#2502](https://github.com/RefinedStone/codex-exec-loop/pull/2502).
-- 검증: journal 15 + domain 4 + restore 13 passed; combined Windows Rust gate passed; git diff --check passed.
+- 검증: journal 19 + domain 4 + restore 13 passed; combined Windows Rust gate passed; git diff --check passed.
 
 ### PR #2473
 
@@ -470,6 +472,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2466
 
+반려 판단 PR: [#2509](https://github.com/RefinedStone/codex-exec-loop/pull/2509).
+
 #### 보드 동작 권한을 개별 변경 승인 영수증으로 확대
 
 - 판단: **반려** (반려).
@@ -489,6 +493,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 코드 및 기존 회귀 계약 대조.
 
 ### PR #2465
+
+반려 판단 PR: [#2511](https://github.com/RefinedStone/codex-exec-loop/pull/2511).
 
 #### 마스킹 함수에 탐지 완료 프로토콜 추가
 
@@ -673,6 +679,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2412
 
+반려 판단 PR: [#2513](https://github.com/RefinedStone/codex-exec-loop/pull/2513).
+
 #### 실행 가능한 docs 도구의 CI 범위 및 시험 등록
 
 - 판단: **기대응** (기대응).
@@ -692,6 +700,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2411
+
+반려 판단 PR: [#2515](https://github.com/RefinedStone/codex-exec-loop/pull/2515).
 
 #### #2410 통합 fixture와 Node gate 등록
 
@@ -744,6 +754,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2408
 
+반려 판단 PR: [#2519](https://github.com/RefinedStone/codex-exec-loop/pull/2519).
+
 #### 추가 retry/coalesce/Disabled 순열 시험
 
 - 판단: **반려** (반려).
@@ -754,6 +766,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2407
+
+반려 판단 PR: [#2521](https://github.com/RefinedStone/codex-exec-loop/pull/2521).
 
 #### Unicode 정규화·비ASCII case-fold 추가 정책
 
@@ -766,6 +780,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2406
 
+반려 판단 PR: [#2522](https://github.com/RefinedStone/codex-exec-loop/pull/2522).
+
 #### 지연 show·관계없는 WebContents 추가 주입 시험
 
 - 판단: **반려** (반려).
@@ -776,6 +792,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2405
+
+반려 판단 PR: [#2523](https://github.com/RefinedStone/codex-exec-loop/pull/2523).
 
 #### 다중 창 reload·자식 장기 프로세스 종료 정책 확대
 
@@ -798,6 +816,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2403
+
+반려 판단 PR: [#2524](https://github.com/RefinedStone/codex-exec-loop/pull/2524).
 
 #### 이전 경로 존재 검사를 이름 변경 discard에만 적용하십시오
 
@@ -827,6 +847,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2402
+
+반려 판단 PR: [#2525](https://github.com/RefinedStone/codex-exec-loop/pull/2525).
 
 #### ExitCode 변경 후 부정확한 runtime 소멸 주석
 
@@ -859,6 +881,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2400
 
+반려 판단 PR: [#2526](https://github.com/RefinedStone/codex-exec-loop/pull/2526).
+
 #### guard helper 공통화 및 복제 경로 추가 panic 시험
 
 - 판단: **반려** (반려).
@@ -869,6 +893,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2399
+
+반려 판단 PR: [#2528](https://github.com/RefinedStone/codex-exec-loop/pull/2528).
 
 #### 같은 target의 두 연속 delivery 전체 통합 시험
 
@@ -881,6 +907,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2398
 
+반려 판단 PR: [#2529](https://github.com/RefinedStone/codex-exec-loop/pull/2529).
+
 #### 정상 close·producer 종료 교차 순열 추가
 
 - 판단: **반려** (반려).
@@ -892,6 +920,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2397
 
+반려 판단 PR: [#2530](https://github.com/RefinedStone/codex-exec-loop/pull/2530).
+
 #### SSE TCP backpressure 전체 연결 종료 기한 확대
 
 - 판단: **반려** (반려).
@@ -902,6 +932,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2396
+
+반려 판단 PR: [#2506](https://github.com/RefinedStone/codex-exec-loop/pull/2506).
 
 #### stale clipboard staged 파일 정리 및 submit 경계 확대
 
@@ -934,6 +966,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2394
 
+반려 판단 PR: [#2507](https://github.com/RefinedStone/codex-exec-loop/pull/2507).
+
 #### Ready 전 첨부 제거·실패 후 재제출 추가 순열
 
 - 판단: **반려** (반려).
@@ -945,6 +979,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2393
 
+반려 판단 PR: [#2508](https://github.com/RefinedStone/codex-exec-loop/pull/2508).
+
 #### 추가 child argv 표현·비UTF-8 순열 시험
 
 - 판단: **반려** (반려).
@@ -955,6 +991,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2392
+
+반려 판단 PR: [#2510](https://github.com/RefinedStone/codex-exec-loop/pull/2510).
 
 #### 직접 저장하는 테스트 호출부에서도 디렉터리를 생성하세요
 
@@ -984,6 +1022,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2391
+
+반려 판단 PR: [#2512](https://github.com/RefinedStone/codex-exec-loop/pull/2512).
 
 #### #2390 통합의 stdin 정체·stdout burst·재연결 회귀
 
@@ -1036,6 +1076,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2388
 
+반려 판단 PR: [#2514](https://github.com/RefinedStone/codex-exec-loop/pull/2514).
+
 #### FIFO writer 있음·descriptor 누수 추가 조합 시험
 
 - 판단: **반려** (반려).
@@ -1047,6 +1089,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2387
 
+반려 판단 PR: [#2516](https://github.com/RefinedStone/codex-exec-loop/pull/2516).
+
 #### 구형 baseline 재-export의 편집본 보존 UX
 
 - 판단: **반려** (반려).
@@ -1057,6 +1101,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2386
+
+반려 판단 PR: [#2517](https://github.com/RefinedStone/codex-exec-loop/pull/2517).
 
 #### 호출자 조합 execution snapshot 일관성
 
@@ -1078,6 +1124,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2385
 
+반려 판단 PR: [#2518](https://github.com/RefinedStone/codex-exec-loop/pull/2518).
+
 #### ..notes와 symlink/junction의 추가 조합 시험
 
 - 판단: **반려** (반려).
@@ -1088,6 +1136,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2384
+
+반려 판단 PR: [#2520](https://github.com/RefinedStone/codex-exec-loop/pull/2520).
 
 #### 다중 프로세스 잠금 및 browser 전체 설정 대체 정책 변경
 
@@ -1100,6 +1150,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ### PR #2382
 
+반려 판단 PR: [#2527](https://github.com/RefinedStone/codex-exec-loop/pull/2527).
+
 #### 반복 close·후속 onState·정상 backoff 추가 coverage
 
 - 판단: **반려** (반려).
@@ -1110,6 +1162,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2381
+
+반려 판단 PR: [#2531](https://github.com/RefinedStone/codex-exec-loop/pull/2531).
 
 #### unborn index 비교 UI 표기 및 첫 commit 전환 추가
 
@@ -1141,6 +1195,8 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 - 검증: 현재 audit base의 코드·기존 작성자 대응·후속 커밋 대조.
 
 ### PR #2379
+
+반려 판단 PR: [#2532](https://github.com/RefinedStone/codex-exec-loop/pull/2532).
 
 #### 여러 unread·재연결 오프라인 완료 복원 추가 범위
 
@@ -1361,6 +1417,93 @@ CI 확인 시각: 2026-11-20T09:10:16.353Z. 검증 상태는 표의 커밋에 �
 
 ## 답글 및 스레드 상태 처리
 
-새 수정이 아직 미머지인 원본 스레드는 수용/후속 PR 답글을 남기고 미해결 상태를 유지한다. 이미 기준 코드에 수정된 스레드만 근거를 확인한 뒤 해결 처리한다. 이미 답글과 해결 처리가 된 스레드는 중복 변경하지 않는다.
+새 수정이 아직 미머지인 원본 스레드는 수용/후속 PR 답글을 남기고 미해결 상태를 유지한다. 이미 기준 코드에 수정된 원본 스레드 8개와, 새 후속 PR의 현재 head에 수정된 추가 리뷰 2개는 근거를 확인한 뒤 해결 처리한다. 이미 답글과 해결 처리가 된 스레드는 중복 변경하지 않는다.
 
-원본 답글과 해결 처리 결과는 최종 갱신 시 decisions.json의 replyActions에 기록한다.
+기록된 대응 84건 중 완료 84건, 게시한 댓글 83개, 해결 처리 10개, 실패 0건.
+
+| 원본 | 처리 | 결과 |
+| --- | --- | --- |
+| [#2480](https://github.com/RefinedStone/codex-exec-loop/pull/2480) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2480#discussion_r4640708974) |
+| [#2479](https://github.com/RefinedStone/codex-exec-loop/pull/2479) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2479#discussion_r4640709678) |
+| [#2479](https://github.com/RefinedStone/codex-exec-loop/pull/2479) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2479#discussion_r4640710164) |
+| [#2478](https://github.com/RefinedStone/codex-exec-loop/pull/2478) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2478#discussion_r4640710709) |
+| [#2478](https://github.com/RefinedStone/codex-exec-loop/pull/2478) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2478#discussion_r4640711193) |
+| [#2477](https://github.com/RefinedStone/codex-exec-loop/pull/2477) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2477#discussion_r4640711853) |
+| [#2477](https://github.com/RefinedStone/codex-exec-loop/pull/2477) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2477#discussion_r4640712411) |
+| [#2476](https://github.com/RefinedStone/codex-exec-loop/pull/2476) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2476#discussion_r4640713019) |
+| [#2476](https://github.com/RefinedStone/codex-exec-loop/pull/2476) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2476#discussion_r4640713562) |
+| [#2475](https://github.com/RefinedStone/codex-exec-loop/pull/2475) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2475#discussion_r4640714116) |
+| [#2475](https://github.com/RefinedStone/codex-exec-loop/pull/2475) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2475#discussion_r4640714617) |
+| [#2474](https://github.com/RefinedStone/codex-exec-loop/pull/2474) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2474#discussion_r4640715224) |
+| [#2474](https://github.com/RefinedStone/codex-exec-loop/pull/2474) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2474#discussion_r4640715713) |
+| [#2473](https://github.com/RefinedStone/codex-exec-loop/pull/2473) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2473#discussion_r4640716256) |
+| [#2472](https://github.com/RefinedStone/codex-exec-loop/pull/2472) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2472#discussion_r4640717059) |
+| [#2471](https://github.com/RefinedStone/codex-exec-loop/pull/2471) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2471#discussion_r4640717758) |
+| [#2471](https://github.com/RefinedStone/codex-exec-loop/pull/2471) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2471#discussion_r4640718257) |
+| [#2469](https://github.com/RefinedStone/codex-exec-loop/pull/2469) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2469#discussion_r4640718850) |
+| [#2469](https://github.com/RefinedStone/codex-exec-loop/pull/2469) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2469#discussion_r4640719272) |
+| [#2468](https://github.com/RefinedStone/codex-exec-loop/pull/2468) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2468#discussion_r4640719851) |
+| [#2468](https://github.com/RefinedStone/codex-exec-loop/pull/2468) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2468#discussion_r4640720451) |
+| [#2467](https://github.com/RefinedStone/codex-exec-loop/pull/2467) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2467#discussion_r4640721052) |
+| [#2467](https://github.com/RefinedStone/codex-exec-loop/pull/2467) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2467#discussion_r4640721585) |
+| [#2467](https://github.com/RefinedStone/codex-exec-loop/pull/2467) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2467#issuecomment-7035783098) |
+| [#2466](https://github.com/RefinedStone/codex-exec-loop/pull/2466) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2466#issuecomment-7035784380) |
+| [#2465](https://github.com/RefinedStone/codex-exec-loop/pull/2465) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2465#issuecomment-7035785595) |
+| [#2464](https://github.com/RefinedStone/codex-exec-loop/pull/2464) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2464#discussion_r4640723501) |
+| [#2464](https://github.com/RefinedStone/codex-exec-loop/pull/2464) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2464#discussion_r4640723966) |
+| [#2464](https://github.com/RefinedStone/codex-exec-loop/pull/2464) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2464#issuecomment-7035790016) |
+| [#2463](https://github.com/RefinedStone/codex-exec-loop/pull/2463) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2463#discussion_r4640724940) |
+| [#2460](https://github.com/RefinedStone/codex-exec-loop/pull/2460) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2460#discussion_r4640725471) |
+| [#2460](https://github.com/RefinedStone/codex-exec-loop/pull/2460) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2460#discussion_r4640725923) |
+| [#2458](https://github.com/RefinedStone/codex-exec-loop/pull/2458) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2458#discussion_r4640726625) |
+| [#2458](https://github.com/RefinedStone/codex-exec-loop/pull/2458) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2458#discussion_r4640727102) |
+| [#2413](https://github.com/RefinedStone/codex-exec-loop/pull/2413) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2413#issuecomment-7035798916) |
+| [#2412](https://github.com/RefinedStone/codex-exec-loop/pull/2412) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2412#issuecomment-7035800127) |
+| [#2411](https://github.com/RefinedStone/codex-exec-loop/pull/2411) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2411#issuecomment-7035801334) |
+| [#2410](https://github.com/RefinedStone/codex-exec-loop/pull/2410) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2410#issuecomment-7035802526) |
+| [#2409](https://github.com/RefinedStone/codex-exec-loop/pull/2409) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2409#discussion_r4640729392) |
+| [#2409](https://github.com/RefinedStone/codex-exec-loop/pull/2409) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2409#issuecomment-7035806783) |
+| [#2408](https://github.com/RefinedStone/codex-exec-loop/pull/2408) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2408#issuecomment-7035808108) |
+| [#2407](https://github.com/RefinedStone/codex-exec-loop/pull/2407) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2407#issuecomment-7035809429) |
+| [#2406](https://github.com/RefinedStone/codex-exec-loop/pull/2406) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2406#issuecomment-7035810587) |
+| [#2405](https://github.com/RefinedStone/codex-exec-loop/pull/2405) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2405#issuecomment-7035811823) |
+| [#2404](https://github.com/RefinedStone/codex-exec-loop/pull/2404) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2404#issuecomment-7035812978) |
+| [#2403](https://github.com/RefinedStone/codex-exec-loop/pull/2403) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2403#discussion_r4640732839) |
+| [#2403](https://github.com/RefinedStone/codex-exec-loop/pull/2403) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2403#issuecomment-7035816872) |
+| [#2402](https://github.com/RefinedStone/codex-exec-loop/pull/2402) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2402#issuecomment-7035818022) |
+| [#2401](https://github.com/RefinedStone/codex-exec-loop/pull/2401) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2401#issuecomment-7035819314) |
+| [#2400](https://github.com/RefinedStone/codex-exec-loop/pull/2400) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2400#issuecomment-7035820689) |
+| [#2399](https://github.com/RefinedStone/codex-exec-loop/pull/2399) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2399#issuecomment-7035822011) |
+| [#2398](https://github.com/RefinedStone/codex-exec-loop/pull/2398) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2398#issuecomment-7035823334) |
+| [#2397](https://github.com/RefinedStone/codex-exec-loop/pull/2397) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2397#issuecomment-7035824716) |
+| [#2396](https://github.com/RefinedStone/codex-exec-loop/pull/2396) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2396#issuecomment-7035825940) |
+| [#2395](https://github.com/RefinedStone/codex-exec-loop/pull/2395) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2395#discussion_r4640737492) |
+| [#2395](https://github.com/RefinedStone/codex-exec-loop/pull/2395) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2395#issuecomment-7035829861) |
+| [#2394](https://github.com/RefinedStone/codex-exec-loop/pull/2394) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2394#issuecomment-7035831083) |
+| [#2393](https://github.com/RefinedStone/codex-exec-loop/pull/2393) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2393#issuecomment-7035832351) |
+| [#2392](https://github.com/RefinedStone/codex-exec-loop/pull/2392) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2392#discussion_r4640739867) |
+| [#2392](https://github.com/RefinedStone/codex-exec-loop/pull/2392) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2392#issuecomment-7035836403) |
+| [#2391](https://github.com/RefinedStone/codex-exec-loop/pull/2391) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2391#issuecomment-7035837867) |
+| [#2390](https://github.com/RefinedStone/codex-exec-loop/pull/2390) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2390#issuecomment-7035838984) |
+| [#2389](https://github.com/RefinedStone/codex-exec-loop/pull/2389) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2389#discussion_r4640742184) |
+| [#2389](https://github.com/RefinedStone/codex-exec-loop/pull/2389) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2389#issuecomment-7035842845) |
+| [#2388](https://github.com/RefinedStone/codex-exec-loop/pull/2388) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2388#issuecomment-7035844076) |
+| [#2387](https://github.com/RefinedStone/codex-exec-loop/pull/2387) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2387#issuecomment-7035845312) |
+| [#2386](https://github.com/RefinedStone/codex-exec-loop/pull/2386) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2386#issuecomment-7035846651) |
+| [#2385](https://github.com/RefinedStone/codex-exec-loop/pull/2385) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2385#issuecomment-7035848041) |
+| [#2384](https://github.com/RefinedStone/codex-exec-loop/pull/2384) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2384#issuecomment-7035849366) |
+| [#2382](https://github.com/RefinedStone/codex-exec-loop/pull/2382) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2382#issuecomment-7035850622) |
+| [#2381](https://github.com/RefinedStone/codex-exec-loop/pull/2381) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2381#issuecomment-7035851861) |
+| [#2380](https://github.com/RefinedStone/codex-exec-loop/pull/2380) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2380#discussion_r4640746489) |
+| [#2380](https://github.com/RefinedStone/codex-exec-loop/pull/2380) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2380#issuecomment-7035855827) |
+| [#2379](https://github.com/RefinedStone/codex-exec-loop/pull/2379) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2379#issuecomment-7035857085) |
+| [#2376](https://github.com/RefinedStone/codex-exec-loop/pull/2376) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2376#issuecomment-7035858386) |
+| [#2373](https://github.com/RefinedStone/codex-exec-loop/pull/2373) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2373#discussion_r4640748796) |
+| [#2371](https://github.com/RefinedStone/codex-exec-loop/pull/2371) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2371#discussion_r4640749319) |
+| [#2370](https://github.com/RefinedStone/codex-exec-loop/pull/2370) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2370#discussion_r4640749955) |
+| [#2370](https://github.com/RefinedStone/codex-exec-loop/pull/2370) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2370#discussion_r4640750503) |
+| [#2366](https://github.com/RefinedStone/codex-exec-loop/pull/2366) | thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2366#discussion_r4640751564) |
+| [#2360](https://github.com/RefinedStone/codex-exec-loop/pull/2360) | issue-comment | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2360#issuecomment-7035869155) |
+| [#2355](https://github.com/RefinedStone/codex-exec-loop/pull/2355) | thread-resolve | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2355#discussion_r4605533824) |
+| [#2491](https://github.com/RefinedStone/codex-exec-loop/pull/2491) | followup-thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2491#discussion_r4640753083) |
+| [#2502](https://github.com/RefinedStone/codex-exec-loop/pull/2502) | followup-thread-reply | [답글](https://github.com/RefinedStone/codex-exec-loop/pull/2502#discussion_r4640754115) |
