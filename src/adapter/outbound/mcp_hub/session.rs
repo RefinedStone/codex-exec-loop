@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::subprocess::{self, ManagedChild};
@@ -173,81 +173,183 @@ fn spawn_stdin_writer(writer: impl Write + Send + 'static) -> SyncSender<WriteRe
     sender
 }
 
+const WRITE_PROGRESS_INTERVAL: Duration = Duration::from_millis(10);
+// One initial RPC plus a bounded batch of control replies; the writer channel stays one slot.
+const MAX_PENDING_WRITES: usize = MAX_PENDING_STDOUT_LINES + 1;
+
+struct PendingWrite {
+    queued: Option<WriteRequest>,
+    acknowledgement: Receiver<io::Result<()>>,
+}
+
+#[derive(Default)]
+struct PendingWrites {
+    writes: std::collections::VecDeque<PendingWrite>,
+}
+
+impl PendingWrites {
+    fn enqueue(
+        &mut self,
+        writer: &SyncSender<WriteRequest>,
+        message: &Value,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.progress(writer, deadline)?;
+        if self.writes.len() >= MAX_PENDING_WRITES {
+            bail!("MCP hub app-server write queue is full");
+        }
+        let mut line = serde_json::to_vec(message)?;
+        line.push(b'\n');
+        if Instant::now() >= deadline {
+            bail!("MCP hub timed out writing app-server request");
+        }
+        let (response, acknowledgement) = mpsc::sync_channel(1);
+        self.writes.push_back(PendingWrite {
+            queued: Some(WriteRequest { line, response }),
+            acknowledgement,
+        });
+        self.progress(writer, deadline)
+    }
+
+    fn progress(&mut self, writer: &SyncSender<WriteRequest>, deadline: Instant) -> Result<()> {
+        if Instant::now() >= deadline {
+            bail!("MCP hub timed out writing app-server request");
+        }
+        let mut index = 0;
+        while index < self.writes.len() {
+            let pending = &self.writes[index];
+            if pending.queued.is_some() {
+                index += 1;
+                continue;
+            }
+            match pending.acknowledgement.try_recv() {
+                Ok(Ok(())) => {
+                    self.writes.remove(index);
+                }
+                Ok(Err(error)) => bail!("MCP hub app-server write failed: {error}"),
+                Err(mpsc::TryRecvError::Empty) => index += 1,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    bail!("MCP hub app-server writer stopped");
+                }
+            }
+        }
+        for pending in &mut self.writes {
+            if let Some(request) = pending.queued.take() {
+                match writer.try_send(request) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(request)) => {
+                        // Keep the bounded control replies even if the writer has not
+                        // dequeued the initial request yet. Continue draining stdout.
+                        pending.queued = Some(request);
+                        break;
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        bail!("MCP hub app-server writer stopped");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.writes.is_empty()
+    }
+
+    fn finish(&mut self, writer: &SyncSender<WriteRequest>, deadline: Instant) -> Result<()> {
+        loop {
+            self.progress(writer, deadline)?;
+            if Instant::now() >= deadline {
+                bail!("MCP hub timed out writing app-server request");
+            }
+            if self.is_empty() {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let wait = remaining.min(WRITE_PROGRESS_INTERVAL);
+            if let Some(index) = self
+                .writes
+                .iter()
+                .position(|pending| pending.queued.is_none())
+            {
+                match self.writes[index].acknowledgement.recv_timeout(wait) {
+                    Ok(Ok(())) => {
+                        self.writes.remove(index);
+                    }
+                    Ok(Err(error)) => bail!("MCP hub app-server write failed: {error}"),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => {
+                        bail!("MCP hub app-server writer stopped");
+                    }
+                }
+            } else {
+                std::thread::sleep(wait);
+            }
+        }
+    }
+}
+
 fn write_before_deadline(
     writer: &SyncSender<WriteRequest>,
     message: &Value,
     deadline: Instant,
 ) -> Result<()> {
-    if Instant::now() >= deadline {
-        bail!("MCP hub timed out writing app-server request");
-    }
-    let mut line = serde_json::to_vec(message)?;
-    line.push(b'\n');
-    let (response_sender, response_receiver) = mpsc::sync_channel(1);
-    if Instant::now() >= deadline {
-        bail!("MCP hub timed out writing app-server request");
-    }
-    match writer.try_send(WriteRequest {
-        line,
-        response: response_sender,
-    }) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) => bail!("MCP hub app-server write queue is full"),
-        Err(TrySendError::Disconnected(_)) => bail!("MCP hub app-server writer stopped"),
-    }
-    match response_receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-        Ok(Ok(())) if Instant::now() < deadline => Ok(()),
-        Ok(Ok(())) | Err(RecvTimeoutError::Timeout) => {
-            bail!("MCP hub timed out writing app-server request")
-        }
-        Ok(Err(error)) => Err(anyhow!("MCP hub app-server write failed: {error}")),
-        Err(RecvTimeoutError::Disconnected) => {
-            bail!("MCP hub app-server writer stopped")
-        }
-    }
+    let mut pending = PendingWrites::default();
+    pending.enqueue(writer, message, deadline)?;
+    pending.finish(writer, deadline)
+}
+
+#[derive(Debug)]
+enum HubMessage {
+    Json(Value),
+    Idle,
+    Closed,
 }
 
 fn recv_json_message_until(
     lines: &Receiver<HubOutputEvent>,
     deadline: Instant,
     waiting_for: &str,
+    poll_writes: bool,
     check_transport: impl Fn() -> Result<()>,
     stderr_context: impl Fn() -> String,
-) -> Result<Value> {
-    loop {
-        check_transport()?;
-        // A continuously non-empty queue must not extend an expired deadline.
-        if Instant::now() >= deadline {
-            bail!("MCP hub timed out waiting for {waiting_for}");
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match lines.recv_timeout(remaining) {
-            Ok(Ok(line)) => {
-                check_transport()?;
-                if Instant::now() >= deadline {
-                    bail!("MCP hub timed out waiting for {waiting_for}");
-                }
-                if let Ok(message) = serde_json::from_str::<Value>(&line) {
-                    return Ok(message);
-                }
-            }
-            Ok(Err(error)) => {
-                bail!(
-                    "MCP hub app-server transport error: {error}{}",
-                    stderr_context()
-                );
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                check_transport()?;
+) -> Result<HubMessage> {
+    check_transport()?;
+    if Instant::now() >= deadline {
+        bail!("MCP hub timed out waiting for {waiting_for}");
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let wait = if poll_writes {
+        remaining.min(WRITE_PROGRESS_INTERVAL)
+    } else {
+        remaining
+    };
+    match lines.recv_timeout(wait) {
+        Ok(Ok(line)) => {
+            check_transport()?;
+            let message = serde_json::from_str::<Value>(&line);
+            if Instant::now() >= deadline {
                 bail!("MCP hub timed out waiting for {waiting_for}");
             }
-            Err(RecvTimeoutError::Disconnected) => {
-                check_transport()?;
-                return Err(anyhow!(
-                    "MCP hub app-server exited while waiting for {waiting_for}{}",
-                    stderr_context()
-                ));
+            Ok(message.map_or(HubMessage::Idle, HubMessage::Json))
+        }
+        Ok(Err(error)) => {
+            bail!(
+                "MCP hub app-server transport error: {error}{}",
+                stderr_context()
+            );
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            check_transport()?;
+            if poll_writes && Instant::now() < deadline {
+                Ok(HubMessage::Idle)
+            } else {
+                bail!("MCP hub timed out waiting for {waiting_for}");
             }
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            check_transport()?;
+            Ok(HubMessage::Closed)
         }
     }
 }
@@ -345,29 +447,68 @@ impl HubAppServerSession {
         params: Value,
         timeout: Duration,
     ) -> Result<Value> {
+        self.request_observing_notifications(method, params, timeout, |_| {})
+    }
+
+    /// Capture the first expected completion while RPC writes are still draining.
+    /// The caller can consume it after handling the response, or continue waiting.
+    pub(super) fn request_with_notification(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        notification_method: &str,
+        accept: impl Fn(&Value) -> bool,
+    ) -> Result<(Value, Option<Value>)> {
+        let mut completed = None;
+        let response =
+            self.request_observing_notifications(method, params, timeout, |message| {
+                let params = message.get("params").unwrap_or(&Value::Null);
+                if completed.is_none()
+                    && message.get("method").and_then(Value::as_str) == Some(notification_method)
+                    && message.get("id").is_none()
+                    && accept(params)
+                {
+                    completed = Some(params.clone());
+                }
+            })?;
+        Ok((response, completed))
+    }
+
+    fn request_observing_notifications(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        observe_notification: impl FnMut(&Value),
+    ) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
         let deadline = Instant::now() + timeout;
-        self.send_until(
+        let mut pending = PendingWrites::default();
+        self.queue_message(
+            &mut pending,
             &json!({ "id": id, "method": method, "params": params }),
             deadline,
         )?;
-        loop {
-            let message = self.next_message(deadline, method)?;
-            if message.get("id").and_then(Value::as_u64) == Some(id)
-                && message.get("method").is_none()
-            {
-                if let Some(error) = message.get("error") {
-                    let detail = error
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown error");
-                    bail!("`{method}` failed: {detail}")
-                }
-                return Ok(message.get("result").cloned().unwrap_or(Value::Null));
-            }
-            self.answer_server_request(&message, deadline)?;
+        let message = self.receive_matching(
+            &mut pending,
+            deadline,
+            method,
+            |message| {
+                message.get("id").and_then(Value::as_u64) == Some(id)
+                    && message.get("method").is_none()
+            },
+            observe_notification,
+        )?;
+        if let Some(error) = message.get("error") {
+            let detail = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            bail!("`{method}` failed: {detail}");
         }
+        Ok(message.get("result").cloned().unwrap_or(Value::Null))
     }
 
     /// `method` 알림 중 `accept` 가 받아들이는 첫 알림의 params 를 돌려준다.
@@ -378,26 +519,81 @@ impl HubAppServerSession {
         accept: impl Fn(&Value) -> bool,
     ) -> Result<Value> {
         let deadline = Instant::now() + timeout;
+        let message = self.receive_matching(
+            &mut PendingWrites::default(),
+            deadline,
+            method,
+            |message| {
+                message.get("method").and_then(Value::as_str) == Some(method)
+                    && message.get("id").is_none()
+                    && accept(message.get("params").unwrap_or(&Value::Null))
+            },
+            |_| {},
+        )?;
+        Ok(message.get("params").cloned().unwrap_or(Value::Null))
+    }
+
+    fn receive_matching(
+        &mut self,
+        pending: &mut PendingWrites,
+        deadline: Instant,
+        waiting_for: &str,
+        accept: impl Fn(&Value) -> bool,
+        mut observe_notification: impl FnMut(&Value),
+    ) -> Result<Value> {
+        // Preserve at most one accepted response while reverse replies finish.
+        // Waiting for their ACK must not stop stdout drain and recreate pipe deadlock.
+        let mut accepted = None;
         loop {
-            let message = self.next_message(deadline, method)?;
-            if message.get("method").and_then(Value::as_str) == Some(method)
-                && message.get("id").is_none()
-            {
-                let params = message.get("params").cloned().unwrap_or(Value::Null);
-                if accept(&params) {
-                    return Ok(params);
-                }
-                continue;
+            self.check_transport_failure()?;
+            pending.progress(&self.writer, deadline)?;
+            if Instant::now() >= deadline {
+                bail!("MCP hub timed out waiting for {waiting_for}");
             }
-            self.answer_server_request(&message, deadline)?;
+            if pending.is_empty()
+                && let Some(message) = accepted.take()
+            {
+                return Ok(message);
+            }
+            match self.next_message(deadline, waiting_for, !pending.is_empty())? {
+                HubMessage::Json(message) => {
+                    if message.get("id").is_none() {
+                        observe_notification(&message);
+                    }
+                    if accepted.is_none() && accept(&message) {
+                        accepted = Some(message);
+                    } else {
+                        self.queue_server_response(pending, &message, deadline)?;
+                    }
+                }
+                HubMessage::Idle => {}
+                HubMessage::Closed => {
+                    if let Some(message) = accepted {
+                        // All complete stdout messages precede EOF. There is no
+                        // remaining output to drain while finishing these receipts.
+                        pending.finish(&self.writer, deadline)?;
+                        return Ok(message);
+                    }
+                    bail!(
+                        "MCP hub app-server exited while waiting for {waiting_for}{}",
+                        self.stderr_context()
+                    );
+                }
+            }
         }
     }
 
-    fn next_message(&mut self, deadline: Instant, waiting_for: &str) -> Result<Value> {
+    fn next_message(
+        &mut self,
+        deadline: Instant,
+        waiting_for: &str,
+        poll_writes: bool,
+    ) -> Result<HubMessage> {
         recv_json_message_until(
             &self.lines,
             deadline,
             waiting_for,
+            poll_writes,
             || self.check_transport_failure(),
             || self.stderr_context(),
         )
@@ -419,7 +615,12 @@ impl HubAppServerSession {
     }
 
     /// app-server 가 클라이언트에게 묻는 요청이다. hub 에는 답할 화면이 없으므로 거절한다.
-    fn answer_server_request(&mut self, message: &Value, deadline: Instant) -> Result<()> {
+    fn queue_server_response(
+        &mut self,
+        pending: &mut PendingWrites,
+        message: &Value,
+        deadline: Instant,
+    ) -> Result<()> {
         let (Some(id), Some(method)) = (
             message.get("id").cloned(),
             message.get("method").and_then(Value::as_str),
@@ -431,7 +632,19 @@ impl HubAppServerSession {
         } else {
             json!({ "id": id, "error": { "code": -32601, "message": "the Akra MCP hub cannot answer this request" } })
         };
-        self.send_until(&reply, deadline)
+        self.queue_message(pending, &reply, deadline)
+    }
+
+    fn queue_message(
+        &mut self,
+        pending: &mut PendingWrites,
+        message: &Value,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.check_transport_failure()?;
+        pending
+            .enqueue(&self.writer, message, deadline)
+            .with_context(|| format!("MCP hub app-server transport{}", self.stderr_context()))
     }
 
     fn send_until(&mut self, message: &Value, deadline: Instant) -> Result<()> {
@@ -475,6 +688,7 @@ mod tests {
             &lines,
             Instant::now(),
             "target-notification",
+            false,
             || Ok(()),
             String::new,
         )
@@ -667,3 +881,7 @@ mod output_tests {
 #[cfg(test)]
 #[path = "session_transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "session_duplex_tests.rs"]
+mod duplex_tests;
