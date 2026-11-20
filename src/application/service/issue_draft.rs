@@ -1,3 +1,7 @@
+mod creation;
+
+use crate::application::port::inbound::issue_draft_port::*;
+use crate::application::service::issue_creation::IssueCreationService;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -60,7 +64,8 @@ pub struct IssueDraftService {
     policy: IssuePolicyService,
     template: IssueTemplateService,
     snapshot: Arc<dyn IssueSnapshotPort>,
-    publisher: IssueJournaledPublishService,
+    publisher: Arc<IssueJournaledPublishService>,
+    creator: Option<Arc<IssueCreationService>>,
     code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
     vault_unlock: Arc<EvidenceVaultUnlockService>,
 }
@@ -77,7 +82,7 @@ impl IssueDraftService {
         policy: IssuePolicyService,
         template: IssueTemplateService,
         snapshot: Arc<dyn IssueSnapshotPort>,
-        publisher: IssueJournaledPublishService,
+        publisher: impl Into<Arc<IssueJournaledPublishService>>,
         code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
         vault_unlock: Arc<EvidenceVaultUnlockService>,
     ) -> Self {
@@ -85,10 +90,22 @@ impl IssueDraftService {
             policy,
             template,
             snapshot,
-            publisher,
+            publisher: publisher.into(),
+            creator: None,
             code_validators,
             vault_unlock,
         }
+    }
+
+    pub fn with_creation(mut self, creator: Arc<IssueCreationService>) -> Self {
+        self.creator = Some(creator);
+        self
+    }
+
+    fn creator(&self) -> Result<&IssueCreationService> {
+        self.creator
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("new-issue creation is unavailable"))
     }
 
     fn conventions(&self, cwd: &str) -> Result<Conventions> {
@@ -101,6 +118,18 @@ impl IssueDraftService {
             policy,
             template,
         })
+    }
+
+    fn workspace_dir(&self, cwd: &str) -> Result<String> {
+        match &self.creator {
+            Some(creator) => creator.canonical_workspace(cwd),
+            None => Ok(cwd.to_string()),
+        }
+    }
+
+    fn scoped_target(&self, mut target: IssueDraftTarget) -> Result<IssueDraftTarget> {
+        target.cwd = self.workspace_dir(&target.cwd)?;
+        Ok(target)
     }
 
     fn resolve(&self, target: &IssueDraftTarget) -> Result<IssueSnapshotResponse> {
@@ -122,7 +151,7 @@ impl IssueDraftService {
             .publisher
             .reconcile(cwd)?
             .into_iter()
-            .rfind(|record| record.issue == *issue)
+            .rfind(|record| record.issue.same_remote_issue(issue))
             .map(|record| intent(&self.with_restore_link(record))))
     }
 
@@ -149,7 +178,44 @@ impl IssueDraftService {
 }
 
 impl IssueDraftPort for IssueDraftService {
+    fn creation_open(&self, target: IssueCreationTarget) -> Result<IssueCreationOpened> {
+        creation::open(self, target)
+    }
+
+    fn creation_preview(
+        &self,
+        request: IssueCreationPreviewRequest,
+    ) -> Result<IssueCreationPreview> {
+        creation::preview(self, request)
+    }
+
+    fn creation_publish(
+        &self,
+        request: IssueCreationPublishRequest,
+    ) -> Result<IssueCreationPublished> {
+        creation::publish(self, request)
+    }
+
+    fn creation_recheck(&self, request: IssueCreationIntentRequest) -> Result<IssueCreationIntent> {
+        creation::recheck(self, request)
+    }
+
+    fn creation_confirm(
+        &self,
+        request: IssueCreationConfirmRequest,
+    ) -> Result<IssueCreationIntent> {
+        creation::confirm(self, request)
+    }
+
+    fn creation_restart(
+        &self,
+        request: IssueCreationRestartRequest,
+    ) -> Result<IssueCreationOpened> {
+        creation::restart(self, request)
+    }
+
     fn open(&self, target: IssueDraftTarget) -> Result<IssueDraftOpened> {
+        let target = self.scoped_target(target)?;
         let conventions = self.conventions(&target.cwd)?;
         let remote = self.resolve(&target)?;
         let publish = conventions
@@ -172,12 +238,14 @@ impl IssueDraftPort for IssueDraftService {
     }
 
     fn preview(&self, request: IssueDraftPreviewRequest) -> Result<IssueDraftPreview> {
-        let conventions = self.conventions(&request.target.cwd)?;
+        let target = self.scoped_target(request.target)?;
+        let conventions = self.conventions(&target.cwd)?;
         Ok(evaluate(&conventions, &request.text, None).0)
     }
 
     fn publish(&self, request: IssueDraftPublishRequest) -> Result<IssueDraftPublished> {
-        let conventions = self.conventions(&request.target.cwd)?;
+        let target = self.scoped_target(request.target)?;
+        let conventions = self.conventions(&target.cwd)?;
         let (preview, passed) = evaluate(
             &conventions,
             &request.text,
@@ -186,7 +254,7 @@ impl IssueDraftPort for IssueDraftService {
         let Some((validated, masked_spans)) = passed else {
             return Ok(IssueDraftPublished::Blocked { preview });
         };
-        let issue = self.resolve(&request.target)?.issue;
+        let issue = self.resolve(&target)?.issue;
         let restorable = restorable_fields(&masked_spans);
         // 가릴 구간이 없거나 공유본만 게시하면 키 저장소를 부르지 않는다.
         let vault_key = (!restorable.is_empty() && !request.shared_copy_only)
@@ -239,12 +307,17 @@ impl IssueDraftPort for IssueDraftService {
     }
 
     fn recheck(&self, target: IssueDraftTarget) -> Result<Option<IssueDraftIntent>> {
+        let target = self.scoped_target(target)?;
         let issue = self.resolve(&target)?.issue;
         self.latest_intent(&target.cwd, &issue)
     }
 
     fn abandon(&self, cwd: &str, intent_id: &str) -> Result<IssueDraftIntent> {
-        Ok(intent(&self.publisher.abandon(cwd, intent_id)?))
+        Ok(intent(
+            &self
+                .publisher
+                .abandon(&self.workspace_dir(cwd)?, intent_id)?,
+        ))
     }
 }
 
@@ -477,6 +550,8 @@ fn template_view(template: &IssueTemplateResolution) -> IssueDraftTemplate {
 
 #[cfg(test)]
 mod tests {
+    mod creation;
+
     use std::sync::Mutex;
 
     use anyhow::bail;

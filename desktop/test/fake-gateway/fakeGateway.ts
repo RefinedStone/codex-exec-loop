@@ -216,7 +216,7 @@ export async function startFakeGateway(
     gitUndo?(params: { cwd?: unknown; opId?: unknown }): unknown;
     /** `akra/issue/handoffCopy` 의 답이다 (#2428). 없으면 모르는 method 로 답한다. */
     issueHandoffCopy?(params: { owner?: unknown; repository?: unknown; number?: unknown; cwd?: unknown }): unknown;
-    /** 이슈 초안 메서드(`akra/issue/open`, `preview`, `publish`, `recheck`, `abandon`)의 답이다 (#2426). 없으면 모르는 method 로 답한다. */
+    /** 이슈 수정/생성 메서드의 답이다 (#2426, #2436). 예외는 JSON-RPC 오류로 답하며 없으면 모르는 method 로 답한다. */
     issue?(method: string, params: Record<string, unknown>): unknown;
     /** `skills/list` 의 답이다 (#2383). 요청의 params 를 받는다. 없으면 녹화가 없는 method 로 답한다. */
     skills?(params: { cwds?: unknown; forceReload?: unknown }): unknown;
@@ -413,7 +413,11 @@ export async function startFakeGateway(
       }
       if (options.issue && message.method.startsWith("akra/issue/") && message.method !== "akra/issue/handoffCopy") {
         const params = (message as { params?: Record<string, unknown> }).params ?? {};
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: options.issue(message.method, params) }));
+        try {
+          socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: options.issue(message.method, params) }));
+        } catch (error) {
+          socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }));
+        }
         return;
       }
       const gitAnswer = {

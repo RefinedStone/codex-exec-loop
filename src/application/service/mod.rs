@@ -1,3 +1,4 @@
+pub mod issue_creation;
 /*
  * service 모듈은 화면이나 저장소 세부사항을 모르는 유스케이스 묶음이다.
  * 각 service는 domain 모델과 outbound port를 조합하고, adapter는 이 공개 진입점만 호출한다.

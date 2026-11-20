@@ -575,6 +575,10 @@ fn issue_publish_goes_only_through_the_publish_intent_journal() {
             "issue_update_port",
             "IssueUpdatePort",
             "GithubIssueUpdateAdapter",
+            "issue_create_port",
+            "IssueCreatePort",
+            "GithubIssueCreateAdapter",
+            "IssueCreationService",
             "issue_publish",
         ],
     );

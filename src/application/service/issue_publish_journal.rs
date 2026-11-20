@@ -1,3 +1,4 @@
+mod creation;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow, bail};
@@ -111,6 +112,8 @@ impl IssueJournaledPublishService {
         }
         let _publishing = self.lock();
         let workspace_dir = publish.issue.project_scope.workspace_dir.clone();
+        let lease = self.journal.acquire_publication_lease(&workspace_dir)?;
+        lease.verify_identity()?;
         let records = self.journal.load(&workspace_dir)?;
         let sequence = records
             .iter()
@@ -119,9 +122,9 @@ impl IssueJournaledPublishService {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| anyhow!("publish sequence exhausted"))?;
-        let pending = records
-            .into_iter()
-            .find(|record| record.issue == publish.issue && record.state.is_unresolved());
+        let pending = records.into_iter().find(|record| {
+            record.issue.same_remote_issue(&publish.issue) && record.state.is_unresolved()
+        });
         if let Some(pending) = pending {
             return Ok(IssueJournaledPublishOutcome::AlreadyPending(pending));
         }
@@ -171,11 +174,13 @@ impl IssueJournaledPublishService {
         record.state = IssuePublishIntentState::Sent;
         record.write_attempted = Some(true);
         self.journal.save(&workspace_dir, &record)?;
+        lease.verify_identity()?;
         let answer = self.update.update_title_and_body(IssueUpdateRequest {
             approval: publish.approval.write,
             issue: publish.issue,
             shared_copy: publish.validated.shared_copy().clone(),
         });
+        lease.verify_identity()?;
         // 답이 있는데 대상이나 글이 다르면 재조회가 같아도 확인하지 않는다. 답을 잃었으면 재조회가 정한다.
         let answer_differs = answer.is_ok_and(|response| {
             response.issue != record.issue
@@ -203,6 +208,8 @@ impl IssueJournaledPublishService {
     /// 읽기만 한다. 쓰기를 보내지 않는다. 이 작업 폴더의 모든 의도를 돌려준다.
     pub fn reconcile(&self, workspace_dir: &str) -> Result<Vec<IssuePublishIntentRecord>> {
         let _publishing = self.lock();
+        let lease = self.journal.acquire_publication_lease(workspace_dir)?;
+        lease.verify_identity()?;
         let mut records = self.journal.load(workspace_dir)?;
         for record in &mut records {
             if record.state.is_unresolved() {
@@ -223,6 +230,8 @@ impl IssueJournaledPublishService {
         intent_id: &str,
     ) -> Result<IssuePublishIntentRecord> {
         let _publishing = self.lock();
+        let lease = self.journal.acquire_publication_lease(workspace_dir)?;
+        lease.verify_identity()?;
         let mut record = self.intent(workspace_dir, intent_id)?;
         if record.state != IssuePublishIntentState::NeedsConfirmation {
             bail!("only an intent that needs confirmation can be abandoned")
@@ -240,6 +249,8 @@ impl IssueJournaledPublishService {
         key: VaultRecordKey,
     ) -> Result<IssuePublishIntentRecord> {
         let _publishing = self.lock();
+        let lease = self.journal.acquire_publication_lease(workspace_dir)?;
+        lease.verify_identity()?;
         let mut record = self.intent(workspace_dir, intent_id)?;
         if record.state != IssuePublishIntentState::Confirmed {
             bail!("the restore link can be finalized only after the publish is confirmed")
@@ -251,10 +262,9 @@ impl IssueJournaledPublishService {
             return Ok(record);
         }
         if self.journal.load(workspace_dir)?.iter().any(|other| {
-            other.issue == record.issue
+            other.issue.same_remote_issue(&record.issue)
                 && other.intent_id != record.intent_id
-                && (other.sequence > record.sequence
-                    || (other.sequence == 0 && record.sequence == 0))
+                && other.sequence >= record.sequence
                 && (matches!(
                     other.state,
                     IssuePublishIntentState::Sent
@@ -277,6 +287,7 @@ impl IssueJournaledPublishService {
                 scope: scope(VaultRecordBinding::PublishIntent(record.intent_id.clone())),
                 key: key.clone(),
             })?;
+            lease.verify_identity()?;
             self.vault.save(VaultRecordSaveRequest {
                 scope: scope(VaultRecordBinding::ConfirmedVersion(
                     record.confirmed_version(),
@@ -286,6 +297,7 @@ impl IssueJournaledPublishService {
             })?;
         }
         // 복원(`evidence_vault_restore`)은 이 레코드가 가리키는 판만 쓴다. 마지막에 저장한다.
+        lease.verify_identity()?;
         self.vault.save(VaultRecordSaveRequest {
             scope: VaultRecordScope::current_version(record.issue.clone()),
             key,

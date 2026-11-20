@@ -17,6 +17,7 @@ use super::GatewayCommand;
 use super::hosts::GatewayHosts;
 use super::parse_args;
 use super::session::{run_session, websocket_config};
+use crate::application::port::inbound::issue_draft_port as creation;
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamSnapshot, GatewayUpstreamStream,
 };
@@ -1189,6 +1190,48 @@ async fn the_issue_handoff_answer_is_the_shared_copy_without_the_secret() {
 struct EchoIssueDrafts;
 
 impl crate::application::port::inbound::issue_draft_port::IssueDraftPort for EchoIssueDrafts {
+    fn creation_open(
+        &self,
+        request: creation::IssueCreationTarget,
+    ) -> Result<creation::IssueCreationOpened> {
+        bail!("echo {}", request.owner)
+    }
+
+    fn creation_preview(
+        &self,
+        request: creation::IssueCreationPreviewRequest,
+    ) -> Result<creation::IssueCreationPreview> {
+        bail!("echo {}", request.text.title)
+    }
+
+    fn creation_publish(
+        &self,
+        request: creation::IssueCreationPublishRequest,
+    ) -> Result<creation::IssueCreationPublished> {
+        bail!("echo {}", request.text.title)
+    }
+
+    fn creation_recheck(
+        &self,
+        request: creation::IssueCreationIntentRequest,
+    ) -> Result<creation::IssueCreationIntent> {
+        bail!("echo {}", request.intent_id)
+    }
+
+    fn creation_confirm(
+        &self,
+        request: creation::IssueCreationConfirmRequest,
+    ) -> Result<creation::IssueCreationIntent> {
+        bail!("echo {}", request.url)
+    }
+
+    fn creation_restart(
+        &self,
+        request: creation::IssueCreationRestartRequest,
+    ) -> Result<creation::IssueCreationOpened> {
+        bail!("echo {}", request.previous_intent_id)
+    }
+
     fn open(
         &self,
         _: crate::application::port::inbound::issue_draft_port::IssueDraftTarget,
@@ -1287,6 +1330,54 @@ async fn issue_draft_requests_are_answered_on_the_local_host_and_stay_out_of_the
             .contains(LOCAL_TEXT),
         "the fake port answered: {answer}"
     );
+
+    // #2436. Every creation method carries local data and uses the same private local-only boundary.
+    let creation_target = json!({ "cwd": "/repo", "owner": LOCAL_TEXT, "repository": "widgets" });
+    let creation_text = json!({ "title": LOCAL_TEXT, "body": "", "spans": [] });
+    let creation_approval = json!({
+        "repository": { "provider": "github", "serverId": "github.com", "repositoryId": "R_1",
+            "projectScope": { "workspaceDir": "/repo" } },
+        "intentId": LOCAL_TEXT, "sharedCopyHash": { "version": 1, "sha256": "aa" },
+        "policyVersion": "p1", "templateVersion": null,
+    });
+    let creation_requests = [
+        ("akra/issue/create/open", creation_target.clone()),
+        (
+            "akra/issue/create/preview",
+            json!({ "target": creation_target, "intentId": LOCAL_TEXT, "text": creation_text }),
+        ),
+        (
+            "akra/issue/create/publish",
+            json!({ "target": creation_target, "intentId": LOCAL_TEXT, "text": creation_text, "approval": creation_approval }),
+        ),
+        (
+            "akra/issue/create/recheck",
+            json!({ "target": creation_target, "intentId": LOCAL_TEXT }),
+        ),
+        (
+            "akra/issue/create/confirm",
+            json!({ "target": creation_target, "intentId": LOCAL_TEXT, "url": LOCAL_TEXT }),
+        ),
+        (
+            "akra/issue/create/restart",
+            json!({ "target": creation_target, "previousIntentId": LOCAL_TEXT, "acknowledgeUncertain": true }),
+        ),
+    ];
+    for (method, params) in &creation_requests {
+        let answer = kernel_request(&mut local, method, method, params.clone()).await;
+        assert_eq!(
+            answer["error"]["code"],
+            json!(-32000),
+            "local route: {method}"
+        );
+        assert!(
+            answer["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(LOCAL_TEXT),
+            "the creation fake answered {method}: {answer}"
+        );
+    }
     // A recorded request after the issue request proves the recording is on and has caught up.
     kernel_request(&mut local, "info", "akra/gateway/info", json!({})).await;
     let recorded: String = std::fs::read_dir(&directory)
@@ -1299,5 +1390,23 @@ async fn issue_draft_requests_are_answered_on_the_local_host_and_stay_out_of_the
     let mut remote = connect("/host/cloud").await;
     let refused = kernel_request(&mut remote, "i", "akra/issue/preview", params).await;
     assert_eq!(refused["error"]["code"], json!(-32601));
+    for (method, params) in creation_requests {
+        let refused = kernel_request(&mut remote, method, method, params).await;
+        assert_eq!(
+            refused["error"]["code"],
+            json!(-32601),
+            "remote route: {method}"
+        );
+        assert!(!refused.to_string().contains(LOCAL_TEXT));
+    }
+    kernel_request(&mut remote, "remote-info", "akra/gateway/info", json!({})).await;
+    let recorded: String = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect();
+    assert!(
+        !recorded.contains(LOCAL_TEXT),
+        "remote creation requests are private too"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }

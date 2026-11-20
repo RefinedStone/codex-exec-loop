@@ -29,3 +29,8 @@ pub(crate) use self::kernel_lock::{
 pub use self::parallel_agent_profile::FilesystemParallelAgentProfileRepositoryAdapter;
 pub use self::planning_workspace::FilesystemPlanningWorkspaceAdapter;
 pub use self::pr_validation_rollout_evidence::FilesystemPrValidationRolloutEvidenceAdapter;
+
+pub mod issue_creation_journal;
+pub use self::issue_creation_journal::IssueCreationJournalAdapter;
+
+pub(crate) mod private_runtime_lease;

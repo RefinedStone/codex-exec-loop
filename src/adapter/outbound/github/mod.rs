@@ -26,3 +26,6 @@ pub use self::pr_validation::GithubPrValidationAdapter;
 // review poller re-export도 같은 public surface를 제공해 composition이 port 구현체를 직접 주입하게 한다.
 pub use self::resource_version::GithubResourceVersionAdapter;
 pub use self::review_poller::GithubReviewPollerAdapter;
+
+pub mod issue_create;
+pub use self::issue_create::GithubIssueCreateAdapter;

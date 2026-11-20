@@ -36,6 +36,17 @@ pub struct IssueReference {
     pub project_scope: IssueProjectScope,
 }
 
+impl IssueReference {
+    /// Compare the remote object across historical workspace spellings in one
+    /// repository journal. Authorization and Vault scopes still require full equality.
+    pub fn same_remote_issue(&self, other: &Self) -> bool {
+        self.provider == other.provider
+            && self.server_id == other.server_id
+            && self.repository_id == other.repository_id
+            && self.issue_id == other.issue_id
+    }
+}
+
 /// 이슈의 공유본이다. 가린 뒤의 제목과 본문이다. 일반 Kernel 이벤트와 Gateway 응답에 넣어도 된다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
