@@ -585,6 +585,9 @@ const ISSUE_AUTOMATION_BOUNDARY_PATHS: &[&str] = &[
     "src/domain/issue_automation",
     "src/application/service/issue_automation",
     "src/application/port/outbound/issue_automation_store_port.rs",
+    "src/application/port/outbound/issue_source_port.rs",
+    "src/adapter/outbound/github/issue_source.rs",
+    "src/adapter/outbound/github/issue_source",
     "src/adapter/outbound/db/sqlite_issue_automation_store.rs",
     "src/adapter/outbound/db/sqlite_issue_automation_store",
 ];
@@ -639,6 +642,8 @@ fn issue_automation_stays_independent_and_stores_only_shared_issue_types() {
     for required in [
         "src/domain/issue_automation/mod.rs",
         "src/application/port/outbound/issue_automation_store_port.rs",
+        "src/application/port/outbound/issue_source_port.rs",
+        "src/adapter/outbound/github/issue_source.rs",
         "src/adapter/outbound/db/sqlite_issue_automation_store.rs",
     ] {
         assert!(

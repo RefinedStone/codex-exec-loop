@@ -4,6 +4,8 @@
 mod binding;
 mod state;
 mod tracked;
+// 출처의 공유 관찰 값과 페이지 커서다 (#2537).
+pub mod source;
 
 pub use binding::{
     IssueAutomationAutonomy, IssueAutomationBinding, IssueAutomationBindingId,

@@ -1529,16 +1529,13 @@ pub(crate) fn configure_credential_command_environment(
             command.env(name, value);
         }
     }
-    if include_user_config {
-        for name in ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"] {
-            let Some(value) = std::env::var_os(name).filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            if let Ok(path) = validate_configuration_path(&value, cwd, true) {
-                command.env(name, path);
-            }
-        }
-    }
+    configure_user_config_environment(
+        command,
+        cwd,
+        include_user_config,
+        |name| std::env::var_os(name),
+        |value, cwd| validate_configuration_path(value, cwd, true),
+    );
     for (upper, lower) in [("HTTPS_PROXY", "https_proxy"), ("NO_PROXY", "no_proxy")] {
         if let Some(value) = resolve_alias(upper, lower)? {
             if upper == "HTTPS_PROXY" {
@@ -1559,6 +1556,35 @@ pub(crate) fn configure_credential_command_environment(
         }
     }
     Ok(())
+}
+
+// 조회와 검증 함수를 분리해 전역 환경이나 사용자 폴더 권한에 의존하지 않고 전달 규칙을 검증한다.
+fn configure_user_config_environment(
+    command: &mut Command,
+    cwd: &Path,
+    include_user_config: bool,
+    mut lookup: impl FnMut(&str) -> Option<OsString>,
+    mut validate: impl FnMut(&OsStr, &Path) -> Result<PathBuf>,
+) {
+    if !include_user_config {
+        return;
+    }
+    for name in [
+        "HOME",
+        "USERPROFILE",
+        "XDG_CONFIG_HOME",
+        "GH_CONFIG_DIR",
+        // Windows gh는 이 경로에서 host 설정을 찾는다. keyring에 토큰만 있어도 API 로그인이 되지는 않는다.
+        #[cfg(windows)]
+        "APPDATA",
+    ] {
+        let Some(value) = lookup(name).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if let Ok(path) = validate(&value, cwd) {
+            command.env(name, path);
+        }
+    }
 }
 
 pub(crate) fn neutral_user_config_directory(cwd: &Path) -> PathBuf {
@@ -1883,6 +1909,136 @@ mod tests {
     #[cfg(windows)]
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn credential_config_opt_out_does_not_consult_user_environment() {
+        let mut command = std::process::Command::new("not-executed");
+        command.env_clear();
+        super::configure_user_config_environment(
+            &mut command,
+            Path::new("."),
+            false,
+            |_| panic!("disabled user configuration must not consult its environment"),
+            |_, _| panic!("disabled user configuration must not validate a path"),
+        );
+        assert_eq!(command.get_envs().count(), 0);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_credential_configuration_does_not_consult_appdata() {
+        let mut command = std::process::Command::new("not-executed");
+        command.env_clear();
+        super::configure_user_config_environment(
+            &mut command,
+            Path::new("."),
+            true,
+            |name| {
+                assert_ne!(name, "APPDATA");
+                None
+            },
+            |_, _| panic!("no user configuration value should reach validation"),
+        );
+        assert_eq!(command.get_envs().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_credential_configuration_passes_only_validated_appdata() {
+        // 이 시험은 전달 경계를 검증한다. 실제 사용자 폴더를 만들거나 그 ACL을 가정하지 않는다.
+        let workspace = Path::new("C:/synthetic-workspace");
+        let supplied = Path::new("C:/supplied-appdata");
+        let validated = PathBuf::from("C:/validated-appdata");
+        let mut command = Command::new("not-executed");
+        command.env_clear();
+        super::configure_user_config_environment(
+            &mut command,
+            workspace,
+            true,
+            |name| (name == "APPDATA").then(|| supplied.as_os_str().to_owned()),
+            |value, cwd| {
+                assert_eq!(value, supplied.as_os_str());
+                assert_eq!(cwd, workspace);
+                Ok(validated.clone())
+            },
+        );
+        let passed = command
+            .get_envs()
+            .find_map(|(name, value)| (name == std::ffi::OsStr::new("APPDATA")).then_some(value));
+        assert_eq!(passed, Some(Some(validated.as_os_str())));
+        assert_eq!(command.get_envs().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_credential_configuration_never_passes_a_path_after_validation_failure() {
+        let supplied = Path::new("C:/supplied-appdata");
+        let mut command = Command::new("not-executed");
+        command.env_clear();
+        let mut validations = 0;
+        super::configure_user_config_environment(
+            &mut command,
+            Path::new("C:/synthetic-workspace"),
+            true,
+            |name| (name == "APPDATA").then(|| supplied.as_os_str().to_owned()),
+            |value, _| {
+                validations += 1;
+                assert_eq!(value, supplied.as_os_str());
+                Err(anyhow::anyhow!(
+                    "synthetic configuration validation failure"
+                ))
+            },
+        );
+        assert_eq!(validations, 1);
+        assert_eq!(
+            command.get_envs().count(),
+            0,
+            "failed validation must not fall back to the supplied path"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_credential_configuration_rejects_relative_and_repository_appdata() {
+        let workspace = fixture_root("credential-appdata-untrusted-workspace");
+        let repository_config = workspace.join("credential-config");
+        fs::create_dir_all(&repository_config).expect("repository config fixture should exist");
+        for config in [
+            PathBuf::from("relative-credential-config"),
+            repository_config,
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        ] {
+            let expected_boundary = if config.is_absolute() {
+                "repository- or pool-controlled"
+            } else {
+                "must be absolute"
+            };
+            let mut command = Command::new("not-executed");
+            command.env_clear();
+            super::configure_user_config_environment(
+                &mut command,
+                &workspace,
+                true,
+                |name| (name == "APPDATA").then(|| config.as_os_str().to_owned()),
+                |value, cwd| {
+                    let result = super::validate_configuration_path(value, cwd, true);
+                    assert!(
+                        result.as_ref().err().is_some_and(|error| error
+                            .chain()
+                            .any(|cause| cause.to_string().contains(expected_boundary))),
+                        "configuration must fail at the expected path boundary"
+                    );
+                    result
+                },
+            );
+            assert_eq!(
+                command.get_envs().count(),
+                0,
+                "untrusted configuration must not fall back to the original path"
+            );
+        }
+        fs::remove_dir_all(workspace).expect("workspace fixture should be removed");
+    }
 
     #[test]
     fn native_executable_validation_accepts_platform_binary_and_rejects_invalid_formats() {

@@ -1,42 +1,16 @@
-use std::fmt;
-use std::ops::Range;
-
 use crate::application::port::outbound::evidence_vault_port::VaultPlaintext;
-use crate::domain::issue_policy::{
-    IssueDisclosurePolicy, IssueSensitiveSpanAction, IssueSensitiveSpanClass,
-};
+use crate::domain::issue_masking::{IssueRestorableSpanPlan, plan_issue_masking};
+use crate::domain::issue_policy::IssueDisclosurePolicy;
 use crate::domain::issue_work::IssueSharedCopy;
 
+pub use crate::domain::issue_masking::{
+    ISSUE_REMOVED_PLACEHOLDER, IssueMaskingBlocked, IssueSensitiveSpan, IssueTextField,
+};
+
 /*
- * 이슈의 제목과 본문에서 민감 구간을 처리해 공유본과 가림 구간을 만든다 (#2419).
- *
- * 제거 대상의 값은 이 함수 밖으로 나가지 않는다. 공유본, 가림 구간의 평문, 오류에 모두 없다. 가림 구간의
- * 평문은 `VaultPlaintext` 에만 있다. 호출자는 이 결과만 초안, 자동 저장, Vault 에 쓴다.
- *
- * 구간을 찾는 일은 하지 않는다. 호출자가 구간과 종류를 준다. 처리는 공개 정책이 정한다.
+ * 기존 가림 API는 순수한 위치 계획에서 Vault에 맡길 평문만 구성한다 (#2419, #2537).
+ * 제거 범위는 읽어 복사하지 않으며, 복원용 평문은 VaultPlaintext 안에만 반환한다.
  */
-
-/// 제거한 값의 자리에 두는 글이다. 복원할 수 없다.
-pub const ISSUE_REMOVED_PLACEHOLDER: &str = "[removed]";
-
-/// 구간이 있는 칸이다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IssueTextField {
-    Title,
-    Body,
-}
-
-/// 호출자가 지정한 민감 구간이다. 값은 없고 위치만 있다.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IssueSensitiveSpan {
-    pub field: IssueTextField,
-    /// 칸의 글에서 본 바이트 범위이다. 문자 경계에 있어야 한다.
-    pub range: Range<usize>,
-    /// 구간의 종류이다. 분류가 불확실하면 `None` 이다.
-    pub class: Option<IssueSensitiveSpanClass>,
-    /// 사용자의 답이다. 정책이 `UserConfirm` 이거나 분류가 불확실할 때만 쓴다.
-    pub user_decision: Option<IssueSensitiveSpanAction>,
-}
 
 /// Vault 에 맡길 가림 구간이다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,201 +30,51 @@ pub struct IssueMaskingOutcome {
     pub masked_spans: Vec<IssueMaskedSpan>,
 }
 
-/// 공유본을 만들 수 없는 상태이다. 구간의 번호만 있고 글은 없다.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IssueMaskingBlocked {
-    /// 사용자의 답이 필요한 구간이다. 값은 입력 `spans` 의 번호이다.
-    NeedsUserConfirmation { span_indexes: Vec<usize> },
-    /// 범위가 비었거나, 글 밖이거나, 문자 경계가 아닌 구간이다.
-    InvalidSpan { span_index: usize },
-}
-
-impl fmt::Display for IssueMaskingBlocked {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NeedsUserConfirmation { span_indexes } => write!(
-                formatter,
-                "{} sensitive span(s) need user confirmation",
-                span_indexes.len()
-            ),
-            Self::InvalidSpan { span_index } => {
-                write!(
-                    formatter,
-                    "sensitive span {span_index} has an invalid range"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for IssueMaskingBlocked {}
-
-/// `policy` 에 따라 제목과 본문을 가린다. `policy` 는 대상(게시, AI 전달)의 공개 정책이다.
+/// 공개 정책으로 공유본을 만들고 복원할 구간만 Vault 평문으로 구성한다.
 pub fn mask_issue_text(
     title: &str,
     body: &str,
     spans: &[IssueSensitiveSpan],
     policy: &IssueDisclosurePolicy,
 ) -> Result<IssueMaskingOutcome, IssueMaskingBlocked> {
-    let mut unconfirmed = Vec::new();
-    let mut title_spans = Vec::new();
-    let mut body_spans = Vec::new();
-    for (span_index, span) in spans.iter().enumerate() {
-        let text = match span.field {
-            IssueTextField::Title => title,
-            IssueTextField::Body => body,
-        };
-        let range = &span.range;
-        if range.start >= range.end
-            || !text.is_char_boundary(range.start)
-            || !text.is_char_boundary(range.end)
-        {
-            return Err(IssueMaskingBlocked::InvalidSpan { span_index });
-        }
-        match resolved_action(span, policy) {
-            Some(remove) => match span.field {
-                IssueTextField::Title => title_spans.push((range.clone(), remove)),
-                IssueTextField::Body => body_spans.push((range.clone(), remove)),
-            },
-            None => unconfirmed.push(span_index),
-        }
-    }
-    if !unconfirmed.is_empty() {
-        return Err(IssueMaskingBlocked::NeedsUserConfirmation {
-            span_indexes: unconfirmed,
-        });
-    }
-
-    let mut markers = MarkerSource {
-        title,
-        body,
-        next: 1,
-    };
-    let mut masked_spans = Vec::new();
-    let shared_title = mask_field(
-        IssueTextField::Title,
-        title,
-        title_spans,
-        &mut markers,
-        &mut masked_spans,
-    );
-    let shared_body = mask_field(
-        IssueTextField::Body,
-        body,
-        body_spans,
-        &mut markers,
-        &mut masked_spans,
-    );
+    let plan = plan_issue_masking(title, body, spans, policy)?;
+    let masked_spans = plan
+        .restorable_spans
+        .into_iter()
+        .map(|span| restorable_span(title, body, span))
+        .collect();
     Ok(IssueMaskingOutcome {
-        shared_copy: IssueSharedCopy {
-            title: shared_title,
-            body: shared_body,
-        },
+        shared_copy: plan.shared_copy,
         masked_spans,
     })
 }
 
-/// 구간을 제거하면 `Some(true)`, 가리면 `Some(false)`, 사용자의 답이 필요하면 `None` 이다.
-fn resolved_action(span: &IssueSensitiveSpan, policy: &IssueDisclosurePolicy) -> Option<bool> {
-    let policy_action = span
-        .class
-        .map_or(IssueSensitiveSpanAction::UserConfirm, |class| {
-            policy.action_for(class)
-        });
-    let action = match policy_action {
-        IssueSensitiveSpanAction::UserConfirm => span.user_decision?,
-        decided => decided,
+fn restorable_span(title: &str, body: &str, span: IssueRestorableSpanPlan) -> IssueMaskedSpan {
+    let text = match span.field {
+        IssueTextField::Title => title,
+        IssueTextField::Body => body,
     };
-    match action {
-        IssueSensitiveSpanAction::Remove => Some(true),
-        IssueSensitiveSpanAction::RestorableMask => Some(false),
-        IssueSensitiveSpanAction::UserConfirm => None,
+    let mut plaintext = String::new();
+    let mut cursor = span.source_range.start;
+    for removal in span.removal_ranges {
+        plaintext.push_str(&text[cursor..removal.start]);
+        plaintext.push_str(ISSUE_REMOVED_PLACEHOLDER);
+        cursor = removal.end;
     }
-}
-
-/// 입력에 이미 있는 글과 겹치지 않는 표식을 차례로 준다.
-struct MarkerSource<'a> {
-    title: &'a str,
-    body: &'a str,
-    next: u64,
-}
-
-impl MarkerSource<'_> {
-    fn next_marker(&mut self) -> String {
-        loop {
-            let marker = format!("[[akra-mask:{}]]", self.next);
-            self.next += 1;
-            if !self.title.contains(&marker) && !self.body.contains(&marker) {
-                return marker;
-            }
-        }
+    plaintext.push_str(&text[cursor..span.source_range.end]);
+    IssueMaskedSpan {
+        marker: span.marker,
+        field: span.field,
+        position: span.shared_position,
+        plaintext: VaultPlaintext::new(plaintext),
     }
-}
-
-/// 칸 하나를 가린다. 겹친 구간은 한 묶음이다. 묶음 안의 제거 범위는 먼저 버리고, 가림이 하나라도 있으면
-/// 묶음 전체를 표식 하나로 바꾼다.
-fn mask_field(
-    field: IssueTextField,
-    text: &str,
-    mut spans: Vec<(Range<usize>, bool)>,
-    markers: &mut MarkerSource<'_>,
-    masked_spans: &mut Vec<IssueMaskedSpan>,
-) -> String {
-    spans.sort_by_key(|(range, _)| range.start);
-    let mut shared = String::with_capacity(text.len());
-    let mut cursor = 0;
-    let mut index = 0;
-    while index < spans.len() {
-        let group_start = spans[index].0.start;
-        let mut group_end = group_start;
-        let mut has_mask = false;
-        // 제거 범위를 버린 묶음의 글이다.
-        let mut kept = String::new();
-        let mut kept_cursor = group_start;
-        while index < spans.len() && (spans[index].0.start < group_end || group_end == group_start)
-        {
-            let (range, remove) = &spans[index];
-            group_end = group_end.max(range.end);
-            if *remove {
-                if range.start > kept_cursor {
-                    kept.push_str(&text[kept_cursor..range.start]);
-                }
-                // 앞의 제거 범위와 이어지면 자리 글을 다시 넣지 않는다.
-                if range.start > kept_cursor || kept.is_empty() {
-                    kept.push_str(ISSUE_REMOVED_PLACEHOLDER);
-                }
-                kept_cursor = kept_cursor.max(range.end);
-            } else {
-                has_mask = true;
-            }
-            index += 1;
-        }
-        if group_end > kept_cursor {
-            kept.push_str(&text[kept_cursor..group_end]);
-        }
-
-        shared.push_str(&text[cursor..group_start]);
-        if has_mask {
-            let marker = markers.next_marker();
-            masked_spans.push(IssueMaskedSpan {
-                marker: marker.clone(),
-                field,
-                position: shared.len(),
-                plaintext: VaultPlaintext::new(kept),
-            });
-            shared.push_str(&marker);
-        } else {
-            shared.push_str(&kept);
-        }
-        cursor = group_end;
-    }
-    shared.push_str(&text[cursor..]);
-    shared
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::issue_policy::{IssueSensitiveSpanAction, IssueSensitiveSpanClass};
+    use std::ops::Range;
 
     // 시험용으로 만든 값이다. 실제 비밀이 아니다.
     const SYNTHETIC_TOKEN: &str = "synthetic-token-AAAA1111";
@@ -535,6 +359,121 @@ mod tests {
             )
             .expect_err("masking should be blocked");
             assert_eq!(blocked, IssueMaskingBlocked::InvalidSpan { span_index: 0 });
+        }
+    }
+
+    #[test]
+    fn wrapper_preserves_mixed_overlap_plan_and_vault_text() {
+        let title = "홍길동 [[akra-mask:1]]";
+        let body = "앞 abcdefghijklmnop 뒤";
+        let start = body.find("abcdefghijklmnop").unwrap();
+        let body_span = |range: Range<usize>, class| IssueSensitiveSpan {
+            field: IssueTextField::Body,
+            range: start + range.start..start + range.end,
+            class: Some(class),
+            user_decision: None,
+        };
+        let spans = vec![
+            body_span(10..16, IssueSensitiveSpanClass::Log),
+            body_span(12..14, IssueSensitiveSpanClass::Secret),
+            body_span(0..7, IssueSensitiveSpanClass::Name),
+            body_span(2..5, IssueSensitiveSpanClass::Secret),
+            body_span(5..12, IssueSensitiveSpanClass::Path),
+            body_span(4..8, IssueSensitiveSpanClass::Secret),
+            body_span(8..10, IssueSensitiveSpanClass::Secret),
+            span(
+                IssueTextField::Title,
+                title,
+                "홍길동",
+                Some(IssueSensitiveSpanClass::Name),
+            ),
+        ];
+        let policy = IssueDisclosurePolicy::builtin();
+        let plan = plan_issue_masking(title, body, &spans, &policy).unwrap();
+        let outcome = mask_issue_text(title, body, &spans, &policy).unwrap();
+
+        assert_eq!(outcome.shared_copy, plan.shared_copy);
+        assert_eq!(outcome.shared_copy.title, "[[akra-mask:2]] [[akra-mask:1]]");
+        assert_eq!(outcome.shared_copy.body, "앞 [[akra-mask:3]] 뒤");
+        assert_eq!(outcome.masked_spans.len(), plan.restorable_spans.len());
+        for (masked, planned) in outcome.masked_spans.iter().zip(&plan.restorable_spans) {
+            assert_eq!(masked.marker, planned.marker);
+            assert_eq!(masked.field, planned.field);
+            assert_eq!(masked.position, planned.shared_position);
+        }
+        let plaintexts: Vec<_> = outcome
+            .masked_spans
+            .iter()
+            .map(|masked| masked.plaintext.expose())
+            .collect();
+        assert_eq!(plaintexts, ["홍길동", "ab[removed]kl[removed]op"]);
+        assert_eq!(outcome.masked_spans[1].position, "앞 ".len());
+        let debug = format!("{outcome:?}");
+        for private_text in ["홍길동", "abcdefghijklmnop", "cdefghij"] {
+            assert!(!debug.contains(private_text));
+        }
+    }
+
+    #[test]
+    fn wrapper_preserves_adjacent_groups_and_a_fully_removed_mask() {
+        let body = "한글 AABB 이름경로 synthetic-private 끝";
+        let spans = [
+            span(
+                IssueTextField::Body,
+                body,
+                "AA",
+                Some(IssueSensitiveSpanClass::Secret),
+            ),
+            span(
+                IssueTextField::Body,
+                body,
+                "BB",
+                Some(IssueSensitiveSpanClass::Secret),
+            ),
+            span(
+                IssueTextField::Body,
+                body,
+                "이름",
+                Some(IssueSensitiveSpanClass::Name),
+            ),
+            span(
+                IssueTextField::Body,
+                body,
+                "경로",
+                Some(IssueSensitiveSpanClass::Path),
+            ),
+            span(
+                IssueTextField::Body,
+                body,
+                "synthetic-private",
+                Some(IssueSensitiveSpanClass::Name),
+            ),
+            span(
+                IssueTextField::Body,
+                body,
+                "synthetic-private",
+                Some(IssueSensitiveSpanClass::Secret),
+            ),
+        ];
+        let policy = IssueDisclosurePolicy::builtin();
+        let plan = plan_issue_masking("t", body, &spans, &policy).unwrap();
+        let outcome = mask_issue_text("t", body, &spans, &policy).unwrap();
+
+        assert_eq!(outcome.shared_copy, plan.shared_copy);
+        assert_eq!(
+            outcome.shared_copy.body,
+            "한글 [removed][removed] [[akra-mask:1]][[akra-mask:2]] [[akra-mask:3]] 끝",
+        );
+        let plaintexts: Vec<_> = outcome
+            .masked_spans
+            .iter()
+            .map(|masked| masked.plaintext.expose())
+            .collect();
+        assert_eq!(plaintexts, ["이름", "경로", "[removed]"]);
+        for (masked, planned) in outcome.masked_spans.iter().zip(&plan.restorable_spans) {
+            assert_eq!(masked.marker, planned.marker);
+            assert_eq!(masked.position, planned.shared_position);
+            assert!(outcome.shared_copy.body[masked.position..].starts_with(&masked.marker));
         }
     }
 }

@@ -103,3 +103,5 @@ pub mod telegram_update_ledger_port;
 
 // 이슈 자동화의 독립 장부 계약이다 (#2536).
 pub mod issue_automation_store_port;
+// 이슈 출처의 발견과 안정 ID 재동기화 계약이다 (#2537).
+pub mod issue_source_port;
