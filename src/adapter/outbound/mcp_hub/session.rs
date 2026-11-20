@@ -29,12 +29,24 @@ pub(super) struct HubAppServerSession {
 
 impl HubAppServerSession {
     pub(super) fn open(codex: &TrustedCommand, codex_home: &Path) -> Result<Self> {
+        let config_path = codex_home.join(super::CONFIG_FILE);
+        let document = match std::fs::read_to_string(&config_path) {
+            Ok(text) => text.parse::<toml_edit::DocumentMut>().with_context(|| {
+                format!("failed to parse MCP hub config `{}`", config_path.display())
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                toml_edit::DocumentMut::new()
+            }
+            Err(error) => return Err(error).context("failed to read MCP hub configuration"),
+        };
+        let selected_environment = super::catalog::referenced_environment_variables(&document);
         let mut command = Command::new(&codex.program);
         // The hub must not inherit arbitrary parent credentials while regular app-server
         // processes use the scrubbed policy. Explicit AKRA_APP_SERVER_PROCESS_ENVIRONMENT=all
         // retains the same opt-in semantics as ordinary app-server sessions.
         crate::adapter::outbound::app_server::connection::configure_hub_app_server_process_environment(
             &mut command,
+            selected_environment,
         );
         command
             .args(&codex.prefix_args)
@@ -204,3 +216,7 @@ impl HubAppServerSession {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_environment_tests.rs"]
+mod environment_tests;

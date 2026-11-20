@@ -115,6 +115,26 @@ fn fingerprint_with_environment(
         "HTTPS_PROXY".to_string(),
         "NO_PROXY".to_string(),
     ]);
+    names.extend(referenced_environment_variables(document));
+    let mut digest = Sha256::new();
+    digest.update(document.to_string().as_bytes());
+    for name in names {
+        digest.update([0]);
+        digest.update(name.as_bytes());
+        match environment(&name) {
+            Some(value) => {
+                digest.update([1]);
+                digest.update(value.as_bytes());
+            }
+            None => digest.update([0]),
+        }
+    }
+    format!("{:x}", digest.finalize())
+}
+
+/// Names explicitly selected by the private MCP configuration, never inferred from credentials.
+pub(super) fn referenced_environment_variables(document: &DocumentMut) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
     if let Some(servers) = document.get("mcp_servers").and_then(Item::as_table_like) {
         for (_, server) in servers.iter() {
             if let Some(name) = server.get("bearer_token_env_var").and_then(Item::as_str) {
@@ -135,20 +155,8 @@ fn fingerprint_with_environment(
             }
         }
     }
-    let mut digest = Sha256::new();
-    digest.update(document.to_string().as_bytes());
-    for name in names {
-        digest.update([0]);
-        digest.update(name.as_bytes());
-        match environment(&name) {
-            Some(value) => {
-                digest.update([1]);
-                digest.update(value.as_bytes());
-            }
-            None => digest.update([0]),
-        }
-    }
-    format!("{:x}", digest.finalize())
+    names.retain(|name| !name.is_empty() && !name.contains(['\0', '=']));
+    names
 }
 
 #[cfg(test)]
