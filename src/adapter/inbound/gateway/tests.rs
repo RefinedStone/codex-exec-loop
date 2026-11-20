@@ -1086,3 +1086,120 @@ async fn the_local_host_answers_the_git_graph_and_a_remote_host_does_not() {
     .await;
     assert_eq!(refused["error"]["code"], json!(-32601));
 }
+
+/// 원격 이슈에 합성 비밀값이 들어온 경우이다. 시험용 값이고 실제 비밀이 아니다.
+struct EditedIssueSnapshot;
+
+const SYNTHETIC_ISSUE_TOKEN: &str = "ghp_SyntheticCanary0000";
+
+impl crate::application::port::outbound::issue_snapshot_port::IssueSnapshotPort
+    for EditedIssueSnapshot
+{
+    fn resolve(
+        &self,
+        request: crate::application::port::outbound::issue_snapshot_port::IssueSnapshotResolveRequest,
+    ) -> anyhow::Result<
+        crate::application::port::outbound::issue_snapshot_port::IssueSnapshotResponse,
+    > {
+        use crate::application::port::outbound::issue_snapshot_port::{
+            IssueRawFields, IssueSnapshotResponse,
+        };
+        use crate::domain::issue_work::{IssueComparisonBasis, IssueProvider, IssueReference};
+        let raw_fields = IssueRawFields::new(
+            format!("Crash #{}", request.locator.number),
+            format!("token={SYNTHETIC_ISSUE_TOKEN} 로 실패"),
+        );
+        Ok(IssueSnapshotResponse {
+            issue: IssueReference {
+                provider: IssueProvider::GitHub,
+                server_id: "github.com".to_string(),
+                repository_id: "R_1".to_string(),
+                issue_id: "I_1".to_string(),
+                project_scope: request.project_scope,
+            },
+            comparison_basis: IssueComparisonBasis {
+                field_hash: raw_fields.field_hash(),
+                provider_updated_at: "2026-11-20T00:00:00Z".to_string(),
+            },
+            raw_fields,
+        })
+    }
+
+    fn read(
+        &self,
+        _request: crate::application::port::outbound::issue_snapshot_port::IssueSnapshotReadRequest,
+    ) -> anyhow::Result<
+        crate::application::port::outbound::issue_snapshot_port::IssueSnapshotResponse,
+    > {
+        anyhow::bail!("not used")
+    }
+}
+
+struct NoIssuePolicyFiles;
+
+impl crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort
+    for NoIssuePolicyFiles
+{
+    fn load_user_policy_toml(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn load_project_policy_toml(&self, _workspace_dir: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+}
+
+async fn connect_with_issue_handoff(path: &str) -> WebSocketStream<DuplexStream> {
+    let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+    let hosts = GatewayHosts::new(
+        EchoUpstream::new(true),
+        vec![("cloud".to_string(), EchoUpstream::new(true) as _)],
+    );
+    let services = super::session::GatewayServices {
+        issue_handoff: Some(Arc::new(
+            crate::application::service::issue_handoff::IssueHandoffService::new(
+                Arc::new(EditedIssueSnapshot),
+                Arc::new(NoIssuePolicyFiles),
+            ),
+        )),
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        let _ = run_session(
+            gateway_side,
+            hosts,
+            Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
+            services,
+            None,
+        )
+        .await;
+    });
+    let (websocket, _) = tokio_tungstenite::client_async_with_config(
+        format!("ws://localhost{path}"),
+        client_side,
+        Some(websocket_config()),
+    )
+    .await
+    .expect("client handshake through the gateway session should succeed");
+    websocket
+}
+
+#[tokio::test]
+async fn the_issue_handoff_answer_is_the_shared_copy_without_the_secret() {
+    // #2428. The remote text has a synthetic secret from an external edit. The answer must not have it.
+    let params = json!({ "owner": "sample", "repository": "widgets", "number": 42 });
+    let mut local = connect_with_issue_handoff("/").await;
+    let answer = kernel_request(&mut local, "i", "akra/issue/handoffCopy", params.clone()).await;
+    assert_eq!(
+        answer["result"],
+        json!({ "sharedCopy": { "title": "Crash #42", "body": "token=[removed] 로 실패" } })
+    );
+    assert!(!answer.to_string().contains(SYNTHETIC_ISSUE_TOKEN));
+
+    let invalid = kernel_request(&mut local, "j", "akra/issue/handoffCopy", json!({})).await;
+    assert_eq!(invalid["error"]["code"], json!(-32602));
+
+    let mut remote = connect_with_issue_handoff("/host/cloud").await;
+    let refused = kernel_request(&mut remote, "i", "akra/issue/handoffCopy", params).await;
+    assert_eq!(refused["error"]["code"], json!(-32601));
+}
