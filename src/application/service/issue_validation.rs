@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::application::service::issue_code_validator::IssueCodeValidatorResult;
 use crate::domain::issue_validation::{
     IssueRequirements, IssueValidationError, IssueValidationPassed, validate_issue,
 };
@@ -18,6 +19,8 @@ pub enum IssuePublishBlocked {
     ValidatorAbsent,
     /// 검증이 실패했다. 필드별 오류이다.
     Invalid(Vec<IssueValidationError>),
+    /// 필수 코드 검증기가 거부했거나 실행되지 않았다 (#2431).
+    CodeValidator(Vec<IssueCodeValidatorResult>),
 }
 
 impl fmt::Display for IssuePublishBlocked {
@@ -33,6 +36,11 @@ impl fmt::Display for IssuePublishBlocked {
                 formatter,
                 "issue publish blocked: {} validation error(s)",
                 errors.len()
+            ),
+            Self::CodeValidator(results) => write!(
+                formatter,
+                "issue publish blocked: {} required code validator(s) did not pass",
+                results.len()
             ),
         }
     }
