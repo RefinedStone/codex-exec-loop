@@ -938,6 +938,11 @@ strategy in the production TUI.
   ports, core contracts, or domain values.
 - TUI must not bypass core/application command gates for planning or parallel mutation.
 - Outbound adapters must not encode domain policy.
+- General Kernel events, the kernel protocol, Gateway code, and the Issue Core contract
+  (`issue_core_port`: read shared copy, publish) must not reference the Evidence Vault restore
+  contract (`evidence_vault_port`). Restore plaintext and key types have no `Serialize`, so they
+  cannot enter a serialized event or response; restore needs a `VaultUserConfirmation` built on the
+  local confirmation path. `FakeIssueWorkAdapter` is the only implementation today.
 
 Verify boundary-sensitive changes with:
 
