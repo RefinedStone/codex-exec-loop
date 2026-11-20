@@ -9,7 +9,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationBindingInsertResult, IssueAutomationBindingSaveResult,
     IssueAutomationIssueInsertResult, IssueAutomationIssueSaveResult, IssueAutomationStorePort,
-    IssueCollectionApplyResult, IssueCollectionModeSaveResult, StoredIssueAutomationBinding,
+    IssueCollectionApplyResult, IssueCollectionModeSaveResult, IssueTriageBatch, IssueTriageFence,
+    IssueTriageSaveResult, StoredIssueAutomationBinding,
 };
 use crate::domain::issue_automation::{
     IssueAutomationAutonomy, IssueAutomationBinding, IssueAutomationBindingId,
@@ -24,13 +25,16 @@ use crate::application::port::outbound::issue_source_port::{
     IssueDiscoveryPage, IssueDiscoveryRequest,
 };
 use crate::domain::issue_automation::collection::{
-    IssueCollectionFailure, IssueCollectionFence, IssueCollectionMode, IssueCollectionPage,
-    IssueCollectionQuery, IssueResyncBatch, StoredIssueCollection,
+    IssueCollectionFailure, IssueCollectionFence, IssueCollectionItem, IssueCollectionMode,
+    IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery, IssueResyncBatch,
+    StoredIssueCollection,
 };
 use crate::domain::issue_automation::source::IssueSourceRead;
+use crate::domain::issue_automation::triage::IssueTriageAssessment;
 
 mod collection;
 mod private_store;
+mod triage;
 
 #[cfg(test)]
 mod tests;
@@ -38,7 +42,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -155,6 +159,7 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
                         enum_name(&record.autonomy)?,
                     ],
                 )?;
+                triage::bump_catalog(transaction, workspace_dir)?;
                 Ok(IssueAutomationBindingInsertResult {
                     binding: StoredIssueAutomationBinding {
                         binding: binding.clone(),
@@ -242,6 +247,7 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
                 if changed != 1 {
                     bail!("the issue automation binding changed during its transaction")
                 }
+                triage::bump_catalog(transaction, workspace_dir)?;
                 Ok(IssueAutomationBindingSaveResult::Saved {
                     record: Box::new(StoredIssueAutomationBinding {
                         binding: binding.clone(),
@@ -280,6 +286,7 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
                 inserted.revision = 1;
                 let inserted_issue = TrackedIssue::hydrate(inserted.clone())?;
                 insert_issue_row(transaction, &inserted)?;
+                triage::bump_catalog(transaction, workspace_dir)?;
                 Ok(IssueAutomationIssueInsertResult {
                     issue: inserted_issue,
                     inserted: true,
@@ -371,6 +378,7 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
                 saved.revision = next_revision(current_revision)?;
                 let saved_issue = TrackedIssue::hydrate(saved.clone())?;
                 update_issue_row(transaction, expected_revision, &saved)?;
+                triage::bump_catalog(transaction, workspace_dir)?;
                 Ok(IssueAutomationIssueSaveResult::Saved {
                     record: Box::new(saved_issue),
                     changed: true,
@@ -381,6 +389,13 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
 
     fn get_collection(&self, workspace_dir: &str) -> Result<Option<StoredIssueCollection>> {
         collection::get(self, workspace_dir)
+    }
+
+    fn get_collection_projection(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<IssueCollectionProjection>> {
+        collection::projection(self, workspace_dir)
     }
 
     fn ensure_collection(&self, workspace_dir: &str) -> Result<StoredIssueCollection> {
@@ -449,6 +464,33 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
     ) -> Result<IssueCollectionPage> {
         collection::query(self, workspace_dir, query)
     }
+
+    fn scan_collection_issues(
+        &self,
+        workspace_dir: &str,
+        binding_id: Option<&IssueAutomationBindingId>,
+        visitor: &mut dyn FnMut(IssueCollectionItem) -> Result<()>,
+    ) -> Result<u64> {
+        triage::scan(self, workspace_dir, binding_id, visitor)
+    }
+
+    fn read_triage_batch(
+        &self,
+        workspace_dir: &str,
+        after: Option<&IssueReference>,
+        limit: u16,
+    ) -> Result<IssueTriageBatch> {
+        triage::batch(self, workspace_dir, after, limit)
+    }
+
+    fn save_triage(
+        &self,
+        workspace_dir: &str,
+        expected: IssueTriageFence,
+        assessment: &IssueTriageAssessment,
+    ) -> Result<IssueTriageSaveResult> {
+        triage::save(self, workspace_dir, expected, assessment)
+    }
 }
 
 fn transaction<T>(
@@ -475,12 +517,17 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, 1) => {
-                // Validate the exact v1 definitions before the additive migration.
-                // Existing bindings, workflow rows and their revisions remain untouched.
-                validate_schema_version(transaction, 1)?;
-                transaction.execute_batch(collection::CONTROL_SCHEMA)?;
-                transaction.execute_batch(collection::OBSERVATIONS_SCHEMA)?;
+            (APPLICATION_ID, version @ (1 | 2)) => {
+                // Exact prior schemas are validated before the additive migration.
+                // Existing bindings, observations, workflow rows and revisions remain untouched.
+                validate_schema_version(transaction, version)?;
+                if version == 1 {
+                    transaction.execute_batch(collection::CONTROL_SCHEMA)?;
+                    transaction.execute_batch(collection::OBSERVATIONS_SCHEMA)?;
+                }
+                transaction.execute_batch(triage::CATALOG_SCHEMA)?;
+                transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
+                triage::seed_catalog(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -497,6 +544,8 @@ fn ensure_schema(
                 transaction.execute_batch(ISSUES_SCHEMA)?;
                 transaction.execute_batch(collection::CONTROL_SCHEMA)?;
                 transaction.execute_batch(collection::OBSERVATIONS_SCHEMA)?;
+                transaction.execute_batch(triage::CATALOG_SCHEMA)?;
+                transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -518,21 +567,29 @@ fn validate_schema(connection: &Connection) -> Result<()> {
 }
 
 fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> {
+    if !matches!(version, 1 | 2 | SCHEMA_VERSION) {
+        bail!("the issue automation schema version is unsupported")
+    }
     let mut statement = connection.prepare(
         "SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
     )?;
     let mut rows = statement.query([])?;
-    let mut expected = vec![(BINDINGS_TABLE, BINDINGS_SCHEMA)];
-    if version == SCHEMA_VERSION {
+    let mut expected = vec![
+        (BINDINGS_TABLE, BINDINGS_SCHEMA),
+        (ISSUES_TABLE, ISSUES_SCHEMA),
+    ];
+    if version >= 2 {
         expected.push((collection::CONTROL_TABLE, collection::CONTROL_SCHEMA));
         expected.push((
             collection::OBSERVATIONS_TABLE,
             collection::OBSERVATIONS_SCHEMA,
         ));
-    } else if version != 1 {
-        bail!("the issue automation schema version is unsupported")
     }
-    expected.push((ISSUES_TABLE, ISSUES_SCHEMA));
+    if version >= 3 {
+        expected.push((triage::CATALOG_TABLE, triage::CATALOG_SCHEMA));
+        expected.push((triage::ASSESSMENTS_TABLE, triage::ASSESSMENTS_SCHEMA));
+    }
+    expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {
         let Some(row) = rows.next()? else {
             bail!("the issue automation database is missing a required table")

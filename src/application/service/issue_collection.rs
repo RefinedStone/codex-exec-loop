@@ -56,7 +56,10 @@ impl IssueCollectionCancellation {
         self.cancelled.store(true, Ordering::Release);
     }
 
-    fn commit_if_active<T>(&self, commit: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
+    pub(crate) fn commit_if_active<T>(
+        &self,
+        commit: impl FnOnce() -> Result<T>,
+    ) -> Result<Option<T>> {
         let _guard = self
             .commit_gate
             .lock()
@@ -91,7 +94,7 @@ pub struct IssueCollectionRunOutcome {
 }
 
 struct CollectionProgress {
-    state: StoredIssueCollection,
+    projection: IssueCollectionProjection,
     newly_tracked: Vec<IssueReference>,
     discarded: bool,
 }
@@ -102,6 +105,7 @@ pub struct IssueCollectionService {
     source: Arc<dyn IssueSourcePort>,
     origin: Arc<dyn IssueCollectionOriginPort>,
     policy: IssuePolicyService,
+    triage: Option<Arc<super::issue_triage::IssueTriageService>>,
 }
 
 impl IssueCollectionService {
@@ -118,20 +122,52 @@ impl IssueCollectionService {
             source,
             origin,
             policy,
+            triage: None,
         }
+    }
+
+    pub fn with_triage(mut self, triage: Arc<super::issue_triage::IssueTriageService>) -> Self {
+        self.triage = Some(triage);
+        self
+    }
+
+    pub fn triage_service(&self) -> Option<Arc<super::issue_triage::IssueTriageService>> {
+        self.triage.clone()
+    }
+
+    pub fn issue(
+        &self,
+        reference: &IssueReference,
+    ) -> Result<crate::domain::issue_automation::collection::IssueCollectionDetail> {
+        self.triage
+            .as_ref()
+            .ok_or_else(|| anyhow!("the issue triage service is unavailable"))?
+            .issue(reference)
+    }
+
+    pub fn report(
+        &self,
+        binding_id: Option<&IssueAutomationBindingId>,
+    ) -> Result<crate::domain::issue_automation::collection::IssueTriageObserveReport> {
+        self.triage
+            .as_ref()
+            .ok_or_else(|| anyhow!("the issue triage service is unavailable"))?
+            .report(binding_id)
     }
 
     /// 기본 Observe도 영속된 뒤에 반환한다. 기존 Off나 읽기 오류를 기본값으로 대체하지 않는다.
     pub fn projection(&self) -> Result<IssueCollectionProjection> {
-        let state = self
-            .store
+        self.store
             .ensure_collection(&self.workspace_dir)
             .map_err(ledger_unavailable)?;
-        self.project(state)
+        self.project()
     }
 
     pub fn issues(&self, query: &IssueCollectionQuery) -> Result<IssueCollectionPage> {
         query.validate()?;
+        if let Some(triage) = &self.triage {
+            return triage.issues(query);
+        }
         self.store
             .query_collection_issues(&self.workspace_dir, query)
             .map_err(ledger_unavailable)
@@ -154,10 +190,14 @@ impl IssueCollectionService {
                 )
                 .map_err(ledger_unavailable)?
             {
-                IssueCollectionModeSaveResult::Saved { state, changed } => {
+                IssueCollectionModeSaveResult::Saved {
+                    projection,
+                    changed,
+                    ..
+                } => {
                     return Ok(IssueCollectionModeChange {
                         previous,
-                        projection: self.project(*state)?,
+                        projection: *projection,
                         changed,
                     });
                 }
@@ -184,19 +224,15 @@ impl IssueCollectionService {
         at_unix_ms: u64,
         committed: &(dyn Fn(Vec<IssueCollectionTrackedFact>) + Send + Sync),
     ) -> Result<IssueCollectionRunOutcome> {
-        let state = cancel
-            .commit_if_active(|| {
-                self.store
-                    .ensure_collection(&self.workspace_dir)
-                    .map_err(ledger_unavailable)
-            })?
+        let projection = cancel
+            .commit_if_active(|| self.projection())?
             .ok_or_else(|| anyhow!("the issue collection was cancelled"))?;
         let mut progress = CollectionProgress {
-            state,
+            projection,
             newly_tracked: Vec::new(),
             discarded: false,
         };
-        if !self.may_read(&progress.state, cancel)? {
+        if !self.may_read(&progress.projection.state, cancel)? {
             return self.discard(progress);
         }
         let origin = match self.origin.github_origin(&self.workspace_dir) {
@@ -237,15 +273,17 @@ impl IssueCollectionService {
             );
         }
 
-        let repository = self
-            .project(progress.state.clone())?
-            .binding
-            .map(|binding| IssueSourceRepository {
-                provider: binding.provider(),
-                server_id: binding.server_id().to_string(),
-                repository_id: binding.repository_id().to_string(),
-                project_scope: binding.project_scope().clone(),
-            });
+        let repository =
+            progress
+                .projection
+                .binding
+                .as_ref()
+                .map(|binding| IssueSourceRepository {
+                    provider: binding.provider(),
+                    server_id: binding.server_id().to_string(),
+                    repository_id: binding.repository_id().to_string(),
+                    project_scope: binding.project_scope().clone(),
+                });
         if repository.as_ref().is_some_and(|repository| {
             repository.provider != IssueProvider::GitHub
                 || repository.server_id != "github.com"
@@ -261,7 +299,9 @@ impl IssueCollectionService {
             );
         }
         let selection = IssueDiscoverySelection::AllOpen;
-        if let (Some(cursor), Some(repository)) = (&progress.state.discovery_cursor, &repository) {
+        if let (Some(cursor), Some(repository)) =
+            (&progress.projection.state.discovery_cursor, &repository)
+        {
             // 바인딩의 안정 좌표가 다르면 정책 변경으로 간주하여 우회하지 않는다.
             if cursor.to_record().repository != *repository {
                 return self.finish(
@@ -284,7 +324,10 @@ impl IssueCollectionService {
             {
                 let result = cancel.commit_if_active(|| {
                     self.store
-                        .reset_discovery_cursor(&self.workspace_dir, progress.state.fence())
+                        .reset_discovery_cursor(
+                            &self.workspace_dir,
+                            progress.projection.state.fence(),
+                        )
                         .map_err(ledger_unavailable)
                 })?;
                 if !adopt(&mut progress, result) {
@@ -295,7 +338,7 @@ impl IssueCollectionService {
         let request = self.discovery_request(
             &origin,
             repository,
-            &progress.state,
+            &progress.projection.state,
             selection,
             disclosure.clone(),
         );
@@ -307,7 +350,7 @@ impl IssueCollectionService {
                 Some(IssueCollectionFailure::Source(reason)),
             );
         }
-        if !self.may_read(&progress.state, cancel)? {
+        if !self.may_read(&progress.projection.state, cancel)? {
             return self.discard(progress);
         }
         let mut failure = None;
@@ -318,7 +361,7 @@ impl IssueCollectionService {
                         .store
                         .apply_discovery_page(
                             &self.workspace_dir,
-                            progress.state.fence(),
+                            progress.projection.state.fence(),
                             &request,
                             &page,
                         )
@@ -334,14 +377,14 @@ impl IssueCollectionService {
         }
 
         // 발견에 실패해도 이미 알고 있는 ID는 별도로 읽는다. 목록 실패를 기존 이슈의 변화 없음으로 보지 않는다.
-        if !self.may_read(&progress.state, cancel)? {
+        if !self.may_read(&progress.projection.state, cancel)? {
             return self.discard(progress);
         }
         let Some(batch) = self
             .store
             .read_resync_batch(
                 &self.workspace_dir,
-                progress.state.fence(),
+                progress.projection.state.fence(),
                 ISSUE_RESYNC_BATCH_SIZE,
             )
             .map_err(ledger_unavailable)?
@@ -350,7 +393,7 @@ impl IssueCollectionService {
         };
         let mut reads = Vec::with_capacity(batch.targets.len());
         for reference in &batch.targets {
-            if !self.may_read(&progress.state, cancel)? {
+            if !self.may_read(&progress.projection.state, cancel)? {
                 return self.discard(progress);
             }
             let read = self.source.resync(IssueResyncRequest {
@@ -436,7 +479,7 @@ impl IssueCollectionService {
             self.store
                 .record_collection_attempt(
                     &self.workspace_dir,
-                    progress.state.fence(),
+                    progress.projection.state.fence(),
                     at_unix_ms,
                     failure,
                 )
@@ -450,36 +493,22 @@ impl IssueCollectionService {
 
     fn discard(&self, mut progress: CollectionProgress) -> Result<IssueCollectionRunOutcome> {
         progress.discarded = true;
-        if let Some(current) = self
-            .store
-            .get_collection(&self.workspace_dir)
-            .map_err(ledger_unavailable)?
-        {
-            progress.state = current;
-        }
         self.outcome(progress)
     }
 
     fn outcome(&self, progress: CollectionProgress) -> Result<IssueCollectionRunOutcome> {
         Ok(IssueCollectionRunOutcome {
-            projection: self.project(progress.state)?,
+            projection: progress.projection,
             newly_tracked: progress.newly_tracked,
             discarded: progress.discarded,
         })
     }
 
-    fn project(&self, state: StoredIssueCollection) -> Result<IssueCollectionProjection> {
-        let binding = match &state.binding_id {
-            Some(id) => Some(
-                self.store
-                    .get_binding(&self.workspace_dir, id)
-                    .map_err(ledger_unavailable)?
-                    .ok_or_else(|| anyhow!("the issue collection binding is unavailable"))?
-                    .binding,
-            ),
-            None => None,
-        };
-        Ok(IssueCollectionProjection { state, binding })
+    fn project(&self) -> Result<IssueCollectionProjection> {
+        self.store
+            .get_collection_projection(&self.workspace_dir)
+            .map_err(ledger_unavailable)?
+            .ok_or_else(|| anyhow!("the issue collection projection is unavailable"))
     }
 }
 
@@ -491,6 +520,7 @@ fn report_committed(
         && !commit.newly_tracked.is_empty()
     {
         let binding_id = commit
+            .projection
             .state
             .binding_id
             .as_ref()
@@ -502,7 +532,7 @@ fn report_committed(
                 .map(|issue| IssueCollectionTrackedFact {
                     issue: issue.clone(),
                     binding_id: binding_id.clone(),
-                    revision: commit.state.revision,
+                    revision: commit.projection.catalog_revision,
                 })
                 .collect(),
         );
@@ -538,12 +568,12 @@ fn checked_resync_read(
 fn adopt(progress: &mut CollectionProgress, result: Option<IssueCollectionApplyResult>) -> bool {
     match result {
         Some(IssueCollectionApplyResult::Applied(commit)) => {
-            progress.state = commit.state;
+            progress.projection = commit.projection;
             progress.newly_tracked.extend(commit.newly_tracked);
             true
         }
-        Some(IssueCollectionApplyResult::Discarded { current }) => {
-            progress.state = *current;
+        Some(IssueCollectionApplyResult::Discarded { projection, .. }) => {
+            progress.projection = *projection;
             progress.discarded = true;
             false
         }

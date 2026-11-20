@@ -40,6 +40,7 @@ fn projection(mode: IssueCollectionMode) -> IssueCollectionProjection {
     )
     .unwrap();
     IssueCollectionProjection {
+        catalog_revision: 13,
         state: StoredIssueCollection {
             config: IssueCollectionConfig { mode },
             epoch: 3,
@@ -118,8 +119,12 @@ fn observation(content: IssueSourceContent) -> IssueSourceRead {
 
 fn page(current: Option<IssueSourceRead>) -> IssueCollectionPage {
     IssueCollectionPage {
+        report: None,
         revision: 7,
         items: vec![IssueCollectionItem {
+            observation_revision: None,
+            tracked_revision: None,
+            triage: None,
             issue: reference(),
             binding_id: IssueAutomationBindingId::new("origin-binding").unwrap(),
             tracked: Some(IssueTrackedSummary {
@@ -300,6 +305,7 @@ fn issue_collection_status_uses_the_committed_mode_and_separates_unknown_runtime
     assert_ne!(
         serde_json::to_value(KernelQueryAnswer::Issues(IssuesState::unavailable())).unwrap(),
         issue_answer(&IssueCollectionPage {
+            report: None,
             revision: 7,
             items: vec![],
             next_after: None
@@ -316,6 +322,7 @@ fn issue_list_cursor_preserves_the_full_stable_reference_and_workspace() {
     issue.issue_id = "stable-id-with-/and-한글".to_string();
     issue.project_scope.workspace_dir = "C:/dev/project".to_string();
     let page = IssueCollectionPage {
+        report: None,
         revision: 1,
         items: vec![],
         next_after: Some(issue.clone()),
@@ -519,4 +526,30 @@ fn populated_issue_queries_and_events_match_the_generated_schema_and_round_trip(
             answer
         );
     }
+}
+
+#[test]
+fn issue_status_and_event_use_catalog_revision_even_without_a_control_change() {
+    let mut projection = projection(IssueCollectionMode::Observe);
+    projection.catalog_revision = 105;
+    let before = serde_json::to_value(IssueAutomationState::from_domain(&projection)).unwrap();
+    assert_eq!(before["revision"], 105);
+    assert_eq!(projection.state.revision, 7);
+
+    // 판정만 저장해도 catalog가 진전한다. 수집 control CAS 판을 공개 목록 판으로 쓰면
+    // Desktop은 새 이벤트를 이전 페이지보다 오래된 것으로 보고 재조회를 건너뛴다.
+    projection.catalog_revision = 106;
+    let event = serde_json::to_value(KernelEvent::Issues(IssueAutomationState::from_domain(
+        &projection,
+    )))
+    .unwrap();
+    let page = issue_answer(&IssueCollectionPage {
+        revision: 106,
+        items: vec![],
+        next_after: None,
+        report: None,
+    });
+    assert_eq!(event["revision"], page["revision"]);
+    assert!(event["revision"].as_u64().unwrap() > before["revision"].as_u64().unwrap());
+    assert_eq!(projection.state.revision, 7);
 }

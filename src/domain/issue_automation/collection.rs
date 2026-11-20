@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::source::{IssueDiscoveryCursor, IssueSourceFailure, IssueSourceRead};
+use super::triage::IssueTriageAssessment;
 use super::{
     IssueAutomationBinding, IssueAutomationBindingId, IssueAutomationError, IssueAutomationFlags,
     IssueAutomationState, MAX_ISSUE_AUTOMATION_REVISION,
@@ -148,6 +149,8 @@ pub enum IssueCollectionFailure {
 pub struct IssueCollectionProjection {
     pub state: StoredIssueCollection,
     pub binding: Option<IssueAutomationBinding>,
+    /// 목록·단건·이벤트가 공유하는 공개 판이다. state.revision은 수집 CAS에만 쓴다.
+    pub catalog_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +176,10 @@ pub struct IssueCollectionItem {
     pub tracked: Option<IssueTrackedSummary>,
     /// v1에서 넘어온 아직 재관찰하지 않은 행은 None이다.
     pub current: Option<IssueSourceRead>,
+    /// 현재 관찰 행의 CAS 판이다. 과거 snapshot에서 만들지 않는다.
+    pub observation_revision: Option<u64>,
+    pub tracked_revision: Option<u64>,
+    pub triage: Option<IssueTriageProjection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +218,46 @@ pub struct IssueCollectionPage {
     pub revision: u64,
     pub items: Vec<IssueCollectionItem>,
     pub next_after: Option<IssueReference>,
+    /// 화면 페이지가 아닌 같은 읽기 snapshot의 전체 binding 집계다.
+    pub report: Option<IssueTriageObserveReport>,
+}
+
+/// 저장된 판정만 담는다. 현재 입력/정책과 다르면 stale이며 실행 관문으로 쓸 수 없다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueTriageProjection {
+    pub assessment: IssueTriageAssessment,
+    pub revision: u64,
+    pub observation_revision: Option<u64>,
+    pub tracked_revision: Option<u64>,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueCollectionDetail {
+    pub revision: u64,
+    pub item: Option<IssueCollectionItem>,
+    pub report: Option<IssueTriageObserveReport>,
+}
+
+/// 범주는 서로 겹치지 않는다. 낡거나 읽지 못한 판정은 시작/승인 건수에 포함하지 않는다.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IssueTriageObserveReport {
+    pub revision: u64,
+    pub binding_id: Option<IssueAutomationBindingId>,
+    pub policy_version: Option<String>,
+    pub assumed_mode: Option<super::IssueAutomationAutonomy>,
+    pub policy_blocked: bool,
+    pub total: u64,
+    pub automatic_start: u64,
+    pub human_approval: u64,
+    pub deferred: u64,
+    pub excluded: u64,
+    pub needs_info: u64,
+    pub unknown: u64,
+    pub observation_only: u64,
+    pub stale: u64,
+    pub untriaged: u64,
+    pub blocked: u64,
 }
 
 fn validate_revision(value: u64) -> Result<(), IssueAutomationError> {

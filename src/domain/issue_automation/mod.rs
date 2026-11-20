@@ -6,8 +6,10 @@ mod binding;
 pub mod collection;
 // 수집/실행과 독립된 자동화 정책의 typed 효과값이다 (#2540).
 pub mod policy;
+// 현재 관찰과 정책의 결정적 판정이다. 실행 허가는 만들지 않는다 (#2541).
 mod state;
 mod tracked;
+pub mod triage;
 // 출처의 공유 관찰 값과 페이지 커서다 (#2537).
 pub mod source;
 

@@ -11,8 +11,8 @@ use crate::application::port::outbound::issue_source_port::{
 use crate::domain::issue_automation::IssueAutomationBindingId;
 use crate::domain::issue_automation::collection::{
     IssueCollectionConfig, IssueCollectionFailure, IssueCollectionFence, IssueCollectionMode,
-    IssueCollectionPage, IssueCollectionQuery, IssueCollectionStatus, IssueResyncBatch,
-    IssueResyncCursor, StoredIssueCollection,
+    IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery, IssueCollectionStatus,
+    IssueResyncBatch, IssueResyncCursor, StoredIssueCollection,
 };
 use crate::domain::issue_automation::source::{
     IssueDiscoveryCursor, IssueSourceRead, PersistedIssueDiscoveryCursor,
@@ -23,7 +23,7 @@ use super::{
     read_revision, sql_revision, transaction, validate_expected_revision, validate_reference_scope,
 };
 mod observations;
-mod queries;
+pub(super) mod queries;
 mod schema;
 pub(super) use schema::{CONTROL_SCHEMA, CONTROL_TABLE, OBSERVATIONS_SCHEMA, OBSERVATIONS_TABLE};
 
@@ -40,6 +40,23 @@ pub(super) fn get(
 ) -> Result<Option<StoredIssueCollection>> {
     adapter.with_connection(workspace, |connection, _guard| {
         read_control(connection, workspace)
+    })
+}
+
+pub(super) fn projection(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+) -> Result<Option<IssueCollectionProjection>> {
+    adapter.with_connection(workspace, |connection, guard| {
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)?;
+        guard.verify_identity()?;
+        let result = read_control(&transaction, workspace)?
+            .map(|state| project_control(&transaction, workspace, &state))
+            .transpose()?;
+        guard.verify_identity()?;
+        transaction.commit()?;
+        Ok(result)
     })
 }
 
@@ -76,39 +93,27 @@ pub(super) fn set_mode(
                 }
                 let state = initial(mode);
                 insert_control(transaction, workspace, &state)?;
-                return Ok(IssueCollectionModeSaveResult::Saved {
-                    state: Box::new(state),
-                    changed: true,
-                });
+                return saved_mode(transaction, workspace, state, true);
             };
             let same_mode = current.config.mode == mode;
             let expected = expected_epoch.unwrap_or(0);
             if current.epoch != expected {
                 if same_mode && expected.checked_add(1) == Some(current.epoch) {
-                    return Ok(IssueCollectionModeSaveResult::Saved {
-                        state: Box::new(current),
-                        changed: false,
-                    });
+                    return saved_mode(transaction, workspace, current, false);
                 }
                 return Ok(IssueCollectionModeSaveResult::Conflict {
                     current: Some(Box::new(current)),
                 });
             }
             if same_mode {
-                return Ok(IssueCollectionModeSaveResult::Saved {
-                    state: Box::new(current),
-                    changed: false,
-                });
+                return saved_mode(transaction, workspace, current, false);
             }
             let mut next = current.clone();
             next.config.mode = mode;
             next.epoch = next_revision(current.epoch)?;
             next.revision = next_revision(current.revision)?;
             save_control(transaction, workspace, current.fence(), &next)?;
-            Ok(IssueCollectionModeSaveResult::Saved {
-                state: Box::new(next),
-                changed: true,
-            })
+            saved_mode(transaction, workspace, next, true)
         })
     })
 }
@@ -125,11 +130,11 @@ pub(super) fn apply_discovery(
         transaction(connection, guard, |transaction| {
             let current = require_control(transaction, workspace)?;
             if !accepts(&current, expected) {
-                return Ok(discarded(current));
+                return discarded(transaction, workspace, current);
             }
             observations::validate_page(workspace, request, page)?;
             if current.discovery_cursor != request.cursor {
-                return Ok(discarded(current));
+                return discarded(transaction, workspace, current);
             }
             let mut next = current.clone();
             let binding =
@@ -150,7 +155,7 @@ pub(super) fn apply_discovery(
                 }
             }
             save_control(transaction, workspace, current.fence(), &next)?;
-            Ok(applied(next, newly_tracked))
+            applied(transaction, workspace, next, newly_tracked)
         })
     })
 }
@@ -165,17 +170,17 @@ pub(super) fn reset_discovery(
         transaction(connection, guard, |transaction| {
             let current = require_control(transaction, workspace)?;
             if !accepts(&current, expected) {
-                return Ok(discarded(current));
+                return discarded(transaction, workspace, current);
             }
             if current.discovery_cursor.is_none() {
-                return Ok(applied(current, Vec::new()));
+                return applied(transaction, workspace, current, Vec::new());
             }
             let mut next = current.clone();
             next.discovery_cursor = None;
             next.epoch = next_revision(current.epoch)?;
             next.revision = next_revision(current.revision)?;
             save_control(transaction, workspace, current.fence(), &next)?;
-            Ok(applied(next, Vec::new()))
+            applied(transaction, workspace, next, Vec::new())
         })
     })
 }
@@ -215,7 +220,7 @@ pub(super) fn apply_resync(
         transaction(connection, guard, |transaction| {
             let current = require_control(transaction, workspace)?;
             if !accepts(&current, batch.expected) {
-                return Ok(discarded(current));
+                return discarded(transaction, workspace, current);
             }
             if reads.len() != batch.targets.len() {
                 bail!("the issue resync batch has an incomplete set of reads")
@@ -226,7 +231,7 @@ pub(super) fn apply_resync(
             // Do not let a caller skip rows or replace a checkpoint with arbitrary coordinates.
             let selected = queries::resync_batch(transaction, workspace, &current, limit)?;
             if selected != *batch {
-                return Ok(discarded(current));
+                return discarded(transaction, workspace, current);
             }
             let mut next = current.clone();
             next.resync_cursor = batch.next_cursor.clone();
@@ -242,7 +247,7 @@ pub(super) fn apply_resync(
                 }
             }
             save_control(transaction, workspace, current.fence(), &next)?;
-            Ok(applied(next, newly_tracked))
+            applied(transaction, workspace, next, newly_tracked)
         })
     })
 }
@@ -260,7 +265,7 @@ pub(super) fn record_attempt(
         transaction(connection, guard, |transaction| {
             let current = require_control(transaction, workspace)?;
             if !accepts(&current, expected) {
-                return Ok(discarded(current));
+                return discarded(transaction, workspace, current);
             }
             let mut next = current.clone();
             next.status.last_attempt_at_ms = Some(at_unix_ms);
@@ -274,7 +279,7 @@ pub(super) fn record_attempt(
             }
             next.revision = next_revision(current.revision)?;
             save_control(transaction, workspace, current.fence(), &next)?;
-            Ok(applied(next, Vec::new()))
+            applied(transaction, workspace, next, Vec::new())
         })
     })
 }
@@ -311,20 +316,67 @@ fn accepts(current: &StoredIssueCollection, expected: IssueCollectionFence) -> b
     current.config.mode == IssueCollectionMode::Observe && current.fence() == expected
 }
 
-fn discarded(current: StoredIssueCollection) -> IssueCollectionApplyResult {
-    IssueCollectionApplyResult::Discarded {
+fn project_control(
+    connection: &Connection,
+    workspace: &str,
+    state: &StoredIssueCollection,
+) -> Result<IssueCollectionProjection> {
+    let binding = state
+        .binding_id
+        .as_ref()
+        .map(|id| {
+            read_binding(connection, workspace, id)?
+                .map(|stored| stored.binding)
+                .context("the issue collection binding is unavailable")
+        })
+        .transpose()?;
+    Ok(IssueCollectionProjection {
+        state: state.clone(),
+        binding,
+        catalog_revision: super::triage::catalog_revision(connection, workspace)?,
+    })
+}
+
+fn saved_mode(
+    connection: &Connection,
+    workspace: &str,
+    state: StoredIssueCollection,
+    changed: bool,
+) -> Result<IssueCollectionModeSaveResult> {
+    let projection = project_control(connection, workspace, &state)?;
+    Ok(IssueCollectionModeSaveResult::Saved {
+        state: Box::new(state),
+        projection: Box::new(projection),
+        changed,
+    })
+}
+
+fn discarded(
+    connection: &Connection,
+    workspace: &str,
+    current: StoredIssueCollection,
+) -> Result<IssueCollectionApplyResult> {
+    let projection = project_control(connection, workspace, &current)?;
+    Ok(IssueCollectionApplyResult::Discarded {
         current: Box::new(current),
-    }
+        projection: Box::new(projection),
+    })
 }
 
 fn applied(
+    connection: &Connection,
+    workspace: &str,
     state: StoredIssueCollection,
     newly_tracked: Vec<crate::domain::issue_work::IssueReference>,
-) -> IssueCollectionApplyResult {
-    IssueCollectionApplyResult::Applied(Box::new(IssueCollectionCommit {
-        state,
-        newly_tracked,
-    }))
+) -> Result<IssueCollectionApplyResult> {
+    let projection = project_control(connection, workspace, &state)?;
+    Ok(IssueCollectionApplyResult::Applied(Box::new(
+        IssueCollectionCommit {
+            state,
+            projection,
+            newly_tracked,
+        },
+    )))
 }
 
 fn require_control(connection: &Connection, workspace: &str) -> Result<StoredIssueCollection> {
@@ -332,7 +384,10 @@ fn require_control(connection: &Connection, workspace: &str) -> Result<StoredIss
         .context("issue collection must be committed locally before collection starts")
 }
 
-fn read_control(connection: &Connection, workspace: &str) -> Result<Option<StoredIssueCollection>> {
+pub(super) fn read_control(
+    connection: &Connection,
+    workspace: &str,
+) -> Result<Option<StoredIssueCollection>> {
     let mut statement = connection.prepare(&format!(
         "SELECT {CONTROL_COLUMNS} FROM issue_collection_control WHERE workspace_dir = ?1"
     ))?;
@@ -413,6 +468,7 @@ fn insert_control(
          VALUES (?1, ?2, ?3, ?4, 0)",
         params![workspace, enum_name(&state.config.mode)?, sql_revision(state.epoch)?, sql_revision(state.revision)?],
     )?;
+    super::triage::bump_catalog(transaction, workspace)?;
     Ok(())
 }
 
@@ -471,6 +527,7 @@ fn save_control(
     if changed != 1 {
         bail!("the issue collection changed during its transaction")
     }
+    super::triage::bump_catalog(transaction, workspace)?;
     Ok(())
 }
 

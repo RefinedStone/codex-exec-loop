@@ -812,3 +812,5 @@ fn committed_facts_are_delivered_before_a_later_local_store_failure() {
     fail.store(false, Ordering::SeqCst);
     assert_eq!(query(&service).items.len(), 3);
 }
+
+mod commit_projection;

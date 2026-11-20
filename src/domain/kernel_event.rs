@@ -399,6 +399,15 @@ pub enum KernelEvent {
         revision: u64,
         by: IssueChangeOrigin,
     },
+    /// 판정이 장부에 commit된 사실이다. 원문이나 판정 전의 공유본을 기록하지 않는다.
+    IssueTriaged {
+        issue: IssueEventReference,
+        binding_id: String,
+        revision: u64,
+        gate_revision: u64,
+        policy_version: String,
+        by: IssueChangeOrigin,
+    },
     /// 모드 설정 commit 이후의 감사 기록이다. 설정 복원은 이 기록이 아닌 장부에서 한다.
     IssueAutomationModeChanged {
         previous: Option<IssueAutomationModeRecord>,
@@ -623,6 +632,23 @@ impl KernelEvent {
         }
     }
 
+    pub fn issue_triaged(
+        issue: &IssueReference,
+        binding_id: &str,
+        revision: u64,
+        gate_revision: u64,
+        policy_version: &str,
+    ) -> Self {
+        Self::IssueTriaged {
+            issue: issue.into(),
+            binding_id: binding_id.to_string(),
+            revision,
+            gate_revision,
+            policy_version: policy_version.to_string(),
+            by: IssueChangeOrigin::Rule,
+        }
+    }
+
     pub fn issue_automation_mode_changed(
         previous: Option<IssueCollectionMode>,
         mode: IssueCollectionMode,
@@ -658,6 +684,7 @@ impl KernelEvent {
     pub fn record_kind(&self) -> KernelRecordKind {
         match self {
             Self::IssueTracked { .. } => KernelRecordKind::IssueTracked,
+            Self::IssueTriaged { .. } => KernelRecordKind::IssueTriaged,
             Self::IssueAutomationModeChanged { .. } => KernelRecordKind::IssueAutomationModeChanged,
             Self::AutoFollowConfigured { .. } => KernelRecordKind::AutoFollowConfigured,
             Self::ThreadPromptQueued(_) => KernelRecordKind::ThreadPromptQueued,
@@ -682,6 +709,7 @@ impl KernelEvent {
             Self::RepositoryChanged { .. }
             | Self::AutoFollowConfigured { .. }
             | Self::IssueTracked { .. }
+            | Self::IssueTriaged { .. }
             | Self::IssueAutomationModeChanged { .. } => "",
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
             Self::ApprovalRequested(approval) => &approval.thread_id,
@@ -718,6 +746,7 @@ impl KernelEvent {
             | Self::ApprovalResolved { .. }
             | Self::RepositoryChanged { .. }
             | Self::IssueTracked { .. }
+            | Self::IssueTriaged { .. }
             | Self::IssueAutomationModeChanged { .. } => None,
         }
     }
@@ -764,6 +793,7 @@ impl KernelEvent {
             | Self::ApprovalResolved { .. }
             | Self::RepositoryChanged { .. }
             | Self::IssueTracked { .. }
+            | Self::IssueTriaged { .. }
             | Self::IssueAutomationModeChanged { .. } => return None,
         };
         Some(state)
@@ -1103,6 +1133,8 @@ mod tests {
             },
         };
         let tracked = super::KernelEvent::issue_tracked(&issue, "origin-binding", 7);
+        let triaged =
+            super::KernelEvent::issue_triaged(&issue, "origin-binding", 8, 2, &"a".repeat(64));
         let changed = super::KernelEvent::issue_automation_mode_changed(
             Some(super::IssueCollectionMode::Observe),
             super::IssueCollectionMode::Off,
@@ -1112,6 +1144,7 @@ mod tests {
         );
         for (event, kind) in [
             (&tracked, "issue_tracked"),
+            (&triaged, "issue_triaged"),
             (&changed, "issue_automation_mode_changed"),
         ] {
             assert_eq!(event.kind(), kind);
@@ -1134,6 +1167,11 @@ mod tests {
             wire["issue"]["project_scope"]["workspace_dir"],
             "/work/project"
         );
+        assert_eq!(wire["by"], "rule");
+        let wire = serde_json::to_value(triaged).unwrap();
+        assert_eq!(wire["revision"], 8);
+        assert_eq!(wire["gate_revision"], 2);
+        assert_eq!(wire["policy_version"], "a".repeat(64));
         assert_eq!(wire["by"], "rule");
         let wire = serde_json::to_value(changed).unwrap();
         assert_eq!(wire["previous"], "observe");
@@ -1608,6 +1646,21 @@ mod tests {
                 },
                 "origin-binding",
                 7,
+            ),
+            KernelEvent::issue_triaged(
+                &IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".to_string(),
+                    repository_id: "R_stable".to_string(),
+                    issue_id: "I_stable".to_string(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".to_string(),
+                    },
+                },
+                "origin-binding",
+                8,
+                2,
+                &"a".repeat(64),
             ),
             KernelEvent::issue_automation_mode_changed(
                 Some(IssueCollectionMode::Observe),

@@ -4,29 +4,45 @@ use std::sync::Arc;
 
 use crate::adapter::outbound::db::sqlite_issue_automation_store::SqliteIssueAutomationStoreAdapter;
 use crate::adapter::outbound::db::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
 use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
 use crate::adapter::outbound::git::issue_origin::GitIssueCollectionOriginAdapter;
 use crate::adapter::outbound::github::issue_source::GithubIssueSourceAdapter;
+use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
 use crate::application::service::issue_collection::IssueCollectionService;
 use crate::application::service::issue_policy::IssuePolicyService;
+use crate::application::service::issue_triage::IssueTriageService;
 
 pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
-    let store = SqliteIssueAutomationStoreAdapter::new(|workspace| {
+    let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
         Ok(PathBuf::from(location.runtime_dir))
-    });
-    Arc::new(IssueCollectionService::new(
+    }));
+    let validation_source = Arc::new(FilesystemIssuePolicySourceAdapter::new());
+    let triage = Arc::new(IssueTriageService::new(
         workspace_dir.to_string(),
-        Arc::new(store),
-        Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
-        Arc::new(GitIssueCollectionOriginAdapter::new()),
-        IssuePolicyService::new(Arc::new(FilesystemIssuePolicySourceAdapter::new())),
-    ))
+        store.clone(),
+        IssueAutomationPolicyService::new(Arc::new(
+            FilesystemIssueAutomationPolicySourceAdapter::new(),
+        )),
+        IssuePolicyService::new(validation_source.clone()),
+    ));
+    Arc::new(
+        IssueCollectionService::new(
+            workspace_dir.to_string(),
+            store,
+            Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
+            Arc::new(GitIssueCollectionOriginAdapter::new()),
+            IssuePolicyService::new(validation_source),
+        )
+        .with_triage(triage),
+    )
 }
 
 #[cfg(test)]
 pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionService> {
+    use crate::application::port::outbound::issue_automation_policy_source_port::IssueAutomationPolicySourcePort;
     use crate::application::port::outbound::issue_collection_origin_port::{
         IssueCollectionOrigin, IssueCollectionOriginPort,
     };
@@ -52,6 +68,15 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
             Ok(None)
         }
     }
+    struct TestAutomationPolicy;
+    impl IssueAutomationPolicySourcePort for TestAutomationPolicy {
+        fn load_user_policy_toml(&self) -> anyhow::Result<Option<String>> {
+            Ok(None)
+        }
+        fn load_project_policy_toml(&self, _: &str) -> anyhow::Result<Option<String>> {
+            Ok(None)
+        }
+    }
     struct TestSource;
     impl IssueSourcePort for TestSource {
         fn capabilities(&self) -> IssueSourceCapabilities {
@@ -67,16 +92,25 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
             panic!("kernel tests must inject an issue source before collecting")
         }
     }
-    let store = SqliteIssueAutomationStoreAdapter::new(|workspace| {
+    let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
         Ok(PathBuf::from(location.runtime_dir))
-    });
-    Arc::new(IssueCollectionService::new(
+    }));
+    let triage = Arc::new(IssueTriageService::new(
         workspace_dir.to_string(),
-        Arc::new(store),
-        Arc::new(TestSource),
-        Arc::new(TestOrigin),
+        store.clone(),
+        IssueAutomationPolicyService::new(Arc::new(TestAutomationPolicy)),
         IssuePolicyService::new(Arc::new(TestPolicy)),
-    ))
+    ));
+    Arc::new(
+        IssueCollectionService::new(
+            workspace_dir.to_string(),
+            store,
+            Arc::new(TestSource),
+            Arc::new(TestOrigin),
+            IssuePolicyService::new(Arc::new(TestPolicy)),
+        )
+        .with_triage(triage),
+    )
 }

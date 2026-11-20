@@ -21,7 +21,10 @@ use crate::core::native_client_port::{
     ParallelModeControlPlanePresentationEvent, ParallelViewState,
 };
 use crate::core::runtime::CoreInputWaker;
-use crate::domain::issue_automation::collection::{IssueCollectionPage, IssueCollectionQuery};
+use crate::domain::issue_automation::collection::{
+    IssueCollectionDetail, IssueCollectionPage, IssueCollectionQuery,
+};
+use crate::domain::issue_work::IssueReference;
 use crate::domain::kernel_event::{
     KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus, ReasonCode,
     RecordedKernelEvent,
@@ -210,6 +213,10 @@ enum KernelHostInput {
     Issues {
         query: IssueCollectionQuery,
         reply: Sender<Result<IssueCollectionPage, String>>,
+    },
+    Issue {
+        issue: IssueReference,
+        reply: Sender<Result<IssueCollectionDetail, String>>,
     },
     /// 판단 사건 기록을 cursor 로 읽는다 (plan 19 Q3-3).
     History {
@@ -449,6 +456,16 @@ impl KernelCommandSender {
     ) -> Result<Result<IssueCollectionPage, String>, KernelCallError> {
         let (reply, answer) = mpsc::channel();
         self.inbox.send(KernelHostInput::Issues { query, reply })?;
+        wait_reply(&answer, timeout)
+    }
+
+    pub(crate) fn issue(
+        &self,
+        issue: IssueReference,
+        timeout: Duration,
+    ) -> Result<Result<IssueCollectionDetail, String>, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox.send(KernelHostInput::Issue { issue, reply })?;
         wait_reply(&answer, timeout)
     }
 
@@ -798,6 +815,13 @@ impl KernelHostLoop {
                     .issue_collection_page(&query)
                     .map_err(|_| "issue collection local state could not be read".to_string());
                 let _ = reply.send(page);
+            }
+            KernelHostInput::Issue { issue, reply } => {
+                let detail = self
+                    .runtime
+                    .issue_collection_detail(&issue)
+                    .map_err(|_| "issue collection local state could not be read".to_string());
+                let _ = reply.send(detail);
             }
             KernelHostInput::Operation { op_id, reply } => {
                 let status = self

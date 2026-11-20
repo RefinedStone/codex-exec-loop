@@ -196,6 +196,56 @@ spec_names! {
             "The planning data changed after the sender read it: `expected_planning_revision` is not the current revision. Nothing was changed. `message` gives both revisions.";
         PlanningLocked => "planning_locked",
             "Another change or parallel work holds the planning data that the command needs. Nothing was changed. `message` names the holder.";
+        NotYetObserved => "not_yet_observed",
+            "The issue has no current provider observation.";
+        SourceUnavailable => "source_unavailable",
+            "The current issue could not be read; missing data is not proof of eligibility.";
+        MetadataIncomplete => "metadata_incomplete",
+            "Required source metadata is incomplete or unavailable.";
+        DisclosurePolicyStale => "disclosure_policy_stale",
+            "The shared observation was produced under an older disclosure policy.";
+        SelectionNotMatched => "selection_not_matched",
+            "The issue does not match the configured selection.";
+        IssueClosed => "issue_closed",
+            "The provider reports that the issue is closed.";
+        UntrustedActor => "untrusted_actor",
+            "No trusted author or qualifying current label actor establishes trust.";
+        AlreadyClaimed => "already_claimed",
+            "The issue already has an assignee or a linked pull request.";
+        TitleMissing => "title_missing",
+            "The current shared issue has no usable title.";
+        RequiredSectionMissing => "required_section_missing",
+            "The current shared issue does not satisfy a required section.";
+        CriteriaMissing => "criteria_missing",
+            "The issue has no acceptance criteria.";
+        CriteriaNotList => "criteria_not_list",
+            "The acceptance criteria cannot be read as a supported Markdown list.";
+        IssueTooLarge => "issue_too_large",
+            "The shared issue exceeds the deterministic assessment size bound.";
+        UnsupportedContent => "unsupported_content",
+            "The issue contains content that cannot be assessed deterministically.";
+        DisclosureConfirmationRequired => "disclosure_confirmation_required",
+            "Disclosure requires explicit user confirmation; withheld content is not assessed as shared text.";
+        MaskedContent => "masked_content",
+            "Masking prevents a complete deterministic assessment.";
+        HighRisk => "high_risk",
+            "High risk requires a person at every gate.";
+        HeldOrManual => "held_or_manual",
+            "The issue is held or explicitly marked for manual handling.";
+        ProtectedPath => "protected_path",
+            "The declared scope includes a protected repository path.";
+        PolicyHumanRequired => "policy_human_required",
+            "An additional policy rule requires a person at the affected gates.";
+        BudgetExhausted => "budget_exhausted",
+            "A zero static budget cap prevents an automatic start and requires a person to review the budget.";
+        ModeOff => "mode_off",
+            "The effective automation policy is off.";
+        ObservationOnly => "observation_only",
+            "This assessment is observational and creates no work or execution permission.";
+        ExecutionGrantRequired => "execution_grant_required",
+            "The execution grant boundary is not connected; descriptive gates do not authorize work.";
+        CloseDisabled => "close_disabled",
+            "Issue closing is not enabled by this assessment.";
         IssueAutomationOff => "issue_automation_off",
             "Issue collection is off. No source read was scheduled. Read issue_automation and decide whether to enable observe before sending sync_issues again.";
     }
@@ -466,6 +516,8 @@ spec_names! {
             "The checked-out commit or branch of the workspace differs from the last observation. The kernel looks periodically, so one record can cover several changes. It does not say who made the change. Without `previous_head`, this is the first observation in this log. This record has no thread: `thread_id` is empty in history.";
         IssueTracked => "issue_tracked",
             "A stable issue entered the collection ledger for the first time. Metadata-only withheld observations count once; rediscovery does not repeat this record.";
+        IssueTriaged => "issue_triaged",
+            "A deterministic issue assessment was committed to the local ledger. The record carries stable identity and policy/gate revisions, with no issue text or execution permit.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",
             "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
     }

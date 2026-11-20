@@ -2165,3 +2165,4 @@ fn kernel_simulation_random_numbers_stay_fixed() {
 const FIXED_SEED_7_VALUES: [u64; 3] = [487, 804, 346];
 
 mod issue_collection;
+mod issue_triage;
