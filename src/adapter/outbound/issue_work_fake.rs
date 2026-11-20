@@ -110,7 +110,8 @@ mod tests {
 
     use super::*;
     use crate::application::port::outbound::evidence_vault_port::{
-        EVIDENCE_VAULT_CONTRACT_VERSION, VaultKey, VaultPlaintext, VaultUserConfirmation,
+        EVIDENCE_VAULT_CONTRACT_VERSION, VaultKey, VaultPlaintext, VaultRecordKey,
+        VaultUserConfirmation,
     };
     use crate::application::port::outbound::issue_core_port::ISSUE_CORE_CONTRACT_VERSION;
     use crate::domain::issue_work::{IssueProjectScope, IssueProvider};
@@ -128,6 +129,13 @@ mod tests {
             project_scope: IssueProjectScope {
                 workspace_dir: "/work/project".to_string(),
             },
+        }
+    }
+
+    fn record_key() -> VaultRecordKey {
+        VaultRecordKey {
+            key_id: "key-1".to_string(),
+            key: VaultKey::new(KEY.to_vec()),
         }
     }
 
@@ -182,6 +190,7 @@ mod tests {
         let restored = seeded_adapter()
             .restore(VaultRestoreRequest {
                 confirmation: VaultUserConfirmation::for_issue_in_test(issue("I_1")),
+                key: record_key(),
             })
             .expect("restore should succeed");
 
@@ -227,10 +236,12 @@ mod tests {
         let restored = adapter
             .restore(VaultRestoreRequest {
                 confirmation: VaultUserConfirmation::for_issue_in_test(issue("I_1")),
+                key: record_key(),
             })
             .expect("restore should succeed");
         let other = adapter.restore(VaultRestoreRequest {
             confirmation: VaultUserConfirmation::for_issue_in_test(issue("I_2")),
+            key: record_key(),
         });
 
         assert_eq!(restored.title.expose(), PLAINTEXT_TITLE);

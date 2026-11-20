@@ -176,8 +176,9 @@ fn scope_bytes(scope: &VaultRecordScope) -> Vec<u8> {
         VaultRecordField::Body => "body",
     };
     let (binding_kind, binding_value) = match &scope.binding {
-        VaultRecordBinding::PublishIntent(intent_id) => ("publish-intent", intent_id),
-        VaultRecordBinding::ConfirmedVersion(version) => ("confirmed-version", version),
+        VaultRecordBinding::PublishIntent(intent_id) => ("publish-intent", intent_id.as_str()),
+        VaultRecordBinding::ConfirmedVersion(version) => ("confirmed-version", version.as_str()),
+        VaultRecordBinding::CurrentVersion => ("current-version", ""),
     };
 
     let mut bytes = Vec::new();

@@ -252,6 +252,12 @@ impl IssueJournaledPublishService {
                 plaintext,
             })?;
         }
+        // 복원(`evidence_vault_restore`)은 이 레코드가 가리키는 판만 쓴다. 마지막에 저장한다.
+        self.vault.save(VaultRecordSaveRequest {
+            scope: VaultRecordScope::current_version(record.issue.clone()),
+            key,
+            plaintext: VaultPlaintext::new(record.confirmed_version()),
+        })?;
         record.restore_link_finalized = true;
         self.journal.save(workspace_dir, &record)?;
         Ok(record)
@@ -626,6 +632,11 @@ mod tests {
         assert_eq!(
             fixture.vault.records.lock().unwrap()[&confirmed_scope].expose(),
             "masked log line"
+        );
+        assert_eq!(
+            fixture.vault.records.lock().unwrap()[&VaultRecordScope::current_version(issue())]
+                .expose(),
+            record.confirmed_version()
         );
     }
 
