@@ -165,7 +165,10 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("worker must drop its port after observer shutdown");
         assert!(
-            matches!(entered_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+            matches!(
+                entered_rx.recv_timeout(Duration::from_secs(5)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            ),
             "no additional read may be started after the observer stops",
         );
     }
