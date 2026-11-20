@@ -13,7 +13,7 @@ use crate::subprocess;
 
 const GITHUB_KIND: &str = "github";
 /// 인식기는 `github.com` 의 문서만 장부에 적는다. `gh` 의 기본 호스트가 다른 서버여도 여기에만 묻는다.
-const GITHUB_HOSTNAME: &str = "github.com";
+pub(super) const GITHUB_HOSTNAME: &str = "github.com";
 /// 문서 하나를 묻는 최대 시간이다. 넘으면 그 문서는 닿지 않은 것으로 둔다.
 const VERSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// `updated_at` 은 `2026-11-11T00:00:00Z` 모양이다. 이보다 긴 답은 버전이 아니다.
@@ -33,28 +33,34 @@ impl GithubResourceVersionAdapter {
     }
 
     fn gh_command(&self, gh: &Path, api_path: &str) -> Result<Command> {
-        let mut command = Command::new(gh);
-        crate::trusted_executable::configure_credential_command_environment(
-            &mut command,
-            &self.working_directory,
-            true,
-        )?;
-        let token = GITHUB_TOKEN_ENVIRONMENT
-            .into_iter()
-            .find_map(|name| std::env::var_os(name).filter(|token| !token.is_empty()));
-        if let Some(token) = token {
-            command.env("GH_TOKEN", token);
-        }
-        command
-            .args(["api", "--hostname", GITHUB_HOSTNAME, api_path])
-            .args(["--jq", ".updated_at"])
-            .current_dir(crate::trusted_executable::neutral_user_config_directory(
-                &self.working_directory,
-            ))
-            .stdin(Stdio::null())
-            .env("GH_PROMPT_DISABLED", "1");
+        let mut command = gh_api_command(&self.working_directory, gh)?;
+        command.arg(api_path).args(["--jq", ".updated_at"]);
         Ok(command)
     }
+}
+
+/// `gh api --hostname github.com` 까지 만든다. 환경을 비우고 사용자의 토큰만 넘긴다. 부르는 쪽이 경로와 인자를 붙인다.
+pub(super) fn gh_api_command(working_directory: &Path, gh: &Path) -> Result<Command> {
+    let mut command = Command::new(gh);
+    crate::trusted_executable::configure_credential_command_environment(
+        &mut command,
+        working_directory,
+        true,
+    )?;
+    let token = GITHUB_TOKEN_ENVIRONMENT
+        .into_iter()
+        .find_map(|name| std::env::var_os(name).filter(|token| !token.is_empty()));
+    if let Some(token) = token {
+        command.env("GH_TOKEN", token);
+    }
+    command
+        .args(["api", "--hostname", GITHUB_HOSTNAME])
+        .current_dir(crate::trusted_executable::neutral_user_config_directory(
+            working_directory,
+        ))
+        .stdin(Stdio::null())
+        .env("GH_PROMPT_DISABLED", "1");
+    Ok(command)
 }
 
 impl ExternalResourceVersionPort for GithubResourceVersionAdapter {
@@ -86,16 +92,16 @@ impl ExternalResourceVersionPort for GithubResourceVersionAdapter {
 
 /// 장부의 GitHub 키 `owner/repo#number` 이다. PR 도 issue API 로 읽는다.
 #[derive(Debug, PartialEq, Eq)]
-struct GithubIssueTarget<'a> {
-    owner: &'a str,
-    repository: &'a str,
-    number: &'a str,
+pub(super) struct GithubIssueTarget<'a> {
+    pub(super) owner: &'a str,
+    pub(super) repository: &'a str,
+    pub(super) number: &'a str,
 }
 
 impl<'a> GithubIssueTarget<'a> {
     /// 키의 각 부분은 API 경로가 된다. GitHub 이름에 쓸 수 있는 글자만 받는다. `.github` 같은 저장소 이름과
     /// 밑줄이 있는 계정 이름도 있다.
-    fn parse(key: &'a str) -> Result<Self> {
+    pub(super) fn parse(key: &'a str) -> Result<Self> {
         let parts = key
             .split_once('#')
             .and_then(|(name, number)| Some((name.split_once('/')?, number)));
@@ -135,7 +141,7 @@ impl<'a> GithubIssueTarget<'a> {
 }
 
 /// `gh --jq .updated_at` 의 답에서 버전을 읽는다. 시각 모양이 아니면 버전으로 쓰지 않는다.
-fn version_from_output(stdout: &[u8]) -> Result<String> {
+pub(super) fn version_from_output(stdout: &[u8]) -> Result<String> {
     let version = String::from_utf8_lossy(stdout).trim().to_string();
     let looks_like_a_time = !version.is_empty()
         && version.chars().count() <= MAX_VERSION_CHARS
