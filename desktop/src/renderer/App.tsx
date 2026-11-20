@@ -30,6 +30,8 @@ import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, Zoo
 import { DocumentsPanel } from "./work/DocumentsPanel";
 import { GitHubPanel } from "./work/GitHubPanel";
 import { GitHubProjectPanel } from "./work/GitHubProjectPanel";
+import { type IssueDraftTarget, issueDraftTarget } from "./work/issueDraft";
+import { IssueDraftPanel } from "./work/IssueDraftPanel";
 import { findFolderForRepository, readIssueHandoffPrompt } from "./work/githubProjects";
 import { JiraPanel } from "./work/JiraPanel";
 import { LinearPanel } from "./work/LinearPanel";
@@ -251,6 +253,9 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
 }) {
   const [source, setSource] = useState<WorkSource>("GitHub");
   const currentRepository = useGitHubRepository(useDesktopStore(openThreadCwd));
+  // 고치는 중인 이슈이다 (#2426). 그 글은 이 패널에만 있고 대화 입력창으로 가지 않는다.
+  const [editing, setEditing] = useState<IssueDraftTarget | null>(null);
+  if (editing) return <IssueDraftPanel request={request} target={editing} onClose={() => setEditing(null)} />;
   return (
     <div className="work-tab">
       <div className="segmented">
@@ -267,6 +272,16 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
           currentRepository={currentRepository}
           onHandOff={async (item) => {
             if (item.url && item.repository && item.number !== null) await handOffIssue(request, item.url, item.repository, item.number);
+          }}
+          onEdit={async (item) => {
+            if (!item.repository || item.number === null) return;
+            const state = useDesktopStore.getState();
+            const openCwd = openThreadCwd(state);
+            const folders = [...(openCwd ? [openCwd] : []), ...state.folders.map((folder) => folder.cwd)];
+            const cwd = await findFolderForRepository(item.repository, folders, (folder) => window.akra.github.repository(folder));
+            const target = cwd ? issueDraftTarget(cwd, item.repository, item.number) : null;
+            if (!target) throw new Error("이 저장소의 작업 폴더가 없습니다. 그 저장소의 폴더를 사이드바에 추가하세요.");
+            setEditing(target);
           }}
         />
       )}
