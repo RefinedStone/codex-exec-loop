@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use anyhow::{Result, anyhow, bail};
 
 use super::super::{IssueCreationApprovedRequest, IssueCreationOutcome, IssueCreationService};
-use crate::application::port::inbound::issue_creation_draft::IssueCreationTarget;
+use crate::application::port::inbound::issue_draft_port::IssueCreationTarget;
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultCreationLoadRequest, VaultCreationRecordScope,
     VaultCreationSaveRequest, VaultKey, VaultPlaintext, VaultRecordKey, VaultRecordLoadRequest,

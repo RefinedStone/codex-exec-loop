@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::application::port::inbound::issue_creation_draft::{
+use crate::application::port::inbound::issue_draft_port::{
     IssueCreationConfirmRequest, IssueCreationIntentRequest, IssueCreationPreviewRequest,
     IssueCreationPublishRequest, IssueCreationRestartRequest, IssueCreationTarget,
 };
@@ -203,7 +203,7 @@ mod tests {
         fn creation_open(
             &self,
             target: IssueCreationTarget,
-        ) -> Result<crate::application::port::inbound::issue_creation_draft::IssueCreationOpened>
+        ) -> Result<crate::application::port::inbound::issue_draft_port::IssueCreationOpened>
         {
             Ok(creation_opened(&target.repository))
         }
@@ -211,10 +211,10 @@ mod tests {
         fn creation_preview(
             &self,
             request: IssueCreationPreviewRequest,
-        ) -> Result<crate::application::port::inbound::issue_creation_draft::IssueCreationPreview>
+        ) -> Result<crate::application::port::inbound::issue_draft_port::IssueCreationPreview>
         {
             Ok(
-                crate::application::port::inbound::issue_creation_draft::IssueCreationPreview {
+                crate::application::port::inbound::issue_draft_port::IssueCreationPreview {
                     preview: IssueDraftPreview::NeedsConfirmation {
                         span_indexes: (0..request.text.spans.len()).collect(),
                     },
@@ -226,7 +226,7 @@ mod tests {
         fn creation_publish(
             &self,
             request: IssueCreationPublishRequest,
-        ) -> Result<crate::application::port::inbound::issue_creation_draft::IssueCreationPublished>
+        ) -> Result<crate::application::port::inbound::issue_draft_port::IssueCreationPublished>
         {
             assert_eq!(request.approval.intent_id, request.intent_id);
             assert_eq!(request.approval.repository.repository_id, "R_widgets");
@@ -234,19 +234,24 @@ mod tests {
                 request.approval.repository.project_scope.workspace_dir,
                 "/work/project"
             );
-            Ok(crate::application::port::inbound::issue_creation_draft::IssueCreationPublished::Held {
-                intent: creation_intent(&request.intent_id, if request.shared_copy_only {
-                    crate::domain::issue_creation::IssueCreationIntentState::Recorded
-                } else {
-                    crate::domain::issue_creation::IssueCreationIntentState::Held
-                }),
-            })
+            Ok(
+                crate::application::port::inbound::issue_draft_port::IssueCreationPublished::Held {
+                    intent: creation_intent(
+                        &request.intent_id,
+                        if request.shared_copy_only {
+                            crate::domain::issue_creation::IssueCreationIntentState::Recorded
+                        } else {
+                            crate::domain::issue_creation::IssueCreationIntentState::Held
+                        },
+                    ),
+                },
+            )
         }
 
         fn creation_recheck(
             &self,
             request: IssueCreationIntentRequest,
-        ) -> Result<crate::application::port::inbound::issue_creation_draft::IssueCreationIntent>
+        ) -> Result<crate::application::port::inbound::issue_draft_port::IssueCreationIntent>
         {
             Ok(creation_intent(
                 &request.intent_id,
@@ -257,7 +262,7 @@ mod tests {
         fn creation_confirm(
             &self,
             request: IssueCreationConfirmRequest,
-        ) -> Result<crate::application::port::inbound::issue_creation_draft::IssueCreationIntent>
+        ) -> Result<crate::application::port::inbound::issue_draft_port::IssueCreationIntent>
         {
             assert_eq!(request.url, "https://github.com/sample/widgets/issues/12");
             Ok(creation_intent(
@@ -269,7 +274,7 @@ mod tests {
         fn creation_restart(
             &self,
             request: IssueCreationRestartRequest,
-        ) -> Result<crate::application::port::inbound::issue_creation_draft::IssueCreationOpened>
+        ) -> Result<crate::application::port::inbound::issue_draft_port::IssueCreationOpened>
         {
             assert!(request.acknowledge_uncertain);
             let mut opened = creation_opened("next");
@@ -391,8 +396,8 @@ mod tests {
     fn creation_intent(
         id: &str,
         state: crate::domain::issue_creation::IssueCreationIntentState,
-    ) -> crate::application::port::inbound::issue_creation_draft::IssueCreationIntent {
-        crate::application::port::inbound::issue_creation_draft::IssueCreationIntent {
+    ) -> crate::application::port::inbound::issue_draft_port::IssueCreationIntent {
+        crate::application::port::inbound::issue_draft_port::IssueCreationIntent {
             intent_id: id.to_string(),
             state,
             created: None,
@@ -405,9 +410,9 @@ mod tests {
 
     fn creation_opened(
         id: &str,
-    ) -> crate::application::port::inbound::issue_creation_draft::IssueCreationOpened {
+    ) -> crate::application::port::inbound::issue_draft_port::IssueCreationOpened {
         use crate::domain::issue_policy::IssueSensitiveSpanAction;
-        crate::application::port::inbound::issue_creation_draft::IssueCreationOpened {
+        crate::application::port::inbound::issue_draft_port::IssueCreationOpened {
             repository: crate::domain::issue_creation::IssueRepositoryReference {
                 provider: crate::domain::issue_work::IssueProvider::GitHub,
                 server_id: "github.com".to_string(),

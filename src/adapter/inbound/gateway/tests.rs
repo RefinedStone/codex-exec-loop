@@ -17,7 +17,7 @@ use super::GatewayCommand;
 use super::hosts::GatewayHosts;
 use super::parse_args;
 use super::session::{run_session, websocket_config};
-use crate::application::port::inbound::issue_creation_draft as creation;
+use crate::application::port::inbound::issue_draft_port as creation;
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamSnapshot, GatewayUpstreamStream,
 };

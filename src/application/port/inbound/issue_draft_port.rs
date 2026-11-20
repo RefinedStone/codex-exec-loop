@@ -1,6 +1,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::issue_creation::{
+    IssueCreatedLocation, IssueCreationApproval, IssueCreationIntentState, IssueRepositoryReference,
+};
+
 use crate::domain::issue_policy::{IssueSensitiveSpanAction, IssueSensitiveSpanClass};
 use crate::domain::issue_publish_intent::IssuePublishIntentState;
 use crate::domain::issue_work::{IssueFieldHash, IssueSharedCopy};
@@ -207,46 +211,137 @@ pub enum IssueDraftPublished {
     Blocked { preview: IssueDraftPreview },
 }
 
+// 새 이슈 생성도 같은 초안 Port의 승인·마스킹 경계를 사용한다.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationTarget {
+    pub cwd: String,
+    pub owner: String,
+    pub repository: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationIntent {
+    pub intent_id: String,
+    pub state: IssueCreationIntentState,
+    pub created: Option<IssueCreatedLocation>,
+    pub shared_copy: Option<IssueSharedCopy>,
+    pub restore_link_required: bool,
+    pub restore_link_finalized: bool,
+    pub predecessor_intent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationOpened {
+    pub repository: IssueRepositoryReference,
+    pub intent: IssueCreationIntent,
+    pub title: String,
+    pub body: String,
+    pub template: IssueDraftTemplate,
+    pub required_sections: Vec<String>,
+    pub span_actions: IssueDraftSpanActions,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationPreviewRequest {
+    pub target: IssueCreationTarget,
+    pub intent_id: String,
+    pub text: IssueDraftText,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationPreview {
+    pub preview: IssueDraftPreview,
+    pub approval: Option<IssueCreationApproval>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationPublishRequest {
+    pub target: IssueCreationTarget,
+    pub intent_id: String,
+    pub text: IssueDraftText,
+    pub approval: IssueCreationApproval,
+    #[serde(default)]
+    pub shared_copy_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum IssueCreationPublished {
+    Confirmed { intent: IssueCreationIntent },
+    NeedsConfirmation { intent: IssueCreationIntent },
+    Held { intent: IssueCreationIntent },
+    Refused { reason: &'static str },
+    Blocked { preview: IssueCreationPreview },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationIntentRequest {
+    pub target: IssueCreationTarget,
+    pub intent_id: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationConfirmRequest {
+    pub target: IssueCreationTarget,
+    pub intent_id: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreationRestartRequest {
+    pub target: IssueCreationTarget,
+    pub previous_intent_id: String,
+    /// An unresolved predecessor may already exist on GitHub. Never infer this consent.
+    #[serde(default)]
+    pub acknowledge_uncertain: bool,
+}
+
 pub trait IssueDraftPort: Send + Sync {
-    fn creation_open(
-        &self,
-        _target: super::issue_creation_draft::IssueCreationTarget,
-    ) -> Result<super::issue_creation_draft::IssueCreationOpened> {
+    fn creation_open(&self, _target: IssueCreationTarget) -> Result<IssueCreationOpened> {
         anyhow::bail!("new-issue creation is unavailable")
     }
 
     fn creation_preview(
         &self,
-        _request: super::issue_creation_draft::IssueCreationPreviewRequest,
-    ) -> Result<super::issue_creation_draft::IssueCreationPreview> {
+        _request: IssueCreationPreviewRequest,
+    ) -> Result<IssueCreationPreview> {
         anyhow::bail!("new-issue creation is unavailable")
     }
 
     fn creation_publish(
         &self,
-        _request: super::issue_creation_draft::IssueCreationPublishRequest,
-    ) -> Result<super::issue_creation_draft::IssueCreationPublished> {
+        _request: IssueCreationPublishRequest,
+    ) -> Result<IssueCreationPublished> {
         anyhow::bail!("new-issue creation is unavailable")
     }
 
     fn creation_recheck(
         &self,
-        _request: super::issue_creation_draft::IssueCreationIntentRequest,
-    ) -> Result<super::issue_creation_draft::IssueCreationIntent> {
+        _request: IssueCreationIntentRequest,
+    ) -> Result<IssueCreationIntent> {
         anyhow::bail!("new-issue creation is unavailable")
     }
 
     fn creation_confirm(
         &self,
-        _request: super::issue_creation_draft::IssueCreationConfirmRequest,
-    ) -> Result<super::issue_creation_draft::IssueCreationIntent> {
+        _request: IssueCreationConfirmRequest,
+    ) -> Result<IssueCreationIntent> {
         anyhow::bail!("new-issue creation is unavailable")
     }
 
     fn creation_restart(
         &self,
-        _request: super::issue_creation_draft::IssueCreationRestartRequest,
-    ) -> Result<super::issue_creation_draft::IssueCreationOpened> {
+        _request: IssueCreationRestartRequest,
+    ) -> Result<IssueCreationOpened> {
         anyhow::bail!("new-issue creation is unavailable")
     }
 
