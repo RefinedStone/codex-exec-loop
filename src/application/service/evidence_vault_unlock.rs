@@ -29,6 +29,8 @@ const VAULT_KEY_LEN: usize = 32;
 const KEY_ID_DOMAIN: &[u8] = b"akra-evidence-vault-key-id";
 /// 여러 서비스 인스턴스도 같은 프로세스의 OS 키 항목을 공유한다.
 static KEY_INITIALIZATION: Mutex<()> = Mutex::new(());
+/// 다른 서비스 인스턴스에 보관 요청을 넘겨도 세션 번호가 겹치지 않는다.
+static NEXT_VIEWING_SESSION: AtomicU64 = AtomicU64::new(1);
 
 /// 로컬 복원본을 여는 열람 세션 한 개이다. 이 프로세스 안에서만 뜻이 있다.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -95,7 +97,6 @@ pub struct VaultUnlockedAccess {
 
 pub struct EvidenceVaultUnlockService {
     key_store: Arc<dyn VaultKeyStorePort>,
-    next_session: AtomicU64,
     /// 살아 있는 세션과, 세션마다 권한을 받은 이슈이다.
     sessions: Mutex<HashMap<VaultViewingSessionId, HashSet<IssueReference>>>,
 }
@@ -104,14 +105,13 @@ impl EvidenceVaultUnlockService {
     pub fn new(key_store: Arc<dyn VaultKeyStorePort>) -> Self {
         Self {
             key_store,
-            next_session: AtomicU64::new(1),
             sessions: Mutex::new(HashMap::new()),
         }
     }
 
     /// 열람 세션을 연다. 로컬 복원본 화면을 열 때 부른다.
     pub fn begin_session(&self) -> VaultViewingSessionId {
-        let session = VaultViewingSessionId(self.next_session.fetch_add(1, Ordering::Relaxed));
+        let session = VaultViewingSessionId(NEXT_VIEWING_SESSION.fetch_add(1, Ordering::Relaxed));
         self.sessions().insert(session.clone(), HashSet::new());
         session
     }
@@ -169,7 +169,7 @@ impl EvidenceVaultUnlockService {
             return Err(VaultSharedCopyReason::SessionExpired);
         }
         Ok(VaultUnlockedAccess {
-            confirmation: VaultUserConfirmation::for_issue(grant.issue.clone()),
+            confirmation: VaultUserConfirmation::for_issue(grant.issue.clone(), grant.session.0),
             key,
         })
     }
@@ -190,6 +190,23 @@ impl EvidenceVaultUnlockService {
         let key = VaultKey::new(bytes);
         self.key_store.store_key(&key).map_err(shared_copy_reason)?;
         Ok(record_key(key))
+    }
+
+    /// 보관하거나 복제한 복원 요청도 원래 열람 세션이 살아 있을 때만 유효하다.
+    pub(crate) fn validate_confirmation(
+        &self,
+        confirmation: &VaultUserConfirmation,
+    ) -> Result<(), VaultSharedCopyReason> {
+        let session = VaultViewingSessionId(confirmation.session_id());
+        if self
+            .sessions()
+            .get(&session)
+            .is_some_and(|issues| issues.contains(confirmation.issue()))
+        {
+            Ok(())
+        } else {
+            Err(VaultSharedCopyReason::SessionExpired)
+        }
     }
 
     fn existing_key(&self) -> Result<VaultRecordKey, VaultSharedCopyReason> {
