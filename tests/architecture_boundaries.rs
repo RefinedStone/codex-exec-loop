@@ -554,6 +554,22 @@ fn raw_issue_snapshot_stays_out_of_general_kernel_and_gateway_surfaces() {
 }
 
 #[test]
+fn issue_publish_path_stays_unwired_until_the_publish_intent_journal() {
+    // 실사용 게시 경로는 게시 의도 기록(#2424)이 연결될 때까지 꺼져 있다 (#2423).
+    assert_no_forbidden_references_in_paths(
+        "composition, core, and inbound adapters must not reach the issue publish path before the publish-intent journal",
+        &["src/composition", "src/core", "src/adapter/inbound"],
+        &[
+            "issue_update_port",
+            "IssueUpdatePort",
+            "GithubIssueUpdateAdapter",
+            "issue_publish",
+            "IssuePublishService",
+        ],
+    );
+}
+
+#[test]
 fn cli_and_telegram_enter_application_through_inbound_ports() {
     assert_no_forbidden_references_in_paths(
         "CLI and Telegram production code must not depend on application service implementations",
