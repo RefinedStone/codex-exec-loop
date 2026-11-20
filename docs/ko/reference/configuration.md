@@ -80,6 +80,30 @@ CODEX_EXEC_LOOP_GITHUB_PR, RUST_LOG, AKRA_TRACE_FILE은 기존의 특수 계약�
 
 Hidden planning/parallel worker는 명시적 모델 정책을 유지하며 interactive conversation 기본값을 상속하지 않습니다.
 
+## 이슈 정책 파일
+
+이슈 규약과 공개 정책(#2416)은 config.toml이 아닌 별도 파일에 둡니다. `IssuePolicyService`가 파일을 읽고 검증한 뒤 타입이 있는 `IssuePolicy`를 돌려줍니다. 아직 이 값을 쓰는 명령이나 클라이언트는 없습니다. 이 값을 쓰는 검증기, 마스킹, 게시 경로는 제안 단계의 작업입니다(#2417 ~ #2419).
+
+| Scope | 경로 |
+| --- | --- |
+| 사용자 | AKRA_HOME/issue-policy.toml (기본값: ~/.akra/issue-policy.toml) |
+| 프로젝트 | workspace/.akra/issue-policy.toml |
+
+값 하나마다 높은 순서에서 낮은 순서로 프로젝트 파일 > 사용자 파일 > 기본값을 적용합니다. table은 값 단위로 합칩니다. `required_sections`는 값 하나이므로 통째로 바뀝니다. schema_version이 없으면 1입니다. 스키마: [`schema/akra-issue-policy.schema.json`](../../../schema/akra-issue-policy.schema.json). 예제: [`schema/akra-issue-policy.example.toml`](../../../schema/akra-issue-policy.example.toml).
+
+| Key | 값 | 기본값 |
+| --- | --- | --- |
+| convention.template | 저장소 안의 상대 경로, `..` 없음 | 없음 |
+| convention.required_sections | 섹션 제목 목록 | 빈 목록 |
+| publish.spans.secret, name, path, log | remove, restorable_mask, user_confirm | secret = remove, 나머지 = restorable_mask |
+| ai_handoff.spans.secret, name, path, log | remove, restorable_mask, user_confirm | secret = remove, 나머지 = restorable_mask |
+| publish.required_validation | true만 허용 | true |
+| vault.user_unlock | true만 허용 | true |
+
+`publish.spans`는 글을 공급자에 게시할 때 적용합니다. `ai_handoff.spans`는 글을 AI에 전달할 때 적용합니다. 두 table은 서로 독립입니다. `remove`는 값을 버리고, `restorable_mask`는 사용자가 Vault에서 복원할 수 있는 표식으로 바꾸고, `user_confirm`은 구간마다 사용자에게 묻습니다.
+
+필수 게시 검증과 Vault 사용자 잠금 해제는 항상 켜져 있습니다. 어느 scope에서도 끌 수 없습니다. `publish.required_validation = false`나 `vault.user_unlock = false`가 있으면 그 파일은 잘못된 파일입니다. 파일을 읽을 수 없거나, 형식이 틀리거나, 모르는 key·종류·처리가 있거나, schema_version을 지원하지 않거나, template 경로가 저장소 밖이면 잘못된 파일의 scope와 함께 `IssuePolicyBlocked`를 돌려줍니다. 호출자는 그 프로젝트의 게시와 AI 전달을 막아야 합니다. 기본 정책으로 대신하지 않습니다. 두 파일은 config.toml과 같은 읽기 안전 규칙을 씁니다.
+
 ## 의도적인 제외와 Codex 차이
 
 Akra TOML에는 AKRA_HOME, credential/token, allowlist, app-server process/shell environment, API-key forwarding, approval/reviewer/sandbox 정책, public-repository/autonomous-delivery opt-in을 넣지 않습니다. Telegram은 private telegram.env, parallel agent profile은 .akra/parallel-agent-profiles.json의 별도 계약을 유지합니다.
