@@ -246,6 +246,34 @@ try {
   await page.getByTestId("chat-dock").waitFor({ state: "detached", timeout: 10_000 });
   check("closing the ChatGPT chat leaves the list", (await page.getByTestId("remote-chat-entry").count()) === 1);
 
+  const accountA = { chats: [{ id: "chat-1", title: "내 ChatGPT 대화" }], chatConversations: { "chat-1": { id: "chat-1", title: "내 ChatGPT 대화", messages: [{ id: "private-a", role: "user", text: "A private message" }] } } };
+  const accountB = { chats: [{ id: "chat-b", title: "Account B private chat" }], chatConversations: { "chat-b": { id: "chat-b", title: "Account B private chat", messages: [{ id: "private-b", role: "assistant", text: "B private message" }] } } };
+  const openHistory = async () => {
+    await page.getByTestId("remote-chat-entry").click();
+    await page.getByTestId("chat-message").first().waitFor({ timeout: 10_000 });
+  };
+  await openHistory();
+  gateway.switchChatAccount(accountB);
+  gateway.setChatsRateLimited(true);
+  await page.getByTestId("chat-refresh").click();
+  await page.getByTestId("chats-problem").waitFor({ timeout: 10_000 });
+  check("an uncached read after switching accounts clears the previous list and dock", (await page.getByTestId("remote-chat-entry").count()) === 0 && (await page.getByTestId("chat-dock").count()) === 0);
+
+  gateway.setChatsRateLimited(false);
+  await page.getByTestId("chats-reload").click();
+  await openHistory();
+  gateway.switchChatAccount(accountA);
+  await page.getByTestId("chats-reload").click();
+  await page.getByTestId("remote-chat-entry").filter({ hasText: "내 ChatGPT 대화" }).waitFor({ timeout: 10_000 });
+  check("a fresh list after switching accounts removes the previous open body", (await page.getByTestId("chat-dock").count()) === 0);
+
+  await openHistory();
+  gateway.switchChatAccount(accountB);
+  gateway.setChatsRateLimited(true);
+  await page.getByTestId("chats-reload").click();
+  await page.getByTestId("chats-problem").waitFor({ timeout: 10_000 });
+  check("an uncached list after switching accounts clears the previous list and dock", (await page.getByTestId("remote-chat-entry").count()) === 0 && (await page.getByTestId("chat-dock").count()) === 0);
+
   await toggleRemoteAgents();
   await page.getByTestId("remote-host").waitFor({ state: "detached", timeout: 10_000 });
   check("turning it off hides the section and leaves the remote conversation", (await page.getByTestId("remote-banner").count()) === 0);

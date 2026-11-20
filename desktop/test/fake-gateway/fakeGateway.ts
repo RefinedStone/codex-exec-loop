@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type WebSocket, WebSocketServer } from "ws";
-import { FakeChatHistory, type FakeChatOptions } from "./chatHistory.ts";
+import { FakeChatHistory, type FakeChatAccount, type FakeChatOptions } from "./chatHistory.ts";
 
 interface RecordedLine {
   direction: "client" | "gateway";
@@ -68,6 +68,7 @@ export interface FakeGateway {
   setDotLiveState(connected: boolean, working: boolean): void;
   /** `akra/chats/*` 의 조회 제한을 켜고 끈다 (plan 25). 처음 값은 `chatsRateLimited` 옵션이다. */
   setChatsRateLimited(limited: boolean): void;
+  switchChatAccount(account: FakeChatAccount): void;
   close(): Promise<void>;
 }
 
@@ -428,6 +429,9 @@ export async function startFakeGateway(
     remoteReceivedMethods,
     setChatsRateLimited(limited) {
       chats.rateLimited = limited;
+    },
+    switchChatAccount(account) {
+      chats.switchAccount(account);
     },
     setDotLiveState(connected, working) {
       dotLiveConnected = connected;

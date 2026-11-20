@@ -237,11 +237,13 @@ export interface DesktopState {
   chats: ChatSummary[];
   /** 이 호스트의 Gateway 가 ChatGPT 대화를 준다. 목록이 비어 있어도 구역과 다시 읽기 단추를 보인다. */
   chatsAvailable: boolean;
-  /** 목록을 읽지 못했거나 낡은 이유이다 (조회 제한 등). 이미 읽은 목록은 그대로 둔다. 새로 읽으면 null 이 된다. */
+  /** 목록이나 대화를 읽지 못했거나 낡은 이유이다 (조회 제한 등). */
   chatsProblem: string | null;
+  /** Gateway 가 마지막으로 확인한, 이 목록에 속하는 대화이다. */
+  chatConversation: ChatConversation | null;
   /** 목록을 읽었다. `null` 은 이 Gateway 에 chats 가 없다는 뜻이다. */
-  setChats(chats: ChatSummary[] | null): void;
-  setChatsProblem(problem: string): void;
+  setChats(chats: ChatSummary[] | null, problem: string | null): void;
+  setChatConversation(conversation: ChatConversation): void;
 }
 
 /** 열린 스레드의 작업 폴더이다. 사이드바 목록에서 찾으므로 기록을 다시 읽는 동안에도 바뀌지 않는다. */
@@ -328,8 +330,14 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   chats: [],
   chatsAvailable: false,
   chatsProblem: null,
-  setChats: (chats) => set({ chats: chats ?? [], chatsAvailable: chats !== null, chatsProblem: null }),
-  setChatsProblem: (chatsProblem) => set({ chatsProblem }),
+  chatConversation: null,
+  setChats: (chats, chatsProblem) => set(({ chatConversation }) => ({
+    chats: chats ?? [],
+    chatsAvailable: chats !== null,
+    chatsProblem,
+    chatConversation: chats?.some(({ id }) => id === chatConversation?.id) ? chatConversation : null,
+  })),
+  setChatConversation: (chatConversation) => set({ chatConversation }),
 }));
 
 /** `local` 호스트의 상태이다. */
@@ -378,7 +386,7 @@ export type SessionStore = Pick<
   | "setDots"
   | "applyDotLive"
   | "setChats"
-  | "setChatsProblem"
+  | "setChatConversation"
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
@@ -406,7 +414,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     setDots: state.setDots,
     applyDotLive: state.applyDotLive,
     setChats: state.setChats,
-    setChatsProblem: state.setChatsProblem,
+    setChatConversation: state.setChatConversation,
     getKernel: () => store.getState().kernel,
     getOpenThreadId: () => store.getState().openThreadId,
     getTranscript: () => store.getState().transcript,
