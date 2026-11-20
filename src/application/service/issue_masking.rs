@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn invalid_ranges_are_rejected() {
         let body = "한글 본문";
-        for range in [0..0, 0..1, 3..2, 0..100] {
+        for range in [0..0, 0..1, Range { start: 3, end: 2 }, 0..100] {
             let blocked = mask(
                 "t",
                 body,
