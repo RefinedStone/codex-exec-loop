@@ -10,7 +10,7 @@ import { contextMenuItems, type ContextTarget } from "../src/main/contextMenuIte
 import { loadWindowState, parseWindowState, saveWindowState, visibleBounds } from "../src/main/windowState";
 import type { PendingApproval } from "../src/renderer/conversation/approvals";
 import { addPrompt, isSendKey, recallCursor } from "../src/renderer/conversation/composerKeys";
-import { findTurns, matchOffsets } from "../src/renderer/conversation/find";
+import { findTurns, matchOffsets, matchRanges } from "../src/renderer/conversation/find";
 import type { TurnView } from "../src/renderer/conversation/transcript";
 import { attentionEvents } from "../src/renderer/session/attention";
 import type { DesktopState } from "../src/renderer/session/desktopStore";
@@ -190,5 +190,19 @@ describe("attention events", () => {
     expect(attentionEvents(state({ connection: disconnected, activeThreadIds: ["a"] }), state({}))).toEqual([]);
     // 다시 붙은 뒤 목록을 통째로 다시 채웠다.
     expect(attentionEvents(state({ activeThreadIds: ["a"] }), state({ activeRefills: 1 }))).toEqual([]);
+  });
+});
+
+describe("original-text search ranges", () => {
+  it("maps case expansions before and inside the match to original UTF-16 offsets", () => {
+    expect(matchRanges("İstanbul", "bul")).toEqual([{ start: 5, end: 8 }]);
+    expect(matchRanges("İstanbul", "i\u0307s")).toEqual([{ start: 0, end: 2 }]);
+    expect(matchRanges("İİ", "i\u0307")).toEqual([{ start: 0, end: 1 }, { start: 1, end: 2 }]);
+  });
+
+  it("preserves surrogate pairs and context-sensitive lowercasing", () => {
+    expect(matchRanges("😀İstanbul 한글", "bul")).toEqual([{ start: 7, end: 10 }]);
+    expect(matchRanges("ΟΣ", "ος")).toEqual([{ start: 0, end: 2 }]);
+    expect(matchRanges("İstanbul", "")).toEqual([]);
   });
 });
