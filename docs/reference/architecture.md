@@ -967,6 +967,10 @@ strategy in the production TUI.
   constructor of `VaultUserConfirmation`: it gives grants bound to one issue and one viewing
   session. See [evidence-vault-unlock.md](./evidence-vault-unlock.md) for failure states, key-loss
   recovery, and protection limits.
+- Issue validation is the pure rule `domain/issue_validation::validate_issue`. Draft validation and
+  the publish gate (`application/service/issue_validation`) both call it. Only that rule builds
+  `IssueValidationPassed` (private fields, no `Deserialize`); an external write must use the text
+  of a passed result, and a failed or absent validator blocks the write, not reads or local edits.
 
 Verify boundary-sensitive changes with:
 
