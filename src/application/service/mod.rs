@@ -71,3 +71,5 @@ pub mod work_context;
 pub mod evidence_vault_unlock;
 // evidence_vault_restore 는 최신 게시본이 저장한 연결과 같을 때만 복원하고, 다르면 보류하고 재연결을 받는다 (#2425).
 pub mod evidence_vault_restore;
+// evidence_vault_backup 은 사용자 승인 뒤에 복구 키로 Vault 백업을 내보내고 가져온다 (#2432).
+pub mod evidence_vault_backup;
