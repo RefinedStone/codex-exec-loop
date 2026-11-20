@@ -421,6 +421,8 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
    자동화는 병렬 모드를 스스로 켜지 않는다 (§19 Q-IA8).
 4. **보면서 하기.** 승인 화면의 다른 선택 "내 대화로 열기"는 지금의 넘기기이다. 그 이슈는 `take_over` 가 된다.
 5. **전달.** 지금의 순서 그대로이다. 더하는 것은 PR 의 닫는 참조이다: `Closes owner/name#N`, Jira 키, Linear 의 브랜치 이름.
+   지금의 PR 본문은 고정 양식이고 닫는 참조가 없다 (`build_distributor_pull_request_body`,
+   `src/application/service/parallel_mode/distributor/delivery/github.rs`).
 6. **연결.** 장부가 `이슈 → task → thread, 브랜치, PR` 을 가진다. `TaskDefinition` 은 바꾸지 않는다. 자료 연결은 #2481 의
    A03 이 맡는다.
 7. **결과 반환.** 상태 댓글 하나를 만들고 고친다. 댓글을 쌓지 않는다. 숨은 표식으로 자기 댓글을 알아본다. 라벨과 상태
@@ -594,8 +596,8 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 
 - Gateway 를 다시 켠 뒤, 병렬 모드가 켜져 있던 저장소의 kernel 을 누가 다시 올리는가. 문서는 "첫 attach 가 kernel 을
   만든다"만 말한다. 코드를 읽지 않았다.
-- `create_task` 로 만든 task 를 병렬 전달이 어떤 PR 본문으로 올리는가. `distributor/delivery/github.rs` 에 닫는 참조와
-  관련된 문자열이 있다. 읽지 않았다.
+- 작업 지시의 닫는 참조와 브랜치 이름을 병렬 전달까지 나르는 길. PR 본문을 만드는 함수만 읽었다. queue record 와 브랜치
+  이름 규칙 (`branch_names.rs`) 은 읽지 않았다.
 - GitHub GraphQL 로 "누가 라벨을 붙였는가"를 읽는 비용 (timeline 조회)과 요청 한도.
 - Jira 의 전이 API 와 Linear 의 상태 쓰기 API. 기억 기준이다. 구현 전에 공식 문서를 본다.
 - 런타임 호스트에 마감 출처 하나를 더하는 크기.
