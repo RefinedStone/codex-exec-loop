@@ -24,6 +24,7 @@ use super::dots::{DOTS_METHOD_PREFIX, DotWatches, spawn_request as spawn_dots_re
 use super::git::{GIT_METHOD_PREFIX, GitPorts, spawn_request as spawn_git_request};
 use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::issue::{ISSUE_METHOD_PREFIX, spawn_request as spawn_issue_request};
+use super::issue_draft::{is_issue_draft_method, spawn_request as spawn_issue_draft_request};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
@@ -33,6 +34,7 @@ use super::router::{
 };
 use crate::application::port::inbound::git_graph_port::GitGraphPort;
 use crate::application::port::inbound::git_operation_port::GitOperationPort;
+use crate::application::port::inbound::issue_draft_port::IssueDraftPort;
 use crate::application::port::inbound::issue_handoff_port::IssueHandoffPort;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::dots_port::DotsPort;
@@ -70,6 +72,8 @@ pub(super) struct GatewayServices {
     pub(super) git_operations: Option<Arc<dyn GitOperationPort>>,
     /// 이슈 인계의 공유본이다 (#2428). 이 기기의 정책 파일과 `gh` 를 쓰므로 `local` 접속에만 답한다.
     pub(super) issue_handoff: Option<Arc<dyn IssueHandoffPort>>,
+    /// 이슈 초안이다 (#2426). 이 기기의 정책 파일과 `gh` 를 쓰므로 `local` 접속에만 답한다.
+    pub(super) issue_drafts: Option<Arc<dyn IssueDraftPort>>,
     /// dots 가 켜졌을 때만 있다 (D-19). 없으면 `akra/dots/*` 는 모르는 method 이다.
     pub(super) dots: Option<Arc<dyn DotsPort>>,
 }
@@ -191,7 +195,10 @@ where
                         }
                     }
                     ClientTextRoute::AkraRequest { id, method } => {
-                        record(RecordDirection::Client, text.as_str());
+                        // 이슈 초안 요청에는 가리기 전의 로컬 글이 있다. 녹화에 남기지 않는다 (#2426).
+                        if !is_issue_draft_method(&method) {
+                            record(RecordDirection::Client, text.as_str());
+                        }
                         let mcp_hub_for_method = services
                             .mcp_hub
                             .as_ref()
@@ -212,7 +219,20 @@ where
                             .dots
                             .as_ref()
                             .filter(|_| method.starts_with(DOTS_METHOD_PREFIX));
-                        let immediate = if method.starts_with(resource_version::METHOD_PREFIX) {
+                        let drafts_for_method = services
+                            .issue_drafts
+                            .as_ref()
+                            .filter(|_| is_local && is_issue_draft_method(&method));
+                        let immediate = if let Some(drafts) = drafts_for_method {
+                            spawn_issue_draft_request(
+                                drafts.clone(),
+                                id,
+                                method,
+                                text.as_str().to_string(),
+                                outbox.clone(),
+                            );
+                            None
+                        } else if method.starts_with(resource_version::METHOD_PREFIX) {
                             Some(match &provider_session {
                                 Some(provider) => provider.request(id, &method, text.as_str()),
                                 None => refuse_kernel_on_remote_host(id, &method),

@@ -554,17 +554,22 @@ fn raw_issue_snapshot_stays_out_of_general_kernel_and_gateway_surfaces() {
 }
 
 #[test]
-fn issue_publish_path_stays_unwired_until_the_publish_intent_journal() {
-    // 실사용 게시 경로는 게시 의도 기록(#2424)이 연결될 때까지 꺼져 있다 (#2423).
+fn issue_publish_goes_only_through_the_publish_intent_journal() {
+    // 실사용 게시는 게시 의도를 기록하는 서비스로만 한다 (#2424). composition 은 기록 없는 게시 서비스를 만들지 않는다.
     assert_no_forbidden_references_in_paths(
-        "composition, core, and inbound adapters must not reach the issue publish path before the publish-intent journal",
+        "composition, core, and inbound adapters must not reach the unjournaled issue publish service",
         &["src/composition", "src/core", "src/adapter/inbound"],
+        &["issue_publish::", "IssuePublishService"],
+    );
+    // 쓰기 포트를 조립하는 곳은 composition 뿐이다 (#2426). 게시 명령은 `issue_draft_port` 로 들어온다.
+    assert_no_forbidden_references_in_paths(
+        "core and inbound adapters must not reach the issue update contract",
+        &["src/core", "src/adapter/inbound"],
         &[
             "issue_update_port",
             "IssueUpdatePort",
             "GithubIssueUpdateAdapter",
             "issue_publish",
-            "IssuePublishService",
         ],
     );
 }

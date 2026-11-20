@@ -10,6 +10,7 @@ mod dots;
 mod git;
 mod hosts;
 mod issue;
+mod issue_draft;
 mod kernel;
 mod listener;
 mod mcp;
@@ -94,6 +95,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         git_operations,
         issue_handoff,
         dots,
+        issue_drafts,
     } = production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
     let _ = std::io::stdout().flush();
@@ -123,6 +125,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             git_operations: Some(git_operations),
             issue_handoff: Some(issue_handoff),
             dots,
+            issue_drafts: Some(issue_drafts),
         },
         recorder,
     )

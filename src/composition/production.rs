@@ -431,6 +431,9 @@ pub(crate) struct GatewayBackend {
         Arc<dyn crate::application::port::inbound::issue_handoff_port::IssueHandoffPort>,
     /// dot 목록이다. dots 클라우드가 켜졌을 때만 있다 (D-19).
     pub(crate) dots: Option<Arc<dyn DotsPort>>,
+    /// 이슈 초안, 미리보기, 게시이다 (#2426).
+    pub(crate) issue_drafts:
+        Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>,
 }
 
 pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
@@ -481,7 +484,49 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
             ),
         ),
         dots: build_dots()?,
+        issue_drafts: build_issue_drafts()?,
     })
+}
+
+/// 이슈 초안 서비스를 조립한다 (#2426). 게시는 게시 의도를 기록하는 서비스로만 한다 (#2424). 일지는 git 작업 일지와
+/// 같은 저장소 runtime 디렉터리에 둔다. `gh` 는 저장소가 아닌 Akra 의 폴더에서 실행한다.
+fn build_issue_drafts()
+-> Result<Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>> {
+    use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
+    use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
+    use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
+    use crate::adapter::outbound::filesystem::issue_template::FilesystemIssueTemplateSourceAdapter;
+    use crate::adapter::outbound::github::{GithubIssueSnapshotAdapter, GithubIssueUpdateAdapter};
+    use crate::application::service::issue_draft::IssueDraftService;
+    use crate::application::service::issue_policy::IssuePolicyService;
+    use crate::application::service::issue_publish_journal::IssueJournaledPublishService;
+    use crate::application::service::issue_template::IssueTemplateService;
+
+    let akra_home = crate::configuration::akra_home_dir()?;
+    let snapshot = Arc::new(GithubIssueSnapshotAdapter::new(akra_home.clone()));
+    let journal = IssuePublishIntentJournalAdapter::new(|workspace_dir| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    });
+    let publisher = IssueJournaledPublishService::new(
+        snapshot.clone(),
+        Arc::new(GithubIssueUpdateAdapter::new(akra_home.clone())),
+        Arc::new(journal),
+        // 이 서비스는 Vault 키를 주지 않는다. 그래서 게시 경로는 이 저장소를 부르지 않는다 (#2425 가 잇는다).
+        Arc::new(FilesystemEvidenceVaultStoreAdapter::new(
+            akra_home.join("evidence-vault"),
+        )),
+    );
+    Ok(Arc::new(IssueDraftService::new(
+        IssuePolicyService::new(Arc::new(FilesystemIssuePolicySourceAdapter::new())),
+        IssueTemplateService::new(Arc::new(FilesystemIssueTemplateSourceAdapter::new())),
+        snapshot,
+        publisher,
+        Arc::new(
+            crate::adapter::outbound::issue_code_validator::SandboxedIssueCodeValidatorRunnerAdapter::new(),
+        ),
+    )))
 }
 
 /// git 작업 엔진을 조립한다 (plan 27 G3). 일지는 planning 기준 데이터와 같은 저장소 runtime 디렉터리에 둔다. 그

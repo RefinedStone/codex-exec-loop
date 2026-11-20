@@ -1203,3 +1203,120 @@ async fn the_issue_handoff_answer_is_the_shared_copy_without_the_secret() {
     let refused = kernel_request(&mut remote, "i", "akra/issue/handoffCopy", params).await;
     assert_eq!(refused["error"]["code"], json!(-32601));
 }
+
+/// 미리보기의 답에 로컬 글을 그대로 넣는 가짜이다. 녹화가 요청과 답을 둘 다 빼는지 본다.
+struct EchoIssueDrafts;
+
+impl crate::application::port::inbound::issue_draft_port::IssueDraftPort for EchoIssueDrafts {
+    fn open(
+        &self,
+        _: crate::application::port::inbound::issue_draft_port::IssueDraftTarget,
+    ) -> anyhow::Result<crate::application::port::inbound::issue_draft_port::IssueDraftOpened> {
+        anyhow::bail!("not used")
+    }
+
+    fn preview(
+        &self,
+        request: crate::application::port::inbound::issue_draft_port::IssueDraftPreviewRequest,
+    ) -> anyhow::Result<crate::application::port::inbound::issue_draft_port::IssueDraftPreview>
+    {
+        anyhow::bail!("echo {}", request.text.title)
+    }
+
+    fn publish(
+        &self,
+        _: crate::application::port::inbound::issue_draft_port::IssueDraftPublishRequest,
+    ) -> anyhow::Result<crate::application::port::inbound::issue_draft_port::IssueDraftPublished>
+    {
+        anyhow::bail!("not used")
+    }
+
+    fn recheck(
+        &self,
+        _: crate::application::port::inbound::issue_draft_port::IssueDraftTarget,
+    ) -> anyhow::Result<Option<crate::application::port::inbound::issue_draft_port::IssueDraftIntent>>
+    {
+        anyhow::bail!("not used")
+    }
+
+    fn abandon(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<crate::application::port::inbound::issue_draft_port::IssueDraftIntent> {
+        anyhow::bail!("not used")
+    }
+}
+
+#[tokio::test]
+async fn issue_draft_requests_are_answered_on_the_local_host_and_stay_out_of_the_recording() {
+    // #2426. The request carries the local text before masking, so neither it nor its answer is recorded.
+    const LOCAL_TEXT: &str = "synthetic-secret-0000";
+    let directory = crate::test_utils::platform_safe_temp_dir().join(format!(
+        "akra-gateway-issue-recording-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    let recorder = Arc::new(super::recorder::GatewayRecorder::create(&directory).unwrap());
+    let connect = |path: &'static str| {
+        let recorder = recorder.clone();
+        async move {
+            let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+            let hosts = GatewayHosts::new(
+                EchoUpstream::new(true),
+                vec![("cloud".to_string(), EchoUpstream::new(true) as _)],
+            );
+            let services = super::session::GatewayServices {
+                issue_drafts: Some(Arc::new(EchoIssueDrafts)),
+                ..Default::default()
+            };
+            tokio::spawn(async move {
+                let _ = run_session(
+                    gateway_side,
+                    hosts,
+                    Arc::new(
+                        crate::composition::repository_kernel::RepositoryKernelRegistry::default(),
+                    ),
+                    services,
+                    Some(recorder),
+                )
+                .await;
+            });
+            let (websocket, _) = tokio_tungstenite::client_async_with_config(
+                format!("ws://localhost{path}"),
+                client_side,
+                Some(websocket_config()),
+            )
+            .await
+            .expect("client handshake through the gateway session should succeed");
+            websocket
+        }
+    };
+    let params = json!({
+        "target": { "cwd": "/repo", "owner": "sample", "repository": "widgets", "number": 7 },
+        "text": { "title": LOCAL_TEXT, "body": "" },
+    });
+
+    let mut local = connect("/").await;
+    let answer = kernel_request(&mut local, "i", "akra/issue/preview", params.clone()).await;
+    assert!(
+        answer["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(LOCAL_TEXT),
+        "the fake port answered: {answer}"
+    );
+    // A recorded request after the issue request proves the recording is on and has caught up.
+    kernel_request(&mut local, "info", "akra/gateway/info", json!({})).await;
+    let recorded: String = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect();
+    assert!(recorded.contains("akra/gateway/info"));
+    assert!(!recorded.contains(LOCAL_TEXT));
+
+    let mut remote = connect("/host/cloud").await;
+    let refused = kernel_request(&mut remote, "i", "akra/issue/preview", params).await;
+    assert_eq!(refused["error"]["code"], json!(-32601));
+    let _ = std::fs::remove_dir_all(&directory);
+}
