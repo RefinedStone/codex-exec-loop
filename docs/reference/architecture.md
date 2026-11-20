@@ -957,6 +957,11 @@ strategy in the production TUI.
   issue, field, publish intent or confirmed version) with ChaCha20-Poly1305 from `ring`. The record
   keeps the format version, key identifier, nonce, and ciphertext; the scope is authenticated as
   associated data. The caller supplies the key and the vault root; nothing wires the adapter yet.
+- The Vault key lives in the OS key store behind `VaultKeyStorePort` (`OsVaultKeyStoreAdapter`,
+  `keyring` crate; `FakeVaultKeyStoreAdapter` for tests). `EvidenceVaultUnlockService` is the only
+  constructor of `VaultUserConfirmation`: it gives grants bound to one issue and one viewing
+  session. See [evidence-vault-unlock.md](./evidence-vault-unlock.md) for failure states, key-loss
+  recovery, and protection limits.
 
 Verify boundary-sensitive changes with:
 
