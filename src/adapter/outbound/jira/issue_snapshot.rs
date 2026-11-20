@@ -48,7 +48,7 @@ impl JiraIssueSnapshotAdapter {
         Self { site, run_jira_api }
     }
 
-    fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
+    pub(super) fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
         let body = (self.run_jira_api)(path)?;
         // serde 의 오류 글에는 답의 값이 들어갈 수 있다. 남기지 않는다.
         serde_json::from_slice(&body).map_err(|_| anyhow!("Jira did not return the expected data"))
@@ -61,7 +61,7 @@ impl JiraIssueSnapshotAdapter {
     }
 
     /// 아는 이슈의 서버가 이 사이트인지 본다.
-    fn ensure_this_site(&self, issue: &IssueReference) -> Result<()> {
+    pub(super) fn ensure_this_site(&self, issue: &IssueReference) -> Result<()> {
         if issue.provider != IssueProvider::Jira {
             bail!("the issue is not on Jira")
         }
@@ -78,6 +78,15 @@ impl JiraIssueSnapshotAdapter {
         self.get(&format!(
             "/rest/api/3/issue/{id_or_key}?fields={ISSUE_FIELDS}"
         ))
+    }
+
+    /// 아는 이슈를 안정 ID 로 읽는다. 답이 다른 이슈나 다른 프로젝트이면 오류이다.
+    pub(super) fn known_issue(&self, expected: &IssueReference) -> Result<RemoteIssue> {
+        let issue = self.issue(&expected.issue_id)?;
+        if issue.id != expected.issue_id || issue.fields.project.id != expected.repository_id {
+            bail!("the target moved to another project or issue")
+        }
+        Ok(issue)
     }
 }
 
@@ -102,10 +111,7 @@ impl IssueSnapshotPort for JiraIssueSnapshotAdapter {
     fn read(&self, request: IssueSnapshotReadRequest) -> Result<IssueSnapshotResponse> {
         let expected = request.issue;
         self.ensure_this_site(&expected)?;
-        let issue = self.issue(&expected.issue_id)?;
-        if issue.id != expected.issue_id || issue.fields.project.id != expected.repository_id {
-            bail!("the target moved to another project or issue")
-        }
+        let issue = self.known_issue(&expected)?;
         snapshot(expected.server_id, issue, expected.project_scope)
     }
 }
@@ -262,18 +268,18 @@ struct TenantInfo {
 }
 
 #[derive(Deserialize)]
-struct RemoteIssue {
+pub(super) struct RemoteIssue {
     id: String,
     key: String,
-    fields: RemoteIssueFields,
+    pub(super) fields: RemoteIssueFields,
 }
 
 #[derive(Deserialize)]
-struct RemoteIssueFields {
-    summary: String,
+pub(super) struct RemoteIssueFields {
+    pub(super) summary: String,
     /// ADF 문서이다. 본문이 없으면 `null` 이다.
     #[serde(default)]
-    description: Value,
+    pub(super) description: Value,
     updated: String,
     project: RemoteProject,
 }
@@ -284,13 +290,13 @@ struct RemoteProject {
 }
 
 #[derive(Deserialize)]
-struct EditMeta {
-    fields: BTreeMap<String, EditMetaField>,
+pub(super) struct EditMeta {
+    pub(super) fields: BTreeMap<String, EditMetaField>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EditMetaField {
+pub(super) struct EditMetaField {
     #[serde(default)]
     required: bool,
     name: Option<String>,
