@@ -190,6 +190,8 @@ export async function startFakeGateway(
     gitUndo?(params: { cwd?: unknown; opId?: unknown }): unknown;
     /** `akra/issue/handoffCopy` 의 답이다 (#2428). 없으면 모르는 method 로 답한다. */
     issueHandoffCopy?(params: { owner?: unknown; repository?: unknown; number?: unknown; cwd?: unknown }): unknown;
+    /** 이슈 초안 메서드(`akra/issue/open`, `preview`, `publish`, `recheck`, `abandon`)의 답이다 (#2426). 없으면 모르는 method 로 답한다. */
+    issue?(method: string, params: Record<string, unknown>): unknown;
     /** `skills/list` 의 답이다 (#2383). 요청의 params 를 받는다. 없으면 녹화가 없는 method 로 답한다. */
     skills?(params: { cwds?: unknown; forceReload?: unknown }): unknown;
     /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 뒤에는 다시 찾지 않는다. */
@@ -365,6 +367,11 @@ export async function startFakeGateway(
         }
         const resources = (options.threadDocuments[threadId] ?? []).map((document) => ({ ...document, changed: changedDocuments.has(`${threadId}\n${document.key}`) }));
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources } }));
+        return;
+      }
+      if (options.issue && message.method.startsWith("akra/issue/") && message.method !== "akra/issue/handoffCopy") {
+        const params = (message as { params?: Record<string, unknown> }).params ?? {};
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: options.issue(message.method, params) }));
         return;
       }
       const gitAnswer = {

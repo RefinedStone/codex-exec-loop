@@ -1,0 +1,46 @@
+.issue-draft textarea {
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--bg-elevated);
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-s);
+  resize: vertical;
+}
+
+.issue-draft ul {
+  margin: 4px 0;
+  padding-left: 16px;
+  font-size: var(--text-s);
+}
+
+.issue-draft-mark {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.issue-draft-shared {
+  margin: 4px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: var(--text-s);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.issue-draft .issue-draft-approve {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
+  color: inherit;
+}
+
+.issue-draft-warning {
+  color: var(--warn);
+}

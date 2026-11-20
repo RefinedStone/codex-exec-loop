@@ -60,14 +60,24 @@ function ProjectForm({ initial, onSave, onCancel }: { initial: string; onSave(pr
   );
 }
 
-function ItemRow({ item, github, onHandOff }: { item: GitHubProjectItem; github: GitHubBridge; onHandOff(item: GitHubProjectItem): Promise<void> }) {
+function ItemRow({
+  item,
+  github,
+  onHandOff,
+  onEdit,
+}: {
+  item: GitHubProjectItem;
+  github: GitHubBridge;
+  onHandOff(item: GitHubProjectItem): Promise<void>;
+  onEdit?(item: GitHubProjectItem): Promise<void>;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const handOff = async () => {
+  const act = async (action: (item: GitHubProjectItem) => Promise<void>) => {
     setBusy(true);
     setError(null);
     try {
-      await onHandOff(item);
+      await action(item);
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -92,8 +102,13 @@ function ItemRow({ item, github, onHandOff }: { item: GitHubProjectItem; github:
         )}
         <span className="work-badge">{KIND_LABEL[item.kind]}</span>
         {item.kind === "issue" && (
-          <button type="button" onClick={() => void handOff()} disabled={busy} data-testid="github-project-hand-off">
+          <button type="button" onClick={() => void act(onHandOff)} disabled={busy} data-testid="github-project-hand-off">
             {busy ? "읽는 중…" : "스레드로 넘기기"}
+          </button>
+        )}
+        {item.kind === "issue" && onEdit && (
+          <button type="button" onClick={() => void act(onEdit)} disabled={busy} data-testid="github-project-edit">
+            수정
           </button>
         )}
       </div>
@@ -106,11 +121,14 @@ export function GitHubProjectPanel({
   github,
   currentRepository,
   onHandOff,
+  onEdit,
 }: {
   github: GitHubBridge;
   /** 열린 스레드 폴더의 `owner/name` 이다. 모르면 null 이다. */
   currentRepository: string | null;
   onHandOff(item: GitHubProjectItem): Promise<void>;
+  /** 이슈의 제목과 본문을 고치는 패널을 연다 (#2426). 열 수 없으면 오류를 던진다. */
+  onEdit?(item: GitHubProjectItem): Promise<void>;
 }) {
   const [projectRef, setProjectRef] = useState<string | null>(loadProjectRef);
   const [editing, setEditing] = useState(false);
@@ -201,7 +219,7 @@ export function GitHubProjectPanel({
               </h3>
               <ul>
                 {group.items.map((item, index) => (
-                  <ItemRow key={item.url ?? `draft-${index}`} item={item} github={github} onHandOff={onHandOff} />
+                  <ItemRow key={item.url ?? `draft-${index}`} item={item} github={github} onHandOff={onHandOff} onEdit={onEdit} />
                 ))}
               </ul>
             </section>
