@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { PendingApproval } from "../src/renderer/conversation/approvals";
 import { applyNotification, contextPercent, type Transcript } from "../src/renderer/conversation/transcript";
-import { activitySummary, formatDuration, stepKind, stepLabel, stepStatus, type StepItem, turnBlocks } from "../src/renderer/conversation/turnBlocks";
+import { activitySummary, formatDuration, stepDetail, stepKind, stepLabel, stepStatus, stepSummary, type StepItem, turnBlocks } from "../src/renderer/conversation/turnBlocks";
 import { useDesktopStore, type WorkspaceThread } from "../src/renderer/session/desktopStore";
 import { allThreads, relativeAge, threadMark } from "../src/renderer/sidebar/threadStatus";
 import type { ThreadItem } from "../src/shared/protocol/generated/v2/ThreadItem";
@@ -46,7 +46,7 @@ describe("turnBlocks", () => {
     const open = web({ action: { type: "openPage", url: "https://example.com/a" } });
     const find = web({ action: { type: "findInPage", url: "https://example.com/a", pattern: "영업" } });
     expect(turnBlocks([web({ id: "w1" }), web({ id: "w2" })]).map((block) => block.type)).toEqual(["activity"]);
-    expect([stepKind(search), stepLabel(search), stepStatus(search)]).toEqual(["web", "부천역 맛집, 부천역 카페", "ok"]);
+    expect([stepKind(search), stepLabel(search), stepStatus(search, "inProgress")]).toEqual(["web", "부천역 맛집, 부천역 카페", "ok"]);
     expect(stepLabel(open)).toBe("https://example.com/a");
     expect(stepLabel(find)).toBe("영업 · https://example.com/a");
     expect(stepLabel(web({ action: { type: "other" } }))).toBe("부천역 맛집");
@@ -55,8 +55,43 @@ describe("turnBlocks", () => {
   });
 
   it("shows a declined step as failed", () => {
-    expect(stepStatus(command("c", { status: "inProgress" }))).toBe("running");
-    expect(stepStatus(command("c", { status: "declined" }))).toBe("failed");
+    expect(stepStatus(command("c", { status: "inProgress" }), "inProgress")).toBe("running");
+    expect(stepStatus(command("c", { status: "declined" }), "completed")).toBe("failed");
+  });
+
+  it("never shows a step without a confirmed end as done (#2378)", () => {
+    const running = command("c", { status: "inProgress" });
+    expect(stepStatus(running, "interrupted")).toBe("interrupted");
+    expect(stepStatus(running, "completed")).toBe("unknown");
+    expect(stepStatus(running, "failed")).toBe("unknown");
+    expect(stepStatus(command("c"), "interrupted")).toBe("ok");
+    expect(stepStatus(command("c", { status: "failed" }), "interrupted")).toBe("failed");
+    expect(stepStatus(item({ type: "collabAgentToolCall", id: "a", tool: "wait", status: "interrupted" }) as StepItem, "completed")).toBe("interrupted");
+  });
+
+  it("shows other tools as one common card (#2378)", () => {
+    const dynamic = item({ type: "dynamicToolCall", id: "d", namespace: "akra", tool: "plan", status: "completed", contentItems: [{ type: "inputText", text: "ok" }] }) as StepItem;
+    const collab = item({ type: "collabAgentToolCall", id: "a", tool: "spawnAgent", status: "inProgress" }) as StepItem;
+    expect(turnBlocks([dynamic, collab])).toMatchObject([{ type: "activity", steps: [{ id: "d" }, { id: "a" }] }]);
+    expect([stepKind(dynamic), stepSummary(dynamic), stepKind(collab), stepSummary(collab)]).toEqual(["tool", "akra.plan", "tool", "spawnAgent"]);
+    expect(stepDetail(dynamic)).toEqual({ output: "ok", error: null });
+  });
+
+  it("keeps long text and secret values out of the card summary (#2378)", () => {
+    const summary = (text: string) => stepSummary(command("c", { command: text }));
+    expect(summary("API_TOKEN=abc123 npm run deploy")).toBe("API_TOKEN=*** npm run deploy");
+    expect(summary(`curl -H "Authorization: Bearer abc123" --password 'p w' https://example.com`)).not.toMatch(/abc123|p w/);
+    expect(summary("echo one\necho two")).toBe("echo one");
+    expect(summary("x".repeat(500))).toHaveLength(121);
+    expect(summary("npm test")).toBe("npm test");
+  });
+
+  it("keeps the stored output and error for the open card (#2378)", () => {
+    expect(stepDetail(command("c", { aggregatedOutput: "1 failed", exitCode: 1 }))).toEqual({ output: "$ npm test\n1 failed", error: "종료 코드 1" });
+    expect(stepDetail(command("c", { exitCode: 0 }))).toEqual({ output: "$ npm test", error: null });
+    const mcp = item({ type: "mcpToolCall", id: "m", server: "notion", tool: "search", status: "failed", result: null, error: { message: "timeout" } }) as StepItem;
+    expect(stepDetail(mcp)).toEqual({ output: null, error: "timeout" });
+    expect(stepDetail(item({ type: "fileChange", id: "f", changes: [], status: "completed" }) as StepItem)).toEqual({ output: null, error: null });
   });
 
   it("writes short durations", () => {

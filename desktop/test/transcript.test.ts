@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { FrameBatcher } from "../src/renderer/conversation/frameBatcher";
-import { applyNotifications, isTurnInProgress, transcriptFromResume } from "../src/renderer/conversation/transcript";
+import { applyNotifications, isTurnInProgress, prependOlderTurns, transcriptFromResume } from "../src/renderer/conversation/transcript";
 import type { ThreadResumeResponse } from "../src/shared/protocol/generated/v2/ThreadResumeResponse";
 import { APPROVAL_TURN_RECORDING, INTERRUPTED_TURN_RECORDING } from "./fake-gateway/fakeGateway";
 
@@ -108,5 +108,25 @@ describe("FrameBatcher", () => {
     batcher.push(4);
     frames.shift()!();
     expect(batches).toEqual([[1, 2, 3], [4]]);
+  });
+});
+
+describe("transcript keeps one entry per stored id (#2378)", () => {
+  it("does not duplicate turns or items when the same notifications arrive again", () => {
+    const { resume, notifications } = loadConversation(APPROVAL_TURN_RECORDING);
+    const once = applyNotifications(transcriptFromResume(resume), notifications);
+    // 다시 붙은 뒤 같은 알림이 한 번 더 온다.
+    const twice = applyNotifications(once, notifications);
+    const ids = (transcript: typeof once) => transcript.turns.map((turn) => [turn.id, turn.items.map((item) => item.id)]);
+    expect(ids(twice)).toEqual(ids(once));
+    const itemIds = twice.turns.flatMap((turn) => turn.items.map((item) => item.id));
+    expect(new Set(itemIds).size).toBe(itemIds.length);
+  });
+
+  it("does not duplicate a turn that an older page repeats", () => {
+    const { resume } = loadConversation(INTERRUPTED_TURN_RECORDING);
+    const initial = transcriptFromResume(resume);
+    const again = prependOlderTurns(initial, [...resume.thread.turns].reverse(), null);
+    expect(again.turns.map((turn) => turn.id)).toEqual(initial.turns.map((turn) => turn.id));
   });
 });

@@ -935,6 +935,20 @@ kbd {
   font-size: var(--text-code);
 }
 
+.step-line .badge {
+  flex: none;
+}
+
+.step-error {
+  margin: 2px 0 2px 26px;
+  color: var(--bad);
+  font-size: var(--text-s);
+}
+
+.step-review {
+  margin: 0 0 6px 26px;
+}
+
 .plan-card,
 .changes-card {
   border: 1px solid var(--line);
