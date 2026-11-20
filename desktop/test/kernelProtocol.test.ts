@@ -11,10 +11,10 @@ const desktop = fileURLToPath(new URL("../", import.meta.url));
 const spec: KernelSpec = JSON.parse(readFileSync(resolve(desktop, "../schema/akra-kernel-spec.json"), "utf8"));
 const generated = renderKernelProtocol(spec);
 
-function compile(source: string) {
+function compile(source: string, protocol = generated) {
   const directory = mkdtempSync(resolve(tmpdir(), "akra-kernel-types-"));
   try {
-    writeFileSync(resolve(directory, "fixture.ts"), `${generated}\n${source}`);
+    writeFileSync(resolve(directory, "fixture.ts"), `${protocol}\n${source}`);
     writeFileSync(resolve(directory, "tsconfig.json"), JSON.stringify({
       compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: "ES2023", types: [] },
       files: ["fixture.ts"],
@@ -45,6 +45,12 @@ describe("kernel protocol generation", () => {
       const answer: KernelQueryAnswer = { type: "thread_activity", threads: [] };
       const response: CommandResponse = { processed: true, rejection: null, operation: null };
       const state: ParallelAgentState = "running";
+      const issueMode: KernelCommand = { type: "set_issue_automation_mode", mode: "observe" };
+      const sync: KernelCommand = { type: "sync_issues" };
+      const issueQuery: KernelQuery = { type: "issues", after: null, limit: 100 };
+      const issueStatus: KernelQueryAnswer = { type: "issue_automation", status: "unavailable" };
+      const issueList: KernelQueryAnswer = { type: "issues", status: "ready", revision: 1, items: [], next_after: null };
+      const issueEvent: KernelEvent = { type: "issues", status: "unavailable" };
     `);
     expect(result).toEqual({ status: 0, output: "" });
   });
@@ -56,10 +62,51 @@ describe("kernel protocol generation", () => {
     'const value: KernelEvent = { type: "planning", status: "ready_without_task" };',
     'const value: KernelQueryAnswer = { type: "resync" };',
     'const value: CommandRequest = { command: { type: "stop_all" }, idempotency_key: 123 };',
+    'const value: KernelCommand = { type: "set_issue_automation_mode", mode: "auto" };',
+    'const value: KernelQueryAnswer = { status: "unavailable" };',
+    'const value: KernelEvent = { type: "issues", status: "ready" };',
+    'const value: KernelQuery = { type: "issues", after: { opaque: "source-cursor" } };',
   ])("rejects a wire-contract violation: %s", (source) => {
     const result = compile(source);
     expect(result.status).toBe(1);
     expect(result.output).toMatch(/error TS(2322|2741)/);
+  });
+
+  it("supports bounded numeric schema fields without widening their numeric type", () => {
+    const changed: KernelSpec = {
+      ...spec, $defs: { ...spec.$defs, IssuePageLimit: { type: "integer", minimum: 1, maximum: 100 } },
+    };
+    const protocol = renderKernelProtocol(changed);
+    expect(protocol).toContain("export type IssuePageLimit = number;");
+    expect(compile('const limit: IssuePageLimit = "100";', protocol).status).toBe(1);
+  });
+
+  it.each(["oneOf", "anyOf"] as const)("preserves a sibling object discriminator beside %s", (keyword) => {
+    const changed: KernelSpec = {
+      ...spec,
+      $defs: {
+        ...spec.$defs,
+        TaggedIssueState: {
+          [keyword]: [
+            { type: "object", properties: { status: { const: "unavailable" } }, required: ["status"] },
+            { type: "object", properties: { status: { const: "ready" }, revision: { type: "integer" } }, required: ["status", "revision"] },
+          ],
+          type: "object", properties: { type: { const: "issues" } }, required: ["type"],
+        },
+      },
+    };
+    const protocol = renderKernelProtocol(changed);
+    expect(compile(`
+      const ready: TaggedIssueState = { type: "issues", status: "ready", revision: 1 };
+      const unavailable: TaggedIssueState = { type: "issues", status: "unavailable" };
+    `, protocol)).toEqual({ status: 0, output: "" });
+    for (const source of [
+      'const value: TaggedIssueState = { status: "unavailable" };',
+      'const value: TaggedIssueState = { type: "other", status: "unavailable" };',
+      'const value: TaggedIssueState = { type: "issues", status: "ready" };',
+    ]) {
+      expect(compile(source, protocol).status).toBe(1);
+    }
   });
 
   it("fails rather than widening an unresolved schema reference", () => {

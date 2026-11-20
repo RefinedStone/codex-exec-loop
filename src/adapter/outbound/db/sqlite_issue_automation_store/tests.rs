@@ -10,14 +10,14 @@ use crate::domain::issue_automation::{
 };
 use crate::domain::issue_work::IssueProvider;
 
-struct Fixture {
-    root: PathBuf,
-    workspace: PathBuf,
-    runtime: PathBuf,
+pub(super) struct Fixture {
+    pub(super) root: PathBuf,
+    pub(super) workspace: PathBuf,
+    pub(super) runtime: PathBuf,
 }
 
 impl Fixture {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let root = crate::test_utils::platform_safe_temp_dir().join(format!(
             "akra-issue-automation-{label}-{}-{}-{:08x}",
             std::process::id(),
@@ -40,24 +40,24 @@ impl Fixture {
         }
     }
 
-    fn cwd(&self) -> &str {
+    pub(super) fn cwd(&self) -> &str {
         self.workspace.to_str().unwrap()
     }
 
-    fn adapter(&self) -> SqliteIssueAutomationStoreAdapter {
+    pub(super) fn adapter(&self) -> SqliteIssueAutomationStoreAdapter {
         let runtime = self.runtime.clone();
         SqliteIssueAutomationStoreAdapter::new(move |_| Ok(runtime.clone()))
     }
 
-    fn database(&self) -> PathBuf {
+    pub(super) fn database(&self) -> PathBuf {
         self.runtime.join(private_store::DATABASE_NAME)
     }
 
-    fn binding(&self, id: &str) -> IssueAutomationBinding {
+    pub(super) fn binding(&self, id: &str) -> IssueAutomationBinding {
         binding_for(id, &reference(self.cwd(), "I_1"))
     }
 
-    fn insert(&self) -> (IssueAutomationBinding, TrackedIssue) {
+    pub(super) fn insert(&self) -> (IssueAutomationBinding, TrackedIssue) {
         let adapter = self.adapter();
         let binding = self.binding("binding-1");
         adapter.insert_binding(self.cwd(), &binding).unwrap();
@@ -73,7 +73,7 @@ impl Drop for Fixture {
     }
 }
 
-fn reference(workspace_dir: &str, issue_id: &str) -> IssueReference {
+pub(super) fn reference(workspace_dir: &str, issue_id: &str) -> IssueReference {
     IssueReference {
         provider: IssueProvider::GitHub,
         server_id: "github.com".to_string(),
@@ -85,7 +85,7 @@ fn reference(workspace_dir: &str, issue_id: &str) -> IssueReference {
     }
 }
 
-fn binding_for(id: &str, reference: &IssueReference) -> IssueAutomationBinding {
+pub(super) fn binding_for(id: &str, reference: &IssueReference) -> IssueAutomationBinding {
     IssueAutomationBinding::new(
         IssueAutomationBindingId::new(id).unwrap(),
         reference.provider,
@@ -96,7 +96,7 @@ fn binding_for(id: &str, reference: &IssueReference) -> IssueAutomationBinding {
     .unwrap()
 }
 
-fn snapshot(body: &str) -> IssueAutomationSnapshot {
+pub(super) fn snapshot(body: &str) -> IssueAutomationSnapshot {
     IssueAutomationSnapshot {
         basis: IssueComparisonBasis {
             // Only a fingerprint enters this ledger. It need not equal the disclosed copy's hash.
@@ -114,7 +114,11 @@ fn snapshot(body: &str) -> IssueAutomationSnapshot {
     }
 }
 
-fn discovered(binding: &IssueAutomationBinding, issue_id: &str, body: &str) -> TrackedIssue {
+pub(super) fn discovered(
+    binding: &IssueAutomationBinding,
+    issue_id: &str,
+    body: &str,
+) -> TrackedIssue {
     TrackedIssue::discovered(
         IssueReference {
             provider: binding.provider(),
@@ -129,7 +133,7 @@ fn discovered(binding: &IssueAutomationBinding, issue_id: &str, body: &str) -> T
     .unwrap()
 }
 
-fn save_changed(
+pub(super) fn save_changed(
     adapter: &SqliteIssueAutomationStoreAdapter,
     cwd: &str,
     candidate: &TrackedIssue,
@@ -146,7 +150,7 @@ fn save_changed(
     }
 }
 
-fn transition_and_save(
+pub(super) fn transition_and_save(
     adapter: &SqliteIssueAutomationStoreAdapter,
     cwd: &str,
     issue: &TrackedIssue,

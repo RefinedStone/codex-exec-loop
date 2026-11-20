@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use sha2::{Digest, Sha256};
 
 use crate::application::port::inbound::issue_draft_port::{
     IssueDraftApproval, IssueDraftField, IssueDraftIntent, IssueDraftMarker, IssueDraftOpened,
@@ -20,7 +19,9 @@ use crate::application::service::issue_code_validator::gate_issue_publish_with_c
 use crate::application::service::issue_masking::{
     IssueMaskedSpan, IssueMaskingBlocked, IssueSensitiveSpan, IssueTextField, mask_issue_text,
 };
-use crate::application::service::issue_policy::IssuePolicyService;
+use crate::application::service::issue_policy::{
+    IssuePolicyService, issue_policy_version as policy_version,
+};
 use crate::application::service::issue_publish::{
     IssueApprovedPublishRequest, IssuePublishRefusal,
 };
@@ -252,11 +253,6 @@ fn intent(record: &IssuePublishIntentRecord) -> IssueDraftIntent {
         intent_id: record.intent_id.clone(),
         state: record.state,
     }
-}
-
-/// shortcut: 정책 값의 `Debug` 글로 판을 만든다, 정책 타입의 모양이 바뀌면 판도 바뀐다 (승인을 다시 받는다).
-fn policy_version(policy: &IssuePolicy) -> String {
-    format!("{:x}", Sha256::digest(format!("{policy:?}")))
 }
 
 /// 로컬 글을 가리고 게시 관문으로 검사한다. 통과하면 관문을 지난 글과 가림 구간도 준다.

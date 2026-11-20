@@ -13,6 +13,8 @@ interface SentRequest {
 const commands = {
   load_sessions: { type: "load_sessions" },
   refresh_planning: { type: "refresh_planning" },
+  set_issue_automation_mode: { type: "set_issue_automation_mode", mode: "observe" },
+  sync_issues: { type: "sync_issues" },
   rename_session: { type: "rename_session", thread_id: "thread-1", name: "Renamed" },
   submit_prompt: { type: "submit_prompt", thread_id: "thread-1", prompt: "Hello" },
   steer_turn: { type: "steer_turn", thread_id: "thread-1", expected_turn_id: "turn-1", prompt: "Stop here" },
@@ -53,7 +55,7 @@ describe("kernel command sending", () => {
     if (!request) throw new Error("Command was not sent");
     expect(request.method).toBe(KERNEL_METHOD.command);
     expect(request.params.command).toEqual(command);
-    if (command.type === "load_sessions" || command.type === "refresh_planning") {
+    if (command.type === "load_sessions" || command.type === "refresh_planning" || command.type === "sync_issues") {
       expect(request.params).not.toHaveProperty("idempotency_key");
     } else {
       expect(request.params.idempotency_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);

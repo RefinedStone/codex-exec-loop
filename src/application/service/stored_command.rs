@@ -1,11 +1,13 @@
-//! 저장 명령을 planning 서비스로 실행한다 (plan 18 K4-9d). port 는 `StoredCommandPort` 이다.
+//! 저장 명령을 해당 로컬 서비스로 실행한다. port는 `StoredCommandPort`다.
 
 use anyhow::Result;
+use std::sync::Arc;
 
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandOutcome, StoredCommandPort, StoredCommandRejection,
     StoredCommandResult, StoredTaskFields,
 };
+use crate::application::service::issue_collection::IssueCollectionService;
 use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskUpdateInput,
@@ -18,15 +20,36 @@ use crate::domain::planning::PlanningMutationRefusal;
  */
 pub struct StoredCommandService {
     planning: PlanningAdminFacadeService,
+    issues: Option<Arc<IssueCollectionService>>,
 }
 
 impl StoredCommandService {
     pub fn new(planning: PlanningAdminFacadeService) -> Self {
-        Self { planning }
+        Self {
+            planning,
+            issues: None,
+        }
+    }
+
+    pub fn with_issue_collection(mut self, issues: Arc<IssueCollectionService>) -> Self {
+        self.issues = Some(issues);
+        self
     }
 
     fn run(&self, command: StoredCommand) -> Result<StoredCommandResult> {
         match command {
+            StoredCommand::SetIssueAutomationMode { mode } => {
+                let change = self
+                    .issues
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
+                    .set_mode(mode)?;
+                Ok(StoredCommandResult::IssueAutomationModeChanged {
+                    previous: change.previous,
+                    projection: Box::new(change.projection),
+                    changed: change.changed,
+                })
+            }
             StoredCommand::CreateTask { task } => {
                 let change = self.planning.apply_operator_task_command(
                     PlanningTaskMutationCommand::CreateTask(create_input(task)),

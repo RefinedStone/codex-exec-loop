@@ -1851,6 +1851,7 @@ fn client_event_name(event: KernelHostEvent) -> Option<String> {
         },
         KernelHostEvent::Parallel(_) => Some("Parallel".to_string()),
         KernelHostEvent::Planning(_) => Some("Planning".to_string()),
+        KernelHostEvent::Issues(_) => Some("Issues".to_string()),
         KernelHostEvent::Resync => Some("Resync".to_string()),
         // 판단 기록은 I6 가 따로 본다. 기록에 넣으면 같은 seed 의 기록이 길어지기만 한다.
         KernelHostEvent::Recorded(_) => None,
@@ -2162,3 +2163,5 @@ fn kernel_simulation_random_numbers_stay_fixed() {
 }
 
 const FIXED_SEED_7_VALUES: [u64; 3] = [487, 804, 346];
+
+mod issue_collection;

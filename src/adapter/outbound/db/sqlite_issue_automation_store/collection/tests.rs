@@ -1,0 +1,1001 @@
+use super::super::tests::{
+    Fixture, binding_for, discovered, reference, save_changed, snapshot, transition_and_save,
+};
+use super::super::{
+    APPLICATION_ID, BINDINGS_SCHEMA, ISSUES_SCHEMA, SCHEMA_VERSION, insert_issue_row,
+    normalized_schema, private_store,
+};
+use super::*;
+use crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort;
+use crate::application::port::outbound::issue_source_port::IssueDiscoveryTarget;
+use crate::domain::issue_automation::source::{
+    IssueContentWithheldReason, IssueDiscoverySelection, IssueMetadataCompleteness,
+    IssueMetadataList, IssuePrPresence, IssueRemoteState, IssueSourceContent,
+    IssueSourceDisclosure, IssueSourceFailure, IssueSourceObservation, IssueSourceRepository,
+};
+use crate::domain::issue_automation::{
+    IssueAutomationAutonomy, IssueAutomationFlag, IssueAutomationState, IssueDecisionResumePhase,
+    IssueTransition, IssueTriageResult, TrackedIssue,
+};
+use crate::domain::issue_policy::IssueDisclosurePolicy;
+
+fn observed(fixture: &Fixture, id: &str, body: &str) -> IssueSourceObservation {
+    IssueSourceObservation {
+        issue: reference(fixture.cwd(), id),
+        remote_state: IssueRemoteState::Open,
+        labels: IssueMetadataList {
+            items: Vec::new(),
+            completeness: IssueMetadataCompleteness::Complete,
+        },
+        assignees: IssueMetadataList {
+            items: Vec::new(),
+            completeness: IssueMetadataCompleteness::Complete,
+        },
+        author: None,
+        label_actors: IssueMetadataList {
+            items: Vec::new(),
+            completeness: IssueMetadataCompleteness::Complete,
+        },
+        linked_pull_request: IssuePrPresence::Unknown,
+        content: IssueSourceContent::Shared(snapshot(body)),
+    }
+}
+
+fn withheld(fixture: &Fixture, id: &str) -> IssueSourceObservation {
+    let mut observation = observed(fixture, id, "unused shared fixture");
+    observation.content = IssueSourceContent::Withheld {
+        basis: snapshot("unused").basis,
+        policy_version: "policy-v1".to_owned(),
+        reason: IssueContentWithheldReason::UserConfirmationRequired,
+    };
+    observation
+}
+
+fn request(fixture: &Fixture, state: &StoredIssueCollection) -> IssueDiscoveryRequest {
+    let repository = IssueSourceRepository::from_reference(&reference(fixture.cwd(), "I_anchor"));
+    IssueDiscoveryRequest {
+        target: if state.binding_id.is_some() {
+            IssueDiscoveryTarget::Repository(repository)
+        } else {
+            IssueDiscoveryTarget::GitHubLocator {
+                owner: "fixture-owner".to_owned(),
+                name: "fixture-repository".to_owned(),
+                project_scope: repository.project_scope,
+                expected_repository_id: None,
+            }
+        },
+        selection: IssueDiscoverySelection::AllOpen,
+        cursor: state.discovery_cursor.clone(),
+        page_size: 3,
+        disclosure: IssueSourceDisclosure {
+            policy: IssueDisclosurePolicy::builtin(),
+            policy_version: "policy-v1".to_owned(),
+        },
+    }
+}
+
+fn page(
+    fixture: &Fixture,
+    request: &IssueDiscoveryRequest,
+    observations: Vec<IssueSourceObservation>,
+    after: Option<&str>,
+) -> IssueDiscoveryPage {
+    let repository = IssueSourceRepository::from_reference(&reference(fixture.cwd(), "I_anchor"));
+    IssueDiscoveryPage {
+        next_cursor: after.map(|after| {
+            IssueDiscoveryCursor::new(
+                repository.clone(),
+                request.selection.clone(),
+                request.page_size,
+                &request.disclosure,
+                after,
+            )
+            .unwrap()
+        }),
+        repository,
+        scanned_count: observations.len() as u16,
+        observations,
+    }
+}
+
+fn commit(result: IssueCollectionApplyResult) -> IssueCollectionCommit {
+    match result {
+        IssueCollectionApplyResult::Applied(commit) => *commit,
+        result => panic!("expected a committed collection page, got {result:?}"),
+    }
+}
+
+fn mode(result: IssueCollectionModeSaveResult) -> StoredIssueCollection {
+    match result {
+        IssueCollectionModeSaveResult::Saved { state, .. } => *state,
+        result => panic!("expected a committed collection mode, got {result:?}"),
+    }
+}
+
+fn unknown(issue: &crate::domain::issue_work::IssueReference) -> IssueSourceRead {
+    IssueSourceRead::Unknown {
+        issue: issue.clone(),
+        reason: IssueSourceFailure::ProviderUnavailable,
+    }
+}
+
+fn resync_one(
+    fixture: &Fixture,
+    state: &StoredIssueCollection,
+    value: IssueSourceRead,
+) -> IssueCollectionCommit {
+    let adapter = fixture.adapter();
+    let batch = adapter
+        .read_resync_batch(fixture.cwd(), state.fence(), 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(batch.targets.len(), 1);
+    commit(
+        adapter
+            .apply_resync_batch(fixture.cwd(), &batch, &[value])
+            .unwrap(),
+    )
+}
+
+#[test]
+fn an_explicit_off_is_durable_before_repository_resolution_and_survives_default_initialization() {
+    let fixture = Fixture::new("collector-off-first");
+    let adapter = fixture.adapter();
+    assert!(adapter.get_collection(fixture.cwd()).unwrap().is_none());
+    let off = mode(
+        adapter
+            .set_collection_mode(fixture.cwd(), None, IssueCollectionMode::Off)
+            .unwrap(),
+    );
+    assert_eq!(off.epoch, 1);
+    assert!(off.binding_id.is_none());
+    assert!(adapter.list_bindings(fixture.cwd()).unwrap().is_empty());
+    assert_eq!(
+        fixture.adapter().ensure_collection(fixture.cwd()).unwrap(),
+        off
+    );
+    assert_eq!(
+        adapter.get_collection(fixture.cwd()).unwrap(),
+        Some(off.clone())
+    );
+
+    let observe = mode(
+        adapter
+            .set_collection_mode(fixture.cwd(), Some(1), IssueCollectionMode::Observe)
+            .unwrap(),
+    );
+    assert_eq!((observe.epoch, observe.revision), (2, 2));
+    assert!(matches!(
+        adapter
+            .set_collection_mode(fixture.cwd(), Some(1), IssueCollectionMode::Observe)
+            .unwrap(),
+        IssueCollectionModeSaveResult::Saved { changed: false, .. }
+    ));
+    let off_again = mode(
+        adapter
+            .set_collection_mode(fixture.cwd(), Some(2), IssueCollectionMode::Off)
+            .unwrap(),
+    );
+    assert!(matches!(
+        adapter
+            .set_collection_mode(fixture.cwd(), Some(1), IssueCollectionMode::Observe)
+            .unwrap(),
+        IssueCollectionModeSaveResult::Conflict { .. }
+    ));
+    assert_eq!(adapter.ensure_collection(fixture.cwd()).unwrap(), off_again);
+    for invalid in [0, u64::MAX] {
+        assert!(
+            adapter
+                .set_collection_mode(fixture.cwd(), Some(invalid), IssueCollectionMode::Observe)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn page_failure_rolls_back_earlier_rows_binding_and_cursor_then_replay_commits_once() {
+    let fixture = Fixture::new("collector-atomic-page");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    assert_eq!(initial.config.mode, IssueCollectionMode::Observe);
+    let request = request(&fixture, &initial);
+    let mut broken = withheld(&fixture, "I_C");
+    let IssueSourceContent::Withheld { basis, .. } = &mut broken.content else {
+        unreachable!()
+    };
+    basis.field_hash.sha256 = "invalid-fingerprint".to_owned();
+    let mut page = page(
+        &fixture,
+        &request,
+        vec![
+            observed(&fixture, "I_A", "shared A"),
+            observed(&fixture, "I_B", "shared B"),
+            broken,
+        ],
+        Some("after-C"),
+    );
+    assert!(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .is_err()
+    );
+    assert_eq!(
+        adapter.get_collection(fixture.cwd()).unwrap(),
+        Some(initial.clone())
+    );
+    assert!(adapter.list_bindings(fixture.cwd()).unwrap().is_empty());
+    assert!(
+        adapter
+            .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    page.observations[2] = observed(&fixture, "I_C", "shared C");
+    let applied = commit(
+        fixture
+            .adapter()
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    assert_eq!(applied.newly_tracked.len(), 3);
+    assert_eq!(applied.state.discovery_cursor, page.next_cursor);
+    assert!(matches!(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+        IssueCollectionApplyResult::Discarded { .. }
+    ));
+    assert_eq!(adapter.list_issues(fixture.cwd(), None).unwrap().len(), 3);
+    let request = self::request(&fixture, &applied.state);
+    page.next_cursor = None;
+    let replay = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), applied.state.fence(), &request, &page)
+            .unwrap(),
+    );
+    assert!(replay.newly_tracked.is_empty());
+    assert!(replay.state.discovery_cursor.is_none());
+    assert_eq!(
+        adapter
+            .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+            .unwrap()
+            .items
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn withheld_unknown_and_shared_use_one_catalog_identity_without_a_stale_snapshot_projection() {
+    let fixture = Fixture::new("collector-withheld");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let page = page(&fixture, &request, vec![withheld(&fixture, "I_A")], None);
+    let first = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    assert_eq!(first.newly_tracked, vec![reference(fixture.cwd(), "I_A")]);
+    assert!(adapter.list_issues(fixture.cwd(), None).unwrap().is_empty());
+    let first_view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert!(first_view.items[0].tracked.is_none());
+    assert!(matches!(
+        first_view.items[0].current.as_ref().unwrap(),
+        IssueSourceRead::Observed(value) if matches!(&value.content, IssueSourceContent::Withheld { .. })
+    ));
+    let alternate = binding_for("alternate-binding", &reference(fixture.cwd(), "I_A"));
+    adapter.insert_binding(fixture.cwd(), &alternate).unwrap();
+    assert!(
+        adapter
+            .insert_issue(
+                fixture.cwd(),
+                &discovered(&alternate, "I_A", "wrong binding")
+            )
+            .is_err()
+    );
+    assert!(adapter.list_issues(fixture.cwd(), None).unwrap().is_empty());
+    let failed = resync_one(
+        &fixture,
+        &first.state,
+        unknown(&reference(fixture.cwd(), "I_A")),
+    );
+    assert!(failed.newly_tracked.is_empty());
+    assert!(adapter.list_issues(fixture.cwd(), None).unwrap().is_empty());
+    let shared = resync_one(
+        &fixture,
+        &failed.state,
+        IssueSourceRead::Observed(Box::new(observed(
+            &fixture,
+            "I_A",
+            "historical-shared-copy-must-not-leak",
+        ))),
+    );
+    assert!(shared.newly_tracked.is_empty());
+    let issue = adapter
+        .get_issue(fixture.cwd(), &reference(fixture.cwd(), "I_A"))
+        .unwrap()
+        .unwrap();
+    let ready = transition_and_save(
+        &adapter,
+        fixture.cwd(),
+        &issue,
+        IssueTransition::Assess(IssueTriageResult::Ready),
+    );
+    let mut pending = ready;
+    pending.transition(IssueTransition::AwaitDecision).unwrap();
+    pending.set_flag(IssueAutomationFlag::Held, true);
+    pending.set_flag(IssueAutomationFlag::Stale, true);
+    let pending = save_changed(&adapter, fixture.cwd(), &pending);
+
+    let failed = resync_one(&fixture, &shared.state, unknown(pending.reference()));
+    let current = adapter
+        .get_issue(fixture.cwd(), pending.reference())
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.state(), IssueAutomationState::AwaitingDecision);
+    assert_eq!(
+        current.decision_resume(),
+        Some(IssueDecisionResumePhase::Ready)
+    );
+    assert!(current.flags().held && current.flags().stale && current.flags().unknown);
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert!(matches!(
+        view.items[0].current,
+        Some(IssueSourceRead::Unknown { .. })
+    ));
+    assert!(!format!("{view:?}").contains("historical-shared-copy-must-not-leak"));
+
+    let withheld = resync_one(
+        &fixture,
+        &failed.state,
+        IssueSourceRead::Observed(Box::new(withheld(&fixture, "I_A"))),
+    );
+    assert!(withheld.newly_tracked.is_empty());
+    let current = adapter
+        .get_issue(fixture.cwd(), pending.reference())
+        .unwrap()
+        .unwrap();
+    assert!(current.flags().held && current.flags().stale && !current.flags().unknown);
+    assert_eq!(current.state(), pending.state());
+    assert_eq!(current.snapshot(), pending.snapshot());
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert!(!format!("{view:?}").contains("historical-shared-copy-must-not-leak"));
+    let mut closed = observed(&fixture, "I_A", "current shared copy");
+    closed.remote_state = IssueRemoteState::Closed;
+    let closed = resync_one(
+        &fixture,
+        &withheld.state,
+        IssueSourceRead::Observed(Box::new(closed)),
+    );
+    assert!(closed.newly_tracked.is_empty());
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert!(
+        matches!(view.items[0].current.as_ref(), Some(IssueSourceRead::Observed(value)) if value.remote_state == IssueRemoteState::Closed)
+    );
+    assert_eq!(
+        view.items[0].tracked.as_ref().unwrap().state,
+        pending.state()
+    );
+}
+
+#[test]
+fn off_commit_discards_late_discovery_resync_and_status_writes_even_after_observe_returns() {
+    let fixture = Fixture::new("collector-off-inflight");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let page = page(
+        &fixture,
+        &request,
+        vec![observed(&fixture, "I_A", "current shared")],
+        None,
+    );
+    let first = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    let batch = adapter
+        .read_resync_batch(fixture.cwd(), first.state.fence(), 1)
+        .unwrap()
+        .unwrap();
+    let off = mode(
+        adapter
+            .set_collection_mode(
+                fixture.cwd(),
+                Some(first.state.epoch),
+                IssueCollectionMode::Off,
+            )
+            .unwrap(),
+    );
+    assert!(
+        adapter
+            .read_resync_batch(fixture.cwd(), off.fence(), 1)
+            .unwrap()
+            .is_none()
+    );
+    for result in [
+        adapter
+            .apply_resync_batch(fixture.cwd(), &batch, &[unknown(&batch.targets[0])])
+            .unwrap(),
+        adapter
+            .apply_discovery_page(fixture.cwd(), first.state.fence(), &request, &page)
+            .unwrap(),
+        adapter
+            .record_collection_attempt(fixture.cwd(), first.state.fence(), 100, None)
+            .unwrap(),
+    ] {
+        assert!(matches!(
+            result,
+            IssueCollectionApplyResult::Discarded { .. }
+        ));
+    }
+    assert_eq!(
+        adapter.get_collection(fixture.cwd()).unwrap(),
+        Some(off.clone())
+    );
+    let observe = mode(
+        adapter
+            .set_collection_mode(fixture.cwd(), Some(off.epoch), IssueCollectionMode::Observe)
+            .unwrap(),
+    );
+    assert!(matches!(
+        adapter
+            .apply_resync_batch(fixture.cwd(), &batch, &[unknown(&batch.targets[0])])
+            .unwrap(),
+        IssueCollectionApplyResult::Discarded { .. }
+    ));
+    let failed = commit(
+        adapter
+            .record_collection_attempt(
+                fixture.cwd(),
+                observe.fence(),
+                100,
+                Some(IssueCollectionFailure::Source(
+                    IssueSourceFailure::ProviderUnavailable,
+                )),
+            )
+            .unwrap(),
+    );
+    assert_eq!(failed.state.status.consecutive_failures, 1);
+    assert_eq!(failed.state.status.last_success_at_ms, None);
+    let success = commit(
+        adapter
+            .record_collection_attempt(fixture.cwd(), failed.state.fence(), 200, None)
+            .unwrap(),
+    );
+    assert_eq!(success.state.status.consecutive_failures, 0);
+    assert_eq!(success.state.status.last_success_at_ms, Some(200));
+    assert_eq!(success.state.discovery_cursor, first.state.discovery_cursor);
+    assert_eq!(
+        fixture.adapter().get_collection(fixture.cwd()).unwrap(),
+        Some(success.state)
+    );
+    let current = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert!(matches!(
+        current.items[0].current,
+        Some(IssueSourceRead::Observed(_))
+    ));
+}
+
+#[test]
+fn bounded_resync_includes_legacy_and_withheld_rows_and_finishes_a_fixed_sweep() {
+    let fixture = Fixture::new("collector-resync-sweep");
+    let adapter = fixture.adapter();
+    let (binding, initial_issue) = fixture.insert();
+    transition_and_save(
+        &adapter,
+        fixture.cwd(),
+        &initial_issue,
+        IssueTransition::Cancel,
+    );
+    for id in ["I_A", "I_B", "I_C"] {
+        adapter
+            .insert_issue(fixture.cwd(), &discovered(&binding, id, "legacy shared"))
+            .unwrap();
+    }
+    let mut done = adapter
+        .get_issue(fixture.cwd(), &reference(fixture.cwd(), "I_A"))
+        .unwrap()
+        .unwrap();
+    for change in [
+        IssueTransition::Assess(IssueTriageResult::Ready),
+        IssueTransition::Queue,
+        IssueTransition::Start,
+        IssueTransition::OpenReview,
+        IssueTransition::Complete,
+    ] {
+        done = transition_and_save(&adapter, fixture.cwd(), &done, change);
+    }
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let page = page(&fixture, &request, vec![withheld(&fixture, "I_D")], None);
+    let discovered = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    let batch = adapter
+        .read_resync_batch(fixture.cwd(), discovered.state.fence(), 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(batch.targets, vec![reference(fixture.cwd(), "I_B")]);
+    assert_eq!(
+        batch.next_cursor.as_ref().unwrap().through,
+        reference(fixture.cwd(), "I_D")
+    );
+    let first = commit(
+        adapter
+            .apply_resync_batch(fixture.cwd(), &batch, &[unknown(&batch.targets[0])])
+            .unwrap(),
+    );
+    assert!(first.newly_tracked.is_empty());
+    adapter
+        .insert_issue(
+            fixture.cwd(),
+            &self::discovered(&binding, "I_E", "later legacy shared"),
+        )
+        .unwrap();
+    let second = adapter
+        .read_resync_batch(fixture.cwd(), first.state.fence(), 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        second.targets,
+        vec![
+            reference(fixture.cwd(), "I_C"),
+            reference(fixture.cwd(), "I_D")
+        ]
+    );
+    assert!(second.next_cursor.is_none());
+    let reads = second.targets.iter().map(unknown).collect::<Vec<_>>();
+    let finished = commit(
+        adapter
+            .apply_resync_batch(fixture.cwd(), &second, &reads)
+            .unwrap(),
+    );
+    let next = adapter
+        .read_resync_batch(fixture.cwd(), finished.state.fence(), 10)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        next.targets,
+        ["I_B", "I_C", "I_D", "I_E"].map(|id| reference(fixture.cwd(), id))
+    );
+}
+
+#[test]
+fn discovery_reset_changes_the_epoch_but_preserves_resync_and_cannot_rebind_the_repository() {
+    let fixture = Fixture::new("collector-reset");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let page = page(
+        &fixture,
+        &request,
+        vec![
+            observed(&fixture, "I_A", "shared"),
+            withheld(&fixture, "I_B"),
+        ],
+        Some("after-B"),
+    );
+    let first = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    let batch = adapter
+        .read_resync_batch(fixture.cwd(), first.state.fence(), 1)
+        .unwrap()
+        .unwrap();
+    let first = commit(
+        adapter
+            .apply_resync_batch(fixture.cwd(), &batch, &[unknown(&batch.targets[0])])
+            .unwrap(),
+    );
+    let reset = commit(
+        adapter
+            .reset_discovery_cursor(fixture.cwd(), first.state.fence())
+            .unwrap(),
+    );
+    assert_eq!(reset.state.epoch, first.state.epoch + 1);
+    assert_eq!(reset.state.revision, first.state.revision + 1);
+    assert!(reset.state.discovery_cursor.is_none());
+    assert_eq!(reset.state.resync_cursor, first.state.resync_cursor);
+    let noop = commit(
+        adapter
+            .reset_discovery_cursor(fixture.cwd(), reset.state.fence())
+            .unwrap(),
+    );
+    assert_eq!(noop.state, reset.state);
+    assert!(matches!(
+        adapter
+            .apply_discovery_page(fixture.cwd(), first.state.fence(), &request, &page)
+            .unwrap(),
+        IssueCollectionApplyResult::Discarded { .. }
+    ));
+    let mut new_request = self::request(&fixture, &reset.state);
+    let mut other_page = self::page(&fixture, &new_request, Vec::new(), None);
+    other_page.repository.repository_id = "R_different".to_owned();
+    new_request.target = IssueDiscoveryTarget::Repository(other_page.repository.clone());
+    assert!(
+        adapter
+            .apply_discovery_page(
+                fixture.cwd(),
+                reset.state.fence(),
+                &new_request,
+                &other_page
+            )
+            .is_err()
+    );
+    assert_eq!(
+        adapter.get_collection(fixture.cwd()).unwrap(),
+        Some(reset.state)
+    );
+}
+
+#[test]
+fn catalog_pagination_is_a_binary_union_and_never_fills_unobserved_rows_from_legacy_snapshots() {
+    let fixture = Fixture::new("collector-union-pages");
+    let adapter = fixture.adapter();
+    let (binding, _) = fixture.insert();
+    adapter
+        .insert_issue(
+            fixture.cwd(),
+            &discovered(&binding, "I_0", "unobserved historical copy"),
+        )
+        .unwrap();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let page = page(
+        &fixture,
+        &request,
+        vec![
+            observed(&fixture, "I_1", "new current copy"),
+            withheld(&fixture, "I_A"),
+            withheld(&fixture, "I_a"),
+        ],
+        None,
+    );
+    let result = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    assert_eq!(result.newly_tracked.len(), 2);
+    let mut query = IssueCollectionQuery {
+        binding_id: Some(binding.id().clone()),
+        after: None,
+        limit: 1,
+    };
+    let mut items = Vec::new();
+    loop {
+        let page = adapter
+            .query_collection_issues(fixture.cwd(), &query)
+            .unwrap();
+        assert_eq!(page.revision, result.state.revision);
+        query.after = page.next_after;
+        items.extend(page.items);
+        if query.after.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.issue.issue_id.as_str())
+            .collect::<Vec<_>>(),
+        ["I_0", "I_1", "I_A", "I_a"]
+    );
+    assert!(items[0].current.is_none());
+    assert!(!format!("{items:?}").contains("unobserved historical copy"));
+    let mut other_reference = reference(fixture.cwd(), "I_1");
+    other_reference.repository_id = "R_other".to_owned();
+    let other_binding = binding_for("other-binding", &other_reference);
+    adapter
+        .insert_binding(fixture.cwd(), &other_binding)
+        .unwrap();
+    adapter
+        .insert_issue(
+            fixture.cwd(),
+            &discovered(&other_binding, "I_1", "other repository"),
+        )
+        .unwrap();
+    let all = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert_eq!(all.items.len(), 5);
+    let filtered = adapter
+        .query_collection_issues(
+            fixture.cwd(),
+            &IssueCollectionQuery {
+                binding_id: Some(other_binding.id().clone()),
+                ..IssueCollectionQuery::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(filtered.items.len(), 1);
+    assert_eq!(filtered.items[0].issue, other_reference);
+}
+
+#[test]
+fn wrong_result_identity_or_missing_batch_results_do_not_advance_resync() {
+    let fixture = Fixture::new("collector-resync-validation");
+    let adapter = fixture.adapter();
+    fixture.insert();
+    let state = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let batch = adapter
+        .read_resync_batch(fixture.cwd(), state.fence(), 1)
+        .unwrap()
+        .unwrap();
+    assert!(
+        adapter
+            .apply_resync_batch(fixture.cwd(), &batch, &[])
+            .is_err()
+    );
+    assert!(
+        adapter
+            .apply_resync_batch(
+                fixture.cwd(),
+                &batch,
+                &[unknown(&reference(fixture.cwd(), "I_wrong"))],
+            )
+            .is_err()
+    );
+    let mut forged = batch.clone();
+    forged.targets[0] = reference(fixture.cwd(), "I_not_tracked");
+    assert!(matches!(
+        adapter
+            .apply_resync_batch(fixture.cwd(), &forged, &[unknown(&forged.targets[0])])
+            .unwrap(),
+        IssueCollectionApplyResult::Discarded { .. }
+    ));
+    assert_eq!(adapter.get_collection(fixture.cwd()).unwrap(), Some(state));
+}
+
+#[test]
+fn exact_v1_migration_preserves_binding_workflow_revisions_flags_and_original_definitions() {
+    let fixture = Fixture::new("collector-v1-migration");
+    let mut binding = fixture.binding("legacy-binding");
+    binding.set_autonomy(IssueAutomationAutonomy::Gated);
+    let mut issue = discovered(&binding, "I_legacy", "legacy shared copy");
+    issue
+        .transition(IssueTransition::Assess(IssueTriageResult::Ready))
+        .unwrap();
+    issue.transition(IssueTransition::AwaitDecision).unwrap();
+    issue.set_flag(IssueAutomationFlag::Held, true);
+    issue.set_flag(IssueAutomationFlag::Stale, true);
+    issue.set_flag(IssueAutomationFlag::Unknown, true);
+    let mut record = issue.to_record();
+    record.revision = 7;
+    let expected_issue = TrackedIssue::hydrate(record.clone()).unwrap();
+    {
+        let mut opened = private_store::open(&fixture.runtime).unwrap();
+        let (connection, _) = opened.parts();
+        connection.execute_batch(BINDINGS_SCHEMA).unwrap();
+        connection.execute_batch(ISSUES_SCHEMA).unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction.execute(
+            "INSERT INTO issue_automation_bindings VALUES (?1, 'github', 'github.com', 'R_1', ?2, 'gated', 4)",
+            params![binding.id().as_str(), fixture.cwd()],
+        ).unwrap();
+        insert_issue_row(&transaction, &record).unwrap();
+        transaction
+            .pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        transaction.pragma_update(None, "user_version", 1).unwrap();
+        transaction.commit().unwrap();
+    }
+    let adapter = fixture.adapter();
+    assert!(adapter.get_collection(fixture.cwd()).unwrap().is_none());
+    assert_eq!(
+        adapter
+            .get_issue(fixture.cwd(), expected_issue.reference())
+            .unwrap(),
+        Some(expected_issue)
+    );
+    let stored_binding = adapter
+        .get_binding(fixture.cwd(), binding.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_binding.binding, binding);
+    assert_eq!(stored_binding.revision, 4);
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert_eq!(view.items.len(), 1);
+    assert!(view.items[0].current.is_none());
+    let database = Connection::open(fixture.database()).unwrap();
+    let version: i64 = database
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+    for (name, expected) in [
+        ("issue_automation_bindings", BINDINGS_SCHEMA),
+        ("tracked_issues", ISSUES_SCHEMA),
+    ] {
+        let actual: String = database
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(normalized_schema(&actual), normalized_schema(expected));
+    }
+}
+
+#[test]
+fn v1_with_an_unexpected_schema_object_is_not_partially_migrated() {
+    let fixture = Fixture::new("collector-invalid-v1");
+    {
+        let mut opened = private_store::open(&fixture.runtime).unwrap();
+        let (connection, _) = opened.parts();
+        connection.execute_batch(BINDINGS_SCHEMA).unwrap();
+        connection.execute_batch(ISSUES_SCHEMA).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('kept');",
+            )
+            .unwrap();
+        connection
+            .pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+    }
+    assert!(fixture.adapter().ensure_collection(fixture.cwd()).is_err());
+    let database = Connection::open(fixture.database()).unwrap();
+    let version: i64 = database
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    let retained: String = database
+        .query_row("SELECT value FROM retained", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(retained, "kept");
+    let added: i64 = database.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE name IN ('issue_collection_control', 'issue_source_observations')",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(added, 0);
+}
+
+#[test]
+fn corrupt_current_observation_or_discovery_checkpoint_fails_closed() {
+    let fixture = Fixture::new("collector-corrupt-observation");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let page = page(
+        &fixture,
+        &request,
+        vec![withheld(&fixture, "I_A")],
+        Some("after-A"),
+    );
+    let result = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    let wrong = IssueSourceRead::Observed(Box::new(withheld(&fixture, "I_wrong")));
+    {
+        let database = Connection::open(fixture.database()).unwrap();
+        database
+            .execute(
+                "UPDATE issue_source_observations SET current_read = ?1",
+                [serde_json::to_string(&wrong).unwrap()],
+            )
+            .unwrap();
+    }
+    assert!(
+        adapter
+            .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+            .is_err()
+    );
+    let mut invalid_cursor = result.state.discovery_cursor.as_ref().unwrap().to_record();
+    invalid_cursor.version += 1;
+    {
+        let database = Connection::open(fixture.database()).unwrap();
+        database
+            .execute(
+                "UPDATE issue_collection_control SET discovery_cursor = ?1",
+                [serde_json::to_string(&invalid_cursor).unwrap()],
+            )
+            .unwrap();
+    }
+    assert!(adapter.get_collection(fixture.cwd()).is_err());
+    assert!(
+        adapter
+            .reset_discovery_cursor(fixture.cwd(), result.state.fence())
+            .is_err()
+    );
+}
+
+#[test]
+fn two_collectors_with_one_fence_cannot_both_apply_a_page_or_emit_first_tracking() {
+    use std::sync::{Arc, Barrier};
+
+    let fixture = Fixture::new("collector-fence-race");
+    let initial = fixture.adapter().ensure_collection(fixture.cwd()).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = ["first shared copy", "second shared copy"]
+        .into_iter()
+        .map(|body| {
+            let adapter = fixture.adapter();
+            let workspace = fixture.cwd().to_owned();
+            let request = request(&fixture, &initial);
+            let page = page(
+                &fixture,
+                &request,
+                vec![observed(&fixture, "I_A", body)],
+                None,
+            );
+            let expected = initial.fence();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                adapter
+                    .apply_discovery_page(&workspace, expected, &request, &page)
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, IssueCollectionApplyResult::Applied(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, IssueCollectionApplyResult::Discarded { .. }))
+            .count(),
+        1
+    );
+    let newly_tracked = results
+        .iter()
+        .filter_map(|result| match result {
+            IssueCollectionApplyResult::Applied(commit) => Some(commit.newly_tracked.len()),
+            IssueCollectionApplyResult::Discarded { .. } => None,
+        })
+        .sum::<usize>();
+    assert_eq!(newly_tracked, 1);
+    let adapter = fixture.adapter();
+    assert_eq!(
+        adapter
+            .get_collection(fixture.cwd())
+            .unwrap()
+            .unwrap()
+            .revision,
+        initial.revision + 1
+    );
+    assert_eq!(adapter.list_issues(fixture.cwd(), None).unwrap().len(), 1);
+    assert_eq!(
+        adapter
+            .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+}

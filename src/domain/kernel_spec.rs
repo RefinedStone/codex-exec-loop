@@ -53,7 +53,7 @@ spec_names! {
     #[derive(Serialize, JsonSchema)]
     #[serde(rename_all = "snake_case")]
     pub enum CommandState {
-        Store => "store", "Stored planning data. A command-only kernel can execute this command.";
+        Store => "store", "Stored repository data. A command-only kernel can execute this command.";
         Runtime => "runtime", "Live kernel state. Start the Gateway before sending this command.";
     }
 }
@@ -93,6 +93,10 @@ spec_names! {
             "Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         DeleteDirection => "delete_direction",
             "Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+        SetIssueAutomationMode => "set_issue_automation_mode",
+            "Persist the issue collection mode: off or observe. The answer follows the ledger commit; observe only collects while the kernel is running.";
+        SyncIssues => "sync_issues",
+            "Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request.";
     }
 }
 
@@ -106,6 +110,7 @@ spec_names! {
         Approval => "approval", "Pending approval requests.";
         AutoFollow => "auto_follow", "The automatic follow-up settings.";
         Planning => "planning", "The planning queue and directions.";
+        Issue => "issue", "Issue collection settings and observations.";
     }
 }
 
@@ -191,6 +196,8 @@ spec_names! {
             "The planning data changed after the sender read it: `expected_planning_revision` is not the current revision. Nothing was changed. `message` gives both revisions.";
         PlanningLocked => "planning_locked",
             "Another change or parallel work holds the planning data that the command needs. Nothing was changed. `message` names the holder.";
+        IssueAutomationOff => "issue_automation_off",
+            "Issue collection is off. No source read was scheduled. Read issue_automation and decide whether to enable observe before sending sync_issues again.";
     }
 }
 
@@ -276,7 +283,8 @@ impl KernelCommandKind {
             Self::LoadSessions
             | Self::RefreshPlanning
             | Self::SetAutoFollowMaxTurns
-            | Self::PauseAutoFollow => CommandCompletion::Accepted,
+            | Self::PauseAutoFollow
+            | Self::SyncIssues => CommandCompletion::Accepted,
             Self::SubmitPrompt
             | Self::RenameSession
             | Self::SteerTurn
@@ -288,7 +296,8 @@ impl KernelCommandKind {
             | Self::DeleteTask
             | Self::CreateDirection
             | Self::UpdateDirection
-            | Self::DeleteDirection => CommandCompletion::Records,
+            | Self::DeleteDirection
+            | Self::SetIssueAutomationMode => CommandCompletion::Records,
         };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (
@@ -355,6 +364,13 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::KernelUnreachable],
             ),
+            Self::SetIssueAutomationMode => (CommandScope::Issue, Write, Natural, &[]),
+            Self::SyncIssues => (
+                CommandScope::Issue,
+                Read,
+                Natural,
+                &[Reason::KernelUnreachable, Reason::IssueAutomationOff],
+            ),
             Self::ResetPlanning => (CommandScope::Planning, Destructive, Natural, &[]),
             Self::RefreshPlanning => (
                 CommandScope::Planning,
@@ -391,7 +407,8 @@ impl KernelCommandKind {
                 | Self::DeleteTask
                 | Self::CreateDirection
                 | Self::UpdateDirection
-                | Self::DeleteDirection => CommandState::Store,
+                | Self::DeleteDirection
+                | Self::SetIssueAutomationMode => CommandState::Store,
                 Self::LoadSessions
                 | Self::RenameSession
                 | Self::SubmitPrompt
@@ -400,7 +417,8 @@ impl KernelCommandKind {
                 | Self::DecideApproval
                 | Self::SetAutoFollowMaxTurns
                 | Self::PauseAutoFollow
-                | Self::RefreshPlanning => CommandState::Runtime,
+                | Self::RefreshPlanning
+                | Self::SyncIssues => CommandState::Runtime,
             },
             effect,
             idempotency,
@@ -446,6 +464,10 @@ spec_names! {
             "A command ended without a turn record. For `submit_prompt`: its preparation failed, its work went to parallel slots, or its turn submission closed before a turn started. For the other commands: the request of the command returned (`done` or `failed`), or the command did nothing (`failed`). For every command: the kernel was built again (`lost`). `detail` is the cause that a failed request gave, as text for a person.";
         RepositoryChanged => "repository_changed",
             "The checked-out commit or branch of the workspace differs from the last observation. The kernel looks periodically, so one record can cover several changes. It does not say who made the change. Without `previous_head`, this is the first observation in this log. This record has no thread: `thread_id` is empty in history.";
+        IssueTracked => "issue_tracked",
+            "A stable issue entered the collection ledger for the first time. Metadata-only withheld observations count once; rediscovery does not repeat this record.";
+        IssueAutomationModeChanged => "issue_automation_mode_changed",
+            "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
     }
 }
 
@@ -473,24 +495,51 @@ mod tests {
     }
 
     #[test]
-    fn read_commands_are_not_recorded_and_only_reject_when_offline() {
+    fn read_commands_are_not_recorded_and_issue_sync_can_reject_when_off() {
         // The recording rule is derived from the effect. It is not a second list.
         let unrecorded = KernelCommandKind::ALL
             .iter()
             .filter(|kind| !kind.is_recorded())
             .map(|kind| kind.name())
             .collect::<Vec<_>>();
-        assert_eq!(unrecorded, ["load_sessions", "refresh_planning"]);
+        assert_eq!(
+            unrecorded,
+            ["load_sessions", "refresh_planning", "sync_issues"]
+        );
         for kind in KernelCommandKind::ALL {
             if !kind.is_recorded() {
                 assert_eq!(
                     kind.spec().rejections,
-                    &[ReasonCode::KernelUnreachable],
+                    if *kind == KernelCommandKind::SyncIssues {
+                        &[
+                            ReasonCode::KernelUnreachable,
+                            ReasonCode::IssueAutomationOff,
+                        ][..]
+                    } else {
+                        &[ReasonCode::KernelUnreachable][..]
+                    },
                     "{}",
                     kind.name()
                 );
             }
         }
+    }
+
+    #[test]
+    fn issue_commands_keep_storage_and_runtime_boundaries_distinct() {
+        let mode = KernelCommandKind::SetIssueAutomationMode.spec();
+        assert_eq!(mode.scope, CommandScope::Issue);
+        assert_eq!(mode.state, CommandState::Store);
+        assert_eq!(mode.effect, CommandEffect::Write);
+        assert_eq!(mode.idempotency, CommandIdempotency::Natural);
+        assert_eq!(mode.completion, CommandCompletion::Records);
+        let sync = KernelCommandKind::SyncIssues.spec();
+        assert_eq!(sync.scope, CommandScope::Issue);
+        assert_eq!(sync.state, CommandState::Runtime);
+        assert_eq!(sync.effect, CommandEffect::Read);
+        assert_eq!(sync.idempotency, CommandIdempotency::Natural);
+        assert_eq!(sync.completion, CommandCompletion::Accepted);
+        assert!(sync.rejections.contains(&ReasonCode::IssueAutomationOff));
     }
 
     #[test]
@@ -527,6 +576,7 @@ mod tests {
                 "rejected_again",
                 "planning_revision_stale",
                 "planning_locked",
+                "issue_automation_off",
             ]
         );
         for reason in ReasonCode::ALL {

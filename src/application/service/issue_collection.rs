@@ -1,0 +1,562 @@
+//! 한 번의 관찰 수집을 수행한다. 시계, worker 수명과 다음 실행 시각은 런타임 호스트가 소유한다.
+//! 출처 호출은 저장 트랜잭션 밖에서 수행하고 각 저장은 mode/epoch/revision을 다시 검사한다.
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Result, anyhow, bail};
+
+use crate::application::port::outbound::issue_automation_store_port::{
+    IssueAutomationStorePort, IssueCollectionApplyResult, IssueCollectionModeSaveResult,
+};
+use crate::application::port::outbound::issue_collection_origin_port::{
+    IssueCollectionOrigin, IssueCollectionOriginPort,
+};
+use crate::application::port::outbound::issue_source_port::{
+    IssueDiscoveryRequest, IssueDiscoveryTarget, IssueResyncRequest, IssueSourcePort,
+};
+use crate::application::service::issue_policy::{IssuePolicyService, issue_policy_version};
+use crate::domain::issue_automation::IssueAutomationBindingId;
+use crate::domain::issue_automation::collection::{
+    IssueCollectionFailure, IssueCollectionMode, IssueCollectionPage, IssueCollectionProjection,
+    IssueCollectionQuery, StoredIssueCollection,
+};
+use crate::domain::issue_automation::source::{
+    IssueDiscoverySelection, IssueSourceContent, IssueSourceDisclosure, IssueSourceFailure,
+    IssueSourceRead, IssueSourceRepository,
+};
+use crate::domain::issue_policy::IssueDisclosureTarget;
+use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
+
+pub const ISSUE_DISCOVERY_PAGE_SIZE: u16 = 25;
+pub const ISSUE_RESYNC_BATCH_SIZE: u16 = 10;
+const MODE_CAS_ATTEMPTS: usize = 3;
+
+/// 취소와 짧은 장부 commit을 선형화한다. 원격 호출 동안에는 commit_gate를 잡지 않는다.
+/// cancel이 먼저 끝나면 이후 commit은 없고, commit이 먼저 시작됐으면 cancel은 그 저장만 기다린다.
+#[derive(Default)]
+pub struct IssueCollectionCancellation {
+    cancelled: AtomicBool,
+    commit_gate: Mutex<()>,
+}
+
+impl IssueCollectionCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    pub fn cancel(&self) {
+        let _guard = self
+            .commit_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    fn commit_if_active<T>(&self, commit: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
+        let _guard = self
+            .commit_gate
+            .lock()
+            .map_err(|_| anyhow!("the issue collection commit gate is unavailable"))?;
+        if self.is_cancelled() {
+            return Ok(None);
+        }
+        commit().map(Some)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueCollectionModeChange {
+    pub previous: Option<IssueCollectionMode>,
+    pub projection: IssueCollectionProjection,
+    pub changed: bool,
+}
+
+/// 해당 트랜잭션에서 이미 확정한 등록 사실이다. 후속 수집 취소·실패와 별도로 전달한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueCollectionTrackedFact {
+    pub issue: IssueReference,
+    pub binding_id: IssueAutomationBindingId,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueCollectionRunOutcome {
+    pub projection: IssueCollectionProjection,
+    pub newly_tracked: Vec<IssueReference>,
+    pub discarded: bool,
+}
+
+struct CollectionProgress {
+    state: StoredIssueCollection,
+    newly_tracked: Vec<IssueReference>,
+    discarded: bool,
+}
+
+pub struct IssueCollectionService {
+    workspace_dir: String,
+    store: Arc<dyn IssueAutomationStorePort>,
+    source: Arc<dyn IssueSourcePort>,
+    origin: Arc<dyn IssueCollectionOriginPort>,
+    policy: IssuePolicyService,
+}
+
+impl IssueCollectionService {
+    pub fn new(
+        workspace_dir: String,
+        store: Arc<dyn IssueAutomationStorePort>,
+        source: Arc<dyn IssueSourcePort>,
+        origin: Arc<dyn IssueCollectionOriginPort>,
+        policy: IssuePolicyService,
+    ) -> Self {
+        Self {
+            workspace_dir,
+            store,
+            source,
+            origin,
+            policy,
+        }
+    }
+
+    /// 기본 Observe도 영속된 뒤에 반환한다. 기존 Off나 읽기 오류를 기본값으로 대체하지 않는다.
+    pub fn projection(&self) -> Result<IssueCollectionProjection> {
+        let state = self
+            .store
+            .ensure_collection(&self.workspace_dir)
+            .map_err(ledger_unavailable)?;
+        self.project(state)
+    }
+
+    pub fn issues(&self, query: &IssueCollectionQuery) -> Result<IssueCollectionPage> {
+        query.validate()?;
+        self.store
+            .query_collection_issues(&self.workspace_dir, query)
+            .map_err(ledger_unavailable)
+    }
+
+    /// 네트워크와 정책 파일을 읽지 않는 저장 명령이다.
+    pub fn set_mode(&self, mode: IssueCollectionMode) -> Result<IssueCollectionModeChange> {
+        for _ in 0..MODE_CAS_ATTEMPTS {
+            let current = self
+                .store
+                .get_collection(&self.workspace_dir)
+                .map_err(ledger_unavailable)?;
+            let previous = current.as_ref().map(|state| state.config.mode);
+            match self
+                .store
+                .set_collection_mode(
+                    &self.workspace_dir,
+                    current.as_ref().map(|state| state.epoch),
+                    mode,
+                )
+                .map_err(ledger_unavailable)?
+            {
+                IssueCollectionModeSaveResult::Saved { state, changed } => {
+                    return Ok(IssueCollectionModeChange {
+                        previous,
+                        projection: self.project(*state)?,
+                        changed,
+                    });
+                }
+                IssueCollectionModeSaveResult::Conflict { .. } => continue,
+            }
+        }
+        bail!("the issue collection configuration changed concurrently")
+    }
+
+    /// 원격 한 페이지와 유한한 재동기화 묶음만 수행한다. 실제 API 호출은 최대 1 + 10회다.
+    pub fn collect_once(
+        &self,
+        cancel: &IssueCollectionCancellation,
+        at_unix_ms: u64,
+    ) -> Result<IssueCollectionRunOutcome> {
+        self.collect_once_with_committed(cancel, at_unix_ms, &|_| {})
+    }
+
+    /// callback은 commit gate 안에서 실행한다. 빠른 mailbox 전송만 수행하며
+    /// 취소나 서비스 호출을 재진입하지 않는다. cancel이 돌아오면 모든 확정 사실이 이미 전달됐다.
+    pub fn collect_once_with_committed(
+        &self,
+        cancel: &IssueCollectionCancellation,
+        at_unix_ms: u64,
+        committed: &(dyn Fn(Vec<IssueCollectionTrackedFact>) + Send + Sync),
+    ) -> Result<IssueCollectionRunOutcome> {
+        let state = cancel
+            .commit_if_active(|| {
+                self.store
+                    .ensure_collection(&self.workspace_dir)
+                    .map_err(ledger_unavailable)
+            })?
+            .ok_or_else(|| anyhow!("the issue collection was cancelled"))?;
+        let mut progress = CollectionProgress {
+            state,
+            newly_tracked: Vec::new(),
+            discarded: false,
+        };
+        if !self.may_read(&progress.state, cancel)? {
+            return self.discard(progress);
+        }
+        let origin = match self.origin.github_origin(&self.workspace_dir) {
+            Ok(origin) => origin,
+            Err(_) => {
+                return self.finish(
+                    progress,
+                    cancel,
+                    at_unix_ms,
+                    Some(IssueCollectionFailure::OriginUnavailable),
+                );
+            }
+        };
+        let policy = match self.policy.resolve(&self.workspace_dir) {
+            Ok(policy) => policy,
+            Err(_) => {
+                return self.finish(
+                    progress,
+                    cancel,
+                    at_unix_ms,
+                    Some(IssueCollectionFailure::PolicyUnavailable),
+                );
+            }
+        };
+        let disclosure = IssueSourceDisclosure {
+            policy: *policy.disclosure_for(IssueDisclosureTarget::AiHandoff),
+            policy_version: issue_policy_version(&policy),
+        };
+        let capabilities = self.source.capabilities();
+        if !capabilities.discovery || !capabilities.resync {
+            return self.finish(
+                progress,
+                cancel,
+                at_unix_ms,
+                Some(IssueCollectionFailure::Source(
+                    IssueSourceFailure::UnsupportedProvider,
+                )),
+            );
+        }
+
+        let repository = self
+            .project(progress.state.clone())?
+            .binding
+            .map(|binding| IssueSourceRepository {
+                provider: binding.provider(),
+                server_id: binding.server_id().to_string(),
+                repository_id: binding.repository_id().to_string(),
+                project_scope: binding.project_scope().clone(),
+            });
+        if repository.as_ref().is_some_and(|repository| {
+            repository.provider != IssueProvider::GitHub
+                || repository.server_id != "github.com"
+                || repository.project_scope.workspace_dir != self.workspace_dir
+        }) {
+            return self.finish(
+                progress,
+                cancel,
+                at_unix_ms,
+                Some(IssueCollectionFailure::Source(
+                    IssueSourceFailure::IdentityMismatch,
+                )),
+            );
+        }
+        let selection = IssueDiscoverySelection::AllOpen;
+        if let (Some(cursor), Some(repository)) = (&progress.state.discovery_cursor, &repository) {
+            // 바인딩의 안정 좌표가 다르면 정책 변경으로 간주하여 우회하지 않는다.
+            if cursor.to_record().repository != *repository {
+                return self.finish(
+                    progress,
+                    cancel,
+                    at_unix_ms,
+                    Some(IssueCollectionFailure::Source(
+                        IssueSourceFailure::IdentityMismatch,
+                    )),
+                );
+            }
+            if cursor
+                .validate_for(
+                    repository,
+                    &selection,
+                    ISSUE_DISCOVERY_PAGE_SIZE,
+                    &disclosure,
+                )
+                .is_err()
+            {
+                let result = cancel.commit_if_active(|| {
+                    self.store
+                        .reset_discovery_cursor(&self.workspace_dir, progress.state.fence())
+                        .map_err(ledger_unavailable)
+                })?;
+                if !adopt(&mut progress, result) {
+                    return self.discard(progress);
+                }
+            }
+        }
+        let request = self.discovery_request(
+            &origin,
+            repository,
+            &progress.state,
+            selection,
+            disclosure.clone(),
+        );
+        if let Err(reason) = request.validate() {
+            return self.finish(
+                progress,
+                cancel,
+                at_unix_ms,
+                Some(IssueCollectionFailure::Source(reason)),
+            );
+        }
+        if !self.may_read(&progress.state, cancel)? {
+            return self.discard(progress);
+        }
+        let mut failure = None;
+        match self.source.discover(request.clone()) {
+            Ok(page) => {
+                let result = cancel.commit_if_active(|| {
+                    let result = self
+                        .store
+                        .apply_discovery_page(
+                            &self.workspace_dir,
+                            progress.state.fence(),
+                            &request,
+                            &page,
+                        )
+                        .map_err(ledger_unavailable)?;
+                    report_committed(&result, committed)?;
+                    Ok(result)
+                })?;
+                if !adopt(&mut progress, result) {
+                    return self.discard(progress);
+                }
+            }
+            Err(reason) => failure = Some(IssueCollectionFailure::Source(reason)),
+        }
+
+        // 발견에 실패해도 이미 알고 있는 ID는 별도로 읽는다. 목록 실패를 기존 이슈의 변화 없음으로 보지 않는다.
+        if !self.may_read(&progress.state, cancel)? {
+            return self.discard(progress);
+        }
+        let Some(batch) = self
+            .store
+            .read_resync_batch(
+                &self.workspace_dir,
+                progress.state.fence(),
+                ISSUE_RESYNC_BATCH_SIZE,
+            )
+            .map_err(ledger_unavailable)?
+        else {
+            return self.discard(progress);
+        };
+        let mut reads = Vec::with_capacity(batch.targets.len());
+        for reference in &batch.targets {
+            if !self.may_read(&progress.state, cancel)? {
+                return self.discard(progress);
+            }
+            let read = self.source.resync(IssueResyncRequest {
+                issue: reference.clone(),
+                disclosure: disclosure.clone(),
+            });
+            let read = checked_resync_read(reference, &disclosure.policy_version, read);
+            if let IssueSourceRead::Unknown { reason, .. } = &read {
+                failure.get_or_insert(IssueCollectionFailure::Source(*reason));
+            }
+            reads.push(read);
+        }
+        let result = cancel.commit_if_active(|| {
+            let result = self
+                .store
+                .apply_resync_batch(&self.workspace_dir, &batch, &reads)
+                .map_err(ledger_unavailable)?;
+            report_committed(&result, committed)?;
+            Ok(result)
+        })?;
+        if !adopt(&mut progress, result) {
+            return self.discard(progress);
+        }
+        self.finish(progress, cancel, at_unix_ms, failure)
+    }
+
+    fn discovery_request(
+        &self,
+        origin: &IssueCollectionOrigin,
+        repository: Option<IssueSourceRepository>,
+        state: &StoredIssueCollection,
+        selection: IssueDiscoverySelection,
+        disclosure: IssueSourceDisclosure,
+    ) -> IssueDiscoveryRequest {
+        // 새 순회의 첫 페이지는 origin이 여전히 같은 저장소인지 확인한다.
+        // 후속 페이지는 이름에 의존하지 않고 확인한 저장소 ID에 연결한다.
+        let target = match (state.discovery_cursor.as_ref(), repository) {
+            (Some(_), Some(repository)) => IssueDiscoveryTarget::Repository(repository),
+            (_, repository) => IssueDiscoveryTarget::GitHubLocator {
+                owner: origin.owner.clone(),
+                name: origin.name.clone(),
+                project_scope: IssueProjectScope {
+                    workspace_dir: self.workspace_dir.clone(),
+                },
+                expected_repository_id: repository.map(|repository| repository.repository_id),
+            },
+        };
+        IssueDiscoveryRequest {
+            target,
+            selection,
+            cursor: state.discovery_cursor.clone(),
+            page_size: ISSUE_DISCOVERY_PAGE_SIZE,
+            disclosure,
+        }
+    }
+
+    fn may_read(
+        &self,
+        expected: &StoredIssueCollection,
+        cancel: &IssueCollectionCancellation,
+    ) -> Result<bool> {
+        if cancel.is_cancelled() || expected.config.mode == IssueCollectionMode::Off {
+            return Ok(false);
+        }
+        let current = self
+            .store
+            .get_collection(&self.workspace_dir)
+            .map_err(ledger_unavailable)?;
+        Ok(current.is_some_and(|current| {
+            current.config.mode == IssueCollectionMode::Observe
+                && current.fence() == expected.fence()
+        }) && !cancel.is_cancelled())
+    }
+
+    fn finish(
+        &self,
+        mut progress: CollectionProgress,
+        cancel: &IssueCollectionCancellation,
+        at_unix_ms: u64,
+        failure: Option<IssueCollectionFailure>,
+    ) -> Result<IssueCollectionRunOutcome> {
+        let result = cancel.commit_if_active(|| {
+            self.store
+                .record_collection_attempt(
+                    &self.workspace_dir,
+                    progress.state.fence(),
+                    at_unix_ms,
+                    failure,
+                )
+                .map_err(ledger_unavailable)
+        })?;
+        if !adopt(&mut progress, result) {
+            return self.discard(progress);
+        }
+        self.outcome(progress)
+    }
+
+    fn discard(&self, mut progress: CollectionProgress) -> Result<IssueCollectionRunOutcome> {
+        progress.discarded = true;
+        if let Some(current) = self
+            .store
+            .get_collection(&self.workspace_dir)
+            .map_err(ledger_unavailable)?
+        {
+            progress.state = current;
+        }
+        self.outcome(progress)
+    }
+
+    fn outcome(&self, progress: CollectionProgress) -> Result<IssueCollectionRunOutcome> {
+        Ok(IssueCollectionRunOutcome {
+            projection: self.project(progress.state)?,
+            newly_tracked: progress.newly_tracked,
+            discarded: progress.discarded,
+        })
+    }
+
+    fn project(&self, state: StoredIssueCollection) -> Result<IssueCollectionProjection> {
+        let binding = match &state.binding_id {
+            Some(id) => Some(
+                self.store
+                    .get_binding(&self.workspace_dir, id)
+                    .map_err(ledger_unavailable)?
+                    .ok_or_else(|| anyhow!("the issue collection binding is unavailable"))?
+                    .binding,
+            ),
+            None => None,
+        };
+        Ok(IssueCollectionProjection { state, binding })
+    }
+}
+
+fn report_committed(
+    result: &IssueCollectionApplyResult,
+    report: &(dyn Fn(Vec<IssueCollectionTrackedFact>) + Send + Sync),
+) -> Result<()> {
+    if let IssueCollectionApplyResult::Applied(commit) = result
+        && !commit.newly_tracked.is_empty()
+    {
+        let binding_id = commit
+            .state
+            .binding_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("the committed issue collection has no binding"))?;
+        report(
+            commit
+                .newly_tracked
+                .iter()
+                .map(|issue| IssueCollectionTrackedFact {
+                    issue: issue.clone(),
+                    binding_id: binding_id.clone(),
+                    revision: commit.state.revision,
+                })
+                .collect(),
+        );
+    }
+    Ok(())
+}
+
+fn checked_resync_read(
+    reference: &IssueReference,
+    policy_version: &str,
+    read: IssueSourceRead,
+) -> IssueSourceRead {
+    let failure = match &read {
+        IssueSourceRead::Observed(observation) if observation.issue == *reference => {
+            let observed_policy = match &observation.content {
+                IssueSourceContent::Shared(snapshot) => &snapshot.policy_version,
+                IssueSourceContent::Withheld { policy_version, .. } => policy_version,
+            };
+            if observed_policy == policy_version {
+                return read;
+            }
+            IssueSourceFailure::MalformedResponse
+        }
+        IssueSourceRead::Unknown { issue, .. } if issue == reference => return read,
+        _ => IssueSourceFailure::IdentityMismatch,
+    };
+    IssueSourceRead::Unknown {
+        issue: reference.clone(),
+        reason: failure,
+    }
+}
+
+fn adopt(progress: &mut CollectionProgress, result: Option<IssueCollectionApplyResult>) -> bool {
+    match result {
+        Some(IssueCollectionApplyResult::Applied(commit)) => {
+            progress.state = commit.state;
+            progress.newly_tracked.extend(commit.newly_tracked);
+            true
+        }
+        Some(IssueCollectionApplyResult::Discarded { current }) => {
+            progress.state = *current;
+            progress.discarded = true;
+            false
+        }
+        None => {
+            progress.discarded = true;
+            false
+        }
+    }
+}
+
+fn ledger_unavailable(_: anyhow::Error) -> anyhow::Error {
+    anyhow!("the issue collection ledger is unavailable")
+}
+
+#[cfg(test)]
+mod tests;

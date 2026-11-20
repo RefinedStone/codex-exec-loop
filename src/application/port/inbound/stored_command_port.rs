@@ -1,12 +1,14 @@
 use anyhow::Result;
 
+use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
+
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
 use crate::domain::planning::{DirectionState, PlanningMutationRefusal, TaskStatus};
 
 /*
  * 저장 명령의 실행기이다 (plan 18 K4-9d, 설계 `docs/plan/18-k4-9d-planning-mutations.md` §3.1).
  *
- * 저장 명령은 저장된 planning 데이터만 바꾼다. 도는 커널의 상태가 필요 없다. 그래서 저장소 잠금을 쥔 쪽이 이
+ * 저장 명령은 저장된 저장소 데이터만 바꾼다. 도는 커널의 상태가 필요 없다. 그래서 저장소 잠금을 쥔 쪽이 이
  * 실행기를 부른다: Gateway 의 커널 런타임, 명령 전용 조립, 또는 TUI 가 커널을 쥔 저장소의 직접 경로이다. 실행은
  * 동기이고, 돌아올 때 변경은 저장되어 있다. 커널 시뮬레이션은 가짜 실행기를 끼운다.
  *
@@ -50,6 +52,9 @@ pub struct StoredDirectionFields {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
+    SetIssueAutomationMode {
+        mode: IssueCollectionMode,
+    },
     CreateTask {
         task: StoredTaskFields,
     },
@@ -81,6 +86,7 @@ impl StoredCommand {
     /// 이 저장 명령의 스펙 항목이다.
     pub const fn kind(&self) -> KernelCommandKind {
         match self {
+            Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
             Self::DeleteTask { .. } => KernelCommandKind::DeleteTask,
@@ -94,6 +100,11 @@ impl StoredCommand {
 /// 성공한 저장 명령의 결과이다. 명령의 답에 실린다. 기록에는 싣지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommandResult {
+    IssueAutomationModeChanged {
+        previous: Option<IssueCollectionMode>,
+        projection: Box<IssueCollectionProjection>,
+        changed: bool,
+    },
     TaskCreated {
         task_id: String,
         planning_revision: i64,
