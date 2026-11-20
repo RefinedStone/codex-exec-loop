@@ -206,17 +206,19 @@ function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: 
 
 /**
  * ChatGPT 구역이다 (plan 25). 사용자의 ChatGPT 개인 대화를 최신 것부터 보인다. 누르면 읽기 전용 대화가 옆 칸에
- * 열리고, 다시 누르면 닫힌다. dot 과 같은 옆 칸을 쓴다. 대화도 없고 읽기 실패도 없으면 구역을 숨긴다. 읽지 못했으면
- * (조회 제한 등) 이유를 보이고, 머리줄의 단추로 다시 읽는다. 자동으로 다시 읽지 않는다: 요청이 제한을 늘린다.
+ * 열리고, 다시 누르면 닫힌다. dot 과 같은 옆 칸을 쓴다. chats 가 없는 Gateway 이면 구역을 숨긴다. 읽지 못했거나
+ * 낡은 목록이면(조회 제한 등) 이유를 보이고, 머리줄의 단추로 다시 읽는다. 자동으로 다시 읽지 않는다: 요청이 제한을 늘린다.
  */
 function ChatsSection({ host, onReload }: { host: string; onReload(host: string): void }) {
   const { useStore, phase } = useRemoteHost(host);
   const [open, setOpen] = useState(true);
   const chats = useStore((state) => state.chats);
+  const available = useStore((state) => state.chatsAvailable);
   const problem = useStore((state) => state.chatsProblem);
   const shownChatId = useUiStore((state) => (state.chatDock?.host === host ? state.chatDock.chatId : null));
   const toggleChat = (chatId: string) => (shownChatId === chatId ? closeChat() : showChat(host, chatId));
-  if (chats.length === 0 && problem === null) return null;
+  // chats 가 없는 Gateway 에서만 숨긴다. 빈 목록에는 머리줄과 다시 읽기 단추를 남긴다: 새 대화를 읽을 수 있다.
+  if (!available && problem === null) return null;
   return (
     <section className="project" data-testid="chats-section">
       <header className="project-header" title="내 ChatGPT 대화 (읽기 전용)">
@@ -235,6 +237,7 @@ function ChatsSection({ host, onReload }: { host: string; onReload(host: string)
           {problem}
         </p>
       )}
+      {open && !problem && chats.length === 0 && <p className="empty-row">대화가 없습니다.</p>}
       {open && (
         <ul data-testid="remote-chats">
           {chats.map((chat) => (

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import { useResizableWidth } from "../design/useResizableWidth";
-import { rateLimitedMessage } from "../session/chatsProblem";
+import { rateLimitedMessage, staleNotice } from "../session/chatsProblem";
 import { type ChatConversation, remoteHostStore } from "../session/desktopStore";
 import { closeChat } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
@@ -47,6 +47,8 @@ export function ChatDock({ host, chatId, request }: { host: string; chatId: stri
 
   const title = state.phase === "loaded" ? state.conversation.title : (summary?.title ?? "대화");
   const messages = state.phase === "loaded" ? state.conversation.messages : [];
+  // 제한 중이면 Gateway 는 마지막으로 읽은 대화를 준다. 낡은 값이라는 것을 보인다.
+  const stale = state.phase === "loaded" ? staleNotice(state.conversation) : null;
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0 });
   }, [chatId]);
@@ -64,7 +66,8 @@ export function ChatDock({ host, chatId, request }: { host: string; chatId: stri
             </span>
           </div>
           <span className="bar-spacer" />
-          <button type="button" className="icon-button" title="새로 고침" aria-label="새로 고침" onClick={() => setRefresh((count) => count + 1)} data-testid="chat-refresh">
+          {/* 읽는 중에는 또 보내지 않는다: 겹친 요청이 조회 제한을 부른다. */}
+          <button type="button" className="icon-button" title="새로 고침" aria-label="새로 고침" onClick={() => setRefresh((count) => count + 1)} disabled={state.phase === "loading"} data-testid="chat-refresh">
             <Icon name="refresh" />
           </button>
           <button type="button" className="icon-button" title="닫기" aria-label="닫기" onClick={closeChat} data-testid="chat-close">
@@ -76,6 +79,11 @@ export function ChatDock({ host, chatId, request }: { host: string; chatId: stri
             <div className="column">
               {state.phase === "loading" && <p className="empty-row">대화를 읽는 중입니다.</p>}
               {state.phase === "failed" && <p className="empty-row error">{state.message}</p>}
+              {stale !== null && (
+                <p className="empty-row error" data-testid="chat-stale">
+                  {stale}
+                </p>
+              )}
               {state.phase === "loaded" && messages.length === 0 && <p className="empty-row">보여 줄 메시지가 없습니다.</p>}
               {messages.map((message) => {
                 const fromAssistant = message.role === "assistant";

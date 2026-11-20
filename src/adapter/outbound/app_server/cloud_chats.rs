@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use super::cloud_upstream::{CloudCredentials, default_user_agent, load_credentials};
 use crate::application::port::outbound::chats_port::{
-    ChatConversation, ChatMessage, ChatSummary, ChatsError, ChatsPort,
+    ChatConversation, ChatMessage, ChatSummary, ChatsError, ChatsPort, ChatsRead,
 };
 use crate::subprocess;
 
@@ -29,12 +29,14 @@ use crate::subprocess;
 const LIST_URL: &str = "https://chatgpt.com/backend-api/conversations?offset=0&limit=28&order=updated&is_archived=false&hide_snorlax=false";
 const CONVERSATION_URL_PREFIX: &str = "https://chatgpt.com/backend-api/conversation/";
 const MAX_CONVERSATION_ID_LENGTH: usize = 128;
-/// 한 대화에서 보일 메시지의 상한이다. 아주 긴 대화에서 메모리를 막는다.
+/// 한 대화에서 보일 메시지의 상한이다. 아주 긴 대화에서 메모리를 막는다. 넘으면 가장 새 것들을 남긴다.
 const MAX_CONVERSATION_MESSAGES: usize = 4_000;
 const MAX_ERROR_DETAIL_CHARS: usize = 200;
 const CONNECT_TIMEOUT_SECONDS: u32 = 10;
 const MAX_TIME_SECONDS: u32 = 20;
-const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+// shortcut: 한 건의 응답은 모든 가지와 도구 출력을 담는다. 32 MiB 를 넘는 대화는 읽기가 실패한다. 그런 대화가
+// 나오면 curl 의 출력을 흘려 읽으며 변환한다.
+const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 64 * 1024;
 
 /// 캐시에 두는 대화의 상한이다. 넘으면 대화 캐시를 비운다. Gateway 는 오래 실행된다.
@@ -77,7 +79,7 @@ impl CloudChatsRestAdapter {
 }
 
 impl ChatsPort for CloudChatsRestAdapter {
-    fn list_chats(&self) -> Result<Vec<ChatSummary>, ChatsError> {
+    fn list_chats(&self) -> Result<ChatsRead<Vec<ChatSummary>>, ChatsError> {
         let credentials = load_credentials(&self.auth_path)?;
         match self.get(LIST_URL, &credentials, "chats list") {
             Ok(body) => {
@@ -85,16 +87,17 @@ impl ChatsPort for CloudChatsRestAdapter {
                 if let Some(mut cache) = self.cache_for(&credentials.account_id) {
                     cache.list = Some(chats.clone());
                 }
-                Ok(chats)
+                Ok(ChatsRead::fresh(chats))
             }
-            // 한 번이라도 읽었으면 마지막 성공을 돌려준다. 첫 조회부터 제한이면 그 오류를 올린다.
+            // 한 번이라도 읽었으면 마지막 성공을 돌려준다. 제한 중이라는 것도 함께 알린다: 안 그러면 사용자가 낡은
+            // 값인지 모르고 다시 읽기를 눌러 제한을 늘린다. 첫 조회부터 제한이면 그 오류를 올린다.
             Err(ChatsError::RateLimited {
                 retry_after_seconds,
             }) => match self
                 .cache_for(&credentials.account_id)
                 .and_then(|cache| cache.list.clone())
             {
-                Some(list) => Ok(list),
+                Some(list) => Ok(ChatsRead::last_good(list, retry_after_seconds)),
                 None => Err(ChatsError::RateLimited {
                     retry_after_seconds,
                 }),
@@ -103,7 +106,7 @@ impl ChatsPort for CloudChatsRestAdapter {
         }
     }
 
-    fn read_chat(&self, id: &str) -> Result<ChatConversation, ChatsError> {
+    fn read_chat(&self, id: &str) -> Result<ChatsRead<ChatConversation>, ChatsError> {
         if !is_safe_conversation_id(id) {
             return Err(ChatsError::Other(anyhow!(
                 "the conversation id is not valid"
@@ -122,7 +125,7 @@ impl ChatsPort for CloudChatsRestAdapter {
                     }
                     cache.reads.insert(id.to_string(), conversation.clone());
                 }
-                Ok(conversation)
+                Ok(ChatsRead::fresh(conversation))
             }
             Err(ChatsError::RateLimited {
                 retry_after_seconds,
@@ -130,7 +133,7 @@ impl ChatsPort for CloudChatsRestAdapter {
                 .cache_for(&credentials.account_id)
                 .and_then(|cache| cache.reads.get(id).cloned())
             {
-                Some(conversation) => Ok(conversation),
+                Some(conversation) => Ok(ChatsRead::last_good(conversation, retry_after_seconds)),
                 None => Err(ChatsError::RateLimited {
                     retry_after_seconds,
                 }),
@@ -335,6 +338,9 @@ struct NodeMessage {
     id: Option<String>,
     #[serde(default)]
     author: Option<MessageAuthor>,
+    /// 받는 쪽이다. 사람에게 보이는 메시지는 `all` 이다. 도구 호출은 도구의 이름이다.
+    #[serde(default)]
+    recipient: Option<String>,
     #[serde(default)]
     content: Option<MessageContent>,
     #[serde(default)]
@@ -385,15 +391,14 @@ fn parse_conversation(id: &str, body: &str) -> Result<ChatConversation, ChatsErr
         }
     }
 
+    // 상한은 잎(가장 새 메시지) 쪽에서 센다: 넘는 대화에서 잘리는 것은 가장 오래된 메시지이다. 그 뒤에 뒤집는다.
     let mut messages: Vec<ChatMessage> = ordered_leaf_first
         .into_iter()
-        .rev()
         .filter_map(|node| node.message.as_ref())
         .filter_map(visible_chat_message)
         .take(MAX_CONVERSATION_MESSAGES)
         .collect();
-    // id 가 없는 메시지는 위에서 걸러진다. 번호가 섞이지 않도록 순서를 유지한다.
-    messages.shrink_to_fit();
+    messages.reverse();
 
     Ok(ChatConversation {
         id: id.to_string(),
@@ -402,12 +407,22 @@ fn parse_conversation(id: &str, body: &str) -> Result<ChatConversation, ChatsErr
     })
 }
 
-/// 보일 메시지이면 옮기고, 아니면 없다. 역할은 `user`/`assistant` 만, 종류는 글만, 숨긴 것은 뺀다.
+/// 보일 메시지이면 옮기고, 아니면 없다. 역할은 `user`/`assistant` 만, 종류는 글(첨부가 붙은 글 포함)만, 숨긴 것과
+/// 도구에게 보낸 것은 뺀다. `recipient` 와 `multimodal_text` 의 규칙은 알려진 응답 모양에 따른 것이다: 실계정
+/// 응답으로는 확인하지 못했다 (2026-11-20, 조회 제한).
 fn visible_chat_message(message: &NodeMessage) -> Option<ChatMessage> {
     if message
         .metadata
         .as_ref()
         .is_some_and(|metadata| metadata.is_visually_hidden_from_conversation)
+    {
+        return None;
+    }
+    // 도구에게 보낸 메시지(메모리 저장, 이미지 생성 등)는 사람에게 한 답이 아니다.
+    if message
+        .recipient
+        .as_deref()
+        .is_some_and(|recipient| recipient != "all")
     {
         return None;
     }
@@ -419,9 +434,11 @@ fn visible_chat_message(message: &NodeMessage) -> Option<ChatMessage> {
         return None;
     }
     let content = message.content.as_ref()?;
-    // content_type 이 없으면 글로 본다. 그 밖(이미지, 도구 결과 등)은 뺀다.
+    // content_type 이 없으면 글로 본다. `multimodal_text` 는 첨부(이미지, 파일)가 붙은 글이다: 아래에서 글 조각만
+    // 남는다. 그 밖(코드 실행, 도구 결과 등)은 뺀다.
     if let Some(content_type) = content.content_type.as_deref()
         && content_type != "text"
+        && content_type != "multimodal_text"
     {
         return None;
     }
@@ -528,6 +545,62 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_text_of_a_message_with_attachments() {
+        let body = r#"{
+            "current_node":"n1",
+            "mapping":{
+                "n1":{"parent":null,"message":{"id":"m1","author":{"role":"user"},"recipient":"all","content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://x"},"이게 뭐야?"]}}}
+            }
+        }"#;
+        let conversation = parse_conversation("c", body).expect("parses");
+        assert_eq!(conversation.messages.len(), 1);
+        assert_eq!(conversation.messages[0].text, "이게 뭐야?");
+    }
+
+    #[test]
+    fn drops_assistant_messages_sent_to_a_tool() {
+        let body = r#"{
+            "current_node":"n2",
+            "mapping":{
+                "n1":{"parent":null,"message":{"id":"m1","author":{"role":"assistant"},"recipient":"bio","content":{"content_type":"text","parts":["remember this"]}}},
+                "n2":{"parent":"n1","message":{"id":"m2","author":{"role":"assistant"},"recipient":"all","content":{"content_type":"text","parts":["저장했습니다."]}}}
+            }
+        }"#;
+        let conversation = parse_conversation("c", body).expect("parses");
+        assert_eq!(conversation.messages.len(), 1);
+        assert_eq!(conversation.messages[0].id, "m2");
+    }
+
+    #[test]
+    fn a_conversation_over_the_limit_keeps_the_newest_messages() {
+        let count = MAX_CONVERSATION_MESSAGES + 2;
+        let nodes: Vec<String> = (0..count)
+            .map(|index| {
+                let parent = if index == 0 {
+                    "null".to_string()
+                } else {
+                    format!("\"n{}\"", index - 1)
+                };
+                format!(
+                    r#""n{index}":{{"parent":{parent},"message":{{"id":"m{index}","author":{{"role":"user"}},"content":{{"content_type":"text","parts":["t{index}"]}}}}}}"#
+                )
+            })
+            .collect();
+        let body = format!(
+            r#"{{"current_node":"n{}","mapping":{{{}}}}}"#,
+            count - 1,
+            nodes.join(",")
+        );
+        let conversation = parse_conversation("c", &body).expect("parses");
+        assert_eq!(conversation.messages.len(), MAX_CONVERSATION_MESSAGES);
+        assert_eq!(conversation.messages[0].id, "m2");
+        assert_eq!(
+            conversation.messages.last().expect("has messages").id,
+            format!("m{}", count - 1)
+        );
+    }
+
+    #[test]
     fn the_cache_of_one_account_is_not_served_to_another() {
         let adapter = CloudChatsRestAdapter::new(PathBuf::from("unused-auth.json"));
         {
@@ -566,7 +639,7 @@ mod tests {
     fn live_chat_list() {
         let auth_path = super::super::cloud_upstream::codex_auth_path().expect("auth path");
         match CloudChatsRestAdapter::new(auth_path).list_chats() {
-            Ok(chats) => println!("chats: {}", chats.len()),
+            Ok(chats) => println!("chats: {}", chats.value.len()),
             Err(ChatsError::RateLimited {
                 retry_after_seconds,
             }) => println!("rate limited; retry after {retry_after_seconds:?}"),

@@ -100,11 +100,13 @@ export interface ChatMessage {
   text: string;
 }
 
-/** 대화 한 건의 전체이다. 메시지는 오래된 것부터이다. */
+/** 대화 한 건의 전체이다. 메시지는 오래된 것부터이다. `limited` 이면 제한 전에 마지막으로 읽은 내용이다. */
 export interface ChatConversation {
   id: string;
   title: string;
   messages: ChatMessage[];
+  limited?: boolean;
+  retryAfterSeconds?: number | null;
 }
 
 /** `local` 이 아닌 호스트 id 를 쉼표로 이은 값이다. 문자열이므로 목록을 다시 읽어도 값이 같으면 화면이 다시 그리지 않는다. */
@@ -233,9 +235,12 @@ export interface DesktopState {
   markDotRoomRead(roomId: string): void;
   /** 원격 호스트의 ChatGPT 개인 대화 목록이다 (plan 25). chats 가 꺼졌거나 없는 호스트에서는 비어 있다. */
   chats: ChatSummary[];
-  /** 목록을 읽지 못한 이유이다 (조회 제한 등). 이미 읽은 목록은 그대로 둔다. 다시 읽기에 성공하면 null 이 된다. */
+  /** 이 호스트의 Gateway 가 ChatGPT 대화를 준다. 목록이 비어 있어도 구역과 다시 읽기 단추를 보인다. */
+  chatsAvailable: boolean;
+  /** 목록을 읽지 못했거나 낡은 이유이다 (조회 제한 등). 이미 읽은 목록은 그대로 둔다. 새로 읽으면 null 이 된다. */
   chatsProblem: string | null;
-  setChats(chats: ChatSummary[]): void;
+  /** 목록을 읽었다. `null` 은 이 Gateway 에 chats 가 없다는 뜻이다. */
+  setChats(chats: ChatSummary[] | null): void;
   setChatsProblem(problem: string): void;
 }
 
@@ -321,8 +326,9 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   applyDotLive: (next) => set((state) => reduceDotLive(state, next)),
   markDotRoomRead: (roomId) => set((state) => (state.dotUnreadRooms.includes(roomId) ? { dotUnreadRooms: state.dotUnreadRooms.filter((id) => id !== roomId) } : {})),
   chats: [],
+  chatsAvailable: false,
   chatsProblem: null,
-  setChats: (chats) => set({ chats, chatsProblem: null }),
+  setChats: (chats) => set({ chats: chats ?? [], chatsAvailable: chats !== null, chatsProblem: null }),
   setChatsProblem: (chatsProblem) => set({ chatsProblem }),
 }));
 

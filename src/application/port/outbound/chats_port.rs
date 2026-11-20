@@ -66,10 +66,44 @@ impl From<anyhow::Error> for ChatsError {
     }
 }
 
+/// 서비스가 지금 기록 조회를 제한하고 있다. 값은 제한 전에 마지막으로 읽은 것이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChatsLimited {
+    /// 서비스가 준 `Retry-After` 이다 (없을 수 있다).
+    pub retry_after_seconds: Option<u64>,
+}
+
+/// 조회의 답이다. `limited` 가 있으면 `value` 는 지금 값이 아닐 수 있다: 클라이언트는 그것을 보이고 백오프한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatsRead<T> {
+    pub value: T,
+    pub limited: Option<ChatsLimited>,
+}
+
+impl<T> ChatsRead<T> {
+    /// 서비스에서 방금 읽은 값이다.
+    pub fn fresh(value: T) -> Self {
+        Self {
+            value,
+            limited: None,
+        }
+    }
+
+    /// 제한 때문에 돌려주는 마지막 성공이다.
+    pub fn last_good(value: T, retry_after_seconds: Option<u64>) -> Self {
+        Self {
+            value,
+            limited: Some(ChatsLimited {
+                retry_after_seconds,
+            }),
+        }
+    }
+}
+
 pub trait ChatsPort: Send + Sync {
     /// 최근 대화 목록이다. 서비스가 주는 순서(최신 먼저)를 그대로 둔다. 첫 페이지만 읽는다. 읽기만 한다.
-    fn list_chats(&self) -> Result<Vec<ChatSummary>, ChatsError>;
+    fn list_chats(&self) -> Result<ChatsRead<Vec<ChatSummary>>, ChatsError>;
 
     /// 대화 한 건의 메시지이다. 오래된 것부터 놓는다. 읽기만 한다.
-    fn read_chat(&self, id: &str) -> Result<ChatConversation, ChatsError>;
+    fn read_chat(&self, id: &str) -> Result<ChatsRead<ChatConversation>, ChatsError>;
 }
