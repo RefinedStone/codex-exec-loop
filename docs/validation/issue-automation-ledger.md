@@ -66,6 +66,8 @@
 
 runtime은 이미 private하게 준비된 절대 디렉터리여야 한다. adapter는 고정 파일만 열고 디렉터리·DB·rollback journal의 파일 신원과 소유권을 검사한다. Unix의 symlink/hardlink/비정규 파일 및 Windows의 경로 재지정과 ACL 경계를 검사한다. 새 DB는 DELETE journal mode를 사용하며 WAL/SHM가 있는 파일을 임의 변환하지 않는다.
 
+쓰기 중단으로 main DB 헤더가 손상돼도 보호된 rollback journal에 유효한 복구 헤더가 남아 있으면 SQLite의 native rollback을 먼저 시도한다. journal mode 조회가 복구를 수행한 직후 main 헤더를 엄격히 재검사한다. 체크섬과 실제 복구 여부는 SQLite가 판단한다. WAL을 뜻하는 형식 바이트 2는 journal 유무와 무관하게 사전에 거절한다. 손상 결과가 우연히 2가 된 경우도 이 보수적인 거절에 포함된다.
+
 ## 검증 범위
 
 의미 있는 회귀는 전이표와 결정 재개, hydrate 검증, 동일 안정 ID의 멱등 삽입, 교차 scope와 binding, 실제 SQLite CAS 경쟁·응답 유실 재시도·ABA, 재시작 복구, 공유본만 있는 디스크 내용, 파일 보호, 이웃 planning DB 무변경을 확인한다. 외부 provider나 모델 turn을 호출하지 않는다.

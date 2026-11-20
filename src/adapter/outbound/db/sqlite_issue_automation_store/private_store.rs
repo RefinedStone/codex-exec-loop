@@ -127,8 +127,8 @@ pub(super) fn open(runtime: &Path) -> Result<PrivateConnection> {
     };
     guard.verify_identity()?;
     // Keep an existing hot journal pinned while SQLite performs normal rollback recovery.
-    let _hot_journal = guard.rollback_journal()?;
-    reject_wal_header(guard.database_file())?;
+    let hot_journal = guard.rollback_journal()?;
+    validate_database_header(guard.database_file(), hot_journal.as_ref())?;
 
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
@@ -142,6 +142,10 @@ pub(super) fn open(runtime: &Path) -> Result<PrivateConnection> {
     if !mode.eq_ignore_ascii_case("delete") {
         bail!("issue automation database requires DELETE rollback journaling")
     }
+    // journal_mode loads the schema, so SQLite has now attempted hot-journal recovery.
+    // No damaged-header exception remains after that native recovery opportunity.
+    guard.verify_identity()?;
+    validate_database_header(guard.database_file(), None)?;
     connection.execute_batch(
         "PRAGMA foreign_keys = ON;
          PRAGMA secure_delete = ON;
@@ -163,28 +167,61 @@ fn reject_wal_sidecars(runtime: &Path) -> Result<()> {
     Ok(())
 }
 
-fn reject_wal_header(file: &File) -> Result<()> {
+fn validate_database_header(file: &File, recovery_journal: Option<&File>) -> Result<()> {
     let mut header = [0u8; 20];
+    let read = read_prefix(file, &mut header)?;
+    if read == 0
+        || (read == header.len()
+            && &header[..16] == b"SQLite format 3\0"
+            && header[18] == 1
+            && header[19] == 1)
+    {
+        return Ok(());
+    }
+    // A known WAL format is rejected even with a rollback journal or a damaged magic.
+    // This deliberately also rejects a torn write that happens to leave a format byte of 2.
+    if (read > 18 && header[18] == 2) || (read > 19 && header[19] == 2) {
+        bail!("issue automation database has an unsupported file format")
+    }
+    if let Some(journal) = recovery_journal
+        && has_rollback_recovery_header(journal)?
+    {
+        return Ok(());
+    }
+    bail!("issue automation database has an unsupported file format")
+}
+
+fn has_rollback_recovery_header(journal: &File) -> Result<bool> {
+    let mut header = [0u8; 28];
+    if read_prefix(journal, &mut header)? != header.len()
+        || header[..8] != [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]
+    {
+        return Ok(false);
+    }
+    let field = |offset| u32::from_be_bytes(header[offset..offset + 4].try_into().unwrap());
+    let sector_size = field(20);
+    let page_size = field(24);
+    // Only authorize a native recovery attempt. SQLite owns hot-journal locking,
+    // record/checksum validation and playback; this never reimplements recovery.
+    Ok(field(8) != 0
+        && field(16) != 0
+        && (512..=65536).contains(&sector_size)
+        && sector_size.is_power_of_two()
+        && (512..=65536).contains(&page_size)
+        && page_size.is_power_of_two()
+        && journal.metadata()?.len() >= u64::from(sector_size) + u64::from(page_size) + 8)
+}
+
+fn read_prefix(file: &File, buffer: &mut [u8]) -> Result<usize> {
     let mut read = 0;
-    while read < header.len() {
-        let count = platform::read_at(file, &mut header[read..], read as u64)?;
+    while read < buffer.len() {
+        let count = platform::read_at(file, &mut buffer[read..], read as u64)?;
         if count == 0 {
             break;
         }
         read += count;
     }
-    if read == 0 {
-        return Ok(());
-    }
-    // Check the persistent read/write format before SQLite can open a legacy WAL database.
-    if read != header.len()
-        || &header[..16] != b"SQLite format 3\0"
-        || header[18] != 1
-        || header[19] != 1
-    {
-        bail!("issue automation database has an unsupported file format")
-    }
-    Ok(())
+    Ok(read)
 }
 
 #[cfg(unix)]
