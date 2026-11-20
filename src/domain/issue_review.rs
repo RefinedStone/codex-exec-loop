@@ -55,13 +55,17 @@ pub fn apply_issue_review_suggestion(
         IssueReviewField::Body => body,
     };
     let original = suggestion.original_text.as_str();
-    let mut positions = text.match_indices(original).map(|(index, _)| index);
-    let position = match (positions.next(), positions.next()) {
-        _ if original.is_empty() => return Err(IssueReviewApplyError::OriginalTextNotFound),
-        (Some(position), None) => position,
-        (Some(_), Some(_)) => return Err(IssueReviewApplyError::OriginalTextAmbiguous),
-        (None, _) => return Err(IssueReviewApplyError::OriginalTextNotFound),
-    };
+    if original.is_empty() {
+        return Err(IssueReviewApplyError::OriginalTextNotFound);
+    }
+    let position = text
+        .find(original)
+        .ok_or(IssueReviewApplyError::OriginalTextNotFound)?;
+    // Start after one character, not after the whole match: matches may overlap.
+    let next_character = position + text[position..].chars().next().unwrap().len_utf8();
+    if text[next_character..].contains(original) {
+        return Err(IssueReviewApplyError::OriginalTextAmbiguous);
+    }
     let mut replaced = text.to_string();
     replaced.replace_range(
         position..position + original.len(),
@@ -133,5 +137,26 @@ mod tests {
             ),
             Err(IssueReviewApplyError::OriginalTextAmbiguous)
         );
+    }
+    #[test]
+    fn overlapping_excerpts_are_ambiguous_including_multibyte_text() {
+        for (body, original) in [("....", "..."), ("가가가", "가가"), ("😀😀😀", "😀😀")]
+        {
+            assert_eq!(
+                apply_issue_review_suggestion(
+                    "T",
+                    body,
+                    &suggestion(IssueReviewField::Body, original, "replacement"),
+                ),
+                Err(IssueReviewApplyError::OriginalTextAmbiguous),
+            );
+        }
+        let applied = apply_issue_review_suggestion(
+            "T",
+            "앞 가가 뒤",
+            &suggestion(IssueReviewField::Body, "가가", "완료"),
+        )
+        .unwrap();
+        assert_eq!(applied.body, "앞 완료 뒤");
     }
 }
