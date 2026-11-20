@@ -72,6 +72,9 @@ pub struct IssuePublishIntentRecord {
     /// 명시적으로 모순된 쓰기 답을 받으면 재조회만으로 확인하지 않는다.
     #[serde(default)]
     pub write_response_mismatch: bool,
+    /// Some(false)는 전송 전이다. None은 이 증거를 저장하지 않던 이전 기록이다.
+    #[serde(default)]
+    pub write_attempted: Option<bool>,
     /// 작업 폴더의 게시 순서이다. 이전 일지에는 없어서 0이다.
     #[serde(default)]
     pub sequence: u64,
@@ -94,6 +97,8 @@ impl IssuePublishIntentRecord {
             return self;
         }
         self.state = match &observed {
+            // A read matching the approved copy is not evidence that an unsent intent wrote it.
+            _ if self.write_attempted == Some(false) => IssuePublishIntentState::Abandoned,
             Some(hash) if *hash == self.approved_hash && !self.write_response_mismatch => {
                 IssuePublishIntentState::Confirmed
             }
@@ -148,6 +153,7 @@ mod tests {
             observed_hash: None,
             restore_link_finalized: false,
             write_response_mismatch: false,
+            write_attempted: None,
             sequence: 0,
         }
     }
@@ -216,8 +222,10 @@ mod tests {
             .unwrap()
             .remove("writeResponseMismatch");
         legacy.as_object_mut().unwrap().remove("sequence");
+        legacy.as_object_mut().unwrap().remove("writeAttempted");
         let legacy: IssuePublishIntentRecord = serde_json::from_value(legacy).unwrap();
         assert!(!legacy.write_response_mismatch);
+        assert_eq!(legacy.write_attempted, None);
         assert_eq!(legacy.sequence, 0);
     }
 
