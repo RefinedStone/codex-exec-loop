@@ -60,3 +60,5 @@ pub(crate) mod text;
 pub(crate) mod turn_terminal;
 // 작업 컨텍스트는 스레드에 나온 외부 문서를 코드로 인식하는 규칙을 가진다.
 pub(crate) mod work_context;
+
+pub(crate) mod issue_markdown;

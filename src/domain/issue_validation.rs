@@ -5,6 +5,7 @@
  * 초안 검증과 게시 직전 검증은 둘 다 `validate_issue` 를 부른다. `IssueValidationPassed` 는 이 모듈만
  * 만든다: 필드가 비공개이고 `Deserialize` 가 없다. LLM 제안이나 클라이언트 입력은 이 값을 만들 수 없다.
  */
+use crate::domain::issue_markdown::IssueMarkdownHeadings;
 use crate::domain::issue_work::IssueSharedCopy;
 
 /// GitHub 이슈 폼이 빈 답 대신 본문에 쓰는 글이다. 빈 값으로 본다.
@@ -158,19 +159,15 @@ struct Section<'a> {
 /// 본문을 Markdown 제목(`#` 1~6개)으로 나눈다. 코드 울타리 안의 `#` 는 제목이 아니다.
 fn parse_sections(body: &str) -> Vec<Section<'_>> {
     let mut sections: Vec<Section<'_>> = Vec::new();
-    let mut in_fence = false;
+    let mut headings = IssueMarkdownHeadings::default();
     for line in body.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fence = !in_fence;
-        }
-        match (in_fence, heading(trimmed)) {
-            (false, Some((level, title))) => sections.push(Section {
+        match headings.heading(line) {
+            Some((level, title)) => sections.push(Section {
                 level,
                 title,
                 lines: Vec::new(),
             }),
-            _ => {
+            None => {
                 if let Some(section) = sections.last_mut() {
                     section.lines.push(line);
                 }
@@ -178,16 +175,6 @@ fn parse_sections(body: &str) -> Vec<Section<'_>> {
         }
     }
     sections
-}
-
-fn heading(line: &str) -> Option<(usize, &str)> {
-    let level = line
-        .chars()
-        .take_while(|character| *character == '#')
-        .count();
-    let rest = &line[level..];
-    let is_heading = (1..=6).contains(&level) && (rest.is_empty() || rest.starts_with(' '));
-    is_heading.then(|| (level, rest.trim().trim_end_matches('#').trim_end()))
 }
 
 /// `title` 섹션의 글이다. 하위 제목과 그 글을 포함하고, 같거나 높은 수준의 다음 제목에서 끝난다.
@@ -341,5 +328,27 @@ mod tests {
 
         assert!(validate_issue(&copy("Title", ""), &requirements).is_ok());
         assert!(validate_issue(&copy("", ""), &requirements).is_err());
+    }
+    #[test]
+    fn examples_cannot_satisfy_required_sections_and_csharp_is_a_real_heading() {
+        let requirements = IssueRequirements {
+            required_sections: vec!["Steps".to_string()],
+            ..IssueRequirements::default()
+        };
+        for body in [
+            "\x60\x60\x60\x60markdown\n\x60\x60\x60\n## Steps\nexample only\n\x60\x60\x60\n\x60\x60\x60\x60",
+            "\x60\x60\x60\n~~~\n## Steps\nexample only\n~~~\n\x60\x60\x60",
+            "\x60\x60\x60\n## Steps\nexample only",
+            "    ## Steps\n    example only",
+        ] {
+            assert!(validate_issue(&copy("Title", body), &requirements).is_err());
+        }
+        let requirements = IssueRequirements {
+            required_sections: vec!["C#".to_string()],
+            ..IssueRequirements::default()
+        };
+        for body in ["### C#\n12.0", "### C# ###\n12.0"] {
+            assert!(validate_issue(&copy("Title", body), &requirements).is_ok());
+        }
     }
 }
