@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import { useDesktopStore } from "../session/desktopStore";
 import type { KernelView } from "./kernelConnection";
-import type { ParallelState, PlanningState, PlanningTask, ThreadActivity } from "./protocol";
+import type { ParallelAgent, ParallelState, PlanningState, PlanningTask, ThreadActivity } from "./protocol";
+import { WORKER_STATUS_LABEL, WORKER_STEP, workerStatus, type WorkerStatus } from "./workerStatus";
 import { folderName } from "../sidebar/threadStatus";
 
 const PLANNING_STATUS: Record<PlanningState["status"], string> = {
@@ -95,7 +96,43 @@ function PlanningSection({ planning }: { planning: PlanningState | null }) {
   );
 }
 
-function ParallelSection({ parallel }: { parallel: ParallelState | null }) {
+const WORKER_BADGE: Record<WorkerStatus, string> = {
+  waiting: "work-badge",
+  running: "work-badge",
+  blocked: "badge badge-warn",
+  done: "badge badge-ok",
+  failed: "badge badge-bad",
+  unknown: "badge badge-warn",
+};
+
+/** 워커 한 줄이다 (#2378): 작업, 상태, 현재 단계, worktree(slot 과 branch). 스레드가 있으면 제목을 눌러 그 스레드로 간다. */
+function WorkerRow({ agent, onOpenThread }: { agent: ParallelAgent; onOpenThread(threadId: string): void }) {
+  const status = workerStatus(agent.state);
+  const threadId = agent.thread_id;
+  return (
+    <li className="work-item" data-testid="kernel-agent" data-status={status}>
+      {threadId ? (
+        <button type="button" className="work-link" title="워커의 스레드 열기" onClick={() => onOpenThread(threadId)}>
+          {agent.task_title}
+        </button>
+      ) : (
+        <span>{agent.task_title}</span>
+      )}
+      <div className="work-meta">
+        <span className={WORKER_BADGE[status]}>{WORKER_STATUS_LABEL[status]}</span>
+        <span>
+          {WORKER_STEP[agent.state] ?? agent.state} {agent.duration}
+        </span>
+        <span className="muted" title="worktree slot · branch">
+          {agent.slot_id} · {agent.branch}
+        </span>
+      </div>
+      {agent.summary && <div className="muted">{agent.summary}</div>}
+    </li>
+  );
+}
+
+function ParallelSection({ parallel, onOpenThread }: { parallel: ParallelState | null; onOpenThread(threadId: string): void }) {
   if (!parallel) {
     return <p className="muted">읽는 중…</p>;
   }
@@ -116,18 +153,7 @@ function ParallelSection({ parallel }: { parallel: ParallelState | null }) {
           </p>
           <ul>
             {supervisor.agents.map((agent) => (
-              <li key={`${agent.agent_id}-${agent.slot_id}`} className="work-item" data-testid="kernel-agent">
-                <span>{agent.task_title}</span>
-                <div className="work-meta">
-                  <span className="muted">
-                    {agent.slot_id} · {agent.branch}
-                  </span>
-                  <span className="work-badge">
-                    {agent.state} {agent.duration}
-                  </span>
-                </div>
-                {agent.summary && <div className="muted">{agent.summary}</div>}
-              </li>
+              <WorkerRow key={`${agent.agent_id}-${agent.slot_id}`} agent={agent} onOpenThread={onOpenThread} />
             ))}
           </ul>
           {supervisor.merge_queue.length > 0 && (
@@ -158,7 +184,15 @@ function ParallelSection({ parallel }: { parallel: ParallelState | null }) {
   );
 }
 
-function KernelBody({ kernel, threadTitle }: { kernel: KernelView; threadTitle(threadId: string): string }) {
+function KernelBody({
+  kernel,
+  threadTitle,
+  onOpenThread,
+}: {
+  kernel: KernelView;
+  threadTitle(threadId: string): string;
+  onOpenThread(threadId: string): void;
+}) {
   if (kernel.workspace === null) {
     return <p className="muted work-section">스레드를 열면 그 폴더의 저장소 커널을 보여 줍니다.</p>;
   }
@@ -199,7 +233,7 @@ function KernelBody({ kernel, threadTitle }: { kernel: KernelView; threadTitle(t
       </section>
       <section className="work-section">
         <h3>병렬 작업</h3>
-        <ParallelSection parallel={kernel.parallel} />
+        <ParallelSection parallel={kernel.parallel} onOpenThread={onOpenThread} />
       </section>
       <section className="work-section">
         <h3>planning 큐</h3>
@@ -209,7 +243,7 @@ function KernelBody({ kernel, threadTitle }: { kernel: KernelView; threadTitle(t
   );
 }
 
-export function KernelPanel({ onRefresh }: { onRefresh(): Promise<void> }) {
+export function KernelPanel({ onRefresh, onOpenThread }: { onRefresh(): Promise<void>; onOpenThread(threadId: string): void }) {
   const kernel = useDesktopStore((state) => state.kernel);
   const folders = useDesktopStore((state) => state.folders);
   const [refreshing, setRefreshing] = useState(false);
@@ -234,7 +268,7 @@ export function KernelPanel({ onRefresh }: { onRefresh(): Promise<void> }) {
           {refreshing ? "읽는 중…" : "새로 고침"}
         </button>
       </div>
-      <KernelBody kernel={kernel} threadTitle={threadTitle} />
+      <KernelBody kernel={kernel} threadTitle={threadTitle} onOpenThread={onOpenThread} />
     </aside>
   );
 }
