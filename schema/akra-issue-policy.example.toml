@@ -36,3 +36,15 @@ log = "remove"
 [vault]
 # Locked. Only `true` is valid; `false` makes the file invalid.
 user_unlock = true
+
+# A code validator that the user approved. The project file selects it by id only.
+# The command and its content hash are in the user file:
+#
+#   [approved_code_validators.team-rules]
+#   command = "/absolute/path/to/validator"
+#   sha256 = "<64 lowercase hexadecimal characters>"
+#   timeout_seconds = 10
+[[code_validators]]
+id = "team-rules"
+targets = ["publish"]
+required = true

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -6,7 +7,8 @@ use serde::Deserialize;
 
 use crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort;
 use crate::domain::issue_policy::{
-    IssueConvention, IssueDisclosurePolicy, IssuePolicy, IssueSensitiveSpanAction,
+    IssueApprovedCodeValidator, IssueCodeValidatorSelection, IssueConvention,
+    IssueDisclosurePolicy, IssueDisclosureTarget, IssuePolicy, IssueSensitiveSpanAction,
 };
 
 /*
@@ -18,6 +20,10 @@ use crate::domain::issue_policy::{
 
 /// 이슈 정책 파일의 스키마 판이다. `schema_version` 이 없으면 이 판으로 읽는다.
 pub const ISSUE_POLICY_SCHEMA_VERSION: u32 = 1;
+
+/// 승인한 코드 검증기의 제한 시간이다. 값이 없으면 기본값을 쓴다.
+pub const ISSUE_CODE_VALIDATOR_DEFAULT_TIMEOUT_SECONDS: u64 = 10;
+pub const ISSUE_CODE_VALIDATOR_MAX_TIMEOUT_SECONDS: u64 = 300;
 
 /// 정책 파일의 범위이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +70,26 @@ struct IssuePolicyLayer {
     publish: Option<PublishLayer>,
     ai_handoff: Option<AiHandoffLayer>,
     vault: Option<VaultLayer>,
+    /// 정책이 고른 코드 검증기이다 (#2431). 한 값이다: 프로젝트 목록이 사용자 목록을 통째로 바꾼다.
+    code_validators: Option<Vec<CodeValidatorSelectionLayer>>,
+    /// 사용자가 승인한 코드 검증기이다. 사용자 파일에만 쓸 수 있다.
+    approved_code_validators: Option<BTreeMap<String, ApprovedCodeValidatorLayer>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CodeValidatorSelectionLayer {
+    id: String,
+    targets: Option<Vec<IssueDisclosureTarget>>,
+    required: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovedCodeValidatorLayer {
+    command: String,
+    sha256: String,
+    timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -138,8 +164,8 @@ pub fn resolve_issue_policy(
         (IssuePolicyScope::Project, project_toml),
     ] {
         if let Some(contents) = contents {
-            let layer =
-                parse_layer(contents).map_err(|reason| IssuePolicyBlocked { scope, reason })?;
+            let layer = parse_layer(contents, scope)
+                .map_err(|reason| IssuePolicyBlocked { scope, reason })?;
             apply_layer(&mut policy, layer);
         }
     }
@@ -153,7 +179,7 @@ fn unreadable(scope: IssuePolicyScope, error: &anyhow::Error) -> IssuePolicyBloc
     }
 }
 
-fn parse_layer(contents: &str) -> Result<IssuePolicyLayer, String> {
+fn parse_layer(contents: &str, scope: IssuePolicyScope) -> Result<IssuePolicyLayer, String> {
     let layer = toml::from_str::<IssuePolicyLayer>(contents).map_err(|error| error.to_string())?;
     if let Some(version) = layer.schema_version
         && version != ISSUE_POLICY_SCHEMA_VERSION
@@ -183,7 +209,56 @@ fn parse_layer(contents: &str) -> Result<IssuePolicyLayer, String> {
             return Err("convention.required_sections must not contain an empty title".to_string());
         }
     }
+    validate_code_validators(&layer, scope)?;
     Ok(layer)
+}
+
+/// 프로젝트 파일은 저장소에서 온다. 그 파일이 실행할 명령을 정하면 저장소의 스크립트가 승인 없이 실행된다.
+fn validate_code_validators(
+    layer: &IssuePolicyLayer,
+    scope: IssuePolicyScope,
+) -> Result<(), String> {
+    if let Some(selections) = &layer.code_validators
+        && selections
+            .iter()
+            .any(|selection| selection.id.trim().is_empty())
+    {
+        return Err("code_validators must not contain an empty id".to_string());
+    }
+    let Some(approved) = &layer.approved_code_validators else {
+        return Ok(());
+    };
+    if scope != IssuePolicyScope::User {
+        return Err("approved_code_validators can be set only in the user file".to_string());
+    }
+    for (id, validator) in approved {
+        if id.trim().is_empty() {
+            return Err("approved_code_validators must not contain an empty id".to_string());
+        }
+        if !Path::new(&validator.command).is_absolute() {
+            return Err(format!(
+                "approved_code_validators.{id}.command must be an absolute path"
+            ));
+        }
+        let is_sha256 = validator.sha256.len() == 64
+            && validator
+                .sha256
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        if !is_sha256 {
+            return Err(format!(
+                "approved_code_validators.{id}.sha256 must be 64 lowercase hexadecimal characters"
+            ));
+        }
+        if let Some(timeout) = validator.timeout_seconds
+            && !(1..=ISSUE_CODE_VALIDATOR_MAX_TIMEOUT_SECONDS).contains(&timeout)
+        {
+            return Err(format!(
+                "approved_code_validators.{id}.timeout_seconds must be 1 to {ISSUE_CODE_VALIDATOR_MAX_TIMEOUT_SECONDS}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// 템플릿은 저장소 안의 파일이어야 한다. 절대 경로와 `..` 는 저장소 밖을 가리킬 수 있다.
@@ -210,6 +285,31 @@ fn apply_layer(policy: &mut IssuePolicy, layer: IssuePolicyLayer) {
     }
     if let Some(spans) = layer.ai_handoff.and_then(|ai_handoff| ai_handoff.spans) {
         apply_spans(&mut policy.ai_handoff, spans);
+    }
+    if let Some(selections) = layer.code_validators {
+        policy.code_validators = selections
+            .into_iter()
+            .map(|selection| IssueCodeValidatorSelection {
+                id: selection.id,
+                targets: selection
+                    .targets
+                    .unwrap_or_else(|| vec![IssueDisclosureTarget::Publish]),
+                required: selection.required.unwrap_or(true),
+            })
+            .collect();
+    }
+    if let Some(approved) = layer.approved_code_validators {
+        policy.approved_code_validators = approved
+            .into_iter()
+            .map(|(id, validator)| IssueApprovedCodeValidator {
+                id,
+                command: validator.command,
+                sha256: validator.sha256,
+                timeout_seconds: validator
+                    .timeout_seconds
+                    .unwrap_or(ISSUE_CODE_VALIDATOR_DEFAULT_TIMEOUT_SECONDS),
+            })
+            .collect();
     }
 }
 
@@ -438,6 +538,60 @@ mod tests {
         let blocked = unreadable.resolve("/workspace").expect_err("blocked");
         assert_eq!(blocked.scope, IssuePolicyScope::Project);
         assert!(blocked.to_string().contains("cannot be read"));
+    }
+
+    #[test]
+    fn project_file_selects_code_validators_but_only_the_user_file_approves_them() {
+        let sha256 = "a".repeat(64);
+        let user = format!(
+            "[approved_code_validators.team-rules]\ncommand = \"/opt/validators/team-rules\"\nsha256 = \"{sha256}\"\n"
+        );
+        let project = "[[code_validators]]\nid = \"team-rules\"\n\n[[code_validators]]\nid = \"style\"\ntargets = [\"publish\", \"ai_handoff\"]\nrequired = false\n";
+
+        let policy = resolve_issue_policy(Some(&user), Some(project)).expect("policy");
+
+        assert_eq!(policy.approved_code_validators.len(), 1);
+        let approved = &policy.approved_code_validators[0];
+        assert_eq!(approved.id, "team-rules");
+        assert_eq!(approved.command, "/opt/validators/team-rules");
+        assert_eq!(approved.timeout_seconds, 10);
+        assert_eq!(policy.code_validators.len(), 2);
+        assert_eq!(
+            policy.code_validators[0].targets,
+            vec![IssueDisclosureTarget::Publish]
+        );
+        assert!(policy.code_validators[0].required);
+        assert_eq!(policy.code_validators[1].targets.len(), 2);
+        assert!(!policy.code_validators[1].required);
+
+        // 프로젝트 파일은 명령을 정할 수 없다.
+        let (scope, reason) = blocked_reason(None, Some(&user));
+        assert_eq!(scope, IssuePolicyScope::Project);
+        assert!(reason.contains("only in the user file"), "{reason}");
+    }
+
+    #[test]
+    fn invalid_approved_code_validators_block_the_user_file() {
+        let sha256 = "a".repeat(64);
+        let invalid_files = [
+            format!(
+                "[approved_code_validators.v]\ncommand = \"relative/v\"\nsha256 = \"{sha256}\"\n"
+            ),
+            "[approved_code_validators.v]\ncommand = \"/opt/v\"\nsha256 = \"ABC\"\n".to_string(),
+            format!(
+                "[approved_code_validators.v]\ncommand = \"/opt/v\"\nsha256 = \"{sha256}\"\ntimeout_seconds = 0\n"
+            ),
+            format!(
+                "[approved_code_validators.v]\ncommand = \"/opt/v\"\nsha256 = \"{sha256}\"\nscript = \"x\"\n"
+            ),
+            "[[code_validators]]\nid = \" \"\n".to_string(),
+            "[[code_validators]]\nid = \"v\"\ncommand = \"/opt/v\"\n".to_string(),
+        ];
+
+        for contents in invalid_files {
+            let (scope, _) = blocked_reason(Some(&contents), None);
+            assert_eq!(scope, IssuePolicyScope::User, "{contents}");
+        }
     }
 
     #[test]
