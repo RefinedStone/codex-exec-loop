@@ -27,6 +27,8 @@ pub mod issue_core_port;
 pub mod evidence_vault_port;
 // issue snapshot port 는 원격 게시본의 원시 값을 읽는다. 신뢰된 처리 경로만 쓴다 (#2420).
 pub mod issue_snapshot_port;
+// issue board field port 는 보드 항목의 필드를 읽고 고친다. 본문 쓰기와 승인이 다르다 (#2435).
+pub mod issue_board_field_port;
 // issue policy source port 는 사용자와 프로젝트의 이슈 정책 파일을 읽는 경계이다 (#2416).
 pub mod issue_policy_source_port;
 // vault key store port 는 Vault 키를 두는 OS 키 저장소의 계약이다 (#2422).

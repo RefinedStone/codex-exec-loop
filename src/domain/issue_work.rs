@@ -42,6 +42,31 @@ pub struct IssueSharedCopy {
     pub body: String,
 }
 
+/// 이슈에 쓰는 동작의 종류이다. 동작마다 승인이 따로 있다 (#2435).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueWriteOperation {
+    /// 이슈의 제목과 본문을 고친다.
+    Body,
+    /// 보드(GitHub Projects) 항목 하나의 필드 값을 고친다.
+    BoardField,
+}
+
+/// 사용자가 한 쓰기 승인이다. 이슈 한 건의 동작 한 종류만 허락한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueWriteApproval {
+    pub issue: IssueReference,
+    pub operation: IssueWriteOperation,
+}
+
+impl IssueWriteApproval {
+    /// 승인이 이 이슈의 이 동작을 허락하는지 본다. 본문 승인은 보드 쓰기를 허락하지 않고, 반대도 같다.
+    pub fn authorizes(&self, issue: &IssueReference, operation: IssueWriteOperation) -> bool {
+        self.issue == *issue && self.operation == operation
+    }
+}
+
 /// 사람이 고르는 이슈의 주소이다. 이름과 번호는 바뀔 수 있다. 안정 ID 를 찾을 때만 쓴다.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,6 +140,35 @@ mod tests {
             IssueFieldHash::of_fields("", "").sha256,
             "288df23891fd8aa7b05789427511ccef781fbc92462087ab6742a51eac8f5f6c"
         );
+    }
+
+    #[test]
+    fn a_write_approval_authorizes_one_operation_on_one_issue() {
+        let issue = IssueReference {
+            provider: IssueProvider::GitHub,
+            server_id: "github.com".to_string(),
+            repository_id: "R_1".to_string(),
+            issue_id: "I_1".to_string(),
+            project_scope: IssueProjectScope {
+                workspace_dir: "/work/project".to_string(),
+            },
+        };
+        let other_issue = IssueReference {
+            issue_id: "I_2".to_string(),
+            ..issue.clone()
+        };
+        for (approved, other) in [
+            (IssueWriteOperation::Body, IssueWriteOperation::BoardField),
+            (IssueWriteOperation::BoardField, IssueWriteOperation::Body),
+        ] {
+            let approval = IssueWriteApproval {
+                issue: issue.clone(),
+                operation: approved,
+            };
+            assert!(approval.authorizes(&issue, approved));
+            assert!(!approval.authorizes(&issue, other));
+            assert!(!approval.authorizes(&other_issue, approved));
+        }
     }
 
     #[test]
