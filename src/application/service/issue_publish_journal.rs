@@ -136,6 +136,7 @@ impl IssueJournaledPublishService {
             observed_hash: None,
             restore_link_finalized: false,
             write_response_mismatch: false,
+            write_attempted: Some(false),
             sequence,
         };
         if !shared_copy_only && !restorable.is_empty() {
@@ -168,6 +169,7 @@ impl IssueJournaledPublishService {
         }
 
         record.state = IssuePublishIntentState::Sent;
+        record.write_attempted = Some(true);
         self.journal.save(&workspace_dir, &record)?;
         let answer = self.update.update_title_and_body(IssueUpdateRequest {
             approval: publish.approval.write,
@@ -242,6 +244,9 @@ impl IssueJournaledPublishService {
         if record.state != IssuePublishIntentState::Confirmed {
             bail!("the restore link can be finalized only after the publish is confirmed")
         }
+        if record.write_attempted == Some(false) {
+            bail!("an unsent intent cannot own a restore link")
+        }
         if record.restore_link_finalized {
             return Ok(record);
         }
@@ -250,13 +255,13 @@ impl IssueJournaledPublishService {
                 && other.intent_id != record.intent_id
                 && (other.sequence > record.sequence
                     || (other.sequence == 0 && record.sequence == 0))
-                && matches!(
+                && (matches!(
                     other.state,
                     IssuePublishIntentState::Sent
                         | IssuePublishIntentState::NeedsConfirmation
                         | IssuePublishIntentState::Confirmed
-                        | IssuePublishIntentState::Abandoned
-                )
+                ) || (other.state == IssuePublishIntentState::Abandoned
+                    && other.write_attempted != Some(false)))
         }) {
             // Abandoning confirmation does not undo a possible remote write. Legacy
             // records with no sequence cannot establish which mapping is newest.
@@ -625,6 +630,7 @@ mod tests {
             observed_hash: None,
             restore_link_finalized: false,
             write_response_mismatch: false,
+            write_attempted: Some(true),
             sequence: 0,
         }
     }
@@ -997,6 +1003,7 @@ mod tests {
             panic!("second publish must need confirmation");
         };
         assert_eq!(fixture.writes(), 2);
+        assert_eq!(second.write_attempted, Some(true));
         service.abandon(WORKSPACE, &second.intent_id).unwrap();
         assert!(
             service
@@ -1031,5 +1038,139 @@ mod tests {
                 .is_err()
         );
         assert!(fixture.vault.records.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn a_newer_preflight_read_failure_does_not_block_the_confirmed_restore_link() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let service = fixture.service();
+        let IssueJournaledPublishOutcome::Confirmed(first) =
+            service.publish(restorable_request(Some(key()))).unwrap()
+        else {
+            panic!("first publish");
+        };
+        fixture.fail_reads_from_now();
+        let mut next = restorable_request(Some(key()));
+        next.publish.edit_basis = first.approved_hash.clone();
+        assert!(service.publish(next).is_err());
+        let newer = fixture
+            .journal
+            .load(WORKSPACE)
+            .unwrap()
+            .into_iter()
+            .find(|record| record.sequence > first.sequence)
+            .unwrap();
+        assert_eq!(newer.state, IssuePublishIntentState::Abandoned);
+        assert_eq!(newer.write_attempted, Some(false));
+        assert_eq!(fixture.writes(), 1);
+        service
+            .finalize_restore_link(WORKSPACE, &first.intent_id, key())
+            .unwrap();
+        assert_eq!(
+            fixture.vault.records.lock().unwrap()[&VaultRecordScope::current_version(issue())]
+                .expose(),
+            first.confirmed_version()
+        );
+    }
+
+    #[test]
+    fn reconciling_an_unsent_record_does_not_block_an_older_confirmed_restore_link() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let service = fixture.service();
+        let IssueJournaledPublishOutcome::Confirmed(first) =
+            service.publish(restorable_request(Some(key()))).unwrap()
+        else {
+            panic!("first publish");
+        };
+        let mut unsent = sent_record();
+        unsent.state = IssuePublishIntentState::Recorded;
+        unsent.sequence = first.sequence + 1;
+        unsent.write_attempted = Some(false);
+        unsent.approved_hash = IssueFieldHash::of_fields("Never sent", "pending text");
+        fixture.journal.save(WORKSPACE, &unsent).unwrap();
+        let records = service.reconcile(WORKSPACE).unwrap();
+        let abandoned = records
+            .iter()
+            .find(|record| record.intent_id == unsent.intent_id)
+            .unwrap();
+        assert_eq!(abandoned.state, IssuePublishIntentState::Abandoned);
+        assert_eq!(abandoned.write_attempted, Some(false));
+        service
+            .finalize_restore_link(WORKSPACE, &first.intent_id, key())
+            .unwrap();
+        assert_eq!(fixture.writes(), 1);
+    }
+
+    #[test]
+    fn a_legacy_abandoned_record_without_send_evidence_remains_conservative() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let service = fixture.service();
+        let IssueJournaledPublishOutcome::Confirmed(first) =
+            service.publish(restorable_request(Some(key()))).unwrap()
+        else {
+            panic!("first publish");
+        };
+        let mut uncertain = sent_record();
+        uncertain.state = IssuePublishIntentState::Abandoned;
+        uncertain.sequence = first.sequence + 1;
+        uncertain.write_attempted = None;
+        fixture.journal.save(WORKSPACE, &uncertain).unwrap();
+        assert!(
+            service
+                .finalize_restore_link(WORKSPACE, &first.intent_id, key())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_unsent_equal_hash_record_cannot_claim_the_restore_mapping_after_restart() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let service = fixture.service();
+        let IssueJournaledPublishOutcome::Confirmed(first) =
+            service.publish(restorable_request(Some(key()))).unwrap()
+        else {
+            panic!("first publish");
+        };
+        let mut unsent = first.clone();
+        unsent.intent_id = "recorded-but-never-sent".to_string();
+        unsent.sequence += 1;
+        unsent.state = IssuePublishIntentState::Recorded;
+        unsent.write_attempted = Some(false);
+        fixture
+            .vault
+            .save(VaultRecordSaveRequest {
+                scope: VaultRecordScope {
+                    issue: issue(),
+                    field: VaultRecordField::Body,
+                    binding: VaultRecordBinding::PublishIntent(unsent.intent_id.clone()),
+                },
+                key: key(),
+                plaintext: VaultPlaintext::new("never published private text".to_string()),
+            })
+            .unwrap();
+        fixture.journal.save(WORKSPACE, &unsent).unwrap();
+        let restarted = fixture.service();
+        let records = restarted.reconcile(WORKSPACE).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .find(|record| record.intent_id == unsent.intent_id)
+                .unwrap()
+                .state,
+            IssuePublishIntentState::Abandoned
+        );
+        restarted
+            .finalize_restore_link(WORKSPACE, &first.intent_id, key())
+            .unwrap();
+        assert!(
+            restarted
+                .finalize_restore_link(WORKSPACE, &unsent.intent_id, key())
+                .is_err()
+        );
+        assert_eq!(
+            fixture.vault.records.lock().unwrap()[&VaultRecordScope::current_version(issue())]
+                .expose(),
+            first.confirmed_version()
+        );
+        assert_eq!(fixture.writes(), 1);
     }
 }
