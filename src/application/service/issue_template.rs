@@ -5,6 +5,7 @@ use serde_yaml_ng::Value;
 use sha2::{Digest, Sha256};
 
 use crate::application::port::outbound::issue_template_source_port::IssueTemplateSourcePort;
+use crate::domain::issue_markdown::IssueMarkdownHeadings;
 use crate::domain::issue_template::{
     IssueTemplateConvention, IssueTemplateFormat, IssueTemplateInputKind,
     IssueTemplateRequiredInput, IssueTemplateResolution, IssueTemplateUnsupportedInput,
@@ -103,20 +104,11 @@ fn markdown_required_sections(contents: &str) -> Vec<IssueTemplateRequiredInput>
         }
     }
     let mut sections = Vec::new();
-    let mut in_code_block = false;
+    let mut headings = IssueMarkdownHeadings::default();
     for line in lines {
-        let line = line.trim();
-        if line.starts_with("```") || line.starts_with("~~~") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
-            continue;
-        }
-        let title = line.trim_start_matches('#');
-        let level = line.len() - title.len();
-        let label = title.trim_end_matches('#').trim();
-        if (1..=6).contains(&level) && title.starts_with(' ') && !label.is_empty() {
+        if let Some((_, label)) = headings.heading(line)
+            && !label.is_empty()
+        {
             sections.push(IssueTemplateRequiredInput {
                 label: label.to_string(),
                 kind: IssueTemplateInputKind::Section,
@@ -147,6 +139,8 @@ struct IssueFormAttributes {
     label: Option<String>,
     #[serde(default)]
     options: Vec<Value>,
+    #[serde(default)]
+    multiple: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -167,7 +161,18 @@ fn parse_issue_form(contents: &str) -> Result<IssueFormInputs, String> {
     let mut unsupported = Vec::new();
     for field in form.body {
         match issue_form_field_inputs(&field) {
-            Ok(inputs) => required.extend(inputs),
+            Ok(inputs) => {
+                if inputs
+                    .iter()
+                    .any(|input| matches!(input.kind, IssueTemplateInputKind::Checkbox { .. }))
+                {
+                    unsupported.push(IssueTemplateUnsupportedInput {
+                        label: field_label(&field)?,
+                        reason: "required checkbox validation is not supported".to_string(),
+                    });
+                }
+                required.extend(inputs);
+            }
             Err(reason) => unsupported.push(IssueTemplateUnsupportedInput {
                 label: field
                     .attributes
@@ -192,6 +197,9 @@ fn issue_form_field_inputs(
         _ if !field.validations.required => return Ok(Vec::new()),
         "input" => IssueTemplateInputKind::Input,
         "textarea" => IssueTemplateInputKind::Textarea,
+        "dropdown" if field.attributes.multiple => {
+            return Err("required multiple-selection dropdowns are not supported".to_string());
+        }
         "dropdown" => IssueTemplateInputKind::Dropdown {
             options: field
                 .attributes
@@ -412,6 +420,7 @@ body:
         assert_eq!(
             unsupported,
             vec![
+                ("Checks", "required checkbox validation is not supported"),
                 ("Log files", "unsupported field type `upload`"),
                 ("contact", "a required field has no label"),
             ]
@@ -515,5 +524,37 @@ body:
             ),
             IssueTemplateVersionCheck::ReviewRequired { .. }
         ));
+    }
+    #[test]
+    fn markdown_templates_share_fence_rules_and_preserve_csharp_labels() {
+        for body in [
+            "\x60\x60\x60\x60md\n\x60\x60\x60\n## Hidden\n\x60\x60\x60\n\x60\x60\x60\x60\n### C# ###",
+            "~~~\n\x60\x60\x60\n## Hidden\n\x60\x60\x60\n~~~\n### C#",
+        ] {
+            let parsed = convention(parse_issue_template("bug.md", body));
+            assert_eq!(
+                parsed.required_inputs,
+                [input("C#", IssueTemplateInputKind::Section)]
+            );
+        }
+        let unclosed = convention(parse_issue_template("bug.md", "\x60\x60\x60\n## Example"));
+        assert!(unclosed.required_inputs.is_empty());
+    }
+
+    #[test]
+    fn required_multiple_dropdowns_are_explicitly_unsupported() {
+        for (multiple, required, expected_required, expected_unsupported) in
+            [(false, true, 1, 0), (true, true, 0, 1), (true, false, 0, 0)]
+        {
+            let yaml = format!(
+                "body:\n  - type: dropdown\n    attributes:\n      label: Systems\n      options: [Windows, macOS]\n      multiple: {multiple}\n    validations:\n      required: {required}\n"
+            );
+            let parsed = convention(parse_issue_template("bug.yml", &yaml));
+            assert_eq!(parsed.required_inputs.len(), expected_required);
+            assert_eq!(
+                parsed.unsupported_required_inputs.len(),
+                expected_unsupported
+            );
+        }
     }
 }
