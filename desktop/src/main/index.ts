@@ -3,11 +3,12 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { shouldKeepAwake, validateSettings } from "../shared/settings";
+import { isVaultRestoreIssueUrl, vaultRestoreProfileHold } from "../shared/vaultRestore";
 import { isZoomDirection, nextZoom, type ZoomDirection } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
@@ -30,6 +31,7 @@ import { JiraService } from "./jiraService";
 import { LinearService, isLinearIssueUrl } from "./linearService";
 import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
+import { VaultRestoreWindows } from "./vaultRestoreWindow";
 import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
 
 // 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
@@ -661,11 +663,43 @@ ipcMain.handle(IPC_CHANNELS.settingsSet, (_event, settings: unknown) => {
 ipcMain.on(IPC_CHANNELS.reportWorking, (event, working: unknown) => {
   if (working === true) {
     workingWindows.add(event.sender.id);
+    vaultRestores.lockAll("agent_working");
   } else {
     workingWindows.delete(event.sender.id);
   }
   updateKeepAwake();
 });
+
+/**
+ * 로컬 복원본 창이다 (#2427). 일반 창은 이슈 주소로 창을 열게 하고 다시 잠그게 할 뿐이다. 복원한 글은 그 창의 전용
+ * 채널로만 간다. 열람은 그 창에서 main 이 띄운 확인을 거친 뒤에만 된다.
+ */
+const vaultRestores = new VaultRestoreWindows({
+  // 로컬 복원 경로(Vault 복원 서비스, #2425)는 아직 이 앱에 연결되지 않았다. 열람은 보류 상태로 남는다.
+  // 일반 Gateway 로 평문을 받는 경로는 만들지 않는다.
+  source: () => null,
+  profileHold: () =>
+    vaultRestoreProfileHold({
+      automation:
+        app.commandLine.hasSwitch("remote-debugging-port") ||
+        app.commandLine.hasSwitch("remote-debugging-pipe") ||
+        [...process.argv, ...process.execArgv].some((argument) => /^--(inspect|remote-debugging)/.test(argument)),
+      devRenderer: Boolean(process.env.ELECTRON_RENDERER_URL),
+      hiddenWindows: HIDDEN_WINDOWS,
+      agentWorking: workingWindows.size > 0,
+    }),
+  preloadPath: join(__dirname, "../preload/vaultRestore.js"),
+  // 개발 서버의 화면은 프로필 검사가 보류한다. 그래서 여기서는 빌드한 파일만 읽는다.
+  loadPage: (window) => void window.loadFile(join(__dirname, "../renderer/vault-restore.html")),
+  hidden: HIDDEN_WINDOWS,
+});
+ipcMain.handle(IPC_CHANNELS.vaultRestoreOpen, (event, issueUrl: unknown) => {
+  const opener = BrowserWindow.fromWebContents(event.sender);
+  if (!opener || !mainWindows.has(opener) || event.senderFrame !== event.sender.mainFrame) throw new Error("복원본 요청을 보낸 창을 확인할 수 없습니다.");
+  if (!isVaultRestoreIssueUrl(issueUrl)) throw new Error("GitHub 이슈 주소만 열 수 있습니다.");
+  vaultRestores.open(opener, issueUrl);
+});
+ipcMain.on(IPC_CHANNELS.vaultRestoreProjectChanged, (event) => vaultRestores.lockOpenedBy(event.sender.id, "project_switch"));
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
@@ -745,6 +779,9 @@ function installApplicationMenu(): void {
 
 void app.whenReady().then(() => {
   installApplicationMenu();
+  // OS 화면 잠금과 절전은 열려 있는 로컬 복원본을 다시 잠근다 (#2427).
+  powerMonitor.on("lock-screen", () => vaultRestores.lockAll("os_lock"));
+  powerMonitor.on("suspend", () => vaultRestores.lockAll("suspend"));
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

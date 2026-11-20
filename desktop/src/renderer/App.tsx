@@ -283,6 +283,7 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
             if (!target) throw new Error("이 저장소의 작업 폴더가 없습니다. 그 저장소의 폴더를 사이드바에 추가하세요.");
             setEditing(target);
           }}
+          onOpenRestore={(issueUrl) => window.akra.vaultRestore.open(issueUrl)}
         />
       )}
       {source === "Jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => onHandOff(await window.akra.jira.issuePrompt(issue.key))} />}
@@ -311,6 +312,8 @@ export function App() {
   // 접속이 끊기면 턴의 상태를 알 수 없다. 그때는 일하는 중으로 치지 않는다: 잠자기 방지가 켜진 채로 남지 않는다.
   const working = useDesktopStore((state) => state.connection?.phase === "connected" && state.activeThreadIds.length > 0);
   useEffect(() => window.akra.settings.reportWorking(working), [working]);
+  // 프로젝트(열린 스레드의 폴더)가 바뀌면 이 창이 연 로컬 복원본을 다시 잠근다 (#2427).
+  useEffect(() => () => window.akra.vaultRestore.projectChanged(), [openCwd]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;

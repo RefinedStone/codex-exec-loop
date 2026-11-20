@@ -1,0 +1,19 @@
+// 로컬 복원본 창의 preload 이다 (#2427). 복원본 채널의 함수만 노출한다. `window.akra` 와 일반 채널은 여기에 없다.
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+
+import { type VaultRestoreBridge, type VaultRestoreViewState, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
+
+const bridge: VaultRestoreBridge = {
+  ready: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.ready),
+  onState(listener) {
+    const handler = (_event: IpcRendererEvent, state: VaultRestoreViewState) => listener(state);
+    ipcRenderer.on(VAULT_RESTORE_CHANNELS.state, handler);
+    return () => ipcRenderer.off(VAULT_RESTORE_CHANNELS.state, handler);
+  },
+  unlock: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.unlock),
+  lock: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.lock),
+  review: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.review),
+  reconnect: (mappings) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.reconnect, mappings),
+};
+
+contextBridge.exposeInMainWorld("akraVaultRestore", bridge);

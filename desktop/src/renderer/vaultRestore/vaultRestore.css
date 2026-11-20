@@ -1,0 +1,65 @@
+/* 로컬 복원본 창이다 (#2427). 색과 크기는 design/tokens.css 를 쓴다. */
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-m);
+}
+
+.vault-restore {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.vault-restore h1 {
+  margin: 0;
+  font-size: var(--text-l);
+}
+
+.vault-restore h2 {
+  margin: 0;
+  font-size: var(--text-m);
+}
+
+.vault-restore p {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.vault-restore pre {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.vault-restore .actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.vault-restore fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+}
+
+.vault-restore legend {
+  font-family: var(--font-mono);
+}
+
+.vault-restore .muted {
+  color: var(--text-3);
+}
