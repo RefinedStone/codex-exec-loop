@@ -6,7 +6,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context as TaskContext, Poll};
@@ -31,11 +31,15 @@ const UPSTREAM_PID_FILE_NAME: &str = "gateway-upstream.pid";
 const STALE_UPSTREAM_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 const STALE_UPSTREAM_KILL_WAIT: Duration = Duration::from_secs(2);
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 const STALE_UPSTREAM_PS_TIMEOUT: Duration = Duration::from_secs(2);
-#[cfg(all(unix, target_os = "macos"))]
+#[cfg(all(unix, test, target_os = "macos"))]
 const TRUSTED_PS_PATHS: &[&str] = &["/bin/ps", "/usr/bin/ps"];
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(
+    unix,
+    any(test, not(any(target_os = "linux", target_os = "macos"))),
+    not(target_os = "macos")
+))]
 const TRUSTED_PS_PATHS: &[&str] = &["/usr/bin/ps", "/bin/ps"];
 const UPSTREAM_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -362,14 +366,14 @@ fn stop_stale_upstream(socket_path: &Path) {
     let _ = std::fs::remove_file(upstream_pid_path(socket_path));
 }
 
-#[cfg(unix)]
-fn trusted_ps_command(pid: libc::pid_t) -> Option<Command> {
+#[cfg(all(unix, any(test, not(any(target_os = "linux", target_os = "macos")))))]
+fn trusted_ps_command(pid: libc::pid_t) -> Option<std::process::Command> {
     // Never consult PATH for a process-identification tool used before sending SIGTERM.
     let binary = TRUSTED_PS_PATHS
         .iter()
         .copied()
         .find(|candidate| Path::new(candidate).is_file())?;
-    let mut command = Command::new(binary);
+    let mut command = std::process::Command::new(binary);
     command
         .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
         .env_clear()
@@ -378,7 +382,7 @@ fn trusted_ps_command(pid: libc::pid_t) -> Option<Command> {
     Some(command)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn process_serves_socket(pid: libc::pid_t, socket_argument: &str) -> bool {
     let Some(mut command) = trusted_ps_command(pid) else {
         return false;
@@ -395,6 +399,89 @@ fn process_serves_socket(pid: libc::pid_t, socket_argument: &str) -> bool {
     }
     let command_line = String::from_utf8_lossy(&output.stdout);
     command_line.contains("app-server") && command_line.contains(socket_argument)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const MAX_PROCESS_ARGUMENT_BYTES: usize = 1024 * 1024;
+
+// Read kernel-provided argument boundaries. A locale-rendered ps line can replace
+// Unicode bytes and a substring match could identify a different socket.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn process_serves_socket(pid: libc::pid_t, socket_argument: &str) -> bool {
+    let Some(arguments) = process_arguments(pid) else {
+        return false;
+    };
+    let expected = format!("unix://{socket_argument}");
+    arguments.iter().any(|argument| argument == b"app-server")
+        && arguments
+            .windows(2)
+            .any(|pair| pair[0] == b"--listen" && pair[1] == expected.as_bytes())
+}
+
+#[cfg(target_os = "linux")]
+fn process_arguments(pid: libc::pid_t) -> Option<Vec<Vec<u8>>> {
+    if pid <= 0 {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(format!("/proc/{pid}/cmdline"))
+        .ok()?
+        .take((MAX_PROCESS_ARGUMENT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_PROCESS_ARGUMENT_BYTES || bytes.last() != Some(&0) {
+        return None;
+    }
+    bytes.pop();
+    Some(bytes.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect())
+}
+
+#[cfg(target_os = "macos")]
+fn process_arguments(pid: libc::pid_t) -> Option<Vec<Vec<u8>>> {
+    if pid <= 0 {
+        return None;
+    }
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut bytes = vec![0u8; MAX_PROCESS_ARGUMENT_BYTES];
+    let mut length = bytes.len();
+    // KERN_PROCARGS2 returns argc, executable path, NUL padding, then argc
+    // NUL-terminated argv values. No executable lookup, shell or locale is involved.
+    let result = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            bytes.as_mut_ptr().cast(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 || length > bytes.len() {
+        return None;
+    }
+    bytes.truncate(length);
+    parse_macos_process_arguments(&bytes)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_macos_process_arguments(bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let count_bytes: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    let count = usize::try_from(i32::from_ne_bytes(count_bytes)).ok()?;
+    if count == 0 || count > bytes.len() {
+        return None;
+    }
+    let mut rest = bytes.get(4..)?;
+    let executable_end = rest.iter().position(|byte| *byte == 0)?;
+    rest = &rest[executable_end..];
+    let argv_start = rest.iter().position(|byte| *byte != 0)?;
+    rest = &rest[argv_start..];
+    let mut arguments = Vec::new();
+    for _ in 0..count {
+        let end = rest.iter().position(|byte| *byte == 0)?;
+        arguments.push(rest[..end].to_vec());
+        rest = &rest[end + 1..];
+    }
+    Some(arguments)
 }
 
 fn wait_until_socket_ready(child: &mut ManagedChild, socket_path: &Path) -> Result<()> {
@@ -563,6 +650,63 @@ mod tests {
             "stalled ps process must be terminated within the timeout"
         );
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn macos_argument_buffer_preserves_boundaries_and_excludes_environment() {
+        let mut bytes = 5i32.to_ne_bytes().to_vec();
+        bytes.extend_from_slice(b"/usr/local/bin/codex\0\0");
+        for arg in [
+            "codex",
+            "app-server",
+            "",
+            "--listen",
+            "unix:///tmp/한글 space/server.sock",
+        ] {
+            bytes.extend_from_slice(arg.as_bytes());
+            bytes.push(0);
+        }
+        bytes.extend_from_slice(b"SECRET=not-an-argument\0");
+        let parsed = super::parse_macos_process_arguments(&bytes).unwrap();
+        assert_eq!(parsed.len(), 5);
+        assert!(parsed[2].is_empty());
+        assert_eq!(parsed[4], "unix:///tmp/한글 space/server.sock".as_bytes());
+        assert!(super::parse_macos_process_arguments(&bytes[..10]).is_none());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn actual_pid_probe_preserves_unicode_spaces_and_exact_socket_arguments() {
+        for path in [
+            "/tmp/ascii/server.sock",
+            "/tmp/한글/server.sock",
+            "/tmp/with spaces/server.sock",
+        ] {
+            let socket = format!("unix://{path}");
+            let mut command = std::process::Command::new("/bin/sh");
+            command
+                .args(["-c", "sleep 30; :", "sh", "app-server", "--listen", &socket])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            let mut child = crate::subprocess::spawn(&mut command).unwrap();
+            let pid = child.id() as libc::pid_t;
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !super::process_serves_socket(pid, path) && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let matches = super::process_serves_socket(pid, path);
+            let prefix_matches = super::process_serves_socket(pid, path.trim_end_matches(".sock"));
+            let other_matches = super::process_serves_socket(pid, "/tmp/unrelated.sock");
+            child.terminate_and_wait().unwrap();
+            assert!(matches, "failed to identify {path}");
+            assert!(!prefix_matches, "must not match a socket prefix");
+            assert!(!other_matches, "must not match a different socket");
+            assert!(
+                !super::process_serves_socket(pid, path),
+                "exited pid must not match"
+            );
+        }
     }
 
     /// 남은 upstream 대신 같은 명령줄 모양의 셸을 띄우고 pid 를 돌려준다. 바깥 셸이 바로 끝나므로 이 셸은 운영의
