@@ -12,6 +12,7 @@ use crate::domain::issue_automation::source::{
     IssueContentWithheldReason, IssueDiscoverySelection, IssueMetadataCompleteness,
     IssueMetadataList, IssuePrPresence, IssueRemoteState, IssueSourceContent,
     IssueSourceDisclosure, IssueSourceFailure, IssueSourceObservation, IssueSourceRepository,
+    IssueSourceWeb,
 };
 use crate::domain::issue_automation::{
     IssueAutomationAutonomy, IssueAutomationFlag, IssueAutomationState, IssueDecisionResumePhase,
@@ -22,6 +23,7 @@ use crate::domain::issue_policy::IssueDisclosurePolicy;
 fn observed(fixture: &Fixture, id: &str, body: &str) -> IssueSourceObservation {
     IssueSourceObservation {
         issue: reference(fixture.cwd(), id),
+        web: None,
         remote_state: IssueRemoteState::Open,
         labels: IssueMetadataList {
             items: Vec::new(),
@@ -997,5 +999,157 @@ fn two_collectors_with_one_fence_cannot_both_apply_a_page_or_emit_first_tracking
             .items
             .len(),
         1
+    );
+}
+
+#[test]
+fn current_web_metadata_round_trips_without_reusing_an_older_shared_link_or_content() {
+    let fixture = Fixture::new("collector-current-web");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let mut first = observed(&fixture, "I_A", "historical-body-must-not-leak");
+    first.web = Some(IssueSourceWeb {
+        number: 17,
+        url: "https://github.com/sample/widgets/issues/17".to_owned(),
+    });
+    let page = page(&fixture, &request, vec![first.clone()], None);
+    let stored = commit(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .unwrap(),
+    );
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert_eq!(
+        view.items[0].current,
+        Some(IssueSourceRead::Observed(Box::new(first)))
+    );
+
+    let mut current = withheld(&fixture, "I_A");
+    current.web = Some(IssueSourceWeb {
+        number: 17,
+        url: "https://github.com/moved/renamed/issues/17".to_owned(),
+    });
+    let withheld = resync_one(
+        &fixture,
+        &stored.state,
+        IssueSourceRead::Observed(Box::new(current.clone())),
+    );
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert_eq!(
+        view.items[0].current,
+        Some(IssueSourceRead::Observed(Box::new(current)))
+    );
+    let projected = format!("{view:?}");
+    assert!(!projected.contains("historical-body-must-not-leak"));
+    assert!(!projected.contains("https://github.com/sample/widgets/issues/17"));
+    assert!(projected.contains("https://github.com/moved/renamed/issues/17"));
+
+    resync_one(
+        &fixture,
+        &withheld.state,
+        unknown(&reference(fixture.cwd(), "I_A")),
+    );
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert!(matches!(
+        &view.items[0].current,
+        Some(IssueSourceRead::Unknown { .. })
+    ));
+    assert!(!format!("{view:?}").contains("https://"));
+    assert!(!format!("{view:?}").contains("historical-body-must-not-leak"));
+}
+
+#[test]
+fn legacy_current_json_without_web_is_readable_but_invalid_persisted_web_is_rejected() {
+    let fixture = Fixture::new("collector-legacy-web");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let mut value = observed(&fixture, "I_A", "legacy shared body");
+    value.web = Some(IssueSourceWeb {
+        number: 17,
+        url: "https://github.com/sample/widgets/issues/17".to_owned(),
+    });
+    let page = page(&fixture, &request, vec![value.clone()], None);
+    adapter
+        .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+        .unwrap();
+    let mut encoded =
+        serde_json::to_value(IssueSourceRead::Observed(Box::new(value.clone()))).unwrap();
+    encoded["value"].as_object_mut().unwrap().remove("web");
+    {
+        let database = Connection::open(fixture.database()).unwrap();
+        database
+            .execute(
+                "UPDATE issue_source_observations SET current_read = ?1",
+                [encoded.to_string()],
+            )
+            .unwrap();
+    }
+    value.web = None;
+    let view = adapter
+        .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+        .unwrap();
+    assert_eq!(
+        view.items[0].current,
+        Some(IssueSourceRead::Observed(Box::new(value)))
+    );
+
+    encoded["value"]["web"] = serde_json::json!({"number":17,"url":"javascript:alert(1)"});
+    {
+        let database = Connection::open(fixture.database()).unwrap();
+        database
+            .execute(
+                "UPDATE issue_source_observations SET current_read = ?1",
+                [encoded.to_string()],
+            )
+            .unwrap();
+    }
+    assert!(
+        adapter
+            .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+            .is_err()
+    );
+}
+
+#[test]
+fn invalid_new_web_metadata_cannot_advance_a_collection_page_or_create_rows() {
+    let fixture = Fixture::new("collector-invalid-new-web");
+    let adapter = fixture.adapter();
+    let initial = adapter.ensure_collection(fixture.cwd()).unwrap();
+    let request = request(&fixture, &initial);
+    let mut invalid = observed(&fixture, "I_B", "must-not-commit");
+    invalid.web = Some(IssueSourceWeb {
+        number: 17,
+        url: "https://github.com/owner/repository/issues/18".to_owned(),
+    });
+    let page = page(
+        &fixture,
+        &request,
+        vec![observed(&fixture, "I_A", "must-roll-back"), invalid],
+        Some("after-invalid"),
+    );
+    assert!(
+        adapter
+            .apply_discovery_page(fixture.cwd(), initial.fence(), &request, &page)
+            .is_err()
+    );
+    assert_eq!(
+        adapter.get_collection(fixture.cwd()).unwrap(),
+        Some(initial)
+    );
+    assert!(adapter.list_bindings(fixture.cwd()).unwrap().is_empty());
+    assert!(
+        adapter
+            .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+            .unwrap()
+            .items
+            .is_empty()
     );
 }

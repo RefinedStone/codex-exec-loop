@@ -69,6 +69,10 @@ export interface FakeGateway {
   /** `akra/chats/*` 의 조회 제한을 켜고 끈다 (plan 25). 처음 값은 `chatsRateLimited` 옵션이다. */
   setChatsRateLimited(limited: boolean): void;
   switchChatAccount(account: FakeChatAccount): void;
+  /** 서버를 유지한 채 접속만 끊어 재접속을 시험한다. */
+  disconnectClients(): void;
+  /** 붙어 있는 local 커널 연결에만 상태 이벤트를 보낸다. */
+  sendKernelEvent(event: unknown): void;
   close(): Promise<void>;
 }
 
@@ -110,35 +114,51 @@ export function loadReplaySegments(recordingPath: string): ReplaySegment[] {
 /**
  * 가짜 저장소 커널이다 (plan 18 K3-6). `akra/kernel/*` 는 Gateway 가 직접 답하므로 녹화가 아니라 이 값으로 답한다.
  */
+export type FakeKernelReply = (
+  | { result: unknown; error?: never }
+  | { error: { code: number; message: string }; result?: never }
+) & { events?: unknown[] };
+
 export interface FakeKernel {
   /** 붙기 결과의 저장소 신원이다. null 이면 다른 프로세스가 잠금을 쥔 것처럼 -32012 로 거절한다. */
   kernel: string | null;
-  /** 조회 종류 → 결과 이벤트 */
+  /** 조회 종류 → 결과. 상태 이벤트와 목록 페이지는 서로 다른 응답이다. */
   queries: Record<string, unknown>;
+  /** cursor/명령별 답이다. undefined이면 기본 가짜 응답을 사용한다. */
+  onRequest?(method: string, params: Record<string, unknown>): FakeKernelReply | undefined;
   /** 붙은 뒤 첫 명령에 응답한 다음 보낼 이벤트이다. 초기 조회가 끝났다는 신호로 쓴다. */
   eventsAfterAttach?: unknown[];
 }
 
-function answerKernel(kernel: FakeKernel, socket: WebSocket, message: JsonRpcEnvelope & { params?: Record<string, unknown> }): void {
+function answerKernel(kernel: FakeKernel, socket: WebSocket, message: JsonRpcEnvelope & { params?: Record<string, unknown> }): boolean {
   const respond = (body: object) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...body }));
+  const custom = kernel.onRequest?.(message.method ?? "", message.params ?? {});
+  if (custom !== undefined) {
+    respond(custom.error ? { error: custom.error } : { result: custom.result });
+    for (const event of custom.events ?? []) {
+      socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
+    }
+    return custom.error === undefined;
+  }
   switch (message.method) {
     case "akra/kernel/attach":
       if (kernel.kernel === null) {
         respond({ error: { code: -32012, message: "the repository kernel runs in another process (pid 4242)" } });
-        return;
+        return false;
       }
       respond({ result: { client_id: "1", protocol_version: 1, kernel: kernel.kernel } });
-      return;
+      return true;
     case "akra/kernel/query": {
       const type = (message.params?.query as { type?: string } | undefined)?.type ?? "";
       respond(type in kernel.queries ? { result: kernel.queries[type] } : { error: { code: -32602, message: `unknown query ${type}` } });
-      return;
+      return true;
     }
     case "akra/kernel/command":
       respond({ result: { processed: true } });
-      return;
+      return true;
     default:
       respond({ result: {} });
+      return true;
   }
 }
 
@@ -180,7 +200,7 @@ export async function startFakeGateway(
   recordingPaths: string | string[],
   options: {
     kernel?: FakeKernel;
-    onRequest?(method: string): void;
+    onRequest?(method: string, params: Record<string, unknown>): void;
     mcpHub?: FakeMcpHub;
     threadDocuments?: Record<string, FakeThreadDocument[]>;
     /** `akra/git/graph` 의 답이다 (plan 27). 요청의 params 를 받아 쪽 하나를 돌려준다. 없으면 모르는 method 로 답한다. */
@@ -232,6 +252,7 @@ export async function startFakeGateway(
   const answeredRequests: Array<{ requestId: string; result: unknown }> = [];
   const server: Server = createServer();
   const sockets = new WebSocketServer({ server });
+  const kernelClients = new Set<WebSocket>();
   // app-server 처럼 서버 요청은 접속마다 따로 받고, 먼저 온 답만 쓴다 (Q-03 실측).
   const resolvedRequestIds = new Set<string>();
   /** 서버 요청 id → 그 요청을 받은 접속들과 스레드 id */
@@ -253,6 +274,7 @@ export async function startFakeGateway(
       return;
     }
     const remote = host !== "local";
+    socket.on("close", () => kernelClients.delete(socket));
     let kernelEventsSent = false;
     // 녹화 재생은 접속마다 따로 한다. 창 두 개가 같은 스레드를 열면 둘 다 같은 기록을 받는다.
     const used = new Set<ReplaySegment>();
@@ -303,7 +325,7 @@ export async function startFakeGateway(
         return;
       }
       (remote ? remoteReceivedMethods : receivedMethods).push(message.method);
-      options.onRequest?.(message.method);
+      options.onRequest?.(message.method, message.params ?? {});
       const hasId = message.id !== undefined && message.id !== null;
       if (remote && hasId && message.method.startsWith("akra/kernel/")) {
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "kernel methods are local only" } }));
@@ -356,8 +378,13 @@ export async function startFakeGateway(
         return;
       }
       if (options.kernel && message.method.startsWith("akra/kernel/")) {
-        answerKernel(options.kernel, socket, message);
-        if (message.method === "akra/kernel/attach") kernelEventsSent = false;
+        const accepted = answerKernel(options.kernel, socket, message);
+        if (message.method === "akra/kernel/attach") {
+          kernelEventsSent = false;
+          if (accepted) kernelClients.add(socket);
+          else kernelClients.delete(socket);
+        }
+        if (message.method === "akra/kernel/detach") kernelClients.delete(socket);
         if (message.method === "akra/kernel/command" && !kernelEventsSent) {
           kernelEventsSent = true;
           for (const event of options.kernel.eventsAfterAttach ?? []) {
@@ -442,6 +469,16 @@ export async function startFakeGateway(
       for (const socket of watchedRooms.keys()) pushDotLive(socket, working);
     },
     answeredRequests,
+    disconnectClients() {
+      for (const client of sockets.clients) client.terminate();
+    },
+    sendKernelEvent(event) {
+      for (const socket of kernelClients) {
+        if (socket.readyState === socket.OPEN) {
+          socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
+        }
+      }
+    },
     close: async () => {
       for (const client of sockets.clients) {
         client.terminate();

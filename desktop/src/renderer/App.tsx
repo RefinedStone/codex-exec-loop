@@ -12,11 +12,12 @@ import { useWorkingTree, type WorkingTree, workingTreeCounts, WorkingTreePanel }
 import { Icon, type IconName } from "./design/icons";
 import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
+import { IssuePanel } from "./kernel/IssuePanel";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
 import { ATTENTION_TEXT, attentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
-import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
+import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { SkillsPanel } from "./skills/SkillsPanel";
 import { folderName } from "./sidebar/threadStatus";
@@ -49,6 +50,7 @@ const PANELS: { id: PanelId; label: string; icon: IconName; testId: string }[] =
   { id: "review", label: "변경", icon: "diff", testId: "review-toggle" },
   { id: "graph", label: "그래프", icon: "branch", testId: "git-graph-toggle" },
   { id: "kernel", label: "Akra", icon: "bolt", testId: "kernel-toggle" },
+  { id: "issues", label: "이슈", icon: "eye", testId: "issues-toggle" },
   { id: "browser", label: "브라우저", icon: "globe", testId: "browser-toggle" },
   { id: "work", label: "업무", icon: "briefcase", testId: "work-toggle" },
   { id: "docs", label: "문서", icon: "book", testId: "documents-toggle" },
@@ -192,20 +194,26 @@ function WriterElsewhereBanner({ onReconnect }: { onReconnect(): Promise<void> }
 const MIN_PANEL_WIDTH = 360;
 const MAX_PANEL_WIDTH = 900;
 
-function RightPanel({ panel, children }: { panel: PanelId; children: React.ReactNode }) {
+function RightPanel({ panel, maximized, children }: { panel: PanelId; maximized: boolean; children: React.ReactNode }) {
   const [width, startResize] = useResizableWidth(520, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
   return (
-    <aside className="right-panel" style={{ width }}>
-      <div className="resize-handle" onPointerDown={startResize} />
+    <aside className="right-panel" style={maximized ? undefined : { width }} data-testid="right-panel" data-maximized={maximized}>
+      {!maximized && <div className="resize-handle" onPointerDown={startResize} />}
       <header className="panel-tabs">
-        {PANELS.map((item) => (
-          <button key={item.id} type="button" className={item.id === panel ? "selected" : undefined} onClick={() => useUiStore.setState({ panel: item.id })}>
-            <Icon name={item.icon} size={14} />
-            {item.label}
+        <nav className="panel-tab-items" aria-label="오른쪽 패널">
+          {PANELS.map((item) => (
+            <button key={item.id} type="button" className={item.id === panel ? "selected" : undefined} aria-pressed={item.id === panel} onClick={() => openPanel(item.id)}>
+              <Icon name={item.icon} size={14} />
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        {panel === "issues" && (
+          <button type="button" className="icon-button" title={maximized ? "이슈 패널 복원" : "이슈 패널 최대화"} aria-label={maximized ? "이슈 패널 복원" : "이슈 패널 최대화"} aria-expanded={maximized} onClick={() => useUiStore.setState({ panelMaximized: !maximized })} data-testid={maximized ? "issues-restore" : "issues-maximize"}>
+            <Icon name={maximized ? "panel" : "popOut"} />
           </button>
-        ))}
-        <span className="bar-spacer" />
-        <button type="button" className="icon-button" title="패널 닫기" onClick={() => useUiStore.setState({ panel: null })}>
+        )}
+        <button type="button" className="icon-button" title="패널 닫기" onClick={() => useUiStore.setState({ panel: null, panelMaximized: false })}>
           <Icon name="close" />
         </button>
       </header>
@@ -465,11 +473,13 @@ export function App() {
     [loadRemoteThread],
   );
 
-  // 커널 패널이 열려 있을 때만 열린 스레드의 저장소 커널에 붙는다. 붙어 있는 동안 그 저장소의 TUI 는 열리지 않는다.
-  const kernelWorkspace = panel === "kernel" ? openCwd : null;
+  // 두 패널은 같은 Gateway 연결과 커널 소유자를 쓰고, 열린 패널의 관심 영역만 읽는다.
+  const kernelWorkspace = panel === "kernel" || panel === "issues" ? openCwd : null;
+  const kernelInterest = panel === "issues" ? "issues" : "overview";
+  const panelMaximized = useUiStore((state) => state.panel === "issues" && state.panelMaximized);
   useEffect(() => {
-    void session.current?.showKernel(kernelWorkspace);
-  }, [kernelWorkspace]);
+    void session.current?.showKernel(kernelWorkspace, [kernelInterest]);
+  }, [kernelWorkspace, kernelInterest]);
 
   const loadThread = useCallback((threadId: string) => {
     // 이미 열려서 기록이 있는 스레드는 다시 읽지 않는다. 다시 읽으면 실시간으로만 오는 값(턴 diff, 계획, 사용량)을 잃는다.
@@ -512,12 +522,12 @@ export function App() {
 
   // 대화가 화면에 있는지 저장소에 알린다. 다른 보기에 있는 동안 끝난 턴은 읽지 않음이 된다. 대화로 돌아오면 지운다.
   useEffect(() => {
-    const threadVisible = view === "thread";
+    const threadVisible = view === "thread" && !panelMaximized;
     useDesktopStore.setState((state) => ({
       threadVisible,
       unreadThreadIds: threadVisible ? state.unreadThreadIds.filter((id) => id !== state.openThreadId) : state.unreadThreadIds,
     }));
-  }, [view]);
+  }, [view, panelMaximized]);
 
   /** 업무 패널이 만든 글을 새 스레드 화면의 입력창에 채운다. 폴더는 열린 스레드의 것을 먼저 고른다. 보내기는 사용자가 한다. */
   const handOff = async (text: string) => {
@@ -618,7 +628,7 @@ export function App() {
       <div className="workspace">
         <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} />
         <SessionBanner />
-        <div className="workspace-body">
+        <div className={panelMaximized ? "workspace-body with-maximized-panel" : "workspace-body"}>
           <main className="main">
             {view === "home" && <Home actions={composerActions} onChooseFolder={() => window.akra.chooseFolder()} onOpenThread={openThread} />}
             {view === "fleet" && <Fleet onOpenThread={openThread} />}
@@ -642,10 +652,20 @@ export function App() {
             <TerminalDock bridge={window.akra.terminal} />
           </main>
           {panel && (
-            <RightPanel panel={panel}>
+            <RightPanel panel={panel} maximized={panelMaximized}>
               {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)} />}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} onOpenThread={openThread} />}
+              {panel === "issues" && (
+                <IssuePanel
+                  onRefresh={async () => session.current?.refreshIssues()}
+                  onNextPage={async () => session.current?.nextIssuesPage()}
+                  onPreviousPage={async () => session.current?.previousIssuesPage()}
+                  onSetMode={async (mode) => session.current?.setIssueAutomationMode(mode)}
+                  onSync={async () => session.current?.syncIssues()}
+                  onOpenUrl={(url) => window.akra.github.openExternal(url)}
+                />
+              )}
               {panel === "browser" && <BrowserPanel bridge={window.akra.browser} threadId={browserThreadId} onStartConversation={async () => {
                 const current = session.current;
                 const cwd = openCwd ?? useUiStore.getState().homeCwd ?? (await window.akra.chooseFolder());
