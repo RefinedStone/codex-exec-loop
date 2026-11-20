@@ -181,3 +181,15 @@ test("the fast gate waits for policy checks but leaves long jobs post-admission"
     [{ job: "rust_lint", result: "failure" }],
   );
 });
+
+test("executable client validation tools under docs select the Node gate", () => {
+  for (const file of ["proxy_ws_check.mjs", "multi_client_check.py", "client_count_validation.test.mjs"]) {
+    const path = "docs/plan/17-akra-desktop/scripts/" + file;
+    const plan = classifyChangedPaths([path, "docs/plan/17-akra-desktop/README.md"]);
+    assert.equal(plan.scope, "admin", path);
+    assert.equal(plan.node, true, path);
+    assert.equal(plan.docs_only, false, path);
+    assert.equal(plan.rust, false, path);
+  }
+  assert.equal(classifyChangedPaths(["docs/plan/17-akra-desktop/README.md"]).docs_only, true);
+});

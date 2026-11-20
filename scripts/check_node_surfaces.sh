@@ -30,6 +30,9 @@ printf '\n==> shell script syntax\n'
 node scripts/generate-kernel-skill.mjs --check
 bash -n scripts/check_windows_portable.sh
 
+printf '\n==> validation tool argument checks\n'
+node --test docs/plan/17-akra-desktop/scripts/client_count_validation.test.mjs
+
 printf '\n==> CI, agent planning, and approval-package tests\n'
 node --test \
   scripts/ci-scope.test.mjs \
