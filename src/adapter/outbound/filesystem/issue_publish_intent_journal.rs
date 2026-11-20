@@ -115,6 +115,8 @@ mod tests {
             state,
             observed_hash: None,
             restore_link_finalized: false,
+            write_response_mismatch: false,
+            sequence: 0,
         }
     }
 
