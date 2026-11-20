@@ -99,10 +99,14 @@ Each value resolves in this highest-to-lowest order: project file > user file > 
 | ai_handoff.spans.secret, name, path, log | remove, restorable_mask, user_confirm | secret = remove; others = restorable_mask |
 | publish.required_validation | true only | true |
 | vault.user_unlock | true only | true |
+| code_validators (list of id, targets, required) | targets: publish, ai_handoff; required: true, false | empty; targets = publish; required = true |
+| approved_code_validators.ID.command, sha256, timeout_seconds | user file only: absolute path, SHA-256 of the file, 1 to 300 | timeout_seconds = 10 |
 
 `publish.spans` applies when text goes to the provider. `ai_handoff.spans` applies when text goes to an AI. The two tables are independent. `remove` discards the value, `restorable_mask` replaces it with a marker that the user can restore from the Vault, and `user_confirm` asks the user for each span.
 
 The mandatory publish validation and the Vault user unlock are always on. No scope can turn them off: `publish.required_validation = false` or `vault.user_unlock = false` makes the file invalid. A file that is unreadable, malformed, has an unknown key, class, or action, an unsupported schema_version, or a template path outside the repository gives `IssuePolicyBlocked` with the scope of the bad file. The caller must then block publish and AI handoff for that project. There is no fallback to the built-in policy. Both files use the same read safety rules as config.toml.
+
+A code validator is an executable that the user approved. `code_validators` selects a validator by ID; the list is one value, and a project list replaces the user list. Only the user file can set `approved_code_validators`: a project file with that table is invalid, so a repository cannot define a command. The validator gets the validated shared copy as JSON on stdin (`schemaVersion`, `target`, `title`, `body`) and an environment with only a fixed PATH. Exit code 0 passes, exit code 1 rejects (stdout is the message), and all other results count as "did not run". A copy of the approved file runs in an isolated temporary directory without network access and without access to user files. The isolation exists only on macOS (`/usr/bin/sandbox-exec`). On other platforms the validator does not run. A required validator that is not approved, is missing, has a different hash, exceeds the time limit, stops abnormally, or has no isolation blocks publish.
 
 ## Deliberate exclusions and Codex difference
 

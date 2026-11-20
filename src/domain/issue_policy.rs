@@ -36,7 +36,8 @@ pub enum IssueSensitiveSpanAction {
 }
 
 /// 글이 나가는 대상이다. 대상마다 공개 정책이 따로 있다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum IssueDisclosureTarget {
     /// 공급자(예: GitHub)에 게시한다.
     Publish,
@@ -83,12 +84,37 @@ pub struct IssueConvention {
     pub required_sections: Vec<String>,
 }
 
+/// 정책이 고른 코드 검증기이다 (#2431). ID 만 있다. 명령은 사용자가 승인한 목록에서 찾는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueCodeValidatorSelection {
+    pub id: String,
+    /// 이 검증기를 적용하는 대상이다.
+    pub targets: Vec<IssueDisclosureTarget>,
+    /// 필수 검증기가 실행되지 않거나 거부하면 게시를 막는다.
+    pub required: bool,
+}
+
+/// 사용자가 승인한 코드 검증기이다. 사용자 정책 파일만 이 값을 만든다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueApprovedCodeValidator {
+    pub id: String,
+    /// 실행 파일의 절대 경로이다.
+    pub command: String,
+    /// 승인한 파일 내용의 SHA-256 이다. 소문자 16진수이다.
+    pub sha256: String,
+    pub timeout_seconds: u64,
+}
+
 /// 프로젝트 하나에 적용하는 이슈 정책이다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuePolicy {
     pub convention: IssueConvention,
     pub publish: IssueDisclosurePolicy,
     pub ai_handoff: IssueDisclosurePolicy,
+    /// 정책이 고른 코드 검증기이다. 프로젝트 파일은 ID 만 고를 수 있다.
+    pub code_validators: Vec<IssueCodeValidatorSelection>,
+    /// 사용자가 승인한 코드 검증기이다. 사용자 파일에서만 온다.
+    pub approved_code_validators: Vec<IssueApprovedCodeValidator>,
 }
 
 impl IssuePolicy {
@@ -98,6 +124,8 @@ impl IssuePolicy {
             convention: IssueConvention::default(),
             publish: IssueDisclosurePolicy::builtin(),
             ai_handoff: IssueDisclosurePolicy::builtin(),
+            code_validators: Vec::new(),
+            approved_code_validators: Vec::new(),
         }
     }
 

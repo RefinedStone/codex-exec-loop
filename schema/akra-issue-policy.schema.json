@@ -51,6 +51,43 @@
           "const": true
         }
       }
+    },
+    "code_validators": {
+      "description": "Code validators the policy selects. One value: a project list replaces the user list. Each id must be in the user file's approved_code_validators; a required validator that does not run blocks publish.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "pattern": "\\S" },
+          "targets": {
+            "description": "Default: [\"publish\"].",
+            "type": "array",
+            "items": { "enum": ["publish", "ai_handoff"] }
+          },
+          "required": { "description": "Default: true.", "type": "boolean" }
+        }
+      }
+    },
+    "approved_code_validators": {
+      "description": "User file only. A project file with this table is invalid. The key is the validator id.",
+      "type": "object",
+      "propertyNames": { "pattern": "\\S" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "sha256"],
+        "properties": {
+          "command": { "description": "Absolute path of the executable.", "type": "string" },
+          "sha256": {
+            "description": "SHA-256 of the approved file content.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "timeout_seconds": { "description": "Default: 10.", "type": "integer", "minimum": 1, "maximum": 300 }
+        }
+      }
     }
   },
   "$defs": {
