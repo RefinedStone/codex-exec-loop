@@ -9,7 +9,7 @@ use super::super::{
     FakeJournal, FakeProjectFiles, FakeRemoteIssue, FakeVaultKeyStoreAdapter, IssueDraftService,
     fixture as update_fixture,
 };
-use crate::application::port::inbound::issue_creation_draft::IssueCreationTarget;
+use crate::application::port::inbound::issue_draft_port::IssueCreationTarget;
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultCreationLoadRequest, VaultCreationRecordScope,
     VaultCreationSaveRequest, VaultKey, VaultPlaintext, VaultRecordKey, VaultRecordLoadRequest,

@@ -1,6 +1,6 @@
 //! Creation UI orchestration reuses the existing masking, policy and validation gates.
 use super::*;
-use crate::application::port::inbound::issue_creation_draft::*;
+use crate::application::port::inbound::issue_draft_port::*;
 use crate::application::service::issue_creation::{
     IssueCreationApprovedRequest, IssueCreationOutcome,
 };

@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Barrier};
 
 use super::{IssueCreationApprovedRequest, IssueCreationOutcome};
-use crate::application::port::inbound::issue_creation_draft::IssueCreationRestartRequest;
+use crate::application::port::inbound::issue_draft_port::IssueCreationRestartRequest;
 use crate::application::port::outbound::evidence_vault_port::{
     VaultKey, VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordScope,
 };

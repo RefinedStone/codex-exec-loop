@@ -4,7 +4,7 @@ mod support;
 use std::sync::atomic::Ordering;
 
 use super::{FAKE_SECRET, ready, text_with_span};
-use crate::application::port::inbound::issue_creation_draft::{
+use crate::application::port::inbound::issue_draft_port::{
     IssueCreationOpened, IssueCreationPreviewRequest, IssueCreationPublishRequest,
     IssueCreationPublished,
 };
