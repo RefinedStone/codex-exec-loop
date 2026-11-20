@@ -207,7 +207,9 @@ async function readUntrackedFile(root: string, path: string): Promise<GitFileDif
 
   // Resolve the canonical path before opening and refuse final symlinks on
   // Unix. Check descriptor identity after opening to detect replacements.
-  const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0));
+  // Nonblocking open also prevents a regular-file-to-FIFO race from waiting for a writer.
+  const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 :
+    (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   const handle = await open(canonicalTarget, flags);
   try {
     const [opened, current, currentTarget] = await Promise.all([
