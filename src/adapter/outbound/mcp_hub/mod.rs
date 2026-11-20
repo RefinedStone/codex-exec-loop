@@ -11,12 +11,14 @@
 mod catalog;
 mod gateway_client;
 mod notion_resource_version;
+mod registry;
+#[cfg(test)]
+mod registry_tests;
 mod session;
 mod tool_cache;
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -55,6 +57,7 @@ pub(crate) struct CodexMcpHubBackend {
     home: PathBuf,
     // None 이면 명령마다 app-server 를 띄우고 끝낸다. Some 이면 Gateway 처럼 app-server 를 유지한다.
     resident: Option<Mutex<Option<ResidentEngine>>>,
+    sync_registry_directory: fn(&Path) -> std::io::Result<()>,
 }
 
 /// Gateway 가 유지하는 app-server 와 서버별 ephemeral 스레드이다. 스레드를 다시 쓰면 MCP 연결도 유지된다.
@@ -75,6 +78,7 @@ impl CodexMcpHubBackend {
         Ok(Self {
             home: hub_home()?,
             resident: Some(Mutex::new(None)),
+            sync_registry_directory: registry::sync_directory,
         })
     }
 
@@ -82,6 +86,7 @@ impl CodexMcpHubBackend {
         Self {
             home,
             resident: None,
+            sync_registry_directory: registry::sync_directory,
         }
     }
 
@@ -140,65 +145,36 @@ impl CodexMcpHubBackend {
         Ok(result)
     }
 
-    /// Install a fully synced private temporary file with a same-directory rename.
-    /// A crash before the rename leaves the old registry intact; readers never see
-    /// an incomplete TOML document.
+    /// A replaced registry remains installed even if directory sync fails.
     fn write_document(&self, document: &DocumentMut) -> Result<()> {
-        // Registry writers may be called directly by fresh-home initialization
-        // and catalog paths, not only under update_document's lock.
-        crate::private_directory::ensure_private_directory(&self.home)?;
-        let path = self.config_path();
-        let mut temporary = None;
-        for _ in 0..32 {
-            let candidate = self.home.join(format!(
-                ".{CONFIG_FILE}.{}.{}.tmp",
-                std::process::id(),
-                rand::random::<u64>()
-            ));
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            match options.open(&candidate) {
-                Ok(file) => {
-                    temporary = Some((candidate, file));
-                    break;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("failed to create `{}`", candidate.display()));
-                }
+        registry::write_document(&self.home, document, self.sync_registry_directory)
+    }
+
+    fn finish_registry_change<T>(&self, mut result: Result<T>, refresh_skill: bool) -> Result<T> {
+        let skill = if refresh_skill {
+            write_agent_skill(&self.home).context("failed to refresh the MCP hub skill")
+        } else {
+            Ok(())
+        };
+        // Attempt every reconciliation step even if an earlier one fails. In
+        // particular, a cache failure must not leave the resident on old config.
+        let catalog = self
+            .invalidate_tool_catalogs()
+            .context("failed to invalidate the MCP tool catalog");
+        let reload = self
+            .reload()
+            .context("failed to reload the MCP hub resident");
+        for follow_up in [skill, catalog, reload] {
+            if let Err(error) = follow_up {
+                result = Err(match result {
+                    Ok(_) => error.context(registry::RegistryChangeFailure::FollowUp),
+                    Err(primary) => {
+                        primary.context(format!("registry follow-up also failed: {error:#}"))
+                    }
+                });
             }
         }
-        let (temporary_path, mut temporary_file) =
-            temporary.context("failed to allocate an MCP registry temporary file")?;
-        let write_result = temporary_file
-            .write_all(document.to_string().as_bytes())
-            .and_then(|()| temporary_file.sync_all());
-        drop(temporary_file);
-        if let Err(error) = write_result {
-            let _ = std::fs::remove_file(&temporary_path);
-            return Err(error)
-                .with_context(|| format!("failed to write `{}`", temporary_path.display()));
-        }
-        if let Err(error) = std::fs::rename(&temporary_path, &path) {
-            let _ = std::fs::remove_file(&temporary_path);
-            return Err(error).with_context(|| format!("failed to replace `{}`", path.display()));
-        }
-        #[cfg(unix)]
-        File::open(&self.home)
-            .and_then(|directory| directory.sync_all())
-            .with_context(|| {
-                format!(
-                    "failed to sync MCP registry directory `{}`",
-                    self.home.display()
-                )
-            })?;
-        Ok(())
+        result
     }
 
     fn open_session(&self) -> Result<HubAppServerSession> {
@@ -309,7 +285,7 @@ impl McpHubBackendPort for CodexMcpHubBackend {
     }
 
     fn register_server(&self, spec: &McpHubServerSpec) -> Result<()> {
-        self.update_document(|document| {
+        let result = self.update_document(|document| {
             let servers = document
                 .entry("mcp_servers")
                 .or_insert_with(|| {
@@ -321,26 +297,30 @@ impl McpHubBackendPort for CodexMcpHubBackend {
                 .context("`mcp_servers` in the MCP hub config is not a table")?;
             servers.insert(&spec.name, Item::Table(server_table(spec)));
             Ok(((), true))
-        })?;
-        write_agent_skill(&self.home)?;
-        self.invalidate_tool_catalogs()?;
-        self.reload()
+        });
+        if result.is_ok() || result.as_ref().is_err_and(registry::was_replaced) {
+            self.finish_registry_change(result, true)
+        } else {
+            result
+        }
     }
 
     fn unregister_server(&self, name: &str) -> Result<bool> {
-        let removed = self.update_document(|document| {
+        let result = self.update_document(|document| {
             let removed = document
                 .get_mut("mcp_servers")
                 .and_then(Item::as_table_mut)
                 .and_then(|servers| servers.remove(name))
                 .is_some();
             Ok((removed, removed))
-        })?;
-        if removed {
-            self.invalidate_tool_catalogs()?;
-            self.reload()?;
+        });
+        if result.as_ref().is_ok_and(|removed| *removed)
+            || result.as_ref().is_err_and(registry::was_replaced)
+        {
+            self.finish_registry_change(result, false)
+        } else {
+            result
         }
-        Ok(removed)
     }
 
     fn server_statuses(&self, only: Option<&str>) -> Result<Vec<McpHubServerStatus>> {

@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+use super::registry;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
     MCP_HUB_GATEWAY_CALL, MCP_HUB_GATEWAY_CATALOGS, MCP_HUB_GATEWAY_OTHER_HUB,
@@ -178,6 +179,23 @@ impl GatewayRoutedMcpHubBackend {
             tracing::warn!(error = %format!("{error:#}"), "MCP hub gateway reload failed");
         }
     }
+
+    /// An installed registry must not be reported as fully applied if its live
+    /// Gateway could not be refreshed. Unavailable means there is no handled
+    /// Gateway request to reconcile and retains the existing fallback policy.
+    fn finish_registry_change<T>(&self, result: Result<T>) -> Result<T> {
+        match self
+            .gateway
+            .request(MCP_HUB_GATEWAY_RELOAD, json!({}), RELOAD_TIMEOUT)
+            .context("failed to reload the MCP hub Gateway after registry replacement")
+        {
+            Ok(_) => result,
+            Err(error) => Err(match result {
+                Ok(_) => error.context(registry::RegistryChangeFailure::FollowUp),
+                Err(primary) => primary.context(format!("Gateway reload also failed: {error:#}")),
+            }),
+        }
+    }
 }
 
 impl McpHubBackendPort for GatewayRoutedMcpHubBackend {
@@ -199,17 +217,23 @@ impl McpHubBackendPort for GatewayRoutedMcpHubBackend {
     }
 
     fn register_server(&self, spec: &McpHubServerSpec) -> Result<()> {
-        self.local.register_server(spec)?;
-        self.reload_gateway();
-        Ok(())
+        let result = self.local.register_server(spec);
+        if result.is_ok() || result.as_ref().is_err_and(registry::was_replaced) {
+            self.finish_registry_change(result)
+        } else {
+            result
+        }
     }
 
     fn unregister_server(&self, name: &str) -> Result<bool> {
-        let removed = self.local.unregister_server(name)?;
-        if removed {
-            self.reload_gateway();
+        let result = self.local.unregister_server(name);
+        if result.as_ref().is_ok_and(|removed| *removed)
+            || result.as_ref().is_err_and(registry::was_replaced)
+        {
+            self.finish_registry_change(result)
+        } else {
+            result
         }
-        Ok(removed)
     }
 
     fn server_statuses(&self, only: Option<&str>) -> Result<Vec<McpHubServerStatus>> {
