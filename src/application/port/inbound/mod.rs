@@ -5,6 +5,8 @@
  */
 pub mod admin_debug_port;
 pub mod app_server_prompt_log_query_port;
+// issue handoff port 는 이슈 인계에 쓸 공유본을 준다 (#2428).
+pub mod issue_handoff_port;
 pub mod kernel_command_port;
 // stored command port 는 저장된 planning 데이터만 바꾸는 커널 명령을 실행한다 (plan 18 K4-9d).
 pub mod git_graph_port;

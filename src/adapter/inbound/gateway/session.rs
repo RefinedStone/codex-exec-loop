@@ -23,6 +23,7 @@ use super::context::{
 use super::dots::{DOTS_METHOD_PREFIX, DotWatches, spawn_request as spawn_dots_request};
 use super::git::{GIT_METHOD_PREFIX, GitPorts, spawn_request as spawn_git_request};
 use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
+use super::issue::{ISSUE_METHOD_PREFIX, spawn_request as spawn_issue_request};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
@@ -32,6 +33,7 @@ use super::router::{
 };
 use crate::application::port::inbound::git_graph_port::GitGraphPort;
 use crate::application::port::inbound::git_operation_port::GitOperationPort;
+use crate::application::port::inbound::issue_handoff_port::IssueHandoffPort;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::dots_port::DotsPort;
 use crate::application::port::outbound::gateway_upstream_port::{
@@ -66,6 +68,8 @@ pub(super) struct GatewayServices {
     pub(super) git_graph: Option<Arc<dyn GitGraphPort>>,
     /// git 작업 엔진이다 (plan 27 G3). `git_graph` 와 같은 `akra/git/*` 에서 답한다. `local` 접속에만 답한다.
     pub(super) git_operations: Option<Arc<dyn GitOperationPort>>,
+    /// 이슈 인계의 공유본이다 (#2428). 이 기기의 정책 파일과 `gh` 를 쓰므로 `local` 접속에만 답한다.
+    pub(super) issue_handoff: Option<Arc<dyn IssueHandoffPort>>,
     /// dots 가 켜졌을 때만 있다 (D-19). 없으면 `akra/dots/*` 는 모르는 method 이다.
     pub(super) dots: Option<Arc<dyn DotsPort>>,
 }
@@ -200,6 +204,10 @@ where
                             .git_graph
                             .as_ref()
                             .filter(|_| is_local && method.starts_with(GIT_METHOD_PREFIX));
+                        let issue_for_method = services
+                            .issue_handoff
+                            .as_ref()
+                            .filter(|_| is_local && method.starts_with(ISSUE_METHOD_PREFIX));
                         let dots_for_method = services
                             .dots
                             .as_ref()
@@ -247,6 +255,16 @@ where
                                     graph: graph.clone(),
                                     operations: services.git_operations.clone(),
                                 },
+                                id,
+                                method,
+                                text.as_str().to_string(),
+                                outbox.clone(),
+                                recording.clone(),
+                            );
+                            None
+                        } else if let Some(handoff) = issue_for_method {
+                            spawn_issue_request(
+                                handoff.clone(),
                                 id,
                                 method,
                                 text.as_str().to_string(),

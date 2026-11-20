@@ -426,6 +426,9 @@ pub(crate) struct GatewayBackend {
     /// git 작업 엔진이다 (plan 27 G3).
     pub(crate) git_operations:
         Arc<dyn crate::application::port::inbound::git_operation_port::GitOperationPort>,
+    /// 이슈 인계의 공유본이다 (#2428).
+    pub(crate) issue_handoff:
+        Arc<dyn crate::application::port::inbound::issue_handoff_port::IssueHandoffPort>,
     /// dot 목록이다. dots 클라우드가 켜졌을 때만 있다 (D-19).
     pub(crate) dots: Option<Arc<dyn DotsPort>>,
 }
@@ -465,6 +468,18 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         resource_versions,
         git_graph: Arc::new(GitGraphService::new(Arc::new(GitHistoryAdapter))),
         git_operations: build_git_operations(),
+        issue_handoff: Arc::new(
+            crate::application::service::issue_handoff::IssueHandoffService::new(
+                Arc::new(
+                    crate::adapter::outbound::github::issue_snapshot::GithubIssueSnapshotAdapter::new(
+                        crate::configuration::akra_home_dir()?,
+                    ),
+                ),
+                Arc::new(
+                    crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter::new(),
+                ),
+            ),
+        ),
         dots: build_dots()?,
     })
 }
