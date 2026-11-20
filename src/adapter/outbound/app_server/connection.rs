@@ -866,13 +866,23 @@ fn codex_command_with_environment(
 /// Both ordinary app-server sessions and the MCP hub use the same process environment
 /// filtering and optional explicit API key forwarding. Child-specific CODEX_HOME overrides
 /// must be applied by the caller *after* this policy clears inherited environment variables.
-pub(crate) fn configure_hub_app_server_process_environment(command: &mut Command) {
+pub(crate) fn configure_hub_app_server_process_environment(
+    command: &mut Command,
+    selected_environment_names: impl IntoIterator<Item = String>,
+) {
     apply_app_server_process_environment(
         command,
         configured_process_environment_policy(),
         configured_api_key_auth(),
         std::env::vars_os(),
     );
+    // The private hub configuration explicitly opts these values into MCP authentication.
+    // var_os and Command::env preserve Windows case-insensitive environment semantics.
+    for name in selected_environment_names {
+        if let Some(value) = std::env::var_os(&name) {
+            command.env(name, value);
+        }
+    }
 }
 
 fn apply_app_server_process_environment(
@@ -3909,9 +3919,9 @@ mod tests {
         SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE, ShellEnvironmentInherit, TransportFailure,
         UNINSPECTABLE_SERVER_REQUEST_METHODS, app_server_api_key_environment_variable_allowed,
         app_server_command_with_environment, app_server_process_environment_key_allowed,
-        apply_app_server_process_environment, canonical_proxy_environment_key,
-        filtered_app_server_process_environment, install_after_approval_decision_received_hook,
-        openai_base_url_is_unsafe, proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
+        canonical_proxy_environment_key, filtered_app_server_process_environment,
+        install_after_approval_decision_received_hook, openai_base_url_is_unsafe,
+        proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
         resolve_process_environment, resolve_shell_environment_inherit, spawn_pipe_reader,
     };
     use crate::adapter::outbound::app_server::approval::{
@@ -4399,6 +4409,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn mcp_hub_app_server_child_receives_no_credential_canaries_under_scrubbed_policy() {
+        use super::apply_app_server_process_environment;
         // /usr/bin/env stands in for the hub app-server executable and reports the actual
         // child process environment. No process-global environment mutation is required.
         let mut command = Command::new("/usr/bin/env");
