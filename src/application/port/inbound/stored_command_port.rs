@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
+use crate::domain::issue_automation::decision::{IssueDecisionFact, IssueDecisionOutcome};
 
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
 use crate::domain::planning::{DirectionState, PlanningMutationRefusal, TaskStatus};
@@ -17,6 +18,23 @@ use crate::domain::planning::{DirectionState, PlanningMutationRefusal, TaskStatu
  */
 pub trait StoredCommandPort: Send + Sync {
     fn execute(&self, command: StoredCommand) -> Result<StoredCommandOutcome>;
+
+    /// 전송 계층이 정한 호출 문맥이다. caller의 자기 소개는 사람 확인 증명이 아니다.
+    fn execute_with_context(
+        &self,
+        command: StoredCommand,
+        _context: &StoredCommandContext,
+    ) -> Result<StoredCommandOutcome> {
+        self.execute(command)
+    }
+}
+
+/// 저장 명령을 실제로 받은 서버가 정한다. 클라이언트 명령 payload에서 받지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCommandContext {
+    pub caller: Option<String>,
+    pub channel: String,
+    pub at: String,
 }
 
 /*
@@ -52,6 +70,11 @@ pub struct StoredDirectionFields {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
+    AnswerIssueDecision {
+        decision_id: String,
+        option: String,
+        note: Option<String>,
+    },
     SetIssueAutomationMode {
         mode: IssueCollectionMode,
     },
@@ -87,6 +110,7 @@ impl StoredCommand {
     pub const fn kind(&self) -> KernelCommandKind {
         match self {
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
+            Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
             Self::DeleteTask { .. } => KernelCommandKind::DeleteTask,
@@ -100,6 +124,12 @@ impl StoredCommand {
 /// 성공한 저장 명령의 결과이다. 명령의 답에 실린다. 기록에는 싣지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommandResult {
+    IssueDecisionResolved {
+        fact: Box<IssueDecisionFact>,
+        outcome: IssueDecisionOutcome,
+        changed: bool,
+        catalog_revision: u64,
+    },
     IssueAutomationModeChanged {
         previous: Option<IssueCollectionMode>,
         projection: Box<IssueCollectionProjection>,

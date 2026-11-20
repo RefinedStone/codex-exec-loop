@@ -1276,14 +1276,24 @@ impl NativeClientRuntime {
         caller: Option<&str>,
     ) -> ClientCommandDispatch {
         let kind = command.kind();
-        let is_issue_mode = matches!(&command, StoredCommand::SetIssueAutomationMode { .. });
+        let is_issue_command = matches!(
+            &command,
+            StoredCommand::SetIssueAutomationMode { .. }
+                | StoredCommand::AnswerIssueDecision { .. }
+        );
+        let context =
+            crate::application::port::inbound::stored_command_port::StoredCommandContext {
+                caller: caller.map(str::to_string),
+                channel: "kernel".to_string(),
+                at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            };
         let op_id = match admission {
             Some(CommandAdmission::Recorded(op_id)) => Some(op_id),
             _ => None,
         };
         let (end, workspace_directory) = match &self.stored_commands {
             Some((port, workspace_directory)) => (
-                match port.execute(command) {
+                match port.execute_with_context(command, &context) {
                     Ok(outcome) => StoredCommandEnd::Finished(outcome),
                     Err(error) => {
                         StoredCommandEnd::Failed(command_failure_detail(&error.to_string()))
@@ -1316,6 +1326,17 @@ impl NativeClientRuntime {
                     caller,
                 )]);
             }
+        }
+        if let StoredCommandEnd::Finished(StoredCommandOutcome::Done(
+            StoredCommandResult::IssueDecisionResolved {
+                fact,
+                changed: true,
+                catalog_revision,
+                ..
+            },
+        )) = &end
+        {
+            self.record_issue_decision(fact, *catalog_revision);
         }
         let rejection = match &end {
             StoredCommandEnd::Finished(StoredCommandOutcome::Rejected(rejection)) => {
@@ -1353,7 +1374,7 @@ impl NativeClientRuntime {
                 }
             }
         }
-        let outcome = match workspace_directory.filter(|_| !is_issue_mode) {
+        let outcome = match workspace_directory.filter(|_| !is_issue_command) {
             Some(workspace_directory) => self.dispatch_client_event(NativeClientEvent::core(
                 CoreInput::Command(AppCommand::RefreshPlanningRuntime {
                     workspace_directory,
@@ -1714,6 +1735,32 @@ impl NativeClientRuntime {
         let cycle = observer.poll(now, at_unix_ms);
         self.published_issue_change |= cycle.changed;
         self.record_issue_committed(cycle.committed);
+    }
+
+    /// 저장 확정 결과만 전달한다. 외부 클라이언트는 이 기록 경계를 직접 호출하지 않는다.
+    /// fact는 ID·판·상태만 가지며 질문이나 답변 note를 포함하지 않는다.
+    fn record_issue_decision(
+        &mut self,
+        fact: &crate::domain::issue_automation::decision::IssueDecisionFact,
+        revision: u64,
+    ) {
+        let event =
+            if fact.state == crate::domain::issue_automation::decision::IssueDecisionState::Open {
+                KernelEvent::issue_decision_requested(fact, revision)
+            } else {
+                KernelEvent::issue_decision_resolved(fact, revision)
+            };
+        self.published_issue_change = true;
+        self.record_kernel_events(vec![event]);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_issue_decision_for_test(
+        &mut self,
+        fact: &crate::domain::issue_automation::decision::IssueDecisionFact,
+        revision: u64,
+    ) {
+        self.record_issue_decision(fact, revision);
     }
 
     fn record_issue_committed(&mut self, committed: Vec<IssueObserverCommittedFact>) {

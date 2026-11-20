@@ -794,7 +794,8 @@ pub(crate) fn stored_command_port_with_issues(
             store.clone(),
             store,
         ))
-        .with_issue_collection(issues),
+        .with_issue_collection(issues)
+        .with_issue_decisions(super::issue_collection::build_decisions(workspace_dir)),
     )
 }
 

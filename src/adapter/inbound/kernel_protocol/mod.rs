@@ -6,6 +6,8 @@ use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandOutcome, StoredCommandResult, StoredDirectionFields,
     StoredTaskFields,
 };
+use crate::domain::issue_automation::decision::{IssueDecisionOutcome, IssueDecisionState};
+use crate::domain::kernel_event::IssueDecisionFactRecord;
 pub use crate::domain::kernel_event::ReasonCode;
 use crate::domain::kernel_event::{
     KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus,
@@ -46,8 +48,10 @@ pub use spec::{KernelSpec, describe};
 
 mod issue_automation;
 mod issue_automation_policy;
+mod issue_decision;
 pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssueState, IssuesState};
 pub use issue_automation_policy::IssueAutomationPolicyState;
+pub use issue_decision::{IssueDecisionChangedState, IssueDecisionRequestState};
 
 /// 프로토콜 판이다. 전송 모양을 호환되지 않게 바꿀 때만 올린다. 필드를 더하는 것은 올리지 않는다. K4-1 에서
 /// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
@@ -251,6 +255,7 @@ impl CommandRequest {
             | KernelCommand::UpdateDirection { .. }
             | KernelCommand::DeleteDirection { .. }
             | KernelCommand::SetIssueAutomationMode { .. }
+            | KernelCommand::AnswerIssueDecision { .. }
             | KernelCommand::SyncIssues {} => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
@@ -360,6 +365,13 @@ pub struct CommandResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandResult {
+    IssueDecisionResolved {
+        decision: Box<IssueDecisionFactRecord>,
+        outcome: IssueDecisionOutcome,
+        changed: bool,
+        catalog_revision: u64,
+        reason: Option<ReasonCode>,
+    },
     TaskCreated {
         task_id: String,
         planning_revision: i64,
@@ -400,6 +412,19 @@ pub enum CommandResult {
 impl CommandResult {
     fn from_stored(result: StoredCommandResult) -> Self {
         match result {
+            StoredCommandResult::IssueDecisionResolved {
+                fact,
+                outcome,
+                changed,
+                catalog_revision,
+            } => Self::IssueDecisionResolved {
+                reason: (fact.state == IssueDecisionState::Superseded)
+                    .then_some(ReasonCode::DecisionSuperseded),
+                decision: Box::new(fact.as_ref().into()),
+                outcome,
+                changed,
+                catalog_revision,
+            },
             StoredCommandResult::TaskCreated {
                 task_id,
                 planning_revision,
@@ -471,6 +496,7 @@ impl CommandResult {
             KernelCommandKind::UpdateDirection => Some("direction_updated"),
             KernelCommandKind::DeleteDirection => Some("direction_deleted"),
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
+            KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
             KernelCommandKind::LoadSessions
             | KernelCommandKind::RenameSession
             | KernelCommandKind::SubmitPrompt
@@ -724,6 +750,16 @@ pub enum KernelCommand {
     SetIssueAutomationMode {
         mode: IssueAutomationMode,
     },
+    /// 현재 기준과 맞는 열린 결정에 에이전트 답 하나를 저장한다. 사람 확인 증명을 받지 않는다.
+    AnswerIssueDecision {
+        #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
+        decision_id: String,
+        #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
+        option: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(max = 4096))]
+        note: Option<String>,
+    },
     /// Observe 모드에서 원격 읽기를 요청한다. 실행 완료 영수증을 만들지 않는다.
     SyncIssues {},
 }
@@ -901,6 +937,7 @@ impl KernelCommand {
             Self::UpdateDirection { .. } => KernelCommandKind::UpdateDirection,
             Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
+            Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::SyncIssues {} => KernelCommandKind::SyncIssues,
         }
     }
@@ -916,7 +953,8 @@ impl KernelCommand {
             | Self::UpdateTask { .. }
             | Self::CreateDirection { .. }
             | Self::UpdateDirection { .. }
-            | Self::SetIssueAutomationMode { .. } => false,
+            | Self::SetIssueAutomationMode { .. }
+            | Self::AnswerIssueDecision { .. } => false,
             Self::LoadSessions {}
             | Self::RenameSession { .. }
             | Self::SubmitPrompt { .. }
@@ -979,6 +1017,15 @@ impl KernelCommand {
             StoredCommand::SetIssueAutomationMode { mode } => {
                 Self::SetIssueAutomationMode { mode: mode.into() }
             }
+            StoredCommand::AnswerIssueDecision {
+                decision_id,
+                option,
+                note,
+            } => Self::AnswerIssueDecision {
+                decision_id,
+                option,
+                note,
+            },
         }
     }
 
@@ -992,6 +1039,18 @@ impl KernelCommand {
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
             Self::SyncIssues {} => return Ok(KernelCommandInput::SyncIssues),
+            Self::AnswerIssueDecision {
+                decision_id,
+                option,
+                note,
+            } => {
+                issue_decision::validate_answer_input(&decision_id, &option, note.as_deref())?;
+                StoredCommand::AnswerIssueDecision {
+                    decision_id,
+                    option,
+                    note,
+                }
+            }
             Self::SetIssueAutomationMode { mode } => {
                 StoredCommand::SetIssueAutomationMode { mode: mode.into() }
             }
@@ -1115,6 +1174,7 @@ impl KernelCommand {
             | Self::UpdateDirection { .. }
             | Self::DeleteDirection { .. }
             | Self::SetIssueAutomationMode { .. }
+            | Self::AnswerIssueDecision { .. }
             | Self::SyncIssues {} => {
                 return Err(KernelProtocolError::invalid_params(
                     "a host or stored command is not a core command",
@@ -1341,6 +1401,8 @@ pub enum KernelEvent {
     Recorded(RecordedKernelEvent),
     /// 이슈 수집 상태가 바뀌었다. revision에 맞는 목록은 issues 조회로 다시 읽는다.
     Issues(IssueAutomationState),
+    /// 결정 요청이나 해소가 같은 catalog 판에 저장되었다. 질문과 메모는 보내지 않는다.
+    IssueDecision(IssueDecisionChangedState),
 }
 
 /// `akra/kernel/event` 알림의 params 이다.
@@ -1370,6 +1432,8 @@ spec_names! {
             "The kernel wrote one decision record. `sequence` is the cursor for `history`.";
         Issues => "issues",
             "The issue collection state or revision changed. Read issue_automation and issues to recover the local projection after an event gap.";
+        IssueDecision => "issue_decision",
+            "A decision request was created or resolved in the issue ledger. The event carries committed metadata only; read issue for current open requests.";
     }
 }
 

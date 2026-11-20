@@ -115,6 +115,12 @@ pub(crate) enum KernelHostEvent {
     Planning(Box<RuntimeProjection>),
     /// 이슈 수집 설정이나 관찰 판이 바뀌었다. 목록은 issues로 다시 읽는다.
     Issues(Box<IssueCollectionHostView>),
+    /// 같은 장부 commit의 metadata와 catalog 판이다. 질문·메모를 포함하지 않는다.
+    IssueDecision {
+        decision: Box<crate::domain::kernel_event::IssueDecisionFactRecord>,
+        revision: u64,
+        reason: Option<crate::domain::kernel_spec::ReasonCode>,
+    },
     /// 이벤트가 넘쳐 일부를 버렸다. 클라이언트는 조회로 다시 맞추고, 판단 기록은 마지막으로 받은 sequence 뒤를
     /// `history` 로 읽는다 (plan 19 Q3-3b).
     Resync,
@@ -622,7 +628,10 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             },
         ) => *planning_revision,
         StoredCommandOutcome::Rejected(rejection) => rejection.planning_revision?,
-        StoredCommandOutcome::Done(StoredCommandResult::IssueAutomationModeChanged { .. }) => {
+        StoredCommandOutcome::Done(
+            StoredCommandResult::IssueAutomationModeChanged { .. }
+            | StoredCommandResult::IssueDecisionResolved { .. },
+        ) => {
             return None;
         }
     };
@@ -952,6 +961,26 @@ impl KernelHostLoop {
             }
         }
         for record in self.runtime.take_published_kernel_records() {
+            // 알림도 최신 재조회가 아니라 기록과 같은 확정 commit에서 만든다.
+            let decision = match &record.event {
+                crate::domain::kernel_event::KernelEvent::IssueDecisionRequested {
+                    decision,
+                    revision,
+                } => Some((decision, *revision, None)),
+                crate::domain::kernel_event::KernelEvent::IssueDecisionResolved {
+                    decision,
+                    revision,
+                    reason,
+                } => Some((decision, *revision, *reason)),
+                _ => None,
+            };
+            if let Some((decision, revision, reason)) = decision {
+                self.broadcast(KernelHostEvent::IssueDecision {
+                    decision: Box::new(decision.clone()),
+                    revision,
+                    reason,
+                });
+            }
             self.broadcast(KernelHostEvent::Recorded(Box::new(record)));
         }
         if let Some(state) = self.runtime.take_issue_collection_update(now) {

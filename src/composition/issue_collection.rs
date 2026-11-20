@@ -56,6 +56,35 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
     )
 }
 
+/// 결정 요청도 수집과 같은 저장소별 SQLite 장부와 현재 정책을 사용한다.
+/// 조립은 원격 호출을 하지 않으며, 요청 자동 생성은 이 함수의 책임이 아니다.
+pub(crate) fn build_decisions(
+    workspace_dir: &str,
+) -> Arc<crate::application::service::issue_decision::IssueDecisionService> {
+    let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    }));
+    let policy = Arc::new(FilesystemIssuePolicySourceAdapter::new());
+    let triage = Arc::new(IssueTriageService::new(
+        workspace_dir.to_string(),
+        store.clone(),
+        IssueAutomationPolicyService::new(Arc::new(
+            FilesystemIssueAutomationPolicySourceAdapter::new(),
+        )),
+        IssuePolicyService::new(policy.clone()),
+    ));
+    Arc::new(
+        crate::application::service::issue_decision::IssueDecisionService::new(
+            workspace_dir.to_string(),
+            store,
+            triage,
+            IssuePolicyService::new(policy),
+        ),
+    )
+}
+
 #[cfg(test)]
 pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionService> {
     use crate::application::port::outbound::issue_automation_policy_source_port::IssueAutomationPolicySourcePort;

@@ -2,9 +2,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::super::{KernelProtocolError, KernelQuery};
+use super::super::{IssueDecisionRequestState, KernelProtocolError, KernelQuery};
 use super::{IssueListItem, IssueTriageObserveReportState};
 use crate::domain::issue_automation::collection::IssueCollectionDetail;
+use crate::domain::issue_automation::decision::IssueDecisionState;
 use crate::domain::issue_work::IssueReference;
 
 const MAX_ISSUE_COORDINATE_BYTES: usize = 4096;
@@ -27,6 +28,8 @@ pub enum IssueState {
 pub struct IssueDetailState {
     pub revision: u64,
     pub item: IssueListItem,
+    #[serde(default)]
+    pub open_decisions: Vec<IssueDecisionRequestState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<IssueTriageObserveReportState>,
 }
@@ -42,6 +45,12 @@ impl IssueState {
             Some(item) => Self::Ready(Box::new(IssueDetailState {
                 revision: detail.revision,
                 item: item.into(),
+                open_decisions: item
+                    .open_decisions
+                    .iter()
+                    .filter(|stored| stored.request.state() == IssueDecisionState::Open)
+                    .map(Into::into)
+                    .collect(),
                 report,
             })),
             None => Self::NotFound {

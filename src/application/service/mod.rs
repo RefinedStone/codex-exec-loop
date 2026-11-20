@@ -24,6 +24,7 @@ pub mod issue_handoff;
 // issue_code_validator 는 사용자가 승인한 코드 검증기를 실행하고 필수 검증기 실패로 게시를 막는다 (#2431).
 pub mod issue_code_validator;
 // issue_draft 는 정책, 템플릿, 검증, 마스킹, 기록 뒤의 게시를 이슈 초안 명령으로 잇는다 (#2426).
+pub mod issue_decision;
 pub mod issue_draft;
 // issue_masking 은 공개 정책에 따라 제목과 본문의 민감 구간을 버리거나 표식으로 가린다 (#2419).
 pub mod issue_masking;

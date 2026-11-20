@@ -70,6 +70,11 @@ fn sample_commands() -> Vec<KernelCommand> {
         KernelCommand::SetIssueAutomationMode {
             mode: IssueAutomationMode::Observe,
         },
+        KernelCommand::AnswerIssueDecision {
+            decision_id: "decision-1".to_owned(),
+            option: "continue".to_owned(),
+            note: None,
+        },
         KernelCommand::SyncIssues {},
     ]
 }
@@ -660,7 +665,7 @@ fn events_and_description_have_stable_wire_shapes() {
         );
     }
     let events = describe().events;
-    assert_eq!(events.len(), 9);
+    assert_eq!(events.len(), 10);
     for (name, event) in events.iter().map(|event| event.name).zip([
         KernelEvent::Sessions(SessionsState {
             status: SessionsStatus::Idle,
@@ -690,6 +695,10 @@ fn events_and_description_have_stable_wire_shapes() {
             event: sample_records().into_iter().next().expect("record fixture"),
         }),
         KernelEvent::Issues(IssueAutomationState::unavailable()),
+        KernelEvent::IssueDecision(IssueDecisionChangedState::from_fact(
+            &sample_issue_decision_fact(),
+            5,
+        )),
     ]) {
         assert_eq!(
             serde_json::to_value(event).expect("event should serialize")["type"],
@@ -1434,6 +1443,9 @@ fn every_reason_reaches_a_client() {
             .map(super::issue_automation::IssueTriageReasonState::from)
             .map(|reason| reason.code),
     );
+    let mut superseded = sample_issue_decision_fact();
+    superseded.state = crate::domain::issue_automation::decision::IssueDecisionState::Superseded;
+    reached.extend(IssueDecisionChangedState::from_fact(&superseded, 42).reason);
     for reason in ReasonCode::ALL {
         assert!(
             reached.contains(reason),
@@ -2088,6 +2100,8 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             1,
             &"a".repeat(64),
         ),
+        Record::issue_decision_requested(&sample_issue_decision_fact(), 5),
+        Record::issue_decision_resolved(&sample_issue_decision_fact(), 6),
         Record::issue_automation_mode_changed(
             Some(crate::domain::issue_automation::collection::IssueCollectionMode::Observe),
             crate::domain::issue_automation::collection::IssueCollectionMode::Off,
@@ -2194,6 +2208,10 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         priority: 3,
     };
     let populated = [
+        KernelEvent::IssueDecision(IssueDecisionChangedState::from_fact(
+            &sample_issue_decision_fact(),
+            5,
+        )),
         KernelEvent::Issues(IssueAutomationState::unavailable()),
         KernelEvent::Resync,
         KernelEvent::Recorded(record(9, records[0].clone())),
@@ -2347,5 +2365,24 @@ mod erased {
         fn json(&self) -> serde_json::Value {
             serde_json::to_value(self).expect("a sample should serialize")
         }
+    }
+}
+
+fn sample_issue_decision_fact() -> crate::domain::issue_automation::decision::IssueDecisionFact {
+    use crate::domain::issue_automation::decision::*;
+    IssueDecisionFact {
+        decision_id: IssueDecisionId::new("decision-1").unwrap(),
+        subject: IssueDecisionSubject::Issue(sample_issue_reference()),
+        gate: crate::domain::issue_automation::policy::IssueAutomationGate::Start,
+        kind: IssueDecisionKind::StartApproval,
+        basis: IssueDecisionBasis {
+            policy_version: "a".repeat(64),
+            field_hash: None,
+            work_order_id: None,
+            gate_revision: 1,
+        },
+        state: IssueDecisionState::Open,
+        answer_by: None,
+        option: None,
     }
 }

@@ -4,6 +4,9 @@ use crate::application::port::outbound::issue_automation_store_port::*;
 use crate::domain::issue_automation::collection::{
     IssueCollectionFence, IssueCollectionItem, IssueResyncBatch,
 };
+use crate::domain::issue_automation::decision::{
+    IssueDecisionId, IssueDecisionRequest, StoredIssueDecision,
+};
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 use crate::domain::issue_automation::{IssueAutomationBinding, TrackedIssue};
 
@@ -131,6 +134,10 @@ impl IssueAutomationStorePort for RacingStore {
         fn scan_collection_issues(workspace: &str, binding_id: Option<&IssueAutomationBindingId>, visitor: &mut dyn FnMut(IssueCollectionItem) -> Result<()>) -> Result<u64>;
         fn read_triage_batch(workspace: &str, after: Option<&IssueReference>, limit: u16) -> Result<IssueTriageBatch>;
         fn save_triage(workspace: &str, expected: IssueTriageFence, assessment: &IssueTriageAssessment) -> Result<IssueTriageSaveResult>;
+        fn get_issue_decision(workspace: &str, id: &IssueDecisionId) -> Result<Option<StoredIssueDecision>>;
+        fn get_issue_decision_commit(workspace: &str, id: &IssueDecisionId) -> Result<Option<IssueDecisionCommit>>;
+        fn ensure_issue_decision(workspace: &str, expected: IssueTriageFence, current: &IssueTriageAssessment, request: &IssueDecisionRequest) -> Result<IssueDecisionSaveResult>;
+        fn save_issue_decision(workspace: &str, expected: IssueDecisionFence, current: &IssueTriageAssessment, request: &IssueDecisionRequest) -> Result<IssueDecisionSaveResult>;
     }
 }
 
