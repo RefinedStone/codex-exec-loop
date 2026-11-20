@@ -949,6 +949,13 @@ strategy in the production TUI.
   only through `IssueSnapshotResponse::verified_shared_copy`, which needs the approved copy's
   versioned field hash (`IssueFieldHash`). The adapter keeps no cache: a failed remote read is an
   error.
+- `JiraIssueSnapshotAdapter` implements the same snapshot contract for one Jira Cloud site (REST API
+  v3 through an injected GET function; the caller owns the login). The stable IDs are the cloud ID,
+  project ID, and issue ID. The raw body is the ADF description converted to Markdown; a node outside
+  the supported subset stays in the text as `[unsupported: <type>]`. `issue_field_requirement_port`
+  reads the required fields of the issue's project and issue type from the edit metadata: supported
+  fields become `IssueFieldRequirement`, the others are listed as unsupported. No caller is wired to
+  it yet.
 - A board field write (`issue_board_field_port`, implemented by `GithubIssueBoardFieldAdapter`) is a
   separate operation from an issue body write: it needs an `IssueWriteApproval` with
   `IssueWriteOperation::BoardField` for the same issue. The adapter re-reads the issue's project

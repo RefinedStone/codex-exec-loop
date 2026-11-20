@@ -20,5 +20,7 @@ pub mod vault_key_store;
 pub mod mcp_hub;
 // github은 PR, review, issue 상태를 원격 GitHub API 호출로 연결한다.
 pub mod github;
+// jira 는 Jira Cloud 이슈의 안정 ID, 본문, 필수 필드를 읽는다. 쓰지 않는다 (#2433).
+pub mod jira;
 // telegram은 inbound bot runner가 사용할 Telegram HTTP API 경계를 구현한다.
 pub mod telegram;

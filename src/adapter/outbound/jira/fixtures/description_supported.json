@@ -1,0 +1,61 @@
+{
+  "type": "doc",
+  "version": 1,
+  "content": [
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Steps" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Run " },
+        { "type": "text", "text": "the tool", "marks": [{ "type": "strong" }] },
+        { "type": "text", "text": " with " },
+        { "type": "text", "text": "--flag", "marks": [{ "type": "code" }] },
+        { "type": "text", "text": " and " },
+        { "type": "text", "text": "read", "marks": [{ "type": "em" }] },
+        { "type": "text", "text": " the " },
+        { "type": "text", "text": "old", "marks": [{ "type": "strike" }] },
+        { "type": "text", "text": " " },
+        {
+          "type": "text",
+          "text": "guide",
+          "marks": [{ "type": "link", "attrs": { "href": "https://example.invalid/guide" } }]
+        },
+        { "type": "text", "text": "." },
+        { "type": "hardBreak" },
+        { "type": "text", "text": "Second line." }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "first" }] }] },
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "second" }] },
+            {
+              "type": "orderedList",
+              "content": [
+                { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "nested one" }] }] },
+                { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "nested two" }] }] }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "orderedList",
+      "attrs": { "order": 3 },
+      "content": [
+        { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "third" }] }] },
+        { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "fourth" }] }] }
+      ]
+    },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "rust" },
+      "content": [{ "type": "text", "text": "fn main() {}\nlet x = 1;" }]
+    }
+  ]
+}
