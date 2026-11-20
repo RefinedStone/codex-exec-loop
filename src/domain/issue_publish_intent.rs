@@ -12,6 +12,7 @@
  *   Held (의도를 기록하기 전에 멈춘 게시이다)
  */
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
 
@@ -68,12 +69,22 @@ pub struct IssuePublishIntentRecord {
     pub observed_hash: Option<IssueFieldHash>,
     /// Vault 레코드를 확인된 판에 묶었으면 `true` 이다.
     pub restore_link_finalized: bool,
+    /// 명시적으로 모순된 쓰기 답을 받으면 재조회만으로 확인하지 않는다.
+    #[serde(default)]
+    pub write_response_mismatch: bool,
+    /// 작업 폴더의 게시 순서이다. 이전 일지에는 없어서 0이다.
+    #[serde(default)]
+    pub sequence: u64,
 }
 
 impl IssuePublishIntentRecord {
-    /// 확인된 판의 이름이다 (`VaultRecordBinding::ConfirmedVersion`). 승인한 공유본의 지문으로 만든다.
+    /// 확인된 판은 승인한 공유본의 지문과 게시 의도 식별자에 함께 묶인다.
     pub fn confirmed_version(&self) -> String {
-        confirmed_version_name(&self.approved_hash)
+        format!(
+            "{}:intent:{:x}",
+            confirmed_version_name(&self.approved_hash),
+            Sha256::digest(self.intent_id.as_bytes())
+        )
     }
 
     /// 원격을 다시 읽은 결과로 다음 상태를 정한다. `observed` 는 지금 원격 글의 지문이고, 읽지 못했으면 `None` 이다.
@@ -83,7 +94,9 @@ impl IssuePublishIntentRecord {
             return self;
         }
         self.state = match &observed {
-            Some(hash) if *hash == self.approved_hash => IssuePublishIntentState::Confirmed,
+            Some(hash) if *hash == self.approved_hash && !self.write_response_mismatch => {
+                IssuePublishIntentState::Confirmed
+            }
             // 보내지 않은 의도이고 원격도 승인한 글이 아니다. 쓰기는 없었다.
             Some(_) if self.state == IssuePublishIntentState::Recorded => {
                 IssuePublishIntentState::Abandoned
@@ -98,6 +111,17 @@ impl IssuePublishIntentRecord {
 /// 필드 해시가 가리키는 확인된 판의 이름이다. 복원은 최신 게시본의 해시로 같은 이름을 만들어 비교한다 (#2425).
 pub fn confirmed_version_name(hash: &IssueFieldHash) -> String {
     format!("{}:{}", hash.version, hash.sha256)
+}
+
+/// 새 게시 의도별 판과 이전 해시 전용 판 모두 최신 공유본의 해시에 묶어 확인한다.
+pub fn confirmed_version_matches_hash(version: &str, hash: &IssueFieldHash) -> bool {
+    let legacy = confirmed_version_name(hash);
+    version == legacy
+        || version
+            .strip_prefix(&format!("{legacy}:intent:"))
+            .is_some_and(|suffix| {
+                suffix.len() == 64 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
 }
 
 #[cfg(test)]
@@ -123,6 +147,8 @@ mod tests {
             state,
             observed_hash: None,
             restore_link_finalized: false,
+            write_response_mismatch: false,
+            sequence: 0,
         }
     }
 
@@ -164,7 +190,63 @@ mod tests {
         assert_eq!(line["approvedHash"]["version"], 1);
         assert_eq!(
             record(IssuePublishIntentState::Sent).confirmed_version(),
-            format!("1:{}", IssueFieldHash::of_fields("New", "new").sha256)
+            format!(
+                "1:{}:intent:{:x}",
+                IssueFieldHash::of_fields("New", "new").sha256,
+                Sha256::digest(b"intent-1")
+            )
         );
+    }
+
+    #[test]
+    fn mismatched_write_response_survives_serialization_and_rereads() {
+        let mut pending = record(IssuePublishIntentState::NeedsConfirmation);
+        pending.write_response_mismatch = true;
+        let stored = serde_json::to_string(&pending).unwrap();
+        let restored: IssuePublishIntentRecord = serde_json::from_str(&stored).unwrap();
+        assert_eq!(
+            restored
+                .reconciled(Some(pending.approved_hash.clone()))
+                .state,
+            IssuePublishIntentState::NeedsConfirmation
+        );
+        let mut legacy = serde_json::to_value(record(IssuePublishIntentState::Sent)).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("writeResponseMismatch");
+        legacy.as_object_mut().unwrap().remove("sequence");
+        let legacy: IssuePublishIntentRecord = serde_json::from_value(legacy).unwrap();
+        assert!(!legacy.write_response_mismatch);
+        assert_eq!(legacy.sequence, 0);
+    }
+
+    #[test]
+    fn equal_shared_copies_have_distinct_restore_versions_per_intent() {
+        let first = record(IssuePublishIntentState::Confirmed);
+        let second = IssuePublishIntentRecord {
+            intent_id: "intent-2".to_string(),
+            ..first.clone()
+        };
+        assert_ne!(first.confirmed_version(), second.confirmed_version());
+        assert!(confirmed_version_matches_hash(
+            &first.confirmed_version(),
+            &first.approved_hash
+        ));
+        assert!(confirmed_version_matches_hash(
+            &confirmed_version_name(&first.approved_hash),
+            &first.approved_hash
+        ));
+        assert!(!confirmed_version_matches_hash(
+            &first.confirmed_version(),
+            &first.previous_hash
+        ));
+        assert!(!confirmed_version_matches_hash(
+            &format!(
+                "{}:intent:bad",
+                confirmed_version_name(&first.approved_hash)
+            ),
+            &first.approved_hash
+        ));
     }
 }
