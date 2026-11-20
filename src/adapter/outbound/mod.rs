@@ -14,6 +14,8 @@ pub(crate) mod gateway_kernel_client;
 pub mod git;
 // issue_work_fake 는 Issue Core 와 Evidence Vault 계약의 메모리 가짜 구현이다 (#2415).
 pub mod issue_work_fake;
+// vault_key_store 는 Vault 키를 OS 키 저장소에 두는 구현과 메모리 가짜 구현이다 (#2422).
+pub mod vault_key_store;
 // MCP hub backend 는 hub 전용 codex app-server 로 MCP 서버에 필요할 때만 연결한다.
 pub mod mcp_hub;
 // github은 PR, review, issue 상태를 원격 GitHub API 호출로 연결한다.
