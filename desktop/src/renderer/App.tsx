@@ -16,11 +16,12 @@ import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
 import { ATTENTION_TEXT, attentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
-import { closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
+import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { SkillsPanel } from "./skills/SkillsPanel";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
+import { ChatDock } from "./views/ChatDock";
 import { DotDock } from "./views/DotDock";
 import { notifyDotReply, notifyOs } from "./views/notify";
 import { SettingsDialog } from "./views/SettingsDialog";
@@ -422,6 +423,20 @@ export function App() {
     },
     [dotDockHost],
   );
+  // ChatGPT 대화 옆 칸이다 (plan 25). dot 옆 칸과 같은 자리를 쓴다. 원격 구역을 끄거나 그 호스트가 빠지면 닫는다.
+  const chatDock = useUiStore((state) => state.chatDock);
+  const chatDockVisible = chatDock !== null && remoteAgents && remoteHosts.split(",").includes(chatDock.host);
+  useEffect(() => {
+    if (chatDock !== null && !chatDockVisible) closeChat();
+  }, [chatDock, chatDockVisible]);
+  const chatDockHost = chatDock?.host ?? null;
+  const chatGatewayRequest = useMemo<GatewayRequest>(
+    () => (method, params) => {
+      const current = chatDockHost ? remoteSessions.current.get(chatDockHost) : undefined;
+      return current ? current.requestGatewayService(method, params) : Promise.reject(new Error("원격 호스트에 연결되어 있지 않습니다."));
+    },
+    [chatDockHost],
+  );
 
   const loadRemoteThread = useCallback((host: string, threadId: string) => {
     const state = remoteHostStore(host).getState();
@@ -630,6 +645,7 @@ export function App() {
             </RightPanel>
           )}
           {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} />}
+          {chatDock !== null && chatDockVisible && <ChatDock host={chatDock.host} chatId={chatDock.chatId} request={chatGatewayRequest} />}
         </div>
       </div>
       {overlay === "palette" && <CommandPalette onOpenThread={openThread} />}

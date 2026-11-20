@@ -33,7 +33,7 @@ import { KernelConnection } from "../kernel/kernelConnection";
 import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
-import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
+import { type ChatSummary, type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
 /** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
@@ -119,12 +119,14 @@ function errorMessage(error: unknown): string {
 }
 
 /** 패널이 직접 부를 수 있는 Gateway 메서드이다. app-server 메서드와 커널 명령은 이 길로 보내지 않는다. */
-const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/", "akra/git/", "akra/issue/"];
+const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/", "akra/chats/", "akra/git/", "akra/issue/"];
 /** 원격 호스트의 dot 목록이다 (D-19). dots 가 꺼진 Gateway 는 모르는 method 로 답한다. */
 const DOTS_LIST_METHOD = "akra/dots/list";
 /** 방의 실시간 상태를 보기 시작한다. 그 뒤 `akra/dots/live` 알림이 온다. */
 const DOTS_WATCH_METHOD = "akra/dots/watch";
 const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
+/** 원격 호스트의 ChatGPT 개인 대화 목록이다 (plan 25). chats 가 꺼진 Gateway 는 모르는 method 로 답한다. */
+const CHATS_LIST_METHOD = "akra/chats/list";
 
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
 export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira">>;
@@ -535,6 +537,7 @@ export class DesktopSession {
         void this.addThreadsFromRolloutScan(generation);
       } else {
         void this.loadDots();
+        void this.loadChats();
       }
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
@@ -558,6 +561,16 @@ export class DesktopSession {
       }
     } catch {
       this.store.setDots([]);
+    }
+  }
+
+  /** 원격 호스트의 ChatGPT 개인 대화 목록을 한 번 읽는다 (plan 25). 실패하면(chats 가 없는 호스트, 조회 제한 등) 목록을 비운다. */
+  private async loadChats(): Promise<void> {
+    try {
+      const response = await this.client.request<{ chats: ChatSummary[] }>(CHATS_LIST_METHOD);
+      this.store.setChats(response.chats);
+    } catch {
+      this.store.setChats([]);
     }
   }
 

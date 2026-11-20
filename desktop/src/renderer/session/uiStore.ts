@@ -45,6 +45,10 @@ export interface UiState {
    */
   dotDock: { host: string; dotId: string } | null;
   /**
+   * 옆 칸에 열어 둔 ChatGPT 대화이다 (plan 25). dot 옆 칸과 같은 자리를 쓰므로 하나만 열린다. null 이면 없다.
+   */
+  chatDock: { host: string; chatId: string } | null;
+  /**
    * 전송 답을 기다리는 dot 의 id 이다. 화면 밖에 둔다: 답을 기다리는 사이 다른 화면을 보고 와도 "전송 중"이 남는다.
    * 쓰던 글도 화면 밖에 남으므로, 이것이 없으면 같은 글을 한 번 더 보낼 수 있다.
    */
@@ -90,6 +94,7 @@ export const useUiStore = create<UiState>(() => ({
   remoteAgents: storedRemoteAgents(),
   remoteHost: null,
   dotDock: null,
+  chatDock: null,
   sendingDotIds: [],
 }));
 
@@ -180,12 +185,15 @@ function isNarrowWindow(): boolean {
  */
 export function fitSideColumns(): void {
   const state = useUiStore.getState();
-  if (state.panel !== null && state.dotDock !== null && isNarrowWindow()) set({ dotDock: null });
+  if (state.panel !== null && isNarrowWindow()) {
+    if (state.dotDock !== null) set({ dotDock: null });
+    if (state.chatDock !== null) set({ chatDock: null });
+  }
 }
 
-/** 오른쪽 패널을 연다. 패널을 여는 곳은 모두 이것을 쓴다: 좁은 창에서는 dot 옆 칸을 닫아 자리를 만든다. */
+/** 오른쪽 패널을 연다. 패널을 여는 곳은 모두 이것을 쓴다: 좁은 창에서는 옆 칸을 닫아 자리를 만든다. */
 export function openPanel(panel: PanelId): void {
-  set((state) => ({ panel, overlay: null, dotDock: isNarrowWindow() ? null : state.dotDock }));
+  set((state) => ({ panel, overlay: null, dotDock: isNarrowWindow() ? null : state.dotDock, chatDock: isNarrowWindow() ? null : state.chatDock }));
 }
 
 export function togglePanel(panel: PanelId): void {
@@ -213,12 +221,24 @@ function setRemoteAgents(enable: boolean): void {
  * dot 과의 대화를 옆 칸에 연다 (D-19). 보던 화면은 그대로 둔다. 좁은 창에서는 오른쪽 패널을 닫아 자리를 만든다.
  */
 export function showDot(host: string, dotId: string): void {
-  set((state) => ({ dotDock: { host, dotId }, overlay: null, panel: isNarrowWindow() ? null : state.panel }));
+  set((state) => ({ dotDock: { host, dotId }, chatDock: null, overlay: null, panel: isNarrowWindow() ? null : state.panel }));
 }
 
 /** dot 과의 대화 옆 칸을 닫는다. 쓰던 글과 보내기 허락은 남는다. */
 export function closeDot(): void {
   set({ dotDock: null });
+}
+
+/**
+ * ChatGPT 대화를 옆 칸에 연다 (plan 25). 읽기 전용이다. dot 옆 칸과 같은 자리를 쓰므로 그 옆 칸은 닫는다.
+ */
+export function showChat(host: string, chatId: string): void {
+  set((state) => ({ chatDock: { host, chatId }, dotDock: null, overlay: null, panel: isNarrowWindow() ? null : state.panel }));
+}
+
+/** ChatGPT 대화 옆 칸을 닫는다. */
+export function closeChat(): void {
+  set({ chatDock: null });
 }
 
 export const DOTS_CLOUD_ENABLE_WARNING =

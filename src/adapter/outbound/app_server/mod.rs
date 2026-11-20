@@ -16,6 +16,8 @@ mod approval;
 pub(crate) mod cloud_dots;
 // cloud_dots_live.rs: dot 메시지 방의 실시간 상태(생각 중, 답 완료)를 본다 (D-19).
 mod cloud_dots_live;
+// cloud_chats.rs: 사용자의 ChatGPT 개인 대화를 ChatGPT 백엔드 REST 로 읽는다 (D-19, plan 25). 공식 앱과 같은 요청이다.
+pub(crate) mod cloud_chats;
 pub(crate) mod cloud_upstream;
 pub(crate) mod connection;
 mod execution_policy;

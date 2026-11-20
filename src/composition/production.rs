@@ -8,6 +8,7 @@ use crate::composition::repository_kernel::RepositoryKernelRegistry;
 use anyhow::Result;
 
 use crate::adapter::inbound::gateway::GatewayMcpHub;
+use crate::adapter::outbound::app_server::cloud_chats::CloudChatsRestAdapter;
 use crate::adapter::outbound::app_server::cloud_dots::CloudDotsRestAdapter;
 use crate::adapter::outbound::app_server::cloud_upstream::{CloudGatewayUpstream, codex_auth_path};
 use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
@@ -59,6 +60,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
     NoopAppServerPromptLogPort,
 };
+use crate::application::port::outbound::chats_port::ChatsPort;
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 use crate::application::port::outbound::dots_port::DotsPort;
 use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPort;
@@ -431,6 +433,8 @@ pub(crate) struct GatewayBackend {
         Arc<dyn crate::application::port::inbound::issue_handoff_port::IssueHandoffPort>,
     /// dot 목록이다. dots 클라우드가 켜졌을 때만 있다 (D-19).
     pub(crate) dots: Option<Arc<dyn DotsPort>>,
+    /// ChatGPT 개인 대화 조회이다. dots 와 같은 조건으로 켜진다 (D-19, plan 25).
+    pub(crate) chats: Option<Arc<dyn ChatsPort>>,
     /// 이슈 초안, 미리보기, 게시이다 (#2426).
     pub(crate) issue_drafts:
         Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>,
@@ -484,6 +488,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
             ),
         ),
         dots: build_dots()?,
+        chats: build_chats()?,
         issue_drafts: build_issue_drafts()?,
     })
 }
@@ -574,6 +579,15 @@ fn build_dots() -> Result<Option<Arc<dyn DotsPort>>> {
     }
     let dots: Arc<dyn DotsPort> = Arc::new(CloudDotsRestAdapter::new(codex_auth_path()?));
     Ok(Some(dots))
+}
+
+/// ChatGPT 개인 대화 조회 adapter 이다. dots 와 같은 조건(클라우드 플래그)으로 켠다. 같은 토큰을 쓴다 (D-19, plan 25).
+fn build_chats() -> Result<Option<Arc<dyn ChatsPort>>> {
+    if !dots_cloud_enabled() {
+        return Ok(None);
+    }
+    let chats: Arc<dyn ChatsPort> = Arc::new(CloudChatsRestAdapter::new(codex_auth_path()?));
+    Ok(Some(chats))
 }
 
 /// dots 클라우드 호스트를 켜는 조건이다. 둘 중 하나면 켠다 (plan 25 §3.2, 기본값 꺼짐):
