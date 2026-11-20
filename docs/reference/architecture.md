@@ -949,6 +949,11 @@ strategy in the production TUI.
   only through `IssueSnapshotResponse::verified_shared_copy`, which needs the approved copy's
   versioned field hash (`IssueFieldHash`). The adapter keeps no cache: a failed remote read is an
   error.
+- A board field write (`issue_board_field_port`, implemented by `GithubIssueBoardFieldAdapter`) is a
+  separate operation from an issue body write: it needs an `IssueWriteApproval` with
+  `IssueWriteOperation::BoardField` for the same issue. The adapter re-reads the issue's project
+  items, then sends one `updateProjectV2ItemFieldValue` with one project, item, field, and option
+  ID. No caller is wired to it yet.
 - The issue policy (`domain/issue_policy`) comes only from `IssuePolicyService`. An invalid or
   unreadable policy file is `IssuePolicyBlocked`; callers must not replace it with the built-in
   policy. See [configuration](./configuration.md#issue-policy-file).
