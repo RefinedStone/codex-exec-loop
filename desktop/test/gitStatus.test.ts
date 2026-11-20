@@ -113,6 +113,26 @@ describe("git file actions", () => {
     expect([existsSync(join(root, "a.txt")), existsSync(join(root, "renamed.txt"))]).toEqual([true, false]);
   });
 
+  it("discards a detected copy without changing its existing source", async () => {
+    const content = Array.from({ length: 20 }, (_, index) => `original line ${index}\n`).join("");
+    const { root, git, write, text, statuses } = repository({ "source.txt": content });
+    git("config", "status.renames", "copies");
+    write("copy.txt", content);
+    write("source.txt", content + "staged source edit\n");
+    git("add", "source.txt", "copy.txt");
+    expect(await statuses()).toMatchObject({ "copy.txt": "C ", "source.txt": "M " });
+    const sourceIndexBefore = git("ls-files", "--stage", "--", "source.txt");
+    const planned = await planGitFileAction(root, "discard", "copy.txt");
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+
+    expect(await executeGitFilePlan(planned.plan)).toEqual({ ok: true });
+    expect(existsSync(join(root, "copy.txt"))).toBe(false);
+    expect(text("source.txt")).toBe(content + "staged source edit\n");
+    expect(git("ls-files", "--stage", "--", "source.txt")).toBe(sourceIndexBefore);
+    expect(await statuses()).toEqual({ "source.txt": "M " });
+  });
+
   it("reads the state from git, not from the caller", async () => {
     const { root, write, text, statuses } = repository();
     // 바뀌지 않은 파일과 목록에 없는 경로는 거절한다. 이전에는 호출한 쪽이 보낸 상태로 명령을 골랐다.
