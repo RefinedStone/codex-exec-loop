@@ -213,7 +213,8 @@ function sessionStore() {
     getTranscript: () => snapshot.transcript ?? null,
     setKernel: (kernel) => Object.assign(snapshot, { kernel }),
     setDots: (dots) => Object.assign(snapshot, { dots }),
-    setChats: (chats) => Object.assign(snapshot, { chats }),
+    setChats: (chats) => Object.assign(snapshot, { chats, chatsProblem: null }),
+    setChatsProblem: (chatsProblem) => Object.assign(snapshot, { chatsProblem }),
     applyDotLive: (live) => Object.assign(snapshot, { lastDotLive: live }),
     getKernel: () => snapshot.kernel ?? EMPTY_KERNEL_VIEW,
   };

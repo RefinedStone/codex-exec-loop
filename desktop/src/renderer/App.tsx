@@ -437,6 +437,7 @@ export function App() {
     },
     [chatDockHost],
   );
+  const reloadChats = useCallback((host: string) => void remoteSessions.current.get(host)?.reloadChats(), []);
 
   const loadRemoteThread = useCallback((host: string, threadId: string) => {
     const state = remoteHostStore(host).getState();
@@ -600,7 +601,7 @@ export function App() {
 
   return (
     <div className="shell">
-      {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} />}
+      {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} />}
       <div className="workspace">
         <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} />
         <SessionBanner />
