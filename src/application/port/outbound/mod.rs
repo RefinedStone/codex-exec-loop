@@ -25,6 +25,8 @@ pub mod git_workspace_port;
 pub mod issue_core_port;
 // evidence vault port 는 사용자 확인이 필요한 복원 진입점이다. 일반 계약과 분리한다 (#2415).
 pub mod evidence_vault_port;
+// issue snapshot port 는 원격 게시본의 원시 값을 읽는다. 신뢰된 처리 경로만 쓴다 (#2420).
+pub mod issue_snapshot_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
 pub mod github_automation_port;
 // GitHub PR validation port는 review/CI/merge 관찰 snapshot의 read-only 계약을 정의한다.
