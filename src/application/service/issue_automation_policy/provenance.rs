@@ -48,6 +48,23 @@ impl PolicyProvenance {
         entry.resolution = resolution;
     }
 
+    /// 최종 leaf의 값으로 도출한 기본값은 실제 입력 leaf들의 출처를 함께 보존한다.
+    pub fn derive(&mut self, key: &str, inputs: &[&str]) {
+        let mut scopes = Vec::new();
+        for input in inputs {
+            scopes.extend(self.for_field(input).scopes);
+        }
+        scopes.sort_unstable();
+        scopes.dedup();
+        self.fields.insert(
+            key.to_owned(),
+            FieldProvenance {
+                scopes,
+                resolution: Resolution::Derived,
+            },
+        );
+    }
+
     /// 요청 mode와 유효 상한 모두가 최종 mode의 입력이다. 상한의 min 출처도 버리지 않는다.
     pub fn cap(&mut self, key: &str, ceiling_key: &str) {
         let ceiling = self.for_field(ceiling_key);

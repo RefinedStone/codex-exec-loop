@@ -15,11 +15,11 @@ use crate::application::port::outbound::issue_source_port::{
 };
 use crate::domain::issue_automation::IssueAutomationSnapshot;
 use crate::domain::issue_automation::source::{
-    IssueContentWithheldReason, IssueDiscoveryCursor, IssueLabelAttribution,
-    IssueMetadataCompleteness, IssueMetadataList, IssuePrPresence, IssueRemoteState,
-    IssueSourceActor, IssueSourceContent, IssueSourceDisclosure, IssueSourceFailure,
-    IssueSourceLabel, IssueSourceObservation, IssueSourceRead, IssueSourceRepository,
-    IssueSourceWeb,
+    IssueContentWithheldReason, IssueCreationProvenance, IssueDiscoveryCursor,
+    IssueLabelAttribution, IssueMetadataCompleteness, IssueMetadataList, IssuePrPresence,
+    IssueRemoteState, IssueSourceActor, IssueSourceActorKind, IssueSourceContent,
+    IssueSourceDisclosure, IssueSourceFailure, IssueSourceLabel, IssueSourceObservation,
+    IssueSourceRead, IssueSourceRepository, IssueSourceWeb,
 };
 use crate::domain::issue_masking::{IssueMaskingBlocked, IssueTextField, plan_issue_masking};
 use crate::domain::issue_secret_spans::secret_spans;
@@ -359,6 +359,7 @@ fn observation(
         issue,
         web: Some(web),
         remote_state,
+        creation_provenance: IssueCreationProvenance::Unattributed,
         labels,
         assignees,
         author,
@@ -390,7 +391,12 @@ fn actor(value: Actor) -> Option<IssueSourceActor> {
     {
         return None;
     }
-    Some(IssueSourceActor { id, login })
+    let kind = match value.typename.as_deref() {
+        Some("User") => IssueSourceActorKind::UserAccount,
+        Some("Bot") => IssueSourceActorKind::Bot,
+        _ => IssueSourceActorKind::Unknown,
+    };
+    Some(IssueSourceActor { id, login, kind })
 }
 
 fn label(value: Label) -> Option<IssueSourceLabel> {

@@ -44,3 +44,19 @@
 .issue-draft-warning {
   color: var(--warn);
 }
+
+.issue-draft-readiness table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.issue-draft-readiness th,
+.issue-draft-readiness td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.issue-draft-readiness h4 {
+  margin: 12px 0 6px;
+}

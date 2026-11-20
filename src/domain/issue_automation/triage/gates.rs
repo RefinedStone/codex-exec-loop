@@ -21,6 +21,35 @@ const GATES: [IssueAutomationGate; 6] = [
     IssueAutomationGate::Close,
 ];
 
+pub(super) fn expected(
+    readiness: &super::IssueReadinessResult,
+    policy: &IssueAutomationPolicy,
+) -> Vec<super::IssueExpectedGate> {
+    let evaluation = Evaluation {
+        eligibility: IssueTriageEligibility::Eligible,
+        readiness: readiness.readiness,
+        risk: readiness.risk_class,
+        effective_mode: readiness.effective_mode,
+        assumed_mode: readiness.assumed_mode,
+        force_human: readiness.force_human,
+        human_gates: readiness.human_gates.clone(),
+        reasons: Vec::new(),
+    };
+    let can_prepare = evaluation.effective_mode >= IssueAutomationAutonomy::Propose
+        && evaluation.readiness == IssueTriageReadiness::Ready;
+    GATES
+        .into_iter()
+        .map(|gate| super::IssueExpectedGate {
+            gate,
+            action: if can_prepare && gate != IssueAutomationGate::Close {
+                action(gate, evaluation.effective_mode, &evaluation, policy)
+            } else {
+                IssueAutomationGateAction::Human
+            },
+        })
+        .collect()
+}
+
 pub(super) fn calculate(
     basis: &IssueTriageBasis,
     evaluation: &Evaluation,

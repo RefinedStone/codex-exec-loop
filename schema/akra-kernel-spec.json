@@ -3038,6 +3038,15 @@
       ]
     },
     {
+      "name": "human_selection_required",
+      "summary": "An agent-created or unresolved issue requires a trusted user account to apply a current selection label.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
       "name": "budget_exhausted",
       "summary": "A zero static budget cap prevents an automatic start and requires a person to review the budget.",
       "next": [
@@ -3802,7 +3811,8 @@
         "and",
         "intersection",
         "union",
-        "cap"
+        "cap",
+        "derived"
       ],
       "type": "string"
     },
@@ -7615,6 +7625,7 @@
         "held_or_manual",
         "protected_path",
         "policy_human_required",
+        "human_selection_required",
         "budget_exhausted",
         "mode_off",
         "observation_only",

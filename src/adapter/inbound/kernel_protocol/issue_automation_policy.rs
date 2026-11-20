@@ -71,6 +71,7 @@ pub enum IssueAutomationPolicyResolutionState {
     Intersection,
     Union,
     Cap,
+    Derived,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -190,6 +191,9 @@ impl From<&IssueAutomationPolicySetting> for IssueAutomationPolicySettingState {
                     IssueAutomationPolicyResolutionState::Union
                 }
                 IssueAutomationPolicyResolution::Cap => IssueAutomationPolicyResolutionState::Cap,
+                IssueAutomationPolicyResolution::Derived => {
+                    IssueAutomationPolicyResolutionState::Derived
+                }
             },
             resolution_summary: value.resolution_summary.clone(),
         }

@@ -78,3 +78,5 @@ pub mod evidence_vault_unlock;
 pub mod evidence_vault_restore;
 // evidence_vault_backup 은 사용자 승인 뒤에 복구 키로 Vault 백업을 내보내고 가져온다 (#2432).
 pub mod evidence_vault_backup;
+pub mod issue_form_install;
+pub mod issue_source_provenance;

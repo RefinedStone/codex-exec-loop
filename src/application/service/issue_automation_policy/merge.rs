@@ -13,12 +13,29 @@ pub(super) fn merge(
     user: PolicyLayer,
     project: PolicyLayer,
 ) -> (IssueAutomationPolicy, PolicyProvenance) {
+    let selection_explicit = user
+        .select
+        .as_ref()
+        .is_some_and(|select| select.labels_any.is_some())
+        || project
+            .select
+            .as_ref()
+            .is_some_and(|select| select.labels_any.is_some());
     let mut policy = IssueAutomationPolicy::builtin();
     let mut origins = PolicyProvenance::default();
     apply_common(&mut policy, &user, Scope::User, &mut origins);
     apply_user_grants(&mut policy, &user, &mut origins);
     apply_common(&mut policy, &project, Scope::Project, &mut origins);
     restrict_with_project(&mut policy, &project, &mut origins);
+    // 어느 layer도 명시하지 않았을 때만 최종 실행 라벨로 선택 기본값을 만든다.
+    // 명시한 빈 목록과 이름 변경 전의 명시 목록은 그대로 유지한다.
+    if !selection_explicit {
+        policy.select.labels_any = policy.labels.selection_labels();
+        origins.derive(
+            "select.labels_any",
+            &["labels.auto", "labels.gated", "labels.manual"],
+        );
+    }
     // normalize()가 수행하는 동일 min의 두 입력 출처를 보존한다.
     origins.cap("binding.github.mode", "authority.autonomy_cap");
     (policy, origins)
@@ -54,6 +71,19 @@ fn apply_common(
             scope,
             origins,
         );
+    }
+    if let Some(labels) = &layer.labels {
+        for (target, value, key) in [
+            (&mut policy.labels.auto, &labels.auto, "labels.auto"),
+            (&mut policy.labels.gated, &labels.gated, "labels.gated"),
+            (&mut policy.labels.manual, &labels.manual, "labels.manual"),
+            (&mut policy.labels.hold, &labels.hold, "labels.hold"),
+        ] {
+            if let Some(value) = value {
+                target.clone_from(value);
+                origins.replace(key, scope);
+            }
+        }
     }
     if let Some(selection) = &layer.select {
         assign(

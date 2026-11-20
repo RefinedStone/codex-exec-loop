@@ -217,6 +217,7 @@ mod tests {
                 crate::application::port::inbound::issue_draft_port::IssueCreationPreview {
                     preview: IssueDraftPreview::NeedsConfirmation {
                         span_indexes: (0..request.text.spans.len()).collect(),
+                        readiness: None,
                     },
                     approval: None,
                 },
@@ -289,6 +290,7 @@ mod tests {
         fn preview(&self, request: IssueDraftPreviewRequest) -> Result<IssueDraftPreview> {
             Ok(IssueDraftPreview::NeedsConfirmation {
                 span_indexes: (0..request.text.spans.len()).collect(),
+                readiness: None,
             })
         }
 

@@ -36,6 +36,7 @@ pub struct IssueAutomationPolicy {
     pub schema_version: u32,
     pub binding: IssueAutomationPolicyBinding,
     pub authority: IssueAutomationAuthority,
+    pub labels: IssueAutomationLabels,
     pub select: IssueAutomationSelection,
     pub classify: IssueAutomationClassification,
     pub gates: IssueAutomationPolicyGates,
@@ -62,6 +63,31 @@ pub struct IssueAutomationGitHubBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IssueAutomationAuthority {
     pub autonomy_cap: IssueAutomationAutonomy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IssueAutomationLabels {
+    pub auto: String,
+    pub gated: String,
+    pub manual: String,
+    pub hold: String,
+}
+
+impl Default for IssueAutomationLabels {
+    fn default() -> Self {
+        Self {
+            auto: "akra:auto".to_owned(),
+            gated: "akra:gated".to_owned(),
+            manual: "akra:manual".to_owned(),
+            hold: "akra:hold".to_owned(),
+        }
+    }
+}
+
+impl IssueAutomationLabels {
+    pub fn selection_labels(&self) -> Vec<String> {
+        vec![self.auto.clone(), self.gated.clone(), self.manual.clone()]
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,13 +286,10 @@ impl IssueAutomationPolicy {
             authority: IssueAutomationAuthority {
                 autonomy_cap: IssueAutomationAutonomy::Propose,
             },
+            labels: IssueAutomationLabels::default(),
             select: IssueAutomationSelection {
                 mode: IssueAutomationSelectionMode::LabelsAny,
-                labels_any: vec![
-                    "akra:auto".to_string(),
-                    "akra:gated".to_string(),
-                    "akra:manual".to_string(),
-                ],
+                labels_any: IssueAutomationLabels::default().selection_labels(),
                 trusted_actors: Vec::new(),
             },
             classify: IssueAutomationClassification { rule: Vec::new() },

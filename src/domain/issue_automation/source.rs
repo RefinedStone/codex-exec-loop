@@ -305,11 +305,24 @@ pub struct IssueMetadataList<T> {
     pub completeness: IssueMetadataCompleteness,
 }
 
+/// 공급자가 명시한 계정 종류다. UserAccount는 실제 조작자가 사람임을 보증하지 않는다.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueSourceActorKind {
+    UserAccount,
+    Bot,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueSourceActor {
     pub id: String,
     pub login: String,
+    /// 과거 관찰에 종류가 없으면 계정 이름이나 안정 ID로 추정하지 않는다.
+    #[serde(default)]
+    pub kind: IssueSourceActorKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +376,16 @@ pub enum IssueSourceContent {
     },
 }
 
+/// 저장된 생성 근거다. 근거가 없다는 것은 외부나 사람이 만들었다는 증명이 아니다.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueCreationProvenance {
+    #[default]
+    Unattributed,
+    AkraCreated,
+    Unresolved,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueSourceObservation {
@@ -371,6 +394,9 @@ pub struct IssueSourceObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web: Option<IssueSourceWeb>,
     pub remote_state: IssueRemoteState,
+    /// Provider 관찰은 Unattributed로 시작하고 수집 서비스가 로컬 생성 근거를 붙인다.
+    #[serde(default)]
+    pub creation_provenance: IssueCreationProvenance,
     pub labels: IssueMetadataList<IssueSourceLabel>,
     pub assignees: IssueMetadataList<IssueSourceActor>,
     /// null은 작성자 계정이 없는 경우다. 필드 누락이나 답 파싱 실패와 구분한다.

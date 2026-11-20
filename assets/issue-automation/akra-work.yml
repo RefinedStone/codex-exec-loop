@@ -1,0 +1,24 @@
+name: Akra 작업
+description: 완료 기준과 작업 범위를 정리합니다. 자동 실행 라벨은 별도로 선택합니다.
+body:
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 기준
+      description: 완료를 확인할 수 있는 조건을 목록으로 적어 주세요.
+      placeholder: |
+        - 확인 가능한 완료 조건을 적어 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 범위
+      description: 바꿀 기능이나 문서, 관련 경로를 적어 주세요.
+      placeholder: 작업에 포함할 범위를 적어 주세요.
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: 하지 않는 것
+      description: 이번 작업에서 제외할 내용을 적어 주세요.
+      placeholder: 이번 작업에서 제외할 내용을 적어 주세요.

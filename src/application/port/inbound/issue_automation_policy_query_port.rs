@@ -13,6 +13,7 @@ pub enum IssueAutomationPolicyOriginScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueAutomationPolicyResolution {
     Default,
+    Derived,
     Override,
     Minimum,
     And,

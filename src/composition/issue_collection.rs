@@ -5,12 +5,14 @@ use std::sync::Arc;
 use crate::adapter::outbound::db::sqlite_issue_automation_store::SqliteIssueAutomationStoreAdapter;
 use crate::adapter::outbound::db::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
+use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJournalAdapter;
 use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
 use crate::adapter::outbound::git::issue_origin::GitIssueCollectionOriginAdapter;
 use crate::adapter::outbound::github::issue_source::GithubIssueSourceAdapter;
 use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
 use crate::application::service::issue_collection::IssueCollectionService;
 use crate::application::service::issue_policy::IssuePolicyService;
+use crate::application::service::issue_source_provenance::IssueSourceProvenanceService;
 use crate::application::service::issue_triage::IssueTriageService;
 
 pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
@@ -32,7 +34,21 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
         IssueCollectionService::new(
             workspace_dir.to_string(),
             store,
-            Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
+            Arc::new(IssueSourceProvenanceService::new(
+                Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
+                Arc::new(
+                    IssueCreationJournalAdapter::new(|workspace| {
+                        let location =
+                            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(
+                                workspace,
+                            )?;
+                        Ok(PathBuf::from(location.runtime_dir))
+                    })
+                    .with_workspace_resolver(|cwd| {
+                        Ok(super::production::repository_kernel_target(cwd)?.workspace_root)
+                    }),
+                ),
+            )),
             Arc::new(GitIssueCollectionOriginAdapter::new()),
             IssuePolicyService::new(validation_source),
         )

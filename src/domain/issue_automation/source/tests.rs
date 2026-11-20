@@ -75,6 +75,7 @@ fn observation() -> IssueSourceObservation {
         issue: reference(),
         web: None,
         remote_state: IssueRemoteState::Open,
+        creation_provenance: IssueCreationProvenance::Unattributed,
         labels: labels(&["akra:auto"], IssueMetadataCompleteness::Complete),
         assignees: IssueMetadataList {
             items: Vec::new(),
@@ -83,6 +84,7 @@ fn observation() -> IssueSourceObservation {
         author: Some(IssueSourceActor {
             id: "U_author".to_owned(),
             login: "maintainer".to_owned(),
+            kind: IssueSourceActorKind::UserAccount,
         }),
         label_actors: IssueMetadataList {
             items: vec![IssueLabelAttribution {
@@ -495,4 +497,78 @@ fn observation_web_is_optional_for_old_json_and_never_fills_an_unknown_read() {
     let mut injected = serde_json::to_value(unknown).unwrap();
     injected["value"]["web"] = serde_json::to_value(current.web.unwrap()).unwrap();
     assert!(serde_json::from_value::<IssueSourceRead>(injected).is_err());
+}
+
+#[test]
+fn legacy_actor_kind_and_creation_provenance_are_not_inferred() {
+    for (id, login) in [("U_account", "maintainer"), ("BOT_account", "worker[bot]")] {
+        let actor: IssueSourceActor = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "login": login,
+        }))
+        .unwrap();
+        assert_eq!(actor.id, id);
+        assert_eq!(actor.login, login);
+        assert_eq!(actor.kind, IssueSourceActorKind::Unknown);
+    }
+
+    let mut legacy = serde_json::to_value(observation()).unwrap();
+    legacy.as_object_mut().unwrap().remove("creationProvenance");
+    legacy["author"].as_object_mut().unwrap().remove("kind");
+    let restored: IssueSourceObservation = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        restored.creation_provenance,
+        IssueCreationProvenance::Unattributed
+    );
+    assert_eq!(restored.author.unwrap().kind, IssueSourceActorKind::Unknown);
+}
+
+#[test]
+fn explicit_actor_kinds_and_creation_provenance_round_trip_without_raw_content() {
+    for provenance in [
+        IssueCreationProvenance::Unattributed,
+        IssueCreationProvenance::AkraCreated,
+        IssueCreationProvenance::Unresolved,
+    ] {
+        for kind in [
+            IssueSourceActorKind::UserAccount,
+            IssueSourceActorKind::Bot,
+            IssueSourceActorKind::Unknown,
+        ] {
+            let mut value = observation();
+            value.creation_provenance = provenance;
+            value.author.as_mut().unwrap().kind = kind;
+            value.assignees.items.push(value.author.clone().unwrap());
+            value.label_actors.items[0].actor = value.author.clone();
+            let encoded = serde_json::to_string(&value).unwrap();
+            assert!(!encoded.contains("raw-secret-sentinel"));
+            assert!(!encoded.contains("raw-title-sentinel"));
+            assert_eq!(
+                serde_json::from_str::<IssueSourceObservation>(&encoded).unwrap(),
+                value
+            );
+        }
+    }
+}
+
+#[test]
+fn actor_kind_and_creation_provenance_reject_unrecognized_persisted_values() {
+    for invalid in [
+        serde_json::json!("human"),
+        serde_json::json!("User"),
+        serde_json::Value::Null,
+    ] {
+        let mut value = serde_json::to_value(observation()).unwrap();
+        value["author"]["kind"] = invalid;
+        assert!(serde_json::from_value::<IssueSourceObservation>(value).is_err());
+    }
+    for invalid in [
+        serde_json::json!("external"),
+        serde_json::json!("agent"),
+        serde_json::Value::Null,
+    ] {
+        let mut value = serde_json::to_value(observation()).unwrap();
+        value["creationProvenance"] = invalid;
+        assert!(serde_json::from_value::<IssueSourceObservation>(value).is_err());
+    }
 }

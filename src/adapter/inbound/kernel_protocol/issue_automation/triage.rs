@@ -217,6 +217,10 @@ fn reason_parts(reason: IssueTriageReasonCode) -> (ReasonCode, &'static str) {
             ReasonCode::PolicyHumanRequired,
             "정책의 추가 규칙이 해당 관문에 사람 확인을 요구합니다.",
         ),
+        IssueTriageReasonCode::HumanSelectionRequired => (
+            ReasonCode::HumanSelectionRequired,
+            "사람이 선택 라벨을 적용한 근거가 필요합니다.",
+        ),
         IssueTriageReasonCode::BudgetExhausted => (
             ReasonCode::BudgetExhausted,
             "예산 상한이 0이어서 자동 시작할 수 없습니다.",
@@ -291,6 +295,9 @@ fn reason_next_summary(reason: IssueTriageReasonCode) -> &'static str {
             "보호 경로의 변경 범위와 필요한 권한을 사람이 확인하세요."
         }
         IssueTriageReasonCode::PolicyHumanRequired => "정책이 요구하는 사람의 확인을 기다리세요.",
+        IssueTriageReasonCode::HumanSelectionRequired => {
+            "신뢰하는 사람이 현재 이슈에 선택 라벨을 적용한 뒤 다시 동기화하세요."
+        }
         IssueTriageReasonCode::BudgetExhausted => {
             "예산과 시도 한도를 확인하고 사람의 검토를 기다리세요."
         }

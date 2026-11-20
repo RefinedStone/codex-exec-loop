@@ -1,4 +1,5 @@
 //! Exercise the public creation facade, including its policy and masking orchestration.
+mod readiness;
 mod support;
 
 use std::sync::atomic::Ordering;
@@ -27,6 +28,7 @@ fn prepare(
     let preview = fixture
         .service
         .creation_preview(IssueCreationPreviewRequest {
+            expected_labels: Vec::new(),
             target: target(),
             intent_id: opened.intent.intent_id.clone(),
             text: text.clone(),
@@ -189,6 +191,7 @@ fn frozen_held_and_recorded_creation_ignore_replacement_raw_text_and_spans() {
         let preview = fixture
             .service
             .creation_preview(IssueCreationPreviewRequest {
+                expected_labels: Vec::new(),
                 target: target(),
                 intent_id: replay.intent_id.clone(),
                 text: replay.text.clone(),
@@ -248,6 +251,7 @@ fn changed_policy_or_template_cannot_reapprove_a_frozen_unsent_creation() {
             let preview = fixture
                 .service
                 .creation_preview(IssueCreationPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     intent_id: request.intent_id.clone(),
                     text: request.text.clone(),
@@ -358,6 +362,7 @@ fn creator_enabled_updates_use_the_primary_scope_for_linked_and_subdirectory_tar
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: update_target.clone(),
                     text: text.clone(),
                 })

@@ -32,6 +32,7 @@ use crate::application::port::inbound::issue_handoff_port::{
     IssueHandoffPort, IssueHandoffRequest,
 };
 use crate::application::port::outbound::evidence_vault_port::VaultRestoreResponse;
+use crate::application::port::outbound::issue_automation_policy_source_port::IssueAutomationPolicySourcePort;
 use crate::application::port::outbound::issue_code_validator_runner_port::{
     IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest, IssueCodeValidatorRunnerPort,
 };
@@ -53,6 +54,7 @@ use crate::application::service::evidence_vault_unlock::{
     EvidenceVaultUnlockService, VaultSharedCopyReason, VaultUnlockGrant, VaultUnlockOutcome,
     VaultUnlockRequest, VaultUserDecision,
 };
+use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
 use crate::application::service::issue_draft::IssueDraftService;
 use crate::application::service::issue_handoff::IssueHandoffService;
 use crate::application::service::issue_policy::IssuePolicyService;
@@ -221,6 +223,21 @@ impl IssueTemplateSourcePort for ProjectFiles {
     }
 }
 
+/// 자동화 정책만 바꾸는 메모리 대역이다. 게시 공개 정책·템플릿과는 독립적이다.
+struct AutomationFiles {
+    policy: Mutex<String>,
+}
+
+impl IssueAutomationPolicySourcePort for AutomationFiles {
+    fn load_user_policy_toml(&self) -> Result<Option<String>> {
+        Ok(Some(self.policy.lock().unwrap().clone()))
+    }
+
+    fn load_project_policy_toml(&self, _: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+}
+
 /// 시험의 정책은 코드 검증기를 고르지 않는다. 실행하면 시험이 실패한다.
 struct NoCodeValidators;
 
@@ -265,11 +282,18 @@ impl World {
 
     /// 프로세스 하나를 시작한다: 서비스를 같은 폴더 위에 새로 만들고 Gateway 세션을 연다.
     async fn start(&self) -> Process {
+        self.start_with_automation_policy(None).await
+    }
+
+    async fn start_with_automation_policy(
+        &self,
+        automation_policy: Option<Arc<IssueAutomationPolicyService>>,
+    ) -> Process {
         let vault = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(
             self.root.join("vault"),
         ));
         let unlock = Arc::new(EvidenceVaultUnlockService::new(self.key_store.clone()));
-        let drafts = Arc::new(IssueDraftService::new(
+        let drafts = IssueDraftService::new(
             IssuePolicyService::new(Arc::new(ProjectFiles)),
             IssueTemplateService::new(Arc::new(ProjectFiles)),
             self.github.clone(),
@@ -281,7 +305,12 @@ impl World {
             ),
             Arc::new(NoCodeValidators),
             unlock.clone(),
-        ));
+        );
+        let drafts = match automation_policy {
+            Some(policy) => drafts.with_automation_policy(policy),
+            None => drafts,
+        };
+        let drafts = Arc::new(drafts);
         let handoff = Arc::new(IssueHandoffService::new(
             self.github.clone(),
             Arc::new(ProjectFiles),
@@ -973,4 +1002,152 @@ async fn the_gateway_hand_off_refuses_an_issue_edited_after_its_approved_publish
         .await;
 
     assert!(handoff["error"].is_object(), "{handoff}");
+}
+
+fn readiness_text() -> Value {
+    json!({
+        "title": "합성 화면 상태 표시 작업",
+        "body": "## Steps\n상태 화면을 연다.\n\n## Expected\n서버 상태가 표시된다.\n\n## Impact\n상태 확인 흐름\n\n## 완료 기준\n- 상태 문구가 서버 응답과 일치한다.\n- 상태 표시 회귀 테스트가 통과한다.\n",
+        "spans": [],
+    })
+}
+
+#[tokio::test]
+async fn gateway_expected_labels_reach_common_readiness_without_execution_authority() {
+    let mut world = World::new("readiness-labels", &[7]);
+    let source = Arc::new(AutomationFiles {
+        policy: Mutex::new(
+            "[[classify.rule]]\nclass = \"high\"\nlabels_any = [\"sensitive\"]\n".to_owned(),
+        ),
+    });
+    let mut process = world
+        .start_with_automation_policy(Some(Arc::new(IssueAutomationPolicyService::new(source))))
+        .await;
+    let text = readiness_text();
+    let ordinary = world
+        .call(
+            &mut process,
+            "akra/issue/preview",
+            json!({ "target": target(7), "text": text, "expectedLabels": [] }),
+        )
+        .await;
+    let sensitive = world
+        .call(
+            &mut process,
+            "akra/issue/preview",
+            json!({ "target": target(7), "text": text, "expectedLabels": ["sensitive"] }),
+        )
+        .await;
+
+    assert_eq!(
+        ordinary["result"]["readiness"]["status"], "assessed",
+        "{ordinary}"
+    );
+    assert_eq!(
+        sensitive["result"]["readiness"]["status"], "assessed",
+        "{sensitive}"
+    );
+    assert_eq!(
+        ordinary["result"]["readiness"]["assessment"]["riskClass"],
+        "normal"
+    );
+    assert_eq!(
+        sensitive["result"]["readiness"]["assessment"]["riskClass"],
+        "high"
+    );
+    assert_eq!(
+        ordinary["result"]["approval"],
+        sensitive["result"]["approval"]
+    );
+    for answer in [&ordinary, &sensitive] {
+        assert_eq!(answer["result"]["publishable"], true, "{answer}");
+        let assessment = &answer["result"]["readiness"]["assessment"];
+        assert_eq!(assessment["readiness"], "ready", "{answer}");
+        assert_eq!(assessment["previewOnly"], true);
+        assert!(assessment.get("issueId").is_none());
+        assert!(assessment.get("executionGrant").is_none());
+        let gates = assessment["expectedGates"]
+            .as_array()
+            .expect("real service readiness must serialize expected gates");
+        assert!(!gates.is_empty());
+        for gate in gates {
+            let mut keys = gate
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            keys.sort_unstable();
+            assert_eq!(keys, ["action", "actionSummary", "gate", "summary"]);
+        }
+    }
+    assert_eq!(world.github.writes_to(7), 0);
+}
+
+#[tokio::test]
+async fn gateway_automation_policy_failure_preserves_preview_approval_and_publish() {
+    let mut world = World::new("readiness-policy-blocked", &[7]);
+    let source = Arc::new(AutomationFiles {
+        policy: Mutex::new(String::new()),
+    });
+    let mut process = world
+        .start_with_automation_policy(Some(Arc::new(IssueAutomationPolicyService::new(
+            source.clone(),
+        ))))
+        .await;
+    let text = readiness_text();
+    let opened = world.call(&mut process, "akra/issue/open", target(7)).await;
+    assert!(opened["result"]["editBasis"].is_object(), "{opened}");
+    let before = world
+        .call(
+            &mut process,
+            "akra/issue/preview",
+            json!({ "target": target(7), "text": text, "expectedLabels": [] }),
+        )
+        .await;
+    assert_eq!(before["result"]["publishable"], true, "{before}");
+    assert_eq!(before["result"]["readiness"]["status"], "assessed");
+
+    const POLICY_CANARY: &str = "private-policy-canary";
+    *source.policy.lock().unwrap() = format!("{POLICY_CANARY} = [");
+    let after = world
+        .call(
+            &mut process,
+            "akra/issue/preview",
+            json!({ "target": target(7), "text": text, "expectedLabels": ["sensitive"] }),
+        )
+        .await;
+    assert_eq!(after["result"]["status"], "ready", "{after}");
+    assert_eq!(
+        after["result"]["readiness"]["status"], "cannot_assess",
+        "{after}"
+    );
+    assert_eq!(after["result"]["readiness"]["reason"], "policy_blocked");
+    assert_eq!(after["result"]["publishable"], true);
+    assert_eq!(after["result"]["approval"], before["result"]["approval"]);
+    assert!(!after.to_string().contains(POLICY_CANARY));
+    assert_eq!(world.github.writes_to(7), 0);
+
+    // 이전에 검토한 게시 승인은 자동화 정책의 표시 오류와 독립적으로 유효하다.
+    let published = world
+        .call(
+            &mut process,
+            "akra/issue/publish",
+            json!({
+                "target": target(7),
+                "text": text,
+                "approval": before["result"]["approval"],
+                "editBasis": opened["result"]["editBasis"],
+            }),
+        )
+        .await;
+    assert_eq!(published["result"]["status"], "confirmed", "{published}");
+    assert_eq!(world.github.writes_to(7), 1);
+    assert_eq!(world.github.issue(7).body, text["body"].as_str().unwrap());
+    assert!(
+        world
+            .answers
+            .iter()
+            .all(|answer| !answer.contains(POLICY_CANARY))
+    );
 }

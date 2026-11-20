@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
  * argument parsing과 process exit code는 edge에 남기고, 실제 작업은 application service와 outbound adapter로 위임한다.
  * 그래서 TUI, admin API, automation tool이 같은 planning/parallel-mode 계약을 공유한다.
  */
+mod issue_form;
 mod kernel;
 mod mcp;
 mod reports;
@@ -73,6 +74,9 @@ where
         [command, rest @ ..] if command == OsStr::new("describe") => {
             Ok(Some(kernel::describe(rest, stdout)?))
         }
+        [command, rest @ ..] if command == OsStr::new("issue-form") => {
+            Ok(Some(issue_form::run(rest, stdout)?))
+        }
         [command, rest @ ..] if command == OsStr::new("kernel") => {
             Ok(Some(kernel::run(rest, stdout)?))
         }
@@ -89,6 +93,7 @@ where
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
             writeln!(stdout, "{CONFIG_USAGE}")?;
             writeln!(stdout, "{MCP_USAGE}")?;
+            writeln!(stdout, "{}", issue_form::USAGE)?;
             writeln!(stdout, "Usage: akra describe --json")?;
             writeln!(
                 stdout,

@@ -23,6 +23,8 @@ fn observation(fixture: &Fixture) -> IssueSourceObservation {
     let mut snapshot = snapshot("## 완료 기준\n- 변경 사항을 검증한다.\n");
     snapshot.policy_version = issue_policy_version(&IssuePolicy::builtin());
     IssueSourceObservation {
+        creation_provenance:
+            crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: reference(fixture.cwd(), "I_triage"),
         web: None,
         remote_state: IssueRemoteState::Open,
@@ -35,6 +37,7 @@ fn observation(fixture: &Fixture) -> IssueSourceObservation {
             completeness: IssueMetadataCompleteness::Complete,
         },
         author: Some(IssueSourceActor {
+            kind: crate::domain::issue_automation::source::IssueSourceActorKind::UserAccount,
             id: "U_author".into(),
             login: "author".into(),
         }),
@@ -199,6 +202,7 @@ fn metadata_only_change_is_immediately_stale_and_rejects_the_old_observation_cas
 
     let mut changed = original;
     changed.assignees.items.push(IssueSourceActor {
+        kind: crate::domain::issue_automation::source::IssueSourceActorKind::UserAccount,
         id: "U_claimant".into(),
         login: "claimant".into(),
     });

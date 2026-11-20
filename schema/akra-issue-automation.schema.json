@@ -43,6 +43,29 @@
         }
       }
     },
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "실행 계약의 정확한 라벨 이름. 각 leaf는 저장소 > 사용자 > 내장 순서로 합성한다. 서로 다른 역할의 이름 중복은 부분 선언과 최종 효과 정책에서 서비스가 거부한다.",
+      "properties": {
+        "auto": {
+          "$ref": "#/$defs/text",
+          "description": "기본 akra:auto"
+        },
+        "gated": {
+          "$ref": "#/$defs/text",
+          "description": "기본 akra:gated"
+        },
+        "manual": {
+          "$ref": "#/$defs/text",
+          "description": "기본 akra:manual"
+        },
+        "hold": {
+          "$ref": "#/$defs/text",
+          "description": "기본 akra:hold"
+        }
+      }
+    },
     "select": {
       "type": "object",
       "additionalProperties": false,
@@ -59,7 +82,7 @@
           "items": {
             "$ref": "#/$defs/text"
           },
-          "description": "정확한 이름 중 하나라도 맞으면 선택한다. []는 선택 대상 없음. 일반 leaf 대체 규칙을 따른다."
+          "description": "정확한 이름 중 하나라도 맞으면 선택한다. []는 선택 대상 없음. 명시한 목록은 보존하고 모든 layer에서 생략하면 최종 labels.auto/gated/manual 이름에서 기본값을 도출한다."
         },
         "trusted_actors": {
           "type": "array",

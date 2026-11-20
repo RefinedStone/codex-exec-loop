@@ -24,8 +24,20 @@ pub(super) fn preview(
         .creator()?
         .intent(&request.target, &request.intent_id)?;
     let conventions = service.conventions(&record.repository.project_scope.workspace_dir)?;
+    let assessment = if record.approved.is_some() {
+        readiness::blocked(IssueDraftReadinessBlocker::FrozenDraft)
+    } else {
+        readiness::inspect(
+            service.automation_policy.as_deref(),
+            &record.repository.project_scope.workspace_dir,
+            &conventions,
+            &request.text,
+            &request.expected_labels,
+        )
+    };
     let text = frozen_text(&record).unwrap_or(request.text);
-    let (preview, _) = evaluate(&conventions, &text, None);
+    let (mut preview, _) = evaluate(&conventions, &text, None);
+    readiness::attach(&mut preview, assessment);
     Ok(creation_preview(&record, preview))
 }
 

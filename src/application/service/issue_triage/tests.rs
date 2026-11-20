@@ -96,12 +96,15 @@ impl Fixture {
             body: "## 완료 기준\n- 기능이 요구한 결과를 반환한다.\n".into(),
         };
         IssueSourceObservation {
+            creation_provenance:
+                crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
             issue: self.reference(id),
             web: None,
             remote_state: IssueRemoteState::Open,
             labels: complete(Vec::new()),
             assignees: complete(Vec::new()),
             author: Some(IssueSourceActor {
+                kind: crate::domain::issue_automation::source::IssueSourceActorKind::UserAccount,
                 id: "U_author".into(),
                 login: "author".into(),
             }),

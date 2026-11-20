@@ -2,8 +2,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::domain::issue_automation::source::{
-    IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState, IssueSourceContent,
-    IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
+    IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
+    IssueSourceActor, IssueSourceActorKind, IssueSourceContent, IssueSourceFailure,
+    IssueSourceObservation, IssueSourceRead,
 };
 use crate::domain::issue_validation::{IssueFieldFormat, IssueRequirements};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
@@ -38,16 +39,30 @@ enum CanonicalRead<'a> {
 
 #[derive(Serialize)]
 struct CanonicalObservation<'a> {
+    creation_provenance: IssueCreationProvenance,
     remote_state: IssueRemoteState,
     labels: Vec<(&'a str, &'a str)>,
     labels_completeness: IssueMetadataCompleteness,
-    assignees: Vec<&'a str>,
+    assignees: Vec<CanonicalActor<'a>>,
     assignees_completeness: IssueMetadataCompleteness,
-    author: Option<&'a str>,
-    label_actors: Vec<(&'a str, &'a str, &'a str, Option<&'a str>)>,
+    author: Option<CanonicalActor<'a>>,
+    label_actors: Vec<(&'a str, &'a str, &'a str, Option<CanonicalActor<'a>>)>,
     label_actors_completeness: IssueMetadataCompleteness,
     linked_pull_request: IssuePrPresence,
     content: CanonicalContent<'a>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+struct CanonicalActor<'a> {
+    id: &'a str,
+    kind: IssueSourceActorKind,
+}
+
+fn canonical_actor(actor: &IssueSourceActor) -> CanonicalActor<'_> {
+    CanonicalActor {
+        id: &actor.id,
+        kind: actor.kind,
+    }
 }
 
 #[derive(Serialize)]
@@ -172,7 +187,7 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
         .assignees
         .items
         .iter()
-        .map(|actor| actor.id.as_str())
+        .map(canonical_actor)
         .collect();
     sort_set(&mut assignees);
     let mut label_actors: Vec<_> = observation
@@ -184,7 +199,7 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
                 event.label.id.as_str(),
                 event.label.name.as_str(),
                 event.event_id.as_str(),
-                event.actor.as_ref().map(|actor| actor.id.as_str()),
+                event.actor.as_ref().map(canonical_actor),
             )
         })
         .collect();
@@ -209,12 +224,13 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
         },
     };
     CanonicalObservation {
+        creation_provenance: observation.creation_provenance,
         remote_state: observation.remote_state,
         labels,
         labels_completeness: observation.labels.completeness,
         assignees,
         assignees_completeness: observation.assignees.completeness,
-        author: observation.author.as_ref().map(|actor| actor.id.as_str()),
+        author: observation.author.as_ref().map(canonical_actor),
         label_actors,
         label_actors_completeness: observation.label_actors.completeness,
         linked_pull_request: observation.linked_pull_request,

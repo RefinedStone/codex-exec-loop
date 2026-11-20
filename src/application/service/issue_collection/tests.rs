@@ -191,6 +191,8 @@ fn observation(
     disclosure: &IssueSourceDisclosure,
 ) -> IssueSourceObservation {
     IssueSourceObservation {
+        creation_provenance:
+            crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue,
         web: None,
         remote_state: IssueRemoteState::Open,

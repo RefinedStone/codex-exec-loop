@@ -77,6 +77,57 @@ export interface IssueDraftValidationError {
   kind: "missing" | "empty" | "invalid_format" | "failed";
 }
 
+export type IssueDraftAutonomy = "off" | "observe" | "propose" | "gated" | "auto";
+
+/** 서버가 현재 AI 전달 공유본으로 계산한 예상이다. 실행 허가와 원격 라벨 변경은 없다. */
+export type IssueDraftReadiness =
+  | {
+      status: "assessed";
+      assessment: {
+        previewOnly: true;
+        readiness: "ready" | "needs_info" | "unknown";
+        summary: string;
+        missingSections: string[];
+        errors: IssueDraftValidationError[];
+        riskClass: "low" | "normal" | "high";
+        riskSummary: string;
+        effectiveMode: IssueDraftAutonomy;
+        assumedMode: IssueDraftAutonomy;
+        modeSummary: string;
+        expectedGates: {
+          gate: "start" | "spec" | "plan" | "delivery" | "merge" | "close";
+          action: "human" | "timeout_default" | "timeout_arbiter" | "auto";
+          summary: string;
+          actionSummary: string;
+        }[];
+        reasons: { code: string; summary: string }[];
+        policyVersion: string;
+        disclosurePolicyVersion: string;
+        sharedCopyHash: IssueDraftApproval["sharedCopyHash"];
+      };
+    }
+  | {
+      status: "cannot_assess";
+      reason: "automation_policy_unavailable" | "policy_blocked" | "requirements_unavailable" |
+        "disclosure_confirmation_required" | "invalid_span" | "invalid_labels" | "frozen_draft" | "invalid_input";
+      summary: string;
+      nextSummary: string;
+      policyError: { scope: "user" | "project" | "effective"; field: string; reason: string } | null;
+    };
+
+export type IssueReadinessDisplay = IssueDraftReadiness | { status: "pending" } | { status: "unavailable" };
+
+/** 현재 요청을 기다리는 동안 이전 결과를 숨기고, 도착한 서버 값은 그대로 표시한다. */
+export function issueReadinessDisplay(result: IssueDraftReadiness | undefined, pending: boolean): IssueReadinessDisplay {
+  if (pending) return { status: "pending" };
+  return result ?? { status: "unavailable" };
+}
+
+/** 쉼표로 나눈 입력 형식만 옮긴다. 선택·위험·관문은 서버가 판단한다. */
+export function expectedLabels(value: string): string[] {
+  return value.split(",").map((label) => label.trim()).filter((label) => label.length > 0);
+}
+
 export type IssueDraftPreview =
   | {
       status: "ready";
@@ -88,9 +139,10 @@ export type IssueDraftPreview =
       validatorAbsent: boolean;
       publishable: boolean;
       approval: IssueDraftApproval;
+      readiness?: IssueDraftReadiness;
     }
-  | { status: "needs_confirmation"; spanIndexes: number[] }
-  | { status: "invalid_span"; spanIndex: number };
+  | { status: "needs_confirmation"; spanIndexes: number[]; readiness?: IssueDraftReadiness }
+  | { status: "invalid_span"; spanIndex: number; readiness?: IssueDraftReadiness };
 
 export type IssueDraftPublished =
   | { status: "confirmed" | "needs_confirmation" | "held"; intent: IssueDraftIntent }

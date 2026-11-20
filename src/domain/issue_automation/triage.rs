@@ -16,6 +16,11 @@ mod criteria;
 mod evaluate;
 mod gates;
 mod paths;
+mod readiness;
+
+pub use readiness::{
+    IssueExpectedGate, IssueReadinessInput, IssueReadinessResult, inspect_issue_readiness,
+};
 
 pub const ISSUE_TRIAGE_BASIS_VERSION: u32 = 1;
 pub const MAX_ISSUE_TRIAGE_TITLE_BYTES: usize = 1024;
@@ -117,6 +122,7 @@ pub enum IssueTriageReasonCode {
     SelectionNotMatched,
     IssueClosed,
     UntrustedActor,
+    HumanSelectionRequired,
     AlreadyClaimed,
     TitleMissing,
     RequiredSectionMissing,
@@ -138,7 +144,7 @@ pub enum IssueTriageReasonCode {
 }
 
 impl IssueTriageReasonCode {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::NotYetObserved,
         Self::SourceUnavailable,
         Self::MetadataIncomplete,
@@ -146,6 +152,7 @@ impl IssueTriageReasonCode {
         Self::SelectionNotMatched,
         Self::IssueClosed,
         Self::UntrustedActor,
+        Self::HumanSelectionRequired,
         Self::AlreadyClaimed,
         Self::TitleMissing,
         Self::RequiredSectionMissing,
@@ -175,6 +182,7 @@ impl IssueTriageReasonCode {
             Self::SelectionNotMatched => "selection_not_matched",
             Self::IssueClosed => "issue_closed",
             Self::UntrustedActor => "untrusted_actor",
+            Self::HumanSelectionRequired => "human_selection_required",
             Self::AlreadyClaimed => "already_claimed",
             Self::TitleMissing => "title_missing",
             Self::RequiredSectionMissing => "required_section_missing",
@@ -365,7 +373,7 @@ pub fn triage_issue(
     if let Some(previous) = input.previous {
         previous.validate_for(input.issue)?;
     }
-    let evaluation = evaluate::evaluate(&input);
+    let evaluation = evaluate::evaluate(&input)?;
     let gates = gates::calculate(&basis, &evaluation, input.policy, input.previous)?;
     let observation = gates::observe(&evaluation, input.policy);
     let mut reasons = evaluation.reasons;

@@ -370,6 +370,30 @@ pub trait GithubAutomationPort: Send + Sync {
         anyhow::bail!("exact frozen-target source push is unavailable")
     }
 
+    /// Create only when the frozen target branch is absent. An existing different SHA is never overwritten.
+    fn create_frozen_branch_for_delivery_target(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        _source_commit_sha: &str,
+        _branch_name: &str,
+    ) -> Result<()> {
+        anyhow::bail!("exact absent-branch creation is unavailable")
+    }
+
+    /// Read-only recovery after an ambiguous PR creation. Implementations must never create a PR here.
+    fn find_pull_request_for_delivery_target(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        _base_branch: &str,
+        _head_branch: &str,
+    ) -> Result<Option<GithubAutomationPullRequest>> {
+        anyhow::bail!("exact frozen-target pull request lookup is unavailable")
+    }
+
     // source branch에 대한 PR을 보장한다. 이미 열려 있으면 기존 PR을 반환하고,
     // 없으면 title/body로 새 PR을 만들어 delivery state가 PR number를 추적할 수 있게 한다.
     fn ensure_pull_request(

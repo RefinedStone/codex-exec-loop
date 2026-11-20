@@ -95,7 +95,7 @@ fn inspection_preserves_resolve_hash_and_never_displays_comments_or_missing_path
     );
     assert_eq!(source.user_reads.load(Ordering::SeqCst), 1);
     assert_eq!(source.project_reads.load(Ordering::SeqCst), 1);
-    assert_eq!(settings.len(), 65);
+    assert_eq!(settings.len(), 69);
     assert_eq!(
         settings
             .iter()
@@ -493,5 +493,63 @@ fn an_unknown_or_relative_source_location_is_not_invented_for_the_open_action() 
         files
             .iter()
             .all(|file| file.path.is_none() && file.open_target.is_none())
+    );
+}
+
+#[test]
+fn implicit_selection_records_the_final_label_inputs_and_their_origins() {
+    use IssueAutomationPolicyOriginScope::{Builtin, Project, User};
+    let (_, settings) = ready(inspect_text(
+        Some("[labels]\nauto='user:auto'"),
+        Some("[labels]\ngated='project:gated'\nhold='project:hold'"),
+    ));
+    assert_eq!(scopes(setting(&settings, "labels.auto")), [User]);
+    assert_eq!(scopes(setting(&settings, "labels.gated")), [Project]);
+    assert_eq!(scopes(setting(&settings, "labels.manual")), [Builtin]);
+    let selected = setting(&settings, "select.labels_any");
+    assert_eq!(
+        selected.resolution,
+        IssueAutomationPolicyResolution::Derived
+    );
+    assert_eq!(scopes(selected), [Builtin, User, Project]);
+    let names: Vec<String> = serde_json::from_str(&selected.value).unwrap();
+    assert_eq!(names, ["akra:manual", "project:gated", "user:auto"]);
+    assert!(!selected.value.contains("project:hold"));
+    let (_, hold_only) = ready(inspect_text(None, Some("[labels]\nhold='project:hold'")));
+    assert_eq!(scopes(setting(&hold_only, "select.labels_any")), [Builtin]);
+}
+
+#[test]
+fn explicit_selection_origins_do_not_claim_execution_label_inputs() {
+    use IssueAutomationPolicyOriginScope::User;
+    for selection in ["[]", "['akra:auto']"] {
+        let user = format!("[select]\nlabels_any={selection}");
+        let (_, settings) = ready(inspect_text(
+            Some(&user),
+            Some("[labels]\nauto='project:auto'"),
+        ));
+        let selected = setting(&settings, "select.labels_any");
+        assert_eq!(
+            selected.resolution,
+            IssueAutomationPolicyResolution::Override
+        );
+        assert_eq!(scopes(selected), [User]);
+    }
+}
+
+#[test]
+fn equal_label_declarations_keep_origins_without_changing_the_effect_hash() {
+    use IssueAutomationPolicyOriginScope::{Builtin, User};
+    let (default_version, _) = ready(inspect_text(None, None));
+    let (version, settings) = ready(inspect_text(Some("[labels]\nauto='akra:auto'"), None));
+    assert_eq!(default_version, version);
+    assert_eq!(scopes(setting(&settings, "labels.auto")), [User]);
+    assert_eq!(
+        scopes(setting(&settings, "select.labels_any")),
+        [Builtin, User]
+    );
+    assert_eq!(
+        setting(&settings, "select.labels_any").resolution,
+        IssueAutomationPolicyResolution::Derived
     );
 }

@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { _electron as electron } from "playwright-core";
+import { exerciseReadiness, readinessFixture } from "./fixtures/issue-readiness.mjs";
+
+const issueScreenshotPath = process.env.AKRA_QA_ISSUE_CREATE_SCREENSHOT ?? process.env.AKRA_QA_SCREENSHOT;
 
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const electronPath = process.env.AKRA_E2E_ELECTRON_EXECUTABLE ?? createRequire(import.meta.url)("electron");
@@ -17,6 +20,7 @@ const repository = { provider: "github", serverId: "github.com", repositoryId: "
 const resultUrl = "https://github.com/sample/widgets/issues/501";
 const hash = (copy) => ({ version: 1, sha256: createHash("sha256").update(JSON.stringify(copy)).digest("hex") });
 const clone = (value) => structuredClone(value);
+const readiness = readinessFixture();
 const issue = { policy: "p1", intent: null, approval: null, sequence: 0, outcome: "held", creates: 0, loseNextRestartReply: false, requests: [], violations: [] };
 
 function newIntent(predecessorIntentId = null) {
@@ -80,8 +84,13 @@ function answerCreate(method, params) {
     }
     return opened();
   }
+  if (method === "akra/issue/readinessBarrier") return { ok: true };
   if (params.intentId !== issue.intent.intentId) throw new Error("현재 생성 의도가 아닙니다.");
-  if (method === "akra/issue/create/preview") return issue.intent.state === "prepared" ? makePreview(params.text) : frozenPreview(params.text);
+  if (method === "akra/issue/create/preview") {
+    const frozen = issue.intent.state !== "prepared";
+    const result = frozen ? frozenPreview(params.text) : makePreview(params.text);
+    return Promise.resolve(readiness.reply(result.preview, frozen)).then((preview) => ({ ...result, preview }));
+  }
   if (method === "akra/issue/create/publish") {
     const prepared = issue.intent.state === "prepared";
     if (!prepared && !["held", "recorded"].includes(issue.intent.state)) return { status: "refused", reason: "intent_requires_confirmation" };
@@ -206,6 +215,14 @@ try {
     const text = await panel.getByTestId("issue-draft-shared-body").innerText();
     return text.includes("[removed]") && text.includes("[[masked:2]]") && !text.includes(SECRET) && !text.includes(LOG);
   }));
+  await exerciseReadiness({
+    page, panel, fixture: readiness, requests: issue.requests, previewMethod: "akra/issue/create/preview",
+    approval: approve, publish: panel.getByTestId("issue-create-publish"), errorId: "issue-create-error", until, check,
+  });
+  if (issueScreenshotPath) {
+    await panel.getByTestId("issue-draft-readiness").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: issueScreenshotPath, animations: "disabled" });
+  }
   await approve.check();
   await title.fill("수정한 새 오류");
   check("원문을 고치면 다음 미리보기 전에도 승인이 즉시 취소된다", !(await approve.isChecked()) && await panel.getByTestId("issue-create-publish").isDisabled());
@@ -220,6 +237,10 @@ try {
   check("Held는 원문 편집기를 닫고 승인한 공유본만 보여 준다", (await title.count()) === 0 && (await panel.getByTestId("issue-create-frozen-body").innerText()).includes("[[masked:2]]"));
   check("Held의 원문은 화면에서 제거된다", !(await panel.innerText()).includes(SECRET) && !(await panel.innerText()).includes(LOG));
   await panel.getByTestId("issue-draft-preview").waitFor();
+  check("고정된 게시본을 새 준비검사 입력으로 대체하지 않는다",
+    await until(async () => (await panel.getByTestId("issue-draft-readiness-blocked").count()) === 1 &&
+      (await panel.getByTestId("issue-draft-readiness-blocked").getAttribute("data-reason")) === "frozen_draft") &&
+    await panel.getByTestId("issue-draft-expected-labels").isDisabled());
   check("고정된 공유본은 원문 구간 정보 없이 표식 0개로 표시하지 않는다", !(await panel.innerText()).includes("표식이 없습니다.") && !(await panel.innerText()).includes("남는 가림 표식"));
   const firstIntent = issue.intent.intentId;
   const beforeResume = publishCount();

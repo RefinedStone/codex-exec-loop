@@ -32,6 +32,7 @@ pub(super) fn validate_policy(
     if policy.binding.github.mode > policy.authority.autonomy_cap {
         return Err(invalid("binding.github.mode", "exceeds_autonomy_cap"));
     }
+    validate_labels(&policy.labels)?;
     for label in &policy.select.labels_any {
         validate_text_value(label, "select.labels_any")?;
     }
@@ -89,6 +90,26 @@ pub(super) fn validate_policy(
     }
     for rule in &policy.human_required.additional {
         rule.validate()?;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_labels(
+    labels: &IssueAutomationLabels,
+) -> Result<(), IssueAutomationPolicyValueError> {
+    let entries = [
+        ("labels.auto", labels.auto.as_str()),
+        ("labels.gated", labels.gated.as_str()),
+        ("labels.manual", labels.manual.as_str()),
+        ("labels.hold", labels.hold.as_str()),
+    ];
+    let mut seen = Vec::new();
+    for (field, name) in entries {
+        validate_text_value(name, field)?;
+        if seen.contains(&name) {
+            return Err(invalid(field, "duplicate_label_name"));
+        }
+        seen.push(name);
     }
     Ok(())
 }
