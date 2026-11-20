@@ -107,3 +107,15 @@ export function dotStatusLine(
 export function isSentDraft(storedDraft: string | undefined, sentText: string): boolean {
   return (storedDraft ?? "").trim() === sentText;
 }
+
+/** 새 메시지(중간 답 포함)와 턴 완료는 다르다. 연결이 끊기면 bounded fallback을 새로 시작한다. */
+export function nextDotReplyWait(
+  waitingSince: number | null,
+  before: { connected: boolean; working: boolean } | undefined,
+  next: { connected: boolean; working: boolean },
+  now: number,
+): number | null {
+  if (!next.connected && before?.connected && before.working) return now;
+  if (next.connected && !next.working && before?.working) return null;
+  return waitingSince;
+}

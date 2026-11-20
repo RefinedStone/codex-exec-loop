@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { reduceDotLive, type DotLiveSlice } from "../src/renderer/session/desktopStore";
-import { allowDotSending, dayLabel, DOT_SEND_WARNING, dotStatusLine, hasDotRepliedSince, isDotSendingAllowed, isSentDraft, lastReadMessageId, messageTime, resetDotSendPermissions } from "../src/renderer/views/dotSend";
+import { allowDotSending, dayLabel, DOT_SEND_WARNING, dotStatusLine, hasDotRepliedSince, nextDotReplyWait, isDotSendingAllowed, isSentDraft, lastReadMessageId, messageTime, resetDotSendPermissions } from "../src/renderer/views/dotSend";
 
 afterEach(() => resetDotSendPermissions());
 
@@ -153,5 +153,19 @@ describe("isSentDraft", () => {
     // 초안이 이미 비었으면 지울 것이 없다.
     expect(isSentDraft(undefined, "hello")).toBe(false);
     expect(isSentDraft("", "hello")).toBe(false);
+  });
+});
+
+describe("interim replies and live disconnect", () => {
+  it("keeps waiting through interim messages and starts bounded reads at disconnect", () => {
+    const working = { connected: true, working: true };
+    let waiting = nextDotReplyWait(100, undefined, working, 200);
+    expect(waiting).toBe(100);
+    waiting = nextDotReplyWait(waiting, working, working, 250);
+    expect(waiting).toBe(100);
+    waiting = nextDotReplyWait(waiting, working, { connected: false, working: true }, 60_000);
+    expect(waiting).toBe(60_000);
+    expect(nextDotReplyWait(waiting, { connected: false, working: true }, { connected: false, working: true }, 61_000)).toBe(60_000);
+    expect(nextDotReplyWait(waiting, { connected: false, working: true }, { connected: true, working: false }, 62_000)).toBeNull();
   });
 });

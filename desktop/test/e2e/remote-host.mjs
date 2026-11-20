@@ -117,6 +117,20 @@ try {
   const readsAfterReply = gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length;
   await page.waitForTimeout(5_000);
   check("the chat stops reading after the reply", gateway.remoteReceivedMethods.filter((method) => method === "akra/dots/messages").length === readsAfterReply);
+  // 중간 메시지를 읽은 뒤 live만 끊는다. GET은 가능하고, 최종 답은 재접속 없이 나타나야 한다.
+  const beforeDisconnect = await page.getByTestId("dot-message").count();
+  await page.getByTestId("dot-composer-input").fill("finish after live disconnect");
+  await page.getByTestId("dot-composer-send").click();
+  await page.getByTestId("dot-message").nth(beforeDisconnect + 1).waitFor({ timeout: 15_000 });
+  gateway.setDotLiveState(false, true);
+  await page.getByTestId("dot-refresh").waitFor({ timeout: 5_000 });
+  await page.getByTestId("dot-message").nth(beforeDisconnect + 2).waitFor({ timeout: 15_000 });
+  check("the final reply appears by GET after an interim reply and live disconnect",
+    (await page.getByTestId("dot-message").last().innerText()).includes("On it.") &&
+    (await page.getByTestId("dot-refresh").count()) === 1);
+  gateway.setDotLiveState(true, false);
+  await page.getByTestId("dot-refresh").waitFor({ state: "detached", timeout: 5_000 });
+
   // 따로 뜬 창으로 옮긴다. 옆 칸은 닫힌다. 그 창은 dot 의 대화만 보이고 자기 접속으로 읽는다. 쓰던 글도 간다.
   await page.getByTestId("dot-composer-input").fill("from the side");
   const [dotWindow] = await Promise.all([app.waitForEvent("window"), page.getByTestId("dot-pop-out").click()]);
