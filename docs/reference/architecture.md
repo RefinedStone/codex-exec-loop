@@ -991,6 +991,11 @@ strategy in the production TUI.
 - `mask_issue_text` (`application/service/issue_masking`) is the only path from local issue text to
   an `IssueSharedCopy`. Removed values leave it in no output; masked plaintext leaves it only as
   `VaultPlaintext`. Callers write drafts, autosave, and Vault entries from its result only.
+- The LLM draft review (`application/service/issue_review`) takes an `IssueValidationPassed` and
+  returns only `IssueReviewSuggestion` values through `issue_review_model_port`. It cannot publish,
+  restore, or build an `IssueValidationPassed`. `apply_issue_review_suggestion` gives a local draft
+  (`IssueReviewAppliedDraft`) that must pass `mask_issue_text` and validation again. Only
+  `FakeIssueReviewModelAdapter` implements the port; a real model adapter is proposed.
 - The issue template convention (`domain/issue_template`) comes only from `IssueTemplateService`.
   A missing, unreadable, or invalid template and an unsupported required input are separate
   results; callers must not treat them as "no requirement". A draft keeps the template version
