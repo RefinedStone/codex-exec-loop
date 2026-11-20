@@ -971,6 +971,9 @@ strategy in the production TUI.
   the publish gate (`application/service/issue_validation`) both call it. Only that rule builds
   `IssueValidationPassed` (private fields, no `Deserialize`); an external write must use the text
   of a passed result, and a failed or absent validator blocks the write, not reads or local edits.
+- `mask_issue_text` (`application/service/issue_masking`) is the only path from local issue text to
+  an `IssueSharedCopy`. Removed values leave it in no output; masked plaintext leaves it only as
+  `VaultPlaintext`. Callers write drafts, autosave, and Vault entries from its result only.
 
 Verify boundary-sensitive changes with:
 

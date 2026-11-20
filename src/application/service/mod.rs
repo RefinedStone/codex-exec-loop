@@ -17,6 +17,8 @@ pub mod review_center;
 pub mod manual_prompt_preparation;
 // MCP hub service 는 등록부 확인, 도구 검색, 결과 축약을 맡는다.
 pub mod mcp_hub;
+// issue_masking 은 공개 정책에 따라 제목과 본문의 민감 구간을 버리거나 표식으로 가린다 (#2419).
+pub mod issue_masking;
 // issue_policy 는 이슈 정책 파일을 검증하고 사용자 < 프로젝트 순서로 합친다 (#2416).
 pub mod issue_policy;
 // issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).
