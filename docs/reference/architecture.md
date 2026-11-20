@@ -957,6 +957,20 @@ strategy in the production TUI.
   reads the required fields of the issue's project and issue type from the edit metadata: supported
   fields become `IssueFieldRequirement`, the others are listed as unsupported. No caller is wired to
   it yet.
+- `JiraIssueUpdateAdapter` implements `issue_update_port` for the same Jira Cloud site and runs
+  behind `IssueJournaledPublishService`; Jira has no journal or approval logic of its own. The
+  compared body is the Markdown form of the description (`JIRA_BODY_REPRESENTATION_VERSION` 1):
+  the reader escapes Markdown syntax found in Jira text and does not depend on mark order, text
+  node splits, or attributes outside the subset. A body is written only when its ADF form reads
+  back as the same Markdown; a body with an `[unsupported: <type>]` place, an unclosed mark, or
+  `\r` is refused before any remote call. Before the write the adapter checks the cloud ID, the
+  edit metadata (`summary` and `description` must be editable), and the current description; an
+  unsupported node or mark there refuses the write, because the write would remove it. The write
+  is one `PUT /rest/api/3/issue/{id}` with `summary` and `description` only, sent once through an
+  injected function, and the answer is a re-read of the issue. Jira has no conditional update, so
+  the same read-to-write race remains. A refusal after the intent is `sent` leaves the intent in
+  `needs_confirmation` with the remote unchanged; the user reviews and abandons it. No production
+  transport and no caller are wired yet.
 - A board field write (`issue_board_field_port`, implemented by `GithubIssueBoardFieldAdapter`) is a
   separate operation from an issue body write: it needs an `IssueWriteApproval` with
   `IssueWriteOperation::BoardField` for the same issue. The adapter re-reads the issue's project
