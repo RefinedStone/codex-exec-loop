@@ -14,7 +14,10 @@ const electronPath = createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
 
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING]);
+const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
+  // 공유본은 Gateway 가 준다 (#2428). 화면은 제목과 본문만 받는다.
+  issueHandoffCopy: (params) => ({ sharedCopy: { title: `Issue ${params.number}`, body: `Shared body of ${params.owner}/${params.repository}#${params.number} for ${params.cwd ?? "no folder"}` } }),
+});
 const userData = await mkdtemp(join(tmpdir(), "akra-projects-ui-"));
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -28,7 +31,7 @@ const check = (name, ok) => {
 const app = await electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env });
 try {
   await app.evaluate(({ ipcMain }) => {
-    for (const channel of ["akra:github-project", "akra:github-issue-prompt", "akra:github-repository"]) ipcMain.removeHandler(channel);
+    for (const channel of ["akra:github-project", "akra:github-repository"]) ipcMain.removeHandler(channel);
     const issue = (number, repository, status) => ({ kind: "issue", title: `Issue ${number}`, url: `https://github.com/${repository}/issues/${number}`, repository, number, status });
     ipcMain.handle("akra:github-project", (_event, project) => {
       if (project !== "sample/1") throw new Error(`Unexpected project ${project}`);
@@ -45,7 +48,6 @@ try {
         truncated: false,
       };
     });
-    ipcMain.handle("akra:github-issue-prompt", (_event, url) => `Issue prompt for ${url}`);
     // 원격 주소의 대소문자가 GitHub 의 이름과 다른 경우이다.
     ipcMain.handle("akra:github-repository", (_event, cwd) => (cwd === "/work/example-app" ? "Sample/Widgets" : null));
   });
@@ -83,12 +85,12 @@ try {
 
   await filter.selectOption("sample/widgets");
   await panel.getByTestId("github-project-hand-off").first().click();
-  check("hand-off fills the composer with the issue", await waitForDraft("Issue prompt for https://github.com/sample/widgets/issues/1"));
+  check("hand-off fills the composer with the issue", await waitForDraft("Shared body of sample/widgets#1 for /work/example-app"));
   check("hand-off picks the folder of the issue's repository", (await page.locator(".home-pickers").innerText()).includes("/work/example-app"));
 
   await filter.selectOption("sample/lib");
   await panel.getByTestId("github-project-hand-off").first().click();
-  check("hand-off of another repository's issue fills the composer", await waitForDraft("Issue prompt for https://github.com/sample/lib/issues/3"));
+  check("hand-off of another repository's issue fills the composer", await waitForDraft("Shared body of sample/lib#3 for no folder"));
   check("hand-off of another repository's issue leaves the folder to choose", !(await page.locator(".home-pickers").innerText()).includes("/work/example-app"));
   check("hand-off does not send the message", !gateway.receivedMethods.includes("turn/start"));
 

@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  issuePrompt,
-  parseIssueUrl,
   parseProjectPage,
   parseProjectRef,
   parsePullRequestUrl,
   parseSummary,
   readGitHubSummary,
-  readIssuePrompt,
   readProject,
   readReviewPrompt,
   reviewPrompt,
@@ -195,45 +192,5 @@ describe("GitHub Project", () => {
       }),
     ).rejects.toThrow("owner/번호");
     expect(called).toBe(false);
-  });
-});
-
-describe("issue hand-off prompt", () => {
-  const issueJson = (comments: unknown[], totalCount = comments.length, body: string | null = "Steps to reproduce") =>
-    JSON.stringify({
-      data: {
-        repository: {
-          nameWithOwner: "sample/widgets",
-          issue: { number: 42, url: "https://github.com/sample/widgets/issues/42", title: "Crash on start", body, comments: { totalCount, nodes: comments } },
-        },
-      },
-    });
-
-  it("accepts github.com issue addresses only", () => {
-    expect(parseIssueUrl("https://github.com/sample/widgets/issues/42")).toEqual({ owner: "sample", name: "widgets", number: 42 });
-    expect(parseIssueUrl("https://github.com/sample/widgets/pull/42")).toBeNull();
-    expect(parseIssueUrl("https://evil.example/sample/widgets/issues/42")).toBeNull();
-  });
-
-  it("puts the issue, its body, recent comments and the closing keyword in the message", () => {
-    const prompt = issuePrompt(issueJson([{ author: { login: "kim" }, body: "Also on Windows." }], 12));
-    expect(prompt).toContain("Closes sample/widgets#42");
-    expect(prompt).toContain("https://github.com/sample/widgets/issues/42 (Crash on start)");
-    expect(prompt).toContain("Steps to reproduce");
-    expect(prompt).toContain("kim: Also on Windows.");
-    expect(prompt).toContain("댓글 12개 중 최근 1개");
-  });
-
-  it("marks an empty body and clips long text", () => {
-    expect(issuePrompt(issueJson([], 0, null))).toContain("(본문 없음)");
-    expect(issuePrompt(issueJson([], 0, "x".repeat(30_000))).length).toBeLessThanOrEqual(20_000 + 10);
-  });
-
-  it("asks gh for the issue and refuses other addresses", async () => {
-    const calls: string[][] = [];
-    await readIssuePrompt("https://github.com/sample/widgets/issues/42", async (args) => (calls.push(args), issueJson([])));
-    expect(calls[0]).toEqual(expect.arrayContaining(["owner=sample", "name=widgets", "number=42"]));
-    await expect(readIssuePrompt("https://github.com/sample/widgets/pull/42", async () => "")).rejects.toThrow("이슈 주소");
-    expect(() => issuePrompt(JSON.stringify({ data: { repository: { issue: null } } }))).toThrow("이슈를 찾을 수 없습니다");
   });
 });

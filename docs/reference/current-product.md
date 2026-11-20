@@ -815,9 +815,16 @@ The Gateway records the external documents that a thread mentions, without a mod
   storage) with `gh api graphql` (`ProjectV2`, `read:project` scope, at most 500 items). It shows the open
   issues, pull requests, and drafts grouped by the Status field and counts the closed ones. The repository
   filter starts at the `origin` of the open thread's folder. Hand-off of an issue fills the composer with the
-  issue body, the 10 newest comments, and a `Closes owner/name#N` request, and picks the first workspace folder
-  whose `origin` is the issue's repository; without one, sending asks for a folder
-  (`desktop/src/main/githubService.ts`, `desktop/src/renderer/work/GitHubProjectPanel.tsx`).
+  shared copy of the issue title and body and a `Closes owner/name#N` request, and picks the first workspace
+  folder whose `origin` is the issue's repository; without one, sending asks for a folder. Comments are not
+  included. The shared copy comes from the Gateway method `akra/issue/handoffCopy` (params
+  `{ owner, repository, number, cwd? }`, result `{ sharedCopy: { title, body } }`, `local` host only, #2428):
+  the Gateway reads the issue with `gh`, finds known secret shapes (token prefixes, `Bearer` values, URL
+  credentials, `key=value` secrets, PEM private keys), and applies the AI hand-off issue policy. The raw
+  remote text does not reach the renderer. An unreadable policy or a span that needs user confirmation
+  refuses the hand-off. Names and paths are not detected, and the approved-copy check has no record yet
+  (`desktop/src/renderer/work/githubProjects.ts`, `desktop/src/renderer/work/GitHubProjectPanel.tsx`,
+  `src/adapter/inbound/gateway/issue.rs`, `src/application/service/issue_handoff.rs`).
   The "변경" side panel lists the working-tree changes of the open thread's folder and can stage, unstage, discard,
   or open one file; the main process reads the file's state from git again before it acts, asks before a discard,
   and refuses conflicted files, files with a content filter (LFS), and discarding a folder

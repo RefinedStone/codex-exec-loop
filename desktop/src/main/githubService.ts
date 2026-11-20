@@ -13,8 +13,6 @@ const MAX_PROMPT_CHARS = 20_000;
 const PROJECT_PAGE_SIZE = 100;
 /** Project 항목을 읽는 최대 페이지 수이다. 넘으면 뒤의 항목은 읽지 않는다. */
 const MAX_PROJECT_PAGES = 5;
-/** 이슈 넘기기에 넣는 최근 댓글 수이다. */
-const ISSUE_COMMENT_COUNT = 10;
 
 /** `stdin` 을 주면 gh 의 표준 입력에 쓴다 (`--body-file -` 처럼 긴 값을 인자 대신 넘길 때). */
 export type GhRunner = (args: string[], stdin?: string) => Promise<string>;
@@ -328,74 +326,4 @@ export async function readProject(input: unknown, run: GhRunner = runGh): Promis
   }
   project.truncated = true;
   return project;
-}
-
-/** `https://github.com/<owner>/<name>/issues/<number>` 만 받는다. */
-export function parseIssueUrl(url: unknown): { owner: string; name: string; number: number } | null {
-  const match = typeof url === "string" ? /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/issues\/(\d+)$/.exec(url) : null;
-  return match ? { owner: match[1]!, name: match[2]!, number: Number(match[3]) } : null;
-}
-
-const ISSUE_QUERY = `query($owner: String!, $name: String!, $number: Int!, $comments: Int!) {
-  repository(owner: $owner, name: $name) {
-    nameWithOwner
-    issue(number: $number) {
-      number url title body
-      comments(last: $comments) { totalCount nodes { author { login } body } }
-    }
-  }
-}`;
-
-/** 이슈의 제목, 본문, 최근 댓글로 새 스레드의 첫 메시지를 만든다. 보내기는 사용자가 한다. */
-export function issuePrompt(json: string): string {
-  const repository = (JSON.parse(json) as {
-    data?: {
-      repository?: {
-        nameWithOwner?: string;
-        issue?: {
-          number?: number;
-          url?: string;
-          title?: string;
-          body?: string | null;
-          comments?: { totalCount?: number; nodes?: Array<{ author?: { login?: string } | null; body?: string }> };
-        } | null;
-      } | null;
-    };
-  }).data?.repository;
-  const issue = repository?.issue;
-  if (!issue?.url || typeof issue.number !== "number") throw new Error("이슈를 찾을 수 없습니다.");
-  const reference = `${repository?.nameWithOwner ?? ""}#${issue.number}`;
-  const lines = [
-    "다음 GitHub 이슈를 처리해 주세요. PR 을 만들면 본문에 `Closes " + reference + "` 를 적어 이슈와 연결해 주세요.",
-    `이슈: ${issue.url} (${issue.title ?? ""})`,
-    "",
-    "## 본문",
-    clip((issue.body ?? "").trim() || "(본문 없음)", MAX_PROMPT_CHARS),
-  ];
-  const comments = issue.comments?.nodes ?? [];
-  if (comments.length > 0) {
-    lines.push("", "## 최근 댓글");
-    for (const comment of comments) {
-      lines.push(`${comment.author?.login ?? "?"}: ${clip((comment.body ?? "").trim(), MAX_COMMENT_CHARS)}`);
-    }
-    const total = issue.comments?.totalCount ?? comments.length;
-    if (total > comments.length) {
-      lines.push(`(댓글 ${total}개 중 최근 ${comments.length}개만 넣었습니다. 나머지는 이슈에서 확인하세요.)`);
-    }
-  }
-  return clip(lines.join("\n").trim(), MAX_PROMPT_CHARS);
-}
-
-export async function readIssuePrompt(url: unknown, run: GhRunner = runGh): Promise<string> {
-  const target = parseIssueUrl(url);
-  if (!target) throw new Error("GitHub 이슈 주소가 아닙니다.");
-  const json = await run([
-    "api", "graphql",
-    "-f", `query=${ISSUE_QUERY}`,
-    "-f", `owner=${target.owner}`,
-    "-f", `name=${target.name}`,
-    "-F", `number=${target.number}`,
-    "-F", `comments=${ISSUE_COMMENT_COUNT}`,
-  ]);
-  return issuePrompt(json);
 }

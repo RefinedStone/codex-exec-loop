@@ -25,7 +25,7 @@ import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBr
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
 import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks";
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
-import { readGitHubSummary, readIssuePrompt, readProject, readReviewPrompt } from "./githubService";
+import { readGitHubSummary, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { LinearService, isLinearIssueUrl } from "./linearService";
 import { SkillService } from "./skillService";
@@ -538,7 +538,6 @@ ipcMain.handle(IPC_CHANNELS.browserAgentStatus, (event) => browserAgents.status(
 ipcMain.handle(IPC_CHANNELS.githubSummary, () => readGitHubSummary());
 ipcMain.handle(IPC_CHANNELS.githubReviewPrompt, (_event, url: unknown) => readReviewPrompt(url));
 ipcMain.handle(IPC_CHANNELS.githubProject, (_event, project: unknown) => readProject(project));
-ipcMain.handle(IPC_CHANNELS.githubIssuePrompt, (_event, url: unknown) => readIssuePrompt(url));
 ipcMain.handle(IPC_CHANNELS.githubRepository, (_event, cwd: unknown) => readGitHubRepository(cwd));
 ipcMain.handle(IPC_CHANNELS.jiraStatus, () => jira.status());
 async function changeJira(action: () => Promise<unknown>): Promise<unknown> {

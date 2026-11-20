@@ -1,5 +1,10 @@
 // GitHub Project 패널(R11)의 화면 밖 규칙이다: 저장소 필터, Status 묶음, 저장소에 맞는 작업 폴더 찾기.
 import type { GitHubProjectItem } from "../../shared/bridge";
+import type { GatewayRequest } from "./notionHub";
+
+/** Gateway 가 이슈를 읽고 AI 전달 정책으로 가린 공유본을 준다 (#2428). 원격의 원시 값은 이 화면에 오지 않는다. */
+export const ISSUE_HANDOFF_COPY_METHOD = "akra/issue/handoffCopy";
+const MAX_PROMPT_CHARS = 20_000;
 
 /** 저장소에 맞는 폴더를 찾을 때 원격을 읽는 최대 폴더 수이다. */
 const MAX_FOLDER_LOOKUPS = 20;
@@ -55,4 +60,30 @@ export async function findFolderForRepository(
     if (sameRepository(found, repository)) return cwd;
   }
   return null;
+}
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…(생략)` : text;
+}
+
+/**
+ * 이슈의 공유본을 Gateway 에서 읽어 새 스레드의 첫 메시지를 만든다. 입력은 가린 제목과 본문뿐이다. 댓글과 복원본은
+ * 넣지 않는다. `cwd` 는 이슈의 저장소에 맞는 작업 폴더이고, 그 프로젝트의 이슈 정책을 고른다. 보내기는 사용자가 한다.
+ */
+export async function readIssueHandoffPrompt(request: GatewayRequest, url: string, repository: string, number: number, cwd: string | null): Promise<string> {
+  const [owner, name] = repository.split("/");
+  const { sharedCopy } = await request<{ sharedCopy: { title: string; body: string } }>(ISSUE_HANDOFF_COPY_METHOD, {
+    owner,
+    repository: name,
+    number,
+    ...(cwd ? { cwd } : {}),
+  });
+  const lines = [
+    "다음 GitHub 이슈를 처리해 주세요. PR 을 만들면 본문에 `Closes " + `${repository}#${number}` + "` 를 적어 이슈와 연결해 주세요.",
+    `이슈: ${url} (${sharedCopy.title})`,
+    "",
+    "## 본문",
+    clip(sharedCopy.body.trim() || "(본문 없음)", MAX_PROMPT_CHARS),
+  ];
+  return clip(lines.join("\n").trim(), MAX_PROMPT_CHARS);
 }
