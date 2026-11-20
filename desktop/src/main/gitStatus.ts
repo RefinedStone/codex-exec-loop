@@ -416,7 +416,7 @@ export async function executeGitFilePlan(plan: GitFilePlan): Promise<GitActionRe
   // Reject a stale plan before even the first destructive command executes.
   if (!(await gitFilePlanIsCurrent(plan))) return { ok: false, message: CHANGED_SINCE_CONFIRMATION };
   for (const args of plan.commands) {
-    if (plan.action === "discard" && plan.originalPath) {
+    if (plan.action === "discard" && plan.status.startsWith("R") && plan.originalPath) {
       const original = await repositoryFile(plan.cwd, plan.originalPath);
       // A new file at the former name must not be clobbered by rename restore.
       if (await pathFingerprint(original.target)) return { ok: false, message: CHANGED_SINCE_CONFIRMATION };
