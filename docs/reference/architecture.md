@@ -1011,9 +1011,11 @@ strategy in the production TUI.
   `refused` with no write. `preview` runs the required-convention gate only; `publish` runs
   `gate_issue_publish_with_code_validators`, so a required code validator that does not pass
   blocks the write. These requests carry text before masking, and `open` returns the remote
-  text as the edit start: the Gateway keeps both out of the session recording. No Vault key is
-  wired yet, so a publish with a restorable mask is `held` until the user repeats it with
-  `sharedCopyOnly`.
+  text as the edit start: the Gateway keeps both out of the session recording. A publish with a
+  restorable mask first seals the masked spans in the Vault with
+  `EvidenceVaultUnlockService::sealing_key`, and the service finalizes the restore link when the
+  publish is `confirmed` (also on a later `open` or `recheck`). When the key store or the Vault
+  save fails, the publish is `held` until the user repeats it with `sharedCopyOnly`.
 - The issue policy (`domain/issue_policy`) comes only from `IssuePolicyService`. An invalid or
   unreadable policy file is `IssuePolicyBlocked`; callers must not replace it with the built-in
   policy. See [configuration](./configuration.md#issue-policy-file).
@@ -1021,7 +1023,8 @@ strategy in the production TUI.
   `FilesystemEvidenceVaultStoreAdapter` writes one record file for each scope (local project,
   issue, field, publish intent or confirmed version) with ChaCha20-Poly1305 from `ring`. The record
   keeps the format version, key identifier, nonce, and ciphertext; the scope is authenticated as
-  associated data. The caller supplies the key and the vault root; nothing wires the adapter yet.
+  associated data. The caller supplies the key and the vault root; `build_issue_drafts` wires it to
+  `$AKRA_HOME/evidence-vault` for the issue publish path.
 - The Vault key lives in the OS key store behind `VaultKeyStorePort` (`OsVaultKeyStoreAdapter`,
   `keyring` crate; `FakeVaultKeyStoreAdapter` for tests). `EvidenceVaultUnlockService` is the only
   constructor of `VaultUserConfirmation`: it gives grants bound to one issue and one viewing
