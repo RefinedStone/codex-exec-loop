@@ -610,13 +610,14 @@ mod tests {
         assert_eq!(mode.effect, CommandEffect::Write);
         assert_eq!(mode.idempotency, CommandIdempotency::Natural);
         assert_eq!(mode.completion, CommandCompletion::Records);
+        assert_eq!(mode.rejections, &[ReasonCode::HumanConfirmationRequired]);
         let answer = KernelCommandKind::AnswerIssueDecision.spec();
         assert_eq!(answer.scope, CommandScope::Issue);
         assert_eq!(answer.state, CommandState::Store);
         assert_eq!(answer.effect, CommandEffect::Write);
         assert_eq!(answer.idempotency, CommandIdempotency::Keyed);
         assert_eq!(answer.completion, CommandCompletion::Records);
-        assert!(answer.rejections.is_empty());
+        assert_eq!(answer.rejections, &[ReasonCode::HumanConfirmationRequired]);
         let sync = KernelCommandKind::SyncIssues.spec();
         assert_eq!(sync.scope, CommandScope::Issue);
         assert_eq!(sync.state, CommandState::Runtime);
@@ -686,6 +687,7 @@ mod tests {
                 "observation_only",
                 "execution_grant_required",
                 "close_disabled",
+                "human_confirmation_required",
                 "decision_superseded",
                 "issue_automation_off",
             ]
