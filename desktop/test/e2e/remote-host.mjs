@@ -22,6 +22,8 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     { id: "m2", createdAt: "2026-11-14T01:00:05Z", author: "Mika", fromDot: true, text: "All **green**." },
   ],
   chats: [{ id: "chat-1", title: "내 ChatGPT 대화" }],
+  // 첫 목록 조회는 제한된다. 사용자가 다시 읽을 수 있어야 한다.
+  chatsRateLimited: true,
   chatConversations: {
     "chat-1": {
       id: "chat-1",
@@ -207,7 +209,14 @@ try {
   console.log((await page.getByTestId("remote-host").innerText()).split("\n").slice(0, 4).join(" | "));
   console.log("----------------------------");
 
-  // ChatGPT 개인 대화 구역 (plan 25). dot 과 다른 구역이고, 누르면 읽기 전용 대화가 옆 칸에 열린다.
+  // ChatGPT 개인 대화 구역 (plan 25). 첫 목록 조회가 제한됐다: 구역은 이유를 보이고, 제한이 풀리면 다시 읽는다.
+  await page.getByTestId("chats-problem").waitFor({ timeout: 10_000 });
+  check("a limited first list shows the reason and no conversation", (await page.getByTestId("chats-problem").innerText()).includes("30초") && (await page.getByTestId("remote-chat-entry").count()) === 0);
+  gateway.setChatsRateLimited(false);
+  await page.getByTestId("chats-reload").click();
+  await page.getByTestId("remote-chat-entry").first().waitFor({ timeout: 10_000 });
+  check("reading again after the limit shows the list and clears the reason", (await page.getByTestId("chats-problem").count()) === 0);
+  // dot 과 다른 구역이고, 누르면 읽기 전용 대화가 옆 칸에 열린다.
   check("the sidebar lists the ChatGPT conversations", (await page.getByTestId("remote-chat-entry").filter({ hasText: "내 ChatGPT 대화" }).count()) === 1);
   check("the ChatGPT list is read over the remote connection", gateway.remoteReceivedMethods.includes("akra/chats/list") && !gateway.receivedMethods.includes("akra/chats/list"));
   await page.getByTestId("remote-chat-entry").first().click();

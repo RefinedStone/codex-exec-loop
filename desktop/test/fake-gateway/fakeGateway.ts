@@ -64,6 +64,8 @@ export interface FakeGateway {
   /** 먼저 도착해서 쓰인 서버 요청 답이다. */
   readonly answeredRequests: Array<{ requestId: string; result: unknown }>;
   setDotLiveState(connected: boolean, working: boolean): void;
+  /** `akra/chats/*` 의 조회 제한을 켜고 끈다 (plan 25). 처음 값은 `chatsRateLimited` 옵션이다. */
+  setChatsRateLimited(limited: boolean): void;
   close(): Promise<void>;
 }
 
@@ -210,7 +212,7 @@ export async function startFakeGateway(
     chats?: unknown[];
     /** 원격 접속의 `akra/chats/read` 답이다. 대화 id 로 고른다. */
     chatConversations?: Record<string, unknown>;
-    /** true 이면 `akra/chats/*` 가 조회 제한 오류로 답한다 (code -32010). */
+    /** true 이면 `akra/chats/*` 가 조회 제한 오류로 답한다 (code -32010). `setChatsRateLimited` 로 바꾼다. */
     chatsRateLimited?: boolean;
   } = {},
 ): Promise<FakeGateway> {
@@ -240,6 +242,7 @@ export async function startFakeGateway(
   /** `akra/dots/watch` 로 방을 보는 접속이다. 그 접속에만 `akra/dots/live` 를 민다. */
   const watchedRooms = new Map<WebSocket, string>();
   let dotLiveConnected = true;
+  let chatsRateLimited = options.chatsRateLimited === true;
   const pushDotLive = (socket: WebSocket, working: boolean) => {
     const roomId = watchedRooms.get(socket);
     if (roomId === undefined || socket.readyState !== socket.OPEN) return;
@@ -317,8 +320,8 @@ export async function startFakeGateway(
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { dots: options.dots } }));
         return;
       }
-      if (remote && hasId && (options.chats || options.chatsRateLimited) && message.method.startsWith("akra/chats/")) {
-        if (options.chatsRateLimited) {
+      if (remote && hasId && (options.chats || chatsRateLimited) && message.method.startsWith("akra/chats/")) {
+        if (chatsRateLimited) {
           socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32010, message: "ChatGPT limited history reads; retry later", data: { retryAfterSeconds: 30 } } }));
           return;
         }
@@ -442,6 +445,9 @@ export async function startFakeGateway(
     endpoint,
     receivedMethods,
     remoteReceivedMethods,
+    setChatsRateLimited(limited) {
+      chatsRateLimited = limited;
+    },
     setDotLiveState(connected, working) {
       dotLiveConnected = connected;
       for (const socket of watchedRooms.keys()) pushDotLive(socket, working);

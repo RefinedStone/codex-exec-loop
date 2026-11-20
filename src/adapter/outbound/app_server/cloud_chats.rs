@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
@@ -37,9 +37,14 @@ const MAX_TIME_SECONDS: u32 = 20;
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 64 * 1024;
 
-/// 마지막으로 성공한 조회이다. 제한(429) 때 그대로 돌려준다.
+/// 캐시에 두는 대화의 상한이다. 넘으면 대화 캐시를 비운다. Gateway 는 오래 실행된다.
+const MAX_CACHED_CONVERSATIONS: usize = 32;
+
+/// 마지막으로 성공한 조회이다. 제한(429) 때 그대로 돌려준다. 계정 하나의 것이다: 로그인 계정이 바뀌면 비운다.
+/// 안 그러면 이전 계정의 개인 대화가 새 계정의 답으로 나간다.
 #[derive(Default)]
 struct ChatsCache {
+    account_id: String,
     list: Option<Vec<ChatSummary>>,
     reads: HashMap<String, ChatConversation>,
 }
@@ -73,10 +78,11 @@ impl CloudChatsRestAdapter {
 
 impl ChatsPort for CloudChatsRestAdapter {
     fn list_chats(&self) -> Result<Vec<ChatSummary>, ChatsError> {
-        match self.get(LIST_URL, "chats list") {
+        let credentials = load_credentials(&self.auth_path)?;
+        match self.get(LIST_URL, &credentials, "chats list") {
             Ok(body) => {
                 let chats = parse_chat_list(&body)?;
-                if let Ok(mut cache) = self.cache.lock() {
+                if let Some(mut cache) = self.cache_for(&credentials.account_id) {
                     cache.list = Some(chats.clone());
                 }
                 Ok(chats)
@@ -84,7 +90,10 @@ impl ChatsPort for CloudChatsRestAdapter {
             // 한 번이라도 읽었으면 마지막 성공을 돌려준다. 첫 조회부터 제한이면 그 오류를 올린다.
             Err(ChatsError::RateLimited {
                 retry_after_seconds,
-            }) => match self.cache.lock().ok().and_then(|cache| cache.list.clone()) {
+            }) => match self
+                .cache_for(&credentials.account_id)
+                .and_then(|cache| cache.list.clone())
+            {
                 Some(list) => Ok(list),
                 None => Err(ChatsError::RateLimited {
                     retry_after_seconds,
@@ -101,10 +110,16 @@ impl ChatsPort for CloudChatsRestAdapter {
             )));
         }
         let url = format!("{CONVERSATION_URL_PREFIX}{id}");
-        match self.get(&url, "chat read") {
+        let credentials = load_credentials(&self.auth_path)?;
+        match self.get(&url, &credentials, "chat read") {
             Ok(body) => {
                 let conversation = parse_conversation(id, &body)?;
-                if let Ok(mut cache) = self.cache.lock() {
+                if let Some(mut cache) = self.cache_for(&credentials.account_id) {
+                    if cache.reads.len() >= MAX_CACHED_CONVERSATIONS
+                        && !cache.reads.contains_key(id)
+                    {
+                        cache.reads.clear();
+                    }
                     cache.reads.insert(id.to_string(), conversation.clone());
                 }
                 Ok(conversation)
@@ -112,9 +127,7 @@ impl ChatsPort for CloudChatsRestAdapter {
             Err(ChatsError::RateLimited {
                 retry_after_seconds,
             }) => match self
-                .cache
-                .lock()
-                .ok()
+                .cache_for(&credentials.account_id)
                 .and_then(|cache| cache.reads.get(id).cloned())
             {
                 Some(conversation) => Ok(conversation),
@@ -128,8 +141,26 @@ impl ChatsPort for CloudChatsRestAdapter {
 }
 
 impl CloudChatsRestAdapter {
+    /// 그 계정의 캐시를 잠근다. 다른 계정의 캐시가 남아 있으면 먼저 비운다.
+    fn cache_for(&self, account_id: &str) -> Option<MutexGuard<'_, ChatsCache>> {
+        let mut cache = self.cache.lock().ok()?;
+        if cache.account_id != account_id {
+            *cache = ChatsCache {
+                account_id: account_id.to_string(),
+                ..ChatsCache::default()
+            };
+        }
+        Some(cache)
+    }
+
     /// 인증된 GET 하나를 보내고 본문을 돌려준다. 429 는 `RateLimited` 이다. `label` 은 오류 글자에만 쓴다.
-    fn get(&self, url: &str, label: &str) -> Result<String, ChatsError> {
+    /// 자격증명은 부르는 쪽이 한 번 읽어 넘긴다: 요청을 보낸 계정과 캐시의 계정이 같아야 한다.
+    fn get(
+        &self,
+        url: &str,
+        credentials: &CloudCredentials,
+        label: &str,
+    ) -> Result<String, ChatsError> {
         let curl = match &self.curl {
             Ok(path) => path,
             Err(error) => {
@@ -138,8 +169,7 @@ impl CloudChatsRestAdapter {
                 )));
             }
         };
-        let credentials = load_credentials(&self.auth_path)?;
-        let config = build_curl_config(url, &credentials, &default_user_agent());
+        let config = build_curl_config(url, credentials, &default_user_agent());
 
         let mut command = Command::new(curl);
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -495,6 +525,38 @@ mod tests {
         assert!(!is_safe_conversation_id("../secrets"));
         assert!(!is_safe_conversation_id("a/b"));
         assert!(!is_safe_conversation_id(""));
+    }
+
+    #[test]
+    fn the_cache_of_one_account_is_not_served_to_another() {
+        let adapter = CloudChatsRestAdapter::new(PathBuf::from("unused-auth.json"));
+        {
+            let mut cache = adapter.cache_for("account-a").expect("cache locks");
+            cache.list = Some(vec![ChatSummary {
+                id: "c-1".to_string(),
+                title: "A 의 대화".to_string(),
+            }]);
+            cache.reads.insert(
+                "c-1".to_string(),
+                ChatConversation {
+                    id: "c-1".to_string(),
+                    title: "A 의 대화".to_string(),
+                    messages: Vec::new(),
+                },
+            );
+        }
+        // 같은 계정은 캐시를 다시 본다.
+        assert!(
+            adapter
+                .cache_for("account-a")
+                .expect("locks")
+                .list
+                .is_some()
+        );
+        // 로그인 계정이 바뀌면 이전 계정의 목록과 대화가 없다.
+        let cache = adapter.cache_for("account-b").expect("cache locks");
+        assert!(cache.list.is_none());
+        assert!(cache.reads.is_empty());
     }
 
     /// 실계정 읽기 확인이다 (조회만). 네트워크와 실토큰이 필요하므로 `#[ignore]` 이다. 개수만 찍는다.

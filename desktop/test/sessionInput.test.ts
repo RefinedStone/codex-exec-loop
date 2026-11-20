@@ -154,7 +154,8 @@ function harness(readOnly = false) {
     getTranscript: () => state.transcript ?? null,
     setKernel: (kernel) => Object.assign(state, { kernel }),
     setDots: (dots) => Object.assign(state, { dots }),
-    setChats: (chats) => Object.assign(state, { chats }),
+    setChats: (chats) => Object.assign(state, { chats, chatsProblem: null }),
+    setChatsProblem: (chatsProblem) => Object.assign(state, { chatsProblem }),
     applyDotLive: (live) => Object.assign(state, { lastDotLive: live }),
     getKernel: () => state.kernel ?? EMPTY_KERNEL_VIEW,
   };

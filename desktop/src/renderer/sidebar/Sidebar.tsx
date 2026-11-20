@@ -206,15 +206,17 @@ function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: 
 
 /**
  * ChatGPT 구역이다 (plan 25). 사용자의 ChatGPT 개인 대화를 최신 것부터 보인다. 누르면 읽기 전용 대화가 옆 칸에
- * 열리고, 다시 누르면 닫힌다. dot 과 같은 옆 칸을 쓴다. 대화가 없으면(조회 제한 포함) 구역을 숨긴다.
+ * 열리고, 다시 누르면 닫힌다. dot 과 같은 옆 칸을 쓴다. 대화도 없고 읽기 실패도 없으면 구역을 숨긴다. 읽지 못했으면
+ * (조회 제한 등) 이유를 보이고, 머리줄의 단추로 다시 읽는다. 자동으로 다시 읽지 않는다: 요청이 제한을 늘린다.
  */
-function ChatsSection({ host }: { host: string }) {
+function ChatsSection({ host, onReload }: { host: string; onReload(host: string): void }) {
   const { useStore, phase } = useRemoteHost(host);
   const [open, setOpen] = useState(true);
   const chats = useStore((state) => state.chats);
+  const problem = useStore((state) => state.chatsProblem);
   const shownChatId = useUiStore((state) => (state.chatDock?.host === host ? state.chatDock.chatId : null));
   const toggleChat = (chatId: string) => (shownChatId === chatId ? closeChat() : showChat(host, chatId));
-  if (chats.length === 0) return null;
+  if (chats.length === 0 && problem === null) return null;
   return (
     <section className="project" data-testid="chats-section">
       <header className="project-header" title="내 ChatGPT 대화 (읽기 전용)">
@@ -224,7 +226,15 @@ function ChatsSection({ host }: { host: string }) {
           <span>ChatGPT</span>
         </button>
         {phase !== "connected" && <span className="connection">{PHASE_LABEL[phase]}</span>}
+        <button type="button" className="icon-button" title="ChatGPT 대화 목록 다시 읽기" aria-label="ChatGPT 대화 목록 다시 읽기" onClick={() => onReload(host)} disabled={phase !== "connected"} data-testid="chats-reload">
+          <Icon name="refresh" size={14} />
+        </button>
       </header>
+      {open && problem && (
+        <p className="empty-row error" data-testid="chats-problem">
+          {problem}
+        </p>
+      )}
       {open && (
         <ul data-testid="remote-chats">
           {chats.map((chat) => (
@@ -281,7 +291,7 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
   );
 }
 
-export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(threadId: string): void; onOpenRemoteThread(host: string, threadId: string): void }) {
+export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { onOpenThread(threadId: string): void; onOpenRemoteThread(host: string, threadId: string): void; onReloadChats(host: string): void }) {
   const folders = useDesktopStore((state) => state.folders);
   // 원격 구역은 사용자가 켰고 Gateway 에 원격 호스트가 있을 때만 보인다.
   const remoteAgents = useUiStore((state) => state.remoteAgents);
@@ -317,7 +327,7 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread }: { onOpenThread(thr
       <div className="sidebar-scroll">
         {/* 원격 구역은 맨 위에 둔다. 로컬 스레드가 많으면 아래에 둔 구역은 스크롤해야 보여서 없는 것처럼 보인다. */}
         {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <DotsSection key={`dots:${host}`} host={host} onOpenThread={onOpenRemoteThread} />)}
-        {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <ChatsSection key={`chats:${host}`} host={host} />)}
+        {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <ChatsSection key={`chats:${host}`} host={host} onReload={onReloadChats} />)}
         {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <RemoteSection key={host} host={host} onOpenThread={onOpenRemoteThread} />)}
         {folders.length === 0 && <p className="empty-row">아직 스레드가 없습니다. 새 스레드에서 작업 폴더를 고르세요.</p>}
         {folders.map((folder) => (

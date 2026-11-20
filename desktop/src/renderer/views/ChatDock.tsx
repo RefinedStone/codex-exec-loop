@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import { useResizableWidth } from "../design/useResizableWidth";
-import { JsonRpcError } from "../rpc/jsonRpcClient";
+import { rateLimitedMessage } from "../session/chatsProblem";
 import { type ChatConversation, remoteHostStore } from "../session/desktopStore";
 import { closeChat } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
@@ -14,24 +14,11 @@ import type { GatewayRequest } from "../work/notionHub";
 const CHATS_READ_METHOD = "akra/chats/read";
 const MIN_DOCK_WIDTH = 320;
 const MAX_DOCK_WIDTH = 640;
-/** 기록 조회 제한의 JSON-RPC 오류 코드이다. Gateway 의 `akra/chats` 와 같아야 한다. */
-const CHATS_RATE_LIMITED = -32010;
 
 type ChatState =
   | { phase: "loading" }
   | { phase: "loaded"; conversation: ChatConversation }
   | { phase: "failed"; message: string };
-
-/** 조회 제한 오류이면 재시도 안내 글자를, 아니면 null 을 돌린다. */
-function rateLimitedMessage(error: unknown): string | null {
-  if (!(error instanceof JsonRpcError) || error.code !== CHATS_RATE_LIMITED) return null;
-  const seconds =
-    typeof error.data === "object" && error.data !== null && "retryAfterSeconds" in error.data
-      ? Number((error.data as { retryAfterSeconds: unknown }).retryAfterSeconds)
-      : Number.NaN;
-  const wait = Number.isFinite(seconds) && seconds > 0 ? ` ${Math.ceil(seconds)}초 뒤 다시 시도하세요.` : "";
-  return `ChatGPT 가 기록 조회를 잠시 제한했습니다.${wait} 켜 둔 ChatGPT 앱이 같은 제한을 함께 씁니다.`;
-}
 
 export function ChatDock({ host, chatId, request }: { host: string; chatId: string; request: GatewayRequest }) {
   const useStore = remoteHostStore(host);

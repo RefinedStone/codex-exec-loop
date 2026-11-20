@@ -33,6 +33,7 @@ import { KernelConnection } from "../kernel/kernelConnection";
 import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
+import { chatsListProblem } from "./chatsProblem";
 import { type ChatSummary, type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
@@ -179,6 +180,8 @@ export class DesktopSession {
   private writerElsewhereThreadId: string | null = null;
   /** 접속마다 늘어난다. 이전 접속에서 늦게 끝난 전체 검사는 반영하지 않는다. */
   private listGeneration = 0;
+  /** ChatGPT 대화 목록을 읽는 중이다. 겹친 요청을 막는다. */
+  private chatsLoading = false;
   /**
    * 이 접속에서 받은 보관·삭제와 제목 변경이다. 목록 요청보다 늦게 온 알림이 더 새롭다. 그래서 늦게 끝난 목록
    * 결과(첫 목록, rollout 전체 검사)에 덮어 쓴다. 접속마다 비운다.
@@ -537,7 +540,7 @@ export class DesktopSession {
         void this.addThreadsFromRolloutScan(generation);
       } else {
         void this.loadDots();
-        void this.loadChats();
+        void this.reloadChats();
       }
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
@@ -564,13 +567,26 @@ export class DesktopSession {
     }
   }
 
-  /** 원격 호스트의 ChatGPT 개인 대화 목록을 한 번 읽는다 (plan 25). 실패하면(chats 가 없는 호스트, 조회 제한 등) 목록을 비운다. */
-  private async loadChats(): Promise<void> {
+  /**
+   * 원격 호스트의 ChatGPT 개인 대화 목록을 읽는다 (plan 25). 접속할 때 한 번 읽고, 사용자가 사이드바에서 다시 읽을 수
+   * 있다. chats 가 없는 Gateway 이면 목록을 비운다. 그 밖의 실패(조회 제한 등)는 이유를 남기고 이미 읽은 목록을
+   * 그대로 둔다: 제한이 풀리면 다시 읽을 수 있다. 읽는 중에는 또 보내지 않는다 (요청이 제한을 늘린다).
+   */
+  async reloadChats(): Promise<void> {
+    if (this.chatsLoading) return;
+    this.chatsLoading = true;
     try {
       const response = await this.client.request<{ chats: ChatSummary[] }>(CHATS_LIST_METHOD);
       this.store.setChats(response.chats);
-    } catch {
-      this.store.setChats([]);
+    } catch (error) {
+      const problem = chatsListProblem(error);
+      if (problem === null) {
+        this.store.setChats([]);
+      } else {
+        this.store.setChatsProblem(problem);
+      }
+    } finally {
+      this.chatsLoading = false;
     }
   }
 

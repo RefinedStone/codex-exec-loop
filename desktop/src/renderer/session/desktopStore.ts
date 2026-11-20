@@ -233,7 +233,10 @@ export interface DesktopState {
   markDotRoomRead(roomId: string): void;
   /** 원격 호스트의 ChatGPT 개인 대화 목록이다 (plan 25). chats 가 꺼졌거나 없는 호스트에서는 비어 있다. */
   chats: ChatSummary[];
+  /** 목록을 읽지 못한 이유이다 (조회 제한 등). 이미 읽은 목록은 그대로 둔다. 다시 읽기에 성공하면 null 이 된다. */
+  chatsProblem: string | null;
   setChats(chats: ChatSummary[]): void;
+  setChatsProblem(problem: string): void;
 }
 
 /** 열린 스레드의 작업 폴더이다. 사이드바 목록에서 찾으므로 기록을 다시 읽는 동안에도 바뀌지 않는다. */
@@ -318,7 +321,9 @@ const createDesktopStore = () => create<DesktopState>((set) => ({
   applyDotLive: (next) => set((state) => reduceDotLive(state, next)),
   markDotRoomRead: (roomId) => set((state) => (state.dotUnreadRooms.includes(roomId) ? { dotUnreadRooms: state.dotUnreadRooms.filter((id) => id !== roomId) } : {})),
   chats: [],
-  setChats: (chats) => set({ chats }),
+  chatsProblem: null,
+  setChats: (chats) => set({ chats, chatsProblem: null }),
+  setChatsProblem: (chatsProblem) => set({ chatsProblem }),
 }));
 
 /** `local` 호스트의 상태이다. */
@@ -367,6 +372,7 @@ export type SessionStore = Pick<
   | "setDots"
   | "applyDotLive"
   | "setChats"
+  | "setChatsProblem"
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
@@ -394,6 +400,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     setDots: state.setDots,
     applyDotLive: state.applyDotLive,
     setChats: state.setChats,
+    setChatsProblem: state.setChatsProblem,
     getKernel: () => store.getState().kernel,
     getOpenThreadId: () => store.getState().openThreadId,
     getTranscript: () => store.getState().transcript,
