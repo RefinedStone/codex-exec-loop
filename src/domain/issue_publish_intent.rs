@@ -73,10 +73,7 @@ pub struct IssuePublishIntentRecord {
 impl IssuePublishIntentRecord {
     /// 확인된 판의 이름이다 (`VaultRecordBinding::ConfirmedVersion`). 승인한 공유본의 지문으로 만든다.
     pub fn confirmed_version(&self) -> String {
-        format!(
-            "{}:{}",
-            self.approved_hash.version, self.approved_hash.sha256
-        )
+        confirmed_version_name(&self.approved_hash)
     }
 
     /// 원격을 다시 읽은 결과로 다음 상태를 정한다. `observed` 는 지금 원격 글의 지문이고, 읽지 못했으면 `None` 이다.
@@ -96,6 +93,11 @@ impl IssuePublishIntentRecord {
         self.observed_hash = observed;
         self
     }
+}
+
+/// 필드 해시가 가리키는 확인된 판의 이름이다. 복원은 최신 게시본의 해시로 같은 이름을 만들어 비교한다 (#2425).
+pub fn confirmed_version_name(hash: &IssueFieldHash) -> String {
+    format!("{}:{}", hash.version, hash.sha256)
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@ use crate::domain::issue_work::IssueReference;
  */
 
 /// 이 계약의 판이다. 요청이나 응답의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_CONTRACT_VERSION: u32 = 1;
+pub const EVIDENCE_VAULT_CONTRACT_VERSION: u32 = 2;
 
 /// 복원한 평문이다.
 #[derive(Clone, PartialEq, Eq)]
@@ -94,10 +94,13 @@ impl VaultUserConfirmation {
     }
 }
 
-/// 복원 요청이다. 확인한 이슈만 복원한다.
+/// 복원 요청이다. 확인한 이슈만 복원한다. 확인과 키는 살아 있는 잠금 해제 권한에서 함께 나온다
+/// (`EvidenceVaultUnlockService::access`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultRestoreRequest {
     pub confirmation: VaultUserConfirmation,
+    /// 이 이슈의 레코드를 여는 키이다.
+    pub key: VaultRecordKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +117,7 @@ pub trait EvidenceVaultRestorePort: Send + Sync {
         EVIDENCE_VAULT_CONTRACT_VERSION
     }
 
-    /// 확인한 이슈의 로컬 복원본을 돌려준다. 공급자에 쓰지 않는다.
+    /// 확인한 이슈의 로컬 복원본을 돌려준다. 공급자에 쓰지 않는다. 최신 게시본이 저장한 연결과 다르면 오류이다.
     fn restore(&self, request: VaultRestoreRequest) -> Result<VaultRestoreResponse>;
 }
 
@@ -143,6 +146,8 @@ pub enum VaultRecordBinding {
     PublishIntent(String),
     /// 공급자가 확인한 게시본의 판이다.
     ConfirmedVersion(String),
+    /// 이 이슈에서 지금 복원에 쓰는 확인된 판의 이름을 담은 레코드이다 (#2425). 이슈마다 하나이다.
+    CurrentVersion,
 }
 
 /// 레코드 한 건의 범위이다: 로컬 프로젝트와 이슈(`issue`), 필드, 게시 의도 또는 확인된 판이다.
@@ -151,6 +156,17 @@ pub struct VaultRecordScope {
     pub issue: IssueReference,
     pub field: VaultRecordField,
     pub binding: VaultRecordBinding,
+}
+
+impl VaultRecordScope {
+    /// 이슈의 `CurrentVersion` 레코드의 범위이다. 필드는 뜻이 없으므로 `Body` 로 고정한다.
+    pub fn current_version(issue: IssueReference) -> Self {
+        Self {
+            issue,
+            field: VaultRecordField::Body,
+            binding: VaultRecordBinding::CurrentVersion,
+        }
+    }
 }
 
 /// 레코드를 암호화하는 키와 그 식별자이다. 식별자는 레코드에 평문으로 남는다. 키는 남지 않는다.
