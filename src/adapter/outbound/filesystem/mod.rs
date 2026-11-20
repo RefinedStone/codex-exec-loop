@@ -12,6 +12,8 @@ pub(crate) mod git_operation_journal;
 pub mod issue_policy;
 // evidence_vault_store 는 가린 구간을 암호화한 레코드 파일로 저장한다 (#2421).
 pub mod evidence_vault_store;
+// evidence_vault_backup 은 암호화한 레코드와 복구 키로 감싼 장치 키를 보관 파일로 내보내고 가져온다 (#2432).
+pub mod evidence_vault_backup;
 // issue_publish_intent_journal 은 이슈 게시 의도 일지 파일이다 (#2424).
 pub mod issue_publish_intent_journal;
 // issue_template 은 작업 폴더의 이슈 템플릿 파일을 읽는다 (#2417).

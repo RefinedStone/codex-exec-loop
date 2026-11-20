@@ -19,7 +19,7 @@ use zeroize::Zeroize;
 
 use super::secure_fs;
 use crate::application::port::outbound::evidence_vault_port::{
-    EvidenceVaultStorePort, VaultPlaintext, VaultRecordBinding, VaultRecordField,
+    EvidenceVaultStorePort, VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey,
     VaultRecordLoadRequest, VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
 };
 use crate::domain::issue_work::IssueProvider;
@@ -56,37 +56,7 @@ impl FilesystemEvidenceVaultStoreAdapter {
 impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
     fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
         let scope = scope_bytes(&request.scope);
-        let key = aead_key(request.key.key.expose())?;
-        // 96 bit 난수 nonce 는 키 하나에 레코드 2^32 건까지 안전하다. 이슈 레코드는 그보다 훨씬 적다.
-        let mut nonce = [0u8; NONCE_LEN];
-        SystemRandom::new()
-            .fill(&mut nonce)
-            .map_err(|_| VaultStoreError::Storage("the OS random source failed".to_string()))?;
-
-        let mut sealed = request.plaintext.expose().as_bytes().to_vec();
-        let associated_data = associated_data(&request.key.key_id, &scope);
-        if key
-            .seal_in_place_append_tag(
-                Nonce::assume_unique_for_key(nonce),
-                Aad::from(associated_data),
-                &mut sealed,
-            )
-            .is_err()
-        {
-            sealed.zeroize();
-            return Err(VaultStoreError::Storage(
-                "the record is too large to seal".to_string(),
-            ));
-        }
-
-        let record = StoredVaultRecord {
-            format_version: RECORD_FORMAT_VERSION,
-            algorithm: RECORD_ALGORITHM.to_string(),
-            key_id: request.key.key_id.clone(),
-            nonce: BASE64.encode(nonce),
-            ciphertext: BASE64.encode(&sealed),
-        };
-        let body = serde_json::to_vec(&record).map_err(storage_error)?;
+        let body = seal_record(&request.key, &scope, &request.plaintext)?;
         secure_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body)
             .map_err(storage_error)
     }
@@ -96,40 +66,87 @@ impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
         let body = secure_fs::read_optional_file(&self.vault_root, &record_relative_path(&scope))
             .map_err(storage_error)?
             .ok_or(VaultStoreError::RecordNotFound)?;
-        let record = parse_record(&body)?;
-        if record.key_id != request.key.key_id {
-            return Err(VaultStoreError::KeyMismatch);
-        }
-        let nonce = BASE64
-            .decode(&record.nonce)
-            .ok()
-            .and_then(|nonce| Nonce::try_assume_unique_for_key(&nonce).ok())
-            .ok_or(VaultStoreError::CorruptRecord)?;
-        let mut opened = BASE64
-            .decode(&record.ciphertext)
-            .map_err(|_| VaultStoreError::CorruptRecord)?;
-
-        let key = aead_key(request.key.key.expose())?;
-        let associated_data = associated_data(&record.key_id, &scope);
-        let plaintext_len = match key.open_in_place(nonce, Aad::from(associated_data), &mut opened)
-        {
-            Ok(plaintext) => plaintext.len(),
-            Err(_) => {
-                opened.zeroize();
-                return Err(VaultStoreError::IntegrityFailure);
-            }
-        };
-        opened.truncate(plaintext_len);
-        String::from_utf8(opened)
-            .map(VaultPlaintext::new)
-            .map_err(|error| {
-                error.into_bytes().zeroize();
-                VaultStoreError::CorruptRecord
-            })
+        open_record(&body, &request.key, &scope)
     }
 }
 
-fn aead_key(key: &[u8]) -> Result<LessSafeKey, VaultStoreError> {
+/// 평문을 이 범위에 묶어 암호화하고 레코드 파일의 내용을 만든다. 백업 가져오기(#2432)도 쓴다.
+pub(super) fn seal_record(
+    record_key: &VaultRecordKey,
+    scope: &[u8],
+    plaintext: &VaultPlaintext,
+) -> Result<Vec<u8>, VaultStoreError> {
+    let key = aead_key(record_key.key.expose())?;
+    // 96 bit 난수 nonce 는 키 하나에 레코드 2^32 건까지 안전하다. 이슈 레코드는 그보다 훨씬 적다.
+    let mut nonce = [0u8; NONCE_LEN];
+    SystemRandom::new()
+        .fill(&mut nonce)
+        .map_err(|_| VaultStoreError::Storage("the OS random source failed".to_string()))?;
+
+    let mut sealed = plaintext.expose().as_bytes().to_vec();
+    let associated_data = associated_data(&record_key.key_id, scope);
+    if key
+        .seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(associated_data),
+            &mut sealed,
+        )
+        .is_err()
+    {
+        sealed.zeroize();
+        return Err(VaultStoreError::Storage(
+            "the record is too large to seal".to_string(),
+        ));
+    }
+
+    let record = StoredVaultRecord {
+        format_version: RECORD_FORMAT_VERSION,
+        algorithm: RECORD_ALGORITHM.to_string(),
+        key_id: record_key.key_id.clone(),
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(&sealed),
+    };
+    serde_json::to_vec(&record).map_err(storage_error)
+}
+
+/// 레코드 파일의 내용을 이 범위와 키로 검증하고 평문을 돌려준다. 백업 내보내기와 가져오기(#2432)도 쓴다.
+pub(super) fn open_record(
+    body: &str,
+    record_key: &VaultRecordKey,
+    scope: &[u8],
+) -> Result<VaultPlaintext, VaultStoreError> {
+    let record = parse_record(body)?;
+    if record.key_id != record_key.key_id {
+        return Err(VaultStoreError::KeyMismatch);
+    }
+    let nonce = BASE64
+        .decode(&record.nonce)
+        .ok()
+        .and_then(|nonce| Nonce::try_assume_unique_for_key(&nonce).ok())
+        .ok_or(VaultStoreError::CorruptRecord)?;
+    let mut opened = BASE64
+        .decode(&record.ciphertext)
+        .map_err(|_| VaultStoreError::CorruptRecord)?;
+
+    let key = aead_key(record_key.key.expose())?;
+    let associated_data = associated_data(&record.key_id, scope);
+    let plaintext_len = match key.open_in_place(nonce, Aad::from(associated_data), &mut opened) {
+        Ok(plaintext) => plaintext.len(),
+        Err(_) => {
+            opened.zeroize();
+            return Err(VaultStoreError::IntegrityFailure);
+        }
+    };
+    opened.truncate(plaintext_len);
+    String::from_utf8(opened)
+        .map(VaultPlaintext::new)
+        .map_err(|error| {
+            error.into_bytes().zeroize();
+            VaultStoreError::CorruptRecord
+        })
+}
+
+pub(super) fn aead_key(key: &[u8]) -> Result<LessSafeKey, VaultStoreError> {
     UnboundKey::new(&CHACHA20_POLY1305, key)
         .map(LessSafeKey::new)
         .map_err(|_| VaultStoreError::InvalidKey)
@@ -159,13 +176,13 @@ fn parse_record(body: &str) -> Result<StoredVaultRecord, VaultStoreError> {
 }
 
 // 길이를 앞에 붙인다. 값의 경계가 달라지면 바이트도 달라진다.
-fn push_part(bytes: &mut Vec<u8>, part: &str) {
+pub(super) fn push_part(bytes: &mut Vec<u8>, part: &str) {
     bytes.extend_from_slice(&(part.len() as u64).to_be_bytes());
     bytes.extend_from_slice(part.as_bytes());
 }
 
 /// 레코드의 범위를 정해진 순서의 바이트로 만든다. 파일 이름과 연관 데이터가 이 값을 쓴다.
-fn scope_bytes(scope: &VaultRecordScope) -> Vec<u8> {
+pub(super) fn scope_bytes(scope: &VaultRecordScope) -> Vec<u8> {
     let issue = &scope.issue;
     let provider = match issue.provider {
         IssueProvider::GitHub => "github",
@@ -208,7 +225,7 @@ fn associated_data(key_id: &str, scope: &[u8]) -> Vec<u8> {
 }
 
 /// 파일 이름은 범위의 SHA-256 이다. 이슈 ID 나 경로가 파일 이름에 드러나지 않는다.
-fn record_relative_path(scope: &[u8]) -> PathBuf {
+pub(super) fn record_relative_path(scope: &[u8]) -> PathBuf {
     let name: String = Sha256::digest(scope)
         .iter()
         .map(|byte| format!("{byte:02x}"))
