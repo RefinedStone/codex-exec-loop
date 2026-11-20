@@ -134,6 +134,7 @@ function paletteCommands(): PaletteEntry[] {
     { id: "browser", icon: "globe", label: "브라우저 패널", hint: "", run: () => togglePanel("browser") },
     { id: "work", icon: "briefcase", label: "업무 패널 (GitHub, Jira, Notion)", hint: "", run: () => togglePanel("work") },
     { id: "docs", icon: "book", label: "문서 패널", hint: "", run: () => togglePanel("docs") },
+    { id: "skills", icon: "stack", label: "설치된 스킬 패널 (출처, 업데이트)", hint: "", run: () => togglePanel("skills") },
     { id: "terminal", icon: "terminal", label: "터미널 열기 / 닫기", hint: `${MOD_KEY}J`, run: toggleTerminal },
     { id: "theme", icon: "sun", label: "밝은 화면 / 어두운 화면", hint: "", run: toggleTheme },
     { id: "settings", icon: "sliders", label: "설정 (글자 크기, 알림, 잠자기 방지)", hint: `${MOD_KEY},`, run: () => useUiStore.setState({ settingsOpen: true }) },

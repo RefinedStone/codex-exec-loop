@@ -3,6 +3,7 @@ import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
 import type { LinearBridge } from "./linear";
 import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings } from "./settings";
+import type { SkillsBridge } from "./skills";
 import type { ZoomDirection } from "./zoom";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
@@ -99,6 +100,12 @@ export const IPC_CHANNELS = {
   settingsChanged: "akra:settings-changed",
   settingsOpen: "akra:settings-open",
   reportWorking: "akra:report-working",
+  skillsList: "akra:skills-list",
+  skillsLink: "akra:skills-link",
+  skillsCheck: "akra:skills-check",
+  skillsPreview: "akra:skills-preview",
+  skillsApply: "akra:skills-apply",
+  skillsRollback: "akra:skills-rollback",
 } as const;
 
 export interface GitHubPullRequest {
@@ -446,6 +453,7 @@ export interface AkraBridge {
   /** 이 앱의 창 가운데 하나에 포커스가 있는지 묻는다. 브라우저 패널에 포커스가 있어도 true 이다. */
   isAppFocused(): Promise<boolean>;
   settings: SettingsBridge;
+  skills: SkillsBridge;
 }
 
 /** 앱 설정이다 (plan 26 U2). 값은 main 이 가지고 저장한다. */

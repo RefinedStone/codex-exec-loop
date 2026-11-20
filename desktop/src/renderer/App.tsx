@@ -18,6 +18,7 @@ import { ATTENTION_TEXT, attentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
 import { closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
+import { SkillsPanel } from "./skills/SkillsPanel";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { DotDock } from "./views/DotDock";
@@ -46,6 +47,7 @@ const PANELS: { id: PanelId; label: string; icon: IconName; testId: string }[] =
   { id: "browser", label: "브라우저", icon: "globe", testId: "browser-toggle" },
   { id: "work", label: "업무", icon: "briefcase", testId: "work-toggle" },
   { id: "docs", label: "문서", icon: "book", testId: "documents-toggle" },
+  { id: "skills", label: "스킬", icon: "stack", testId: "skills-toggle" },
 ];
 
 function errorText(error: unknown): string {
@@ -488,6 +490,13 @@ export function App() {
     handOffToNewThread(text);
   };
 
+  // 스킬 패널이 쓰는 두 함수이다 (#2383). 패널이 다시 읽지 않도록 한 번만 만든다.
+  const listCodexSkills = useCallback(
+    (cwd: string | null, forceReload: boolean) => session.current?.listSkills(cwd, forceReload) ?? Promise.reject(new Error("세션이 아직 시작되지 않았습니다.")),
+    [],
+  );
+  const onSkillsChanged = useCallback((listener: () => void) => session.current?.onSkillsChanged(listener) ?? (() => undefined), []);
+
   // 패널이 접속마다 새 객체를 받지 않도록 한 번만 만든다. 요청은 그때의 세션으로 보낸다.
   const gatewayRequest = useMemo<GatewayRequest>(
     () =>
@@ -601,6 +610,7 @@ export function App() {
               }} />}
               {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} onLinearHandOff={handOffLinear} />}
               {panel === "docs" && <DocumentsPanel state={documents} onRefresh={() => setDocumentsRefresh((count) => count + 1)} onOpenChanged={markDocumentRead} />}
+              {panel === "skills" && <SkillsPanel cwd={openCwd ?? null} connected={connected} skills={window.akra.skills} listCodexSkills={listCodexSkills} onSkillsChanged={onSkillsChanged} />}
             </RightPanel>
           )}
           {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} />}

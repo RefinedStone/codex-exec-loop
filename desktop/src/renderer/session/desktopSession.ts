@@ -9,6 +9,8 @@ import { BROWSER_TOOL_NAMES, type BrowserAgentBridge } from "../../shared/browse
 import type { ListMcpServerStatusResponse } from "../../shared/protocol/generated/v2/ListMcpServerStatusResponse";
 import type { ListMcpServerStatusParams } from "../../shared/protocol/generated/v2/ListMcpServerStatusParams";
 import type { InitializeParams } from "../../shared/protocol/generated/InitializeParams";
+import type { SkillsListParams } from "../../shared/protocol/generated/v2/SkillsListParams";
+import type { SkillsListResponse } from "../../shared/protocol/generated/v2/SkillsListResponse";
 import type { Thread } from "../../shared/protocol/generated/v2/Thread";
 import type { ThreadListResponse } from "../../shared/protocol/generated/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "../../shared/protocol/generated/v2/ThreadReadResponse";
@@ -155,6 +157,7 @@ export class DesktopSession {
   private readonly client: JsonRpcClient;
   private readonly batcher: FrameBatcher<QueuedNotification>;
   private readonly unsubscribers: Array<() => void> = [];
+  private readonly skillsChangedListeners = new Set<() => void>();
   /** resume 응답을 기다리는 동안 그 스레드에 온 알림이다. 응답을 반영한 뒤 이어서 반영한다. */
   private loading: ResumeLoading | null = null;
   /** initialize 가 thread/list 를 읽는 동안 받은 진행 상태 변경이다 (스레드 id → 진행 중). */
@@ -253,6 +256,21 @@ export class DesktopSession {
   /** 커널 패널의 상태를 다시 읽는다. */
   refreshKernel(): Promise<void> {
     return this.kernel.refresh();
+  }
+
+  /** Codex 가 찾은 스킬을 읽는다 (#2383). `forceReload` 이면 캐시 대신 디스크를 다시 읽는다. 턴을 쓰지 않는다. */
+  listSkills(cwd: string | null, forceReload: boolean): Promise<SkillsListResponse> {
+    if (!this.connected) {
+      return Promise.reject(new Error("Gateway 에 연결되어 있지 않습니다."));
+    }
+    const params: SkillsListParams = { cwds: cwd ? [cwd] : [], forceReload };
+    return this.client.request<SkillsListResponse>("skills/list", params);
+  }
+
+  /** `skills/changed` 알림을 듣는다. 로컬 스킬 파일이 바뀌었다는 신호이다: 목록을 다시 읽는다. */
+  onSkillsChanged(listener: () => void): () => void {
+    this.skillsChangedListeners.add(listener);
+    return () => this.skillsChangedListeners.delete(listener);
   }
 
   /** 업무 패널이 같은 Gateway 접속으로 보내는 요청이다: MCP hub(plan 21)와 작업 컨텍스트(plan 22). */
@@ -689,6 +707,10 @@ export class DesktopSession {
   private handleNotification(method: string, params: unknown): void {
     if (method === KERNEL_METHOD.event) {
       this.kernel.handleEvent(params);
+      return;
+    }
+    if (method === "skills/changed") {
+      for (const listener of this.skillsChangedListeners) listener();
       return;
     }
     if (method === DOTS_LIVE_NOTIFICATION) {

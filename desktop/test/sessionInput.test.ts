@@ -106,6 +106,14 @@ function harness(readOnly = false) {
     zoom: { get: () => Promise.resolve(1), step: () => undefined, onChanged: () => () => undefined },
     isAppFocused: () => Promise.resolve(false),
     settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: () => Promise.resolve(DEFAULT_SETTINGS), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined },
+    skills: {
+      list: () => Promise.resolve([]),
+      link: () => Promise.resolve({ ok: true }),
+      check: () => Promise.resolve({ ok: true }),
+      preview: () => Promise.resolve({ ok: false, message: "" }),
+      apply: () => Promise.resolve({ ok: true }),
+      rollback: () => Promise.resolve({ ok: true }),
+    },
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {

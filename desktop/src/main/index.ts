@@ -1,8 +1,9 @@
 // Electron main: 창을 만들고, 창마다 Gateway 접속을 하나씩 연결한다. 메시지는 해석하지 않는다.
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
@@ -27,6 +28,7 @@ import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, read
 import { readGitHubSummary, readIssuePrompt, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { LinearService, isLinearIssueUrl } from "./linearService";
+import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
 import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
 
@@ -63,6 +65,14 @@ const browserSettingsPath = () => join(app.getPath("userData"), "browser-setting
 // userData 는 위에서 정한 뒤이다. 토큰은 safeStorage 로 암호화한다.
 const jira = new JiraService(app.getPath("userData"), safeStorage);
 const linear = new LinearService(app.getPath("userData"), safeStorage);
+// 스킬 출처 장부, 스냅샷, 복구 저널은 userData 에 둔다 (#2383). 원본은 인증 없이 공개 GitHub 에서만 읽는다.
+const skills = new SkillService({
+  dataDir: join(app.getPath("userData"), "skill-sources"),
+  home: homedir(),
+  fetcher: (url, init) => net.fetch(url, { headers: init.headers, signal: init.signal, redirect: init.redirect, credentials: "omit" }),
+});
+// 지난 실행이 교체하다 멈췄으면 지금 이전 상태로 되돌린다.
+skills.recover();
 
 /**
  * 화면 시험용이다. 창을 보이지 않게 만들어 사용자가 쓰는 다른 앱 위로 올라오지 않게 한다.
@@ -568,6 +578,22 @@ ipcMain.handle(IPC_CHANNELS.linearOpenExternal, async (event, url: unknown) => {
   requireLinearSender(event);
   if (typeof url !== "string" || !isLinearIssueUrl(url)) throw new Error("Linear 이슈 주소만 열 수 있습니다.");
   await shell.openExternal(url);
+});
+// 스킬 파일은 main 만 쓴다 (#2383). 적용과 롤백은 main 이 경로와 커밋을 보여 주고 확인한다. renderer 가 확인을 건너뛸 수 없다.
+function requireSkillSender(event: IpcMainInvokeEvent): void {
+  if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) throw new Error("스킬 요청을 보낸 창을 확인할 수 없습니다.");
+}
+ipcMain.handle(IPC_CHANNELS.skillsList, (event, request: unknown) => { requireSkillSender(event); return skills.list(request); });
+ipcMain.handle(IPC_CHANNELS.skillsLink, (event, identity: unknown, source: unknown) => { requireSkillSender(event); return skills.link(identity, source); });
+ipcMain.handle(IPC_CHANNELS.skillsCheck, (event, identity: unknown) => { requireSkillSender(event); return skills.check(identity); });
+ipcMain.handle(IPC_CHANNELS.skillsPreview, (event, identity: unknown) => { requireSkillSender(event); return skills.preview(identity); });
+ipcMain.handle(IPC_CHANNELS.skillsApply, (event, identity: unknown, approval: unknown) => {
+  requireSkillSender(event);
+  return skills.apply(identity, approval, (message, detail) => confirmAction(event.sender, "warning", message, detail, "바꾸기"));
+});
+ipcMain.handle(IPC_CHANNELS.skillsRollback, (event, identity: unknown, localHash: unknown) => {
+  requireSkillSender(event);
+  return skills.rollback(identity, localHash, (message, detail) => confirmAction(event.sender, "warning", message, detail, "되돌리기"));
 });
 ipcMain.handle(
   IPC_CHANNELS.dotsOpenWindow,
