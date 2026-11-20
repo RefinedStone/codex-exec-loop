@@ -220,7 +220,7 @@ export interface DesktopState {
   renameThread(threadId: string, title: string): void;
   /** 다른 곳에서 보관하거나 지운 스레드를 사이드바에서 뺀다. */
   removeThread(threadId: string): void;
-  /** 커널 패널이 보는 저장소 커널의 상태이다 (plan 18 K3-6). */
+  /** 같은 Gateway/attach가 소유하는 개요와 이슈 페이지다. 이 창의 메모리에만 둔다. */
   kernel: KernelView;
   setKernel(kernel: KernelView): void;
   /** 원격 호스트의 dot 목록이다. `local` 과 dots 가 없는 호스트에서는 비어 있다. */

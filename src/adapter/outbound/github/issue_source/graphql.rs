@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, de::IgnoredAny};
 
 pub(super) const ISSUE_FRAGMENT: &str = r#"
 fragment AkraSourceIssue on Issue {
-  __typename id title body state updatedAt repository { id }
+  __typename id number url title body state updatedAt repository { id nameWithOwner }
   author { login ... on Node { id } }
   labels(first: 100) {
     nodes { id name }
@@ -128,6 +128,8 @@ pub(super) struct IssueNode {
     #[serde(rename = "__typename")]
     pub typename: String,
     pub id: Option<String>,
+    pub number: Option<u64>,
+    pub url: Option<String>,
     pub title: Option<String>,
     pub body: Option<String>,
     pub state: Option<String>,
@@ -142,8 +144,10 @@ pub(super) struct IssueNode {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct RepositoryId {
     pub id: String,
+    pub name_with_owner: String,
 }
 
 #[derive(Default)]

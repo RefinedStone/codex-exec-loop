@@ -1474,6 +1474,12 @@
           },
           {
             "properties": {
+              "groups": {
+                "items": {
+                  "$ref": "#/$defs/IssueListGroup"
+                },
+                "type": "array"
+              },
               "items": {
                 "items": {
                   "$ref": "#/$defs/IssueListItem"
@@ -1499,7 +1505,8 @@
             "required": [
               "status",
               "revision",
-              "items"
+              "items",
+              "groups"
             ],
             "type": "object"
           }
@@ -3418,6 +3425,37 @@
       ],
       "type": "object"
     },
+    "IssueListGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/IssueListGroupId"
+        },
+        "item_indices": {
+          "items": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "item_indices"
+      ],
+      "type": "object"
+    },
+    "IssueListGroupId": {
+      "enum": [
+        "collection"
+      ],
+      "type": "string"
+    },
     "IssueListItem": {
       "additionalProperties": false,
       "properties": {
@@ -3429,6 +3467,9 @@
         },
         "issue": {
           "$ref": "#/$defs/IssueEventReference"
+        },
+        "presentation": {
+          "$ref": "#/$defs/IssueListPresentation"
         },
         "tracked": {
           "anyOf": [
@@ -3444,9 +3485,111 @@
       "required": [
         "issue",
         "binding_id",
-        "current"
+        "current",
+        "presentation"
       ],
       "type": "object"
+    },
+    "IssueListPresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/IssueListReason"
+        },
+        "status": {
+          "$ref": "#/$defs/IssueListStatus"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "IssueListReason": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/IssueListReasonCode"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "IssueListReasonCode": {
+      "enum": [
+        "observed",
+        "source_read_failed",
+        "disclosure_confirmation_required",
+        "not_yet_observed",
+        "held",
+        "stale",
+        "remote_closed",
+        "workflow"
+      ],
+      "type": "string"
+    },
+    "IssueListStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/IssueListStatusCode"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "label"
+      ],
+      "type": "object"
+    },
+    "IssueListStatusCode": {
+      "enum": [
+        "discovered",
+        "ineligible",
+        "needs_info",
+        "awaiting_decision",
+        "ready",
+        "queued",
+        "running",
+        "in_review",
+        "done",
+        "failed",
+        "cancelled",
+        "observed",
+        "withheld",
+        "unknown",
+        "not_yet_observed"
+      ],
+      "type": "string"
     },
     "IssueMetadataCompletenessState": {
       "enum": [
@@ -4714,6 +4857,12 @@
             },
             {
               "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/$defs/IssueListGroup"
+                  },
+                  "type": "array"
+                },
                 "items": {
                   "items": {
                     "$ref": "#/$defs/IssueListItem"
@@ -4739,7 +4888,8 @@
               "required": [
                 "status",
                 "revision",
-                "items"
+                "items",
+                "groups"
               ],
               "type": "object"
             }

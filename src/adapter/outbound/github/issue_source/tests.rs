@@ -98,8 +98,10 @@ fn event(id: &str, actor_id: &str, actor_login: &str, kind: &str) -> Value {
 
 fn issue(id: &str) -> Value {
     json!({
-        "__typename":"Issue","id":id,"title":"작업 제목","body":"가릴 값이 없는 본문",
-        "state":"OPEN","updatedAt":"2026-11-20T01:00:00Z","repository":{"id":"R_1"},
+        "__typename":"Issue","id":id,"number":17,"url":"https://github.com/sample/widgets/issues/17",
+        "title":"작업 제목","body":"가릴 값이 없는 본문",
+        "state":"OPEN","updatedAt":"2026-11-20T01:00:00Z",
+        "repository":{"id":"R_1","nameWithOwner":"sample/widgets"},
         "author":{"id":"U_writer","login":"writer"},
         "labels":metadata_json(vec![label_json("LA_1","akra:auto")]),
         "assignees":metadata_json(vec![json!({"id":"U_assignee","login":"assignee"})]),
@@ -728,4 +730,115 @@ fn missing_label_actor_is_unavailable_instead_of_a_deleted_account() {
         IssueMetadataCompleteness::Unavailable
     );
     assert!(value.label_actors.items.is_empty());
+}
+
+#[test]
+fn source_web_uses_current_repository_metadata_after_a_rename_without_changing_identity() {
+    let mut renamed = issue("I_1");
+    renamed["repository"]["nameWithOwner"] = json!("moved-owner/renamed-repository");
+    renamed["url"] = json!("https://github.com/moved-owner/renamed-repository/issues/17");
+    let (adapter, calls) = fake(vec![
+        Reply::Json(page(vec![renamed.clone()], false, false, None)),
+        Reply::Json(read_reply(renamed)),
+    ]);
+    let discovered = adapter.discover(discovery_request()).unwrap();
+    let reread = observed(read(&adapter));
+    for value in [&discovered.observations[0], &reread] {
+        assert_eq!(value.issue, reference("I_1"));
+        assert_eq!(
+            value.web,
+            Some(IssueSourceWeb {
+                number: 17,
+                url: "https://github.com/moved-owner/renamed-repository/issues/17".to_owned(),
+            })
+        );
+    }
+    for arguments in calls.lock().unwrap().iter() {
+        let query = argument(arguments, "query").unwrap();
+        assert!(query.contains("id number url"));
+        assert!(query.contains("repository { id nameWithOwner }"));
+    }
+}
+
+#[test]
+fn source_web_rejects_missing_unsafe_or_inconsistent_metadata_on_both_read_paths() {
+    let mut cases = Vec::new();
+    for field in ["number", "url"] {
+        let mut node = issue("I_1");
+        node.as_object_mut().unwrap().remove(field);
+        cases.push((node, IssueSourceFailure::MalformedResponse));
+    }
+    let mut missing_repository_name = issue("I_1");
+    missing_repository_name["repository"]
+        .as_object_mut()
+        .unwrap()
+        .remove("nameWithOwner");
+    cases.push((
+        missing_repository_name,
+        IssueSourceFailure::MalformedResponse,
+    ));
+    for number in [json!(null), json!(0), json!(-1), json!("17"), json!(18)] {
+        let mut node = issue("I_1");
+        node["number"] = number;
+        cases.push((node, IssueSourceFailure::MalformedResponse));
+    }
+    for url in [
+        "http://github.com/sample/widgets/issues/17",
+        "https://github.com.evil.test/sample/widgets/issues/17",
+        "https://github.com@evil.test/sample/widgets/issues/17",
+        "https://github.com/sample/widgets/pull/17",
+        "https://github.com/sample/widgets/issues/17?redirect=evil",
+        "https://github.com/sample/widgets/issues/017",
+        "javascript:alert(1)",
+    ] {
+        let mut node = issue("I_1");
+        node["url"] = json!(url);
+        cases.push((node, IssueSourceFailure::MalformedResponse));
+    }
+    let mut different_repository = issue("I_1");
+    different_repository["url"] = json!("https://github.com/another/repository/issues/17");
+    cases.push((different_repository, IssueSourceFailure::IdentityMismatch));
+    for (node, failure) in cases {
+        let (adapter, _) = fake(vec![
+            Reply::Json(page(vec![node.clone()], false, false, None)),
+            Reply::Json(read_reply(node)),
+        ]);
+        assert_eq!(adapter.discover(discovery_request()), Err(failure));
+        let read = read(&adapter);
+        assert_eq!(
+            read,
+            IssueSourceRead::Unknown {
+                issue: reference("I_1"),
+                reason: failure
+            }
+        );
+        let encoded = serde_json::to_string(&read).unwrap();
+        assert!(!encoded.contains("작업 제목"));
+        assert!(!encoded.contains("https://"));
+    }
+}
+
+#[test]
+fn withheld_source_web_keeps_only_current_display_coordinates_and_no_raw_content() {
+    let mut node = issue("I_1");
+    node["body"] = json!("provider token ghp_1234567890abcdefghijklmnopqrstuvwxyz");
+    let mut disclosure = disclosure();
+    disclosure.policy.secret = IssueSensitiveSpanAction::UserConfirm;
+    let (adapter, _) = fake(vec![Reply::Json(read_reply(node))]);
+    let value = observed(adapter.resync(IssueResyncRequest {
+        issue: reference("I_1"),
+        disclosure,
+    }));
+    assert!(matches!(
+        &value.content,
+        IssueSourceContent::Withheld { .. }
+    ));
+    assert_eq!(value.web.as_ref().unwrap().number, 17);
+    assert_eq!(
+        value.web.as_ref().unwrap().url,
+        "https://github.com/sample/widgets/issues/17"
+    );
+    let encoded = serde_json::to_string(&value).unwrap();
+    assert!(!encoded.contains("provider token"));
+    assert!(!encoded.contains("ghp_"));
 }

@@ -19,6 +19,7 @@ use crate::domain::issue_automation::source::{
     IssueMetadataCompleteness, IssueMetadataList, IssuePrPresence, IssueRemoteState,
     IssueSourceActor, IssueSourceContent, IssueSourceDisclosure, IssueSourceFailure,
     IssueSourceLabel, IssueSourceObservation, IssueSourceRead, IssueSourceRepository,
+    IssueSourceWeb,
 };
 use crate::domain::issue_masking::{IssueMaskingBlocked, IssueTextField, plan_issue_masking};
 use crate::domain::issue_secret_spans::secret_spans;
@@ -289,6 +290,27 @@ fn observation(
     if remote_repository.id != repository.repository_id {
         return Err(IssueSourceFailure::IdentityMismatch);
     }
+    let issue = IssueReference {
+        provider: repository.provider,
+        server_id: repository.server_id.clone(),
+        repository_id: repository.repository_id.clone(),
+        issue_id: id,
+        project_scope: repository.project_scope.clone(),
+    };
+    let web = IssueSourceWeb {
+        number: node.number.ok_or(IssueSourceFailure::MalformedResponse)?,
+        url: node.url.ok_or(IssueSourceFailure::MalformedResponse)?,
+    };
+    web.validate_for(&issue)
+        .map_err(|_| IssueSourceFailure::MalformedResponse)?;
+    if web.url
+        != format!(
+            "https://github.com/{}/issues/{}",
+            remote_repository.name_with_owner, web.number
+        )
+    {
+        return Err(IssueSourceFailure::IdentityMismatch);
+    }
     let remote_state = match node.state.as_deref() {
         Some("OPEN") => IssueRemoteState::Open,
         Some("CLOSED") => IssueRemoteState::Closed,
@@ -334,13 +356,8 @@ fn observation(
         None => IssuePrPresence::Unknown,
     };
     Ok(IssueSourceObservation {
-        issue: IssueReference {
-            provider: repository.provider,
-            server_id: repository.server_id.clone(),
-            repository_id: repository.repository_id.clone(),
-            issue_id: id,
-            project_scope: repository.project_scope.clone(),
-        },
+        issue,
+        web: Some(web),
         remote_state,
         labels,
         assignees,

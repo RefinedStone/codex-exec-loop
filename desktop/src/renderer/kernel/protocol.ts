@@ -7,3 +7,7 @@ export const KERNEL_UNAVAILABLE = KERNEL_ERROR.kernel_unavailable;
 export const KERNEL_VIEW_QUERIES = ["thread_activity", "auto_follow", "planning", "parallel"] as const satisfies readonly KernelQuery["type"][];
 export type KernelViewQuery = (typeof KERNEL_VIEW_QUERIES)[number];
 export type KernelViewAnswer = Extract<KernelQueryAnswer, { type: KernelViewQuery }>;
+
+/** 이슈 이벤트는 수집 상태이고, 같은 이름의 query는 목록 페이지다. 서로 바꾸어 적용하지 않는다. */
+export type IssueAutomationAnswer = Extract<KernelQueryAnswer, { type: "issue_automation" }>;
+export type IssuesPageAnswer = Extract<KernelQueryAnswer, { type: "issues" }>;

@@ -317,6 +317,9 @@ fn validate_observation(
     binding: &IssueAutomationBinding,
     observation: &IssueSourceObservation,
 ) -> Result<()> {
+    if let Some(web) = &observation.web {
+        web.validate_for(&observation.issue)?;
+    }
     match &observation.content {
         IssueSourceContent::Shared(snapshot) => {
             TrackedIssue::discovered(observation.issue.clone(), binding, snapshot.clone())?;

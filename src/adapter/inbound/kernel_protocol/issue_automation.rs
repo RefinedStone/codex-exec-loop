@@ -21,6 +21,9 @@ use crate::domain::kernel_event::{
     IssueEventProjectScope, IssueEventProvider, IssueEventReference,
 };
 
+mod presentation;
+pub use presentation::{IssueListGroup, IssueListPresentation};
+
 const DEFAULT_ISSUES_LIMIT: u16 = 50;
 const MAX_ISSUES_LIMIT: u16 = 100;
 const MAX_ISSUES_CURSOR_BYTES: usize = 16 * 1024;
@@ -166,6 +169,7 @@ pub enum IssuesState {
 pub struct IssuesPageState {
     pub revision: u64,
     pub items: Vec<IssueListItem>,
+    pub groups: Vec<IssueListGroup>,
     pub next_after: Option<String>,
 }
 
@@ -178,6 +182,7 @@ impl IssuesState {
         Self::Ready(IssuesPageState {
             revision: page.revision,
             items: page.items.iter().map(Into::into).collect(),
+            groups: vec![IssueListGroup::collection(page.items.len())],
             next_after: page.next_after.as_ref().map(encode_issue_cursor),
         })
     }
@@ -190,6 +195,7 @@ pub struct IssueListItem {
     pub binding_id: String,
     pub tracked: Option<IssueTrackedState>,
     pub current: IssueObservationState,
+    pub presentation: IssueListPresentation,
 }
 
 impl From<&IssueCollectionItem> for IssueListItem {
@@ -197,6 +203,7 @@ impl From<&IssueCollectionItem> for IssueListItem {
         Self {
             issue: (&item.issue).into(),
             binding_id: item.binding_id.as_str().to_string(),
+            presentation: IssueListPresentation::from_domain(item),
             tracked: item.tracked.as_ref().map(|tracked| IssueTrackedState {
                 state: tracked.state.into(),
                 held: tracked.flags.held,

@@ -192,6 +192,7 @@ fn observation(
 ) -> IssueSourceObservation {
     IssueSourceObservation {
         issue,
+        web: None,
         remote_state: IssueRemoteState::Open,
         labels: IssueMetadataList {
             items: Vec::new(),

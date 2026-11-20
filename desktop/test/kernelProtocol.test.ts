@@ -49,7 +49,12 @@ describe("kernel protocol generation", () => {
       const sync: KernelCommand = { type: "sync_issues" };
       const issueQuery: KernelQuery = { type: "issues", after: null, limit: 100 };
       const issueStatus: KernelQueryAnswer = { type: "issue_automation", status: "unavailable" };
-      const issueList: KernelQueryAnswer = { type: "issues", status: "ready", revision: 1, items: [], next_after: null };
+      const presentation: IssueListPresentation = { number: null, url: null, title: null, status: { code: "not_yet_observed", label: "관찰 전" }, reason: { code: "not_yet_observed", summary: "다음 관찰을 기다립니다." } };
+      const issueItem: IssueListItem = {
+        issue: { provider: "github", server_id: "github.com", repository_id: "R_repo", issue_id: "I_issue", project_scope: { workspace_dir: "/work/repo" } },
+        binding_id: "origin", tracked: null, current: { status: "not_yet_observed" }, presentation,
+      };
+      const issueList: KernelQueryAnswer = { type: "issues", status: "ready", revision: 1, items: [issueItem], groups: [{ id: "collection", label: "수집한 이슈", item_indices: [0] }], next_after: null };
       const issueEvent: KernelEvent = { type: "issues", status: "unavailable" };
     `);
     expect(result).toEqual({ status: 0, output: "" });
@@ -66,6 +71,8 @@ describe("kernel protocol generation", () => {
     'const value: KernelQueryAnswer = { status: "unavailable" };',
     'const value: KernelEvent = { type: "issues", status: "ready" };',
     'const value: KernelQuery = { type: "issues", after: { opaque: "source-cursor" } };',
+    'const value: KernelQueryAnswer = { type: "issues", status: "ready", revision: 1, items: [], next_after: null };',
+    'const value: IssueListPresentation = { number: null, url: null, title: null, status: { code: "unknown", label: "확인 불가" }, reason: { code: "source_read_failed", summary: 12 } };',
   ])("rejects a wire-contract violation: %s", (source) => {
     const result = compile(source);
     expect(result.status).toBe(1);
