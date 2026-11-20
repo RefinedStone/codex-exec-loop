@@ -2,6 +2,22 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+/// The destination was replaced, but a later durability or identity check failed.
+#[derive(Debug)]
+struct AtomicReplacementCompleted(String);
+
+impl std::fmt::Display for AtomicReplacementCompleted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for AtomicReplacementCompleted {}
+
+pub(crate) fn atomic_replacement_completed(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<AtomicReplacementCompleted>().is_some()
+}
+
 pub(crate) const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(unix)]
 const MAX_TREE_BYTES: usize = 32 * 1024 * 1024;
@@ -289,6 +305,7 @@ mod platform {
         let temp_fd = open_new_private_file(&parent, &temp_name, mode)?;
         validate_regular_identity(identity_from_fd(temp_fd.as_raw_fd())?, &root.join(relative))?;
         let mut temp_file = File::from(temp_fd);
+        let mut replaced = false;
         let write_result = (|| -> Result<()> {
             temp_file
                 .write_all(body)
@@ -304,6 +321,7 @@ mod platform {
             run_before_atomic_replace_hook();
             ensure_destination_unchanged(&parent, &leaf, original.as_ref())?;
             rename_entry(&parent, &temp_name, &leaf)?;
+            replaced = true;
             run_after_atomic_replace_error_hook()?;
             sync_directory(&parent)?;
             let (_, installed) = open_regular_file(&parent, &leaf)?
@@ -320,7 +338,14 @@ mod platform {
         if write_result.is_err() {
             let _ = unlink_file(&parent, &temp_name);
         }
-        write_result
+        write_result.map_err(|error| {
+            if replaced {
+                let message = error.to_string();
+                error.context(super::AtomicReplacementCompleted(message))
+            } else {
+                error
+            }
+        })
     }
 
     pub(super) fn compare_and_swap_optional_file(

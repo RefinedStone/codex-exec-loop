@@ -130,7 +130,7 @@ pub trait EvidenceVaultRestorePort: Send + Sync {
  */
 
 /// 저장 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 1;
+pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 2;
 
 /// 가린 구간이 있는 이슈의 필드이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -205,7 +205,9 @@ pub enum VaultStoreError {
     InvalidKey,
     /// 인증에 실패했다: 암호문이나 머리말이 바뀌었거나, 다른 범위의 레코드이거나, 키가 다르다.
     IntegrityFailure,
-    /// 저장소를 읽거나 쓰지 못했다.
+    /// 교체는 끝났지만 동기화나 사후 검증에 실패했다. 이전 레코드 보존을 가정하지 말고 다시 읽어야 한다.
+    WriteOutcomeUnknown,
+    /// 저장소를 읽지 못했거나 교체 전에 쓰기가 실패했다.
     Storage(String),
 }
 
@@ -224,6 +226,9 @@ impl fmt::Display for VaultStoreError {
             Self::IntegrityFailure => {
                 formatter.write_str("the vault record failed its integrity check")
             }
+            Self::WriteOutcomeUnknown => formatter.write_str(
+                "the vault record was replaced but its outcome is unknown; reload before retrying",
+            ),
             Self::Storage(message) => write!(formatter, "the vault storage failed: {message}"),
         }
     }
@@ -237,7 +242,8 @@ pub trait EvidenceVaultStorePort: Send + Sync {
         EVIDENCE_VAULT_STORE_CONTRACT_VERSION
     }
 
-    /// 평문을 암호화해 이 범위의 레코드로 저장한다. 같은 범위의 레코드는 바꾼다. 실패하면 이전 레코드가 남는다.
+    /// 평문을 암호화해 이 범위의 레코드로 저장한다. 같은 범위의 레코드는 바꾼다.
+    /// 교체 전 실패는 이전 레코드를 보존한다. 교체 후 실패는 `WriteOutcomeUnknown`이며 다시 읽어야 한다.
     fn save(&self, request: VaultRecordSaveRequest) -> std::result::Result<(), VaultStoreError>;
 
     /// 이 범위의 레코드를 검증하고 평문을 돌려준다. 검증에 실패하면 평문을 돌려주지 않는다.
