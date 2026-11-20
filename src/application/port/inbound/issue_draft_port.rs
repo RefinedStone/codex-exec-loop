@@ -127,11 +127,11 @@ pub struct IssueDraftOpened {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueDraftValidationError {
-    /// `title`, `template_field`, `required_section` 중 하나이다.
+    /// `title`, `template_field`, `required_section`, `code_validator` 중 하나이다.
     pub field: &'static str,
-    /// 템플릿 필드나 섹션의 제목이다. 제목 칸이면 `None` 이다.
+    /// 템플릿 필드나 섹션의 제목 또는 코드 검증기의 ID 이다. 제목 칸이면 `None` 이다.
     pub label: Option<String>,
-    /// `missing`, `empty`, `invalid_format` 중 하나이다.
+    /// `missing`, `empty`, `invalid_format`, `failed`(필수 코드 검증기가 통과하지 않았다) 중 하나이다.
     pub kind: &'static str,
 }
 

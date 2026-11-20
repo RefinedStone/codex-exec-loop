@@ -10,9 +10,11 @@ use crate::application::port::inbound::issue_draft_port::{
     IssueDraftTarget, IssueDraftTemplate, IssueDraftText, IssueDraftUnsupportedInput,
     IssueDraftValidationError,
 };
+use crate::application::port::outbound::issue_code_validator_runner_port::IssueCodeValidatorRunnerPort;
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueSnapshotPort, IssueSnapshotResolveRequest, IssueSnapshotResponse,
 };
+use crate::application::service::issue_code_validator::gate_issue_publish_with_code_validators;
 use crate::application::service::issue_masking::{
     IssueMaskedSpan, IssueMaskingBlocked, IssueSensitiveSpan, IssueTextField, mask_issue_text,
 };
@@ -45,6 +47,9 @@ use crate::domain::issue_work::{
  * 승인은 클라이언트가 미리보기에서 받은 값(공유본 해시, 정책 판, 템플릿 판)이다. 게시할 때 로컬 글을 다시 가리고
  * 정책과 템플릿을 다시 읽는다. 그 결과가 승인과 다르면 게시 서비스가 거절한다.
  *
+ * 미리보기는 필수 규약 관문만 지난다. 게시는 코드 검증기가 있는 관문(#2431)을 지난다: 검증기는 프로그램을
+ * 실행하므로 글자를 칠 때마다 돌리지 않는다.
+ *
  * shortcut: Vault 키를 연결하지 않았다. 복원 가능 구간이 있는 게시는 항상 `Held` 이고 사용자가 공유본만 게시할지
  * 정한다. Vault 저장과 복원 연결은 #2425, #2427 에서 잇는다.
  */
@@ -53,6 +58,7 @@ pub struct IssueDraftService {
     template: IssueTemplateService,
     snapshot: Arc<dyn IssueSnapshotPort>,
     publisher: IssueJournaledPublishService,
+    code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
 }
 
 /// 프로젝트의 지금 규약이다.
@@ -68,12 +74,14 @@ impl IssueDraftService {
         template: IssueTemplateService,
         snapshot: Arc<dyn IssueSnapshotPort>,
         publisher: IssueJournaledPublishService,
+        code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
     ) -> Self {
         Self {
             policy,
             template,
             snapshot,
             publisher,
+            code_validators,
         }
     }
 
@@ -138,12 +146,16 @@ impl IssueDraftPort for IssueDraftService {
 
     fn preview(&self, request: IssueDraftPreviewRequest) -> Result<IssueDraftPreview> {
         let conventions = self.conventions(&request.target.cwd)?;
-        Ok(evaluate(&conventions, &request.text).0)
+        Ok(evaluate(&conventions, &request.text, None).0)
     }
 
     fn publish(&self, request: IssueDraftPublishRequest) -> Result<IssueDraftPublished> {
         let conventions = self.conventions(&request.target.cwd)?;
-        let (preview, passed) = evaluate(&conventions, &request.text);
+        let (preview, passed) = evaluate(
+            &conventions,
+            &request.text,
+            Some(self.code_validators.as_ref()),
+        );
         let Some((validated, masked_spans)) = passed else {
             return Ok(IssueDraftPublished::Blocked { preview });
         };
@@ -226,9 +238,11 @@ fn policy_version(policy: &IssuePolicy) -> String {
 }
 
 /// 로컬 글을 가리고 게시 관문으로 검사한다. 통과하면 관문을 지난 글과 가림 구간도 준다.
+/// `code_validators` 가 있으면 코드 검증기도 실행한다.
 fn evaluate(
     conventions: &Conventions,
     text: &IssueDraftText,
+    code_validators: Option<&dyn IssueCodeValidatorRunnerPort>,
 ) -> (
     IssueDraftPreview,
     Option<(IssueValidationPassed, Vec<IssueMaskedSpan>)>,
@@ -253,13 +267,32 @@ fn evaluate(
         }
     };
     let requirements = requirements(conventions);
-    let gate = gate_issue_publish(&masked.shared_copy, requirements.as_ref());
+    let gate = match code_validators {
+        Some(runner) => gate_issue_publish_with_code_validators(
+            &masked.shared_copy,
+            requirements.as_ref(),
+            &conventions.policy,
+            runner,
+        ),
+        None => gate_issue_publish(&masked.shared_copy, requirements.as_ref()),
+    };
     let (errors, validator_absent) = match &gate {
         Ok(_) => (Vec::new(), false),
         Err(IssuePublishBlocked::ValidatorAbsent) => (Vec::new(), true),
         Err(IssuePublishBlocked::Invalid(errors)) => {
             (errors.iter().map(validation_error).collect(), false)
         }
+        Err(IssuePublishBlocked::CodeValidator(results)) => (
+            results
+                .iter()
+                .map(|result| IssueDraftValidationError {
+                    field: "code_validator",
+                    label: Some(result.id.clone()),
+                    kind: "failed",
+                })
+                .collect(),
+            false,
+        ),
     };
     let preview = IssueDraftPreview::Ready {
         markers: masked
@@ -430,6 +463,9 @@ mod tests {
         EvidenceVaultStorePort, VaultPlaintext, VaultRecordLoadRequest, VaultRecordSaveRequest,
         VaultStoreError,
     };
+    use crate::application::port::outbound::issue_code_validator_runner_port::{
+        IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest,
+    };
     use crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort;
     use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
     use crate::application::port::outbound::issue_snapshot_port::{
@@ -561,6 +597,15 @@ mod tests {
         }
     }
 
+    /// 시험의 정책은 코드 검증기를 고르지 않는다. 실행하면 시험이 실패한다.
+    struct NoCodeValidators;
+
+    impl IssueCodeValidatorRunnerPort for NoCodeValidators {
+        fn run(&self, _: IssueCodeValidatorRunRequest) -> IssueCodeValidatorRunOutcome {
+            unreachable!("the policy selects no code validator")
+        }
+    }
+
     struct Fixture {
         files: Arc<FakeProjectFiles>,
         remote: Arc<FakeRemoteIssue>,
@@ -592,6 +637,7 @@ mod tests {
                 Arc::new(FakeJournal::default()),
                 Arc::new(UnusedVault),
             ),
+            Arc::new(NoCodeValidators),
         );
         Fixture {
             files,

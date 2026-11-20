@@ -986,9 +986,18 @@ strategy in the production TUI.
   `needs_confirmation` intent with `abandon`. Restorable spans are saved to the Vault under
   `VaultRecordBinding::PublishIntent` first; without a key or after a failed save the publish is
   `held` until the user repeats it with `shared_copy_only`. `finalize_restore_link` rebinds the
-  records to `ConfirmedVersion` only for a `confirmed` intent. Composition does not build this
-  service yet: no inbound caller exists, and the boundary test still forbids every `issue_publish`
-  reference there. The first caller wires only the journaled service.
+  records to `ConfirmedVersion` only for a `confirmed` intent. Composition builds only this
+  journaled service (`build_issue_drafts`); the boundary test forbids `IssuePublishService` there.
+- The inbound caller is `IssueDraftPort` (`application/service/issue_draft`), served by the Gateway
+  as `akra/issue/open`, `preview`, `publish`, `recheck`, and `abandon` on host `local`. A client
+  sends the local title, body, and sensitive spans (UTF-16 offsets); the service masks, runs the
+  publish gate, and returns the shared copy, the markers that stay, per-field errors, and an
+  approval value (shared copy hash, policy version, template version). `publish` masks and reads
+  the policy and template again, so an approval of other text or of an older policy or template is
+  `refused` with no write. These requests carry text before masking, and `open` returns the remote
+  text as the edit start: the Gateway keeps both out of the session recording. No Vault key is
+  wired yet, so a publish with a restorable mask is `held` until the user repeats it with
+  `sharedCopyOnly`.
 - The issue policy (`domain/issue_policy`) comes only from `IssuePolicyService`. An invalid or
   unreadable policy file is `IssuePolicyBlocked`; callers must not replace it with the built-in
   policy. See [configuration](./configuration.md#issue-policy-file).
