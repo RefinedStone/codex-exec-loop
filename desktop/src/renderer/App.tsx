@@ -30,7 +30,7 @@ import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, Zoo
 import { DocumentsPanel } from "./work/DocumentsPanel";
 import { GitHubPanel } from "./work/GitHubPanel";
 import { GitHubProjectPanel } from "./work/GitHubProjectPanel";
-import { findFolderForRepository } from "./work/githubProjects";
+import { findFolderForRepository, readIssueHandoffPrompt } from "./work/githubProjects";
 import { JiraPanel } from "./work/JiraPanel";
 import { LinearPanel } from "./work/LinearPanel";
 import type { GatewayRequest } from "./work/notionHub";
@@ -234,12 +234,12 @@ function useGitHubRepository(cwd: string | null): string | null {
  * 이슈 내용을 새 스레드의 입력창에 채운다 (R11). 폴더는 열린 스레드의 폴더부터 사이드바의 작업 폴더까지 `origin` 이 같은
  * 것을 고른다. 없으면 고르지 않고, 보낼 때 폴더 선택 창이 열린다.
  */
-async function handOffIssue(url: string, repository: string): Promise<void> {
-  const text = await window.akra.github.issuePrompt(url);
+async function handOffIssue(request: GatewayRequest, url: string, repository: string, number: number): Promise<void> {
   const state = useDesktopStore.getState();
   const openCwd = openThreadCwd(state);
   const folders = [...(openCwd ? [openCwd] : []), ...state.folders.map((folder) => folder.cwd)];
   const cwd = await findFolderForRepository(repository, folders, (folder) => window.akra.github.repository(folder));
+  const text = await readIssueHandoffPrompt(request, url, repository, number, cwd);
   useUiStore.setState({ homeCwd: cwd });
   handOffToNewThread(text);
 }
@@ -266,7 +266,7 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
           github={window.akra.github}
           currentRepository={currentRepository}
           onHandOff={async (item) => {
-            if (item.url && item.repository) await handOffIssue(item.url, item.repository);
+            if (item.url && item.repository && item.number !== null) await handOffIssue(request, item.url, item.repository, item.number);
           }}
         />
       )}

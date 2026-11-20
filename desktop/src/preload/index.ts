@@ -153,9 +153,6 @@ const bridge: AkraBridge = {
     project(project: string): Promise<GitHubProject> {
       return ipcRenderer.invoke(IPC_CHANNELS.githubProject, project) as Promise<GitHubProject>;
     },
-    issuePrompt(url: string): Promise<string> {
-      return ipcRenderer.invoke(IPC_CHANNELS.githubIssuePrompt, url) as Promise<string>;
-    },
     repository(cwd: string): Promise<string | null> {
       return ipcRenderer.invoke(IPC_CHANNELS.githubRepository, cwd) as Promise<string | null>;
     },

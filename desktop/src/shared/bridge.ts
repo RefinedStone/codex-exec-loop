@@ -64,7 +64,6 @@ export const IPC_CHANNELS = {
   githubSummary: "akra:github-summary",
   githubReviewPrompt: "akra:github-review-prompt",
   githubProject: "akra:github-project",
-  githubIssuePrompt: "akra:github-issue-prompt",
   githubRepository: "akra:github-repository",
   openExternal: "akra:open-external",
   jiraStatus: "akra:jira-status",
@@ -162,8 +161,6 @@ export interface GitHubBridge {
   reviewPrompt(url: string): Promise<string>;
   /** Project 하나의 항목을 읽는다 (R11). `project` 는 `owner/번호` 또는 Project 주소이다. */
   project(project: string): Promise<GitHubProject>;
-  /** 이슈의 본문과 최근 댓글로 만든 첫 메시지이다. */
-  issuePrompt(url: string): Promise<string>;
   /** 폴더의 `origin` 이 가리키는 GitHub `owner/name` 이다. git 저장소가 아니거나 GitHub 가 아니면 null 이다. */
   repository(cwd: string): Promise<string | null>;
   /** github.com 주소를 기본 브라우저로 연다. */
