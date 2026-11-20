@@ -1618,7 +1618,11 @@ fn read_layer_if_present(path: &Path, scope: ConfigScope) -> Result<Option<AkraC
     Ok(Some(layer))
 }
 
-fn read_config_file_if_present(path: &Path, scope: ConfigScope) -> Result<Option<String>> {
+/// `.akra` 아래의 다른 설정 파일(이슈 정책, #2416)도 같은 안전 규칙으로 읽는다.
+pub(crate) fn read_config_file_if_present(
+    path: &Path,
+    scope: ConfigScope,
+) -> Result<Option<String>> {
     // Reject a link/reparse-point parent before querying the leaf.  O_NOFOLLOW
     // protects the final component on Unix, but it cannot protect `.akra` (or
     // an operator-provided AKRA_HOME) when that directory itself is a link.

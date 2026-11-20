@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Akra issue policy (issue-policy.toml), schema_version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "A missing value means 1.",
+      "const": 1
+    },
+    "convention": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "description": "Issue template to apply. A relative path inside the repository, without `..`.",
+          "type": "string",
+          "minLength": 1
+        },
+        "required_sections": {
+          "description": "Section titles the project requires in addition to the template.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "\\S" }
+        }
+      }
+    },
+    "publish": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required_validation": {
+          "description": "Locked. The mandatory publish validation cannot be turned off.",
+          "const": true
+        },
+        "spans": { "$ref": "#/$defs/spans" }
+      }
+    },
+    "ai_handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spans": { "$ref": "#/$defs/spans" }
+      }
+    },
+    "vault": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "user_unlock": {
+          "description": "Locked. The user unlock for restore cannot be turned off.",
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "action": {
+      "enum": ["remove", "restorable_mask", "user_confirm"]
+    },
+    "spans": {
+      "description": "Action per sensitive span class. Built-in: secret = remove, others = restorable_mask.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secret": { "$ref": "#/$defs/action" },
+        "name": { "$ref": "#/$defs/action" },
+        "path": { "$ref": "#/$defs/action" },
+        "log": { "$ref": "#/$defs/action" }
+      }
+    }
+  }
+}

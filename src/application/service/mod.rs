@@ -17,6 +17,8 @@ pub mod review_center;
 pub mod manual_prompt_preparation;
 // MCP hub service 는 등록부 확인, 도구 검색, 결과 축약을 맡는다.
 pub mod mcp_hub;
+// issue_policy 는 이슈 정책 파일을 검증하고 사용자 < 프로젝트 순서로 합친다 (#2416).
+pub mod issue_policy;
 // parallel_agent_profile은 병렬 agent의 이름, 역할, avatar, persona prompt 설정을 관리한다.
 pub mod parallel_agent_profile;
 // parallel_mode는 여러 worktree/agent lane을 만들고 배분하는 application 흐름이다.
