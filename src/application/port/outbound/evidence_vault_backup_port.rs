@@ -1,0 +1,178 @@
+use std::fmt;
+
+use zeroize::Zeroize;
+
+use super::evidence_vault_port::{VaultRecordKey, VaultRecordScope, VaultStoreError};
+use crate::domain::issue_work::{IssueProjectScope, IssueReference};
+
+/*
+ * Evidence Vault 의 백업 계약이다 (#2432). 암호화한 레코드와 복구 키로 감싼 장치 키를 보관 파일 한 개로 내보내고,
+ * 복구 키로 다른 장치의 Vault 에 가져온다.
+ *
+ * 보관 파일에는 복구 키와 평문이 없다. 가져오기는 사용자가 승인한 프로젝트의 레코드만 로컬 장치 키로 다시
+ * 암호화해 쓴다. 원격 이슈의 ID 는 바꾸지 않는다. 이미 있는 로컬 레코드와 로컬 장치 키는 바꾸지 않는다.
+ *
+ * 이 파일의 요청 타입은 `Serialize` 를 구현하지 않고 `Debug` 는 키를 가린다.
+ */
+
+/// 백업 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
+pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 1;
+
+/// 복구 키의 길이이다 (256 bit).
+pub const VAULT_RECOVERY_KEY_LEN: usize = 32;
+
+/// 사용자가 보관하는 복구 키이다. OS 난수로 만든다. 내보낼 때 한 번만 보여주고 Akra 는 저장하지 않는다.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VaultRecoveryKey(Vec<u8>);
+
+impl VaultRecoveryKey {
+    /// `key` 는 OS 난수 `VAULT_RECOVERY_KEY_LEN` 바이트이다.
+    pub fn new(key: Vec<u8>) -> Self {
+        Self(key)
+    }
+
+    /// 사용자가 입력한 글에서 만든다. `-` 와 공백은 무시한다. 16 진수 64 자가 아니면 `None` 이다.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut digits = text
+            .chars()
+            .filter(|character| *character != '-' && !character.is_whitespace())
+            .map(|character| character.to_digit(16).map(|digit| digit as u8));
+        let mut key = Vec::with_capacity(VAULT_RECOVERY_KEY_LEN);
+        while let Some(high) = digits.next() {
+            match (high, digits.next().flatten()) {
+                (Some(high), Some(low)) => key.push(high << 4 | low),
+                _ => {
+                    key.zeroize();
+                    return None;
+                }
+            }
+        }
+        if key.len() != VAULT_RECOVERY_KEY_LEN {
+            key.zeroize();
+            return None;
+        }
+        Some(Self(key))
+    }
+
+    /// 키를 꺼낸다. Vault 구현만 부른다.
+    pub fn expose(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// 사용자에게 한 번 보여주는 글이다: 16 진수를 8 자씩 `-` 로 나눈다. 신뢰된 로컬 UI 만 부른다.
+    pub fn expose_text(&self) -> String {
+        let hex: Vec<String> = self.0.iter().map(|byte| format!("{byte:02x}")).collect();
+        hex.chunks(4)
+            .map(|group| group.concat())
+            .collect::<Vec<_>>()
+            .join("-")
+    }
+}
+
+impl Drop for VaultRecoveryKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl fmt::Debug for VaultRecoveryKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VaultRecoveryKey(<redacted>)")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultBackupExportRequest {
+    /// 내보낼 레코드의 범위이다. 레코드가 없는 범위는 건너뛴다.
+    pub scopes: Vec<VaultRecordScope>,
+    /// 이 장치의 키이다. 복구 키로 감싸서 보관 파일에 넣는다.
+    pub key: VaultRecordKey,
+    pub recovery_key: VaultRecoveryKey,
+}
+
+/// 사용자가 승인한 프로젝트 한 개이다: 보관 파일의 프로젝트와, 그 레코드를 받을 이 장치의 프로젝트.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultBackupProjectApproval {
+    pub source: IssueProjectScope,
+    pub local: IssueProjectScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultBackupImportRequest {
+    /// 보관 파일의 내용이다.
+    pub archive: String,
+    pub recovery_key: VaultRecoveryKey,
+    /// 가져온 레코드를 다시 암호화하는 이 장치의 키이다.
+    pub local_key: VaultRecordKey,
+    /// 승인하지 않은 프로젝트의 레코드는 쓰지 않는다.
+    pub projects: Vec<VaultBackupProjectApproval>,
+}
+
+/// 가져오기의 결과이다. 평문은 없다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultBackupImportReport {
+    /// 보관 파일의 안정 식별자이다.
+    pub backup_id: String,
+    /// 이 호출이 연결(`CurrentVersion`)을 쓴 이슈이다. 프로젝트는 로컬 프로젝트이다.
+    pub imported: Vec<IssueReference>,
+    /// 이미 로컬 연결이 있어서 건드리지 않은 이슈이다.
+    pub kept_local: Vec<IssueReference>,
+    /// 보관 파일에 있지만 승인이 없어서 쓰지 않은 프로젝트이다.
+    pub unapproved_projects: Vec<IssueProjectScope>,
+}
+
+/// 백업 계약의 오류이다. 어떤 오류도 평문이나 키를 담지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VaultBackupError {
+    /// 내보낼 레코드가 없다.
+    NothingToExport,
+    /// 보관 파일이 크기나 레코드 수의 상한을 넘는다.
+    ArchiveTooLarge,
+    /// 보관 파일을 해석할 수 없거나, 안의 레코드가 검증에 실패했다.
+    CorruptArchive,
+    /// 보관 파일의 형식을 이 구현이 모른다.
+    UnsupportedFormat,
+    /// 복구 키로 장치 키를 풀지 못했다: 복구 키가 다르거나, 머리말이나 레코드 목록이 바뀌었다.
+    RecoveryKeyRejected,
+    /// 내보낼 로컬 레코드가 검증에 실패했다.
+    Record(VaultStoreError),
+    /// 저장소를 읽거나 쓰지 못했다. 가져오기는 다시 시도할 수 있다.
+    Storage(String),
+}
+
+impl fmt::Display for VaultBackupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NothingToExport => formatter.write_str("the vault has no record to export"),
+            Self::ArchiveTooLarge => formatter.write_str("the vault backup exceeds the size limit"),
+            Self::CorruptArchive => formatter.write_str("the vault backup is corrupt"),
+            Self::UnsupportedFormat => {
+                formatter.write_str("the vault backup uses an unsupported format")
+            }
+            Self::RecoveryKeyRejected => {
+                formatter.write_str("the recovery key does not open this vault backup")
+            }
+            Self::Record(error) => write!(formatter, "a vault record cannot be exported: {error}"),
+            Self::Storage(message) => write!(formatter, "the vault storage failed: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for VaultBackupError {}
+
+pub trait EvidenceVaultBackupPort: Send + Sync {
+    /// 구현이 따르는 계약의 판이다.
+    fn contract_version(&self) -> u32 {
+        EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION
+    }
+
+    /// 레코드를 암호문 그대로 담고 장치 키를 복구 키로 감싼 보관 파일의 내용을 만든다. Vault 를 바꾸지 않는다.
+    fn export(&self, request: VaultBackupExportRequest) -> Result<String, VaultBackupError>;
+
+    /// 보관 파일 전체를 검증한 뒤에 승인한 프로젝트의 레코드를 쓴다. 검증에 실패하면 아무것도 쓰지 않는다.
+    /// 이슈의 연결은 그 이슈의 다른 레코드 뒤에 쓴다. 중간에 멈춘 가져오기는 다시 부르면 끝난다.
+    fn import(
+        &self,
+        request: VaultBackupImportRequest,
+    ) -> Result<VaultBackupImportReport, VaultBackupError>;
+}

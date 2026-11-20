@@ -43,6 +43,8 @@ pub mod issue_policy_source_port;
 pub mod vault_key_store_port;
 // issue review model port 는 이슈 초안 품질 검토에 쓰는 모델의 경계이다 (#2430).
 pub mod issue_review_model_port;
+// evidence vault backup port 는 복구 키로 여는 Vault 백업의 내보내기와 가져오기 계약이다 (#2432).
+pub mod evidence_vault_backup_port;
 // issue template source port 는 대상 저장소의 이슈 템플릿 파일을 읽는 경계이다 (#2417).
 pub mod issue_template_source_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
