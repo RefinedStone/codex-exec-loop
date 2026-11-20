@@ -21,6 +21,10 @@ pub mod git_history_port;
 pub mod git_operation_journal_port;
 // git workspace port 는 작업 트리의 상태를 읽고 저장소를 고치는 경계다 (plan 27 G3).
 pub mod git_workspace_port;
+// issue core port 는 이슈 공유본의 조회와 게시 계약이다 (#2415).
+pub mod issue_core_port;
+// evidence vault port 는 사용자 확인이 필요한 복원 진입점이다. 일반 계약과 분리한다 (#2415).
+pub mod evidence_vault_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
 pub mod github_automation_port;
 // GitHub PR validation port는 review/CI/merge 관찰 snapshot의 read-only 계약을 정의한다.
