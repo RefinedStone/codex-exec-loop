@@ -72,3 +72,20 @@ test("the committed exception list is valid", () => {
   const committed = JSON.parse(readFileSync(new URL("./npm-audit-exceptions.json", import.meta.url), "utf8"));
   assert.doesNotThrow(() => validateExceptions(committed));
 });
+
+for (const order of ["excepted-first", "excepted-last"]) {
+  test(`one package exception cannot hide the same advisory in another package (${order})`, () => {
+    const other = { ...PICOMATCH, name: "micromatch", severity: "critical" };
+    const advisories = order === "excepted-first" ? [PICOMATCH, other] : [other, PICOMATCH];
+    const result = evaluateAudit(report(...advisories), [EXCEPTION], "2026-11-18");
+    assert.deepEqual(result.accepted.map(({ advisory }) => advisory.package), ["picomatch"]);
+    assert.deepEqual(result.blocking.map((advisory) => advisory.package), ["micromatch"]);
+    assert.equal(reportedAdvisories(report(...advisories)).length, 2);
+  });
+}
+
+test("duplicate occurrences of one advisory and package remain one entry", () => {
+  const repeated = report(PICOMATCH);
+  repeated.vulnerabilities.vite.via.push(PICOMATCH);
+  assert.equal(reportedAdvisories(repeated).length, 1);
+});
