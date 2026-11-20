@@ -506,6 +506,23 @@ the desktop app itself is not shipped yet.
   retried; the section shows a login message when the reason is `cloud login rejected`. The command and
   the section appear only when the Gateway registers a remote host
   (`desktop/src/main/gatewayConnection.ts`, `desktop/src/renderer/session/`).
+- Desktop installed skills (#2383): the "스킬" panel lists installed skills, one row per runtime, host
+  (`local` only), install scope, and install path. Codex rows come from `skills/list`; Claude Code rows
+  come from `~/.claude/skills` and `<work folder>/.claude/skills` on disk (install state only). Only a
+  real folder below `.claude/skills`, `.codex/skills`, or `.agents/skills` is writable. Plugin, system,
+  and admin installs, linked folders, and other locations are read-only. A copy has no source until the
+  user links one (public GitHub `owner/name`, sub-path, and a policy: stable release, branch, or pinned
+  ref); Desktop never links by name or file date. The source ledger, snapshots, and the recovery journal
+  are in `<userData>/skill-sources/`; nothing is written into the install folder for tracking.
+  "지금 확인" resolves the ref to a commit without credentials and compares manifest hash v1 (sha256
+  over every file of the skill folder, bytes as they are; rule in `desktop/src/main/skillManifest.ts`)
+  of the skill sub-path only. A failed check keeps the last success and is never shown as latest.
+  Apply and rollback run in the main process after a main-process confirmation: only the commit and
+  hash of the last check, no merge, abort when local files changed after the preview, a snapshot of
+  the previous files and ledger entry, and a journaled folder swap that is rolled back at the next
+  start if it stopped. Downloaded files are never executed. Not shipped: `skills-lock.json` reuse,
+  private repositories, scheduled checks, Claude Code plugin installs, and remote hosts
+  (`desktop/src/main/skill*.ts`, `desktop/src/renderer/skills/`, `desktop/src/shared/skills.ts`).
 - Kernel protocol (`akra/kernel/*`, plan 18 K3, protocol version 1 since the kernel spec of K4-1): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
   kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep
