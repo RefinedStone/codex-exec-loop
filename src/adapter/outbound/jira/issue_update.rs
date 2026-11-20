@@ -388,4 +388,28 @@ mod tests {
 
         assert_eq!(response.published_copy.title, "New title");
     }
+
+    #[test]
+    fn inline_code_with_literal_delimiters_cannot_be_silently_rewritten() {
+        let description = json!({"type": "doc", "version": 1, "content": [{
+            "type": "paragraph", "content": [{
+                "type": "text", "text": "a\x60 b \x60c", "marks": [{"type": "code"}]
+            }]
+        }]});
+        let body = adf_to_markdown(&description).markdown;
+        let (adapter, calls) = adapter_with(
+            vec![
+                tenant(CLOUD_ID),
+                edit_meta(),
+                remote_issue("Old title", description),
+            ],
+            false,
+        );
+        assert!(
+            adapter
+                .update_title_and_body(request_for(reference(), "Old title", &body))
+                .is_err()
+        );
+        assert_eq!(put_count(&calls), 0);
+    }
 }
