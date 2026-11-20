@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import "./IssueDraftPanel.css";
+import { IssueReadinessPanel } from "./IssueReadinessPanel";
 import { IssueDraftPreviewView, IssueDraftRequirements, IssueDraftTextFields } from "./IssueDraftFields";
-import { shiftSpans, type IssueDraftField, type IssueDraftSpan } from "./issueDraft";
+import { expectedLabels, shiftSpans, type IssueDraftField, type IssueDraftSpan } from "./issueDraft";
 import {
   creationNeedsConfirmation, creationRestorePending, creationStatus, ISSUE_CREATE_METHOD, sameCreationApproval,
   type IssueCreationApproval, type IssueCreationIntent, type IssueCreationOpened,
@@ -36,6 +37,8 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [spans, setSpans] = useState<IssueDraftSpan[]>([]);
+  const [labelInput, setLabelInput] = useState("");
+  const previewRequest = useRef(0);
   const [preview, setPreview] = useState<IssueCreationPreview | null>(null);
   const [approval, setApproval] = useState<IssueCreationApproval | null>(null);
   const [busy, setBusy] = useState(false);
@@ -51,6 +54,8 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
   approvalRef.current = approval;
 
   const installOpened = (next: IssueCreationOpened) => {
+    previewRequest.current += 1;
+    setLabelInput("");
     setOpened(next);
     // Frozen intents expose only the approved shared copy, never a rewritten raw draft.
     setTitle(next.intent.state === "prepared" ? next.title : next.intent.sharedCopy?.title ?? "");
@@ -64,6 +69,7 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
   };
 
   const installIntent = (intent: IssueCreationIntent) => {
+    previewRequest.current += 1;
     setOpened((current) => current ? { ...current, intent } : current);
     if (intent.state !== "prepared") {
       setTitle(intent.sharedCopy?.title ?? "");
@@ -78,6 +84,8 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
 
   useEffect(() => {
     const generation = ++epoch.current;
+    previewRequest.current += 1;
+    setLabelInput("");
     busyRef.current = false;
     setBusy(false);
     setUnknownRequest(false);
@@ -102,16 +110,20 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
   const editable = intent?.state === "prepared" && !unknownRequest;
   const resumable = intent?.state === "held" || intent?.state === "recorded";
   useEffect(() => {
+    const requestId = ++previewRequest.current;
+    const generation = epoch.current;
+    setPreview(null);
     if (!opened || busy || unknownRequest || (!editable && !resumable)) return;
     let current = true;
     const timer = window.setTimeout(() => {
       void request<IssueCreationPreview>(ISSUE_CREATE_METHOD.preview, {
-        target, intentId: opened.intent.intentId,
+        target, intentId: opened.intent.intentId, expectedLabels: expectedLabels(labelInput),
         text: editable ? { title, body, spans } : { title: opened.intent.sharedCopy?.title ?? "", body: opened.intent.sharedCopy?.body ?? "", spans: [] },
       }).then(
         (next) => {
-          if (!current) return;
+          if (!current || requestId !== previewRequest.current || generation !== epoch.current) return;
           setPreview(next);
+          setError(null);
           const approved = approvalRef.current;
           if (approved && (!next.approval || !sameCreationApproval(approved, next.approval))) {
             setApproval(null);
@@ -119,7 +131,7 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
           }
         },
         (cause: unknown) => {
-          if (!current) return;
+          if (!current || requestId !== previewRequest.current || generation !== epoch.current) return;
           setPreview(null);
           setApproval(null);
           setError(errorMessage(cause));
@@ -127,7 +139,7 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
       );
     }, 300);
     return () => { current = false; window.clearTimeout(timer); };
-  }, [request, target.cwd, target.owner, target.repository, intent?.intentId, intent?.state, title, body, spans, refresh, busy, unknownRequest]);
+  }, [request, target.cwd, target.owner, target.repository, intent?.intentId, intent?.state, title, body, spans, labelInput, refresh, busy, unknownRequest]);
 
   const perform = async <T,>(method: string, params: unknown, accept: (result: T) => void, uncertainOnFailure = false) => {
     if (busyRef.current) return;
@@ -157,7 +169,12 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
     }
   };
 
+  const invalidatePreview = () => {
+    previewRequest.current += 1;
+    setPreview(null);
+  };
   const invalidateApproval = () => {
+    invalidatePreview();
     if (approvalRef.current) setNotice("내용이 바뀌어서 승인을 지웠습니다. 새 미리보기를 확인하세요.");
     setApproval(null);
     setPreview(null);
@@ -246,7 +263,13 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
             <div className="issue-draft-shared" data-testid="issue-create-frozen-title">{intent.sharedCopy.title}</div>
             <pre className="issue-draft-shared" data-testid="issue-create-frozen-body">{intent.sharedCopy.body}</pre>
           </section>}
-          {(editable || resumable) && !unknownRequest && <IssueDraftPreviewView preview={preview?.preview ?? null} showMarkers={editable} />}
+          {(editable || resumable) && !unknownRequest && <>
+            <IssueDraftPreviewView preview={preview?.preview ?? null} showMarkers={editable} />
+            <IssueReadinessPanel result={preview?.preview.readiness} pending={preview === null && error === null}
+              labels={labelInput} disabled={busy || !editable}
+              onLabelsChange={(value) => { invalidatePreview(); setLabelInput(value); }}
+              onRefresh={() => { invalidatePreview(); setRefresh((value) => value + 1); }} />
+          </>}
           {resumable && preview && !preview.approval && <p className="error work-section" data-testid="issue-create-frozen-policy">
             기록된 승인과 현재 정책 또는 템플릿이 달라 이 공유본을 다시 보낼 수 없습니다. 새 초안을 시작하고 다시 승인하세요.
           </p>}

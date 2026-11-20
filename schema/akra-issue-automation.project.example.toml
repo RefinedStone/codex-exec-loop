@@ -10,8 +10,17 @@ mode = "observe"
 [authority]
 autonomy_cap = "propose"
 
+# 실행 계약의 라벨 이름은 각 leaf를 바꿀 수 있으며 네 이름은 서로 달라야 한다.
+[labels]
+auto = "akra:auto"
+gated = "akra:gated"
+manual = "akra:manual"
+hold = "akra:hold"
+
 [select]
 mode = "labels_any"
+# 모든 layer에서 labels_any를 생략하면 최종 auto/gated/manual 이름을 선택한다.
+# 아래처럼 명시한 값(빈 [] 포함)은 라벨 이름 변경 뒤에도 보존한다.
 # []은 선택 대상 없음이다. 전체 열린 이슈를 선택하려면 mode = "all_open"을 명시한다.
 labels_any = ["akra:auto", "akra:manual"]
 # 생략하면 사용자 목록을 상속하며, []이면 모두 제외한다.

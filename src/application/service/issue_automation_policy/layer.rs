@@ -18,6 +18,7 @@ pub(super) struct PolicyLayer {
     pub schema_version: Option<u32>,
     pub binding: Option<BindingLayer>,
     pub authority: Option<AuthorityLayer>,
+    pub labels: Option<LabelsLayer>,
     pub select: Option<SelectionLayer>,
     pub classify: Option<ClassificationLayer>,
     pub gates: Option<GatesLayer>,
@@ -46,6 +47,15 @@ pub(super) struct GitHubBindingLayer {
 #[serde(deny_unknown_fields)]
 pub(super) struct AuthorityLayer {
     pub autonomy_cap: Option<IssueAutomationAutonomy>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LabelsLayer {
+    pub auto: Option<String>,
+    pub gated: Option<String>,
+    pub manual: Option<String>,
+    pub hold: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -198,6 +208,23 @@ fn validate(layer: &PolicyLayer) -> Result<(), IssueAutomationPolicyValueError> 
         .and_then(|github| github.repository.as_ref())
     {
         validate_repository(repository)?;
+    }
+    if let Some(labels) = &layer.labels {
+        let mut seen = Vec::new();
+        for (field, name) in [
+            ("labels.auto", labels.auto.as_deref()),
+            ("labels.gated", labels.gated.as_deref()),
+            ("labels.manual", labels.manual.as_deref()),
+            ("labels.hold", labels.hold.as_deref()),
+        ] {
+            if let Some(name) = name {
+                validate_text_value(name, field)?;
+                if seen.contains(&name) {
+                    return Err(invalid(field, "duplicate_label_name"));
+                }
+                seen.push(name);
+            }
+        }
     }
     if let Some(selection) = &layer.select {
         if let Some(labels) = &selection.labels_any {

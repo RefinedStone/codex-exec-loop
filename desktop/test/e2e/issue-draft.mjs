@@ -10,6 +10,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { _electron as electron } from "playwright-core";
+import { exerciseReadiness, readinessFixture } from "./fixtures/issue-readiness.mjs";
+
+const issueScreenshotPath = process.env.AKRA_QA_ISSUE_DRAFT_SCREENSHOT ?? process.env.AKRA_QA_SCREENSHOT;
 
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const electronPath = createRequire(import.meta.url)("electron");
@@ -20,6 +23,7 @@ const SECRET = "synthetic-secret-0000";
 const LOG_LINE = "synthetic-log-1111";
 
 /** 가짜 이슈 서비스이다. 원격 글 한 건, 정책 판, 게시 의도 하나를 가진다. */
+const readiness = readinessFixture();
 const issue = {
   remote: { title: "Old title", body: "## Steps\nold steps\n" },
   policyVersion: "p1",
@@ -69,7 +73,8 @@ function answerIssue(method, params) {
       intent: issue.intent,
     };
   }
-  if (method === "akra/issue/preview") return preview(params.text);
+  if (method === "akra/issue/readinessBarrier") return { ok: true };
+  if (method === "akra/issue/preview") return readiness.reply(preview(params.text));
   if (method === "akra/issue/publish") {
     const current = preview(params.text);
     if (current.status !== "ready" || !current.publishable) return { status: "blocked", preview: current };
@@ -191,6 +196,15 @@ try {
   check("the explicit decision stays editable after the preview is ready", await until(async () => (await approve.isEnabled())) && (await decision.count()) === 1);
   check("choosing the changed policy preserves both sensitive spans", (await panel.getByTestId("issue-draft-span").count()) === 2);
 
+  await exerciseReadiness({
+    page, panel, fixture: readiness, requests: issue.requests, previewMethod: "akra/issue/preview",
+    approval: approve, publish: panel.getByTestId("issue-draft-publish"), errorId: "issue-draft-action-error", until, check,
+  });
+  if (issueScreenshotPath) {
+    await panel.getByTestId("issue-draft-readiness").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: issueScreenshotPath, animations: "disabled" });
+  }
+
   await approve.check();
   await title.fill("New title");
   check("a content change clears the approval", await until(async () => !(await approve.isChecked()) && (await panel.getByTestId("issue-draft-notice").count()) > 0));
@@ -252,10 +266,6 @@ try {
   console.log("--- issue draft panel text ---");
   console.log(await panel.innerText());
   console.log("------------------------------");
-  if (process.env.AKRA_QA_SCREENSHOT) {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive());
-    await page.screenshot({ path: process.env.AKRA_QA_SCREENSHOT, animations: "disabled" });
-  }
 
   await panel.getByTestId("issue-draft-done").click();
   check("closing returns to the project list", await until(async () => (await page.getByTestId("github-project-panel").count()) > 0));

@@ -5,20 +5,20 @@ use serde::{Deserialize, Deserializer, de::IgnoredAny};
 pub(super) const ISSUE_FRAGMENT: &str = r#"
 fragment AkraSourceIssue on Issue {
   __typename id number url title body state updatedAt repository { id nameWithOwner }
-  author { login ... on Node { id } }
+  author { __typename login ... on Node { id } }
   labels(first: 100) {
     nodes { id name }
     pageInfo { hasNextPage hasPreviousPage }
   }
   assignees: assignedActors(first: 100) {
-    nodes { ... on Node { id } ... on Actor { login } }
+    nodes { __typename ... on Node { id } ... on Actor { login } }
     pageInfo { hasNextPage hasPreviousPage }
   }
   timelineItems(last: 100, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
     nodes {
       __typename
-      ... on LabeledEvent { id createdAt actor { login ... on Node { id } } label { id name } }
-      ... on UnlabeledEvent { id createdAt actor { login ... on Node { id } } label { id name } }
+      ... on LabeledEvent { id createdAt actor { __typename login ... on Node { id } } label { id name } }
+      ... on UnlabeledEvent { id createdAt actor { __typename login ... on Node { id } } label { id name } }
     }
     pageInfo { hasNextPage hasPreviousPage }
   }
@@ -165,6 +165,8 @@ impl<'de> Deserialize<'de> for AuthorField {
 
 #[derive(Deserialize)]
 pub(super) struct Actor {
+    #[serde(rename = "__typename")]
+    pub typename: Option<String>,
     pub id: Option<String>,
     pub login: Option<String>,
 }

@@ -125,6 +125,7 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
             vec![Step::query(KernelQueryKind::IssueAutomation), Step::AskUser]
         }
         ReasonCode::UntrustedActor
+        | ReasonCode::HumanSelectionRequired
         | ReasonCode::AlreadyClaimed
         | ReasonCode::TitleMissing
         | ReasonCode::RequiredSectionMissing

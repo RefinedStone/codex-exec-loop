@@ -5,6 +5,12 @@ use crate::domain::issue_creation::{
     IssueCreatedLocation, IssueCreationApproval, IssueCreationIntentState, IssueRepositoryReference,
 };
 
+use crate::domain::issue_automation::IssueAutomationAutonomy;
+use crate::domain::issue_automation::policy::{
+    IssueAutomationGate, IssueAutomationGateAction, IssueAutomationRiskClass,
+};
+use crate::domain::issue_automation::triage::{IssueTriageReadiness, IssueTriageReasonCode};
+
 use crate::domain::issue_policy::{IssueSensitiveSpanAction, IssueSensitiveSpanClass};
 use crate::domain::issue_publish_intent::IssuePublishIntentState;
 use crate::domain::issue_work::{IssueFieldHash, IssueSharedCopy};
@@ -147,6 +153,80 @@ pub struct IssueDraftMarker {
     pub field: IssueDraftField,
 }
 
+/// 준비검사는 현재 AI 전달 공유본에 대한 예상이다. 게시 승인, 실제 라벨, 실행 허가를 만들지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum IssueDraftReadiness {
+    Assessed {
+        assessment: Box<IssueDraftReadinessAssessment>,
+    },
+    #[serde(rename_all = "camelCase")]
+    CannotAssess {
+        reason: IssueDraftReadinessBlocker,
+        summary: &'static str,
+        next_summary: &'static str,
+        policy_error: Option<IssueDraftReadinessPolicyError>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDraftReadinessAssessment {
+    pub preview_only: bool,
+    pub readiness: IssueTriageReadiness,
+    pub summary: &'static str,
+    pub missing_sections: Vec<String>,
+    pub errors: Vec<IssueDraftValidationError>,
+    pub risk_class: IssueAutomationRiskClass,
+    pub risk_summary: &'static str,
+    pub effective_mode: IssueAutomationAutonomy,
+    pub assumed_mode: IssueAutomationAutonomy,
+    pub mode_summary: String,
+    pub expected_gates: Vec<IssueDraftExpectedGate>,
+    pub reasons: Vec<IssueDraftReadinessReason>,
+    pub policy_version: String,
+    pub disclosure_policy_version: String,
+    /// 준비검사에 사용한 AI 전달 공유본의 해시이다. 게시 승인 해시와 구별한다.
+    pub shared_copy_hash: IssueFieldHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDraftExpectedGate {
+    pub gate: IssueAutomationGate,
+    pub action: IssueAutomationGateAction,
+    pub summary: &'static str,
+    pub action_summary: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDraftReadinessReason {
+    pub code: IssueTriageReasonCode,
+    pub summary: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueDraftReadinessBlocker {
+    AutomationPolicyUnavailable,
+    PolicyBlocked,
+    RequirementsUnavailable,
+    DisclosureConfirmationRequired,
+    InvalidSpan,
+    InvalidLabels,
+    FrozenDraft,
+    InvalidInput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDraftReadinessPolicyError {
+    pub scope: &'static str,
+    pub field: &'static str,
+    pub reason: &'static str,
+}
+
 /// 미리보기이다. 로컬 글과 가린 평문은 없다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -164,13 +244,23 @@ pub enum IssueDraftPreview {
         publishable: bool,
         /// 사용자가 승인하면 게시 요청에 그대로 넣는 값이다.
         approval: IssueDraftApproval,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        readiness: Option<Box<IssueDraftReadiness>>,
     },
     /// 사용자의 답이 필요한 구간이 있다. 값은 요청 `spans` 의 번호이다.
     #[serde(rename_all = "camelCase")]
-    NeedsConfirmation { span_indexes: Vec<usize> },
+    NeedsConfirmation {
+        span_indexes: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        readiness: Option<Box<IssueDraftReadiness>>,
+    },
     /// 범위가 틀린 구간이다.
     #[serde(rename_all = "camelCase")]
-    InvalidSpan { span_index: usize },
+    InvalidSpan {
+        span_index: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        readiness: Option<Box<IssueDraftReadiness>>,
+    },
 }
 
 #[derive(Clone, Deserialize)]
@@ -178,6 +268,9 @@ pub enum IssueDraftPreview {
 pub struct IssueDraftPreviewRequest {
     pub target: IssueDraftTarget,
     pub text: IssueDraftText,
+    /// 준비검사에만 쓰는 가정이다. 외부 라벨을 바꾸지 않는다.
+    #[serde(default)]
+    pub expected_labels: Vec<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -250,6 +343,8 @@ pub struct IssueCreationPreviewRequest {
     pub target: IssueCreationTarget,
     pub intent_id: String,
     pub text: IssueDraftText,
+    #[serde(default)]
+    pub expected_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

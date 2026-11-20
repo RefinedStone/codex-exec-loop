@@ -32,6 +32,10 @@ pub(super) fn from_policy(
         "자율 수준 상한",
         &policy.authority.autonomy_cap,
     )?;
+    settings.add("labels.auto", "자동 요청 라벨", &policy.labels.auto)?;
+    settings.add("labels.gated", "반자동 요청 라벨", &policy.labels.gated)?;
+    settings.add("labels.manual", "수동 요청 라벨", &policy.labels.manual)?;
+    settings.add("labels.hold", "보류 라벨", &policy.labels.hold)?;
     settings.add("select.mode", "이슈 선택 방식", &policy.select.mode)?;
     settings.add("select.labels_any", "선택 라벨", &policy.select.labels_any)?;
     settings.add(
@@ -170,6 +174,9 @@ fn scope_label(scope: IssueAutomationPolicyOriginScope) -> &'static str {
 fn resolution_summary(resolution: IssueAutomationPolicyResolution) -> &'static str {
     match resolution {
         IssueAutomationPolicyResolution::Default => "내장 기본값을 사용합니다.",
+        IssueAutomationPolicyResolution::Derived => {
+            "최종 자동·반자동·수동 라벨 이름에서 선택 기본값을 만듭니다."
+        }
         IssueAutomationPolicyResolution::Override => "가장 높은 우선순위의 명시한 값을 사용합니다.",
         IssueAutomationPolicyResolution::Minimum => {
             "내장·사용자 허용값과 저장소 제한값 중 작은 값을 사용합니다."

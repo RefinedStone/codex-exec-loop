@@ -495,9 +495,21 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
 
 /// 이슈 초안 서비스를 조립한다 (#2426). 게시는 게시 의도를 기록하는 서비스로만 한다 (#2424). 일지는 git 작업 일지와
 /// 같은 저장소 runtime 디렉터리에 둔다. `gh` 는 저장소가 아닌 Akra 의 폴더에서 실행한다.
+pub(crate) fn build_issue_form_install()
+-> Arc<dyn crate::application::port::inbound::issue_form_install_port::IssueFormInstallPort> {
+    use crate::adapter::outbound::git::issue_form_repository::GitIssueFormRepositoryAdapter;
+    use crate::adapter::outbound::github::automation::GithubAutomationAdapter;
+    use crate::application::service::issue_form_install::IssueFormInstallService;
+    Arc::new(IssueFormInstallService::new(
+        Arc::new(GitIssueFormRepositoryAdapter::new()),
+        Arc::new(GithubAutomationAdapter::new()),
+    ))
+}
+
 fn build_issue_drafts()
 -> Result<Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>> {
     use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
+    use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
     use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJournalAdapter;
     use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
     use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
@@ -505,6 +517,7 @@ fn build_issue_drafts()
     use crate::adapter::outbound::github::{
         GithubIssueCreateAdapter, GithubIssueSnapshotAdapter, GithubIssueUpdateAdapter,
     };
+    use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
     use crate::application::service::issue_creation::IssueCreationService;
     use crate::application::service::issue_draft::IssueDraftService;
     use crate::application::service::issue_policy::IssuePolicyService;
@@ -554,7 +567,10 @@ fn build_issue_drafts()
                 Arc::new(crate::adapter::outbound::vault_key_store::OsVaultKeyStoreAdapter::new()),
             ),
         ),
-    ).with_creation(creator)))
+    ).with_creation(creator)
+        .with_automation_policy(Arc::new(IssueAutomationPolicyService::new(Arc::new(
+            FilesystemIssueAutomationPolicySourceAdapter::new(),
+        ))))))
 }
 
 /// git 작업 엔진을 조립한다 (plan 27 G3). 일지는 planning 기준 데이터와 같은 저장소 runtime 디렉터리에 둔다. 그

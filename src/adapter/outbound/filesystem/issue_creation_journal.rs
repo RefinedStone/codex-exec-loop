@@ -81,6 +81,69 @@ impl IssueCreationJournalPort for IssueCreationJournalAdapter {
     }
 }
 
+impl crate::application::port::outbound::issue_creation_provenance_port::IssueCreationProvenancePort
+    for IssueCreationJournalAdapter
+{
+    fn load(
+        &self,
+        repository: &crate::domain::issue_automation::source::IssueSourceRepository,
+    ) -> Result<crate::application::port::outbound::issue_creation_provenance_port::IssueCreationProvenanceSnapshot>{
+        use crate::application::port::outbound::issue_creation_provenance_port::IssueCreationProvenanceSnapshot;
+        use crate::domain::issue_creation::IssueCreationIntentState;
+
+        repository.validate()?;
+        let workspace = self.canonical_workspace(&repository.project_scope.workspace_dir)?;
+        if workspace != repository.project_scope.workspace_dir {
+            bail!("the creation provenance workspace identity changed")
+        }
+        let runtime = (self.resolve_runtime_dir)(&workspace)?;
+        // 생성은 Sent를 영속화한 뒤에만 원격으로 보낸다. 읽기는 atomic journal
+        // snapshot만 사용하므로 원격 요청 동안 잡힌 writer lease를 기다리지 않는다.
+        #[cfg(unix)]
+        let records = unix::read_validated_records(&runtime)?;
+        #[cfg(not(unix))]
+        let records = {
+            match std::fs::symlink_metadata(runtime.join("issue-create-intents.jsonl")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                // 이 플랫폼에는 안전한 생성 journal 읽기 구현이 없다.
+                // 파일이 있으면 없다고 간주하거나 일반 파일 읽기로 우회하지 않는다.
+                _ => bail!("the creation provenance journal cannot be safely inspected"),
+            }
+        };
+        let mut snapshot = IssueCreationProvenanceSnapshot {
+            repository: repository.clone(),
+            created_issue_ids: std::collections::BTreeSet::new(),
+            unresolved: false,
+        };
+        for record in records {
+            let record: crate::domain::issue_creation::IssueCreationIntentRecord = record;
+            if record.repository.project_scope.workspace_dir != workspace {
+                bail!("the creation provenance journal belongs to another workspace")
+            }
+            if record.repository.provider != repository.provider
+                || record.repository.server_id != repository.server_id
+                || record.repository.repository_id != repository.repository_id
+            {
+                continue;
+            }
+            if let Some(created) = &record.created {
+                if !record.repository.contains(&created.issue) {
+                    bail!("the creation provenance identity does not match")
+                }
+                snapshot
+                    .created_issue_ids
+                    .insert(created.issue.issue_id.clone());
+            } else if matches!(
+                record.state,
+                IssueCreationIntentState::Sent | IssueCreationIntentState::NeedsConfirmation
+            ) {
+                snapshot.unresolved = true;
+            }
+        }
+        Ok(snapshot)
+    }
+}
+
 #[cfg(unix)]
 mod unix {
     use std::collections::HashSet;
@@ -127,32 +190,35 @@ mod unix {
 
         fn read_records(&self) -> Result<Vec<IssueCreationIntentRecord>> {
             self.verify_identity()?;
-            let text = secure_fs::read_optional_file_with_limit(
-                &self.runtime,
-                Path::new(JOURNAL_NAME),
-                MAX_JOURNAL_BYTES,
-            )?
-            .unwrap_or_default();
+            let records = read_validated_records(&self.runtime)?;
             self.verify_identity()?;
-            let mut records = Vec::new();
-            let mut ids = HashSet::new();
-            for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                if records.len() >= MAX_RECORDS {
-                    bail!("the issue creation journal contains too many records")
-                }
-                // Do not include source text in the parse error.
-                let record: IssueCreationIntentRecord =
-                    serde_json::from_str(line).map_err(|_| {
-                        anyhow!("the issue creation journal contains an invalid record")
-                    })?;
-                validate_record(&record)?;
-                if !ids.insert(record.intent_id.clone()) {
-                    bail!("the issue creation journal contains duplicate intent IDs")
-                }
-                records.push(record);
-            }
             Ok(records)
         }
+    }
+
+    pub(super) fn read_validated_records(runtime: &Path) -> Result<Vec<IssueCreationIntentRecord>> {
+        let text = secure_fs::read_optional_file_with_limit(
+            runtime,
+            Path::new(JOURNAL_NAME),
+            MAX_JOURNAL_BYTES,
+        )?
+        .unwrap_or_default();
+        let mut records = Vec::new();
+        let mut ids = HashSet::new();
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            if records.len() >= MAX_RECORDS {
+                bail!("the issue creation journal contains too many records")
+            }
+            // Do not include source text in the parse error.
+            let record: IssueCreationIntentRecord = serde_json::from_str(line)
+                .map_err(|_| anyhow!("the issue creation journal contains an invalid record"))?;
+            validate_record(&record)?;
+            if !ids.insert(record.intent_id.clone()) {
+                bail!("the issue creation journal contains duplicate intent IDs")
+            }
+            records.push(record);
+        }
+        Ok(records)
     }
 
     impl IssueCreationJournalTransaction for Transaction {
@@ -395,3 +461,6 @@ mod workspace_resolver_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(all(test, not(unix)))]
+mod provenance_portable_tests;

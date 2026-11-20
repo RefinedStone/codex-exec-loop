@@ -413,11 +413,16 @@ export async function startFakeGateway(
       }
       if (options.issue && message.method.startsWith("akra/issue/") && message.method !== "akra/issue/handoffCopy") {
         const params = (message as { params?: Record<string, unknown> }).params ?? {};
-        try {
-          socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: options.issue(message.method, params) }));
-        } catch (error) {
-          socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }));
-        }
+        const answerIssue = options.issue;
+        const method = message.method;
+        void Promise.resolve()
+          .then(() => answerIssue(method, params))
+          .then((result) => {
+            if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+          })
+          .catch((error: unknown) => {
+            if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }));
+          });
         return;
       }
       const gitAnswer = {

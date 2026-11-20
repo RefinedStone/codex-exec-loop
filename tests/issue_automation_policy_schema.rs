@@ -438,3 +438,31 @@ fn repository_coordinates_and_relative_globs_have_bounded_syntax() {
         );
     }
 }
+
+#[test]
+fn execution_labels_are_optional_exact_text_leaves_without_unknown_keys() {
+    let validator = validator();
+    for source in [
+        "[labels]",
+        "[labels]\nauto='work:auto'\ngated='검토 필요'\nmanual='CaseSensitive'\nhold='work:hold'",
+        "[labels]\nauto='custom'\n[select]\nlabels_any=[]",
+    ] {
+        assert_valid(&validator, source, source);
+    }
+    for source in [
+        "[labels]\nauto=''",
+        "[labels]\ngated=' leading'",
+        "[labels]\nmanual='trailing '",
+        "[labels]\nhold=\"bad\\u0085value\"",
+        "[labels]\nauto=false",
+        "[labels]\nautomatic='unknown'",
+    ] {
+        assert_invalid(&validator, source, source);
+    }
+    // 서로 다른 leaf의 임의 문자열 동등성과 최종 병합 충돌은 정책 서비스가 검사한다.
+    assert_valid(
+        &validator,
+        "중복은 서비스 경계에서 검사",
+        "[labels]\nauto='same'\ngated='same'",
+    );
+}

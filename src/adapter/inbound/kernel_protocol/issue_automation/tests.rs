@@ -88,6 +88,8 @@ fn observation(content: IssueSourceContent) -> IssueSourceRead {
         name: "ready".to_string(),
     };
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        creation_provenance:
+            crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: reference(),
         web: None,
         remote_state: IssueRemoteState::Closed,
@@ -97,6 +99,7 @@ fn observation(content: IssueSourceContent) -> IssueSourceRead {
         },
         assignees: IssueMetadataList {
             items: vec![IssueSourceActor {
+                kind: crate::domain::issue_automation::source::IssueSourceActorKind::UserAccount,
                 id: "U_stable".to_string(),
                 login: "assignee".to_string(),
             }],

@@ -30,6 +30,7 @@ fn issue() -> IssueReference {
 }
 fn actor(id: &str) -> IssueSourceActor {
     IssueSourceActor {
+        kind: crate::domain::issue_automation::source::IssueSourceActorKind::UserAccount,
         id: id.into(),
         login: "display-name".into(),
     }
@@ -42,6 +43,8 @@ fn list<T>(items: Vec<T>) -> IssueMetadataList<T> {
 }
 fn source() -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        creation_provenance:
+            crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: issue(),
         web: None,
         remote_state: IssueRemoteState::Open,
@@ -334,12 +337,12 @@ fn trusted_label_requires_current_selection_and_exact_provider_server_actor_ids(
 }
 
 #[test]
-fn all_open_can_use_current_labels_but_conflicting_events_are_not_trust() {
+fn all_open_human_authors_can_use_current_labels_but_conflicting_events_are_not_trust() {
     let mut policy = policy();
     policy.select.mode = IssueAutomationSelectionMode::AllOpen;
     let mut current = source();
     let observation = observed(&mut current);
-    observation.author = None;
+    observation.author = Some(actor("U_untrusted"));
     observation.labels.items[0].name = "bug".into();
     let event = trusted_event(observation);
     observation.label_actors.items.push(event.clone());
@@ -1424,4 +1427,406 @@ fn zero_attempt_budget_is_not_treated_as_unlimited_attempts() {
     let mut policy = policy();
     policy.budget.max_attempts = 0;
     assert_zero_budget_requires_human(policy);
+}
+
+#[test]
+fn draft_readiness_and_live_triage_use_the_same_content_risk_and_gate_rules() {
+    let cases = [
+        (VALID_BODY, Vec::<String>::new()),
+        ("## 완료 기준\n- \n", Vec::new()),
+        ("## 완료 기준\n목록이 아닌 글\n", Vec::new()),
+        ("## 완료 기준\n- 결과 확인\n## 범위\n", Vec::new()),
+        (
+            "## 완료 기준\n- 결과 확인\n범위: \x60src/protected/config.rs\x60\n",
+            Vec::new(),
+        ),
+        ("## 완료 기준\n- 결과 확인\n[removed]\n", Vec::new()),
+        (VALID_BODY, vec!["akra:gated".to_owned()]),
+        (VALID_BODY, vec!["akra:manual".to_owned()]),
+        (VALID_BODY, vec!["akra:hold".to_owned()]),
+    ];
+    for (body, extra_labels) in cases {
+        let mut current = source();
+        set_body(&mut current, body);
+        for (index, name) in extra_labels.into_iter().enumerate() {
+            observed(&mut current).labels.items.push(IssueSourceLabel {
+                id: format!("L_extra_{index}"),
+                name,
+            });
+        }
+        let mut policy = policy();
+        policy.protection.paths.push("src/protected/**".to_owned());
+        let requirements = IssueRequirements {
+            required_sections: if body.contains("## 범위") {
+                vec!["범위".to_owned()]
+            } else {
+                Vec::new()
+            },
+            ..IssueRequirements::default()
+        };
+        let IssueSourceRead::Observed(observation) = &current else {
+            unreachable!()
+        };
+        let IssueSourceContent::Shared(snapshot) = &observation.content else {
+            unreachable!()
+        };
+        let labels: Vec<_> = observation
+            .labels
+            .items
+            .iter()
+            .map(|label| label.name.clone())
+            .collect();
+        let preview = inspect_issue_readiness(IssueReadinessInput {
+            shared_copy: &snapshot.shared_copy,
+            requirements: &requirements,
+            policy: &policy,
+            labels: &labels,
+            labels_complete: true,
+            held: false,
+        })
+        .unwrap();
+        let live = triage_issue(input(
+            &issue(),
+            Some(&current),
+            &policy,
+            &requirements,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(live.eligibility(), IssueTriageEligibility::Eligible);
+        assert_eq!(preview.readiness, live.readiness(), "{body}");
+        assert_eq!(preview.risk_class, live.risk_class(), "{body}");
+        assert_eq!(preview.effective_mode, live.effective_mode());
+        assert_eq!(preview.assumed_mode, live.observation().assumed_mode);
+        assert_eq!(preview.reasons, live.reasons());
+        assert_eq!(preview.expected_gates.len(), live.gates().len());
+        for (expected, actual) in preview.expected_gates.iter().zip(live.gates()) {
+            assert_eq!(
+                (expected.gate, expected.action),
+                (actual.gate, actual.action),
+                "{body}"
+            );
+        }
+    }
+}
+
+#[test]
+fn readiness_reports_missing_sections_and_never_needs_a_remote_identity() {
+    let copy = IssueSharedCopy {
+        title: String::new(),
+        body: "## 범위\n_No response_\n".into(),
+    };
+    let requirements = IssueRequirements {
+        required_sections: vec!["범위".to_owned(), "하지 않는 것".to_owned()],
+        ..IssueRequirements::default()
+    };
+    let policy = policy();
+    let labels = vec![policy.labels.auto.clone()];
+    let result = inspect_issue_readiness(IssueReadinessInput {
+        shared_copy: &copy,
+        requirements: &requirements,
+        policy: &policy,
+        labels: &labels,
+        labels_complete: true,
+        held: false,
+    })
+    .unwrap();
+    assert_eq!(result.readiness, IssueTriageReadiness::NeedsInfo);
+    assert_eq!(
+        result.missing_sections,
+        ["범위", "완료 기준", "하지 않는 것"]
+    );
+    assert!(
+        result
+            .reasons
+            .contains(&IssueTriageReasonCode::TitleMissing)
+    );
+    assert!(
+        result
+            .reasons
+            .contains(&IssueTriageReasonCode::CriteriaMissing)
+    );
+    assert!(!result.validation_errors.is_empty());
+    assert!(
+        result
+            .expected_gates
+            .iter()
+            .all(|gate| gate.action == IssueAutomationGateAction::Human)
+    );
+}
+
+#[test]
+fn configurable_labels_lower_modes_and_old_names_no_longer_act_as_hidden_controls() {
+    let mut policy = policy();
+    policy.labels.auto = "work:auto".into();
+    policy.labels.gated = "work:gated".into();
+    policy.labels.manual = "work:manual".into();
+    policy.labels.hold = "work:hold".into();
+    policy.select.labels_any = policy.labels.selection_labels();
+    for (labels, expected_mode, held) in [
+        (vec!["work:auto"], IssueAutomationAutonomy::Auto, false),
+        (
+            vec!["work:auto", "work:gated"],
+            IssueAutomationAutonomy::Gated,
+            false,
+        ),
+        (
+            vec!["work:auto", "work:manual"],
+            IssueAutomationAutonomy::Propose,
+            true,
+        ),
+        (
+            vec!["work:auto", "work:hold"],
+            IssueAutomationAutonomy::Auto,
+            true,
+        ),
+        (
+            vec!["work:auto", "akra:manual", "akra:hold"],
+            IssueAutomationAutonomy::Auto,
+            false,
+        ),
+    ] {
+        let mut current = source();
+        observed(&mut current).labels.items = labels
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| IssueSourceLabel {
+                id: format!("L_{index}"),
+                name: name.into(),
+            })
+            .collect();
+        let result = run(Some(&current), &policy, None).unwrap();
+        assert_eq!(result.eligibility(), IssueTriageEligibility::Eligible);
+        assert_eq!(result.effective_mode(), expected_mode);
+        assert_eq!(
+            result
+                .reasons()
+                .contains(&IssueTriageReasonCode::HeldOrManual),
+            held
+        );
+        if held {
+            assert!(
+                result
+                    .gates()
+                    .iter()
+                    .all(|gate| gate.action == IssueAutomationGateAction::Human)
+            );
+        }
+    }
+    policy.authority.autonomy_cap = IssueAutomationAutonomy::Propose;
+    policy.binding.github.mode = IssueAutomationAutonomy::Propose;
+    let copy = IssueSharedCopy {
+        title: "제목".into(),
+        body: VALID_BODY.into(),
+    };
+    for label in ["work:auto", "work:gated"] {
+        let labels = vec![label.to_owned()];
+        let result = inspect_issue_readiness(IssueReadinessInput {
+            shared_copy: &copy,
+            requirements: &IssueRequirements::default(),
+            policy: &policy,
+            labels: &labels,
+            labels_complete: true,
+            held: false,
+        })
+        .unwrap();
+        assert_eq!(result.effective_mode, IssueAutomationAutonomy::Propose);
+        assert_eq!(result.assumed_mode, IssueAutomationAutonomy::Propose);
+    }
+}
+
+#[test]
+fn bot_unknown_and_locally_created_issues_need_current_trusted_human_selection() {
+    use crate::domain::issue_automation::source::{
+        IssueCreationProvenance as Origin, IssueSourceActorKind as Kind,
+    };
+    for (kind, provenance) in [
+        (Kind::UserAccount, Origin::AkraCreated),
+        (Kind::UserAccount, Origin::Unresolved),
+        (Kind::Bot, Origin::Unattributed),
+        (Kind::Unknown, Origin::Unattributed),
+    ] {
+        let policy = policy();
+        let mut current = source();
+        let observation = observed(&mut current);
+        observation.author.as_mut().unwrap().kind = kind;
+        observation.creation_provenance = provenance;
+        let blocked = run(Some(&current), &policy, None).unwrap();
+        assert_eq!(
+            blocked.eligibility(),
+            IssueTriageEligibility::Ineligible,
+            "{kind:?}/{provenance:?}"
+        );
+        assert!(
+            blocked
+                .reasons()
+                .contains(&IssueTriageReasonCode::HumanSelectionRequired)
+        );
+        assert!(blocked.gates().iter().all(|gate| !gate.enabled));
+        let observation = observed(&mut current);
+        observation
+            .label_actors
+            .items
+            .push(trusted_event(observation));
+        let selected = run(Some(&current), &policy, None).unwrap();
+        assert_eq!(selected.eligibility(), IssueTriageEligibility::Eligible);
+        assert!(
+            !selected
+                .reasons()
+                .contains(&IssueTriageReasonCode::HumanSelectionRequired)
+        );
+    }
+}
+
+#[test]
+fn bot_self_label_and_ambiguous_or_stale_label_events_cannot_select_an_agent_issue() {
+    use crate::domain::issue_automation::source::{
+        IssueCreationProvenance as Origin, IssueSourceActorKind as Kind,
+    };
+    for mutation in 0..8 {
+        let policy = policy();
+        let mut current = source();
+        let observation = observed(&mut current);
+        observation.creation_provenance = Origin::AkraCreated;
+        observation
+            .label_actors
+            .items
+            .push(trusted_event(observation));
+        match mutation {
+            0 => {
+                observation.label_actors.items[0]
+                    .actor
+                    .as_mut()
+                    .unwrap()
+                    .kind = Kind::Bot
+            }
+            1 => {
+                observation.label_actors.items[0]
+                    .actor
+                    .as_mut()
+                    .unwrap()
+                    .kind = Kind::Unknown
+            }
+            2 => observation.label_actors.items[0].actor.as_mut().unwrap().id = "U_other".into(),
+            3 => observation.label_actors.items[0].label.id = "L_old".into(),
+            4 => observation.label_actors.items[0].label.name = "old-name".into(),
+            5 => observation.label_actors.completeness = IssueMetadataCompleteness::Unavailable,
+            6 => {
+                let mut event = observation.label_actors.items[0].clone();
+                event.event_id = "E_other".into();
+                event.actor.as_mut().unwrap().kind = Kind::Bot;
+                observation.label_actors.items.push(event);
+            }
+            7 => {
+                let mut event = observation.label_actors.items[0].clone();
+                event.actor.as_mut().unwrap().kind = Kind::Unknown;
+                observation.label_actors.items.push(event);
+            }
+            _ => unreachable!(),
+        }
+        let result = run(Some(&current), &policy, None).unwrap();
+        assert_eq!(
+            result.eligibility(),
+            IssueTriageEligibility::Ineligible,
+            "case {mutation}"
+        );
+        assert!(
+            result
+                .reasons()
+                .contains(&IssueTriageReasonCode::HumanSelectionRequired)
+        );
+    }
+}
+
+#[test]
+fn all_open_does_not_turn_an_unrelated_human_label_into_agent_selection() {
+    use crate::domain::issue_automation::source::IssueCreationProvenance;
+    let mut policy = policy();
+    policy.select.mode = IssueAutomationSelectionMode::AllOpen;
+    let mut current = source();
+    let observation = observed(&mut current);
+    observation.creation_provenance = IssueCreationProvenance::AkraCreated;
+    observation.labels.items[0].name = "unrelated".into();
+    observation
+        .label_actors
+        .items
+        .push(trusted_event(observation));
+    let result = run(Some(&current), &policy, None).unwrap();
+    assert_eq!(result.eligibility(), IssueTriageEligibility::Ineligible);
+    assert!(
+        result
+            .reasons()
+            .contains(&IssueTriageReasonCode::HumanSelectionRequired)
+    );
+    observed(&mut current).labels.items[0].name = policy.labels.auto.clone();
+    let observation = observed(&mut current);
+    observation.label_actors.items = vec![trusted_event(observation)];
+    assert_eq!(
+        run(Some(&current), &policy, None).unwrap().eligibility(),
+        IssueTriageEligibility::Eligible
+    );
+    policy.select.labels_any.clear();
+    assert_eq!(
+        run(Some(&current), &policy, None).unwrap().eligibility(),
+        IssueTriageEligibility::Ineligible
+    );
+}
+
+#[test]
+fn account_kind_and_creation_provenance_are_semantic_evidence_even_with_the_same_actor_ids() {
+    use crate::domain::issue_automation::source::{
+        IssueCreationProvenance as Origin, IssueSourceActorKind as Kind,
+    };
+    let mut current = source();
+    let observation = observed(&mut current);
+    observation
+        .label_actors
+        .items
+        .push(trusted_event(observation));
+    let policy = policy();
+    let first = run(Some(&current), &policy, None).unwrap();
+    for mutation in 0..5 {
+        let mut changed = current.clone();
+        let observation = observed(&mut changed);
+        match mutation {
+            0 => observation.author.as_mut().unwrap().kind = Kind::Bot,
+            1 => observation.author.as_mut().unwrap().kind = Kind::Unknown,
+            2 => {
+                observation.label_actors.items[0]
+                    .actor
+                    .as_mut()
+                    .unwrap()
+                    .kind = Kind::Bot
+            }
+            3 => observation.creation_provenance = Origin::AkraCreated,
+            4 => observation.creation_provenance = Origin::Unresolved,
+            _ => unreachable!(),
+        }
+        let result = run(Some(&changed), &policy, Some(&first)).unwrap();
+        assert_eq!(result.basis().field_hash, first.basis().field_hash);
+        assert_ne!(result.input_fingerprint(), first.input_fingerprint());
+        assert!(
+            first
+                .validate_current(&issue(), Some(&changed), false)
+                .is_err()
+        );
+        assert!(result.gates().iter().all(|gate| gate.gate_revision == 2));
+    }
+}
+
+#[test]
+fn old_valid_assessments_remain_readable_but_are_replaced_when_new_evidence_is_hashed() {
+    let current = source();
+    let policy = policy();
+    let first = run(Some(&current), &policy, None).unwrap();
+    let mut old = first.to_record();
+    old.basis.evidence_sha256 = "e".repeat(64);
+    let old = IssueTriageAssessment::hydrate(old).unwrap();
+    old.validate_for(&issue()).unwrap();
+    assert!(
+        old.validate_current(&issue(), Some(&current), false)
+            .is_err()
+    );
+    let refreshed = run(Some(&current), &policy, Some(&old)).unwrap();
+    assert!(refreshed.gates().iter().all(|gate| gate.gate_revision == 2));
 }

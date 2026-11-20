@@ -163,6 +163,8 @@ impl SimIssueSource {
     ) -> IssueSourceObservation {
         let body = self.body.lock().expect("body").clone();
         IssueSourceObservation {
+            creation_provenance:
+                crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
             issue,
             web: None,
             remote_state: IssueRemoteState::Open,
@@ -175,6 +177,7 @@ impl SimIssueSource {
                 completeness: IssueMetadataCompleteness::Complete,
             },
             author: Some(IssueSourceActor {
+                kind: crate::domain::issue_automation::source::IssueSourceActorKind::UserAccount,
                 id: "U_triage_trusted".to_string(),
                 login: "display-only".to_string(),
             }),

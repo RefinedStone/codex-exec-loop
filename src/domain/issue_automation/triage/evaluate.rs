@@ -4,16 +4,14 @@ use crate::domain::issue_automation::policy::{
     IssueAutomationSelectionMode,
 };
 use crate::domain::issue_automation::source::{
-    IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState, IssueSourceContent,
-    IssueSourceObservation, IssueSourceRead,
+    IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
+    IssueSourceActorKind, IssueSourceContent, IssueSourceObservation, IssueSourceRead,
 };
-use crate::domain::issue_validation::{IssueValidationField, validate_issue};
 
-use super::criteria::{CriteriaProblem, count_criteria};
-use super::paths::{MentionedPaths, matches_glob, mentioned_paths};
+use super::readiness::{budget_exhausted, held_or_manual, label_cap};
 use super::{
-    IssueTriageEligibility, IssueTriageInput, IssueTriageReadiness, IssueTriageReasonCode,
-    MAX_ISSUE_TRIAGE_BODY_BYTES, MAX_ISSUE_TRIAGE_TITLE_BYTES,
+    IssueReadinessInput, IssueTriageEligibility, IssueTriageError, IssueTriageInput,
+    IssueTriageReadiness, IssueTriageReasonCode, inspect_issue_readiness,
 };
 
 pub(super) struct Evaluation {
@@ -27,11 +25,7 @@ pub(super) struct Evaluation {
     pub reasons: Vec<IssueTriageReasonCode>,
 }
 
-pub(super) fn evaluate(input: &IssueTriageInput<'_>) -> Evaluation {
-    // 동적 사용량을 추측하지 않는다. 정책의 0 상한은 현재 입력만으로 소진을 확정할 수 있다.
-    let budget_exhausted = input.policy.budget.max_running == 0
-        || input.policy.budget.max_started_per_day == 0
-        || input.policy.budget.max_attempts == 0;
+pub(super) fn evaluate(input: &IssueTriageInput<'_>) -> Result<Evaluation, IssueTriageError> {
     let mut result = Evaluation {
         eligibility: IssueTriageEligibility::Unknown,
         readiness: IssueTriageReadiness::Unknown,
@@ -40,7 +34,7 @@ pub(super) fn evaluate(input: &IssueTriageInput<'_>) -> Evaluation {
         assumed_mode: input.policy.authority.autonomy_cap,
         force_human: true,
         human_gates: Vec::new(),
-        reasons: if budget_exhausted {
+        reasons: if budget_exhausted(input.policy) {
             vec![IssueTriageReasonCode::BudgetExhausted]
         } else {
             Vec::new()
@@ -49,23 +43,27 @@ pub(super) fn evaluate(input: &IssueTriageInput<'_>) -> Evaluation {
     let observation = match input.current {
         None => {
             result.reasons.push(IssueTriageReasonCode::NotYetObserved);
-            return result;
+            return Ok(result);
         }
         Some(IssueSourceRead::Unknown { .. }) => {
             result
                 .reasons
                 .push(IssueTriageReasonCode::SourceUnavailable);
-            return result;
+            return Ok(result);
         }
         Some(IssueSourceRead::Observed(observation)) => observation,
     };
-    let label_cap = label_cap(observation);
-    result.effective_mode = result.effective_mode.min(label_cap);
-    result.assumed_mode = result.assumed_mode.min(label_cap);
+    let labels: Vec<_> = observation
+        .labels
+        .items
+        .iter()
+        .map(|label| label.name.clone())
+        .collect();
+    let cap = label_cap(&labels, input.policy);
+    result.effective_mode = result.effective_mode.min(cap);
+    result.assumed_mode = result.assumed_mode.min(cap);
     result.eligibility = eligibility(observation, input.policy, &mut result.reasons);
-    let held_or_manual =
-        input.held || has_label(observation, "akra:hold") || has_label(observation, "akra:manual");
-    if held_or_manual {
+    if held_or_manual(&labels, input.policy, input.held) {
         result.reasons.push(IssueTriageReasonCode::HeldOrManual);
     }
     let (disclosure_version, copy) = match &observation.content {
@@ -80,7 +78,7 @@ pub(super) fn evaluate(input: &IssueTriageInput<'_>) -> Evaluation {
                     .reasons
                     .push(IssueTriageReasonCode::DisclosureConfirmationRequired);
             }
-            return result;
+            return Ok(result);
         }
         IssueSourceContent::Shared(snapshot) => (&snapshot.policy_version, &snapshot.shared_copy),
     };
@@ -88,107 +86,24 @@ pub(super) fn evaluate(input: &IssueTriageInput<'_>) -> Evaluation {
         result
             .reasons
             .push(IssueTriageReasonCode::DisclosurePolicyStale);
-        return result;
+        return Ok(result);
     }
-    if copy.title.len() > MAX_ISSUE_TRIAGE_TITLE_BYTES
-        || copy.body.len() > MAX_ISSUE_TRIAGE_BODY_BYTES
-    {
-        result.readiness = IssueTriageReadiness::NeedsInfo;
-        result.reasons.push(IssueTriageReasonCode::IssueTooLarge);
-        return result;
-    }
-    result.readiness = IssueTriageReadiness::Ready;
-    if let Err(errors) = validate_issue(copy, input.requirements) {
-        result.readiness = IssueTriageReadiness::NeedsInfo;
-        for error in errors {
-            result.reasons.push(match error.field {
-                IssueValidationField::Title => IssueTriageReasonCode::TitleMissing,
-                _ => IssueTriageReasonCode::RequiredSectionMissing,
-            });
-        }
-    }
-    if let Err(problem) = count_criteria(&copy.body) {
-        result.readiness = IssueTriageReadiness::NeedsInfo;
-        result.reasons.push(match problem {
-            CriteriaProblem::Missing => IssueTriageReasonCode::CriteriaMissing,
-            CriteriaProblem::NotList => IssueTriageReasonCode::CriteriaNotList,
-            CriteriaProblem::TooLarge => IssueTriageReasonCode::IssueTooLarge,
-            CriteriaProblem::Unsupported => IssueTriageReasonCode::UnsupportedContent,
-        });
-    }
-    let unsupported = copy
-        .title
-        .chars()
-        .chain(copy.body.chars())
-        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'));
-    if unsupported {
-        result.readiness = IssueTriageReadiness::NeedsInfo;
-        result
-            .reasons
-            .push(IssueTriageReasonCode::UnsupportedContent);
-    }
-    let masked = copy.title.contains("[[akra-mask:")
-        || copy.title.contains("[removed]")
-        || copy.body.contains("[[akra-mask:")
-        || copy.body.contains("[removed]");
-    if masked {
-        result.reasons.push(IssueTriageReasonCode::MaskedContent);
-    }
-    let paths = mentioned_paths(&copy.body);
-    let metadata_incomplete =
-        observation.labels.completeness != IssueMetadataCompleteness::Complete;
-    result.risk = risk(observation, &paths, input.policy);
-    if masked || unsupported || metadata_incomplete || paths.incomplete {
-        result.risk = IssueAutomationRiskClass::High;
-    }
-    if metadata_incomplete {
-        result
-            .reasons
-            .push(IssueTriageReasonCode::MetadataIncomplete);
-    }
-    if paths.incomplete {
-        result
-            .reasons
-            .push(IssueTriageReasonCode::UnsupportedContent);
-    }
-    result.force_human =
-        budget_exhausted || held_or_manual || result.risk == IssueAutomationRiskClass::High;
-    match path_match(&input.policy.protection.paths, &paths) {
-        Some(true) => {
-            result.force_human = true;
-            result.reasons.push(IssueTriageReasonCode::ProtectedPath);
-        }
-        None => {
-            result.force_human = true;
-            result.risk = IssueAutomationRiskClass::High;
-            result
-                .reasons
-                .push(IssueTriageReasonCode::UnsupportedContent);
-        }
-        Some(false) => {}
-    }
-    for rule in &input.policy.human_required.additional {
-        match condition_match(&rule.labels_any, &rule.paths_any, observation, &paths) {
-            Some(false) => {}
-            Some(true) => {
-                result.human_gates.extend(&rule.gates);
-                result
-                    .reasons
-                    .push(IssueTriageReasonCode::PolicyHumanRequired);
-            }
-            None => {
-                result.force_human = true;
-                result.risk = IssueAutomationRiskClass::High;
-                result
-                    .reasons
-                    .push(IssueTriageReasonCode::PolicyHumanRequired);
-            }
-        }
-    }
-    if result.risk == IssueAutomationRiskClass::High {
-        result.reasons.push(IssueTriageReasonCode::HighRisk);
-    }
-    result
+    let readiness = inspect_issue_readiness(IssueReadinessInput {
+        shared_copy: copy,
+        requirements: input.requirements,
+        policy: input.policy,
+        labels: &labels,
+        labels_complete: observation.labels.completeness == IssueMetadataCompleteness::Complete,
+        held: input.held,
+    })?;
+    result.readiness = readiness.readiness;
+    result.risk = readiness.risk_class;
+    result.effective_mode = readiness.effective_mode;
+    result.assumed_mode = readiness.assumed_mode;
+    result.force_human = readiness.force_human;
+    result.human_gates = readiness.human_gates;
+    result.reasons.extend(readiness.reasons);
+    Ok(result)
 }
 
 fn eligibility(
@@ -210,13 +125,31 @@ fn eligibility(
         }
         None => unknown = true,
     }
-    match trusted(observation, policy) {
-        Some(true) => {}
-        Some(false) => {
-            excluded = true;
-            reasons.push(IssueTriageReasonCode::UntrustedActor);
+    let requires_human_selection = observation.creation_provenance
+        != IssueCreationProvenance::Unattributed
+        || observation
+            .author
+            .as_ref()
+            .is_none_or(|actor| actor.kind != IssueSourceActorKind::UserAccount);
+    let trusted = if requires_human_selection {
+        trusted_label(observation, policy, true)
+    } else {
+        trusted(observation, policy)
+    };
+    if requires_human_selection && trusted != Some(true) {
+        // 작성자 계정이 신뢰 목록에 있어도 에이전트의 자기 선택은 사람의 선택이 아니다.
+        excluded = true;
+        unknown |= trusted.is_none();
+        reasons.push(IssueTriageReasonCode::HumanSelectionRequired);
+    } else {
+        match trusted {
+            Some(true) => {}
+            Some(false) => {
+                excluded = true;
+                reasons.push(IssueTriageReasonCode::UntrustedActor);
+            }
+            None => unknown = true,
         }
-        None => unknown = true,
     }
     if !observation.assignees.items.is_empty()
         || observation.linked_pull_request == IssuePrPresence::Present
@@ -262,23 +195,35 @@ fn selected(observation: &IssueSourceObservation, policy: &IssueAutomationPolicy
     (observation.labels.completeness == IssueMetadataCompleteness::Complete).then_some(false)
 }
 
+fn actor_trusted(
+    observation: &IssueSourceObservation,
+    policy: &IssueAutomationPolicy,
+    id: &str,
+) -> bool {
+    policy.select.trusted_actors.iter().any(|actor| {
+        actor.provider == observation.issue.provider
+            && actor.server_id == observation.issue.server_id
+            && actor.actor_id == id
+    })
+}
+
 fn trusted(observation: &IssueSourceObservation, policy: &IssueAutomationPolicy) -> Option<bool> {
+    if observation.author.as_ref().is_some_and(|actor| {
+        actor.kind == IssueSourceActorKind::UserAccount
+            && actor_trusted(observation, policy, &actor.id)
+    }) {
+        return Some(true);
+    }
+    trusted_label(observation, policy, false)
+}
+
+fn trusted_label(
+    observation: &IssueSourceObservation,
+    policy: &IssueAutomationPolicy,
+    require_selection_label: bool,
+) -> Option<bool> {
     if policy.select.trusted_actors.is_empty() {
         return Some(false);
-    }
-    let actor_trusted = |id: &str| {
-        policy.select.trusted_actors.iter().any(|actor| {
-            actor.provider == observation.issue.provider
-                && actor.server_id == observation.issue.server_id
-                && actor.actor_id == id
-        })
-    };
-    if observation
-        .author
-        .as_ref()
-        .is_some_and(|actor| actor_trusted(&actor.id))
-    {
-        return Some(true);
     }
     if observation.labels.completeness == IssueMetadataCompleteness::Unavailable
         || observation.label_actors.completeness == IssueMetadataCompleteness::Unavailable
@@ -287,7 +232,8 @@ fn trusted(observation: &IssueSourceObservation, policy: &IssueAutomationPolicy)
     }
     let mut ambiguous = false;
     for label in &observation.labels.items {
-        if policy.select.mode == IssueAutomationSelectionMode::LabelsAny
+        if (require_selection_label
+            || policy.select.mode == IssueAutomationSelectionMode::LabelsAny)
             && !policy.select.labels_any.contains(&label.name)
         {
             continue;
@@ -300,7 +246,10 @@ fn trusted(observation: &IssueSourceObservation, policy: &IssueAutomationPolicy)
             .map(|event| {
                 (
                     event.event_id.as_str(),
-                    event.actor.as_ref().map(|actor| actor.id.as_str()),
+                    event
+                        .actor
+                        .as_ref()
+                        .map(|actor| (actor.id.as_str(), actor.kind)),
                 )
             })
             .collect();
@@ -313,7 +262,9 @@ fn trusted(observation: &IssueSourceObservation, policy: &IssueAutomationPolicy)
         if events
             .first()
             .and_then(|(_, actor)| *actor)
-            .is_some_and(actor_trusted)
+            .is_some_and(|(id, kind)| {
+                kind == IssueSourceActorKind::UserAccount && actor_trusted(observation, policy, id)
+            })
         {
             return Some(true);
         }
@@ -326,76 +277,4 @@ fn trusted(observation: &IssueSourceObservation, policy: &IssueAutomationPolicy)
     } else {
         Some(false)
     }
-}
-
-fn risk(
-    observation: &IssueSourceObservation,
-    paths: &MentionedPaths,
-    policy: &IssueAutomationPolicy,
-) -> IssueAutomationRiskClass {
-    if paths.incomplete || observation.labels.completeness != IssueMetadataCompleteness::Complete {
-        return IssueAutomationRiskClass::High;
-    }
-    for rule in &policy.classify.rule {
-        match condition_match(&rule.labels_any, &rule.paths_any, observation, paths) {
-            Some(true) => return rule.class,
-            Some(false) => {}
-            None => return IssueAutomationRiskClass::High,
-        }
-    }
-    IssueAutomationRiskClass::Normal
-}
-
-fn condition_match(
-    labels: &[String],
-    patterns: &[String],
-    observation: &IssueSourceObservation,
-    paths: &MentionedPaths,
-) -> Option<bool> {
-    if labels.iter().any(|label| has_label(observation, label)) {
-        return Some(true);
-    }
-    match path_match(patterns, paths) {
-        Some(true) => Some(true),
-        None => None,
-        Some(false)
-            if !labels.is_empty()
-                && observation.labels.completeness != IssueMetadataCompleteness::Complete =>
-        {
-            None
-        }
-        Some(false) => Some(false),
-    }
-}
-
-fn path_match(patterns: &[String], paths: &MentionedPaths) -> Option<bool> {
-    let mut unknown = !patterns.is_empty() && paths.incomplete;
-    for pattern in patterns {
-        for path in &paths.paths {
-            match matches_glob(pattern, path) {
-                Some(true) => return Some(true),
-                None => unknown = true,
-                Some(false) => {}
-            }
-        }
-    }
-    if unknown { None } else { Some(false) }
-}
-
-fn label_cap(observation: &IssueSourceObservation) -> IssueAutomationAutonomy {
-    if has_label(observation, "akra:manual") {
-        IssueAutomationAutonomy::Propose
-    } else if has_label(observation, "akra:gated") {
-        IssueAutomationAutonomy::Gated
-    } else {
-        IssueAutomationAutonomy::Auto
-    }
-}
-
-fn has_label(observation: &IssueSourceObservation, name: &str) -> bool {
-    observation
-        .labels
-        .items
-        .iter()
-        .any(|label| label.name == name)
 }

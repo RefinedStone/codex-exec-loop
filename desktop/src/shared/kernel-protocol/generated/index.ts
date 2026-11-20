@@ -89,7 +89,7 @@ export type IssueAutomationPolicyProblemScopeState = ("user" | "project" | "effe
 
 export type IssueAutomationPolicyProblemState = { readonly "field": string; readonly "file_scopes": Array<IssueAutomationPolicyFileScopeState>; readonly "next_summary": string; readonly "reason": string; readonly "scope": IssueAutomationPolicyProblemScopeState; readonly "summary": string; };
 
-export type IssueAutomationPolicyResolutionState = ("default" | "override" | "minimum" | "and" | "intersection" | "union" | "cap");
+export type IssueAutomationPolicyResolutionState = ("default" | "override" | "minimum" | "and" | "intersection" | "union" | "cap" | "derived");
 
 export type IssueAutomationPolicySettingState = { readonly "key": string; readonly "label": string; readonly "origins": Array<IssueAutomationPolicyOriginState>; readonly "resolution": IssueAutomationPolicyResolutionState; readonly "resolution_summary": string; readonly "value": string; };
 
@@ -255,7 +255,7 @@ export type QueryRequest = { readonly "query": KernelQuery; };
 
 export type QueuedThreadPrompt = { readonly "op_id"?: (number | null); readonly "task_id": string; readonly "thread_id": string; readonly "workspace_directory": string; };
 
-export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "foreign_workspace" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again" | "planning_revision_stale" | "planning_locked" | "not_yet_observed" | "source_unavailable" | "metadata_incomplete" | "disclosure_policy_stale" | "selection_not_matched" | "issue_closed" | "untrusted_actor" | "already_claimed" | "title_missing" | "required_section_missing" | "criteria_missing" | "criteria_not_list" | "issue_too_large" | "unsupported_content" | "disclosure_confirmation_required" | "masked_content" | "high_risk" | "held_or_manual" | "protected_path" | "policy_human_required" | "budget_exhausted" | "mode_off" | "observation_only" | "execution_grant_required" | "close_disabled" | "issue_automation_off");
+export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matching_turn" | "decision_in_flight" | "no_matching_approval" | "busy" | "preparation_active" | "unknown_thread" | "foreign_workspace" | "parallel_mode" | "parallel_mode_unknown" | "parallel_mode_started" | "turn_started_during_preparation" | "stop_pending" | "unavailable" | "cancelled" | "text_mismatch" | "bootstrap_review_required" | "planning_refused" | "task_finished" | "rejected_again" | "planning_revision_stale" | "planning_locked" | "not_yet_observed" | "source_unavailable" | "metadata_incomplete" | "disclosure_policy_stale" | "selection_not_matched" | "issue_closed" | "untrusted_actor" | "already_claimed" | "title_missing" | "required_section_missing" | "criteria_missing" | "criteria_not_list" | "issue_too_large" | "unsupported_content" | "disclosure_confirmation_required" | "masked_content" | "high_risk" | "held_or_manual" | "protected_path" | "policy_human_required" | "human_selection_required" | "budget_exhausted" | "mode_off" | "observation_only" | "execution_grant_required" | "close_disabled" | "issue_automation_off");
 
 export type RecordedKernelEvent = { readonly "event": KernelRecord; readonly "recorded_at": string; readonly "sequence": number; };
 

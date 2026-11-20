@@ -48,6 +48,8 @@ fn basis() -> IssueComparisonBasis {
 
 fn observed(issue: &IssueReference) -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        creation_provenance:
+            crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: issue.clone(),
         web: Some(IssueSourceWeb {
             number: 17,
@@ -66,6 +68,7 @@ fn observed(issue: &IssueReference) -> IssueSourceRead {
             completeness: IssueMetadataCompleteness::Complete,
         },
         author: Some(IssueSourceActor {
+            kind: crate::domain::issue_automation::source::IssueSourceActorKind::UserAccount,
             id: "U_trusted".to_owned(),
             login: "display-only".to_owned(),
         }),

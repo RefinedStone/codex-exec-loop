@@ -405,3 +405,111 @@ fn service_uses_only_its_source_and_keeps_io_errors_out_of_policy_blocked() {
         ["one/workspace"]
     );
 }
+
+#[test]
+fn execution_label_names_merge_per_leaf_and_supply_only_an_implicit_selection() {
+    let defaults = resolve_issue_automation_policy(None, None).unwrap();
+    assert_eq!(defaults.policy.labels.auto, "akra:auto");
+    assert_eq!(defaults.policy.labels.gated, "akra:gated");
+    assert_eq!(defaults.policy.labels.manual, "akra:manual");
+    assert_eq!(defaults.policy.labels.hold, "akra:hold");
+    let resolved = resolve_issue_automation_policy(
+        Some("[labels]\nauto='user:auto'\ngated='user:gated'\nhold='user:hold'"),
+        Some("[labels]\ngated='project:gated'\nmanual='project:manual'"),
+    )
+    .unwrap();
+    assert_eq!(resolved.policy.labels.auto, "user:auto");
+    assert_eq!(resolved.policy.labels.gated, "project:gated");
+    assert_eq!(resolved.policy.labels.manual, "project:manual");
+    assert_eq!(resolved.policy.labels.hold, "user:hold");
+    assert_eq!(
+        resolved.policy.select.labels_any,
+        ["project:gated", "project:manual", "user:auto"]
+    );
+    assert!(
+        !resolved
+            .policy
+            .select
+            .labels_any
+            .contains(&resolved.policy.labels.hold)
+    );
+}
+
+#[test]
+fn explicit_empty_and_older_selection_names_survive_execution_label_renaming() {
+    for (declared, expected) in [
+        ("[]", Vec::<String>::new()),
+        ("['akra:auto']", vec!["akra:auto".to_owned()]),
+        ("['selected']", vec!["selected".to_owned()]),
+    ] {
+        let user = format!("[select]\nlabels_any={declared}");
+        let resolved = resolve_issue_automation_policy(
+            Some(&user),
+            Some("[labels]\nauto='renamed:auto'\ngated='renamed:gated'\nmanual='renamed:manual'"),
+        )
+        .unwrap();
+        assert_eq!(resolved.policy.select.labels_any, expected);
+    }
+    let resolved = resolve_issue_automation_policy(
+        Some("[select]\nlabels_any=['user:selection']"),
+        Some("[select]\nlabels_any=[]\n[labels]\nauto='renamed:auto'"),
+    )
+    .unwrap();
+    assert!(resolved.policy.select.labels_any.is_empty());
+}
+
+#[test]
+fn execution_label_names_reject_invalid_or_duplicate_declarations_and_effects() {
+    for text in [
+        "[labels]\nauto=''",
+        "[labels]\nauto=' leading'",
+        "[labels]\nmanual='trailing '",
+        "[labels]\nhold=\"bad\\u007fvalue\"",
+        "[labels]\nauto='same'\ngated='same'",
+        "[labels]\nmanual='same'\nhold='same'",
+        "[labels]\nautomatic='unknown'",
+        "[labels]\nauto=true",
+    ] {
+        assert!(
+            resolve_issue_automation_policy(Some(text), None).is_err(),
+            "{text}"
+        );
+    }
+    let conflict = resolve_issue_automation_policy(
+        Some("[labels]\nauto='selected'"),
+        Some("[labels]\nmanual='selected'"),
+    )
+    .unwrap_err();
+    assert_eq!(conflict.scope, IssueAutomationPolicyScope::Effective);
+    assert_eq!(conflict.reason, "duplicate_label_name");
+
+    // 뒤의 정상 선언으로 앞의 파일 안에 있는 잘못된 중복을 덮어 숨기지 않는다.
+    let conflict = resolve_issue_automation_policy(
+        Some("[labels]\nauto='same'\ngated='same'"),
+        Some("[labels]\ngated='different'"),
+    )
+    .unwrap_err();
+    assert_eq!(conflict.scope, IssueAutomationPolicyScope::User);
+    assert_eq!(conflict.reason, "duplicate_label_name");
+}
+
+#[test]
+fn execution_label_names_are_part_of_effect_hash_without_tracking_explicitness() {
+    let defaults = resolve_issue_automation_policy(None, None).unwrap();
+    let explicit = resolve_issue_automation_policy(
+        Some("[labels]\nauto='akra:auto'\ngated='akra:gated'\nmanual='akra:manual'\nhold='akra:hold'"),
+        None,
+    ).unwrap();
+    assert_eq!(defaults, explicit);
+    let first = resolve_issue_automation_policy(Some("[select]\nlabels_any=[]"), None).unwrap();
+    let renamed = resolve_issue_automation_policy(
+        Some("[select]\nlabels_any=[]\n[labels]\nhold='custom:hold'"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        first.policy.select.labels_any,
+        renamed.policy.select.labels_any
+    );
+    assert_ne!(first.version, renamed.version);
+}

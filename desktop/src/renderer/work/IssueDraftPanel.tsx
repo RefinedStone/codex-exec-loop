@@ -6,9 +6,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import "./IssueDraftPanel.css";
+import { IssueReadinessPanel } from "./IssueReadinessPanel";
 import { IssueDraftRequirements as Requirements, IssueDraftPreviewView as Preview, IssueDraftTextFields } from "./IssueDraftFields";
 import {
   intentStatus,
+  expectedLabels,
   ISSUE_METHOD,
   type IssueDraftApproval,
   type IssueDraftField,
@@ -46,6 +48,9 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [spans, setSpans] = useState<IssueDraftSpan[]>([]);
+  const [labelInput, setLabelInput] = useState("");
+  const previewRequest = useRef(0);
+  const epoch = useRef(0);
   const [preview, setPreview] = useState<IssueDraftPreview | null>(null);
   const [approval, setApproval] = useState<IssueDraftApproval | null>(null);
   const [status, setStatus] = useState<IssuePublishStatus | null>(null);
@@ -60,11 +65,17 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
   approvalRef.current = approval;
 
   /** 원격을 읽는다. `keepDraft` 이면 사용자의 글을 두고 편집 기준만 바꾼다 (외부 변경 뒤). */
-  const open = async (keepDraft: boolean) => {
+  const open = async (keepDraft: boolean, generation = epoch.current) => {
     setError(null);
-    if (!keepDraft) setOpenState({ phase: "loading" });
+    if (!keepDraft) {
+      previewRequest.current += 1;
+      setPreview(null);
+      setApproval(null);
+      setOpenState({ phase: "loading" });
+    }
     try {
       const opened = await request<IssueDraftOpened>(ISSUE_METHOD.open, target);
+      if (generation !== epoch.current) return null;
       setOpenState({ phase: "loaded", opened });
       setApproval(null);
       setStatus(keepDraft ? null : intentStatus(opened.intent));
@@ -73,9 +84,11 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
         setTitle(opened.title);
         setBody(opened.body);
         setSpans([]);
+        setLabelInput("");
       }
       return opened;
     } catch (cause) {
+      if (generation !== epoch.current) return null;
       if (keepDraft) setError(message(cause));
       else setOpenState({ phase: "failed", message: message(cause) });
       return null;
@@ -83,18 +96,23 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
   };
 
   useEffect(() => {
-    void open(false);
+    const generation = ++epoch.current;
+    void open(false, generation);
+    return () => { epoch.current += 1; previewRequest.current += 1; };
     // 대상이 바뀌면 처음부터 다시 읽는다.
   }, [request, target.cwd, target.owner, target.repository, target.number]);
 
   const loaded = openState.phase === "loaded";
   useEffect(() => {
+    const requestId = ++previewRequest.current;
+    const generation = epoch.current;
+    setPreview(null);
     if (!loaded) return;
     let current = true;
     const timer = window.setTimeout(() => {
-      request<IssueDraftPreview>(ISSUE_METHOD.preview, { target, text: { title, body, spans } }).then(
+      request<IssueDraftPreview>(ISSUE_METHOD.preview, { target, text: { title, body, spans }, expectedLabels: expectedLabels(labelInput) }).then(
         (next) => {
-          if (!current) return;
+          if (!current || requestId !== previewRequest.current || generation !== epoch.current) return;
           setPreview(next);
           setError(null);
           const approved = approvalRef.current;
@@ -105,7 +123,7 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
           }
         },
         (cause: unknown) => {
-          if (!current) return;
+          if (!current || requestId !== previewRequest.current || generation !== epoch.current) return;
           setPreview(null);
           setApproval(null);
           setError(message(cause));
@@ -116,9 +134,19 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
       current = false;
       window.clearTimeout(timer);
     };
-  }, [loaded, title, body, spans, previewCount]);
+  }, [request, target.cwd, target.owner, target.repository, target.number, loaded, title, body, spans, labelInput, previewCount]);
+
+  const invalidatePreview = (changedText = false) => {
+    previewRequest.current += 1;
+    setPreview(null);
+    if (changedText) {
+      if (approvalRef.current) setNotice("내용이나 정책이 바뀌어서 승인을 지웠습니다. 미리보기를 보고 다시 승인하세요.");
+      setApproval(null);
+    }
+  };
 
   const edit = (field: IssueDraftField, next: string) => {
+    invalidatePreview(true);
     setSpans((current) => shiftSpans(current, field, field === "title" ? title : body, next));
     if (field === "title") setTitle(next);
     else setBody(next);
@@ -219,7 +247,7 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
         <Requirements opened={opened} />
         <IssueDraftTextFields
           opened={opened} title={title} body={body} spans={spans} needsDecision={needsDecision}
-          disabled={editingDisabled} onEdit={edit} onSpansChange={setSpans} onNotice={setNotice}
+          disabled={editingDisabled} onEdit={edit} onSpansChange={(next) => { invalidatePreview(true); setSpans(next); }} onNotice={setNotice}
         />
         {remoteText && (
           <details className="work-section" data-testid="issue-draft-remote">
@@ -229,6 +257,10 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
           </details>
         )}
         <Preview preview={preview} />
+        <IssueReadinessPanel result={preview?.readiness} pending={preview === null && error === null}
+          labels={labelInput} disabled={editingDisabled}
+          onLabelsChange={(value) => { invalidatePreview(); setLabelInput(value); }}
+          onRefresh={() => { invalidatePreview(); setPreviewCount((count) => count + 1); }} />
         <section className="work-section work-form">
           <label className="issue-draft-approve">
             <input

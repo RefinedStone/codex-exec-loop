@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   addSpan,
+  expectedLabels,
+  issueReadinessDisplay,
+  type IssueDraftReadiness,
   intentStatus,
   type IssueDraftApproval,
   type IssueDraftSpan,
@@ -70,5 +73,59 @@ describe("issue draft approval and status", () => {
     expect(issueDraftTarget("/work/app", "widgets", 7)).toBeNull();
     expect(validationErrorText({ field: "required_section", label: "Impact", kind: "missing" })).toBe('필수 섹션 "Impact": 섹션이 없습니다');
     expect(validationErrorText({ field: "title", label: null, kind: "empty" })).toBe("제목: 값이 비어 있습니다");
+  });
+});
+
+describe("server-owned draft readiness", () => {
+  const result: IssueDraftReadiness = {
+    status: "assessed",
+    assessment: {
+      previewOnly: true, readiness: "needs_info", summary: "서버가 정한 보완 안내",
+      missingSections: ["완료 기준", "범위"],
+      errors: [{ field: "required_section", label: "완료 기준", kind: "missing" }],
+      riskClass: "high", riskSummary: "서버의 위험 설명",
+      effectiveMode: "observe", assumedMode: "propose", modeSummary: "서버의 예상 수준 설명",
+      expectedGates: [
+        { gate: "merge", action: "human", summary: "먼저 온 통합", actionSummary: "사람 확인" },
+        { gate: "start", action: "auto", summary: "나중 온 시작", actionSummary: "정책상 자동" },
+      ],
+      reasons: [{ code: "criteria_missing", summary: "서버가 정한 다음 보완점" }],
+      policyVersion: "automation", disclosurePolicyVersion: "disclosure",
+      sharedCopyHash: { version: 1, sha256: "shared-copy" },
+    },
+  };
+  it("preserves the server's summaries and gate order without deriving a decision", () => {
+    const display = issueReadinessDisplay(result, false);
+    expect(display).toBe(result);
+    if (display.status !== "assessed") throw new Error("expected the server assessment");
+    expect(display.assessment.summary).toBe("서버가 정한 보완 안내");
+    expect(display.assessment.riskSummary).toBe("서버의 위험 설명");
+    expect(display.assessment.modeSummary).toBe("서버의 예상 수준 설명");
+    expect(display.assessment.reasons.map((reason) => reason.summary)).toEqual(["서버가 정한 다음 보완점"]);
+    expect(display.assessment.expectedGates.map((gate) => gate.summary)).toEqual(["먼저 온 통합", "나중 온 시작"]);
+  });
+
+  it("hides a previously assessed answer while the current draft is pending", () => {
+    expect(issueReadinessDisplay(result, true)).toEqual({ status: "pending" });
+    expect(issueReadinessDisplay(undefined, true)).toEqual({ status: "pending" });
+  });
+
+  it("preserves the server failure and distinguishes a missing answer without inventing gates", () => {
+    const blocked: IssueDraftReadiness = {
+      status: "cannot_assess", reason: "policy_blocked",
+      summary: "서버의 정책 오류 설명", nextSummary: "서버의 복구 안내",
+      policyError: { scope: "project", field: "policy", reason: "invalid_toml" },
+    };
+    const display = issueReadinessDisplay(blocked, false);
+    expect(display).toBe(blocked);
+    expect(display).not.toHaveProperty("assessment");
+    expect(issueReadinessDisplay(blocked, true)).toEqual({ status: "pending" });
+    expect(issueReadinessDisplay(undefined, false)).toEqual({ status: "unavailable" });
+  });
+
+  it("only separates the user's hypothetical label input and does not add conventional labels", () => {
+    expect(expectedLabels("team:automate, SECURITY, team:manual")).toEqual(["team:automate", "SECURITY", "team:manual"]);
+    expect(expectedLabels(" , ")).toEqual([]);
+    expect(expectedLabels("custom:hold")).toEqual(["custom:hold"]);
   });
 });

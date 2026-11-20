@@ -22,6 +22,8 @@ use crate::domain::issue_policy::IssueDisclosurePolicy;
 
 fn observed(fixture: &Fixture, id: &str, body: &str) -> IssueSourceObservation {
     IssueSourceObservation {
+        creation_provenance:
+            crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: reference(fixture.cwd(), id),
         web: None,
         remote_state: IssueRemoteState::Open,

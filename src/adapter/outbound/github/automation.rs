@@ -480,6 +480,48 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         )
     }
 
+    fn create_frozen_branch_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        source_commit_sha: &str,
+        branch_name: &str,
+    ) -> Result<()> {
+        if !matches!(source_commit_sha.len(), 40 | 64)
+            || !source_commit_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("issue form source commit is invalid");
+        }
+        run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
+        let refspec = format!("{source_commit_sha}:refs/heads/{branch_name}");
+        // Empty expected old OID means absent, even if another client races the preceding read.
+        let lease = format!("--force-with-lease=refs/heads/{branch_name}:");
+        run_git_to_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
+            &["push", &lease, FROZEN_GITHUB_REMOTE_NAME, &refspec],
+        )
+    }
+
+    fn find_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        base_branch: &str,
+        head_branch: &str,
+    ) -> Result<Option<GithubAutomationPullRequest>> {
+        self.find_open_pull_request(
+            repo_root,
+            credential_redacted_push_url,
+            base_branch,
+            head_branch,
+        )
+    }
+
     /*
     ensure semantics는 PR creation을 retry-safe하게 만든다.
 

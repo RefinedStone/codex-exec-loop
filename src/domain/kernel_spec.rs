@@ -236,6 +236,8 @@ spec_names! {
             "The declared scope includes a protected repository path.";
         PolicyHumanRequired => "policy_human_required",
             "An additional policy rule requires a person at the affected gates.";
+        HumanSelectionRequired => "human_selection_required",
+            "An agent-created or unresolved issue requires a trusted user account to apply a current selection label.";
         BudgetExhausted => "budget_exhausted",
             "A zero static budget cap prevents an automatic start and requires a person to review the budget.";
         ModeOff => "mode_off",
@@ -648,6 +650,7 @@ mod tests {
                 "held_or_manual",
                 "protected_path",
                 "policy_human_required",
+                "human_selection_required",
                 "budget_exhausted",
                 "mode_off",
                 "observation_only",

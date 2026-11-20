@@ -1,6 +1,8 @@
 mod creation;
+mod readiness;
 
 use crate::application::port::inbound::issue_draft_port::*;
+use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
 use crate::application::service::issue_creation::IssueCreationService;
 use std::sync::Arc;
 
@@ -66,6 +68,7 @@ pub struct IssueDraftService {
     snapshot: Arc<dyn IssueSnapshotPort>,
     publisher: Arc<IssueJournaledPublishService>,
     creator: Option<Arc<IssueCreationService>>,
+    automation_policy: Option<Arc<IssueAutomationPolicyService>>,
     code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
     vault_unlock: Arc<EvidenceVaultUnlockService>,
 }
@@ -92,6 +95,7 @@ impl IssueDraftService {
             snapshot,
             publisher: publisher.into(),
             creator: None,
+            automation_policy: None,
             code_validators,
             vault_unlock,
         }
@@ -99,6 +103,11 @@ impl IssueDraftService {
 
     pub fn with_creation(mut self, creator: Arc<IssueCreationService>) -> Self {
         self.creator = Some(creator);
+        self
+    }
+
+    pub fn with_automation_policy(mut self, policy: Arc<IssueAutomationPolicyService>) -> Self {
+        self.automation_policy = Some(policy);
         self
     }
 
@@ -240,7 +249,18 @@ impl IssueDraftPort for IssueDraftService {
     fn preview(&self, request: IssueDraftPreviewRequest) -> Result<IssueDraftPreview> {
         let target = self.scoped_target(request.target)?;
         let conventions = self.conventions(&target.cwd)?;
-        Ok(evaluate(&conventions, &request.text, None).0)
+        let mut preview = evaluate(&conventions, &request.text, None).0;
+        readiness::attach(
+            &mut preview,
+            readiness::inspect(
+                self.automation_policy.as_deref(),
+                &target.cwd,
+                &conventions,
+                &request.text,
+                &request.expected_labels,
+            ),
+        );
+        Ok(preview)
     }
 
     fn publish(&self, request: IssueDraftPublishRequest) -> Result<IssueDraftPublished> {
@@ -342,7 +362,15 @@ fn evaluate(
     for (span_index, span) in text.spans.iter().enumerate() {
         match sensitive_span(text, span) {
             Some(span) => spans.push(span),
-            None => return (IssueDraftPreview::InvalidSpan { span_index }, None),
+            None => {
+                return (
+                    IssueDraftPreview::InvalidSpan {
+                        span_index,
+                        readiness: None,
+                    },
+                    None,
+                );
+            }
         }
     }
     let disclosure = conventions
@@ -351,10 +379,22 @@ fn evaluate(
     let masked = match mask_issue_text(&text.title, &text.body, &spans, disclosure) {
         Ok(masked) => masked,
         Err(IssueMaskingBlocked::NeedsUserConfirmation { span_indexes }) => {
-            return (IssueDraftPreview::NeedsConfirmation { span_indexes }, None);
+            return (
+                IssueDraftPreview::NeedsConfirmation {
+                    span_indexes,
+                    readiness: None,
+                },
+                None,
+            );
         }
         Err(IssueMaskingBlocked::InvalidSpan { span_index }) => {
-            return (IssueDraftPreview::InvalidSpan { span_index }, None);
+            return (
+                IssueDraftPreview::InvalidSpan {
+                    span_index,
+                    readiness: None,
+                },
+                None,
+            );
         }
     };
     let requirements = requirements(conventions);
@@ -409,6 +449,7 @@ fn evaluate(
             template_version: conventions.template.version().map(str::to_string),
         },
         shared_copy: masked.shared_copy,
+        readiness: None,
     };
     (
         preview,
@@ -551,6 +592,7 @@ fn template_view(template: &IssueTemplateResolution) -> IssueDraftTemplate {
 #[cfg(test)]
 mod tests {
     mod creation;
+    mod readiness;
 
     use std::sync::Mutex;
 
@@ -836,6 +878,7 @@ mod tests {
         let preview = fixture
             .service
             .preview(IssueDraftPreviewRequest {
+                expected_labels: Vec::new(),
                 target: target(),
                 text,
             })
@@ -872,6 +915,7 @@ mod tests {
         let masked = fixture
             .service
             .preview(IssueDraftPreviewRequest {
+                expected_labels: Vec::new(),
                 target: target(),
                 text: text_with_span(Some(IssueSensitiveSpanClass::Log)),
             })
@@ -892,16 +936,15 @@ mod tests {
         let unclassified = fixture
             .service
             .preview(IssueDraftPreviewRequest {
+                expected_labels: Vec::new(),
                 target: target(),
                 text: text_with_span(None),
             })
             .unwrap();
-        assert_eq!(
+        assert!(matches!(
             unclassified,
-            IssueDraftPreview::NeedsConfirmation {
-                span_indexes: vec![0]
-            }
-        );
+            IssueDraftPreview::NeedsConfirmation { span_indexes, .. } if span_indexes == vec![0]
+        ));
     }
 
     #[test]
@@ -922,6 +965,7 @@ mod tests {
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })
@@ -955,6 +999,7 @@ mod tests {
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })
@@ -996,6 +1041,7 @@ mod tests {
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })
@@ -1028,6 +1074,7 @@ mod tests {
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })
@@ -1052,6 +1099,7 @@ mod tests {
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })
@@ -1074,6 +1122,7 @@ mod tests {
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })
@@ -1115,6 +1164,7 @@ mod tests {
             fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })
@@ -1152,6 +1202,7 @@ mod tests {
             let preview = fixture
                 .service
                 .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
                     target: target(),
                     text: text.clone(),
                 })

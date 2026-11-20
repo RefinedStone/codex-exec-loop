@@ -93,7 +93,7 @@ fn label_json(id: &str, name: &str) -> Value {
 
 fn event(id: &str, actor_id: &str, actor_login: &str, kind: &str) -> Value {
     json!({"__typename":kind,"id":id,"createdAt":"2026-11-20T00:00:00Z",
-        "actor":{"id":actor_id,"login":actor_login},"label":label_json("LA_1","akra:auto")})
+        "actor":{"__typename":"User","id":actor_id,"login":actor_login},"label":label_json("LA_1","akra:auto")})
 }
 
 fn issue(id: &str) -> Value {
@@ -102,9 +102,9 @@ fn issue(id: &str) -> Value {
         "title":"작업 제목","body":"가릴 값이 없는 본문",
         "state":"OPEN","updatedAt":"2026-11-20T01:00:00Z",
         "repository":{"id":"R_1","nameWithOwner":"sample/widgets"},
-        "author":{"id":"U_writer","login":"writer"},
+        "author":{"__typename":"User","id":"U_writer","login":"writer"},
         "labels":metadata_json(vec![label_json("LA_1","akra:auto")]),
-        "assignees":metadata_json(vec![json!({"id":"U_assignee","login":"assignee"})]),
+        "assignees":metadata_json(vec![json!({"__typename":"User","id":"U_assignee","login":"assignee"})]),
         "timelineItems":metadata_json(vec![event("LE_1","U_labeler","labeler","LabeledEvent")]),
         "closedByPullRequestsReferences":{"totalCount":0}
     })
@@ -177,6 +177,14 @@ fn two_pages_bind_the_cursor_to_stable_repository_and_use_one_read_each() {
         assert!(query.contains("labels(first: 100)"));
         assert!(query.contains("timelineItems(last: 100"));
         assert!(query.contains("includeClosedPrs: true"));
+        assert!(query.contains("author { __typename login ... on Node { id } }"));
+        assert!(query.contains("nodes { __typename ... on Node { id } ... on Actor { login } }"));
+        assert_eq!(
+            query
+                .matches("actor { __typename login ... on Node { id } }")
+                .count(),
+            2
+        );
         assert!(!query.contains("mutation"));
         assert!(!query.contains("comments("));
     }
@@ -841,4 +849,168 @@ fn withheld_source_web_keeps_only_current_display_coordinates_and_no_raw_content
     let encoded = serde_json::to_string(&value).unwrap();
     assert!(!encoded.contains("provider token"));
     assert!(!encoded.contains("ghp_"));
+}
+
+#[test]
+fn actor_kind_uses_only_the_provider_type_and_keeps_stable_identity() {
+    for (typename, id, login, expected) in [
+        (
+            Some("User"),
+            "BOT_account",
+            "worker[bot]",
+            IssueSourceActorKind::UserAccount,
+        ),
+        (
+            Some("Bot"),
+            "U_account",
+            "maintainer",
+            IssueSourceActorKind::Bot,
+        ),
+        (
+            Some("Organization"),
+            "U_account",
+            "maintainer",
+            IssueSourceActorKind::Unknown,
+        ),
+        (
+            Some("UserAccount"),
+            "U_account",
+            "maintainer",
+            IssueSourceActorKind::Unknown,
+        ),
+        (
+            Some("private-provider-kind-sentinel"),
+            "U_account",
+            "maintainer",
+            IssueSourceActorKind::Unknown,
+        ),
+        (
+            None,
+            "U_account",
+            "maintainer",
+            IssueSourceActorKind::Unknown,
+        ),
+    ] {
+        let mut node = issue("I_1");
+        let mut value = json!({"id":id,"login":login});
+        if let Some(typename) = typename {
+            value["__typename"] = json!(typename);
+        }
+        node["author"] = value.clone();
+        node["assignees"] = metadata_json(vec![value.clone()]);
+        node["timelineItems"]["nodes"][0]["actor"] = value;
+        // 원격 payload가 로컬 생성 장부의 근거를 가장하지 못한다.
+        node["creationProvenance"] = json!("akra_created");
+        let (adapter, _) = fake(vec![Reply::Json(read_reply(node))]);
+        let result = observed(read(&adapter));
+        assert_eq!(
+            result.creation_provenance,
+            IssueCreationProvenance::Unattributed
+        );
+        for actor in [
+            result.author.as_ref().unwrap(),
+            &result.assignees.items[0],
+            result.label_actors.items[0].actor.as_ref().unwrap(),
+        ] {
+            assert_eq!(actor.kind, expected, "{typename:?}");
+            assert_eq!(actor.id, id);
+            assert_eq!(actor.login, login);
+        }
+        assert_eq!(
+            result.assignees.completeness,
+            IssueMetadataCompleteness::Complete
+        );
+        assert_eq!(
+            result.label_actors.completeness,
+            IssueMetadataCompleteness::Complete
+        );
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("private-provider-kind-sentinel")
+        );
+    }
+}
+
+#[test]
+fn null_actor_type_is_unknown_but_a_wrong_type_shape_fails_closed() {
+    let mut missing_type = issue("I_1");
+    missing_type["author"]["__typename"] = Value::Null;
+    let mut malformed = issue("I_1");
+    malformed["author"]["__typename"] = json!({"raw":"private-type-shape-sentinel"});
+    let (adapter, _) = fake(vec![
+        Reply::Json(read_reply(missing_type)),
+        Reply::Json(read_reply(malformed)),
+    ]);
+    assert_eq!(
+        observed(read(&adapter)).author.unwrap().kind,
+        IssueSourceActorKind::Unknown
+    );
+    let failed = read(&adapter);
+    assert_eq!(
+        failed,
+        IssueSourceRead::Unknown {
+            issue: reference("I_1"),
+            reason: IssueSourceFailure::MalformedResponse,
+        }
+    );
+    assert!(
+        !serde_json::to_string(&failed)
+            .unwrap()
+            .contains("private-type-shape-sentinel")
+    );
+}
+
+#[test]
+fn a_known_actor_type_does_not_replace_valid_identity_and_login() {
+    for value in [
+        json!({"__typename":"User","login":"maintainer"}),
+        json!({"__typename":"Bot","id":"U_account"}),
+        json!({"__typename":"User","id":"bad id","login":"maintainer"}),
+        json!({"__typename":"Bot","id":"U_account","login":"invalid/login"}),
+    ] {
+        let mut node = issue("I_1");
+        node["author"] = value;
+        let (adapter, _) = fake(vec![Reply::Json(read_reply(node))]);
+        assert_eq!(
+            read(&adapter),
+            IssueSourceRead::Unknown {
+                issue: reference("I_1"),
+                reason: IssueSourceFailure::MalformedResponse,
+            }
+        );
+    }
+}
+
+#[test]
+fn the_latest_label_application_preserves_bot_or_unknown_actor_kind() {
+    for (typename, expected) in [
+        (Some("Bot"), IssueSourceActorKind::Bot),
+        (None, IssueSourceActorKind::Unknown),
+    ] {
+        let mut current = event(
+            "LE_current",
+            "U_actor",
+            "trusted-looking-name",
+            "LabeledEvent",
+        );
+        let actor = current["actor"].as_object_mut().unwrap();
+        actor.remove("__typename");
+        if let Some(typename) = typename {
+            actor.insert("__typename".into(), json!(typename));
+        }
+        let mut node = issue("I_1");
+        node["timelineItems"] = metadata_json(vec![
+            event("LE_old", "U_human", "human", "LabeledEvent"),
+            event("LE_remove", "U_human", "human", "UnlabeledEvent"),
+            current,
+        ]);
+        let (adapter, _) = fake(vec![Reply::Json(read_reply(node))]);
+        let observed = observed(read(&adapter));
+        assert_eq!(observed.label_actors.items.len(), 1);
+        let current = &observed.label_actors.items[0];
+        assert_eq!(current.event_id, "LE_current");
+        assert_eq!(current.actor.as_ref().unwrap().id, "U_actor");
+        assert_eq!(current.actor.as_ref().unwrap().kind, expected);
+    }
 }

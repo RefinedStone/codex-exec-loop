@@ -36,6 +36,8 @@ fn item(id: &str, state: Option<IssueAutomationState>) -> IssueCollectionItem {
         }),
         current: Some(IssueSourceRead::Observed(Box::new(
             IssueSourceObservation {
+                creation_provenance:
+                    crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
                 issue,
                 web: Some(IssueSourceWeb {
                     number: 17,
