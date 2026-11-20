@@ -376,6 +376,11 @@ fn byte_offset(text: &str, utf16_offset: usize) -> Option<usize> {
 fn requirements(conventions: &Conventions) -> Option<IssueRequirements> {
     let template_fields = match &conventions.template {
         IssueTemplateResolution::NotConfigured => Vec::new(),
+        IssueTemplateResolution::Resolved(convention)
+            if !convention.unsupported_required_inputs.is_empty() =>
+        {
+            return None;
+        }
         IssueTemplateResolution::Resolved(convention) => convention
             .required_inputs
             .iter()
@@ -1054,5 +1059,47 @@ mod tests {
         let published = fixture.service.publish(request).unwrap();
         assert!(matches!(published, IssueDraftPublished::Confirmed { .. }));
         assert_eq!(*fixture.remote.fields.lock().unwrap(), shared_copy);
+    }
+    #[test]
+    fn unsupported_required_form_inputs_and_invalid_forms_block_every_write() {
+        for form in [
+            "body:\n  - type: dropdown\n    attributes:\n      label: Systems\n      multiple: true\n      options: [Windows, macOS]\n    validations:\n      required: true\n",
+            "body:\n  - type: upload\n    attributes:\n      label: Attachment\n    validations:\n      required: true\n",
+            "body:\n  - type: checkboxes\n    attributes:\n      label: Checks\n      options:\n        - label: I checked\n          required: true\n",
+            "body: [unterminated",
+        ] {
+            let fixture = fixture(false);
+            let updated_policy = fixture
+                .files
+                .policy
+                .lock()
+                .unwrap()
+                .replace(TEMPLATE_PATH, ".github/ISSUE_TEMPLATE/bug.yml");
+            *fixture.files.policy.lock().unwrap() = updated_policy;
+            *fixture.files.template.lock().unwrap() = form.to_string();
+            let text = text_with_span(Some(IssueSensitiveSpanClass::Secret));
+            let preview = fixture
+                .service
+                .preview(IssueDraftPreviewRequest {
+                    target: target(),
+                    text: text.clone(),
+                })
+                .unwrap();
+            assert!(matches!(
+                &preview,
+                IssueDraftPreview::Ready {
+                    validator_absent: true,
+                    publishable: false,
+                    ..
+                }
+            ));
+            let (_, approval, _) = ready(preview);
+            let result = fixture
+                .service
+                .publish(publish_request(&fixture, text, approval))
+                .unwrap();
+            assert!(matches!(result, IssueDraftPublished::Blocked { .. }));
+            assert_eq!(*fixture.remote.writes.lock().unwrap(), 0);
+        }
     }
 }
