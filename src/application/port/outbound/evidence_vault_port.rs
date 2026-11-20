@@ -14,7 +14,7 @@ use crate::domain::issue_work::IssueReference;
  */
 
 /// 이 계약의 판이다. 요청이나 응답의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_CONTRACT_VERSION: u32 = 2;
+pub const EVIDENCE_VAULT_CONTRACT_VERSION: u32 = 3;
 
 /// 복원한 평문이다.
 #[derive(Clone, PartialEq, Eq)]
@@ -74,19 +74,27 @@ impl fmt::Debug for VaultKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultUserConfirmation {
     issue: IssueReference,
+    session_id: u64,
 }
 
 impl VaultUserConfirmation {
     /// 사용자가 `issue` 의 복원을 확인한 뒤에만 부른다. application 밖에서는 만들 수 없다: 잠금 해제 서비스
     /// (`evidence_vault_unlock`)가 살아 있는 열람 세션의 권한에서만 만든다 (#2422).
-    pub(in crate::application) fn for_issue(issue: IssueReference) -> Self {
-        Self { issue }
+    pub(in crate::application) fn for_issue(issue: IssueReference, session_id: u64) -> Self {
+        Self { issue, session_id }
+    }
+
+    pub(in crate::application) fn session_id(&self) -> u64 {
+        self.session_id
     }
 
     /// 시험에서만 확인 없이 만든다.
     #[cfg(test)]
     pub(crate) fn for_issue_in_test(issue: IssueReference) -> Self {
-        Self { issue }
+        Self {
+            issue,
+            session_id: 0,
+        }
     }
 
     pub fn issue(&self) -> &IssueReference {
@@ -118,6 +126,7 @@ pub trait EvidenceVaultRestorePort: Send + Sync {
     }
 
     /// 확인한 이슈의 로컬 복원본을 돌려준다. 공급자에 쓰지 않는다. 최신 게시본이 저장한 연결과 다르면 오류이다.
+    /// 요청의 열람 세션을 시작 전과 평문 반환 직전에 검증한다. 끝난 세션의 요청은 재사용할 수 없다.
     fn restore(&self, request: VaultRestoreRequest) -> Result<VaultRestoreResponse>;
 }
 

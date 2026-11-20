@@ -16,7 +16,7 @@
  * 이 파일의 타입은 `Serialize` 를 구현하지 않는다. Kernel 이벤트와 Gateway 응답에 넣지 않는다.
  */
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
@@ -35,6 +35,9 @@ use crate::application::service::issue_masking::{IssueMaskedSpan, IssueTextField
 use crate::application::service::issue_publish_journal::IssueRestorableField;
 use crate::domain::issue_publish_intent::{IssuePublishVaultField, confirmed_version_name};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
+
+/// 같은 프로세스의 여러 복원 서비스가 현재 판과 필드 레코드를 교차해서 쓰지 않는다.
+static RECONNECT_TRANSACTION: Mutex<()> = Mutex::new(());
 
 const SPAN_BUNDLE_HEADER: &str = "akra.vault.spans.v1";
 /// 검토 화면에 보이는 표식 앞뒤 글의 최대 바이트 수이다.
@@ -410,6 +413,12 @@ impl EvidenceVaultRestoreService {
         if published.field_hash() != approval.reviewed_hash {
             return Err(VaultRestoreHold::ChangedDuringReview);
         }
+        let _transaction = RECONNECT_TRANSACTION.lock().map_err(|_| {
+            VaultRestoreHold::RecordUnavailable(VaultStoreError::Storage(
+                "the reconnect transaction lock is unavailable".to_string(),
+            ))
+        })?;
+        self.key(grant)?;
         let bound_version = self.bound_version(issue, &key)?;
         let new_version = confirmed_version_name(&approval.reviewed_hash);
         if new_version == bound_version {
@@ -566,14 +575,20 @@ impl EvidenceVaultRestoreService {
 impl EvidenceVaultRestorePort for EvidenceVaultRestoreService {
     /// 보류는 `VaultRestoreHold` 오류이다 (`downcast_ref` 로 꺼낸다).
     fn restore(&self, request: VaultRestoreRequest) -> Result<VaultRestoreResponse> {
-        Ok(self.verified_restore(request.confirmation.issue(), &request.key)?)
+        self.unlock
+            .validate_confirmation(&request.confirmation)
+            .map_err(VaultRestoreHold::Locked)?;
+        let restored = self.verified_restore(request.confirmation.issue(), &request.key)?;
+        self.unlock
+            .validate_confirmation(&request.confirmation)
+            .map_err(VaultRestoreHold::Locked)?;
+        Ok(restored)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Mutex;
 
     use serde::Serialize;
 
@@ -642,6 +657,7 @@ mod tests {
         records: Mutex<HashMap<VaultRecordScope, VaultPlaintext>>,
         /// 이 수만큼 저장한 뒤의 저장은 실패한다.
         saves_left: Mutex<Option<usize>>,
+        after_current_load: Mutex<Option<ReadHook>>,
     }
 
     impl EvidenceVaultStorePort for FakeVault {
@@ -660,12 +676,20 @@ mod tests {
         }
 
         fn load(&self, request: VaultRecordLoadRequest) -> Result<VaultPlaintext, VaultStoreError> {
-            self.records
+            let result = self
+                .records
                 .lock()
                 .unwrap()
                 .get(&request.scope)
                 .cloned()
-                .ok_or(VaultStoreError::RecordNotFound)
+                .ok_or(VaultStoreError::RecordNotFound);
+            if request.scope.binding == VaultRecordBinding::CurrentVersion {
+                let hook = self.after_current_load.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
+            result
         }
     }
 
@@ -994,6 +1018,95 @@ mod tests {
             error.downcast_ref::<VaultRestoreHold>(),
             Some(&VaultRestoreHold::MarkerMissing)
         );
+    }
+
+    #[test]
+    fn the_restore_port_rejects_saved_requests_after_session_end() {
+        for end_during_read in [false, true] {
+            let fixture = Fixture::published();
+            let access = fixture.unlock.access(&fixture.grant(&issue())).unwrap();
+            let request = VaultRestoreRequest {
+                confirmation: access.confirmation,
+                key: access.key,
+            };
+            if end_during_read {
+                let (unlock, session) = (fixture.unlock.clone(), fixture.session.clone());
+                *fixture.remote.during_read.lock().unwrap() =
+                    Some(Box::new(move || unlock.end_session(&session)));
+            } else {
+                fixture.unlock.end_session(&fixture.session);
+            }
+            let port: &dyn EvidenceVaultRestorePort = &fixture.service;
+            let error = port.restore(request).unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<VaultRestoreHold>(),
+                Some(&VaultRestoreHold::Locked(
+                    VaultSharedCopyReason::SessionExpired
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_reconnects_do_not_interleave_their_record_transactions() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let fixture = Arc::new(Fixture::published());
+        let edited = format!("changed: {MASKED_BODY}");
+        fixture.publish(&issue(), MASKED_TITLE, &edited);
+        let first_grant = fixture.grant(&issue());
+        let second_grant = fixture.grant(&issue());
+        let first_approval = VaultReconnectApproval {
+            reviewed_hash: IssueFieldHash::of_fields(MASKED_TITLE, &edited),
+            mappings: vec![mapping(
+                VaultRecordField::Title,
+                MASKED_TITLE,
+                "[[akra-mask:1]]",
+            )],
+        };
+        let second_approval = VaultReconnectApproval {
+            reviewed_hash: first_approval.reviewed_hash.clone(),
+            mappings: vec![mapping(VaultRecordField::Body, &edited, "[[akra-mask:2]]")],
+        };
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *fixture.vault.after_current_load.lock().unwrap() = Some(Box::new(move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }));
+        let first_fixture = fixture.clone();
+        let first = std::thread::spawn(move || {
+            first_fixture
+                .service
+                .reconnect(&first_grant, &first_approval)
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let second_fixture = fixture.clone();
+        let second = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = second_fixture
+                .service
+                .reconnect(&second_grant, &second_approval);
+            finished_tx.send(()).unwrap();
+            result
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let waited_for_first = matches!(
+            finished_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+        release_tx.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+        assert!(
+            waited_for_first,
+            "a second reconnect committed while the first was paused"
+        );
+        let restored = fixture.restore().unwrap();
+        assert_eq!(restored.title.expose(), TITLE);
+        assert_eq!(restored.body.expose(), edited);
     }
 
     #[test]
