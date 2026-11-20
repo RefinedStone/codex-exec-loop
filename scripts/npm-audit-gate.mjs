@@ -18,7 +18,7 @@ function advisoryId(url) {
   return String(url ?? "").split("/").filter(Boolean).at(-1) ?? "";
 }
 
-/** The advisories of an audit report, one entry per advisory id. */
+/** The advisories of an audit report, one entry per advisory id and affected package. */
 export function reportedAdvisories(report) {
   const advisories = new Map();
   for (const vulnerability of Object.values(report.vulnerabilities ?? {})) {
@@ -26,7 +26,7 @@ export function reportedAdvisories(report) {
       // A string names another vulnerable package; that package has its own entry with the advisory.
       if (typeof cause !== "object" || cause === null) continue;
       const id = advisoryId(cause.url);
-      advisories.set(id, { id, package: cause.name, severity: cause.severity, title: cause.title, url: cause.url });
+      advisories.set(JSON.stringify([id, cause.name]), { id, package: cause.name, severity: cause.severity, title: cause.title, url: cause.url });
     }
   }
   return [...advisories.values()];
