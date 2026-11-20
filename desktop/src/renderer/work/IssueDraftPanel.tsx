@@ -306,6 +306,8 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
   const ready = preview?.status === "ready" ? preview : null;
   // 결과를 모르는 게시가 있으면 새 게시를 보내지 않는다. Gateway 도 막는다.
   const waiting = status?.kind === "needs_confirmation" || status?.kind === "held";
+  // 게시한 글을 다시 읽을 때 아직 게시하지 않은 편집을 덮어쓰지 않도록 결과 확인까지 입력을 잠근다.
+  const editingDisabled = busy || status?.kind === "needs_confirmation";
   return (
     <aside className="work-panel issue-draft" data-testid="issue-draft-panel">
       <div className="work-header">
@@ -320,16 +322,16 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
           <p className="muted">이 입력은 대화 초안과 자동 저장에 들어가지 않습니다. 패널을 닫으면 사라집니다.</p>
           <label>
             제목
-            <input ref={titleInput} value={title} onChange={(event) => edit("title", event.target.value)} data-testid="issue-draft-title" />
+            <input ref={titleInput} disabled={editingDisabled} value={title} onChange={(event) => edit("title", event.target.value)} data-testid="issue-draft-title" />
           </label>
           <label>
             본문
-            <textarea ref={bodyInput} value={body} onChange={(event) => edit("body", event.target.value)} rows={12} data-testid="issue-draft-body" />
+            <textarea ref={bodyInput} disabled={editingDisabled} value={body} onChange={(event) => edit("body", event.target.value)} rows={12} data-testid="issue-draft-body" />
           </label>
           <div className="issue-draft-mark">
             <label>
               민감 구간의 종류
-              <select value={spanClass} onChange={(event) => setSpanClass(event.target.value as IssueSpanClass | "")} data-testid="issue-draft-span-class">
+              <select disabled={editingDisabled} value={spanClass} onChange={(event) => setSpanClass(event.target.value as IssueSpanClass | "")} data-testid="issue-draft-span-class">
                 {(Object.keys(CLASS_LABEL) as IssueSpanClass[]).map((value) => (
                   <option key={value} value={value}>
                     {CLASS_LABEL[value]} ({ACTION_LABEL[opened.spanActions[value]]})
@@ -338,10 +340,10 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
                 <option value="">모름 (직접 정함)</option>
               </select>
             </label>
-            <button type="button" onClick={() => markSelection("title")} data-testid="issue-draft-mark-title">
+            <button type="button" disabled={editingDisabled} onClick={() => markSelection("title")} data-testid="issue-draft-mark-title">
               제목의 선택을 가리기
             </button>
-            <button type="button" onClick={() => markSelection("body")} data-testid="issue-draft-mark-body">
+            <button type="button" disabled={editingDisabled} onClick={() => markSelection("body")} data-testid="issue-draft-mark-body">
               본문의 선택을 가리기
             </button>
           </div>
@@ -349,12 +351,13 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
             <ul data-testid="issue-draft-spans">
               {spans.map((span, index) => {
                 const action = span.class ? opened.spanActions[span.class] : "user_confirm";
-                const asks = action === "user_confirm";
+                const asks = action === "user_confirm" || needsDecision.includes(index) || span.decision !== null;
                 return (
                   <li key={`${span.field}-${span.start}`} className={needsDecision.includes(index) ? "issue-draft-warning" : undefined} data-testid="issue-draft-span">
                     {FIELD_LABEL[span.field]} {span.start}–{span.end} · {span.class ? CLASS_LABEL[span.class] : "모름"} ·{" "}
                     {asks ? (
                       <select
+                        disabled={editingDisabled}
                         value={span.decision ?? ""}
                         onChange={(event) =>
                           setSpans(spans.map((other, at) => (at === index ? { ...other, decision: (event.target.value || null) as IssueDraftSpan["decision"] } : other)))
@@ -368,7 +371,7 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
                     ) : (
                       ACTION_LABEL[action]
                     )}{" "}
-                    <button type="button" onClick={() => setSpans(spans.filter((_, at) => at !== index))}>
+                    <button type="button" disabled={editingDisabled} onClick={() => setSpans(spans.filter((_, at) => at !== index))}>
                       지정 취소
                     </button>
                   </li>
@@ -424,7 +427,7 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
             {status.kind === "needs_confirmation" && (
               <>
                 <strong>게시 결과 확인 필요</strong>
-                <p className="muted">쓰기를 보냈지만 결과를 모릅니다. 자동으로 다시 보내지 않습니다.</p>
+                <p className="muted">쓰기를 보냈지만 결과를 모릅니다. 자동으로 다시 보내지 않습니다. 결과 확인을 마치거나 그만둘 때까지 초안 편집을 잠급니다.</p>
                 <button type="button" onClick={() => void recheck()} disabled={busy} data-testid="issue-draft-recheck">
                   원격을 다시 확인
                 </button>

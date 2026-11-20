@@ -26,19 +26,20 @@ const issue = {
   intent: null,
   /** 다음 게시가 외부 변경을 만나게 한다. */
   externalEdit: false,
+  confirmLogs: false,
   requests: [],
 };
 const fieldHash = (copy) => ({ version: 1, sha256: createHash("sha256").update(`${copy.title}\n${copy.body}`).digest("hex") });
 
 function preview(text) {
-  const unanswered = text.spans.flatMap((span, index) => (span.class === null && span.decision === null ? [index] : []));
+  const unanswered = text.spans.flatMap((span, index) => ((span.class === null || (span.class === "log" && issue.confirmLogs)) && span.decision === null ? [index] : []));
   if (unanswered.length > 0) return { status: "needs_confirmation", spanIndexes: unanswered };
   const sharedCopy = { title: text.title, body: text.body };
   const markers = [];
   // 뒤의 구간부터 바꾸면 앞 구간의 위치가 그대로이다.
   const ordered = text.spans.map((span, index) => ({ ...span, index })).sort((left, right) => right.start - left.start);
   for (const span of ordered) {
-    const masks = span.class === "log" || span.decision === "restorable_mask";
+    const masks = span.decision === "restorable_mask" || (span.decision === null && span.class === "log");
     const marker = `[[masked:${span.index + 1}]]`;
     if (masks) markers.unshift({ marker, field: span.field });
     const value = sharedCopy[span.field];
@@ -182,6 +183,14 @@ try {
   check("text added after the spans keeps both spans", await until(async () => (await panel.getByTestId("issue-draft-span").count()) === 2 && (await approve.isEnabled())));
   check("the shared copy still hides both values", !(await sharedBody.innerText()).includes(SECRET) && !(await sharedBody.innerText()).includes(LOG_LINE));
 
+  issue.confirmLogs = true;
+  await title.fill("Policy changed");
+  const decision = panel.getByTestId("issue-draft-span-decision");
+  check("a changed policy exposes a decision for the existing log span", await until(async () => (await decision.count()) === 1));
+  await decision.selectOption("restorable_mask");
+  check("the explicit decision stays editable after the preview is ready", await until(async () => (await approve.isEnabled())) && (await decision.count()) === 1);
+  check("choosing the changed policy preserves both sensitive spans", (await panel.getByTestId("issue-draft-span").count()) === 2);
+
   await approve.check();
   await title.fill("New title");
   check("a content change clears the approval", await until(async () => !(await approve.isChecked()) && (await panel.getByTestId("issue-draft-notice").count()) > 0));
@@ -214,6 +223,8 @@ try {
   check("a lost answer is shown as publish result needs confirmation", await statusIs("needs_confirmation"));
   check("the needs-confirmation status names its state", (await status.innerText()).includes("게시 결과 확인 필요"));
   check("no new publish can start while the result is unknown", await panel.getByTestId("issue-draft-publish").isDisabled());
+  check("unknown publish results lock text edits", await title.isDisabled() && await body.isDisabled());
+  check("unknown publish results lock sensitive span edits", await panel.getByTestId("issue-draft-mark-body").isDisabled() && await decision.isDisabled());
   const publishes = issue.requests.filter((request) => request.method === "akra/issue/publish").length;
 
   // #2429: 창을 다시 불러온다. renderer 의 상태는 모두 없어진다. 다시 연 편집기는 `open` 이 준 의도 상태를 보여주고
@@ -228,6 +239,7 @@ try {
   await panel.getByTestId("issue-draft-recheck").click();
   check("a recheck that sees the approved copy is publish confirmed", await statusIs("confirmed"));
   check("the confirmed status names its state", (await status.innerText()).includes("게시 확인"));
+  check("confirmation unlocks draft editing", await until(async () => (await title.isEnabled()) && (await body.isEnabled())));
   check("the recheck sent no new publish", issue.requests.filter((request) => request.method === "akra/issue/publish").length === publishes);
   check("after the publish the editor holds the remote shared copy", await until(async () => (await body.inputValue()).includes("[[masked:2]]") && !(await body.inputValue()).includes(SECRET)));
 
