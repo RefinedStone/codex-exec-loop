@@ -25,6 +25,8 @@ pub(crate) mod issue_work;
 pub(crate) mod issue_policy;
 // issue_validation 은 이슈 필수 규약의 순수한 검증 규칙과 통과 결과이다 (#2418).
 pub(crate) mod issue_validation;
+// issue_template 은 대상 저장소의 이슈 템플릿에서 읽은 필수 입력과 판이다 (#2417).
+pub(crate) mod issue_template;
 // github_review는 review thread와 polling 결과를 서비스가 다루기 쉬운 값으로 표현한다.
 pub(crate) mod github_review;
 // MCP hub 는 사용자당 하나인 MCP 서버 등록부와 도구 검색 규칙을 가진다.
