@@ -7,6 +7,9 @@
 [plan 23 주의 항목](23-akra-attention-items.md), [plan 24 증거로 끝내는 작업](24-akra-evidence-harness.md),
 이슈 #2414 (Issue Core epic), 이슈 #2481 (ADE 로드맵 epic)
 
+개정 (2026-11-20): PR #2533 의 사후 리뷰를 반영했다. 실행기와의 계약 (§5.4), 수집의 재동기화 (§13), 끝 원인별 전이와
+외부 닫힘 (§12.1, §12.2), 결정 요청의 판 (§10.1), 조각의 선행 조건과 완료 기준 (§17, §18) 을 고쳤다.
+
 ## 한 줄 요약
 
 Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞으면 기존 계획 큐와 병렬 슬롯으로 실행하고, 결과를 이슈에
@@ -40,7 +43,8 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 | 이슈 judge | 중재자 (arbiter) | 마감이 지난 결정 요청을 대신 결정하는 읽기 전용 검토자 | plan 24 §4.5 의 게이트 리뷰어 |
 | AI 사람 양방향 | 결정 요청 (decision request), 개입 명령 | §10 | plan 18 §4.3 의 4번과 5번 |
 | (없음) | 바인딩 (binding) | 이슈 출처 하나와 저장소 하나의 연결 | - |
-| (없음) | 작업 지시 (work order) | 실행기에 넘기는 값. Akra 에서는 planning task 이다 | `TaskDefinition` |
+| (없음) | 작업 지시 (work order) | 실행기에 넘기는 값. Akra 에서는 최초 task 하나와 그 보완 task 들이다 | `TaskDefinition` |
+| (없음) | 허가 (permit) | 작업 지시 하나의 단계 하나를 실행해도 된다는 값 | §5.4 |
 
 ## 3. 이미 있는 것과 없는 것
 
@@ -57,6 +61,8 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 | AI 인계용 공유본 | `akra/issue/handoffCopy`, `application/service/issue_handoff` |
 | 초안 품질 검토의 모델 계약 | `issue_review_model_port`. 구현은 Fake 하나이다 |
 | task 큐 | kernel 명령 16개 (`create_task` 등), task 상태 `awaiting_user` |
+| 원자적 task 등록 | `admit_system_task_once` (`application/service/planning/task_mutation.rs`). PR 검증의 보완 task 가 이것을 쓴다 |
+| PR 검증의 끝 원인과 복구 행동 | `PrValidationTerminalReason`, `recovery_action` (`domain/parallel_mode/pr_validation.rs`) |
 | 격리 실행과 전달 | 병렬 모드: 슬롯 3개, worktree, lease, push → PR 검증 → 통합. 사람 리뷰가 기본이다 |
 | 자율 전달의 상한 | `AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1` 은 부모 프로세스에서만 온다. 저장소 설정은 이 권한을 주지 못한다 |
 | 사건 기록, 연산 영수증, 멱등 키, 마감 시각 타이머 | plan 19 Q3-1 ~ Q3-7 |
@@ -69,14 +75,18 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 | 이슈 목록과 변화 읽기 (Rust) | `issue_snapshot_port` 는 한 건만 읽는다. 목록은 Desktop main 이 읽는다 (`githubService.ts`, `jiraService.ts`, `linearService.ts`) |
 | 화면 없이 도는 수집 | Jira 와 Linear 의 토큰은 Electron main 에만 있다 (`jira-token.bin`, `linear-token.bin`). Gateway 는 GitHub 만 `gh` 로 읽는다 |
 | 이슈의 수명 상태 | 없다. 이슈는 프롬프트의 재료이다 |
+| 이슈의 상태, 라벨, 담당자 읽기 | 없다. snapshot 은 ID, 번호, 제목, 본문, `updatedAt`, 저장소 ID 만 읽는다 |
 | 이슈와 task 의 연결 | 없다. 넘기기는 입력창만 채운다 |
+| 작업별 실행 허가 | 없다. dispatcher 와 distributor 는 task 의 출처를 모른다. `AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1` 이면 distributor 는 모든 PR 에서 사람의 APPROVED 검사를 건너뛴다 (`pull_request_readiness_error`) |
+| 재시작을 넘는 task 1회 생성 | 없다. 멱등 키는 남아 있는 기록 (최근 10,000건) 에서만 기억한다 (`CommandMemory`). 수신 기록과 실제 작업은 따로 쓰인다 |
 | 실행 가능 판정 | 없다 |
 | 묻기와 답하기 | plan 18 K5 의 남은 일이다. 승인은 턴 안의 app-server 승인만 있다 |
 | 댓글, 라벨, 상태 전이 쓰기 | 없다 |
 | 완료 기준과 증거 | plan 24 (제안), #2481 의 A01 |
 | 주의함 | plan 23 (제안), #2481 의 A02 |
 
-결론: 수집, 판정, 조정, 양방향이 새 일이다. 실행과 전달은 있는 것을 쓴다.
+결론: 수집, 판정, 조정, 양방향이 새 일이다. 실행과 전달은 있는 것을 쓴다. 단 실행기를 다시 쓰는 것과, 그 실행기가
+이슈별 승인과 보류를 지키는 것은 다른 계약이다. 뒤의 것은 새로 만든다 (§5.4).
 
 ## 4. 원칙
 
@@ -88,6 +98,7 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 5. **자율의 상한은 사용자가 정한다.** 저장소의 파일은 상한을 낮출 수만 있다. 코드 검증기의 승인과 같은 규칙이다.
 6. **켜는 순서는 관찰 → 제안 → 반자동 → 자동이다.** 기본은 `observe` 이다 (`akra.prValidationMode` 와 같다).
 7. **새 실행 경로를 만들지 않는다.** 실행은 planning task 이다. 전달은 병렬 전달이다. 사람 리뷰 기본은 그대로이다.
+   기존 실행기는 작업별 허가를 확인하는 자리만 더 가진다 (§5.4).
 8. **밖으로 쓰는 글은 공유본이다.** 댓글과 라벨도 승인, 마스킹, 일지를 지난다 (#2414 의 규칙).
 9. **원문을 저장하지 않는다.** 장부에는 참조, 해시, 공유본만 둔다.
 10. **떼어낼 수 있게 만든다.** 모듈은 port 로만 밖과 만난다 (§5.2).
@@ -106,7 +117,7 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 │             결정 요청,        ├─ 중재자 (마감 뒤, 정책이 허락할 때)         │
 │             행동 일지)        └─ 작업 지시 ──▶ 실행 port                    │
 └───────────────────────────────────────────────┬──────────────────────────┘
-      ▲ 명령, 조회, 이벤트                        │ create_task, 조회 (planning, parallel)
+      ▲ 명령, 조회, 이벤트                        │ 작업 지시 등록, 단계별 허가, 조회 (§5.4)
       │ (kernel spec 의 범위 issue)               ▼
  Desktop · CLI · 에이전트            planning 큐 → 병렬 슬롯 → push → PR 검증 → 통합 (있음)
 ```
@@ -120,9 +131,9 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 | port | 방향 | 하는 일 | Akra 의 adapter |
 | --- | --- | --- | --- |
 | `IssueAutomationPort` | inbound | 명령과 조회 | kernel 프로토콜 (범위 `issue`) |
-| `IssueSourcePort` | outbound | 목록, 커서 뒤의 변화, 한 건 읽기, 능력 목록 | GitHub (`gh`). 뒤에 Jira, Linear |
+| `IssueSourcePort` | outbound | 발견 (선택 조건, 커서), 재동기화 (안정 ID 로 한 건), 능력 목록 (§13) | GitHub (`gh`). 뒤에 Jira, Linear |
 | `IssueFeedbackPort` | outbound | 댓글, 라벨, 담당자, 상태 전이 | provider 마다 하나. 게시 일지의 방식을 다시 쓴다 |
-| `IssueWorkExecutionPort` | outbound | 작업 지시의 제출, 취소, 상태 읽기 | planning task 와 병렬 상태 조회 |
+| `IssueWorkExecutionPort` | outbound | 작업 지시의 1회 등록, 단계별 허가의 부여와 철회, 취소, 상태와 끝 원인 읽기 (§5.4, §12.1) | planning authority 의 작업 지시 기록, dispatcher 와 distributor 의 확인 |
 | `IssueAutomationStorePort` | outbound | 장부 | SQLite. 저장소 runtime 폴더의 새 파일이다 |
 | `IssueAutomationPolicySourcePort` | outbound | 정책 파일 | 파일. `issue_policy` 와 같은 방식이다 |
 | `IssueAssessmentModelPort` | outbound | 선택적 모델 판정과 중재자 | 읽기 전용 thread. 처음에는 Fake 이다 |
@@ -131,7 +142,9 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 - 떼어낼 때는 모듈과 port 정의를 옮긴다. adapter 는 Akra 에 남는다.
 - 다른 실행기(다른 에이전트 런타임, CI)는 `IssueWorkExecutionPort` 의 다른 adapter 이다.
 - 지금은 crate 를 나누지 않는다. 이 저장소는 Cargo workspace 가 아니다. 나누는 일은 IA9 이다.
-- 장부를 planning DB 에 넣지 않는다. planning DB 의 schema version 을 올리면 이전 binary 가 그 DB 를 열지 못한다.
+- 이슈의 장부를 planning DB 에 넣지 않는다. planning DB 의 schema version 을 올리면 이전 binary 가 그 DB 를 열지 못한다.
+  예외는 §5.4 의 작업 지시 기록이다. 그 기록은 task 와 같은 트랜잭션에 있어야 한다. 표는 schema version 을 올리지 않고
+  더한다 (`kernel_events` 표의 방식).
 
 ### 5.3 실행 자리
 
@@ -149,6 +162,58 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 - 조정기는 planning 과 parallel 의 메모리 상태를 공유하지 않는다. 저장된 값을 읽고 명령만 보낸다. 그래서 plan 19 §3.2 의
   "상태 기계가 둘이다"의 비용(메시지로 맞추기)을 늘리지 않는다.
 
+### 5.4 작업 지시와 실행 허가 (실행기와의 계약)
+
+planning 큐와 병렬 전달은 조정기와 따로 돈다. 그래서 이슈 장부의 값만으로는 실행기를 멈추지 못한다.
+
+- 슬롯을 기다리는 task 의 이슈를 보류해도, dispatcher 는 나중에 그 task 를 가져간다.
+- 프로세스에 `AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1` 이 있으면, distributor 는 그 이슈의 관문을 모르고 사람의 APPROVED
+  검사를 건너뛴다. 이 값은 다른 작업을 위해 켜져 있을 수 있다.
+
+이 절은 그 간격을 메우는 계약이다. 새 실행기를 만들지 않는다. 기존 dispatcher 와 distributor 가 확인하는 자리를 더한다.
+
+**작업 지시 기록.** planning authority 에 둔다. task 를 만드는 것과 같은 트랜잭션에서 쓴다.
+
+```text
+work_order: { work_order_id, origin, task_ids[], permits[] }
+  work_order_id  바뀌지 않는다. 이슈, 필드 해시, 시도 번호에서 만든다
+  origin         이 지시를 낸 모듈 (예: issue_automation)
+  task_ids       최초 task 하나와, PR 검증이 만든 보완 task 들
+  permits        단계별 허가
+```
+
+- **1회 등록.** adapter 는 `work_order_id` 로 조회하고, 없을 때만 만든다. 조회와 생성은 한 트랜잭션이다.
+  `admit_system_task_once` 의 방식을 쓴다. 그 함수를 그대로 부르지 않는다. 그 함수는 task 의 provenance 로 중복을 가리고,
+  provenance 는 task 가 고쳐질 때 바뀐다.
+- **명령의 멱등 키와 다르다.** kernel 명령의 멱등 키는 영수증의 중복을 막는다. 기록이 정리되면 키를 잊는다. 수신 기록을
+  쓴 뒤 task 를 만들기 전에 죽으면, 재전송은 영수증만 다시 받는다. "task 하나"는 작업 지시 기록이 보장한다.
+- **계보.** 최초 task 와 보완 task 는 한 작업 지시에 속한다. 보류, 취소, 예산은 계보 전체에 든다.
+
+**허가.** 단계는 `dispatch`, `push`, `pull_request`, `integrate` 이다.
+
+```text
+permit: { work_order_id, stage, policy_version, field_hash, gate_revision, source_sha }
+  gate_revision  그 관문의 판 번호 (§9.2)
+  source_sha     push, pull_request, integrate 에만 있다. 고정한 소스 커밋이다
+```
+
+- **유효 권한 = 프로세스 상한 ∩ 바인딩과 이슈의 정책 ∩ 현재 관문의 승인.** 프로세스의 opt-in 은 상한이다. 그것만으로는
+  이슈 작업을 통합하지 못한다.
+- **확인하는 자리.** 슬롯 배분 (claim 과 같은 트랜잭션), 소스 push 직전, PR 작성 직전, 통합 직전. 허가가 없거나 묶인 값이
+  지금 값과 다르면 그 단계를 하지 않고 이유를 남긴다. 다른 작업은 계속한다.
+- **기존 흐름.** 작업 지시 기록이 없는 task (사람이 만든 task) 는 지금과 똑같이 돈다.
+- **경계.** dispatcher 와 distributor 는 planning authority 의 이 기록만 읽는다. 이슈 자동화 모듈을 import 하지 않는다.
+
+**철회와 인계.**
+
+| 명령이나 변화 | 허가에 주는 영향 |
+| --- | --- |
+| `hold`, `stale`, `cancel` | 그 작업 지시의 아직 쓰지 않은 허가를 모두 철회한다. 실행 중인 턴을 끊는 것은 따로 고른다 |
+| `release` | 허가를 되살리지 않는다. 관문을 다시 지나야 새 허가가 나온다 |
+| `take_over` | 자동 후속 실행, 전달, 정리의 허가를 모두 철회한다. thread 는 사람이 이어 쓴다. 호스트는 브랜치와 worktree 를 지우지 않는다. 슬롯의 lease 는 사람이 끝낼 때까지 남는다 (§19 Q-IA14) |
+
+이 계약은 IA3 의 범위이다. `propose` 에서도 통합의 허가는 사람의 승인에서만 나온다.
+
 ## 6. 추적 이슈의 상태와 맞추기
 
 상태는 닫힌 목록이다.
@@ -163,14 +228,15 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 | `queued` | 작업 지시를 냈다. task 가 큐에 있다 | `running`, `cancelled` |
 | `running` | 실행기가 일한다 | `in_review`, `awaiting_decision`, `failed` |
 | `in_review` | PR 이 열려 있다. CI, 리뷰, 통합을 기다린다 | `done`, `running` (수정), `failed` |
-| `done` | 통합했고 결과를 이슈에 돌려줬다 | 끝 |
+| `done` | 통합 브랜치에 통합했고 검증이 끝났다. 외부 이슈의 닫힘은 따로 본다 (§12.2) | 끝 |
 | `failed` | 시도 한도를 넘었다 | 사람의 결정 |
 | `cancelled` | 이슈가 닫혔거나 사람이 취소했다 | 끝 |
 
 상태와 따로 표시 두 개가 있다.
 
-- `held`: 사람이나 규칙이 멈췄다. 보류 중에는 조정기가 새 행동을 내지 않는다.
+- `held`: 사람이나 규칙이 멈췄다. 보류 중에는 조정기가 새 행동을 내지 않는다. 실행기도 멈춘다: 허가를 철회한다 (§5.4).
 - `stale`: 판정한 뒤에 이슈의 제목이나 본문이 바뀌었다.
+- `unknown`: 이슈를 다시 읽지 못했다 (403, 404, 조회 실패). 닫힘으로도, 변화 없음으로도 보지 않는다.
 
 맞추기:
 
@@ -179,8 +245,11 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
   `mark_done`, `none`.
 - 입력은 저장된 값이다: 장부, provider 의 최신 스냅숏, task 의 상태, PR 검증 상태. 사건 하나를 놓쳐도 다음 주기에 같은
   답이 나온다. 재시작해도 이어진다 (plan 19 P1).
-- 이슈 하나에 진행 중인 행동은 하나이다. 밖으로 쓰는 행동은 먼저 행동 일지에 적는다. 일지의 상태는 게시 일지와 같다
-  (`recorded` → `sent` → `confirmed`).
+- 이슈 하나에 진행 중인 행동은 하나이다. 밖으로 쓰는 행동은 먼저 행동 일지에 적는다. 일지의 상태는 게시 일지와 같다:
+  `recorded` → `sent` → `confirmed` 또는 `needs_confirmation`.
+- 결과를 모르는 행동 (`needs_confirmation`) 은 다시 보내지 않는다. 조정기는 읽기만 해서 확인한다. 확인할 때까지 그
+  이슈의 새 쓰기를 막는다 (§12).
+- 제출과 시작의 직전에 이슈를 다시 읽고 자격을 다시 본다 (§13).
 
 밖의 변화와 대응:
 
@@ -188,10 +257,14 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 | --- | --- |
 | 판정 뒤에 제목이나 본문이 바뀜 (필드 해시가 다름) | `stale`. 시작 전이면 다시 판정한다. 실행 중이면 결정 요청을 연다 (계속 / 다시 시작 / 멈춤) |
 | 이슈가 닫힘 | 시작 전이면 `cancelled`. 실행 중이면 결정 요청을 연다 |
+| 선택 라벨이 없어짐 | 다시 판정한다. 시작 전이면 `ineligible` 이고 허가를 철회한다. 실행 중이면 결정 요청을 연다 |
+| 이슈를 읽지 못함 (403, 404, 조회 실패) | `unknown`. 새로 시작하지 않고 전달하지 않는다. 다음 주기에 다시 읽는다 |
 | 다른 사람이 담당자가 됨, 다른 PR 이 연결됨 | `held`, 이유 `already_claimed` |
 | 보류 라벨이 붙음 | `held` |
 | task 가 `awaiting_user` 가 됨 | 결정 요청으로 올린다 (§10.2) |
-| PR 검증이 `Blocked` 나 `Failed` 가 됨 | 시도 수를 올린다. 한도 안이면 다시 하고, 넘으면 `failed` 이다 |
+| PR 검증이 `Blocked` 나 `Failed` 가 됨 | 끝의 원인에 따라 다르다. 모두 다시 구현하는 것이 아니다 (§12.1) |
+
+닫힌 이슈와 선택 라벨을 잃은 이슈는 발견의 결과에서 사라진다. 그래서 위의 변화는 재동기화가 읽는다 (§13).
 
 ## 7. 체계: 실행 계약, 정책, 플레이북
 
@@ -229,6 +302,8 @@ Akra 가 외부 이슈를 수집하고, 정책으로 판정하고, 조건이 맞
 - `issue-policy.toml` 과 따로 둔다. 한 파일이 깨졌을 때 다른 기능이 막히지 않는다.
 - 값마다 저장소 > 사용자 > 내장 순서로 정한다. 예외가 있다: 자율 상한, 이슈에 쓰는 허락, 예산의 최대값은 사용자
   파일에서만 온다. 저장소 파일은 낮출 수만 있다.
+- 저장소 파일은 신뢰와 보호도 풀지 못한다. 신뢰하는 행위자는 사용자 파일에서만 온다. 저장소 파일은 그 목록을 줄일
+  수만 있다. 보호 경로와 사람 필수 규칙은 내장 값과 사용자 파일이 정한다. 저장소 파일은 더할 수만 있다.
 - 깨진 파일은 `policy_blocked` 이다. 내장 값으로 대신하지 않는다 (`IssuePolicyBlocked` 와 같다).
 - 판정과 결정 요청에 정책 판(내용의 SHA-256)을 적는다. 정책이 바뀌면 열린 판정은 낡은 것이다.
 
@@ -243,7 +318,7 @@ mode = "observe"                   # off | observe | propose | gated | auto
 
 [select]                           # 추적할 이슈
 labels_any = ["akra:auto", "akra:gated", "akra:manual"]
-trusted_actors = ["maintainer-login"]   # 이슈를 썼거나 라벨을 붙인 사람
+trusted_actors = ["maintainer-login"]   # 이슈를 썼거나 라벨을 붙인 사람. 사용자 파일에서만 온다
 
 [[classify.rule]]                  # 위험 등급. 위에서부터 본다
 class = "high"
@@ -271,7 +346,10 @@ max_attempts = 3
 [feedback]                         # 이슈에 쓰는 것. 기본은 모두 꺼짐
 comment = false
 labels = false
-transition = false
+transition = false                 # false 이면 Akra 는 이슈를 닫지도 전이하지도 않는다
+
+[close]                            # 통합 뒤의 외부 이슈 (§12.2)
+when = "never"                     # never | integration | provider_link
 ```
 
 ### 7.4 플레이북 (skill)
@@ -313,7 +391,9 @@ transition = false
 | `auto` (풀자동) | 한다 | 자동 | 자동. 사람 필수 규칙은 예외이다 | 정책과 프로세스 opt-in | 정책이 켠 것만 |
 
 - 수준을 올리는 것은 사람의 명령이다. Desktop main 이 확인 창을 띄운다.
-- `auto` 의 자동 통합은 지금의 `AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1` 을 그대로 요구한다. 새 길을 열지 않는다.
+- `auto` 의 자동 통합은 둘을 모두 요구한다: 지금의 `AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1` 과 그 작업의 `integrate` 허가.
+  프로세스의 opt-in 만으로는 통합하지 않는다 (§5.4). 새 길을 열지 않는다.
+- `propose` 와 `gated` 의 "사람 리뷰"는 표시가 아니다. 실행기가 허가로 강제한다 (§5.4).
 - 공개 저장소의 기본 상한은 `propose` 이다 (§19 Q-IA3).
 
 ### 9.2 관문
@@ -325,14 +405,17 @@ transition = false
 | `plan` | 구현 계획을 낸 뒤, 파일을 고치기 전 | 사람, 중재자 |
 | `delivery` | push 와 PR | 지금의 병렬 전달 규칙 |
 | `merge` | 통합 | 사람 리뷰. opt-in 일 때만 자동이다 |
-| `close` | 이슈 닫기, 상태 전이 | provider 의 PR 연결 (`Closes #N`) 이 기본이다 |
+| `close` | 이슈 닫기, 상태 전이 | 정책 `close.when`. 기본은 닫지 않는다 (§12.2) |
 
 관문의 처리 방식은 넷이다: `human` (끝까지 기다린다), `timeout_default` (마감 뒤에 권고값), `timeout_arbiter` (마감 뒤에
 중재자), `auto`.
 
+관문마다 판 번호 (`gate_revision`) 가 있다. 정책 판, 이슈의 필드 해시, 위험 등급, 고정한 소스 커밋 중 하나가 바뀌면 판이
+오른다. 이전 판의 승인과 허가는 쓰지 못한다.
+
 ### 9.3 사람 필수 규칙 (풀자동의 예외)
 
-아래 중 하나이면 그 관문은 `human` 이다. 마감이 지나도 넘어가지 않는다.
+아래 중 하나이면 그 관문은 `human` 이다. 마감이 지나도 넘어가지 않는다. 저장소 파일은 이 목록을 줄이지 못한다 (§7.3).
 
 - 위험 등급이 `high` 이다. 또는 보류 라벨이나 수동 라벨이 있다.
 - 작성자를 신뢰하지 않고, 신뢰하는 행위자의 라벨도 없다.
@@ -350,10 +433,16 @@ transition = false
 
 ```text
 decision: { id, issue, gate, kind, question, options[{ id, label, effect }], recommended,
+            basis: { policy_version, field_hash, work_order_id, gate_revision },
             on_timeout: wait | default | arbiter, due_at, asked_by, evidence[],
-            state: open | answered | expired | withdrawn,
-            answer: { option, note, by, channel, at } }
+            state: open | answered | expired | withdrawn | superseded,
+            answer: { option, note, by, confirmation, caller, channel, at } }
 ```
+
+- `basis` 는 이 질문이 본 판이다. 답을 저장할 때 지금의 판과 비교한다. 다르면 답을 적용하지 않고 요청을 `superseded` 로
+  닫는다. 필요하면 새 요청을 연다. 이 검사가 오래 열려 있던 Desktop 카드의 답, 늦게 끝난 중재자의 답, 바뀐 이슈에 대한
+  답을 거른다.
+- `confirmation` 은 사람 확인의 증거이다 (§14). `caller` 는 표시용 이름이고 증거가 아니다. 둘을 섞지 않는다.
 
 - `kind` 는 닫힌 목록이다: 시작 승인, 기준 확정, 계획 승인, 위험 예외, 이슈가 바뀜, 실패 뒤 처리, 에이전트의 질문.
 - 이 객체는 plan 18 §4.3 의 "묻기·답하기"와 "승인을 독립 객체로"의 첫 구현이다. 대상(subject)을 가진 일반 객체로
@@ -375,11 +464,13 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 
 | 명령 | 하는 일 |
 | --- | --- |
-| `hold` / `release` | 새 행동을 멈추고 다시 연다. 실행 중인 턴을 끊는 것은 따로 고른다 (`stop_all`) |
+| `hold` / `release` | 새 행동을 멈추고 다시 연다. `hold` 는 허가를 철회한다. `release` 뒤에는 관문을 다시 지난다. 실행 중인 턴을 끊는 것은 따로 고른다 (`stop_all`) |
 | `steer` | 지시를 더한다. 실행 전이면 작업 지시에 붙고, 실행 중이면 그 thread 에 간다 |
-| `take_over` | 자동화가 손을 뗀다. 브랜치와 thread 는 남는다. 사람이 그 thread 를 이어 쓴다 |
+| `take_over` | 자동화가 손을 뗀다. 자동 후속 실행, 전달, 정리의 허가를 철회한다. 브랜치, worktree, thread 는 남는다. 사람이 그 thread 를 이어 쓴다 |
 | `retriage` | 다시 판정한다 |
-| `cancel` | 작업을 취소한다. 확인이 필요하다 |
+| `cancel` | 작업 지시의 계보 전체를 취소하고 허가를 철회한다. 확인이 필요하다 |
+
+허가의 철회와 인계의 계약은 §5.4 에 있다.
 
 ### 10.3 마감과 중재자
 
@@ -413,35 +504,97 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 
 ## 12. 실행과 결과 반환
 
-1. **작업 지시.** `{ issue, field_hash, title, handoff, acceptance[], scope, branch_hint, closing_reference, profile,
-   priority, attempt }`. `handoff` 는 AI 인계 정책을 지난 공유본이다.
-2. **task.** Akra 의 adapter 는 `create_task` 를 보낸다. 멱등 키는 이슈, 필드 해시, 시도 번호로 만든다. 같은 지시는 task 를
-   두 번 만들지 않는다.
-3. **실행.** 병렬 모드가 켜져 있으면 슬롯이 task 를 가져간다. 꺼져 있으면 task 는 큐에 남고 화면이 이유를 보인다. 이슈
-   자동화는 병렬 모드를 스스로 켜지 않는다 (§19 Q-IA8).
+1. **작업 지시.** `{ work_order_id, issue, field_hash, title, handoff, acceptance[], scope, branch_hint,
+   link_reference, profile, priority, attempt }`. `handoff` 는 AI 인계 정책을 지난 공유본이다.
+2. **task.** Akra 의 adapter 는 작업 지시를 한 번 등록한다 (§5.4). 등록은 최초 task 를 만들고 작업 지시 기록을 같은
+   트랜잭션에 쓴다. `create_task` 의 멱등 키에 기대지 않는다. 재시작, 응답 유실, 기록의 정리 뒤에도 같은
+   `work_order_id` 는 같은 task 를 돌려준다.
+3. **실행.** 병렬 모드가 켜져 있고 `dispatch` 허가가 있으면 슬롯이 task 를 가져간다. 병렬 모드가 꺼져 있으면 task 는 큐에
+   남고 화면이 이유를 보인다. 이슈 자동화는 병렬 모드를 스스로 켜지 않는다 (§19 Q-IA8).
 4. **보면서 하기.** 승인 화면의 다른 선택 "내 대화로 열기"는 지금의 넘기기이다. 그 이슈는 `take_over` 가 된다.
-5. **전달.** 지금의 순서 그대로이다. 더하는 것은 PR 의 닫는 참조이다: `Closes owner/name#N`, Jira 키, Linear 의 브랜치 이름.
-   지금의 PR 본문은 고정 양식이고 닫는 참조가 없다 (`build_distributor_pull_request_body`,
-   `src/application/service/parallel_mode/distributor/delivery/github.rs`).
-6. **연결.** 장부가 `이슈 → task → thread, 브랜치, PR` 을 가진다. `TaskDefinition` 은 바꾸지 않는다. 자료 연결은 #2481 의
-   A03 이 맡는다.
-7. **결과 반환.** 상태 댓글 하나를 만들고 고친다. 댓글을 쌓지 않는다. 숨은 표식으로 자기 댓글을 알아본다. 라벨과 상태
-   전이는 정책이 켠 것만 한다.
-8. **완료 기준과 증거.** plan 24 가 맡는다. E3 게이트가 생기면 `gated` 와 `auto` 의 전달은 필수 기준의 통과를 요구한다.
-9. **예산.** 동시에 도는 이슈 수, 하루에 시작하는 수, 이슈당 시도 수. 사용 한도 (`account/rateLimits/*`) 가 기준을 넘으면
-   새로 시작하지 않는다 (#2481 의 R01).
+5. **전달.** 지금의 순서 그대로이다. push, PR 작성, 통합은 각각 그 단계의 허가를 확인한다 (§5.4). 더하는 것은 PR 의
+   참조이다: 이슈 주소, Jira 키, Linear 의 브랜치 이름. 지금의 PR 본문은 고정 양식이고 참조가 없다
+   (`build_distributor_pull_request_body`, `src/application/service/parallel_mode/distributor/delivery/github.rs`).
+   닫는 키워드 (`Closes #N`) 는 이슈를 닫는 수단으로 믿지 않는다 (§12.2).
+6. **연결.** 장부가 `이슈 → 작업 지시` 를 가진다. 작업 지시 기록이 `task 계보` 를 가진다. 장부는 thread, 브랜치, PR 도
+   적는다. `TaskDefinition` 은 바꾸지 않는다. 자료 연결은 #2481 의 A03 이 맡는다.
+7. **결과 반환.** 상태 댓글 하나를 만들고 고친다. 댓글을 쌓지 않는다. 라벨과 상태 전이는 정책이 켠 것만 한다.
+   - 쓰기는 행동 일지를 지난다. 일지는 의도 ID, 만든 댓글의 ID, 쓴 계정을 적는다.
+   - 숨은 표식만으로는 중복을 막지 못한다. 응답을 잃은 쓰기는 `needs_confirmation` 이다. 조정기는 다시 읽어서 댓글 ID 와
+     쓴 계정과 의도 ID 를 확인한다. 확인하지 못하면 자동으로 다시 쓰지 않는다. 사람에게 알린다.
+8. **완료 기준과 증거.** plan 24 가 맡는다. 증거 게이트 (E3) 가 없는 동안 전달과 통합은 모든 위험 등급에서 사람
+   리뷰이다. 자동 전달 (`auto`, IA6) 은 E3 의 enforce 를 요구한다.
+9. **예산.** 동시에 도는 이슈 수, 하루에 시작하는 수, 이슈당 실행 횟수 (§12.1). 사용 한도 (`account/rateLimits/*`) 가
+   기준을 넘으면 새로 시작하지 않는다 (#2481 의 R01).
+
+### 12.1 실행의 끝과 다시 하기
+
+PR 검증의 `Blocked` 와 `Failed` 는 모두 "다시 구현하라"가 아니다. 기존 FSM 은 끝의 원인과 복구 행동을 가른다
+(`PrValidationTerminalReason`, `recovery_action`). 실행 port 는 끝의 원인을 중립 분류로 준다. Akra 의 adapter 가 기존
+원인을 그 분류로 옮긴다. 분류의 이름은 IA4 에서 정한다.
+
+| 분류 (제안) | Akra 의 원인 (예) | 조정기의 대응 | 오르는 횟수 |
+| --- | --- | --- | --- |
+| `rework_needed` | 검증이 낸 고칠 수 있는 지적, 통합 전 CI 실패 | 보완 실행. 같은 작업 지시의 보완 task 이다 | 실행 |
+| `observe_again` | `ObservationFailed`, provider 의 활동을 기다림 | 검증을 다시 읽는다. 코드를 다시 만들지 않는다 | 검증 |
+| `contract_recovery` | `PostMergeContractBlocked`, `IntegrationEvidenceMissing` | 구현을 다시 실행하지 않는다. 복구 행동을 사람에게 보인다 | 없음 |
+| `identity_conflict` | `IdentityViolation`, `IntegrationAuthorityConflict` | 보류한다. 사람에게 묻는다 | 없음 |
+| `pull_request_closed` | `PullRequestClosedWithoutMerge` | 결정 요청 (다시 열기 / 새 PR / 취소) | 없음 |
+| `queue_recovery` | `RemediationAdmissionFailed` | 큐를 복구한 뒤 검증을 다시 한다 | 검증 |
+| `publish_unknown` | 댓글이나 라벨 쓰기의 결과를 모름 | 다시 읽어 확인한다. 자동으로 다시 쓰지 않는다 | 게시 |
+
+- 횟수는 셋이고 따로 센다: 실행 (구현과 보완), 검증 (조회와 재검증), 게시 (쓰기의 재시도). 시도 한도
+  (`max_attempts`) 는 실행 횟수에만 든다.
+- 같은 끝 기록을 여러 번 읽어도 횟수는 한 번만 오른다. 끝 기록의 식별자로 가른다.
+- 이미 통합한 작업은 다시 구현하지 않는다.
+- 보완 task 는 기존 PR 검증이 만든다 (`remediate` 모드). adapter 는 그 task 를 작업 지시의 계보에 잇는다.
+
+### 12.2 통합과 외부 이슈의 닫힘
+
+통합의 완료와 provider 이슈의 닫힘은 다른 사실이다. 장부는 둘을 따로 적는다.
+
+- GitHub 은 PR 의 base 가 저장소의 기본 브랜치일 때만 닫는 키워드를 따른다
+  ([GitHub 문서](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)).
+  다른 브랜치로 가는 PR 에서는 키워드를 무시하고, 연결도 만들지 않고, 병합해도 이슈를 닫지 않는다.
+- 이 저장소의 기본 브랜치는 `main` 이다. 병렬 통합 브랜치의 기본값은 `prerelease` 이다. distributor 는 PR 의 base 가 통합
+  브랜치인지 확인한다. 그래서 `Closes owner/name#N` 은 이 전달 경로에서 이슈를 닫지 않는다.
+- `done` 은 외부 닫힘을 요구하지 않는다. 화면은 "통합함"과 "외부 이슈가 열려 있음"을 따로 보인다.
+- 닫기는 정책 `close.when` 이 정한다.
+
+| `close.when` | 뜻 | 조건 |
+| --- | --- | --- |
+| `never` (기본) | Akra 는 이슈를 닫지 않는다. 상태 댓글이 켜져 있으면 통합을 알린다. 닫기는 사람이 한다 | 없음 |
+| `integration` | 통합과 검증이 끝나면 Akra 가 이슈를 닫거나 전이한다 | `feedback.transition = true` 와 `close` 관문의 승인 |
+| `provider_link` | provider 의 PR 연결에 맡긴다 | PR 의 base 가 기본 브랜치이다 |
+
+- `feedback.transition = false` 이면 Akra 는 이슈를 닫지도 전이하지도 않는다. 이때 `close.when = integration` 은 정책
+  오류이다 (`policy_blocked`).
+- 통합 브랜치가 기본 브랜치로 올라가는 것 (`prerelease` → `main`) 을 Akra 는 관찰하지 않는다. 그때 닫으려면 `never` 로
+  두고 사람이 닫는다 (§19 Q-IA13).
 
 ## 13. 수집 (provider 와 자격 증명)
 
 | provider | 읽기 | 쓰기 | 자격 증명 | 순서 |
 | --- | --- | --- | --- | --- |
-| GitHub Issues | `gh api graphql`: 선택 조건의 열린 이슈, `updatedAt` 커서 | 댓글, 라벨, 담당자. 닫기는 PR 연결 | `gh` 로그인. Gateway 에서 된다 | 첫 번째 |
+| GitHub Issues | `gh api graphql`. 발견: 선택 조건의 열린 이슈, `updatedAt` 커서. 재동기화: node ID 로 한 건 | 댓글, 라벨, 담당자. 닫기는 §12.2 | `gh` 로그인. Gateway 에서 된다 | 첫 번째 |
 | GitHub Projects | 보드의 열과 필드 | `issue_board_field_port` (있음) | `read:project` | 뒤 |
 | Jira Cloud | JQL, `updated` 커서 | 댓글, 전이 | Electron main 에만 있다. 결정이 필요하다 | 뒤 |
 | Linear | GraphQL, `updatedAt` | 댓글, 상태 | Electron main 에만 있다. 결정이 필요하다 | 뒤 |
 
 - 수집은 폴링이다. 기본 주기는 5분이다. "지금 동기화" 명령이 있다. 실패하면 간격을 늘린다.
 - webhook 은 받지 않는다. 로컬 데몬은 공개 주소가 없다.
+- 읽기는 둘이다.
+  - **발견.** 선택 조건에 맞는 열린 이슈를 `updatedAt` 커서로 읽는다. 새 이슈를 찾는 일만 한다.
+  - **재동기화.** 끝나지 않은 추적 이슈를 안정 ID 로 다시 읽는다. 선택 조건과 무관하다. 읽는 값: 열림과 닫힘, 라벨,
+    담당자, 신뢰의 근거 (누가 썼는가, 누가 라벨을 붙였는가), 필드 해시.
+- 둘을 나누는 이유: 닫힌 이슈와 선택 라벨을 잃은 이슈는 발견의 결과에서 사라진다. 사라진 것은 변화로 보이지 않는다.
+  발견만 하면 장부에 예전의 `ready` 나 `queued` 가 남는다.
+- 지금의 `issue_snapshot_port` 는 상태, 라벨, 담당자, 신뢰의 근거를 읽지 않는다. 재동기화의 계약은 새로 만든다 (IA1).
+- 403, 404, 조회 실패는 `unknown` 이다. 닫힘으로도, 변화 없음으로도 보지 않는다. `unknown` 인 이슈는 시작하지 않고
+  전달하지 않는다.
+- 제출과 시작의 직전에 재동기화를 한 번 더 한다. 낡은 자격으로 실행하지 않는다.
+- 커서는 그 쪽 (page) 의 처리와 장부 저장이 끝난 뒤에 나아간다. 중간에 죽으면 같은 쪽을 다시 읽는다. 장부 쓰기는
+  멱등이다.
 - 출처는 능력 목록을 낸다: `{ incremental, comments, labels, assign, transition, link_pull_request, board_fields }`.
   조정기는 없는 능력의 행동을 고르지 않는다.
 - 바인딩: GitHub 은 저장소의 `origin` 이 기본이다. Jira 프로젝트와 Linear 팀은 저장소가 없다. 사용자가 그것을 저장소에
@@ -463,13 +616,18 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 | --- | --- |
 | 이슈 글 안의 지시문. 공개 저장소에는 누구나 이슈를 쓴다 | 자격 단계가 글보다 먼저이다. 신뢰하는 행위자가 쓴 이슈이거나, 그 사람이 붙인 라벨이 있어야 한다. 글은 자료 구역으로 감싸서 넘긴다. 댓글은 기본으로 넣지 않는다 |
 | 승인한 글과 실행한 글이 다르다 | 필드 해시로 고정한다. 바뀌면 `stale` 이다 |
-| 저장소의 파일이 권한을 올린다 | 자율 상한, 쓰기 허락, 예산 최대는 사용자 파일과 프로세스 환경에서만 온다 |
-| 에이전트가 자기 관문을 스스로 통과시킨다 | kernel 의 `caller` 는 인증이 아니다. 그래서 `human` 관문의 답은 사람 확인 경로에서만 받는다: Desktop main 의 확인 창이 만든 값. CLI 로 온 답은 `by: agent` 로 기록하고 `human` 관문을 통과시키지 못한다 (§19 Q-IA11) |
+| 저장소의 파일이 권한을 올린다 | 자율 상한, 쓰기 허락, 예산 최대, 신뢰하는 행위자는 사용자 파일과 프로세스 환경에서만 온다. 저장소 파일은 보호 경로와 사람 필수 규칙을 줄이지 못한다 (§7.3) |
+| 프로세스의 자율 전달 opt-in 이 이슈의 관문을 건너뛴다 | 유효 권한은 프로세스 상한 ∩ 정책 ∩ 관문의 승인이다. distributor 는 통합 직전에 그 작업의 허가를 확인한다 (§5.4) |
+| 보류하거나 낡은 이슈의 task 를 실행기가 가져간다 | 허가의 철회. dispatcher 는 슬롯 배분의 트랜잭션에서 허가를 확인한다 (§5.4) |
+| 닫혔거나 라벨을 잃은 이슈를 낡은 자격으로 실행한다 | 재동기화. 조회 실패는 `unknown` 이다. 제출과 시작의 직전에 다시 읽는다 (§13) |
+| 오래된 답이 새 상황에 적용된다 | 결정 요청의 `basis`. 판이 다르면 `superseded` 이다 (§10.1) |
+| 에이전트가 자기 관문을 스스로 통과시킨다 | kernel 의 `caller` 는 인증이 아니다. 그래서 `human` 관문의 답은 사람 확인 경로에서만 받는다: Desktop main 의 확인 창이 만든 값 (`confirmation`). CLI 로 온 답은 `by: agent` 로 기록하고 `human` 관문을 통과시키지 못한다 (§19 Q-IA11) |
 | 비밀 값이 이슈나 댓글로 나간다 | 밖으로 쓰는 글은 `mask_issue_text` 를 지난 공유본뿐이다. 에이전트의 글을 그대로 올리지 않는다 |
-| 중복 실행, 중복 댓글 | 멱등 키, 행동 일지, 상태 댓글 하나, 숨은 표식 |
+| 중복 실행 | 작업 지시의 1회 등록 (§5.4). 명령의 멱등 키에 기대지 않는다 |
+| 중복 댓글 | 행동 일지, 상태 댓글 하나, 댓글 ID 와 쓴 계정의 확인. 결과를 모르면 다시 쓰지 않는다 (§12) |
 | 자기가 만든 변화에 다시 반응한다 | 자기 댓글과 자기 라벨은 변화로 세지 않는다. 에이전트가 만든 이슈는 사람의 라벨 전에는 `ineligible` 이다 |
 | 폭주 | 예산, 시도 한도, 사용 한도 확인, 바인딩 일시 정지, 기존 `stop_all` |
-| 모델 사용량 (plan 17 D-13) | `observe` 와 `propose` 는 사람이 승인하기 전에 턴을 내지 않는다. `gated` 와 `auto` 는 D-13 의 해석을 넓힌다. 결정이 필요하다 (§19 Q-IA1) |
+| 모델 사용량 | 두 규칙을 나눈다. plan 17 D-13 은 개발과 검증의 규칙이다: 시험은 가짜 provider, 가짜 작업자, 가짜 시계를 쓰고 모델을 부르지 않는다. 제품의 자동 실행은 다른 계약이다: `observe` 와 `propose` 는 사람이 승인하기 전에 턴을 내지 않는다. `gated` 와 `auto` 는 사용자가 수준을 켠 것이 opt-in 이고 예산이 한도이다 (§19 Q-IA1) |
 | 두 기기나 두 사람이 같은 이슈를 집는다 | 쓰기가 켜져 있으면 시작할 때 담당자나 라벨로 표시한다. 기기는 지금 한 대이다 (plan 18 Q-K6) |
 
 ## 15. kernel 계약 (제안)
@@ -489,8 +647,8 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 | 조회 | `issues` | 추적 이슈의 쪽 목록: 상태, 묶음, 판정, 이유, 연결 |
 | 조회 | `issue` | 한 건: 공유본, 판정, 관문, 결정 요청, 시간순 기록 |
 | 이벤트 | `issues`, `issue_decision` | 바뀜 |
-| 기록 | `issue_tracked`, `issue_triaged`, `issue_decision_requested`, `issue_decision_resolved`, `issue_work_submitted`, `issue_feedback_posted`, `issue_held`, `issue_released`, `issue_closed`, `issue_automation_mode_changed` | `by` 를 가진다: 사람, 에이전트, 기본값, 중재자, 규칙 |
-| 이유 | `source_unreachable`, `credentials_missing`, `policy_blocked`, `not_selected`, `untrusted_actor`, `criteria_missing`, `needs_clarification`, `risk_requires_human`, `protected_path`, `diff_too_large`, `snapshot_stale`, `already_claimed`, `attempts_exhausted`, `budget_exhausted`, `mode_ceiling`, `executor_unavailable` | `summary` 와 `next` 를 가진다 |
+| 기록 | `issue_tracked`, `issue_triaged`, `issue_decision_requested`, `issue_decision_resolved`, `issue_work_submitted`, `issue_work_permit_granted`, `issue_work_permit_revoked`, `issue_integrated`, `issue_feedback_posted`, `issue_held`, `issue_released`, `issue_closed`, `issue_automation_mode_changed` | `by` 를 가진다: 사람, 에이전트, 기본값, 중재자, 규칙. `issue_integrated` 와 `issue_closed` 는 다른 사실이다 (§12.2) |
+| 이유 | `source_unreachable`, `issue_unreadable`, `credentials_missing`, `policy_blocked`, `not_selected`, `untrusted_actor`, `criteria_missing`, `needs_clarification`, `risk_requires_human`, `protected_path`, `diff_too_large`, `snapshot_stale`, `already_claimed`, `attempts_exhausted`, `budget_exhausted`, `mode_ceiling`, `executor_unavailable`, `permit_missing`, `permit_stale`, `decision_superseded`, `feedback_unconfirmed` | `summary` 와 `next` 를 가진다 |
 
 - 화면의 묶음은 조회가 정한다 (plan 23 원칙 3): 내 차례, 곧 시작, 실행 중, 리뷰 중, 끝남, 제외.
 - 원문은 명령, 조회, 기록 어디에도 없다. 공유본과 해시만 있다.
@@ -515,12 +673,12 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 
 | 조각 | 내용 | 동작 변화 | 선행 |
 | --- | --- | --- | --- |
-| IA1 | 수집 (GitHub, 읽기만): `IssueSourcePort`, 장부, 바인딩, `observe`, 조회 `issue_automation` 과 `issues`, Desktop 목록 | 켠 저장소에서 목록이 보인다. 턴도 쓰기도 없다 | - |
+| IA1 | 수집 (GitHub, 읽기만): `IssueSourcePort` 의 발견과 재동기화, 조회 실패의 `unknown`, 커서가 나아가는 기준, 장부, 바인딩, `observe`, 조회 `issue_automation` 과 `issues`, Desktop 목록 | 켠 저장소에서 목록이 보인다. 턴도 쓰기도 없다 | - |
 | IA2 | 정책 파일, 결정적 판정, 이유 코드, 관찰 보고, 초안 화면의 준비 검사, 이슈 양식 | 판정이 보인다 | IA1 |
-| IA3 | 결정 요청, `propose`, 개입 명령, 이슈와 task 의 연결 | 첫 끝-끝 흐름: 이슈 → 승인 → task → 기존 실행 → PR | IA2 |
-| IA4 | 실행 추적과 결과 반환: 상태 맞추기, 닫는 참조, `IssueFeedbackPort` (댓글, 라벨) 와 일지 | 이슈에 상태가 돌아간다 | IA3 |
-| IA5 | `gated`: 자동 시작, 예산, 시도 한도, 실행 뒤 diff 판정, 마감과 `default` | 반자동 | IA4, Q-IA1, plan 24 E3 (권장) |
-| IA6 | 중재자, `auto`, Gateway 를 다시 켠 뒤 이어 하기, 일시 정지 | 풀자동 | IA5 |
+| IA3 | 결정 요청 (판 포함), `propose`, 작업 지시의 1회 등록, 단계별 허가와 dispatcher·distributor 의 확인, 개입 명령의 철회와 인계 (§5.4) | 첫 끝-끝 흐름: 이슈 → 승인 → task → 기존 실행 → PR. 이슈 작업의 통합은 사람의 승인을 요구한다 | IA2 |
+| IA4 | 실행 추적과 결과 반환: 끝 원인별 전이와 횟수 (§12.1), 통합과 닫힘의 분리 (§12.2), `IssueFeedbackPort` (댓글, 라벨) 와 일지, 결과 모름의 처리 | 이슈에 상태가 돌아간다 | IA3 |
+| IA5 | `gated`: 자동 시작, 예산, 시도 한도, 실행 뒤 diff 판정, 마감과 `default`. 전달과 통합은 모든 등급에서 사람 리뷰이다 | 반자동 | IA4, Q-IA1 |
+| IA6 | 중재자, `auto`, 자동 전달, Gateway 를 사람 없이 다시 켠 뒤 이어 하기, 일시 정지 | 풀자동 | IA5, plan 24 E3 (자동 전달의 조건) |
 | IA7 | Jira, Linear, Projects 보드: 자격 증명, 바인딩 화면, 전이 | 출처 확장 | IA4, Q-IA2 |
 | IA8 | 이슈 댓글 명령, Telegram 결정, 에이전트의 `ask_issue_decision` | 수단 확장 | IA3 |
 | IA9 | 떼어내기 준비: crate 경계, 두 번째 실행기 adapter | 구조 | 필요할 때 |
@@ -528,8 +686,13 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 - 조각 하나가 PR 하나이다. 큰 조각은 #2481 의 하위 이슈 양식으로 다시 나눈다.
 - 모든 조각은 kernel 시뮬레이션 시험 (`src/composition/kernel_host/simulation.rs`) 을 통과한다. 시험은 가짜 출처, 가짜
   실행기, 가짜 시계를 쓴다. 모델 턴이 없다.
+- 죽였다 살리는 시험의 범위는 조각마다 다르다. IA3 ~ IA5 는 client 가 다시 붙어 kernel 이 다시 올라온 뒤의 복구까지
+  본다. 사람 없이 Gateway 가 kernel 을 다시 올리는 복구는 IA6 이 본다.
+- 계약의 순서: IA1 의 수집 계약 → IA3 의 영속 등록, 작업별 허가, 사람 개입 → IA4 의 끝과 피드백의 복구 → IA5, IA6 의
+  자동화 확대. IA2 의 판정은 IA3 의 입력이므로 그 사이에 둔다.
 - #2481 과의 관계:
-  - A01 (완료 기준, 증거) 은 IA5 의 전달 조건이다. IA1 ~ IA4 는 A01 을 기다리지 않는다.
+  - A01 (완료 기준, 증거) 은 IA6 의 자동 전달 조건이다. IA5 까지는 사람 리뷰가 전달 조건이다. 그래서 IA1 ~ IA5 는
+    A01 을 기다리지 않는다.
   - A02 (주의함) 는 결정 요청을 보이는 자리이다. IA3 은 주의함이 없어도 이슈 탭으로 시작한다.
   - A03 (인계 manifest) 은 작업 지시의 자료 연결을 맡는다.
   - 이 계획은 #2481 의 새 작업군 후보이다 (§19 Q-IA9).
@@ -540,12 +703,25 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 
 | 조각 | 기준 | 확인하는 곳 |
 | --- | --- | --- |
-| IA1 | 가짜 출처의 이슈 3건이 장부에 들어간다. 다시 수집해도 늘지 않는다. 원문이 장부와 기록에 없다 | `command`: 단위 시험. `data`: 장부의 줄 |
+| IA1 | 가짜 출처의 이슈 3건이 장부에 들어간다. 다시 수집해도 늘지 않는다. 원문이 장부와 기록에 없다. 추적한 이슈가 닫히거나 선택 라벨을 잃으면 장부가 그것을 안다. 조회 실패는 `unknown` 이다. 쪽 처리 중에 죽어도 이슈를 빠뜨리지 않는다 | `command`: 단위 시험. `data`: 장부의 줄 |
 | IA2 | 같은 이슈와 같은 정책은 같은 판정이다. 깨진 정책 파일은 `policy_blocked` 이고 내장 값으로 돌지 않는다. 저장소 파일이 상한을 올리지 못한다 | `command`: 표 기반 단위 시험 |
-| IA3 | 승인은 task 를 하나만 만든다 (재전송과 재시작 포함). 거절과 보류는 task 를 만들지 않는다. 이슈가 바뀌면 `stale` 이다 | `command`: 시뮬레이션 시험 |
-| IA4 | 응답을 잃어도 댓글이 하나이다. 댓글의 글은 공유본이다. 자기 댓글은 다시 판정을 일으키지 않는다 | `command`: 가짜 provider 시험 |
+| IA3 | 승인은 task 를 하나만 만든다 (재전송, 재시작, 기록의 정리 포함). 거절과 보류는 task 를 만들지 않는다. 이슈가 바뀌면 `stale` 이다. 허가가 없는 단계는 실행되지 않는다. 판이 다른 답은 적용되지 않는다 | `command`: 시뮬레이션 시험 |
+| IA4 | 응답을 잃어도 댓글이 하나이다. 댓글의 글은 공유본이다. 자기 댓글은 다시 판정을 일으키지 않는다. 같은 끝 기록을 두 번 읽어도 횟수가 한 번만 오른다 | `command`: 가짜 provider 시험 |
 | IA5 | 예산을 넘겨 시작하지 않는다. 보호 경로를 건드린 diff 는 `human` 관문으로 간다. 3번 실패하면 `failed` 이다. 임의 시점에 죽였다 살려도 결과가 같다 | `command`: 시뮬레이션 시험 (seed) |
-| IA6 | 중재자가 사람 필수 관문을 넘지 못한다. 사람의 답이 먼저이면 중재자의 답을 버린다. 일시 정지 뒤에 새 행동이 없다 | `command`: 시뮬레이션 시험 |
+| IA6 | 중재자가 사람 필수 관문을 넘지 못한다. 사람의 답이 먼저이면 중재자의 답을 버린다. 판이 바뀐 뒤에 온 중재자의 답은 `superseded` 이다. 일시 정지 뒤에 새 행동이 없다 | `command`: 시뮬레이션 시험 |
+
+아래 시나리오는 PR #2533 의 리뷰가 더했다. 해당 조각의 완료 기준에 넣는다.
+
+| 상황 | 확인할 결과 | 조각 |
+| --- | --- | --- |
+| 프로세스의 자율 전달 opt-in 이 켜져 있다. 이슈 작업의 통합을 사람이 승인하지 않았다 | 통합 0회 | IA3 (`propose`), IA5 (`gated`) |
+| `auto` 의 결과가 보호 경로를 바꿨다. `delivery` 를 승인하지 않았다 | 소스 push 0회, PR 작성 0회 | IA5 (diff 판정), IA6 |
+| 슬롯을 기다리는 중에 `hold` 나 `stale`. 또는 push 직전에 `take_over` | 그 작업의 다음 실행과 전달이 없다. 다른 작업은 계속한다 | IA3 |
+| task 생성 전후의 종료, 응답 유실, 기록 10,000건 초과 | task 가 없는 채로 남지 않는다. task 가 둘이 되지 않는다. 같은 `work_order_id` 로 복구한다 | IA3 |
+| 추적한 뒤에 이슈가 닫힘, 선택 라벨이 없어짐, 조회 불가 | 낡은 자격으로 실행하지 않는다 | IA1, IA3 |
+| 통합 뒤에 검증 계약이 없다 (`PostMergeContractBlocked`) | 구현을 새로 실행하지 않는다. 계약 복구의 길로 간다. 실행 횟수가 오르지 않는다 | IA4 |
+| 기본 브랜치는 `main`, 통합 브랜치는 `prerelease` | 통합 상태와 외부 닫힘이 따로 보인다 | IA4 |
+| 댓글 생성의 응답 유실과 재조회 실패 | 결과 모름으로 남는다. 댓글이 둘이 되지 않는다 | IA4 |
 
 ## 19. 결정 (제안)과 미결정
 
@@ -555,7 +731,7 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 | --- | --- | --- |
 | IA-01 | 이름은 "이슈 자동화"이다. 용어는 §2 를 쓴다 | 제안 |
 | IA-02 | 모듈은 port 로만 밖과 만나는 application 모듈이다. 명령은 kernel spec 의 범위 `issue` 이다. 타이머는 런타임 호스트가 돌린다 | 제안 |
-| IA-03 | 실행은 planning task 와 병렬 전달을 쓴다. 새 실행 경로를 만들지 않는다 | 제안 |
+| IA-03 | 실행은 planning task 와 병렬 전달을 쓴다. 새 실행 경로를 만들지 않는다. 기존 실행기는 작업별 허가를 확인한다 | 제안 |
 | IA-04 | 체계는 세 층이다: 코드의 닫힌 목록, 정책 파일, 플레이북 skill. 권한은 정책에서만 온다 | 제안 |
 | IA-05 | 자율 수준은 `off`, `observe`, `propose`, `gated`, `auto` 이다. 기본은 `observe` 이다 | 제안 |
 | IA-06 | 자율 상한, 쓰기 허락, 예산 최대는 사용자 파일에서만 온다 | 제안 |
@@ -563,14 +739,21 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 | IA-08 | 중재자는 사람 필수 규칙, `spec`, `merge` 를 넘지 못한다 | 제안 |
 | IA-09 | 첫 provider 는 GitHub Issues 이다. 수집은 폴링이다 | 제안 |
 | IA-10 | 정책 파일은 `issue-policy.toml` 과 따로 둔다 | 제안 |
+| IA-11 | 유효 권한은 프로세스 상한 ∩ 바인딩과 이슈의 정책 ∩ 현재 관문의 승인이다. 슬롯 배분, push, PR 작성, 통합의 직전에 확인한다 (§5.4) | 제안 (리뷰 반영) |
+| IA-12 | "task 하나"는 planning authority 의 작업 지시 기록이 보장한다. 명령의 멱등 키는 영수증의 중복만 막는다 (§5.4) | 제안 (리뷰 반영) |
+| IA-13 | 수집은 발견과 재동기화로 나눈다. 조회 실패는 `unknown` 이다 (§13) | 제안 (리뷰 반영) |
+| IA-14 | 실행의 끝은 원인별로 다르게 대응한다. 실행, 검증, 게시의 횟수를 따로 센다 (§12.1) | 제안 (리뷰 반영) |
+| IA-15 | 통합과 외부 이슈의 닫힘은 다른 사실이다. `done` 은 외부 닫힘을 요구하지 않는다 (§12.2) | 제안 (리뷰 반영) |
+| IA-16 | 결정 요청과 허가는 판 (정책 판, 필드 해시, 작업 지시, 관문 판) 에 묶인다. 판이 다른 답은 적용하지 않는다 (§10.1) | 제안 (리뷰 반영) |
+| IA-17 | 저장소 파일은 신뢰하는 행위자, 보호 경로, 사람 필수 규칙을 풀지 못한다 (§7.3) | 제안 (리뷰 반영) |
 
 | ID | 질문 | 기본값 (답이 없을 때) |
 | --- | --- | --- |
-| Q-IA1 | `gated` 와 `auto` 는 사람의 건별 행동 없이 턴을 시작한다. D-13 을 "자율 수준을 켠 것이 시작이고 예산이 한도이다"로 넓히는가 | IA5 전에 정한다. 그 전에는 `propose` 까지만 만든다 |
+| Q-IA1 | `gated` 와 `auto` 는 사람의 건별 행동 없이 턴을 시작한다. 제품의 계약을 "자율 수준을 켠 것이 opt-in 이고 예산이 한도이다"로 정하는가. D-13 은 개발과 검증의 규칙이므로 바꾸지 않는다 | IA5 전에 정한다. 그 전에는 `propose` 까지만 만든다 |
 | Q-IA2 | Jira 와 Linear 의 자격 증명을 어디에 두는가 | Gateway 의 OS 키 저장소 (§13 의 a) |
 | Q-IA3 | 공개 저장소에서 어디까지 허락하는가 | 상한은 `propose` 이다. 신뢰하는 행위자의 라벨이 필수이다 |
 | Q-IA4 | 중재자는 어떤 모델과 프로필인가. 확신의 기준은 무엇인가 | 병렬 에이전트 프로필 하나를 읽기 전용으로 쓴다. 기준은 IA6 에서 측정으로 정한다 |
-| Q-IA5 | 이슈 하나가 task 여럿이 되는가 | 아니요. 분해는 하위 이슈를 제안하는 것으로 한다 |
+| Q-IA5 | 이슈 하나가 task 여럿이 되는가 | 이슈 하나는 작업 지시 하나이다. 작업 지시는 최초 task 하나와 PR 검증의 보완 task 들을 가진다. 범위의 분해는 하위 이슈를 제안하는 것으로 한다 |
 | Q-IA6 | 이슈에 쓰는 것의 기본은 무엇인가 | 모두 꺼짐. IA4 는 댓글과 라벨만 만든다 |
 | Q-IA7 | `gated`, `auto` 인 저장소는 kernel 이 계속 떠 있고 TUI 를 막는다. 받아들이는가 | 예 (K6 까지) |
 | Q-IA8 | 이슈 자동화가 병렬 모드를 스스로 켜는가 | 아니요. 화면이 이유를 보인다 |
@@ -578,6 +761,9 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 | Q-IA10 | 화면의 자리는 오른쪽 패널의 탭인가, 주 화면인가 | 오른쪽 패널의 탭이고 최대화할 수 있다 |
 | Q-IA11 | 사람의 답을 무엇으로 증명하는가. 터미널에서 사람이 답하는 길을 여는가 | Desktop main 의 확인 창을 지난 답만 `by: human` 이다. 터미널의 길은 열지 않는다 |
 | Q-IA12 | 수집 주기와 요청 한도 | 5분. 실패하면 간격을 늘린다 |
+| Q-IA13 | 통합 브랜치가 기본 브랜치와 다를 때 외부 이슈를 언제 닫는가 | `close.when = never`. 이슈를 열어 두고 사람이 닫는다 (§12.2) |
+| Q-IA14 | `take_over` 한 작업의 슬롯 lease 를 어떻게 하는가 | 사람이 끝낼 때까지 그 슬롯을 쥔다. 호스트는 정리하지 않는다. 세부는 IA3 에서 정한다 |
+| Q-IA15 | 작업 지시 기록을 planning authority 의 어디에 두는가 (새 표인가, 기존 문서의 필드인가) | 새 표. schema version 을 올리지 않는다 |
 
 ## 20. 하지 않는 것
 
@@ -596,8 +782,13 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 
 - Gateway 를 다시 켠 뒤, 병렬 모드가 켜져 있던 저장소의 kernel 을 누가 다시 올리는가. 문서는 "첫 attach 가 kernel 을
   만든다"만 말한다. 코드를 읽지 않았다.
-- 작업 지시의 닫는 참조와 브랜치 이름을 병렬 전달까지 나르는 길. PR 본문을 만드는 함수만 읽었다. queue record 와 브랜치
+- 작업 지시의 이슈 참조와 브랜치 이름을 병렬 전달까지 나르는 길. PR 본문을 만드는 함수만 읽었다. queue record 와 브랜치
   이름 규칙 (`branch_names.rs`) 은 읽지 않았다.
+- dispatcher 가 슬롯을 배분하는 트랜잭션과 distributor 의 push, PR 작성, 통합의 직전에 허가 확인을 넣는 크기. 리뷰가
+  가리킨 자리 (`orchestrator_loop.rs`, `distributor/delivery/github.rs` 의 `pull_request_readiness_error`) 만 읽었다.
+- PR 검증의 보완 task 를 작업 지시의 계보에 잇는 방법. 지금의 `PrValidationRemediationRequest` 에는 작업 지시의 값이
+  없다.
+- 닫는 키워드의 동작. GitHub 문서의 내용이다. 이 저장소에서 따로 시험하지 않았다.
 - GitHub GraphQL 로 "누가 라벨을 붙였는가"를 읽는 비용 (timeline 조회)과 요청 한도.
 - Jira 의 전이 API 와 Linear 의 상태 쓰기 API. 기억 기준이다. 구현 전에 공식 문서를 본다.
 - 런타임 호스트에 마감 출처 하나를 더하는 크기.
