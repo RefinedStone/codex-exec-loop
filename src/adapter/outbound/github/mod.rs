@@ -10,9 +10,12 @@ pub mod review_poller;
 pub mod resource_version;
 // issue_snapshot adapter는 이슈 한 건의 안정 ID 와 게시본을 `gh` 로 읽는다. 쓰지 않는다 (#2420).
 pub mod issue_snapshot;
+// issue_board_field adapter는 GitHub Projects 항목 하나의 필드를 `gh` 로 읽고 고친다 (#2435).
+pub mod issue_board_field;
 
 // automation re-export는 wiring code가 하위 파일명을 직접 의존하지 않고 adapter 이름만 import하게 한다.
 pub use self::automation::GithubAutomationAdapter;
+pub use self::issue_board_field::GithubIssueBoardFieldAdapter;
 pub use self::issue_snapshot::GithubIssueSnapshotAdapter;
 pub use self::pr_validation::GithubPrValidationAdapter;
 // review poller re-export도 같은 public surface를 제공해 composition이 port 구현체를 직접 주입하게 한다.
