@@ -4,7 +4,7 @@
 
 오른쪽 패널의 이슈 탭은 열린 대화의 작업 폴더가 속한 저장소를 보여 준다. 기존 업무 탭의 GitHub 보기는 그대로 별도 용도로 사용한다.
 
-이슈 탭과 Akra 개요 탭은 DesktopSession의 같은 Gateway 연결과 KernelConnection을 사용한다. 관심 영역만 바뀌면 커널에 다시 붙지 않는다. 이슈 탭을 열 때는 issue_automation과 issues를 조회하며 planning 새로 고침 명령은 보내지 않는다. 두 탭이 모두 닫히면 기존 attach를 해제한다.
+이슈 탭과 Akra 개요 탭은 DesktopSession의 같은 Gateway 연결과 KernelConnection을 사용한다. 관심 영역만 바뀌면 커널에 다시 붙지 않는다. 이슈 탭을 열 때는 issue_automation, issues와 issue_automation_policy를 조회하며 planning 새로 고침 명령은 보내지 않는다. 두 탭이 모두 닫히면 기존 attach를 해제한다.
 
 머리에는 연결된 공급자와 작업 폴더, 저장된 수집 모드, 수집 진행 상태, 마지막 성공 시각, 수집 오류를 표시한다. Off/Observe 변경과 지금 동기화는 공통 명령 sender를 통한다. 모드 변경에는 새 UUID 멱등 키를 붙이고, Read인 동기화에는 mutation key를 붙이지 않는다. 연결부의 진행 상태가 중복 클릭과 모드/동기화 동시 요청을 제한한다.
 
@@ -14,7 +14,7 @@
 
 목록 행은 items[].presentation의 번호, 제목, 상태 문구, 이유 문구를 그대로 표시한다. renderer는 원격 상태, workflow, flags로 상태나 그룹을 다시 판단하지 않는다.
 
-IA1은 단일 collection 묶음을 사용한다. 서버는 groups의 순서와 item_indices의 행 순서를 지정한다. 화면은 이를 그대로 따른다. 안정 ID 기반 SQL 정렬과 기존 next_after cursor를 변경하지 않는다.
+초기 IA1은 단일 collection 묶음을 사용했다. 판정 도입 후에도 서버는 groups의 순서와 item_indices의 행 순서를 지정한다. 화면은 이를 그대로 따른다. 안정 ID 기반 SQL 정렬과 기존 next_after cursor를 변경하지 않는다.
 
 페이지는 한 번에 한 쪽을 표시한다. 이전 cursor 이력은 연결부가 소유한다. 이벤트의 issues는 수집 상태와 revision이고, query의 issues는 목록 페이지이므로 서로 대신 사용하지 않는다. 목록이 무효화되면 이전 제목을 숨기고 다시 조회한다. 다른 revision의 페이지는 섞지 않으며, 페이지 이동 중 revision이 바뀌면 첫 페이지부터 다시 읽는다.
 
@@ -28,7 +28,7 @@ GitHub adapter는 number, url, repository.nameWithOwner를 받고 현재 저장�
 
 Shared는 현재 공유 제목과 web을 표시한다. Withheld는 현재 web만 제공한다. Unknown이나 아직 관찰하지 않은 기존 행에는 과거 제목·번호·링크를 채워 넣지 않는다. URL과 저장소 표시 이름 변경은 본문 해시에 포함하지 않는다.
 
-제목을 누르면 기존 window.akra.github.openExternal 경로를 사용한다. main이 알려진 HTTPS 주소를 검사한 뒤 기본 브라우저를 연다. renderer가 URL을 조립하거나 공급자 API를 직접 호출하지 않는다.
+제목은 이슈 상세를 연다(#2542). 별도의 외부 링크 버튼은 기존 window.akra.github.openExternal 경로를 사용한다. main이 알려진 HTTPS 주소를 검사한 뒤 기본 브라우저를 연다. renderer가 URL을 조립하거나 공급자 API를 직접 호출하지 않는다.
 
 ## 검증 범위
 
@@ -58,3 +58,5 @@ Shared는 현재 공유 제목과 web을 표시한다. Withheld는 현재 web만
 ![작업 본문 영역을 채운 이슈 패널](issue-2539-panel-maximized.png)
 
 최대화 중 대화를 선택하거나 뒤로·앞으로 이동하면 패널을 일반 너비로 복원한다. 가려진 대화를 읽은 것으로 처리하지 않도록 이 이동 경로도 회귀로 확인한다.
+
+판정 상세·관찰 보고·정책 조회와 파일 열기는 [Desktop 판정 화면 검증](desktop-issue-triage.md)에 기록한다.

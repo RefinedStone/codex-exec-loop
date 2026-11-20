@@ -1426,6 +1426,110 @@
       }
     },
     {
+      "name": "issue_automation_policy",
+      "summary": "The effective issue automation policy, authoritative merge provenance and known policy files in the representative workspace. Invalid policy is explicit and no file, work or execution grant is created.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "issue_automation_policy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/IssueAutomationPolicyFileState"
+                },
+                "type": "array"
+              },
+              "settings": {
+                "items": {
+                  "$ref": "#/$defs/IssueAutomationPolicySettingState"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "ready",
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "workspace": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "workspace",
+              "version",
+              "settings",
+              "files"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "blocked": {
+                "$ref": "#/$defs/IssueAutomationPolicyProblemState"
+              },
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/IssueAutomationPolicyFileState"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "policy_blocked",
+                "type": "string"
+              },
+              "workspace": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "workspace",
+              "blocked",
+              "files"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "type": {
+            "const": "issue_automation_policy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issues",
       "summary": "A page of the local issue ledger. The default limit is 50 and the maximum is 100. Return the opaque next_after as after; it is bound to the workspace and is separate from source-discovery cursors. Only a current shared observation contains disclosed title/body. Triage and groups are server projections; report counts cover the complete query scope, not just this page.",
       "input": {
@@ -3572,6 +3676,171 @@
       ],
       "type": "string"
     },
+    "IssueAutomationPolicyFileScopeState": {
+      "enum": [
+        "user",
+        "project"
+      ],
+      "type": "string"
+    },
+    "IssueAutomationPolicyFileState": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "open_target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueAutomationPolicyFileScopeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/IssueAutomationPolicyFileScopeState"
+        },
+        "status": {
+          "$ref": "#/$defs/IssueAutomationPolicyFileStatusState"
+        }
+      },
+      "required": [
+        "scope",
+        "label",
+        "status"
+      ],
+      "type": "object"
+    },
+    "IssueAutomationPolicyFileStatusState": {
+      "enum": [
+        "missing",
+        "readable",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "IssueAutomationPolicyOriginScopeState": {
+      "enum": [
+        "builtin",
+        "user",
+        "project"
+      ],
+      "type": "string"
+    },
+    "IssueAutomationPolicyOriginState": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/IssueAutomationPolicyOriginScopeState"
+        }
+      },
+      "required": [
+        "scope",
+        "label"
+      ],
+      "type": "object"
+    },
+    "IssueAutomationPolicyProblemScopeState": {
+      "enum": [
+        "user",
+        "project",
+        "effective"
+      ],
+      "type": "string"
+    },
+    "IssueAutomationPolicyProblemState": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "file_scopes": {
+          "items": {
+            "$ref": "#/$defs/IssueAutomationPolicyFileScopeState"
+          },
+          "type": "array"
+        },
+        "next_summary": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/IssueAutomationPolicyProblemScopeState"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "field",
+        "reason",
+        "summary",
+        "next_summary",
+        "file_scopes"
+      ],
+      "type": "object"
+    },
+    "IssueAutomationPolicyResolutionState": {
+      "enum": [
+        "default",
+        "override",
+        "minimum",
+        "and",
+        "intersection",
+        "union",
+        "cap"
+      ],
+      "type": "string"
+    },
+    "IssueAutomationPolicySettingState": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "origins": {
+          "items": {
+            "$ref": "#/$defs/IssueAutomationPolicyOriginState"
+          },
+          "type": "array"
+        },
+        "resolution": {
+          "$ref": "#/$defs/IssueAutomationPolicyResolutionState"
+        },
+        "resolution_summary": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "value",
+        "origins",
+        "resolution",
+        "resolution_summary"
+      ],
+      "type": "object"
+    },
     "IssueBasisState": {
       "additionalProperties": false,
       "properties": {
@@ -4499,6 +4768,9 @@
           },
           "type": "array"
         },
+        "next_summary": {
+          "type": "string"
+        },
         "summary": {
           "type": "string"
         }
@@ -4506,6 +4778,7 @@
       "required": [
         "code",
         "summary",
+        "next_summary",
         "next"
       ],
       "type": "object"
@@ -5406,6 +5679,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "type": {
+              "const": "issue_automation_policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "after": {
               "default": null,
               "type": [
@@ -5659,6 +5945,93 @@
           "properties": {
             "type": {
               "const": "issue_automation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "const": "unavailable",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "files": {
+                  "items": {
+                    "$ref": "#/$defs/IssueAutomationPolicyFileState"
+                  },
+                  "type": "array"
+                },
+                "settings": {
+                  "items": {
+                    "$ref": "#/$defs/IssueAutomationPolicySettingState"
+                  },
+                  "type": "array"
+                },
+                "status": {
+                  "const": "ready",
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "workspace": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "workspace",
+                "version",
+                "settings",
+                "files"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "blocked": {
+                  "$ref": "#/$defs/IssueAutomationPolicyProblemState"
+                },
+                "files": {
+                  "items": {
+                    "$ref": "#/$defs/IssueAutomationPolicyFileState"
+                  },
+                  "type": "array"
+                },
+                "status": {
+                  "const": "policy_blocked",
+                  "type": "string"
+                },
+                "workspace": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "workspace",
+                "blocked",
+                "files"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "type": {
+              "const": "issue_automation_policy",
               "type": "string"
             }
           },

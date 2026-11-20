@@ -2,12 +2,13 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
+import type { IssueEventReference } from "../src/renderer/kernel/protocol";
 
 interface Sent {
   id: number;
   method: string;
   params: {
-    query?: { type: string; after?: string | null; limit?: number };
+    query?: { type: string; after?: string | null; limit?: number; issue?: IssueEventReference };
     command?: { type: string; mode?: string };
     idempotency_key?: string;
   };
@@ -21,14 +22,41 @@ function automation(revision = 7, mode: "off" | "observe" = "observe") {
   };
 }
 
+function issueReference(id = "I_first", workspace = "/repo"): IssueEventReference {
+  return {
+    provider: "github", server_id: "github.com", repository_id: "R_repo", issue_id: id,
+    project_scope: { workspace_dir: workspace },
+  };
+}
+
+function policyAnswer(version = "policy-v1", workspace = "/repo") {
+  return {
+    type: "issue_automation_policy", status: "ready", workspace, version,
+    settings: [{
+      key: "authority.autonomy_cap", label: "서버 상한 이름", value: "서버 유효값",
+      origins: [{ scope: "user", label: "서버 사용자 출처" }, { scope: "project", label: "서버 저장소 출처" }],
+      resolution: "minimum", resolution_summary: "서버가 설명한 제한 병합",
+    }],
+    files: [
+      { scope: "user", label: "사용자 정책", path: "/user/issue-automation.toml", status: "readable", open_target: "user" },
+      { scope: "project", label: "저장소 정책", path: workspace + "/.akra/issue-automation.toml", status: "missing", open_target: "project" },
+    ],
+  };
+}
+
+function report(revision: number) {
+  return {
+    revision, binding_id: "origin", policy_version: "policy-v1", assumed_mode: "propose", policy_blocked: false,
+    total: 20, automatic_start: 12, human_approval: 5, excluded: 3,
+    deferred: 0, needs_info: 0, unknown: 0, observation_only: 0, stale: 0, untriaged: 0, blocked: 0,
+  };
+}
+
 function issuePage(ids = ["I_first"], revision = 7, nextAfter: string | null = "opaque-next") {
   return {
     type: "issues", status: "ready", revision, next_after: nextAfter,
     items: ids.map((id) => ({
-      issue: {
-        provider: "github", server_id: "github.com", repository_id: "R_repo", issue_id: id,
-        project_scope: { workspace_dir: "/repo" },
-      },
+      issue: issueReference(id),
       binding_id: "origin", tracked: null, current: { status: "not_yet_observed" },
       presentation: {
         number: null, url: null, title: null,
@@ -40,6 +68,37 @@ function issuePage(ids = ["I_first"], revision = 7, nextAfter: string | null = "
   };
 }
 
+function issueDetail(issue: IssueEventReference, revision = 7, body = "서버의 현재 공유 본문") {
+  return {
+    type: "issue", status: "ready", revision, report: report(revision),
+    item: {
+      ...issuePage([issue.issue_id], revision, null).items[0]!,
+      issue,
+      current: {
+        status: "observed", remote_state: "open",
+        labels: { completeness: "complete", items: [] }, assignees: { completeness: "complete", items: [] },
+        author: null, label_actors: { completeness: "complete", items: [] }, linked_pull_request: "absent",
+        content: {
+          kind: "shared", basis: { field_hash: { version: 1, sha256: "0".repeat(64) }, provider_updated_at: "2026-11-20T00:00:00Z" },
+          shared_copy: { title: "서버 공유 제목", body }, policy_version: "disclosure-v1",
+        },
+      },
+      triage: {
+        revision: 1, observation_revision: 1, tracked_revision: null, stale: false,
+        eligibility: "eligible", readiness: "ready", risk_class: "normal", effective_mode: "observe",
+        policy_version: "policy-v1", field_hash: { version: 1, sha256: "0".repeat(64) },
+        basis: {
+          version: 1, issue, source: "shared", disclosure_policy_version: "disclosure-v1",
+          validation_policy_version: "disclosure-v1", evidence_sha256: "1".repeat(64), requirements_sha256: "2".repeat(64), pinned_source_commit: null,
+        },
+        gates: ["start", "spec", "plan", "delivery", "merge", "close"].map((gate) => ({ gate, action: "human", enabled: false, gate_revision: 1 })),
+        reasons: [{ code: "observation_only", summary: "서버가 정한 판정 이유", next: [{ step: "ask_user" }], next_summary: "서버가 정한 다음 행동" }],
+        observation: { observation_only: true, assumed_mode: "propose", disposition: "human_approval" },
+      },
+    },
+  };
+}
+
 function overviewAnswer(type: string | undefined, maxTurns = 1): unknown {
   if (type === "thread_activity") return { type, threads: [] };
   if (type === "auto_follow") return { type, max_turns: maxTurns, paused: false };
@@ -47,11 +106,19 @@ function overviewAnswer(type: string | undefined, maxTurns = 1): unknown {
   return { type: "parallel", enabled: false };
 }
 
-function harness() {
+function harness({ autoPolicy = true }: { autoPolicy?: boolean } = {}) {
+  let automaticPolicyReplies = autoPolicy;
   const sent: Sent[] = [];
   const listeners = new Set<() => void>();
   const changed = () => { for (const listener of listeners) listener(); };
-  const client = new JsonRpcClient((text) => { sent.push(JSON.parse(text) as Sent); changed(); });
+  const client = new JsonRpcClient((text) => {
+    const request = JSON.parse(text) as Sent;
+    sent.push(request);
+    changed();
+    if (automaticPolicyReplies && request.params.query?.type === "issue_automation_policy") {
+      queueMicrotask(() => client.handleText(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: policyAnswer() })));
+    }
+  });
   let view = EMPTY_KERNEL_VIEW;
   const connection = new KernelConnection(client, {
     getKernel: () => view,
@@ -93,6 +160,13 @@ function harness() {
     reply(requests("akra/kernel/attach").at(-1), { client_id: "1", protocol_version: 1, kernel });
     await when(() => queries("issues").length > before);
   };
+  const answerPolicyBootstrap = async (policy = policyAnswer()) => {
+    const beforeRevision = query("issue_automation_policy");
+    reply(beforeRevision, policy);
+    await when(() => query("issue_automation_policy") !== beforeRevision);
+    reply(query("issue_automation_policy"), policy);
+    await when(() => !view.issues.policyLoading);
+  };
   const answerOverviewReads = (reads: Sent[], maxTurns = 1) => {
     for (const request of reads) reply(request, overviewAnswer(request.params.query?.type, maxTurns));
   };
@@ -106,24 +180,29 @@ function harness() {
     reply(requests("akra/kernel/command")[0], { processed: true });
     await shown;
   };
-  const openIssues = async (page = issuePage(), state = automation(page.revision)) => {
+  const openIssues = async (page = issuePage(), state = automation(page.revision), workspace = "/repo") => {
+    // 최초 catalog 판을 알기 전 보낸 정책 요청의 보완 조회까지 끝낸 뒤 개별 지연 회귀를 시작한다.
+    const previousAutomaticReplies = automaticPolicyReplies;
+    automaticPolicyReplies = true;
     connection.connectionChanged(true);
-    const shown = connection.show("/repo", ["issues"]);
+    const shown = connection.show(workspace, ["issues"]);
     await answerAttach();
     answerIssueReads(page, state);
     await shown;
+    await when(() => !view.issues.policyLoading);
+    automaticPolicyReplies = previousAutomaticReplies;
   };
-  return { connection, sent, requests, queries, query, reply, fail, when, answerIssueReads, answerAttach, answerOverviewReads, openOverview, openIssues, view: () => view };
+  return { connection, sent, requests, queries, query, reply, fail, when, answerIssueReads, answerAttach, answerPolicyBootstrap, answerOverviewReads, openOverview, openIssues, view: () => view };
 }
 
 describe("issue kernel connection", () => {
-  it("uses the existing attach and reads only issue state and one page", async () => {
+  it("uses the existing attach and reads issue state, one page and read-only policy", async () => {
     const h = harness();
     const page = issuePage(["I_b", "I_a"]);
     page.groups[0]!.item_indices = [1, 0];
     await h.openIssues(page);
     expect(h.requests("akra/kernel/attach")).toHaveLength(1);
-    expect(h.requests("akra/kernel/query").map((request) => request.params.query?.type)).toEqual(["issue_automation", "issues"]);
+    expect(h.requests("akra/kernel/query").map((request) => request.params.query?.type)).toEqual(["issue_automation", "issues", "issue_automation_policy", "issue_automation_policy"]);
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
     expect(h.view().issues).toMatchObject({ page, pageNumber: 1, canGoBack: false, loading: false, stale: false, error: null });
     expect(h.view().planning).toBeNull();
@@ -552,7 +631,7 @@ describe("issue kernel connection", () => {
     await h.openIssues();
     h.connection.handleEvent({ event: { type: "resync" } });
     expect(h.requests("akra/kernel/query").map((request) => request.params.query?.type)).toEqual([
-      "issue_automation", "issues", "issue_automation", "issues",
+      "issue_automation", "issues", "issue_automation_policy", "issue_automation_policy", "issue_automation", "issues", "issue_automation_policy",
     ]);
     const oldState = h.query("issue_automation");
     const oldPage = h.query("issues");
@@ -566,4 +645,433 @@ describe("issue kernel connection", () => {
     expect(h.view()).toEqual(EMPTY_KERNEL_VIEW);
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
+
+  it("uses server reference and policy workspace when attach starts from a worktree subfolder", async () => {
+    const h = harness();
+    const page = issuePage();
+    await h.openIssues(page, automation(), "/repo-worktree/subfolder");
+    expect(h.view().workspace).toBe("/repo-worktree/subfolder");
+    expect(h.view().issues.policy).toEqual(policyAnswer());
+    const selected = h.connection.selectIssue(page.items[0]!.issue);
+    expect(h.query("issue")?.params.query).toEqual({ type: "issue", issue: issueReference() });
+    const detail = issueDetail(issueReference());
+    h.reply(h.query("issue"), detail);
+    await selected;
+    expect(h.view().issues.detail).toEqual(detail);
+    expect(h.requests("akra/kernel/attach")).toHaveLength(1);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it.each(["success", "failure"] as const)("ignores old detail %s and finally while another row is loading", async (outcome) => {
+    const h = harness();
+    const page = issuePage(["I_A", "I_B"]);
+    await h.openIssues(page);
+    const first = h.connection.selectIssue(page.items[0]!.issue);
+    const oldRequest = h.query("issue");
+    const second = h.connection.selectIssue(page.items[1]!.issue);
+    const currentRequest = h.query("issue");
+    expect(h.view().issues).toMatchObject({ selectedIssue: issueReference("I_B"), detail: null, detailLoading: true, detailError: null });
+    if (outcome === "success") h.reply(oldRequest, issueDetail(issueReference("I_A"), 99, "old-private-body"));
+    else h.fail(oldRequest, "old detail failed");
+    await first;
+    expect(h.view().issues).toMatchObject({ detail: null, detailLoading: true, detailError: null });
+    const detail = issueDetail(issueReference("I_B"));
+    h.reply(currentRequest, detail);
+    await second;
+    expect(h.view().issues).toMatchObject({ detail, detailLoading: false, detailStale: false, detailError: null });
+    expect(JSON.stringify(h.view().issues)).not.toContain("old-private-body");
+  });
+
+  it("clears a visible body immediately on selection and ignores a closed detail response", async () => {
+    const h = harness();
+    const page = issuePage(["I_A", "I_B"]);
+    await h.openIssues(page);
+    const first = h.connection.selectIssue(page.items[0]!.issue);
+    h.reply(h.query("issue"), issueDetail(issueReference("I_A"), 7, "only-A-body"));
+    await first;
+    expect(JSON.stringify(h.view().issues.detail)).toContain("only-A-body");
+    const second = h.connection.selectIssue(page.items[1]!.issue);
+    const oldRequest = h.query("issue");
+    expect(h.view().issues.detail).toBeNull();
+    h.connection.clearIssueSelection();
+    h.reply(oldRequest, issueDetail(issueReference("I_B"), 7, "closed-body"));
+    await second;
+    expect(h.view().issues).toMatchObject({ selectedIssue: null, detail: null, detailLoading: false, detailError: null, detailStale: false });
+    expect(h.view().issues.page).toEqual(page);
+    expect(JSON.stringify(h.view().issues)).not.toContain("closed-body");
+  });
+
+  it("does not select a reference that is absent from the current page", async () => {
+    const h = harness();
+    await h.openIssues();
+    await h.connection.selectIssue(issueReference("I_foreign"));
+    await h.connection.selectIssue(issueReference("I_first", "/another-workspace"));
+    expect(h.queries("issue")).toHaveLength(0);
+    expect(h.view().issues.selectedIssue).toBeNull();
+  });
+
+  it.each(["provider", "server_id", "repository_id", "issue_id", "workspace"] as const)(
+    "rejects a detail response with a different %s without advancing the revision watermark",
+    async (coordinate) => {
+      const h = harness();
+      await h.openIssues();
+      const selected = h.connection.selectIssue(issueReference());
+      const original = issueReference();
+      const wrong: IssueEventReference = coordinate === "workspace"
+        ? { ...original, project_scope: { ...original.project_scope, workspace_dir: "/foreign" } }
+        : coordinate === "provider"
+          ? { ...original, provider: "jira" }
+          : { ...original, [coordinate]: "foreign" };
+      h.reply(h.query("issue"), issueDetail(wrong, 99, "foreign-private-body"));
+      await selected;
+      expect(h.view().issues.detail).toBeNull();
+      expect(h.view().issues.detailError).toContain("저장소 좌표");
+      const refreshed = h.connection.refreshIssueDetail();
+      h.reply(h.query("issue"), issueDetail(issueReference(), 7, "correct-body"));
+      await refreshed;
+      expect(h.view().issues).toMatchObject({ detailStale: false, detailLoading: false, detailError: null, detail: { revision: 7 } });
+      expect(JSON.stringify(h.view().issues)).not.toContain("foreign-private-body");
+    },
+  );
+
+  it("hides a detail on a newer event and retries an older pending response once", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    const oldDetail = h.query("issue");
+    h.connection.handleEvent({ event: { ...automation(8), type: "issues" } });
+    expect(h.view().issues).toMatchObject({ detail: null, detailStale: true, detailLoading: true });
+    expect(h.queries("issue")).toHaveLength(1);
+    h.reply(oldDetail, issueDetail(issueReference(), 7, "old-private-body"));
+    await h.when(() => h.queries("issue").length === 2);
+    expect(h.view().issues.detail).toBeNull();
+    h.reply(h.query("issues"), issuePage(["I_first"], 8, null));
+    const fresh = issueDetail(issueReference(), 8, "fresh-current-body");
+    h.reply(h.query("issue"), fresh);
+    await selected;
+    expect(h.view().issues).toMatchObject({ detail: fresh, detailStale: false, detailLoading: false });
+    expect(JSON.stringify(h.view().issues)).not.toContain("old-private-body");
+  });
+
+  it("bounds retries when detail replies remain older than the latest catalog revision", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.connection.handleEvent({ event: { ...automation(8), type: "issues" } });
+    h.reply(h.query("issues"), issuePage(["I_first"], 8, null));
+    h.reply(h.query("issue"), issueDetail(issueReference(), 7));
+    await h.when(() => h.queries("issue").length === 2);
+    h.reply(h.query("issue"), issueDetail(issueReference(), 7));
+    await selected;
+    expect(h.queries("issue")).toHaveLength(2);
+    expect(h.view().issues).toMatchObject({ detail: null, detailLoading: false, detailStale: true });
+    expect(h.view().issues.detailError).toContain("조회 중 바뀌었습니다");
+  });
+
+  it("invalidates an older page from a newer detail and preserves the server's whole report", async () => {
+    const h = harness();
+    const page = { ...issuePage(["I_first", "I_second"]), report: report(7) };
+    await h.openIssues(page);
+    const selected = h.connection.selectIssue(issueReference());
+    const detail = issueDetail(issueReference(), 10);
+    h.reply(h.query("issue"), detail);
+    await selected;
+    expect(h.view().issues).toMatchObject({ detail, stale: true, loading: true, canGoBack: false });
+    expect(h.query("issues")?.params.query?.after).toBeNull();
+    h.reply(h.query("issues"), { ...issuePage(["I_first"], 10, null), report: report(10) });
+    await h.when(() => !h.view().issues.loading);
+    expect(h.view().issues).toMatchObject({ stale: false, page: { report: report(10) }, detail: { report: report(10) } });
+    expect(h.view().issues.detail).toEqual(detail);
+    expect(h.queries("issue")).toHaveLength(1);
+  });
+
+  it("does not restore the old Shared body when the current detail becomes Unknown or Withheld", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), issueDetail(issueReference(), 7, "previous-shared-body"));
+    await selected;
+    for (const [revision, current] of [
+      [8, { status: "unknown", reason: "provider_unavailable" }],
+      [9, { status: "observed", content: { kind: "withheld", reason: "confirmation_required" } }],
+      [10, { status: "not_yet_observed" }],
+    ] as const) {
+      h.connection.handleEvent({ event: { ...automation(revision), type: "issues" } });
+      expect(h.view().issues.detail).toBeNull();
+      const base = issueDetail(issueReference(), revision);
+      const detail = { ...base, item: { ...base.item, current, triage: { ...base.item.triage, stale: true } } };
+      h.reply(h.query("issue"), detail);
+      h.reply(h.query("issues"), issuePage(["I_first"], revision, null));
+      await h.when(() => !h.view().issues.detailLoading && !h.view().issues.loading);
+      expect(h.view().issues.detail).toEqual(detail);
+      expect(JSON.stringify(h.view().issues.detail)).not.toContain("previous-shared-body");
+    }
+  });
+
+
+  it("keeps policy and detail failures independent when state and page reads succeed", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), issueDetail(issueReference()));
+    await selected;
+    const refreshed = h.connection.refreshIssues();
+    h.fail(h.query("issue"), "detail unavailable");
+    h.fail(h.query("issue_automation_policy"), "policy unavailable");
+    await h.when(() => h.view().issues.detailError !== null && h.view().issues.policyError !== null);
+    h.answerIssueReads();
+    await refreshed;
+    expect(h.view().issues).toMatchObject({ error: null, detail: null, policy: null, detailLoading: false, policyLoading: false });
+    expect(h.view().issues.detailError).toContain("detail unavailable");
+    expect(h.view().issues.policyError).toContain("policy unavailable");
+    expect(h.view().issues.page).toEqual(issuePage());
+    expect(h.queries("issue")).toHaveLength(2);
+  });
+
+  it.each(["success", "failure"] as const)("ignores superseded policy %s and finally without clearing a newer policy load", async (outcome) => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const older = h.connection.refreshIssueAutomationPolicy();
+    const oldRequest = h.query("issue_automation_policy");
+    const latest = h.connection.refreshIssueAutomationPolicy();
+    const currentRequest = h.query("issue_automation_policy");
+    if (outcome === "success") h.reply(oldRequest, policyAnswer("old-version", "/old-workspace"));
+    else h.fail(oldRequest, "old policy error");
+    await older;
+    expect(h.view().issues).toMatchObject({ policy: null, policyLoading: true, policyError: null });
+    const policy = policyAnswer("current-version");
+    h.reply(currentRequest, policy);
+    await latest;
+    expect(h.view().issues).toMatchObject({ policy, policyLoading: false, policyError: null });
+  });
+
+  it("rereads policy on a newer issue event and preserves blocked causes, paths and server wording", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const policyReads = h.queries("issue_automation_policy").length;
+    h.connection.handleEvent({ event: { ...automation(8), type: "issues" } });
+    expect(h.view().issues).toMatchObject({ policy: null, policyLoading: true });
+    await h.when(() => h.queries("issue_automation_policy").length === policyReads + 1);
+    const policy = {
+      type: "issue_automation_policy", status: "policy_blocked", workspace: "/repo",
+      blocked: { scope: "effective", field: "close.when", reason: "transition_disabled", summary: "서버가 보낸 차단 원인 그대로", next_summary: "서버가 보낸 해결 방법 그대로", file_scopes: ["user", "project"] },
+      files: policyAnswer().files,
+    };
+    h.reply(h.query("issue_automation_policy"), policy);
+    h.reply(h.query("issues"), { ...issuePage(["I_first"], 8, null), report: { ...report(8), policy_blocked: true, blocked: 20, automatic_start: 0, human_approval: 0, excluded: 0 } });
+    await h.when(() => !h.view().issues.policyLoading && !h.view().issues.loading);
+    expect(h.view().issues.policy).toEqual(policy);
+    expect(h.view().issues.policyError).toBeNull();
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    const unavailable = h.connection.refreshIssueAutomationPolicy();
+    h.reply(h.query("issue_automation_policy"), { type: "issue_automation_policy", status: "unavailable" });
+    await unavailable;
+    expect(h.view().issues.policy).toEqual({ type: "issue_automation_policy", status: "unavailable" });
+  });
+
+  it("discards detail and policy responses from the prior workspace, including their finally blocks", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const oldDetail = h.connection.selectIssue(issueReference());
+    const oldDetailRequest = h.query("issue");
+    const oldPolicy = h.connection.refreshIssueAutomationPolicy();
+    const oldPolicyRequest = h.query("issue_automation_policy");
+    const shown = h.connection.show("/second/worktree", ["issues"]);
+    expect(h.view().issues).toMatchObject({ selectedIssue: null, detail: null, policy: null });
+    await h.answerAttach("second-kernel");
+    h.reply(oldDetailRequest, issueDetail(issueReference(), 99, "first-workspace-private-body"));
+    h.fail(oldPolicyRequest, "first policy failed");
+    await Promise.all([oldDetail, oldPolicy]);
+    expect(h.view().issues).toMatchObject({ detail: null, detailError: null, policy: null, policyLoading: true, policyError: null });
+    const page = issuePage(["I_second"], 1, null);
+    page.items[0]!.issue = issueReference("I_second", "/second");
+    h.answerIssueReads(page, automation(1));
+    await h.answerPolicyBootstrap(policyAnswer("second", "/second"));
+    await shown;
+    expect(h.view().issues).toMatchObject({ page: { revision: 1 }, policy: { workspace: "/second" }, selectedIssue: null });
+    expect(JSON.stringify(h.view().issues)).not.toContain("first-workspace-private-body");
+  });
+
+  it("does not revive selection or policy after issue interest is removed and restored", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const oldDetail = h.connection.selectIssue(issueReference());
+    const oldDetailRequest = h.query("issue");
+    const oldPolicy = h.connection.refreshIssueAutomationPolicy();
+    const oldPolicyRequest = h.query("issue_automation_policy");
+    const closed = h.connection.show("/repo", []);
+    h.reply(h.requests("akra/kernel/detach").at(-1), {});
+    h.reply(oldDetailRequest, issueDetail(issueReference(), 9, "closed-private-body"));
+    h.reply(oldPolicyRequest, policyAnswer("closed-policy"));
+    await Promise.all([closed, oldDetail, oldPolicy]);
+    expect(h.view()).toEqual(EMPTY_KERNEL_VIEW);
+    const reopened = h.connection.show("/repo", ["issues"]);
+    await h.answerAttach();
+    h.answerIssueReads();
+    await h.answerPolicyBootstrap(policyAnswer("reopened-policy"));
+    await reopened;
+    expect(h.view().issues).toMatchObject({ selectedIssue: null, detail: null, policy: { version: "reopened-policy" } });
+    expect(h.queries("issue")).toHaveLength(1);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("reconnects without replaying detail selection and rejects late detail and policy errors", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const oldDetail = h.connection.selectIssue(issueReference());
+    const oldDetailRequest = h.query("issue");
+    const oldPolicy = h.connection.refreshIssueAutomationPolicy();
+    const oldPolicyRequest = h.query("issue_automation_policy");
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    await h.answerAttach();
+    h.fail(oldDetailRequest, "disconnected detail failed");
+    h.fail(oldPolicyRequest, "disconnected policy failed");
+    await Promise.all([oldDetail, oldPolicy]);
+    expect(h.view().issues).toMatchObject({ selectedIssue: null, detail: null, detailError: null, policy: null, policyLoading: true, policyError: null });
+    h.answerIssueReads(issuePage(["I_reconnected"], 8, null), automation(8));
+    await h.answerPolicyBootstrap(policyAnswer("reconnected-policy"));
+    await h.when(() => !h.view().issues.loading && !h.view().issues.policyLoading);
+    expect(h.view().issues.policy).toMatchObject({ version: "reconnected-policy" });
+    expect(h.queries("issue")).toHaveLength(1);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("keeps not-found and unavailable details distinct and clears selection when changing pages", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), { type: "issue", status: "not_found", revision: 7, report: report(7) });
+    await selected;
+    expect(h.view().issues.detail).toEqual({ type: "issue", status: "not_found", revision: 7, report: report(7) });
+    const refreshed = h.connection.refreshIssueDetail();
+    h.reply(h.query("issue"), { type: "issue", status: "unavailable" });
+    await refreshed;
+    expect(h.view().issues.detail).toEqual({ type: "issue", status: "unavailable" });
+    const next = h.connection.nextIssuesPage();
+    expect(h.view().issues).toMatchObject({ selectedIssue: null, detail: null });
+    h.reply(h.query("issues"), issuePage(["I_next"], 7, null));
+    await next;
+    expect(h.view().issues.pageNumber).toBe(2);
+  });
+
+  it("rejects a report from another snapshot instead of mixing its counts with the detail", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), { ...issueDetail(issueReference()), report: report(8) });
+    await selected;
+    expect(h.view().issues.detail).toBeNull();
+    expect(h.view().issues.detailError).toContain("표시 계약");
+  });
+
+
+  it("fences the old issue interest after an overview round trip on the same attachment", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const oldDetail = h.connection.selectIssue(issueReference());
+    const oldDetailRequest = h.query("issue");
+    const oldPolicy = h.connection.refreshIssueAutomationPolicy();
+    const oldPolicyRequest = h.query("issue_automation_policy");
+    const overview = h.connection.show("/repo", ["overview"]);
+    h.answerOverviewReads(h.requests("akra/kernel/query").slice(-4));
+    await h.when(() => h.requests("akra/kernel/command").length === 1);
+    h.reply(h.requests("akra/kernel/command")[0], { processed: true });
+    await overview;
+    const returned = h.connection.show("/repo", ["issues"]);
+    h.reply(oldDetailRequest, issueDetail(issueReference(), 99, "old-interest-body"));
+    h.fail(oldPolicyRequest, "old interest policy failed");
+    await Promise.all([oldDetail, oldPolicy]);
+    expect(h.view().issues).toMatchObject({ selectedIssue: null, detail: null, detailError: null, policy: null, policyLoading: true, policyError: null });
+    h.answerIssueReads();
+    await h.answerPolicyBootstrap(policyAnswer("current-interest-policy"));
+    await returned;
+    expect(h.requests("akra/kernel/attach")).toHaveLength(1);
+    expect(h.requests("akra/kernel/detach")).toHaveLength(0);
+    expect(h.view().issues.policy).toMatchObject({ version: "current-interest-policy" });
+    expect(h.queries("issue")).toHaveLength(1);
+    expect(JSON.stringify(h.view().issues)).not.toContain("old-interest-body");
+  });
+
+
+  it.each([
+    { leader: "page", oldReply: "success" },
+    { leader: "page", oldReply: "failure" },
+    { leader: "detail", oldReply: "success" },
+    { leader: "detail", oldReply: "failure" },
+  ] as const)("refreshes policy when $leader leads the catalog and rejects old policy $oldReply", async ({ leader, oldReply }) => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const older = h.connection.refreshIssueAutomationPolicy();
+    const oldPolicy = h.query("issue_automation_policy");
+    const policyReads = h.queries("issue_automation_policy").length;
+    if (leader === "page") {
+      const next = h.connection.nextIssuesPage();
+      h.reply(h.query("issues"), issuePage(["I_first"], 8, null));
+      await h.when(() => h.queries("issues").length === 3);
+      h.reply(h.query("issues"), issuePage(["I_first"], 8, null));
+      await next;
+    } else {
+      const selected = h.connection.selectIssue(issueReference());
+      h.reply(h.query("issue"), issueDetail(issueReference(), 8));
+      await selected;
+      h.reply(h.query("issues"), issuePage(["I_first"], 8, null));
+      await h.when(() => !h.view().issues.loading);
+    }
+    await h.when(() => h.queries("issue_automation_policy").length === policyReads + 1);
+    const newPolicy = h.query("issue_automation_policy");
+    expect(h.view().issues).toMatchObject({ policy: null, policyLoading: true, policyError: null });
+    h.connection.handleEvent({ event: { ...automation(8), type: "issues" } });
+    await Promise.resolve();
+    expect(h.queries("issue_automation_policy")).toHaveLength(policyReads + 1);
+    if (oldReply === "success") h.reply(oldPolicy, policyAnswer("old-policy-P7"));
+    else h.fail(oldPolicy, "old policy failed after catalog 8");
+    await older;
+    expect(h.view().issues).toMatchObject({ policy: null, policyLoading: true, policyError: null });
+    h.reply(newPolicy, policyAnswer("current-policy-P8"));
+    await h.when(() => !h.view().issues.policyLoading);
+    expect(h.view().issues.policy).toEqual(policyAnswer("current-policy-P8"));
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("coalesces initial state and page revision advances into one corrective policy read", async () => {
+    const h = harness({ autoPolicy: false });
+    h.connection.connectionChanged(true);
+    const shown = h.connection.show("/repo", ["issues"]);
+    await h.answerAttach();
+    const initialPolicy = h.query("issue_automation_policy");
+    h.reply(h.query("issue_automation"), automation(7));
+    h.reply(h.query("issues"), issuePage(["I_first"], 8, null));
+    await h.when(() => h.queries("issue_automation_policy").length === 2);
+    const currentPolicy = h.query("issue_automation_policy");
+    h.reply(initialPolicy, policyAnswer("before-catalog"));
+    await shown;
+    expect(h.view().issues).toMatchObject({ policy: null, policyLoading: true, policyError: null });
+    h.reply(currentPolicy, policyAnswer("catalog-8-policy"));
+    await h.when(() => !h.view().issues.policyLoading);
+    expect(h.view().issues.policy).toEqual(policyAnswer("catalog-8-policy"));
+    expect(h.queries("issue_automation_policy")).toHaveLength(2);
+  });
+
+  it("starts and completes policy reads while a refreshed detail is still pending", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    const oldDetail = h.query("issue");
+    const policyReads = h.queries("issue_automation_policy").length;
+    const refreshed = h.connection.refreshIssues();
+    const pendingDetail = h.query("issue");
+    expect(h.queries("issue_automation_policy")).toHaveLength(policyReads + 1);
+    h.reply(h.query("issue_automation_policy"), policyAnswer("independent-policy"));
+    await h.when(() => !h.view().issues.policyLoading);
+    expect(h.view().issues).toMatchObject({ policy: policyAnswer("independent-policy"), detail: null, detailLoading: true });
+    h.answerIssueReads();
+    h.reply(pendingDetail, issueDetail(issueReference()));
+    await refreshed;
+    h.reply(oldDetail, issueDetail(issueReference(), 99, "old-late-detail"));
+    await selected;
+    expect(h.view().issues.policy).toEqual(policyAnswer("independent-policy"));
+    expect(JSON.stringify(h.view().issues.detail)).not.toContain("old-late-detail");
+  });
+
 });

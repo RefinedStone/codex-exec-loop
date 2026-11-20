@@ -8,9 +8,9 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::adapter::inbound::kernel_protocol::{
-    CommandRejection, CommandRequest, CommandResponse, IssueAutomationState, IssueState,
-    IssuesState, KernelCommand, KernelCommandInput, KernelProtocolError, KernelQuery,
-    KernelQueryAnswer, PlanningState, ResetTarget, reason_next,
+    CommandRejection, CommandRequest, CommandResponse, IssueAutomationPolicyState,
+    IssueAutomationState, IssueState, IssuesState, KernelCommand, KernelCommandInput,
+    KernelProtocolError, KernelQuery, KernelQueryAnswer, PlanningState, ResetTarget, reason_next,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::{
@@ -18,6 +18,7 @@ use crate::adapter::outbound::filesystem::{
     RepositoryKernelLockHeld, RepositoryKernelOwner,
 };
 use crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter;
+use crate::application::port::inbound::issue_automation_policy_query_port::IssueAutomationPolicyInspection;
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandOutcome, StoredCommandRejection, StoredCommandResult,
@@ -363,7 +364,30 @@ impl KernelCommandPort for CommandOnlyKernel {
     }
 
     fn query(&self, input: Value, wait: bool) -> Result<Value> {
+        self.query_with_policy_inspector(input, wait, |workspace| {
+            super::issue_collection::build(workspace).policy_inspection()
+        })
+    }
+}
+
+impl CommandOnlyKernel {
+    fn query_with_policy_inspector(
+        &self,
+        input: Value,
+        wait: bool,
+        inspect: impl FnOnce(&str) -> Option<IssueAutomationPolicyInspection>,
+    ) -> Result<Value> {
         let query: KernelQuery = serde_json::from_value(input)?;
+        if matches!(query, KernelQuery::IssueAutomationPolicy {}) {
+            let inspection = inspect(&self.workspace);
+            let state = inspection
+                .as_ref()
+                .map(IssueAutomationPolicyState::from_domain)
+                .unwrap_or_else(IssueAutomationPolicyState::unavailable);
+            return Ok(serde_json::to_value(
+                KernelQueryAnswer::IssueAutomationPolicy(state),
+            )?);
+        }
         if let Some(issue) = query
             .issue_reference(&self.workspace)
             .map_err(protocol_error)?

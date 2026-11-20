@@ -658,6 +658,11 @@ export function App() {
               {panel === "issues" && (
                 <IssuePanel
                   onRefresh={async () => session.current?.refreshIssues()}
+                  onSelectIssue={async (issue) => session.current?.selectIssue(issue)}
+                  onClearIssueSelection={() => session.current?.clearIssueSelection()}
+                  onRefreshDetail={async () => session.current?.refreshIssueDetail()}
+                  onRefreshPolicy={async () => session.current?.refreshIssueAutomationPolicy()}
+                  onOpenPolicyFile={async (workspace, scope, expectedPath) => window.akra.openIssueAutomationPolicyFile({ workspace, scope, expectedPath, host: { kind: "local" } })}
                   onNextPage={async () => session.current?.nextIssuesPage()}
                   onPreviousPage={async () => session.current?.previousIssuesPage()}
                   onSetMode={async (mode) => session.current?.setIssueAutomationMode(mode)}

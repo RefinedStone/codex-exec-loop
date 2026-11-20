@@ -36,6 +36,7 @@ export const IPC_CHANNELS = {
   gitHunks: "akra:git-hunks",
   gitHunkAction: "akra:git-hunk-action",
   gitOpenFile: "akra:git-open-file",
+  issueAutomationPolicyOpenFile: "issueAutomationPolicy:openFile",
   gitBranchSummary: "akra:git-branch-summary",
   gitCommitDiff: "akra:git-commit-diff",
   gitPush: "akra:git-push",
@@ -408,6 +409,15 @@ export interface RemoteHostBridge {
 }
 
 /** preload 가 `window.akra` 로 노출하는 함수 전부이다. */
+
+/** 서버가 반환한 정책 위치는 일치 확인에만 쓴다. 실제 대상은 main이 scope별로 다시 결정한다. */
+export interface IssueAutomationPolicyFileRequest {
+  workspace: string;
+  scope: "user" | "project";
+  expectedPath: string;
+  host: { kind: "local" } | { kind: "remote"; id: string };
+}
+
 export interface AkraBridge {
   /** JSON-RPC 메시지 한 개를 Gateway 로 보낸다. */
   send(text: string): void;
@@ -433,6 +443,8 @@ export interface AkraBridge {
   gitHunkAction(cwd: string, action: GitHunkAction, path: string, hunkId: string): Promise<GitActionResult>;
   /** 파일을 편집기(VS Code)로 연다. 편집기가 없으면 파일이 있는 폴더를 연다. */
   gitOpenFile(cwd: string, path: string): Promise<void>;
+  /** 로컬의 알려진 자동화 정책 파일을 편집기로 연다. 누락된 파일을 여기서 만들지 않는다. */
+  openIssueAutomationPolicyFile(request: IssueAutomationPolicyFileRequest): Promise<void>;
   /** 브랜치가 기준 브랜치 뒤에 더한 커밋과 그 브랜치의 PR 을 읽는다. `fresh` 이면 잠깐 저장해 둔 PR 을 쓰지 않고 다시 묻는다. */
   gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary>;
   /** 커밋 하나의 변경을 읽는다. */

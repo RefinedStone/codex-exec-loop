@@ -30,7 +30,7 @@ import {
   transcriptFromThread,
 } from "../conversation/transcript";
 import { KernelConnection, type KernelInterest } from "../kernel/kernelConnection";
-import { KERNEL_METHOD, type IssueAutomationModeRecord } from "../kernel/protocol";
+import { KERNEL_METHOD, type IssueAutomationModeRecord, type IssueEventReference } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
@@ -280,6 +280,22 @@ export class DesktopSession {
 
   previousIssuesPage(): Promise<void> {
     return this.kernel.previousIssuesPage();
+  }
+
+  selectIssue(issue: IssueEventReference): Promise<void> {
+    return this.kernel.selectIssue(issue);
+  }
+
+  clearIssueSelection(): void {
+    this.kernel.clearIssueSelection();
+  }
+
+  refreshIssueDetail(): Promise<void> {
+    return this.kernel.refreshIssueDetail();
+  }
+
+  refreshIssueAutomationPolicy(): Promise<void> {
+    return this.kernel.refreshIssueAutomationPolicy();
   }
 
   setIssueAutomationMode(mode: IssueAutomationModeRecord): Promise<void> {

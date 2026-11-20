@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 use super::{
     FilesystemIssueAutomationPolicySourceAdapter, ISSUE_AUTOMATION_POLICY_FILE_NAME,
-    PROJECT_POLICY_DIRECTORY, read_user_policy,
+    PROJECT_POLICY_DIRECTORY, read_snapshot_from_paths, read_user_policy,
 };
 use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
-use crate::application::port::outbound::issue_automation_policy_source_port::IssueAutomationPolicySourcePort;
+use crate::application::port::outbound::issue_automation_policy_source_port::{
+    IssueAutomationPolicySourcePort, IssueAutomationPolicySourceRead,
+};
 use crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort;
 
 const AUTOMATION_POLICY: &str = "schema_version = 1\n[binding.github]\nmode = \"observe\"\n";
@@ -257,4 +259,112 @@ fn user_policy_keeps_global_file_and_parent_permission_checks() {
         read_user_policy(&fixture.0).unwrap(),
         Some(AUTOMATION_POLICY.to_owned())
     );
+}
+
+#[test]
+fn source_snapshot_keeps_missing_paths_without_creating_files_or_directories() {
+    let user = Fixture::new("snapshot-missing-user");
+    let project = Fixture::new("snapshot-missing-project");
+    let user_path = user.0.join(ISSUE_AUTOMATION_POLICY_FILE_NAME);
+    let project_path = project
+        .0
+        .join(PROJECT_POLICY_DIRECTORY)
+        .join(ISSUE_AUTOMATION_POLICY_FILE_NAME);
+    let snapshot = read_snapshot_from_paths(Ok(user_path.clone()), project_path.clone());
+
+    assert_eq!(snapshot.user.location, Some(user_path.clone()));
+    assert_eq!(snapshot.project.location, Some(project_path.clone()));
+    assert!(matches!(
+        snapshot.user.read,
+        IssueAutomationPolicySourceRead::Missing
+    ));
+    assert!(matches!(
+        snapshot.project.read,
+        IssueAutomationPolicySourceRead::Missing
+    ));
+    assert!(!user_path.exists());
+    assert!(!project_path.exists());
+    assert!(!project.0.join(PROJECT_POLICY_DIRECTORY).exists());
+}
+
+#[test]
+fn source_snapshot_pairs_each_location_with_the_exact_file_read() {
+    let user = Fixture::new("snapshot-user");
+    let project = Fixture::new("snapshot-project");
+    let user_path = user.0.join(ISSUE_AUTOMATION_POLICY_FILE_NAME);
+    let project_path = project.project_policy_path();
+    let user_text = "[budget]\nmax_running=4\n";
+    let project_text = "[budget]\nmax_running=2\n";
+    write_private_file(&user_path, user_text.as_bytes());
+    write_private_file(&project_path, project_text.as_bytes());
+    write_private_file(&user.0.join("issue-policy.toml"), b"not automation");
+    write_private_file(
+        &project.project_directory().join("issue-policy.toml"),
+        b"not automation",
+    );
+
+    let snapshot = read_snapshot_from_paths(Ok(user_path.clone()), project_path.clone());
+    fs::write(&project_path, b"[budget]\nmax_running=1\n").unwrap();
+
+    assert_eq!(snapshot.user.location.as_ref(), Some(&user_path));
+    assert_eq!(snapshot.project.location.as_ref(), Some(&project_path));
+    let IssueAutomationPolicySourceRead::Contents(user_contents) = snapshot.user.read else {
+        panic!("the user file must be readable")
+    };
+    let IssueAutomationPolicySourceRead::Contents(project_contents) = snapshot.project.read else {
+        panic!("the project file must be readable")
+    };
+    assert_eq!(user_contents, user_text);
+    assert_eq!(project_contents, project_text);
+    assert_eq!(fs::read(&user_path).unwrap(), user_text.as_bytes());
+}
+
+#[test]
+fn source_snapshot_retains_known_unreadable_locations_but_never_extracts_a_path_from_errors() {
+    let project = Fixture::new("snapshot-failure");
+    let project_path = project.project_policy_path();
+    write_private_file(&project_path, &[0xff]);
+    let snapshot = read_snapshot_from_paths(
+        Err(anyhow::anyhow!(
+            "synthetic-private-error /invented-policy-path"
+        )),
+        project_path.clone(),
+    );
+
+    assert!(snapshot.user.location.is_none());
+    assert!(matches!(
+        snapshot.user.read,
+        IssueAutomationPolicySourceRead::Unavailable
+    ));
+    assert_eq!(snapshot.project.location, Some(project_path));
+    assert!(matches!(
+        snapshot.project.read,
+        IssueAutomationPolicySourceRead::Unavailable
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn source_snapshot_keeps_existing_link_rejection_and_the_logical_policy_location() {
+    let user = Fixture::new("snapshot-linked-user");
+    let project = Fixture::new("snapshot-linked-project");
+    let target = project.0.join("outside.toml");
+    let project_path = project.project_policy_path();
+    write_private_file(&target, AUTOMATION_POLICY.as_bytes());
+    std::os::unix::fs::symlink(&target, &project_path).unwrap();
+
+    let snapshot = read_snapshot_from_paths(
+        Ok(user.0.join(ISSUE_AUTOMATION_POLICY_FILE_NAME)),
+        project_path.clone(),
+    );
+    assert!(matches!(
+        snapshot.user.read,
+        IssueAutomationPolicySourceRead::Missing
+    ));
+    assert_eq!(snapshot.project.location, Some(project_path));
+    assert!(matches!(
+        snapshot.project.read,
+        IssueAutomationPolicySourceRead::Unavailable
+    ));
+    assert_eq!(fs::read(&target).unwrap(), AUTOMATION_POLICY.as_bytes());
 }
