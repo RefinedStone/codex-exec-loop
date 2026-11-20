@@ -41,7 +41,7 @@ impl RepositoryKernelOwner {
 /// 저장소 하나의 커널 잠금이다. 버리면 잠금이 풀린다.
 #[derive(Debug)]
 pub(crate) struct RepositoryKernelLock {
-    _file: File,
+    file: File,
     repository_key: String,
 }
 
@@ -49,6 +49,16 @@ impl RepositoryKernelLock {
     /// 저장소 신원이다. 같은 저장소의 worktree 들은 같은 값을 갖는다. 저장소별 커널 목록의 키로 쓴다.
     pub(crate) fn repository_key(&self) -> &str {
         &self.repository_key
+    }
+}
+
+impl Drop for RepositoryKernelLock {
+    fn drop(&mut self) {
+        // A concurrent fork can retain this open file description until exec or exit.
+        // Release ownership with the guard, even while a duplicate handle remains open.
+        if let Err(error) = self.file.unlock() {
+            tracing::warn!(error = %error, repository_key = %self.repository_key, "kernel lock release failed");
+        }
     }
 }
 
@@ -133,7 +143,7 @@ impl RepositoryKernelLockAdapter {
             tracing::warn!(error = %error, "kernel lock owner record write failed");
         }
         Ok(RepositoryKernelLock {
-            _file: file,
+            file,
             repository_key: location.repository_identity,
         })
     }
@@ -376,6 +386,25 @@ mod tests {
         let next = acquire(&checkout).expect("lock after release");
 
         assert_eq!(next.repository_key(), repository_key);
+    }
+
+    #[test]
+    fn dropping_the_lock_releases_it_while_a_duplicate_handle_is_open() {
+        let (_root, checkout, worktree) = repository_with_linked_worktree("release-duplicate");
+        let lock = acquire(&worktree).expect("first lock");
+        let repository_key = lock.repository_key().to_string();
+        // A concurrent fork can retain the same open file description until exec or exit.
+        let duplicate = lock.file.try_clone().expect("duplicate lock handle");
+        held_error(acquire(&checkout));
+
+        drop(lock);
+
+        let next = acquire(&checkout).expect("the guard lifetime must control the lock");
+        assert_eq!(next.repository_key(), repository_key);
+        drop(duplicate);
+        held_error(acquire(&worktree));
+        drop(next);
+        acquire(&worktree).expect("the next guard also releases its lock");
     }
 
     #[test]

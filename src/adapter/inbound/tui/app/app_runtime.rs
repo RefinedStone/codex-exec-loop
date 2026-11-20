@@ -725,7 +725,7 @@ mod tests {
             < 1
             && Instant::now() < first_write_deadline
         {
-            app.poll_client_runtime_events(16);
+            // Leave the completion queued for the admission check below.
             std::thread::yield_now();
         }
         assert_eq!(
