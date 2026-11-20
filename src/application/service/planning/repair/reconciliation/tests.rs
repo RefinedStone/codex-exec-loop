@@ -76,6 +76,8 @@ impl PlanningTaskRepositoryPort for FailingSnapshotTaskRepository {
 
 struct RevisionedTaskRepository {
     revision: Arc<AtomicI64>,
+    reads: std::sync::atomic::AtomicUsize,
+    before_second_read: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl PlanningTaskRepositoryPort for RevisionedTaskRepository {
@@ -102,6 +104,11 @@ impl PlanningTaskRepositoryPort for RevisionedTaskRepository {
         &self,
         _workspace_dir: &str,
     ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
+        if self.reads.fetch_add(1, Ordering::SeqCst) == 1
+            && let Some(before_read) = &self.before_second_read
+        {
+            before_read();
+        }
         Ok(Some(PlanningTaskAuthoritySnapshot {
             planning_revision: self.revision.load(Ordering::SeqCst),
             task_authority: TaskAuthorityDocument {
@@ -226,7 +233,7 @@ fn execution_snapshot_restore_payload_preserves_absent_result_output() {
 }
 
 #[test]
-fn execution_snapshot_keeps_protected_file_when_task_authority_read_fails() {
+fn execution_snapshot_fails_closed_when_task_authority_read_fails() {
     let workspace = std::env::temp_dir().join(format!(
         "akra-snapshot-task-read-failure-{}-{}",
         std::process::id(),
@@ -247,22 +254,39 @@ fn execution_snapshot_keeps_protected_file_when_task_authority_read_fails() {
         )
         .expect("protected file should seed");
     let service = PlanningReconciliationService::with_task_repository(
-        workspace_port,
+        workspace_port.clone(),
         PlanningValidationService::new(),
         crate::domain::planning::PriorityQueueService::new(),
         Arc::new(FailingSnapshotTaskRepository),
     );
 
-    let snapshot = service
+    let error = service
         .load_execution_snapshot(&workspace_dir)
-        .expect("task authority failure should not discard protected file capture");
-
-    assert_eq!(
-        snapshot.result_output_markdown.as_deref(),
-        Some("# Protected result")
+        .expect_err("an unverifiable revision cannot authorize a future restore");
+    assert!(error.to_string().contains("temporarily unavailable"));
+    let outcome = service
+        .reconcile_after_turn(
+            &workspace_dir,
+            "turn-with-unavailable-authority",
+            &[crate::domain::planning::RESULT_OUTPUT_FILE_PATH.to_owned()],
+            &PlanningExecutionSnapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        outcome
+            .auto_follow_block_reason
+            .unwrap()
+            .contains("could not verify")
     );
-    assert_eq!(snapshot.planning_revision, None);
-    assert_eq!(snapshot.task_authority, None);
+    assert!(outcome.restored_protected_files.is_empty());
+    assert_eq!(
+        workspace_port
+            .load_planning_workspace_files(&workspace_dir)
+            .unwrap()
+            .result_output_markdown
+            .as_deref(),
+        Some("# Protected result"),
+    );
     std::fs::remove_dir_all(workspace).expect("snapshot workspace should clean up");
 }
 
@@ -291,6 +315,8 @@ fn revisioned_reconciliation_fixture(
         crate::domain::planning::PriorityQueueService::new(),
         Arc::new(RevisionedTaskRepository {
             revision: revision.clone(),
+            reads: std::sync::atomic::AtomicUsize::new(0),
+            before_second_read: None,
         }),
     );
     (workspace, files, service, revision)
@@ -351,7 +377,7 @@ fn accepted_revision_advancing_during_turn_preserves_operator_document() {
 }
 
 #[test]
-fn unchanged_accepted_revision_still_restores_worker_candidate() {
+fn legacy_revision_bound_restore_fails_closed_without_atomic_authority_guard() {
     let (workspace, files, service, _revision) =
         revisioned_reconciliation_fixture("unchanged-accepted-revision");
     let workspace_dir = workspace.to_string_lossy();
@@ -381,15 +407,15 @@ fn unchanged_accepted_revision_still_restores_worker_candidate() {
             &snapshot,
         )
         .unwrap();
-    assert_eq!(result.restored_protected_files.len(), 1);
-    assert!(result.auto_follow_block_reason.is_none());
+    assert!(result.restored_protected_files.is_empty());
+    assert!(result.auto_follow_block_reason.is_some());
     assert_eq!(
         files
             .load_planning_workspace_files(&workspace_dir)
             .unwrap()
             .result_output_markdown
             .as_deref(),
-        Some("# Snapshot A")
+        Some("# Accidental worker candidate")
     );
     std::fs::remove_dir_all(workspace).unwrap();
 }
@@ -582,4 +608,65 @@ fn queue_task(id: &str, status: TaskStatus) -> PriorityQueueTask {
         updated_at: "2026-04-29T00:00:00Z".to_string(),
         rank_reasons: vec!["status=ready".to_string()],
     }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn legacy_execution_capture_retries_when_operator_commits_between_body_and_revision() {
+    let (workspace, files, _, revision) = revisioned_reconciliation_fixture("mixed-capture");
+    let workspace_dir = workspace.to_string_lossy().to_string();
+    files
+        .commit_planning_workspace_files(
+            &workspace_dir,
+            &PlanningWorkspaceLoadRecord {
+                result_output_markdown: Some("Accepted A".into()),
+            },
+        )
+        .unwrap();
+    let changed_files = files.clone();
+    let changed_revision = revision.clone();
+    let changed_workspace = workspace_dir.clone();
+    let service = PlanningReconciliationService::with_task_repository(
+        files.clone(),
+        PlanningValidationService::new(),
+        crate::domain::planning::PriorityQueueService::new(),
+        Arc::new(RevisionedTaskRepository {
+            revision,
+            reads: std::sync::atomic::AtomicUsize::new(0),
+            before_second_read: Some(Box::new(move || {
+                changed_files
+                    .commit_planning_workspace_files(
+                        &changed_workspace,
+                        &PlanningWorkspaceLoadRecord {
+                            result_output_markdown: Some("Accepted B".into()),
+                        },
+                    )
+                    .unwrap();
+                changed_revision.store(42, Ordering::SeqCst);
+            })),
+        }),
+    );
+    let snapshot = service.load_execution_snapshot(&workspace_dir).unwrap();
+    assert_eq!(
+        snapshot.result_output_markdown.as_deref(),
+        Some("Accepted B")
+    );
+    assert_eq!(snapshot.planning_revision, Some(42));
+    let result = service
+        .reconcile_after_turn(
+            &workspace_dir,
+            "mixed-capture-turn",
+            &[crate::domain::planning::RESULT_OUTPUT_FILE_PATH.to_owned()],
+            &snapshot,
+        )
+        .unwrap();
+    assert!(result.restored_protected_files.is_empty());
+    assert_eq!(
+        files
+            .load_planning_workspace_files(&workspace_dir)
+            .unwrap()
+            .result_output_markdown,
+        Some("Accepted B".into())
+    );
+    std::fs::remove_dir_all(workspace).unwrap();
 }

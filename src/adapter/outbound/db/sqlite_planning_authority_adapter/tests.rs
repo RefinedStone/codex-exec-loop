@@ -9095,3 +9095,218 @@ fn unparsable_metadata_counter_fails_instead_of_restarting() {
         "authority metadata `planning_revision` is not an integer",
     );
 }
+
+#[test]
+fn execution_snapshot_pins_body_tasks_and_revision_during_operator_commit() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let workspace = temp_workspace("execution-snapshot-atomic");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let tasks = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &tasks,
+                queue_projection: &empty_test_queue_projection(),
+            },
+        )
+        .unwrap();
+    SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
+        &workspace,
+        &PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("Accepted A".into()),
+        },
+    )
+    .unwrap();
+    let before =
+        SqlitePlanningAuthorityAdapter::load_active_execution_snapshot(&workspace).unwrap();
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
+            .unwrap();
+    let writer_connection = open_authority_connection(&location).unwrap();
+    writer_connection
+        .busy_timeout(Duration::from_millis(50))
+        .unwrap();
+    let (prepare_tx, prepare_rx) = mpsc::channel();
+    let (prepared_tx, prepared_rx) = mpsc::channel();
+    let (commit_tx, commit_rx) = mpsc::channel();
+    let (attempted_tx, attempted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        prepare_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let mut transaction = writer_connection.unchecked_transaction().unwrap();
+        super::set_active_document(&transaction, RESULT_OUTPUT_FILE_PATH, Some("Accepted B"))
+            .unwrap();
+        transaction
+            .execute(
+                "UPDATE authority_metadata SET value = '3' WHERE key = 'task_authority_version'",
+                [],
+            )
+            .unwrap();
+        super::bump_planning_revision(&transaction).unwrap();
+        prepared_tx.send(()).unwrap();
+        commit_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let committed = match transaction.execute_batch("COMMIT") {
+            Ok(()) => true,
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) =>
+            {
+                false
+            }
+            Err(error) => panic!("unexpected concurrent commit failure: {error}"),
+        };
+        if committed {
+            transaction.set_drop_behavior(rusqlite::DropBehavior::Ignore);
+        }
+        attempted_tx.send(committed).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        if !committed {
+            transaction.commit().unwrap();
+        }
+    });
+    let captured = SqlitePlanningAuthorityAdapter::load_active_execution_snapshot_with_body_hook(
+        &workspace,
+        || {
+            prepare_tx.send(()).unwrap();
+            prepared_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            commit_tx.send(()).unwrap();
+            // Wait for the actual commit attempt, not merely the writer's intent.
+            // DELETE mode blocks it on this read transaction; WAL may commit but
+            // must retain the pinned snapshot. Without a transaction it commits
+            // before the later task/revision reads, deterministically mixing A/B.
+            attempted_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        },
+    )
+    .unwrap();
+    release_tx.send(()).unwrap();
+    writer.join().unwrap();
+    assert_eq!(captured, before);
+    let after = SqlitePlanningAuthorityAdapter::load_active_execution_snapshot(&workspace).unwrap();
+    assert_eq!(after.result_output_markdown.as_deref(), Some("Accepted B"));
+    assert_eq!(
+        after.planning_revision,
+        before.planning_revision.map(|revision| revision + 1)
+    );
+    assert_eq!(after.task_authority.unwrap().version, 3);
+}
+
+#[test]
+fn execution_snapshot_preserves_absence_and_restore_rechecks_revision_in_transaction() {
+    let workspace = temp_workspace("execution-snapshot-revision-cas");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let mut tasks = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &tasks,
+                queue_projection: &empty_test_queue_projection(),
+            },
+        )
+        .unwrap();
+    let missing =
+        SqlitePlanningAuthorityAdapter::load_active_execution_snapshot(&workspace).unwrap();
+    assert!(missing.result_output_markdown.is_none());
+    assert_eq!(missing.task_authority, Some(tasks.clone()));
+    assert!(missing.planning_revision.is_some());
+
+    let candidate = PlanningWorkspaceLoadRecord {
+        result_output_markdown: Some("Worker candidate".into()),
+    };
+    SqlitePlanningAuthorityAdapter::commit_active_workspace_files(&workspace, &candidate).unwrap();
+    let before =
+        SqlitePlanningAuthorityAdapter::load_active_execution_snapshot(&workspace).unwrap();
+    // An approval advances authority without changing the observed body. A body-only
+    // CAS would silently accept the stale restoration at this boundary.
+    tasks.version = 3;
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: before.planning_revision,
+                task_authority: &tasks,
+                queue_projection: &empty_test_queue_projection(),
+            },
+        )
+        .unwrap();
+    let replacement = PlanningWorkspaceLoadRecord::default();
+    assert!(
+        !SqlitePlanningAuthorityAdapter::compare_and_swap_active_workspace_files_at_revision(
+            &workspace,
+            before.planning_revision,
+            &candidate,
+            &replacement,
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_active_workspace_files(&workspace).unwrap(),
+        candidate
+    );
+    let current =
+        SqlitePlanningAuthorityAdapter::load_active_execution_snapshot(&workspace).unwrap();
+    assert!(
+        SqlitePlanningAuthorityAdapter::compare_and_swap_active_workspace_files_at_revision(
+            &workspace,
+            current.planning_revision,
+            &candidate,
+            &replacement,
+        )
+        .unwrap()
+    );
+    assert!(
+        SqlitePlanningAuthorityAdapter::load_active_workspace_files(&workspace)
+            .unwrap()
+            .result_output_markdown
+            .is_none()
+    );
+}
+
+#[test]
+fn sqlite_revision_bound_restore_rejects_missing_revision_without_body_only_fallback() {
+    let workspace = temp_workspace("execution-restore-missing-revision");
+    let empty = PlanningWorkspaceLoadRecord::default();
+    let accepted = PlanningWorkspaceLoadRecord {
+        result_output_markdown: Some("Accepted body".into()),
+    };
+    let initial =
+        SqlitePlanningAuthorityAdapter::load_active_execution_snapshot(&workspace).unwrap();
+    assert_eq!(initial.planning_revision, Some(0));
+    assert!(
+        !SqlitePlanningAuthorityAdapter::compare_and_swap_active_workspace_files_at_revision(
+            &workspace, None, &empty, &accepted,
+        )
+        .unwrap()
+    );
+    SqlitePlanningAuthorityAdapter::commit_active_workspace_files(&workspace, &accepted).unwrap();
+    assert!(
+        !SqlitePlanningAuthorityAdapter::compare_and_swap_active_workspace_files_at_revision(
+            &workspace, None, &accepted, &empty,
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_active_workspace_files(&workspace).unwrap(),
+        accepted
+    );
+    assert!(
+        SqlitePlanningAuthorityAdapter::compare_and_swap_active_workspace_files(
+            &workspace, &accepted, &empty,
+        )
+        .unwrap(),
+        "the explicitly requested body-only primitive remains available"
+    );
+}

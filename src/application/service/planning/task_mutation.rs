@@ -86,6 +86,8 @@ pub struct PlanningTaskCreatePreview {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskMutationCommitResult {
+    // Exact accepted revision used by the successful mutation, before its commit.
+    pub observed_planning_revision: i64,
     pub committed_planning_revision: i64,
     // queue_head는 caller cache가 아니라 방금 재계산한 projection에서 온다. commit 직후 TUI의
     // queue-head view가 저장된 authority와 같은 상태를 보게 하기 위한 응답 값이다.
@@ -266,6 +268,7 @@ impl PlanningTaskMutationService {
                     return Ok(PlanningTaskCreateCommitResult {
                         committed_task,
                         mutation: PlanningTaskMutationCommitResult {
+                            observed_planning_revision: observed_revision,
                             committed_planning_revision: planning_revision,
                             queue_head: queue_projection.next_task,
                             task_authority_changed: true,
@@ -310,6 +313,7 @@ impl PlanningTaskMutationService {
             let queue_projection =
                 self.validate_and_project(&context.directions, &context.task_authority)?;
             return Ok(PlanningTaskMutationCommitResult {
+                observed_planning_revision: context.task_planning_revision,
                 committed_planning_revision: context.task_planning_revision,
                 queue_head: queue_projection.next_task,
                 task_authority_changed: false,
@@ -338,6 +342,7 @@ impl PlanningTaskMutationService {
                 // 현재 task definition과 같게 normalize되는 update는 inspected id를 보고하되
                 // authority file은 다시 쓰지 않는다.
                 return Ok(PlanningTaskMutationCommitResult {
+                    observed_planning_revision: context.task_planning_revision,
                     committed_planning_revision: context.task_planning_revision,
                     queue_head: queue_projection.next_task,
                     task_authority_changed: false,
@@ -360,6 +365,7 @@ impl PlanningTaskMutationService {
                     planning_revision, ..
                 } => {
                     return Ok(PlanningTaskMutationCommitResult {
+                        observed_planning_revision: context.task_planning_revision,
                         committed_planning_revision: planning_revision,
                         queue_head: queue_projection.next_task,
                         task_authority_changed: true,
@@ -542,6 +548,7 @@ impl PlanningTaskMutationService {
             PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision, ..
             } => Ok(PlanningTaskMutationCommitResult {
+                observed_planning_revision: context.task_planning_revision,
                 committed_planning_revision: planning_revision,
                 queue_head: queue_projection.next_task,
                 task_authority_changed: true,

@@ -511,6 +511,15 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         })
     }
 
+    fn load_planning_execution_snapshot(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<crate::domain::planning::ExecutionSnapshot>> {
+        self.repo_scoped_store(workspace_dir)
+            .map(|store| store.load_active_execution_snapshot(workspace_dir))
+            .transpose()
+    }
+
     fn load_planning_workspace_candidate_files(
         &self,
         workspace_dir: &str,
@@ -569,6 +578,26 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             observed.result_output_markdown.as_deref(),
             replacement.result_output_markdown.as_deref(),
         )
+    }
+
+    fn compare_and_swap_planning_workspace_files_at_revision(
+        &self,
+        workspace_dir: &str,
+        expected_planning_revision: Option<i64>,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.compare_and_swap_active_workspace_files_at_revision(
+                workspace_dir,
+                expected_planning_revision,
+                observed,
+                replacement,
+            );
+        }
+        // The legacy file lock cannot serialize SQLite task/direction approvals.
+        // Even a missing revision can become present before the file write.
+        Ok(false)
     }
 
     fn load_optional_planning_file(
@@ -819,6 +848,24 @@ mod tests {
             .commit_planning_workspace_files(workspace_dir, &worker_candidate)
             .expect("worker candidate should commit");
 
+        for revision in [None, Some(41)] {
+            assert!(
+                !adapter
+                    .compare_and_swap_planning_workspace_files_at_revision(
+                        workspace_dir,
+                        revision,
+                        &worker_candidate,
+                        &snapshot,
+                    )
+                    .expect("legacy revision-bound restoration must fail closed")
+            );
+            assert_eq!(
+                adapter
+                    .load_planning_workspace_files(workspace_dir)
+                    .unwrap(),
+                worker_candidate
+            );
+        }
         assert!(
             adapter
                 .compare_and_swap_planning_workspace_files(
@@ -826,7 +873,7 @@ mod tests {
                     &worker_candidate,
                     &snapshot,
                 )
-                .expect("matching candidate should restore")
+                .expect("explicit body-only CAS should remain available")
         );
         assert!(
             !adapter

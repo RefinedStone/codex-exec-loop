@@ -93,6 +93,13 @@ impl RepoScopedPlanningWorkspacePort for SqlitePlanningAuthorityAdapter {
         Self::load_active_workspace_files(workspace_dir)
     }
 
+    fn load_active_execution_snapshot(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<crate::domain::planning::ExecutionSnapshot> {
+        Self::load_active_execution_snapshot(workspace_dir)
+    }
+
     // application이 만든 active workspace snapshot을 SQLite active_documents row들로 commit한다.
     fn commit_active_workspace_files(
         &self,
@@ -111,6 +118,21 @@ impl RepoScopedPlanningWorkspacePort for SqlitePlanningAuthorityAdapter {
         replacement: &PlanningWorkspaceLoadRecord,
     ) -> Result<bool> {
         Self::compare_and_swap_active_workspace_files(workspace_dir, observed, replacement)
+    }
+
+    fn compare_and_swap_active_workspace_files_at_revision(
+        &self,
+        workspace_dir: &str,
+        expected_planning_revision: Option<i64>,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
+        Self::compare_and_swap_active_workspace_files_at_revision(
+            workspace_dir,
+            expected_planning_revision,
+            observed,
+            replacement,
+        )
     }
 
     // active_documents에서 단일 planning 파일 본문을 선택적으로 읽는다.
