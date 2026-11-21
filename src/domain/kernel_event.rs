@@ -1170,6 +1170,17 @@ pub fn open_queued_thread_prompts(
     open
 }
 
+impl KernelEvent {
+    /// 이슈 outbox 사실의 영속 dedupe 식별자다. 다른 사건은 기존 sequence 계약을 유지한다.
+    pub fn issue_work_event_id(&self) -> Option<&str> {
+        match self {
+            Self::IssueWorkSubmitted { event_id, .. }
+            | Self::IssueWorkPermitGranted { event_id, .. } => Some(event_id),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2014,16 +2025,5 @@ mod tests {
             serde_json::to_value(settled("task-1")).expect("event should serialize")["kind"],
             settled("task-1").kind()
         );
-    }
-}
-
-impl KernelEvent {
-    /// 이슈 outbox 사실의 영속 dedupe 식별자다. 다른 사건은 기존 sequence 계약을 유지한다.
-    pub fn issue_work_event_id(&self) -> Option<&str> {
-        match self {
-            Self::IssueWorkSubmitted { event_id, .. }
-            | Self::IssueWorkPermitGranted { event_id, .. } => Some(event_id),
-            _ => None,
-        }
     }
 }

@@ -2,7 +2,7 @@
 use super::issue_collection::{IssueCollectionCancellation, checked_resync_read};
 use super::issue_decision::IssueDecisionService;
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
-use super::issue_triage::IssueTriageService;
+use super::issue_triage::{IssueTriageService, IssueTriagedFact};
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationStorePort, IssueCollectionApplyResult, IssueDecisionFence,
     IssueDecisionSaveResult, IssueTriageFence, IssueTriageSaveResult, IssueWorkSaveResult,
@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueCoordinatorFact {
+    Triaged(IssueTriagedFact),
     Decision {
         fact: IssueDecisionFact,
         revision: u64,
@@ -206,7 +207,12 @@ impl IssueCoordinatorService {
                 Ok(snapshot) => snapshot,
                 Err(_) => {
                     if let Some(work) = work.as_ref() {
-                        self.block_work(work, IssueWorkBlockReason::SourceUnavailable, cancel)?;
+                        self.block_work(
+                            work,
+                            IssueWorkBlockReason::SourceUnavailable,
+                            cancel,
+                            committed,
+                        )?;
                     }
                     return Ok(());
                 }
@@ -240,7 +246,7 @@ impl IssueCoordinatorService {
             }
             IssueCoordinatorAction::ExpireDecision => {
                 if let Some(stored) = decision {
-                    let (fence, current, assessment) = self.current(&item.issue)?;
+                    let (fence, current, assessment) = self.current(&item.issue, committed)?;
                     let _ = current;
                     let resolution = stored.request.answer_agent(
                         &basis,
@@ -263,13 +269,12 @@ impl IssueCoordinatorService {
                                 &assessment,
                                 &resolution.request,
                             )?
+                            && commit.changed
                         {
-                            if commit.changed {
-                                committed(vec![IssueCoordinatorFact::Decision {
-                                    fact: commit.record.request.fact(),
-                                    revision: commit.catalog_revision,
-                                }]);
-                            }
+                            committed(vec![IssueCoordinatorFact::Decision {
+                                fact: commit.record.request.fact(),
+                                revision: commit.catalog_revision,
+                            }]);
                         }
                         Ok(())
                     })?;
@@ -283,6 +288,7 @@ impl IssueCoordinatorService {
                         work,
                         cancel,
                         execution_enabled,
+                        committed,
                     )?;
                 }
             }
@@ -292,7 +298,7 @@ impl IssueCoordinatorService {
                         self.execution
                             .revoke(&self.workspace, &work.order.work_order_id)?;
                         work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
-                        let (fence, _, assessment) = self.current(&item.issue)?;
+                        let (fence, _, assessment) = self.current(&item.issue, committed)?;
                         self.store
                             .save_issue_work(&self.workspace, fence, &assessment, &work)?;
                         Ok(())
@@ -302,7 +308,7 @@ impl IssueCoordinatorService {
             IssueCoordinatorAction::None => {
                 if let Some(mut work) = work {
                     let reason = if !execution_enabled {
-                        Some(IssueWorkBlockReason::ParallelDisabled)
+                        Some(IssueWorkBlockReason::ExecutionDisabled)
                     } else if !work.delivery_granted {
                         Some(IssueWorkBlockReason::AwaitingSource)
                     } else {
@@ -310,7 +316,7 @@ impl IssueCoordinatorService {
                     };
                     if work.blocked_reason != reason {
                         work.blocked_reason = reason;
-                        let (fence, _, assessment) = self.current(&item.issue)?;
+                        let (fence, _, assessment) = self.current(&item.issue, committed)?;
                         cancel.commit_if_active(|| {
                             self.store.save_issue_work(
                                 &self.workspace,
@@ -342,6 +348,7 @@ impl IssueCoordinatorService {
         existing: Option<IssueWorkCheckpoint>,
         cancel: &IssueCollectionCancellation,
         execution_enabled: bool,
+        committed: &Reporter<'_>,
     ) -> Result<()> {
         // 느린 integration target fetch를 먼저 마친다. 제출 직전의 마지막 원격 읽기는 이슈다.
         let execution = self
@@ -351,7 +358,7 @@ impl IssueCoordinatorService {
         if !self.fresh_resync(issue, cancel)? {
             return Ok(());
         }
-        let (fence, item, assessment) = self.current(issue)?;
+        let (fence, item, assessment) = self.current(issue, committed)?;
         let basis =
             IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None)?;
         if !ready_for_propose(&assessment)
@@ -366,7 +373,12 @@ impl IssueCoordinatorService {
                     self.execution
                         .revoke(&self.workspace, &work.order.work_order_id)
                 })?;
-                self.block_work(&work, IssueWorkBlockReason::ApprovalChanged, cancel)?;
+                self.block_work(
+                    &work,
+                    IssueWorkBlockReason::ApprovalChanged,
+                    cancel,
+                    committed,
+                )?;
             }
             return Ok(());
         }
@@ -422,7 +434,7 @@ impl IssueCoordinatorService {
                 Ok(task_ids) => task_ids,
                 Err(_) => {
                     work.blocked_reason = Some(IssueWorkBlockReason::SubmissionUnavailable);
-                    let (fence, _, assessment) = self.current(issue)?;
+                    let (fence, _, assessment) = self.current(issue, committed)?;
                     self.store
                         .save_issue_work(&self.workspace, fence, &assessment, &work)?;
                     bail!("the issue work submission was interrupted");
@@ -434,16 +446,16 @@ impl IssueCoordinatorService {
             } else if execution_enabled {
                 Some(IssueWorkBlockReason::AwaitingSource)
             } else {
-                Some(IssueWorkBlockReason::ParallelDisabled)
+                Some(IssueWorkBlockReason::ExecutionDisabled)
             };
-            let (fence, _, current) = self.current(issue)?;
-            // 로컬 정책도 등록 후 다시 확인한다. 판이 바뀌면 task는 permit 없이 queued로 남는다.
-            if IssueDecisionBasis::from_assessment(&current, IssueAutomationGate::Start, None)?
-                != basis
-                || !ready_for_propose(&current)
-            {
+            let (fence, current_item, current) = self.current_or_revoke(&work, committed)?;
+            // 로컬 정책과 표시도 등록 후 다시 확인한다. 판이 바뀌면 task는 permit 없이 남는다.
+            if !matches_approval(&current_item, &current, &basis)? {
                 self.execution
                     .revoke(&self.workspace, &work.order.work_order_id)?;
+                work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
+                self.store
+                    .save_issue_work(&self.workspace, fence, &current, &work)?;
                 return Ok(());
             }
             let IssueWorkSaveResult::Saved { record, .. } =
@@ -473,24 +485,60 @@ impl IssueCoordinatorService {
                 &self.workspace,
                 &IssueWorkPermitRequest {
                     work_order_id: work.order.work_order_id.clone(),
-                    approval: basis,
+                    approval: basis.clone(),
                     source_sha: source.clone(),
                     gate_revision,
                     delivery,
                 },
             )?;
+            let (fence, current_item, current) = self.current_or_revoke(&work, committed)?;
+            if !matches_approval(&current_item, &current, &basis)? {
+                self.execution
+                    .revoke(&self.workspace, &work.order.work_order_id)?;
+                work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
+                self.store
+                    .save_issue_work(&self.workspace, fence, &current, &work)?;
+                return Ok(());
+            }
             work.permit_source = Some(source.clone());
             work.permit_revision = gate_revision;
             work.delivery_granted = delivery;
             if delivery && execution_enabled {
                 work.blocked_reason = None;
             }
-            let (fence, _, current) = self.current(issue)?;
-            self.store
-                .save_issue_work(&self.workspace, fence, &current, &work)?;
+            match self
+                .store
+                .save_issue_work(&self.workspace, fence, &current, &work)
+            {
+                Ok(IssueWorkSaveResult::Saved { .. }) => {}
+                Ok(IssueWorkSaveResult::Conflict) => {
+                    self.execution
+                        .revoke(&self.workspace, &work.order.work_order_id)?;
+                }
+                Err(error) => {
+                    self.execution
+                        .revoke(&self.workspace, &work.order.work_order_id)?;
+                    return Err(error);
+                }
+            }
             Ok(())
         })?;
         Ok(())
+    }
+
+    fn current_or_revoke(
+        &self,
+        work: &IssueWorkCheckpoint,
+        committed: &Reporter<'_>,
+    ) -> Result<(IssueTriageFence, IssueCollectionItem, IssueTriageAssessment)> {
+        match self.current(&work.order.issue, committed) {
+            Ok(current) => Ok(current),
+            Err(error) => {
+                self.execution
+                    .revoke(&self.workspace, &work.order.work_order_id)?;
+                Err(error)
+            }
+        }
     }
 
     fn block_work(
@@ -498,10 +546,11 @@ impl IssueCoordinatorService {
         work: &IssueWorkCheckpoint,
         reason: IssueWorkBlockReason,
         cancel: &IssueCollectionCancellation,
+        committed: &Reporter<'_>,
     ) -> Result<()> {
         let mut candidate = work.clone();
         candidate.blocked_reason = Some(reason);
-        let (fence, _, assessment) = self.current(&work.order.issue)?;
+        let (fence, _, assessment) = self.current(&work.order.issue, committed)?;
         cancel.commit_if_active(|| {
             self.store
                 .save_issue_work(&self.workspace, fence, &assessment, &candidate)?;
@@ -548,6 +597,7 @@ impl IssueCoordinatorService {
     fn current(
         &self,
         issue: &IssueReference,
+        committed: &Reporter<'_>,
     ) -> Result<(IssueTriageFence, IssueCollectionItem, IssueTriageAssessment)> {
         for _ in 0..3 {
             let mut after = None;
@@ -569,10 +619,38 @@ impl IssueCoordinatorService {
                         tracked_revision: item.tracked_revision,
                         assessment_revision: item.triage.as_ref().map(|triage| triage.revision),
                     };
-                    if let IssueTriageSaveResult::Saved { record, .. } =
-                        self.store
-                            .save_triage(&self.workspace, fence, &assessment)?
+                    if let IssueTriageSaveResult::Saved {
+                        record,
+                        binding_id,
+                        catalog_revision,
+                        changed,
+                    } = self
+                        .store
+                        .save_triage(&self.workspace, fence, &assessment)?
                     {
+                        if changed {
+                            committed(vec![IssueCoordinatorFact::Triaged(IssueTriagedFact {
+                                issue: item.issue.clone(),
+                                binding_id,
+                                revision: catalog_revision,
+                                assessment_revision: record.revision,
+                                gate_revision: record
+                                    .assessment
+                                    .gates()
+                                    .iter()
+                                    .map(|gate| gate.gate_revision)
+                                    .max()
+                                    .ok_or_else(|| {
+                                        anyhow!("the committed issue assessment has no gates")
+                                    })?,
+                                policy_version: record
+                                    .assessment
+                                    .basis()
+                                    .automation_policy_version
+                                    .clone(),
+                                field_hash: record.assessment.basis().field_hash.clone(),
+                            })]);
+                        }
                         fence.assessment_revision = Some(record.revision);
                         item.triage = Some(*record);
                         return Ok((fence, item, assessment));
@@ -688,6 +766,19 @@ fn start_definition(
         asked_by: "issue-coordinator".into(),
         evidence: Vec::new(),
     })
+}
+
+fn matches_approval(
+    item: &IssueCollectionItem,
+    assessment: &IssueTriageAssessment,
+    basis: &IssueDecisionBasis,
+) -> Result<bool> {
+    Ok(ready_for_propose(assessment)
+        && IssueDecisionBasis::from_assessment(assessment, IssueAutomationGate::Start, None)?
+            == *basis
+        && item.tracked.as_ref().is_some_and(|tracked| {
+            !tracked.flags.held && !tracked.flags.stale && !tracked.flags.unknown
+        }))
 }
 
 #[cfg(test)]
