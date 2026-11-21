@@ -52,8 +52,8 @@ mod work_permits;
 #[cfg(test)]
 pub(super) use self::delivery::install_before_distributor_cleanup_lock_hook;
 use self::work_permits::{
-    block_if_work_order_permit_denied, recheck_work_order_permit_wait, select_permitted_queue_head,
-    work_order_delivery_gate, work_order_permit_decision,
+    WorkOrderPermitWaitRecheck, block_if_work_order_permit_denied, recheck_work_order_permit_wait,
+    select_permitted_queue_head, work_order_delivery_gate, work_order_permit_decision,
 };
 use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitStage;
 mod queue_keys;
@@ -78,7 +78,33 @@ thread_local! {
         RefCell::new(None);
     static AFTER_DISTRIBUTOR_ENQUEUE_POOL_BUSY_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
         RefCell::new(None);
+    static BEFORE_WORK_ORDER_PERMIT_REARM_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        RefCell::new(None);
 }
+
+#[cfg(test)]
+pub(super) fn install_before_work_order_permit_rearm_hook(hook: impl FnOnce() + 'static) {
+    BEFORE_WORK_ORDER_PERMIT_REARM_HOOK.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(hook));
+        assert!(
+            previous.is_none(),
+            "work-order permit rearm test hook already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn run_before_work_order_permit_rearm_hook() {
+    BEFORE_WORK_ORDER_PERMIT_REARM_HOOK.with(|slot| {
+        let hook = slot.borrow_mut().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_before_work_order_permit_rearm_hook() {}
 
 #[cfg(test)]
 pub(super) fn install_after_distributor_enqueue_preflight_hook(hook: impl FnOnce() + 'static) {
@@ -1522,15 +1548,19 @@ impl ParallelModeDistributorService {
                 context.distributor_queue_records[index] = record;
                 continue;
             }
-            if recheck_work_order_permit_wait(
+            match recheck_work_order_permit_wait(
                 self.planning_authority.as_ref(),
                 self.parallel_runtime.as_ref(),
                 &context.repo_root,
                 &context.pool_root,
                 &mut record,
             )? {
-                context.distributor_queue_records[index] = record;
-                continue;
+                WorkOrderPermitWaitRecheck::NotWaiting => {}
+                WorkOrderPermitWaitRecheck::Waiting => {
+                    context.distributor_queue_records[index] = record;
+                    continue;
+                }
+                WorkOrderPermitWaitRecheck::Retry(detail) => return Err(detail),
             }
             /*
             Recovery runs the narrow, non-destructive fixes before broader state

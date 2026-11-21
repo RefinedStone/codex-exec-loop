@@ -84,6 +84,12 @@ fn blocked_stage(detail: &str) -> Option<PlanningWorkPermitStage> {
     }
 }
 
+pub(super) enum WorkOrderPermitWaitRecheck {
+    NotWaiting,
+    Waiting,
+    Retry(String),
+}
+
 /// Only a work-order permit wait may yield its place in the distributor queue.
 /// Existing operator, conflict, and cleanup blocks retain their previous ordering.
 pub(super) fn select_permitted_queue_head(
@@ -97,14 +103,16 @@ pub(super) fn select_permitted_queue_head(
             continue;
         }
         let mut record = context.distributor_queue_records[index].clone();
-        if recheck_work_order_permit_wait(
+        match recheck_work_order_permit_wait(
             authority,
             runtime,
             &context.repo_root,
             &context.pool_root,
             &mut record,
         )? {
-            continue;
+            WorkOrderPermitWaitRecheck::NotWaiting => {}
+            WorkOrderPermitWaitRecheck::Waiting => continue,
+            WorkOrderPermitWaitRecheck::Retry(detail) => return Err(detail),
         }
         context.distributor_queue_records[index] = record;
         return Ok(Some(index));
@@ -112,23 +120,23 @@ pub(super) fn select_permitted_queue_head(
     Ok(None)
 }
 
-/// Returns true while this record is still waiting. A new grant re-arms only this task.
+/// A new grant re-arms only this task. A lost CAS invalidates the caller's queue snapshot.
 pub(super) fn recheck_work_order_permit_wait(
     authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     pool_root: &Path,
     record: &mut ParallelModeDistributorQueueRecord,
-) -> Result<bool, String> {
+) -> Result<WorkOrderPermitWaitRecheck, String> {
     if record.queue_state != ParallelModeQueueItemState::Blocked {
-        return Ok(false);
+        return Ok(WorkOrderPermitWaitRecheck::NotWaiting);
     }
     let Some(stage) = blocked_stage(&record.integration_note) else {
-        return Ok(false);
+        return Ok(WorkOrderPermitWaitRecheck::NotWaiting);
     };
     let decision = work_order_permit_decision(authority, repo_root, record, stage)?;
     if decision.blocked_reason().is_some() {
-        return Ok(true);
+        return Ok(WorkOrderPermitWaitRecheck::Waiting);
     }
     let expected = record.clone();
     record.queue_state = ParallelModeQueueItemState::Queued;
@@ -137,12 +145,17 @@ pub(super) fn recheck_work_order_permit_wait(
         "work-order execution permit is current; queued for revalidation".to_string();
     record.updated_at = current_timestamp();
     record.retry_not_before = None;
+    super::run_before_work_order_permit_rearm_hook();
     if !super::store::compare_and_swap_distributor_queue_record(
         authority, runtime, repo_root, pool_root, &expected, record,
     )? {
-        // A concurrent completion or claim owns the newer row; never resurrect this snapshot.
+        // The newer row may be runnable or owned by another distributor. Neither queue
+        // selection nor recovery may skip it or write anything else from this snapshot.
         *record = expected;
-        return Ok(true);
+        return Ok(WorkOrderPermitWaitRecheck::Retry(format!(
+            "distributor queue changed during work-order permit refresh / item {}; retry with a fresh authority snapshot",
+            record.queue_item_id
+        )));
     }
-    Ok(false)
+    Ok(WorkOrderPermitWaitRecheck::NotWaiting)
 }
