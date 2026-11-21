@@ -63,7 +63,8 @@ pub(super) fn websocket_config() -> WebSocketConfig {
 
 /// Gateway 가 직접 답하는 `akra/*` 서비스들이다. 없는 서비스의 메서드는 모르는 메서드로 답한다. 테스트는 필요한
 /// 것만 채운다.
-#[derive(Clone, Default)]
+#[derive(Clone)]
+#[cfg_attr(test, derive(Default))]
 pub(super) struct GatewayServices {
     pub(super) delegations: Arc<super::delegation::Delegations>,
     pub(super) mcp_hub: Option<Arc<GatewayMcpHub>>,

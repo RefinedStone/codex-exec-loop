@@ -8,9 +8,16 @@ scenario = "D2_SCENARIO"
 calls = Path(__file__).parent / "calls"
 cwd = Path.cwd()
 assert not any(cwd.iterdir())
-assert cwd.parent == Path(os.environ["CODEX_HOME"]).parent
+profile = Path(os.environ["CODEX_HOME"])
+assert cwd.parent == profile.parent
+assert profile.name == "codex-delegation-auth"
 assert cwd != Path(os.environ["HOME"])
 assert "OPENAI_API_KEY" not in os.environ
+assert "CODEX_API_KEY" not in os.environ
+assert 'cli_auth_credentials_store="keyring"' in sys.argv
+assert 'forced_login_method="chatgpt"' in sys.argv
+features = ["shell_tool", "unified_exec", "code_mode", "view_image", "apps", "plugins", "secret_auth_storage"]
+assert all(f"features.{feature}=false" in sys.argv for feature in features)
 
 
 def send(value):
@@ -45,10 +52,21 @@ for line in sys.stdin:
         result = {"userAgent": "codex-fixture", "platformFamily": "unix", "platformOs": "linux"}
     elif method == "account/read":
         assert params == {"refreshToken": False}
-        result = {"account": {"type": "apiKey"}}
+        if scenario == "auth_refused":
+            send({"id": request["id"], "error": {"code": -32600, "message": "synthetic keyring failure"}})
+            continue
+        account = {"type": "chatgpt", "email": "fixture@example.invalid", "planType": "plus"}
+        if scenario == "auth_api_key":
+            account = {"type": "apiKey"}
+        result = {"account": None if scenario == "auth_missing" else account}
     elif method == "config/read":
         assert params["cwd"] == str(cwd)
-        result = {"config": {"mcp_servers": {}, "plugins": {}, "hooks": None}}
+        store = "file" if scenario == "auth_file_store" else "keyring"
+        applied = dict.fromkeys(features, False)
+        if scenario == "auth_tools_enabled":
+            applied["shell_tool"] = True
+        result = {"config": {"mcp_servers": {}, "plugins": {}, "hooks": None,
+                             "cli_auth_credentials_store": store, "features": applied}}
     elif method == "thread/start":
         assert params["cwd"] == str(cwd)
         assert params["ephemeral"]

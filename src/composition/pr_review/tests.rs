@@ -1,12 +1,10 @@
 use super::*;
-use crate::application::service::pr_review::REVIEW_INSTRUCTIONS;
 use crate::domain::delegation::{
     Delivery, EndReason,
     policy::{PolicyFile, resolve},
 };
+use crate::test_utils::pr_review_loopback::loopback;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::time::Duration;
 
 fn fixture_route() -> Route {
@@ -36,53 +34,6 @@ fn fixture_route() -> Route {
 
 fn output_message() -> Value {
     json!({"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":r#"{"summary":"local result","findings":[]}"#}]})
-}
-
-fn loopback(output: Vec<Value>) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut client, _) = listener.accept().unwrap();
-        client
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut reader = BufReader::new(&client);
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        assert_eq!(line.trim(), "POST /v1/responses HTTP/1.1");
-        let mut length = None;
-        let mut auth = false;
-        loop {
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-            if line == "\r\n" {
-                break;
-            }
-            let (name, value) = line.split_once(':').unwrap();
-            if name.eq_ignore_ascii_case("authorization") {
-                auth = value.trim() == "Bearer synthetic-local-key";
-            }
-            if name.eq_ignore_ascii_case("content-length") {
-                length = Some(value.trim().parse::<usize>().unwrap());
-            }
-        }
-        assert!(auth);
-        let mut payload = vec![0; length.unwrap()];
-        reader.read_exact(&mut payload).unwrap();
-        let body: Value = serde_json::from_slice(&payload).unwrap();
-        assert_eq!(body["model"], "codex-fixture");
-        assert_eq!(body["tools"], json!([]));
-        assert_eq!(body["tool_choice"], "none");
-        assert_eq!(body["store"], false);
-        assert_eq!(body["instructions"], REVIEW_INSTRUCTIONS);
-        assert_eq!(body["input"][0]["role"], "user");
-        let data = body["input"][0]["content"].as_str().unwrap();
-        assert!(data.contains("synthetic PR payload") && data.contains("[removed]"));
-        assert!(!data.contains("fakeSecret123456789"));
-        let reply = json!({"status":"completed","output":output}).to_string();
-        write!(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", reply.len(), reply).unwrap();
-    });
-    (addr, server)
 }
 
 fn fixture_input() -> ReviewInput {
@@ -157,11 +108,11 @@ fn pr_review_model_only_rejects_mixed_text_and_tool_result() {
 #[test]
 fn pr_review_malformed_tool_response_persists_result_invalid_for_desktop() {
     use crate::adapter::outbound::db::sqlite_pr_review_journal::ReviewJournal;
-    use crate::application::service::pr_review::{
-        PrReviewGithub, PrReviewService, ReviewMode, ReviewRevision,
-    };
+    use crate::application::port::outbound::pr_review_port::{PrReviewGithubPort, ReviewRevision};
+    use crate::application::service::pr_review::PrReviewService;
+    use crate::domain::pr_review::ReviewMode;
     struct Github;
-    impl PrReviewGithub for Github {
+    impl PrReviewGithubPort for Github {
         fn revision(&self, _: &GithubPullRequestTarget) -> Result<Option<ReviewRevision>> {
             let input = fixture_input();
             Ok(Some(ReviewRevision {

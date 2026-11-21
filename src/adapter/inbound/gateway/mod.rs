@@ -9,6 +9,7 @@ mod chats;
 mod confirmation;
 mod context;
 mod delegation;
+pub(crate) use delegation::Delegations;
 pub(crate) use delegation::{advance_pr_review, expire_pr_reviews};
 mod dots;
 mod git;
@@ -105,6 +106,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         dots,
         chats,
         issue_drafts,
+        delegations,
     } = production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
     let _ = std::io::stdout().flush();
@@ -130,7 +132,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             mcp_hub: Some(mcp_hub.clone()),
             work_context: Some(work_context),
             resource_versions: Some(resource_versions),
-            delegations: Default::default(),
+            delegations,
             git_graph: Some(git_graph),
             git_operations: Some(git_operations),
             issue_handoff: Some(issue_handoff),

@@ -311,16 +311,21 @@ impl Default for AppServerConnectionConfig {
 }
 
 impl AppServerConnectionConfig {
-    pub(super) fn isolated_delegation(cwd: &Path, home: &Path) -> Result<Self> {
+    pub(super) fn isolated_delegation(cwd: &Path, home: &Path, profile: &Path) -> Result<Self> {
         let binary = crate::trusted_executable::pinned_codex_command()?;
         let mut config = Self::isolated_delegation_process(cwd, home);
         config.executable = binary.program;
         config.executable_prefix_args = binary.prefix_args;
-        if configured_api_key_auth() {
-            for name in APP_SERVER_API_KEY_ENV_VARS {
-                if let Some(key) = std::env::var_os(name) {
-                    config.command_environment.push(((*name).into(), key));
-                }
+        config
+            .command_environment
+            .retain(|(name, _)| name != "CODEX_HOME");
+        config
+            .command_environment
+            .push(("CODEX_HOME".into(), profile.as_os_str().to_owned()));
+        #[cfg(target_os = "linux")]
+        for name in ["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"] {
+            if let Some(value) = std::env::var_os(name) {
+                config.command_environment.push((name.into(), value));
             }
         }
         Ok(config)
@@ -355,9 +360,20 @@ impl AppServerConnectionConfig {
     }
 
     #[cfg(test)]
-    pub(super) fn isolated_delegation_fixture(cwd: &Path, home: &Path, command: &Path) -> Self {
+    pub(super) fn isolated_delegation_fixture(
+        cwd: &Path,
+        home: &Path,
+        profile: &Path,
+        command: &Path,
+    ) -> Self {
         let mut config = Self::isolated_delegation_process(cwd, home);
         config.executable = command.into();
+        config
+            .command_environment
+            .retain(|(name, _)| name != "CODEX_HOME");
+        config
+            .command_environment
+            .push(("CODEX_HOME".into(), profile.as_os_str().to_owned()));
         config
     }
 
@@ -914,11 +930,62 @@ fn app_server_command_with_environment(
         .envs(config.command_environment.iter().cloned());
     if let Some(cwd) = &config.isolated_cwd {
         command
+            .args(ISOLATED_CODEX_AUTH_ARGS)
+            .args([
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.unified_exec=false",
+                "-c",
+                "features.code_mode=false",
+                "-c",
+                "features.view_image=false",
+                "-c",
+                "features.apps=false",
+                "-c",
+                "features.plugins=false",
+                "-c",
+                "web_search=\"disabled\"",
+            ])
             .env_clear()
             .envs(config.command_environment.iter().cloned())
             .current_dir(cwd);
     }
     command
+}
+
+const ISOLATED_CODEX_AUTH_ARGS: &[&str] = &[
+    "-c",
+    "cli_auth_credentials_store=\"keyring\"",
+    "-c",
+    "forced_login_method=\"chatgpt\"",
+    "-c",
+    "features.secret_auth_storage=false",
+];
+
+pub(super) fn isolated_delegation_login(cwd: &Path, home: &Path, profile: &Path) -> Result<bool> {
+    let config = AppServerConnectionConfig::isolated_delegation(cwd, home, profile)?;
+    let mut command = Command::new(&config.executable);
+    // This is an interactive, user-invoked official Codex login. Do not inject
+    // provider credentials, and let Codex deliver browser/device instructions.
+    command
+        .args(config.executable_prefix_args)
+        .args(ISOLATED_CODEX_AUTH_ARGS)
+        .arg("login")
+        .env_clear()
+        .envs(config.command_environment)
+        .current_dir(cwd);
+    for name in ["DISPLAY", "WAYLAND_DISPLAY"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    #[cfg(unix)]
+    command.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+    Ok(command
+        .status()
+        .context("could not start Codex login")?
+        .success())
 }
 
 /// 고정된 codex 실행 파일과 정리된 환경만 담은 command 이다. 하위 명령과 인자는 호출자가 붙인다.

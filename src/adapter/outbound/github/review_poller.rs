@@ -14,6 +14,9 @@ use crate::application::port::outbound::github_pr_validation_port::{
     GithubPrValidationError, GithubPrValidationErrorClass, GithubValidationProviderMetadata,
 };
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::port::outbound::pr_review_port::{
+    MAX_DIFF_BYTES, PrReviewGithubPort, ReviewRevision,
+};
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
@@ -1190,11 +1193,8 @@ impl GithubReviewPollerAdapter {
     }
 }
 
-impl crate::application::service::pr_review::PrReviewGithub for GithubReviewPollerAdapter {
-    fn revision(
-        &self,
-        target: &GithubPullRequestTarget,
-    ) -> Result<Option<crate::application::service::pr_review::ReviewRevision>> {
+impl PrReviewGithubPort for GithubReviewPollerAdapter {
+    fn revision(&self, target: &GithubPullRequestTarget) -> Result<Option<ReviewRevision>> {
         #[derive(Deserialize)]
         struct Commit {
             sha: String,
@@ -1209,18 +1209,15 @@ impl crate::application::service::pr_review::PrReviewGithub for GithubReviewPoll
         }
         let endpoint = review_pull_endpoint(target)?;
         let response: PullRequest = self.fetch_object(&endpoint)?;
-        Ok((response.state == "open").then(|| {
-            crate::application::service::pr_review::ReviewRevision {
-                head: response.head.sha,
-                base: response.base.sha,
-                title: response.title,
-                body: response.body.unwrap_or_default(),
-            }
+        Ok((response.state == "open").then(|| ReviewRevision {
+            head: response.head.sha,
+            base: response.base.sha,
+            title: response.title,
+            body: response.body.unwrap_or_default(),
         }))
     }
 
     fn diff(&self, target: &GithubPullRequestTarget) -> Result<Option<String>> {
-        use crate::application::service::pr_review::MAX_DIFF_BYTES;
         let endpoint = review_pull_endpoint(target)?;
         let output = self.review_http(
             &endpoint,

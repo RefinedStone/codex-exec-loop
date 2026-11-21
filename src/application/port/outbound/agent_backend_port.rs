@@ -1,6 +1,5 @@
-use std::future::Future;
-
 use anyhow::Result;
+use futures_util::future::BoxFuture;
 use serde::Deserialize;
 
 use crate::domain::delegation::{BackendStatus, ChatSession, Delivery, Phase, Recovery};
@@ -36,8 +35,14 @@ pub(crate) struct Dispatch<'a> {
     pub callback_token: &'a str,
     pub callback_workspace: &'a str,
     pub model: Option<&'a str>,
-    pub issue_draft: bool,
+    pub profile: Option<TextDispatchProfile>,
     pub timeout: std::time::Duration,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TextDispatchProfile {
+    pub developer_instructions: &'static str,
+    pub accepts_reply: fn(&str) -> bool,
 }
 
 pub(crate) struct BackendCapabilities {
@@ -45,15 +50,16 @@ pub(crate) struct BackendCapabilities {
     pub defensive_isolation: bool,
 }
 
-pub(crate) trait AgentBackendPort: Sync {
+pub(crate) trait AgentBackendPort: Send + Sync {
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             defensive_isolation: false,
         }
     }
-    fn health(&self) -> impl Future<Output = BackendHealth> + Send;
-    fn dispatch(&self, request: Dispatch<'_>) -> impl Future<Output = Result<Observation>> + Send;
-    fn observe(&self, attempt_id: &str) -> impl Future<Output = Result<Observation>> + Send;
-    fn collect(&self, attempt_id: &str) -> impl Future<Output = Result<String>> + Send;
-    fn stop(&self, attempt_id: &str) -> impl Future<Output = Result<()>> + Send;
+    fn health(&self) -> BoxFuture<'_, BackendHealth>;
+    fn dispatch<'a>(&'a self, request: Dispatch<'a>) -> BoxFuture<'a, Result<Observation>>;
+    fn observe<'a>(&'a self, attempt_id: &'a str) -> BoxFuture<'a, Result<Observation>>;
+    fn collect<'a>(&'a self, attempt_id: &'a str) -> BoxFuture<'a, Result<String>>;
+    fn stop<'a>(&'a self, attempt_id: &'a str) -> BoxFuture<'a, Result<()>>;
+    fn forget(&self, _attempt_id: &str) {}
 }

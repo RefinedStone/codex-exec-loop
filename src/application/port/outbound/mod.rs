@@ -58,6 +58,7 @@ pub mod github_automation_port;
 pub mod github_pr_validation_port;
 // GitHub review poller port는 review thread 조회와 상태 수집 계약을 정의한다.
 pub mod github_review_poller_port;
+pub(crate) mod pr_review_port;
 // review center repository port는 approval/review inbox와 history truth를 읽고 쓰는 저장소 경계다.
 pub mod review_center_repository_port;
 // clipboard image probe port는 OS 클립보드 이미지를 스테이징 파일로 읽는 경계다.

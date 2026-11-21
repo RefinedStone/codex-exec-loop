@@ -12,6 +12,7 @@ use crate::adapter::inbound::kernel_protocol::{CommandRequest, KernelQuery};
 use crate::application::port::inbound::kernel_command_port::KernelCommandPort;
 use crate::composition::production;
 use crate::domain::kernel_spec::KernelCallError;
+use crate::domain::pr_review::ReviewMode;
 
 const SPEC: &str = include_str!("../../../../schema/akra-kernel-spec.json");
 
@@ -43,7 +44,6 @@ pub(super) fn run(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
 
 /// Local operator entry. The machine command and Gateway surfaces expose no setter.
 pub(super) fn pr_review_settings(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
-    use crate::application::service::pr_review::ReviewMode;
     let result = (|| {
         let (mode, workspace) = match args {
             [mode] => (mode, std::env::current_dir()?),
@@ -58,15 +58,12 @@ pub(super) fn pr_review_settings(args: &[OsString], stdout: &mut impl Write) -> 
                     !stdin.is_terminal(),
                     "pipe the dedicated API credential on stdin"
                 );
-                let (repository, _) = production::pr_review_settings(&workspace)?;
+                let settings = production::pr_review_settings(&workspace)?;
                 let mut key = zeroize::Zeroizing::new(String::new());
                 stdin.lock().take(515).read_to_string(&mut key)?;
                 ensure!(key.len() < 515, "invalid PR review API credential");
-                crate::adapter::outbound::openai_review::set_key(
-                    &repository,
-                    key.trim_end_matches(['\r', '\n']),
-                )?;
-                return Ok(json!({"repository":repository,"credential_saved":true}));
+                settings.set_api_key(key.trim_end_matches(['\r', '\n']))?;
+                return Ok(json!({"repository":settings.repository(),"credential_saved":true}));
             }
             Some("off") => ReviewMode::Off,
             Some("observe") => ReviewMode::Observe,
@@ -79,7 +76,8 @@ pub(super) fn pr_review_settings(args: &[OsString], stdout: &mut impl Write) -> 
             stdin.is_terminal() && stderr.is_terminal(),
             "PR review settings require an interactive terminal"
         );
-        let (repository, journal) = production::pr_review_settings(&workspace)?;
+        let settings = production::pr_review_settings(&workspace)?;
+        let repository = settings.repository();
         let confirmation = format!("{} {repository}", mode.as_str());
         write!(
             stderr,
@@ -93,7 +91,7 @@ pub(super) fn pr_review_settings(args: &[OsString], stdout: &mut impl Write) -> 
             response.trim_end_matches(['\r', '\n']) == confirmation,
             "PR review settings were not changed"
         );
-        journal.set_mode(&repository, mode)?;
+        settings.set_mode(mode)?;
         Ok(json!({ "repository": repository, "pr_review": mode }))
     })();
     render(result, None, stdout)

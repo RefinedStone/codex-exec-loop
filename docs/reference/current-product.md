@@ -801,6 +801,9 @@ The Gateway records the external documents that a thread mentions, without a mod
 - Repository delegation policy controls backend order, concurrency, daily limits and the deadline.
   The ledger records attempts and observations across restarts. An unknown delivery outcome
   requires attention before another send. The Codex backend uses an isolated read-only thread.
+  Run `akra codex-delegation login` and sign in with ChatGPT to enable subscription
+  access for delegated threads. Codex keeps this dedicated profile's session in the
+  operating system credential store. Run the command as the user who runs the Gateway.
   For opt-in PR review, see [Configure defensive pull request review](pr-review-backend.md).
 - Desktop basics (plan 26 U1): one zoom factor for all windows (view menu, `Cmd/Ctrl` `+` `-` `0`, `Cmd/Ctrl`
   + wheel, pinch), saved with the main window's size and position in `userData/window-state.json`; the

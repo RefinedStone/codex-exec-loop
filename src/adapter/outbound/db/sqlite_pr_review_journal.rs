@@ -3,10 +3,9 @@ use std::{path::PathBuf, time::Duration};
 use anyhow::{Result, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::application::service::pr_review::{
-    CommentReservation, PrReviewJournal, ReviewMode, ReviewRecord, StoredPrReview,
-};
+use crate::application::port::outbound::pr_review_port::{CommentReservation, PrReviewJournalPort};
 use crate::domain::github_review::GithubPullRequestTarget;
+use crate::domain::pr_review::{ReviewMode, ReviewRecord, StoredPrReview};
 
 pub struct ReviewJournal(PathBuf);
 
@@ -87,7 +86,7 @@ impl ReviewJournal {
     }
 }
 
-impl PrReviewJournal for ReviewJournal {
+impl PrReviewJournalPort for ReviewJournal {
     fn mode(&self, repository: &str) -> Result<ReviewMode> {
         if !self.0.exists() {
             return Ok(ReviewMode::Off);

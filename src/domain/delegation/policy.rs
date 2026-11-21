@@ -196,7 +196,7 @@ pub(crate) fn resolve(
             && (mode == Mode::On || (feature == "pr_review" && mode == Mode::Observe)),
         "feature cannot dispatch"
     );
-    let draft = feature == "issue_draft_review";
+    let draft = feature == super::ISSUE_DRAFT_REVIEW_FEATURE;
     let defaults = [if draft { CODEX } else { CHAT }.to_owned()];
     let user_order = user_feature
         .and_then(|f| f.route.as_deref())

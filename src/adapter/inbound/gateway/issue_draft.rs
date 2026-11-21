@@ -21,7 +21,7 @@ use crate::application::port::inbound::issue_draft_port::{
     IssueDraftApproval, IssueDraftPort, IssueDraftPreviewRequest, IssueDraftPublishRequest,
     IssueDraftTarget,
 };
-use crate::application::service::issue_review::{ISSUE_DRAFT_REVIEW_FEATURE, model_request};
+use crate::domain::delegation::ISSUE_DRAFT_REVIEW_FEATURE;
 
 /// params `IssueDraftTarget` -> result `IssueDraftOpened`. 쓰지 않는다.
 const ISSUE_OPEN_METHOD: &str = "akra/issue/open";
@@ -143,14 +143,14 @@ fn submit_review(
     crate::domain::delegation::Delegation,
 )> {
     use crate::composition::production::{delegation_route, delegation_runtime, delegation_store};
-    let (workspace, validated) = drafts.validated_review_draft(params.draft, params.approval)?;
-    let request = model_request(&validated);
+    let prepared = drafts.prepare_review_draft(params.draft, params.approval)?;
+    let workspace = prepared.workspace;
     let runtime = delegation_runtime(&workspace)?;
     let store = delegation_store(runtime.clone(), false).expect("new store is always available");
     let route = delegation_route(&workspace, ISSUE_DRAFT_REVIEW_FEATURE);
     let job = store.submit_with_route(
         &format!("{ISSUE_DRAFT_REVIEW_FEATURE}:{}", params.idempotency_key),
-        &request.draft_json,
+        &prepared.draft_json,
         ISSUE_DRAFT_REVIEW_FEATURE,
         route,
     )?;

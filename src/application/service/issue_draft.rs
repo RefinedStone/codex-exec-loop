@@ -187,11 +187,11 @@ impl IssueDraftService {
 }
 
 impl IssueDraftPort for IssueDraftService {
-    fn validated_review_draft(
+    fn prepare_review_draft(
         &self,
         request: IssueDraftPreviewRequest,
         approval: IssueDraftApproval,
-    ) -> Result<(String, IssueValidationPassed)> {
+    ) -> Result<PreparedIssueDraftReview> {
         let target = self.scoped_target(request.target)?;
         let conventions = self.conventions(&target.cwd)?;
         let (preview, passed) = evaluate(&conventions, &request.text, None);
@@ -208,7 +208,11 @@ impl IssueDraftPort for IssueDraftService {
             approval == current,
             "issue draft approval no longer matches"
         );
-        Ok((target.cwd, passed))
+        let model = super::issue_review::model_request(&passed);
+        Ok(PreparedIssueDraftReview {
+            workspace: target.cwd,
+            draft_json: model.draft_json,
+        })
     }
 
     fn creation_open(&self, target: IssueCreationTarget) -> Result<IssueCreationOpened> {
@@ -945,18 +949,17 @@ mod tests {
         else {
             panic!("expected reviewable draft");
         };
-        let (_, passed) = fixture
+        let prepared = fixture
             .service
-            .validated_review_draft(request.clone(), approval.clone())
+            .prepare_review_draft(request.clone(), approval.clone())
             .unwrap();
-        let model = crate::application::service::issue_review::model_request(&passed);
-        assert!(!model.draft_json.contains(FAKE_SECRET));
-        assert!(model.draft_json.contains("[removed]"));
+        assert!(!prepared.draft_json.contains(FAKE_SECRET));
+        assert!(prepared.draft_json.contains("[removed]"));
         request.text.title.push_str(" changed");
         assert!(
             fixture
                 .service
-                .validated_review_draft(request, approval)
+                .prepare_review_draft(request, approval)
                 .is_err()
         );
     }
