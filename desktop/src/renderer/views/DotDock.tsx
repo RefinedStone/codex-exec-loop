@@ -11,7 +11,7 @@ import { DotChat } from "./DotChat";
 const MIN_DOCK_WIDTH = 320;
 const MAX_DOCK_WIDTH = 640;
 
-export function DotDock({ host, dotId, request }: { host: string; dotId: string; request: GatewayRequest }) {
+export function DotDock({ host, dotId, request, visible }: { host: string; dotId: string; request: GatewayRequest; visible: boolean }) {
   const useStore = remoteHostStore(host);
   const dot = useStore((state) => state.dots.find((candidate) => candidate.id === dotId) ?? null);
   const room = dot?.messagingRoomId ?? null;
@@ -31,6 +31,7 @@ export function DotDock({ host, dotId, request }: { host: string; dotId: string;
         live={live}
         replies={replies}
         request={request}
+        visible={visible}
         onSeen={() => room && useStore.getState().markDotRoomRead(room)}
         onPopOut={() => {
           // 쓰던 글도 창으로 옮긴다. 창은 다른 renderer 이므로 이 창의 초안을 보지 못한다. 새 창이 글을 받았을 때만

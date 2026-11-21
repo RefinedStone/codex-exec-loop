@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
-import { closeChat, closeDot, MOD_KEY, showChat, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
+import { closeChat, closeDot, isDotDockVisible, MOD_KEY, showChat, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
 import { DotAvatar } from "../views/DotChat";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
@@ -143,7 +143,10 @@ function DotsSection({ host, onOpenThread }: { host: string; onOpenThread(host: 
   const dots = useStore((state) => state.dots);
   const dotLive = useStore((state) => state.dotLive);
   const dotUnreadRooms = useStore((state) => state.dotUnreadRooms);
-  const shownDotId = useUiStore((state) => (state.dotDock?.host === host ? state.dotDock.dotId : null));
+  const shownDotId = useUiStore((state) => {
+    const dock = state.dotDock;
+    return dock !== null && isDotDockVisible(state, host, dock.dotId) ? dock.dotId : null;
+  });
   const toggleDot = (dotId: string) => {
     if (shownDotId === dotId) {
       closeDot();

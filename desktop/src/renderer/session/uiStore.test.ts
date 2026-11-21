@@ -58,3 +58,31 @@ describe("navigation out of a maximized issues panel", () => {
     }
   });
 });
+
+describe("dot visibility while the issues panel is maximized", () => {
+  it("keeps the dock open without treating the hidden conversation as visible", () => {
+    ui.useUiStore.setState({ dotDock: { host: "cloud", dotId: "dot-1" }, panel: "issues", panelMaximized: true });
+
+    expect(ui.isDotDockVisible(ui.useUiStore.getState(), "cloud", "dot-1")).toBe(false);
+    expect(ui.useUiStore.getState().dotDock).toEqual({ host: "cloud", dotId: "dot-1" });
+
+    ui.useUiStore.setState({ panelMaximized: false });
+    expect(ui.isDotDockVisible(ui.useUiStore.getState(), "cloud", "dot-1")).toBe(true);
+    expect(ui.isDotDockVisible(ui.useUiStore.getState(), "other-host", "dot-1")).toBe(false);
+    expect(ui.isDotDockVisible(ui.useUiStore.getState(), "cloud", "dot-2")).toBe(false);
+  });
+
+  it.each([800, 1600])("reveals an explicitly opened dot in a %s-pixel window", (width) => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+    ui.useUiStore.setState({ dotDock: { host: "cloud", dotId: "dot-1" }, panel: "issues", panelMaximized: true });
+    ui.setDraft(ui.dotDraftKey("dot-1"), "keep this draft");
+
+    ui.showDot("cloud", "dot-1");
+
+    const state = ui.useUiStore.getState();
+    expect(state.panel).toBe(width < 1400 ? null : "issues");
+    expect(state.panelMaximized).toBe(false);
+    expect(ui.isDotDockVisible(state, "cloud", "dot-1")).toBe(true);
+    expect(state.drafts[ui.dotDraftKey("dot-1")]).toBe("keep this draft");
+  });
+});
