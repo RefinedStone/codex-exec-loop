@@ -25,7 +25,7 @@ import 하고 자기 frontend (구동기) 를 만든다. 전달, 진행, 비정�
 | D3-2 | 호출 길: Rust 의 `ChatDriverPort` 와 구동기를 잇는다. Desktop 이 없으면 `unavailable` 이다 | `src/adapter/inbound/gateway/`, `src/adapter/outbound/`, `desktop/src/main/` | D1-3, D3-1 |
 | D3-3 | `chatgpt_chat` adapter: 작업 보내기, core 의 상태를 공통 값으로 옮기기, 결과 읽기와 모양의 확인 | `src/adapter/outbound/` | D3-2, D7-5 |
 | D3-4 | `ChatsPort` 정리: 자기 설정, 요청 예산, 메시지 ID 와 끝남 여부, `cloud` 근거 | `chats_port.rs`, `cloud_chats/`, `gateway/chats.rs` | D1-3 |
-| D3-5 | tunnel: `TunnelStatusPort`, 앱 선택, `local_tools` 능력, `tunnel` 근거 | `src/adapter/outbound/`, 구동기 | D3-3, D4-1 |
+| D3-5 | tunnel: 구동기 `status` 의 tunnel 상태, 앱 선택, `local_tools` 능력, `tunnel` 근거 | `src/adapter/outbound/`, 구동기 | D3-3, D4-1 |
 
 ## 계약
 
