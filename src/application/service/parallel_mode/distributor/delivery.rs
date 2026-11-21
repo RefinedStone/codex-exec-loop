@@ -792,17 +792,6 @@ fn distributor_integrate_branch(
     )? {
         return Ok(notice);
     }
-    if let Some(notice) = block_if_delivery_target_changed(
-        planning_authority,
-        runtime,
-        resolution,
-        record,
-        github_automation,
-        claim_permit,
-        "final integration push target verification",
-    )? {
-        return Ok(notice);
-    }
     let integration_base_commit_sha = record
         .integration_base_commit_sha
         .clone()

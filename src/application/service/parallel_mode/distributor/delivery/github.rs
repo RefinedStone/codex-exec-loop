@@ -649,6 +649,17 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
 ) -> Result<Option<String>, String> {
     // Direct integration has no PR reinspection, but still requires a current task permit.
     let Some(pr_number) = record.pull_request_number else {
+        if let Some(notice) = block_if_delivery_target_changed(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            github_automation,
+            claim_permit,
+            "final integration push target verification",
+        )? {
+            return Ok(Some(notice));
+        }
         let detail = match work_order_delivery_gate(
             planning_authority,
             &resolution.context.repo_root,
@@ -676,7 +687,8 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
     let target = record
         .delivery_target
         .as_ref()
-        .expect("validated delivery target must be present");
+        .expect("validated delivery target must be present")
+        .clone();
     let autonomous_delivery = match autonomous_delivery_allowed {
         Ok(allowed) => *allowed,
         Err(detail) => {
@@ -721,6 +733,19 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
         }
     };
     record.pull_request_url = Some(pull_request.url.clone());
+    // PR 조회 사이에 visibility/원격이 변했는지 확인한 뒤, 마지막 현재 허가를 읽는다.
+    // 이 허가의 사람 리뷰 조건은 방금 읽은 PR 사실에 적용한다.
+    if let Some(notice) = block_if_delivery_target_changed(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
+        claim_permit,
+        "final integration push target verification",
+    )? {
+        return Ok(Some(notice));
+    }
     let requires_human_review = match work_order_delivery_gate(
         planning_authority,
         &resolution.context.repo_root,
