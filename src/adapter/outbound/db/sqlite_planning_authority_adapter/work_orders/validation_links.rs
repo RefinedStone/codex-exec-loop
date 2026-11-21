@@ -294,7 +294,7 @@ pub(super) fn backfill_owned_queue_sources(
     // Stable sorting preserves existing sources' relative order. Queue timestamps are
     // normalized to UTC, so RFC3339 offsets do not change the chronological comparison.
     let mut ordered: Vec<_> = existing.iter().chain(&imported).collect();
-    ordered.sort_by(|left, right| left.enqueued_at.cmp(&right.enqueued_at));
+    ordered.sort_by_key(|source| source.enqueued_at);
     let keys: Vec<_> = ordered
         .into_iter()
         .map(|source| source.key.clone())
