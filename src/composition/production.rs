@@ -5,7 +5,7 @@ use crate::composition::clipboard_image_probe::CompositionClipboardImageProbeTri
 use crate::composition::kernel_command_execution;
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::adapter::inbound::gateway::GatewayMcpHub;
 use crate::adapter::outbound::app_server::cloud_chats::CloudChatsRestAdapter;
@@ -662,6 +662,41 @@ pub(crate) fn delegation_runtime(workspace: &str) -> Result<PathBuf> {
         .map(|location| PathBuf::from(location.runtime_dir))
 }
 
+pub(crate) fn delegation_route(
+    workspace: &str,
+    feature: &str,
+) -> Result<crate::domain::delegation::policy::Route> {
+    use crate::domain::delegation::policy::{PolicyFile, resolve};
+    use sha2::{Digest, Sha256};
+
+    fn load(path: &std::path::Path) -> Result<String> {
+        match std::fs::read_to_string(path) {
+            Ok(contents) if contents.len() <= 128 * 1024 => Ok(contents),
+            Ok(_) => anyhow::bail!("delegation policy file is too large"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    let read = || {
+        let home = crate::configuration::akra_home_dir()?;
+        let root = resolve_active_planning_workspace_root(workspace);
+        let user = load(&home.join("delegation.toml"))?;
+        let repo = load(&root.join(".akra/delegation.toml"))?;
+        let mut hash = Sha256::new();
+        hash.update(user.len().to_le_bytes());
+        hash.update(&user);
+        hash.update(&repo);
+        resolve(
+            toml::from_str::<PolicyFile>(&user)?,
+            toml::from_str::<PolicyFile>(&repo)?,
+            feature,
+            format!("{:x}", hash.finalize()),
+        )
+    };
+    read().map_err(|_| anyhow::anyhow!("policy_blocked"))
+}
+
 pub(crate) fn delegation_store(
     runtime: PathBuf,
     existing_only: bool,
@@ -946,8 +981,7 @@ pub(crate) fn build_github_review_poller_service(
     repo_root: &Path,
 ) -> Result<GithubReviewPollerService> {
     let adapter = GithubReviewPollerAdapter::from_local_github_credentials(repo_root)?;
-    let port: Arc<dyn GithubReviewPollerPort> = Arc::new(adapter);
-    Ok(GithubReviewPollerService::new(port))
+    Ok(compose_pr_review_poller(repo_root, adapter))
 }
 
 pub(crate) fn discover_github_review_poller_service_for_current_branch(
@@ -962,8 +996,68 @@ pub(crate) fn discover_github_review_poller_service_for_current_branch(
     else {
         return Ok(None);
     };
-    let port: Arc<dyn GithubReviewPollerPort> = Arc::new(adapter);
-    Ok(Some((target, GithubReviewPollerService::new(port))))
+    Ok(Some((target, compose_pr_review_poller(repo_root, adapter))))
+}
+
+pub(crate) fn pr_review_settings(
+    repo_root: &Path,
+) -> Result<(
+    String,
+    crate::adapter::outbound::db::sqlite_pr_review_journal::ReviewJournal,
+)> {
+    use crate::adapter::outbound::db::sqlite_pr_review_journal::ReviewJournal;
+    let repository = GithubReviewPollerAdapter::review_repository(repo_root)?;
+    let runtime = delegation_runtime(repo_root.to_str().context("workspace is not UTF-8")?)?;
+    Ok((repository, ReviewJournal::new(runtime)))
+}
+
+pub(crate) fn query_pr_review(
+    workspace: &str,
+    number: Option<u64>,
+) -> Result<crate::adapter::inbound::kernel_protocol::KernelQueryAnswer> {
+    use crate::adapter::inbound::kernel_protocol::KernelQueryAnswer;
+    use crate::application::service::pr_review::PrReviewJournal;
+    let (repository, journal) = pr_review_settings(Path::new(workspace))?;
+    Ok(match number {
+        None => KernelQueryAnswer::FeatureBindings {
+            pr_review: journal.mode(&repository)?,
+            repository: Some(repository),
+        },
+        Some(number) => {
+            anyhow::ensure!(
+                (1..=9_007_199_254_740_991).contains(&number),
+                "invalid pull request number"
+            );
+            KernelQueryAnswer::PrReviewResult {
+                number,
+                review: journal.latest(&GithubPullRequestTarget::new(repository, number))?,
+            }
+        }
+    })
+}
+
+fn compose_pr_review_poller(
+    repo_root: &Path,
+    adapter: GithubReviewPollerAdapter,
+) -> GithubReviewPollerService {
+    use crate::application::service::pr_review::PrReviewService;
+    let adapter = Arc::new(adapter);
+    let port: Arc<dyn GithubReviewPollerPort> = adapter.clone();
+    let service = GithubReviewPollerService::new(port);
+    let review = || {
+        let (repository, journal) = pr_review_settings(repo_root).ok()?;
+        let backend = super::pr_review::RoutedPrReview::new(repo_root.to_str()?, &repository);
+        Some(PrReviewService::new(
+            repository,
+            Arc::new(journal),
+            adapter,
+            Some(Arc::new(backend)),
+        ))
+    };
+    match review() {
+        Some(review) => service.with_pr_review(review),
+        None => service,
+    }
 }
 
 fn build_prompt_log_port_for_setting(

@@ -230,7 +230,7 @@ export function showDot(host: string, dotId: string): void {
 /** 열린 dot 옆 칸이라도 최대화한 이슈 패널에 가려져 있으면 보고 있는 대화가 아니다. */
 export function isDotDockVisible(state: Pick<UiState, "dotDock" | "panel" | "panelMaximized">, host: string, dotId: string): boolean {
   return state.dotDock?.host === host && state.dotDock.dotId === dotId
-    && !(state.panel === "issues" && state.panelMaximized);
+    && !state.panelMaximized;
 }
 
 /** dot 과의 대화 옆 칸을 닫는다. 쓰던 글과 보내기 허락은 남는다. */

@@ -1,11 +1,10 @@
-import type { GatewayConnection } from "../main/gatewayConnection";
 import { connectDelegatedChat } from "./gateway";
 import type { ChatWorkerMessage, ChatWorkerRequest } from "./messages";
 
 const port = process.parentPort;
 if (!port) throw new Error("Delegation Gateway requires a private parent channel");
 
-let connection: GatewayConnection | undefined;
+let connection: ReturnType<typeof connectDelegatedChat> | undefined;
 let sequence = 0;
 const pending = new Map<number, { finish(message: ChatWorkerMessage): void }>();
 
@@ -13,7 +12,7 @@ port.on("message", ({ data }: { data: ChatWorkerMessage }) => {
   switch (data.type) {
     case "start": {
       if (connection) return;
-      connection = connectDelegatedChat({ endpoint: data.endpoint }, (method, jobId, instruction) => {
+      connection = connectDelegatedChat({ endpoint: data.endpoint }, (method, jobId, instruction, options) => {
         const id = ++sequence;
         return new Promise((resolve, reject) => {
           const timer = setTimeout(() => {
@@ -27,7 +26,7 @@ port.on("message", ({ data }: { data: ChatWorkerMessage }) => {
               else reject(new Error("Delegation driver rejected the operation"));
             },
           });
-          port.postMessage({ id, method, jobId, instruction } satisfies ChatWorkerRequest);
+          port.postMessage({ id, method, jobId, instruction, options } satisfies ChatWorkerRequest);
         });
       });
       break;
@@ -43,6 +42,9 @@ port.on("message", ({ data }: { data: ChatWorkerMessage }) => {
       connection?.close();
       // Let the local socket finish writing its unregister before the process exits.
       port.removeAllListeners("message");
+      break;
+    case "callback":
+      connection?.report(data.jobId, data.report);
       break;
   }
 });

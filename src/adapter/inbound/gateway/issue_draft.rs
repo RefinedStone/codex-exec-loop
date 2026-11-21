@@ -18,13 +18,16 @@ use crate::application::port::inbound::issue_draft_port::{
     IssueCreationPublishRequest, IssueCreationRestartRequest, IssueCreationTarget,
 };
 use crate::application::port::inbound::issue_draft_port::{
-    IssueDraftPort, IssueDraftPreviewRequest, IssueDraftPublishRequest, IssueDraftTarget,
+    IssueDraftApproval, IssueDraftPort, IssueDraftPreviewRequest, IssueDraftPublishRequest,
+    IssueDraftTarget,
 };
+use crate::application::service::issue_review::{ISSUE_DRAFT_REVIEW_FEATURE, model_request};
 
 /// params `IssueDraftTarget` -> result `IssueDraftOpened`. 쓰지 않는다.
 const ISSUE_OPEN_METHOD: &str = "akra/issue/open";
 /// params `{ target, text }` -> result `IssueDraftPreview`. 쓰지 않는다.
 const ISSUE_PREVIEW_METHOD: &str = "akra/issue/preview";
+const ISSUE_REVIEW_METHOD: &str = "akra/issue/review";
 /// params `{ target, text, approval, editBasis, sharedCopyOnly? }` -> result `IssueDraftPublished`.
 const ISSUE_PUBLISH_METHOD: &str = "akra/issue/publish";
 /// params `IssueDraftTarget` -> result `{ intent: IssueDraftIntent | null }`. 읽기만 한다.
@@ -54,11 +57,20 @@ struct AbandonParams {
     intent_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewParams {
+    draft: IssueDraftPreviewRequest,
+    approval: IssueDraftApproval,
+    idempotency_key: String,
+}
+
 /// 이 모듈이 답하는 메서드인지 본다. 이 메서드들의 요청과 답은 녹화하지 않는다.
 pub(super) fn is_issue_draft_method(method: &str) -> bool {
     [
         ISSUE_OPEN_METHOD,
         ISSUE_PREVIEW_METHOD,
+        ISSUE_REVIEW_METHOD,
         ISSUE_PUBLISH_METHOD,
         ISSUE_RECHECK_METHOD,
         ISSUE_ABANDON_METHOD,
@@ -80,6 +92,7 @@ fn params<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
 /// 요청 하나를 블로킹 작업으로 처리하고 답을 접속의 보내기 함으로 보낸다. 녹화하지 않는다.
 pub(super) fn spawn_request(
     drafts: Arc<dyn IssueDraftPort>,
+    delegations: Arc<super::delegation::Delegations>,
     id: Value,
     method: String,
     text: String,
@@ -87,6 +100,29 @@ pub(super) fn spawn_request(
 ) {
     tokio::spawn(async move {
         let fallback_id = id.clone();
+        if method == ISSUE_REVIEW_METHOD {
+            let response = match params::<ReviewParams>(&text) {
+                None => error_response(id, JSON_RPC_INVALID_PARAMS, "invalid review parameters"),
+                Some(params) => {
+                    let result =
+                        tokio::task::spawn_blocking(move || submit_review(drafts.as_ref(), params))
+                            .await;
+                    match result {
+                        Ok(Ok((workspace, runtime, store, job))) => {
+                            delegations.track(runtime, store, workspace);
+                            json!({"jsonrpc":"2.0","id":id,"result":job}).to_string()
+                        }
+                        _ => error_response(
+                            id,
+                            ISSUE_ERROR,
+                            "issue draft review could not be queued",
+                        ),
+                    }
+                }
+            };
+            let _ = outbox.send(Message::text(response)).await;
+            return;
+        }
         let response =
             tokio::task::spawn_blocking(move || respond(drafts.as_ref(), id, &method, &text))
                 .await
@@ -95,6 +131,30 @@ pub(super) fn spawn_request(
                 });
         let _ = outbox.send(Message::text(response)).await;
     });
+}
+
+fn submit_review(
+    drafts: &dyn IssueDraftPort,
+    params: ReviewParams,
+) -> anyhow::Result<(
+    String,
+    std::path::PathBuf,
+    super::delegation::DelegationStore,
+    crate::domain::delegation::Delegation,
+)> {
+    use crate::composition::production::{delegation_route, delegation_runtime, delegation_store};
+    let (workspace, validated) = drafts.validated_review_draft(params.draft, params.approval)?;
+    let request = model_request(&validated);
+    let runtime = delegation_runtime(&workspace)?;
+    let store = delegation_store(runtime.clone(), false).expect("new store is always available");
+    let route = delegation_route(&workspace, ISSUE_DRAFT_REVIEW_FEATURE);
+    let job = store.submit_with_route(
+        &format!("{ISSUE_DRAFT_REVIEW_FEATURE}:{}", params.idempotency_key),
+        &request.draft_json,
+        ISSUE_DRAFT_REVIEW_FEATURE,
+        route,
+    )?;
+    Ok((workspace, runtime, store, job))
 }
 
 fn respond(drafts: &dyn IssueDraftPort, id: Value, method: &str, text: &str) -> String {

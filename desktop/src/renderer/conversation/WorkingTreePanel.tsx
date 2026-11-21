@@ -234,7 +234,9 @@ export function workingTreeCounts(tree: WorkingTree): { branch: string | null; a
   return { branch, added: files.reduce((sum, file) => sum + (file.added ?? 0), 0), removed: files.reduce((sum, file) => sum + (file.removed ?? 0), 0) };
 }
 
-export function WorkingTreePanel({ tree, git, onOpenUrl }: { tree: WorkingTree; git: GitAccess; onOpenUrl(url: string): void }) {
+export function WorkingTreePanel({ tree, git, onOpenUrl, children }: {
+  tree: WorkingTree; git: GitAccess; onOpenUrl(url: string): void; children?: React.ReactNode;
+}) {
   const { cwd, panel } = tree;
   const [busy, setBusy] = useState(false);
   if (!cwd) {
@@ -271,6 +273,7 @@ export function WorkingTreePanel({ tree, git, onOpenUrl }: { tree: WorkingTree; 
         </div>
       )}
       <BranchCommits cwd={cwd} state={tree.branch} git={git} lock={{ busy, setBusy }} onChanged={() => tree.refresh()} onOpenUrl={onOpenUrl} />
+      {children}
     </section>
   );
 }

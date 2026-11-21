@@ -49,6 +49,9 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel issue sync_issues --json` | read | Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request. |
 | `akra kernel delegation submit_delegation --json` | write | Accept one text-only ChatGPT delegation using a durable request key. |
 | `akra kernel delegation cancel_delegation --json` | write | Cancel one text-only ChatGPT delegation by ID. |
+| `akra kernel delegation checkpoint_delegation --json` | write | Record progress through the trusted delegation callback channel. |
+| `akra kernel delegation report_delegation_result --json` | write | Finish a delegation through the trusted delegation callback channel. |
+| `akra kernel delegation retry_delegation --json` | write | Create a new job for a safely retryable delegation. Reuse the request idempotency key for the same retry. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.
 
@@ -58,6 +61,9 @@ Pass input fields as `--field value`. Use the input schema from `describe` for r
 - `akra kernel query delegation --json`: Read one text-only delegation by ID.
 - `akra kernel query delegation_result --json`: Read the stored text result for a delegation.
 - `akra kernel query delegation_backends --json`: Check the live Desktop chat backend.
+- `akra kernel query delegation_my_turn --json`: List delegations that require human attention.
+- `akra kernel query feature_bindings --json`: Read the attached repository's stored PR review mode.
+- `akra kernel query pr_review_result --json`: Read the latest stored review for a pull request in the attached repository.
 - `akra kernel query sessions --json`: The session list of the workspace and its load state.
 - `akra kernel query auto_follow --json`: The automatic follow-up settings. They are the same for every thread.
 - `akra kernel query thread_activity --json`: The threads that still have work: a running turn, a pending approval, or automatic follow-up.

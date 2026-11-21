@@ -346,6 +346,11 @@ fn account_id_from_token(token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+pub(crate) fn chat_account_id(auth_path: &std::path::Path) -> Option<String> {
+    let id = load_credentials(auth_path).ok()?.account_id;
+    (!id.trim().is_empty() && id.len() <= 256).then_some(id)
+}
+
 fn build_cloud_request(credentials: &CloudCredentials, user_agent: &str) -> Result<Request> {
     let mut request = CLOUD_URL
         .into_client_request()

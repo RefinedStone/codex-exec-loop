@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
+import { CHAT_CONVERSATION, type DelegatedChatSession } from "../../shared/delegatedChat";
 import { JsonRpcError } from "../rpc/jsonRpcClient";
 import { useAction } from "./useAction";
 
@@ -13,18 +14,28 @@ export interface DelegationSummary {
 export interface DelegationDetail extends DelegationSummary {
   prompt?: string;
   canCancel: boolean;
+  canRetry?: boolean;
+  conversationUrl?: string;
   result?: string;
   reason?: string;
   attempts?: readonly string[];
+  fallbacks?: readonly string[];
   evidence?: readonly { source: string; observedAt: string; text?: string }[];
 }
 
+export interface DelegationOverview {
+  jobs: readonly DelegationSummary[];
+  backends: readonly { name: string; status: string; details: readonly string[] }[];
+  myTurn: readonly { id: string; reason: string }[];
+}
+
 export interface DelegationActions {
-  list(): Promise<readonly DelegationSummary[]>;
+  overview(): Promise<DelegationOverview>;
   detail(id: string): Promise<DelegationDetail>;
-  submit(text: string, key: string): Promise<string>;
+  submit(text: string, session: DelegatedChatSession, key: string): Promise<string>;
   cancel(id: string): Promise<void>;
-  openLogin(): Promise<void>;
+  retry(id: string, key: string): Promise<string>;
+  openLogin(url?: string): Promise<void>;
 }
 
 type ReadState<T> =
@@ -45,14 +56,17 @@ function DelegationDetailView({
   id,
   revision,
   refresh,
+  select,
 }: {
   actions: DelegationActions;
   id: string;
   revision: number;
   refresh(): void;
+  select(id: string): void;
 }) {
   const [state, setState] = useState<ReadState<DelegationDetail>>({ phase: "loading" });
   const cancelAction = useAction();
+  const retry = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -85,6 +99,12 @@ function DelegationDetailView({
           <ul>{task.attempts.map((attempt, index) => <li key={index}>{attempt}</li>)}</ul>
         </>
       )}
+      {!!task.fallbacks?.length && (
+        <>
+          <h3>대체 이력</h3>
+          <ul>{task.fallbacks.map((fallback, index) => <li key={index}>{fallback}</li>)}</ul>
+        </>
+      )}
       {!!task.evidence?.length && (
         <>
           <h3>진행 근거</h3>
@@ -108,17 +128,32 @@ function DelegationDetailView({
           refresh();
         })}>{cancelAction.busy ? "취소 중…" : "위임 취소"}</button>
       )}
+      {task.canRetry && (
+        <button type="button" disabled={cancelAction.busy} onClick={() => void cancelAction.run(async () => {
+          retry.current ??= crypto.randomUUID();
+          select(await actions.retry(id, retry.current));
+          retry.current = null;
+          refresh();
+        })}>위임 다시 내기</button>
+      )}
+      {task.conversationUrl && (
+        <button type="button" disabled={cancelAction.busy} onClick={() => void cancelAction.run(
+          () => actions.openLogin(task.conversationUrl),
+        )}>ChatGPT 대화 열기</button>
+      )}
       {cancelAction.error && <p className="error" role="alert">{cancelAction.error}</p>}
     </section>
   );
 }
 
 export function DelegationPanel({ actions, ready, message }: { actions: DelegationActions; ready: boolean; message: string }) {
-  const [list, setList] = useState<ReadState<readonly DelegationSummary[]>>({ phase: "loading" });
+  const [list, setList] = useState<ReadState<DelegationOverview>>({ phase: "loading" });
   const [draft, setDraft] = useState("");
+  const [mode, setMode] = useState<DelegatedChatSession["mode"]>("new");
+  const [chatUrl, setChatUrl] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
-  const submission = useRef<{ text: string; key: string } | null>(null);
+  const submission = useRef<{ text: string; target: string; key: string } | null>(null);
   const submitAction = useAction();
   const loginAction = useAction();
   const refresh = () => setRevision((value) => value + 1);
@@ -127,7 +162,7 @@ export function DelegationPanel({ actions, ready, message }: { actions: Delegati
     if (!ready) return;
     let active = true;
     setList({ phase: "loading" });
-    actions.list().then(
+    actions.overview().then(
       (value) => { if (active) setList({ phase: "ready", value }); },
       (cause: unknown) => { if (active) setList(readError(cause)); },
     );
@@ -138,9 +173,14 @@ export function DelegationPanel({ actions, ready, message }: { actions: Delegati
     event.preventDefault();
     const text = draft.trim();
     if (!text || !ready || list.phase !== "ready") return;
+    const target = mode === "continue" ? chatUrl.trim() : "";
+    if (mode === "continue" && !CHAT_CONVERSATION.test(target)) return;
     void submitAction.run(async () => {
-      if (submission.current?.text !== text) submission.current = { text, key: crypto.randomUUID() };
-      const id = await actions.submit(text, submission.current.key);
+      if (submission.current?.text !== text || submission.current.target !== target) {
+        submission.current = { text, target, key: crypto.randomUUID() };
+      }
+      const session: DelegatedChatSession = mode === "continue" ? { mode, chatUrl: target } : { mode };
+      const id = await actions.submit(text, session, submission.current.key);
       submission.current = null;
       setDraft("");
       setSelected(id);
@@ -149,6 +189,7 @@ export function DelegationPanel({ actions, ready, message }: { actions: Delegati
   }
 
   const unsupported = list.phase === "failed" && list.unsupported;
+  const validTarget = mode === "new" || CHAT_CONVERSATION.test(chatUrl.trim());
   return (
     <section className="work-panel" aria-label="ChatGPT 위임" data-testid="delegation-panel">
       <div className="work-header">
@@ -163,12 +204,48 @@ export function DelegationPanel({ actions, ready, message }: { actions: Delegati
       <div className="work-scroll">
         {loginAction.error && <p className="error work-section" role="alert">{loginAction.error}</p>}
         {!ready && <p className="muted work-section" role="status">{message}</p>}
+        {ready && list.phase === "ready" && <>
+          <section className="work-section" data-testid="delegation-backends">
+            <h3>백엔드</h3>
+            <ul>{list.value.backends.map((backend) => (
+              <li key={backend.name} className="work-item">
+                <strong>{backend.name}</strong> · {backend.status}
+                {backend.details.length > 0 && <div className="work-meta muted">{backend.details.join(" · ")}</div>}
+              </li>
+            ))}</ul>
+          </section>
+          <section className="work-section" data-testid="delegation-my-turn">
+            <h3>내 차례</h3>
+            {list.value.myTurn.length === 0 ? <p className="muted">확인할 위임이 없습니다.</p> : (
+              <ul>{list.value.myTurn.map((item) => (
+                <li key={item.id} className="work-item">
+                  <button type="button" className="work-link" aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
+                    {item.id}
+                  </button>
+                  <div className="work-meta muted">{item.reason}</div>
+                </li>
+              ))}</ul>
+            )}
+          </section>
+        </>}
         <form className="work-section work-form delegation-form" onSubmit={submit}>
+          <label>
+            대상 대화
+            <select value={mode} disabled={submitAction.busy || unsupported} onChange={(event) => setMode(event.target.value === "continue" ? "continue" : "new")}>
+              <option value="new">새 ChatGPT 대화</option>
+              <option value="continue">기존 ChatGPT 대화</option>
+            </select>
+          </label>
+          {mode === "continue" && <label>
+            ChatGPT 대화 주소
+            <input type="url" value={chatUrl} disabled={submitAction.busy || unsupported} onChange={(event) => setChatUrl(event.target.value)} required />
+            <span className="muted">대화 주소를 지정하세요. 계정이 확인되어야 전송됩니다.</span>
+          </label>}
           <label>
             위임 지시
             <textarea value={draft} rows={4} disabled={submitAction.busy || unsupported} onChange={(event) => setDraft(event.target.value)} />
           </label>
-          <button type="submit" disabled={!ready || !draft.trim() || submitAction.busy || list.phase !== "ready"}>
+          <button type="submit" disabled={!ready || !validTarget || !draft.trim() || submitAction.busy || list.phase !== "ready"}>
             {submitAction.busy ? "접수 중…" : "텍스트 위임"}
           </button>
           {submitAction.error && <p className="error" role="alert">{submitAction.error}</p>}
@@ -179,11 +256,11 @@ export function DelegationPanel({ actions, ready, message }: { actions: Delegati
           {list.phase === "failed" && (
             <p className="error" role="alert">{unsupported ? "이 Gateway 는 위임을 지원하지 않습니다." : list.message}</p>
           )}
-          {list.phase === "ready" && (list.value.length === 0
+          {list.phase === "ready" && (list.value.jobs.length === 0
             ? <p className="muted">위임 작업이 없습니다.</p>
             : (
               <ul>
-                {list.value.map((task) => (
+                {list.value.jobs.map((task) => (
                   <li key={task.id} className="work-item">
                     <button type="button" className="work-link delegation-text" aria-pressed={selected === task.id} onClick={() => setSelected(task.id)}>
                       {task.label}
@@ -194,7 +271,7 @@ export function DelegationPanel({ actions, ready, message }: { actions: Delegati
               </ul>
             ))}
         </section>}
-        {ready && selected && <DelegationDetailView key={selected} actions={actions} id={selected} revision={revision} refresh={refresh} />}
+        {ready && selected && <DelegationDetailView key={selected} actions={actions} id={selected} revision={revision} refresh={refresh} select={setSelected} />}
       </div>
     </section>
   );

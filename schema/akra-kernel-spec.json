@@ -1200,6 +1200,12 @@
           "instruction": {
             "type": "string"
           },
+          "session": {
+            "$ref": "#/$defs/ChatSession",
+            "default": {
+              "mode": "new"
+            }
+          },
           "type": {
             "const": "submit_delegation",
             "type": "string"
@@ -1270,6 +1276,166 @@
           },
           "type": {
             "const": "delegation_cancelled",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "delegation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "checkpoint_delegation",
+      "scope": "delegation",
+      "state": "runtime",
+      "summary": "Record progress through the trusted delegation callback channel.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "type": {
+            "const": "checkpoint_delegation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "token",
+          "message"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "delegation": {
+            "$ref": "#/$defs/Delegation"
+          },
+          "type": {
+            "const": "delegation_checkpointed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "delegation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "report_delegation_result",
+      "scope": "delegation",
+      "state": "runtime",
+      "summary": "Finish a delegation through the trusted delegation callback channel.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "type": {
+            "const": "report_delegation_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "token",
+          "result"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "delegation": {
+            "$ref": "#/$defs/Delegation"
+          },
+          "type": {
+            "const": "delegation_result_reported",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "delegation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "retry_delegation",
+      "scope": "delegation",
+      "state": "runtime",
+      "summary": "Create a new job for a safely retryable delegation. Reuse the request idempotency key for the same retry.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "retry_delegation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "delegation": {
+            "$ref": "#/$defs/Delegation"
+          },
+          "type": {
+            "const": "delegation_retried",
             "type": "string"
           }
         },
@@ -1419,7 +1585,16 @@
       "output": {
         "properties": {
           "chatgpt_chat": {
-            "$ref": "#/$defs/BackendStatus"
+            "$ref": "#/$defs/ChatBackendStatus"
+          },
+          "codex_thread": {
+            "$ref": "#/$defs/CodexBackendStatus",
+            "default": {
+              "local_reads": true,
+              "reason": "gateway_unavailable",
+              "state": "unavailable",
+              "verified_text_only": false
+            }
           },
           "type": {
             "const": "delegation_backends",
@@ -1429,6 +1604,133 @@
         "required": [
           "type",
           "chatgpt_chat"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delegation_my_turn",
+      "summary": "List delegations that require human attention.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "delegation_my_turn",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/MyTurn"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "delegation_my_turn",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "items"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "feature_bindings",
+      "summary": "Read the attached repository's stored PR review mode.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "feature_bindings",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "pr_review": {
+            "$ref": "#/$defs/ReviewMode"
+          },
+          "repository": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "feature_bindings",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "pr_review"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "pr_review_result",
+      "summary": "Read the latest stored review for a pull request in the attached repository.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "number": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": {
+            "const": "pr_review_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "number"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "number": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StoredPrReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "const": "pr_review_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "number"
         ],
         "type": "object"
       }
@@ -3708,6 +4010,14 @@
     }
   ],
   "$defs": {
+    "AccountMatch": {
+      "enum": [
+        "unknown",
+        "match",
+        "mismatch"
+      ],
+      "type": "string"
+    },
     "ApprovalDecision": {
       "enum": [
         "accept",
@@ -3813,6 +4123,81 @@
       ],
       "type": "object"
     },
+    "Attempt": {
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "backend_kind": {
+          "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Recovery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resumes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retry_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "backend",
+        "backend_kind",
+        "delivery",
+        "phase",
+        "observations"
+      ],
+      "type": "object"
+    },
     "AutoFollowSettings": {
       "properties": {
         "max_turns": {
@@ -3837,8 +4222,22 @@
       ],
       "type": "string"
     },
-    "BackendStatus": {
+    "ChatBackendStatus": {
       "properties": {
+        "account_match": {
+          "$ref": "#/$defs/AccountMatch",
+          "default": "unknown"
+        },
+        "circuit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Circuit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "reason": {
           "type": [
             "string",
@@ -3847,10 +4246,96 @@
         },
         "state": {
           "$ref": "#/$defs/BackendState"
+        },
+        "tunnel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TunnelStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "state"
+      ],
+      "type": "object"
+    },
+    "ChatSession": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "new",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "chat_url": {
+              "type": "string"
+            },
+            "mode": {
+              "const": "continue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "chat_url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Circuit": {
+      "enum": [
+        "open",
+        "closed"
+      ],
+      "type": "string"
+    },
+    "CodexBackendStatus": {
+      "properties": {
+        "circuit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Circuit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "local_reads": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/BackendState"
+        },
+        "verified_text_only": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "local_reads",
+        "verified_text_only"
       ],
       "type": "object"
     },
@@ -3976,6 +4461,54 @@
             },
             "type": {
               "const": "delegation_cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delegation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delegation": {
+              "$ref": "#/$defs/Delegation"
+            },
+            "type": {
+              "const": "delegation_checkpointed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delegation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delegation": {
+              "$ref": "#/$defs/Delegation"
+            },
+            "type": {
+              "const": "delegation_result_reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delegation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delegation": {
+              "$ref": "#/$defs/Delegation"
+            },
+            "type": {
+              "const": "delegation_retried",
               "type": "string"
             }
           },
@@ -4279,8 +4812,22 @@
     },
     "Delegation": {
       "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/Attempt"
+          },
+          "type": "array"
+        },
         "caller": {
           "type": "string"
+        },
+        "can_cancel": {
+          "default": false,
+          "type": "boolean"
+        },
+        "can_retry": {
+          "default": false,
+          "type": "boolean"
         },
         "conversation_url": {
           "type": [
@@ -4292,11 +4839,37 @@
           "format": "int64",
           "type": "integer"
         },
+        "current_backend": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadline": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "delivery": {
           "$ref": "#/$defs/Delivery"
         },
+        "fallbacks": {
+          "items": {
+            "$ref": "#/$defs/Fallback"
+          },
+          "type": "array"
+        },
         "id": {
           "type": "string"
+        },
+        "last_progress_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "outcome_unknown": {
           "type": "boolean"
@@ -4304,11 +4877,23 @@
         "phase": {
           "$ref": "#/$defs/Phase"
         },
+        "policy_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reason": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "session": {
+          "$ref": "#/$defs/ChatSession",
+          "default": {
+            "mode": "new"
+          }
         },
         "state": {
           "$ref": "#/$defs/State"
@@ -4389,6 +4974,19 @@
       ],
       "type": "object"
     },
+    "EndReason": {
+      "enum": [
+        "unavailable",
+        "quota",
+        "transient",
+        "interrupted",
+        "needs_human",
+        "rejected",
+        "result_invalid",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "EventNotification": {
       "properties": {
         "event": {
@@ -4397,6 +4995,89 @@
       },
       "required": [
         "event"
+      ],
+      "type": "object"
+    },
+    "Evidence": {
+      "properties": {
+        "at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "source": {
+          "$ref": "#/$defs/EvidenceSource"
+        }
+      },
+      "required": [
+        "source",
+        "at",
+        "delivery",
+        "phase"
+      ],
+      "type": "object"
+    },
+    "EvidenceSource": {
+      "enum": [
+        "browser",
+        "stream",
+        "callback",
+        "coordinator"
+      ],
+      "type": "string"
+    },
+    "Fallback": {
+      "properties": {
+        "at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "from": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/EndReason"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "reason",
+        "to",
+        "at"
+      ],
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "required": [
+        "path",
+        "line",
+        "severity",
+        "body"
       ],
       "type": "object"
     },
@@ -6582,6 +7263,12 @@
             "instruction": {
               "type": "string"
             },
+            "session": {
+              "$ref": "#/$defs/ChatSession",
+              "default": {
+                "mode": "new"
+              }
+            },
             "type": {
               "const": "submit_delegation",
               "type": "string"
@@ -6602,6 +7289,73 @@
             },
             "type": {
               "const": "cancel_delegation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string"
+            },
+            "type": {
+              "const": "checkpoint_delegation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "token",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string"
+            },
+            "type": {
+              "const": "report_delegation_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "token",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "retry_delegation",
               "type": "string"
             }
           },
@@ -6970,6 +7724,52 @@
           "additionalProperties": false,
           "properties": {
             "type": {
+              "const": "delegation_my_turn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "feature_bindings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "number": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "pr_review_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "number"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
               "const": "sessions",
               "type": "string"
             }
@@ -7218,7 +8018,16 @@
         {
           "properties": {
             "chatgpt_chat": {
-              "$ref": "#/$defs/BackendStatus"
+              "$ref": "#/$defs/ChatBackendStatus"
+            },
+            "codex_thread": {
+              "$ref": "#/$defs/CodexBackendStatus",
+              "default": {
+                "local_reads": true,
+                "reason": "gateway_unavailable",
+                "state": "unavailable",
+                "verified_text_only": false
+              }
             },
             "type": {
               "const": "delegation_backends",
@@ -7228,6 +8037,75 @@
           "required": [
             "type",
             "chatgpt_chat"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "pr_review": {
+              "$ref": "#/$defs/ReviewMode"
+            },
+            "repository": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "feature_bindings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pr_review"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/MyTurn"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "delegation_my_turn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "number": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "review": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StoredPrReview"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "pr_review_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "number"
           ],
           "type": "object"
         },
@@ -8308,6 +9186,21 @@
       ],
       "type": "object"
     },
+    "MyTurn": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "reason"
+      ],
+      "type": "object"
+    },
     "NextStep": {
       "oneOf": [
         {
@@ -9212,6 +10105,14 @@
       ],
       "type": "object"
     },
+    "Recovery": {
+      "enum": [
+        "none",
+        "in_progress",
+        "exhausted"
+      ],
+      "type": "string"
+    },
     "ResetTarget": {
       "enum": [
         "queue",
@@ -9219,6 +10120,117 @@
         "all"
       ],
       "type": "string"
+    },
+    "ReviewMode": {
+      "enum": [
+        "off",
+        "observe",
+        "on"
+      ],
+      "type": "string"
+    },
+    "ReviewRecord": {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "diff_too_large",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "source_unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "backend_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "result_invalid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "result": {
+              "$ref": "#/$defs/ReviewResult"
+            },
+            "status": {
+              "const": "reviewed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "backend",
+            "result"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReviewResult": {
+      "additionalProperties": false,
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "findings"
+      ],
+      "type": "object"
     },
     "SessionEntry": {
       "properties": {
@@ -9278,6 +10290,15 @@
       ],
       "type": "string"
     },
+    "Severity": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "type": "string"
+    },
     "SkippedPlanningTask": {
       "properties": {
         "reason": {
@@ -9310,9 +10331,31 @@
         "awaiting_human",
         "succeeded",
         "failed",
-        "cancelled"
+        "cancelled",
+        "expired"
       ],
       "type": "string"
+    },
+    "StoredPrReview": {
+      "properties": {
+        "head": {
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "head"
+      ],
+      "type": "object"
     },
     "TaskFields": {
       "additionalProperties": false,
@@ -9436,6 +10479,79 @@
           "type": "string"
         }
       ]
+    },
+    "TunnelConnection": {
+      "enum": [
+        "connected",
+        "offline",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "TunnelInstall": {
+      "enum": [
+        "ready",
+        "missing",
+        "invalid"
+      ],
+      "type": "string"
+    },
+    "TunnelReadiness": {
+      "enum": [
+        "unknown",
+        "ready",
+        "login_required",
+        "challenge",
+        "unreachable"
+      ],
+      "type": "string"
+    },
+    "TunnelStatus": {
+      "properties": {
+        "connection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TunnelConnection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host": {
+          "type": "boolean"
+        },
+        "install": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TunnelInstall"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manual": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "readiness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TunnelReadiness"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "type": "object"
     },
     "TurnEndOutcome": {
       "oneOf": [

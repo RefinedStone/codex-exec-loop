@@ -20,6 +20,36 @@ fn describe_prints_json_without_creating_configuration() {
 }
 
 #[test]
+fn delegation_cli_uses_the_embedded_command_schemas() {
+    let home =
+        std::env::temp_dir().join(format!("akra-kernel-cli-callback-{}", std::process::id()));
+    assert!(!home.exists());
+    for (command, missing) in [
+        ("checkpoint_delegation", "token"),
+        ("report_delegation_result", "token"),
+        ("retry_delegation", "id"),
+    ] {
+        let mut cli = Command::new(env!("CARGO_BIN_EXE_akra"));
+        cli.args(["kernel", "delegation", command, "--json"]);
+        match command {
+            "checkpoint_delegation" => cli.args(["--id", "job-1", "--message", "working"]),
+            "report_delegation_result" => cli.args(["--id", "job-1", "--result", "finished"]),
+            _ => cli.args(["--idempotency-key", "same-retry"]),
+        };
+        let output = cli.env("AKRA_HOME", &home).output().expect("run CLI");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let message = error["error"]["message"].as_str().unwrap();
+        assert!(message.contains(missing), "{error}");
+        assert!(!message.contains("unknown kernel"), "{error}");
+    }
+    assert!(
+        !home.exists(),
+        "schema checks must not initialize configuration"
+    );
+}
+
+#[test]
 fn invalid_kernel_input_is_json_before_startup_configuration() {
     let home = std::env::temp_dir().join(format!("akra-kernel-cli-invalid-{}", std::process::id()));
     assert!(!home.exists());

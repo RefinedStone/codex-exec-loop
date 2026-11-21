@@ -27,6 +27,7 @@ state와 비교해 새 이벤트만 고른다"는 use-case 규칙만 담당한�
 pub struct GithubReviewPollerService {
     // GitHub PR activity를 읽는 outbound port이다. service는 이 port가 돌려준 snapshot을 정렬/비교만 한다.
     github_review_poller_port: Arc<dyn GithubReviewPollerPort>,
+    pr_review: Option<super::pr_review::PrReviewService>,
 }
 
 // 이 impl은 GitHub activity polling의 use-case 규칙을 담는다.
@@ -41,7 +42,13 @@ impl GithubReviewPollerService {
         */
         Self {
             github_review_poller_port,
+            pr_review: None,
         }
+    }
+
+    pub fn with_pr_review(mut self, service: super::pr_review::PrReviewService) -> Self {
+        self.pr_review = Some(service);
+        self
     }
 
     // target PR의 현재 activity snapshot을 읽고 service 경계에서 정렬한다.
@@ -80,6 +87,12 @@ impl GithubReviewPollerService {
         */
         // 항상 정렬된 snapshot을 먼저 확보한 뒤 diff를 수행한다.
         let snapshot = self.load_snapshot(target)?;
+        if let Some(review) = &self.pr_review
+            && review.poll(target).is_err()
+        {
+            // Review failure must not reset the activity poll cursor or expose source data.
+            tracing::warn!("defensive PR review could not complete");
+        }
         // 이전 cursor가 본 마지막 timestamp/identity 이후의 event만 changes로 추립니다.
         let changes = Self::collect_changes(&snapshot.events, previous_state);
         // next_state는 changes가 아니라 전체 snapshot에서 만들어, 새 event가 없는 poll도 cursor를 보존한다.

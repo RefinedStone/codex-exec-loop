@@ -11,7 +11,23 @@ import { _electron as electron } from "playwright-core";
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING]);
+const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
+  kernel: { kernel: "fixture-repo", queries: {}, onRequest(method, params) {
+    if (method !== "akra/kernel/query") return;
+    if (params.query?.type === "feature_bindings") {
+      return { result: { type: "feature_bindings", repository: "sample/widgets", pr_review: "observe" } };
+    }
+    if (params.query?.type !== "pr_review_result") return;
+    assert.equal(params.query.number, 12);
+    return { result: { type: "pr_review_result", number: 12, review: {
+      head: "a".repeat(40),
+      result: { status: "reviewed", backend: "fixture-review", result: {
+        summary: "One issue in the fixture.",
+        findings: [{ path: "src/example.rs", line: 23, severity: "medium", body: "<b>Keep this finding as text.</b>" }],
+      } },
+    } } };
+  } },
+});
 const userData = await mkdtemp(join(tmpdir(), "akra-publish-ui-"));
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -61,6 +77,15 @@ try {
   await page.getByTestId("branch-pr").waitFor();
   assert.equal(await page.getByTestId("branch-pr-new").count(), 0);
   assert.equal(await page.getByTestId("branch-pr-form").count(), 0);
+  const review = page.getByTestId("pr-review-result");
+  await review.getByText("One issue in the fixture.").waitFor();
+  await review.getByText("src/example.rs:23").waitFor();
+  await review.getByText("medium", { exact: true }).waitFor();
+  await review.getByText("저장소 설정 · observe").waitFor();
+  await review.getByText("<b>Keep this finding as text.</b>").waitFor();
+  assert.equal(await review.locator("b").count(), 0);
+  assert.ok(!gateway.receivedMethods.includes("akra/kernel/command"));
+  console.log("PASS stored PR review shows summary, severity, and plain-text findings");
   console.log("PASS push refreshes the panel, PR form sends the draft, and the created PR replaces the form");
 } finally {
   const exited = once(app.process(), "exit");

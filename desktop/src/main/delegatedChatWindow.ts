@@ -112,16 +112,15 @@ export class DelegatedChatWindow {
     return contents;
   }
 
-  openForManualUse(): void {
+  async openForManualUse(conversationUrl?: string): Promise<void> {
     const contents = this.getContents();
     // OpenAI sign-in and challenge handling belong to the operator while the window is open.
     this.manual = true;
     this.manualGeneration++;
-    if (!contents.getURL() || contents.getURL() === "about:blank") {
-      void contents.loadURL(this.startUrl).catch(() => undefined);
-    }
     this.window?.show();
     contents.focus();
+    if (conversationUrl) await contents.loadURL(conversationUrl);
+    else if (!contents.getURL() || contents.getURL() === "about:blank") await contents.loadURL(this.startUrl);
   }
 
   close(): void {

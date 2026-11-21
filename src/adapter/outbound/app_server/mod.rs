@@ -19,6 +19,7 @@ mod cloud_dots_live;
 // cloud_chats.rs: 사용자의 ChatGPT 개인 대화를 ChatGPT 백엔드 REST 로 읽는다 (D-19, plan 25). 공식 앱과 같은 요청이다.
 pub(crate) mod cloud_chats;
 pub(crate) mod cloud_upstream;
+pub(crate) mod codex_thread;
 pub(crate) mod connection;
 mod execution_policy;
 mod kernel_skill;

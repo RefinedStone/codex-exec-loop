@@ -266,6 +266,7 @@ where
                         let immediate = if let Some(drafts) = drafts_for_method {
                             spawn_issue_draft_request(
                                 drafts.clone(),
+                                services.delegations.clone(),
                                 id,
                                 method,
                                 text.as_str().to_string(),

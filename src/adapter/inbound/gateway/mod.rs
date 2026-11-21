@@ -9,6 +9,7 @@ mod chats;
 mod confirmation;
 mod context;
 mod delegation;
+pub(crate) use delegation::{advance_pr_review, expire_pr_reviews};
 mod dots;
 mod git;
 mod hosts;

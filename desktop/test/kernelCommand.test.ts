@@ -13,6 +13,9 @@ interface SentRequest {
 const commands = {
   submit_delegation: { type: "submit_delegation", instruction: "Summarize the draft", idempotency_key: "delegation-1" },
   cancel_delegation: { type: "cancel_delegation", id: "delegation-1" },
+  checkpoint_delegation: { type: "checkpoint_delegation", id: "delegation-1", token: "fixture", message: "In progress" },
+  report_delegation_result: { type: "report_delegation_result", id: "delegation-1", token: "fixture", result: "Finished" },
+  retry_delegation: { type: "retry_delegation", id: "delegation-1" },
   load_sessions: { type: "load_sessions" },
   refresh_planning: { type: "refresh_planning" },
   set_issue_automation_mode: { type: "set_issue_automation_mode", mode: "observe" },

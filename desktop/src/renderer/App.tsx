@@ -30,6 +30,7 @@ import { useAppSettings } from "./views/useAppSettings";
 import { useZoom } from "./views/useZoom";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, ZoomNotice } from "./views/Views";
 import { DelegationPanel } from "./work/DelegationPanel";
+import { PrReviewResult, type PrReviewMode, type StoredPrReview } from "./work/PrReviewResult";
 import { delegationActions } from "./work/delegationGateway";
 import { DocumentsPanel } from "./work/DocumentsPanel";
 import { GitHubPanel } from "./work/GitHubPanel";
@@ -199,6 +200,7 @@ const MAX_PANEL_WIDTH = 900;
 
 function RightPanel({ panel, maximized, delegationEnabled, children }: { panel: PanelId; maximized: boolean; delegationEnabled: boolean; children: React.ReactNode }) {
   const [width, startResize] = useResizableWidth(520, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
+  const maximizeLabel = panel === "delegation" ? "위임 패널" : "이슈 패널";
   return (
     <aside className="right-panel" style={maximized ? undefined : { width }} data-testid="right-panel" data-maximized={maximized}>
       {!maximized && <div className="resize-handle" onPointerDown={startResize} />}
@@ -211,8 +213,8 @@ function RightPanel({ panel, maximized, delegationEnabled, children }: { panel: 
             </button>
           ))}
         </nav>
-        {panel === "issues" && (
-          <button type="button" className="icon-button" title={maximized ? "이슈 패널 복원" : "이슈 패널 최대화"} aria-label={maximized ? "이슈 패널 복원" : "이슈 패널 최대화"} aria-expanded={maximized} onClick={() => useUiStore.setState({ panelMaximized: !maximized })} data-testid={maximized ? "issues-restore" : "issues-maximize"}>
+        {(panel === "issues" || panel === "delegation") && (
+          <button type="button" className="icon-button" title={`${maximizeLabel} ${maximized ? "복원" : "최대화"}`} aria-label={`${maximizeLabel} ${maximized ? "복원" : "최대화"}`} aria-expanded={maximized} onClick={() => useUiStore.setState({ panelMaximized: !maximized })} data-testid={`${panel}-${maximized ? "restore" : "maximize"}`}>
             <Icon name={maximized ? "panel" : "popOut"} />
           </button>
         )}
@@ -482,13 +484,15 @@ export function App() {
 
   // 두 패널은 같은 Gateway 연결과 커널 소유자를 쓰고, 열린 패널의 관심 영역만 읽는다.
   const delegationWorkspace = openCwd ?? homeCwd;
+  const reviewPr = tree.branch.phase === "loaded" && tree.branch.summary.ok ? tree.branch.summary.pullRequest : null;
   const kernelWorkspace = panel === "delegation" && delegationEnabled ? delegationWorkspace
-    : panel === "kernel" || panel === "issues" ? openCwd : null;
-  const kernelInterest = panel === "delegation" ? "delegation" : panel === "issues" ? "issues" : "overview";
+    : panel === "review" && reviewPr ? tree.cwd
+      : panel === "kernel" || panel === "issues" ? openCwd : null;
+  const kernelInterest = panel === "delegation" || panel === "review" ? "delegation" : panel === "issues" ? "issues" : "overview";
   const kernelPhase = useDesktopStore((state) => state.kernel.phase);
   const attachedWorkspace = useDesktopStore((state) => state.kernel.workspace);
   const kernelMessage = useDesktopStore((state) => state.kernel.message);
-  const panelMaximized = useUiStore((state) => state.panel === "issues" && state.panelMaximized);
+  const panelMaximized = useUiStore((state) => state.panelMaximized);
   useEffect(() => {
     void session.current?.showKernel(kernelWorkspace, [kernelInterest]);
   }, [kernelWorkspace, kernelInterest]);
@@ -582,6 +586,15 @@ export function App() {
     (method, params) => session.current?.requestDelegation(method, params) ?? Promise.reject(new Error("Gateway 세션이 시작되지 않았습니다.")),
     window.akra.delegatedChat.open,
   ), []);
+  const readPrReview = useCallback(async (number: number) => {
+    const current = session.current;
+    if (!current) throw new Error("Gateway 세션이 시작되지 않았습니다.");
+    const [{ review }, { pr_review: mode }] = await Promise.all([
+      current.requestDelegation<{ review: StoredPrReview | null }>("akra/kernel/query", { query: { type: "pr_review_result", number } }),
+      current.requestDelegation<{ pr_review: PrReviewMode }>("akra/kernel/query", { query: { type: "feature_bindings" } }),
+    ]);
+    return { review, mode };
+  }, []);
   const openThreadId = useDesktopStore((state) => state.openThreadId);
   const browserThreadId = view === "thread" ? openThreadId : null;
   useEffect(() => {
@@ -679,7 +692,13 @@ export function App() {
                     : "위임을 읽거나 접수하려면 먼저 작업 폴더 또는 스레드를 선택하세요."}
                 />
               )}
-              {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)} />}
+              {panel === "review" && (
+                <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)}>
+                  {reviewPr && connected && kernelPhase === "attached" && attachedWorkspace === tree.cwd && (
+                    <PrReviewResult key={`${tree.cwd}:${reviewPr.number}`} number={reviewPr.number} read={readPrReview} />
+                  )}
+                </WorkingTreePanel>
+              )}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} onOpenThread={openThread} />}
               {panel === "issues" && (

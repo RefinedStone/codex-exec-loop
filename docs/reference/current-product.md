@@ -786,10 +786,22 @@ The Gateway records the external documents that a thread mentions, without a mod
   "다시 연결" tries `thread/resume` again and reads the newest history when the lock is still held
   (`desktop/src/renderer/session/desktopSession.ts`).
 - Set `AKRA_DESKTOP_DELEGATED_CHAT=1` before starting Desktop to enable its chat driver.
+  The Tunnel launcher uses Local Agent runtime schema 23. When upgrading from schema 22,
+  finish active work, reinstall the Local Agent in the launcher, then reconnect.
+  The shared runtime status API checks the installed files against the manifest.
+  A `ready` installation can still have a disconnected tunnel.
   In the work panel, open **ChatGPT 위임**, enter a text instruction, and select **텍스트 위임**.
   Open an item to see its status, the last recorded delivery and phase, and the result when it succeeds.
   **위임 취소** cancels an active item. **ChatGPT 로그인 열기** opens the dedicated login view.
   Desktop reports when the connected Gateway does not support delegation.
+  Select a conversation to continue it under the matching ChatGPT account. The panel shows
+  backend status and jobs waiting for your action. A retry creates a new job for an eligible item.
+  `akra kernel delegation wait <id> --json` waits up to ten seconds for a change.
+  Use `akra kernel delegation result <id> --json` to read the stored result.
+- Repository delegation policy controls backend order, concurrency, daily limits and the deadline.
+  The ledger records attempts and observations across restarts. An unknown delivery outcome
+  requires attention before another send. The Codex backend uses an isolated read-only thread.
+  For opt-in PR review, see [Configure defensive pull request review](pr-review-backend.md).
 - Desktop basics (plan 26 U1): one zoom factor for all windows (view menu, `Cmd/Ctrl` `+` `-` `0`, `Cmd/Ctrl`
   + wheel, pinch), saved with the main window's size and position in `userData/window-state.json`; the
   browser panel and the macOS window buttons follow the factor. On macOS the main window has an inset title

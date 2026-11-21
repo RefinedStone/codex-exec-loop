@@ -64,6 +64,9 @@ impl GatewayKernelClientAdapter {
             .enable_all()
             .build()?;
         runtime.block_on(async {
+            let delegation_wait =
+                wait && params.pointer("/query/type").and_then(Value::as_str) == Some("delegation");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             let connected = tokio::time::timeout(CONNECT_TIMEOUT, async {
                 let stream = connect(&endpoint).await.ok()?;
                 tokio_tungstenite::client_async("ws://localhost/rpc", stream)
@@ -74,8 +77,12 @@ impl GatewayKernelClientAdapter {
             let Ok(Some((mut socket, _))) = connected else {
                 return Ok(KernelGatewayReply::NoGateway);
             };
-            let result = tokio::time::timeout(
-                REQUEST_TIMEOUT,
+            let result = tokio::time::timeout_at(
+                if delegation_wait {
+                    deadline
+                } else {
+                    tokio::time::Instant::now() + REQUEST_TIMEOUT
+                },
                 request_over_socket(
                     &mut socket,
                     &self.workspace,
@@ -146,6 +153,32 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
             return Ok(KernelGatewayReply::GatewayTooOld);
         }
         let value = answer(reply)?;
+        if wait && params.pointer("/query/type").and_then(Value::as_str) == Some("delegation") {
+            if matches!(
+                value.pointer("/delegation/state").and_then(Value::as_str),
+                Some("queued" | "running" | "dispatching" | "interrupted")
+            ) {
+                // The delegation ledger can change independently of kernel log notifications.
+                // Reuse this attached connection until the first change, without issuing a command.
+                let changed = tokio::time::timeout(std::time::Duration::from_secs(9), async {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        id += 1;
+                        send(socket, id, method, params.clone()).await?;
+                        let latest = answer(response(socket, id, &mut recorded).await?)?;
+                        if latest != value {
+                            return Ok::<_, anyhow::Error>(latest);
+                        }
+                    }
+                })
+                .await;
+                return Ok(KernelGatewayReply::Answer(match changed {
+                    Ok(result) => result?,
+                    Err(_) => value,
+                }));
+            }
+            return Ok(KernelGatewayReply::Answer(value));
+        }
         if !wait || query_finished(&value)? {
             // The kernel already answered. A failed detach must not turn that answer into an error:
             // the caller would send the command again. Closing the socket detaches too.
@@ -345,6 +378,37 @@ mod tests {
             false,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn delegation_wait_returns_on_state_change_without_a_second_submit() {
+        let (mut client, mut server) = wire().await;
+        let serving = async {
+            serve(&mut server, "akra/kernel/attach", json!({"result":{}})).await;
+            for state in ["queued", "running"] {
+                serve(
+                    &mut server,
+                    "akra/kernel/query",
+                    json!({
+                        "result":{"type":"delegation","delegation":{"id":"job-1","state":state}}
+                    }),
+                )
+                .await;
+            }
+        };
+        let (reply, ()) = tokio::join!(
+            request_over_socket(
+                &mut client,
+                "/workspace",
+                "test",
+                "akra/kernel/query",
+                json!({"query":{"type":"delegation","id":"job-1"}}),
+                true
+            ),
+            serving
+        );
+        assert!(matches!(reply.unwrap(), KernelGatewayReply::Answer(value)
+            if value["delegation"]["state"] == "running"));
     }
 
     #[tokio::test]

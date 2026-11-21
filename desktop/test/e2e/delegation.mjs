@@ -14,16 +14,27 @@ const electronPath = createRequire(import.meta.url)("electron");
 const endpoint = fake.uniqueTestEndpoint();
 const userData = await mkdtemp(join(tmpdir(), "akra-delegation-"));
 const instruction = "Summarize the fixture.\nKeep line breaks.";
+const conversationUrl = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc";
 const record = (id, state) => ({
   id, state, caller: "akra-desktop", delivery: "observed", phase: "working",
   reason: null, conversation_url: null, outcome_unknown: false, created_at: 1795219200000, updated_at: 1795219200000,
+  current_backend: "chatgpt_chat", can_cancel: ["awaiting_human", "queued"].includes(state), can_retry: state === "failed",
 });
 const finished = record("fixture-finished", "succeeded");
+finished.conversation_url = conversationUrl;
+finished.attempts = [{
+  id: "fixture-browser-attempt", backend: "chatgpt_chat", delivery: "observed", phase: "complete",
+  recovery: "exhausted", resumes: 2,
+  observations: [{ source: "browser", at: 1795219200000, delivery: "observed", phase: "complete" }],
+}];
+finished.fallbacks = [{ from: "codex_thread", to: "chatgpt_chat", at: 1795219200000, reason: "quota" }];
 const running = record("fixture-running", "awaiting_human");
 running.reason = "login_required";
-const records = new Map([[finished.id, finished], [running.id, running]]);
+const failed = record("fixture-failed", "failed");
+const records = new Map([[finished.id, finished], [running.id, running], [failed.id, failed]]);
 const submissions = [];
 const cancellations = [];
+const retries = [];
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   kernel: {
     kernel: "fixture-repo",
@@ -36,7 +47,15 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
           case "delegation":
             return { result: { type: "delegation", delegation: records.get(params.query.id) ?? null } };
           case "delegation_result":
-            return { result: { type: "delegation_result", text: "First line.\nSecond line." } };
+            return { result: { type: "delegation_result", text: params.query.id === finished.id ? "First line.\nSecond line." : null } };
+          case "delegation_backends":
+            return { result: { type: "delegation_backends",
+              chatgpt_chat: { state: "ready", account_match: "mismatch", tunnel: { host: true, readiness: "login_required", manual: false } },
+              codex_thread: { state: "unavailable", reason: "quota", circuit: "open" },
+            } };
+          case "delegation_my_turn":
+            return { result: { type: "delegation_my_turn", items: [...records.values()]
+              .filter(({ state }) => state === "awaiting_human").map(({ id, reason }) => ({ id, reason })) } };
         }
       }
       if (method === "akra/kernel/command") {
@@ -53,6 +72,12 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
           const delegation = record(command.id, "cancelled");
           records.set(delegation.id, delegation);
           return { result: { processed: true, result: { type: "delegation_cancelled", delegation } } };
+        }
+        if (command?.type === "retry_delegation") {
+          retries.push(command.id);
+          const delegation = record("fixture-retried", "queued");
+          records.set(delegation.id, delegation);
+          return { result: { processed: true, result: { type: "delegation_retried", delegation } } };
         }
       }
     },
@@ -76,8 +101,11 @@ try {
     ipcMain.removeHandler("akra:delegated-chat-enabled");
     ipcMain.removeHandler("akra:delegated-chat-open");
     ipcMain.handle("akra:delegated-chat-enabled", () => true);
-    globalThis.delegationLoginClicks = 0;
-    ipcMain.handle("akra:delegated-chat-open", () => ++globalThis.delegationLoginClicks === 1);
+    globalThis.delegationManualOpens = [];
+    ipcMain.handle("akra:delegated-chat-open", (_event, url) => {
+      globalThis.delegationManualOpens.push(url ?? null);
+      return globalThis.delegationManualOpens.length < 3;
+    });
   });
   await page.reload();
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
@@ -88,40 +116,12 @@ try {
   const input = panel.getByLabel("위임 지시");
   const submit = panel.getByRole("button", { name: "텍스트 위임" });
   const login = panel.getByRole("button", { name: "ChatGPT 로그인 열기" });
-
-  await panel.getByRole("button", { name: "fixture-fini" }).click();
-  await detail.getByTestId("delegation-result").waitFor();
-  assert.equal(await detail.getByTestId("delegation-result").textContent(), "First line.\nSecond line.");
-  assert.equal(await detail.getByRole("button", { name: "위임 취소" }).count(), 0);
-  assert.equal(await app.evaluate(() => globalThis.delegationLoginClicks), 0);
-  assert.equal(await submit.isDisabled(), true);
-  console.log("PASS list, completed detail, multiline result, and no automatic login");
-
-  await panel.getByRole("button", { name: "fixture-runn" }).click();
-  await detail.getByText("login_required").waitFor();
-  await login.click();
-  await login.click();
-  await panel.getByRole("alert").filter({ hasText: "로그인을 열 수 없습니다" }).waitFor();
-  assert.equal(await app.evaluate(() => globalThis.delegationLoginClicks), 2);
-  await detail.getByRole("button", { name: "위임 취소" }).click();
-  await detail.getByText("취소됨", { exact: false }).waitFor();
-  assert.deepEqual(cancellations, [running.id]);
-  console.log("PASS explicit login, login error, and cancellation");
-
-  await input.fill(instruction);
-  await submit.click();
-  await panel.getByText("fixture request failed").waitFor();
-  assert.equal(await input.inputValue(), instruction);
-  await submit.click();
-  await detail.getByText("fixture-submitted", { exact: true }).waitFor();
-  assert.equal(await input.inputValue(), "");
-  assert.equal(submissions.length, 2);
-  assert.equal(submissions[0].instruction, instruction);
-  assert.ok(submissions[0].idempotency_key);
-  assert.equal(submissions[0].idempotency_key, submissions[1].idempotency_key);
-  assert.ok(!gateway.receivedMethods.some((method) => method === "turn/start" || method === "turn/steer"));
-  console.log("PASS text submit, failure preserves draft, and retry reuses the request key");
-  if (process.env.AKRA_E2E_DELEGATION_SCREENSHOT) {
+  const capture = async (output, scrollTop) => {
+    if (!output) return;
+    await panel.locator(".work-scroll").evaluate(async (scroll, top) => {
+      scroll.scrollTop = top ? 0 : scroll.scrollHeight;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, scrollTop);
     const box = await panel.boundingBox();
     assert.ok(box);
     const window = await app.browserWindow(page);
@@ -133,8 +133,64 @@ try {
       if (image.isEmpty()) throw new Error("Delegation panel capture is empty");
       return image.toPNG().toString("base64");
     }, box);
-    await writeFile(process.env.AKRA_E2E_DELEGATION_SCREENSHOT, Buffer.from(png, "base64"));
-  }
+    await writeFile(output, Buffer.from(png, "base64"));
+  };
+  await panel.getByTestId("delegation-backends").getByText("mismatch", { exact: false }).waitFor();
+  await panel.getByTestId("delegation-backends").getByText("open", { exact: false }).waitFor();
+  await panel.getByTestId("delegation-my-turn").getByText("login_required").waitFor();
+  await capture(process.env.AKRA_E2E_DELEGATION_SCREENSHOT, true);
+  await page.getByTestId("delegation-maximize").click();
+  assert.equal(await page.getByTestId("right-panel").getAttribute("data-maximized"), "true");
+  await page.getByTestId("delegation-restore").click();
+
+  await panel.getByRole("button", { name: "fixture-fini" }).click();
+  await detail.getByTestId("delegation-result").waitFor();
+  assert.equal(await detail.getByTestId("delegation-result").textContent(), "First line.\nSecond line.");
+  assert.equal(await detail.getByRole("button", { name: "위임 취소" }).count(), 0);
+  assert.deepEqual(await app.evaluate(() => globalThis.delegationManualOpens), []);
+  await detail.getByText("exhausted (2회)", { exact: false }).waitFor();
+  await detail.getByText("Codex → ChatGPT", { exact: false }).waitFor();
+  await detail.getByText("browser", { exact: false }).waitFor();
+  await capture(process.env.AKRA_E2E_DELEGATION_DETAIL_SCREENSHOT, false);
+  await detail.getByRole("button", { name: "ChatGPT 대화 열기" }).click();
+  assert.equal(await submit.isDisabled(), true);
+  console.log("PASS list, completed detail, multiline result, and no automatic login");
+
+  await panel.getByTestId("delegation-my-turn").getByRole("button", { name: running.id, exact: true }).click();
+  await detail.getByText("login_required").waitFor();
+  await login.click();
+  await login.click();
+  await panel.getByRole("alert").filter({ hasText: "로그인을 열 수 없습니다" }).waitFor();
+  assert.deepEqual(await app.evaluate(() => globalThis.delegationManualOpens), [conversationUrl, null, null]);
+  await detail.getByRole("button", { name: "위임 취소" }).click();
+  await detail.getByText("취소됨", { exact: false }).waitFor();
+  assert.deepEqual(cancellations, [running.id]);
+  console.log("PASS explicit login, login error, and cancellation");
+
+  await panel.getByRole("button", { name: "fixture-fail", exact: true }).click();
+  await detail.getByRole("button", { name: "위임 다시 내기" }).click();
+  await detail.getByText("fixture-retried", { exact: true }).waitFor();
+  assert.deepEqual(retries, [failed.id]);
+
+  await input.fill(instruction);
+  await panel.getByLabel("대상 대화").selectOption("continue");
+  const chatInput = panel.getByLabel("ChatGPT 대화 주소");
+  await chatInput.fill("https://example.test/c/12345678-1234-1234-1234-123456789abc");
+  assert.equal(await submit.isDisabled(), true);
+  await chatInput.fill(conversationUrl);
+  await submit.click();
+  await panel.getByText("fixture request failed").waitFor();
+  assert.equal(await input.inputValue(), instruction);
+  await submit.click();
+  await detail.getByText("fixture-submitted", { exact: true }).waitFor();
+  assert.equal(await input.inputValue(), "");
+  assert.equal(submissions.length, 2);
+  assert.equal(submissions[0].instruction, instruction);
+  assert.deepEqual(submissions[0].session, { mode: "continue", chat_url: conversationUrl });
+  assert.ok(submissions[0].idempotency_key);
+  assert.equal(submissions[0].idempotency_key, submissions[1].idempotency_key);
+  assert.ok(!gateway.receivedMethods.some((method) => method === "turn/start" || method === "turn/steer"));
+  console.log("PASS text submit, failure preserves draft, and retry reuses the request key");
   console.log(await panel.innerText());
 } finally {
   if (app) await app.close();

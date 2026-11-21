@@ -100,6 +100,7 @@ pub struct GithubReviewPollerAdapter {
     user_agent: String,
     // local GitHub credential에서 추출한 token이다. raw credential line은 이 adapter 밖으로 보존하지 않는다.
     token: String,
+    write_login: Option<String>,
     subprocess_timeout: Duration,
 }
 
@@ -131,6 +132,10 @@ impl GithubActivityLoadBudget {
 }
 
 impl GithubReviewPollerAdapter {
+    pub(crate) fn review_repository(repo_root: &Path) -> Result<String> {
+        Self::resolve_repository_full_name(repo_root)
+    }
+
     pub fn new(token: impl Into<String>) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self::new_for_workspace(token, &cwd)
@@ -172,6 +177,7 @@ impl GithubReviewPollerAdapter {
             api_base_url: GITHUB_API_BASE_URL.to_string(),
             user_agent: format!("codex-exec-loop-native/{}", env!("CARGO_PKG_VERSION")),
             token: token.into(),
+            write_login: None,
             subprocess_timeout: subprocess::configured_subprocess_timeout(),
         }
     }
@@ -182,10 +188,13 @@ impl GithubReviewPollerAdapter {
         명령을 실행할 수 있고 credential file은 별도 owner/symlink 검증 없이는 신뢰할 수 없으므로 둘 다 사용하지 않는다. 찾은 token은
         즉시 bearer token으로 변환하며 이후 HTTP code는 token source나 raw credential URL을 알지 못한다.
         */
-        Ok(Self::new_for_workspace(
-            Self::read_local_github_token(repo_root)?,
-            repo_root,
-        ))
+        let mut adapter =
+            Self::new_for_workspace(Self::read_local_github_token(repo_root)?, repo_root);
+        adapter.write_login = repo_root
+            .to_str()
+            .and_then(super::automation::configured_github_write_login)
+            .and_then(|login| login.into_string().ok());
+        Ok(adapter)
     }
 
     /*
@@ -1181,6 +1190,205 @@ impl GithubReviewPollerAdapter {
     }
 }
 
+impl crate::application::service::pr_review::PrReviewGithub for GithubReviewPollerAdapter {
+    fn revision(
+        &self,
+        target: &GithubPullRequestTarget,
+    ) -> Result<Option<crate::application::service::pr_review::ReviewRevision>> {
+        #[derive(Deserialize)]
+        struct Commit {
+            sha: String,
+        }
+        #[derive(Deserialize)]
+        struct PullRequest {
+            state: String,
+            head: Commit,
+            base: Commit,
+            title: String,
+            body: Option<String>,
+        }
+        let endpoint = review_pull_endpoint(target)?;
+        let response: PullRequest = self.fetch_object(&endpoint)?;
+        Ok((response.state == "open").then(|| {
+            crate::application::service::pr_review::ReviewRevision {
+                head: response.head.sha,
+                base: response.base.sha,
+                title: response.title,
+                body: response.body.unwrap_or_default(),
+            }
+        }))
+    }
+
+    fn diff(&self, target: &GithubPullRequestTarget) -> Result<Option<String>> {
+        use crate::application::service::pr_review::MAX_DIFF_BYTES;
+        let endpoint = review_pull_endpoint(target)?;
+        let output = self.review_http(
+            &endpoint,
+            "application/vnd.github.diff",
+            None,
+            MAX_DIFF_BYTES,
+        )?;
+        if output.status.code() == Some(63) {
+            return Ok(None);
+        }
+        let diff = review_http_body(output, 200)?;
+        if diff.len() > MAX_DIFF_BYTES {
+            return Ok(None);
+        }
+        Ok(Some(String::from_utf8(diff.to_vec())?))
+    }
+
+    fn write_comment(
+        &self,
+        target: &GithubPullRequestTarget,
+        existing: Option<u64>,
+        body: &str,
+    ) -> Result<u64> {
+        review_pull_endpoint(target)?;
+        #[derive(Deserialize)]
+        struct AuthenticatedUser {
+            login: String,
+        }
+        let expected = self
+            .write_login
+            .as_deref()
+            .context("PR review comments require a pinned GitHub write identity")?;
+        let user: AuthenticatedUser = self.fetch_object("/user")?;
+        anyhow::ensure!(
+            user.login.eq_ignore_ascii_case(expected),
+            "GitHub PR review write identity did not match"
+        );
+        #[derive(Deserialize)]
+        struct Comment {
+            id: u64,
+        }
+        let (method, endpoint, expected_status) = match existing {
+            Some(id) => (
+                "PATCH",
+                format!("/repos/{}/issues/comments/{id}", target.repository),
+                200,
+            ),
+            None => (
+                "POST",
+                format!(
+                    "/repos/{}/issues/{}/comments",
+                    target.repository, target.number
+                ),
+                201,
+            ),
+        };
+        let payload = serde_json::json!({ "body": body }).to_string();
+        let output = self.review_http(
+            &endpoint,
+            "application/vnd.github+json",
+            Some((method, &payload)),
+            64 * 1024,
+        )?;
+        let comment: Comment = serde_json::from_slice(&review_http_body(output, expected_status)?)?;
+        anyhow::ensure!(
+            comment.id > 0 && existing.is_none_or(|id| id == comment.id),
+            "unexpected GitHub comment id"
+        );
+        Ok(comment.id)
+    }
+}
+
+fn review_pull_endpoint(target: &GithubPullRequestTarget) -> Result<String> {
+    let valid_segment = |segment: &str| {
+        !segment.is_empty()
+            && !matches!(segment, "." | "..")
+            && segment
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    anyhow::ensure!(
+        target.number > 0
+            && target
+                .repository
+                .split_once('/')
+                .is_some_and(|(owner, name)| valid_segment(owner) && valid_segment(name)),
+        "invalid GitHub PR review target"
+    );
+    Ok(format!(
+        "/repos/{}/pulls/{}",
+        target.repository, target.number
+    ))
+}
+
+fn review_http_body(mut output: Output, status: u16) -> Result<Vec<u8>> {
+    anyhow::ensure!(output.status.success(), "GitHub PR review transport failed");
+    let suffix = format!("{VALIDATION_HTTP_STATUS_MARKER}{status}");
+    anyhow::ensure!(
+        output.stdout.ends_with(suffix.as_bytes()),
+        "unexpected GitHub PR review HTTP status"
+    );
+    output.stdout.truncate(output.stdout.len() - suffix.len());
+    Ok(output.stdout)
+}
+
+impl GithubReviewPollerAdapter {
+    fn review_http(
+        &self,
+        endpoint: &str,
+        accept: &str,
+        write: Option<(&str, &str)>,
+        limit: usize,
+    ) -> Result<Output> {
+        anyhow::ensure!(
+            self.curl_resolution_error.is_none(),
+            "trusted curl unavailable"
+        );
+        let mut config = build_curl_stdin_config(
+            &format!("X-GitHub-Api-Version: {GITHUB_API_VERSION}"),
+            &format!("Authorization: Bearer {}", self.token),
+            &format!("User-Agent: {}", self.user_agent),
+        )
+        .replace(
+            "Accept: application/vnd.github+json",
+            &format!("Accept: {accept}"),
+        );
+        if let Some((method, body)) = write {
+            config.push_str(&format!(
+                "request = {method}\nheader = \"Content-Type: application/json\"\ndata-binary = {}\n",
+                curl_config_string_literal(body)
+            ));
+        }
+        let mut command = Command::new(&self.curl_path);
+        let cwd = std::env::current_dir()?;
+        crate::trusted_executable::configure_credential_command_environment(
+            &mut command,
+            &cwd,
+            false,
+        )?;
+        command
+            .args([
+                "-q",
+                "-sS",
+                "--proto",
+                "=https",
+                "--connect-timeout",
+                CURL_CONNECT_TIMEOUT_SECONDS,
+                "--max-time",
+                CURL_MAX_TIME_SECONDS,
+                "--max-filesize",
+                &limit.to_string(),
+                "--write-out",
+                &format!("{VALIDATION_HTTP_STATUS_MARKER}%{{http_code}}"),
+                "--config",
+                "-",
+            ])
+            .arg(format!("{}{endpoint}", self.api_base_url));
+        // A write is attempted once, including transport timeout and unknown HTTP status.
+        subprocess::command_output_with_input_and_timeout(
+            &mut command,
+            "GitHub PR review request",
+            config.as_bytes(),
+            self.subprocess_timeout,
+        )
+        .map_err(|_| anyhow!("GitHub PR review request failed or timed out"))
+    }
+}
+
 fn parse_validation_http_response(
     output: &[u8],
     observed_at: DateTime<Utc>,
@@ -1579,6 +1787,7 @@ sleep 2
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "secret-token".to_string(),
+            write_login: None,
             subprocess_timeout: std::time::Duration::from_millis(50),
         };
 
@@ -1621,6 +1830,7 @@ printf '{{"ok":true}}'
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "secret-token".to_string(),
+            write_login: None,
             subprocess_timeout: NON_TIMEOUT_TEST_WAIT,
         };
 
@@ -1671,6 +1881,7 @@ printf 'HTTP/2 200\r\nX-RateLimit-Remaining: 4999\r\n\r\n{{"data":{{}}}}{}200'
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "secret-token".to_string(),
+            write_login: None,
             subprocess_timeout: NON_TIMEOUT_TEST_WAIT,
         };
         let request =
@@ -1747,6 +1958,7 @@ printf '{{"ok":true}}'
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "bearer-token-must-not-leak".to_string(),
+            write_login: None,
             // This fixture verifies curl config isolation, not timeout policy.
             // Leave enough headroom for process startup during the full parallel suite.
             subprocess_timeout: std::time::Duration::from_secs(10),
