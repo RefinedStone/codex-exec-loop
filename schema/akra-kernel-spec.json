@@ -985,69 +985,6 @@
       }
     },
     {
-      "name": "set_issue_autonomy",
-      "scope": "issue",
-      "state": "store",
-      "summary": "Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result.",
-      "effect": "write",
-      "idempotency": "keyed",
-      "rejections": [
-        "human_confirmation_required"
-      ],
-      "completion": "records",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "command_id": {
-            "maxLength": 256,
-            "minLength": 1,
-            "pattern": "\\S",
-            "type": "string"
-          },
-          "level": {
-            "$ref": "#/$defs/IssueAutonomyLevel"
-          },
-          "type": {
-            "const": "set_issue_autonomy",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "command_id",
-          "level"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "$ref": "#/$defs/CommandResponse"
-      },
-      "result": {
-        "properties": {
-          "autonomy": {
-            "$ref": "#/$defs/IssueAutonomyState"
-          },
-          "changed": {
-            "type": "boolean"
-          },
-          "command_id": {
-            "type": "string"
-          },
-          "type": {
-            "const": "issue_autonomy_changed",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "command_id",
-          "changed",
-          "autonomy"
-        ],
-        "type": "object"
-      }
-    },
-    {
       "name": "set_issue_automation_mode",
       "scope": "issue",
       "state": "store",
@@ -1117,6 +1054,69 @@
           "epoch",
           "revision",
           "changed"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "set_issue_autonomy",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "human_confirmation_required"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/$defs/IssueAutonomyLevel"
+          },
+          "type": {
+            "const": "set_issue_autonomy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "command_id",
+          "level"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "autonomy": {
+            "$ref": "#/$defs/IssueAutonomyState"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "issue_autonomy_changed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "command_id",
+          "changed",
+          "autonomy"
         ],
         "type": "object"
       }
