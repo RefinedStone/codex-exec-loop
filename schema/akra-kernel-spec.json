@@ -2360,6 +2360,16 @@
                 },
                 "type": "array"
               },
+              "feedback": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueFeedbackDetailState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "item": {
                 "$ref": "#/$defs/IssueListItem"
               },
@@ -3569,6 +3579,60 @@
           "issue",
           "work_order_id",
           "integration",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_feedback_posted",
+      "summary": "A journaled issue feedback write was confirmed by readback. Only intent, actor, comment or label identity is recorded; the shared text and provider response are excluded.",
+      "payload": {
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/IssueFeedbackRecordAction"
+          },
+          "actor_id": {
+            "type": "string"
+          },
+          "comment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "intent_id": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_feedback_posted",
+            "type": "string"
+          },
+          "label_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "issue",
+          "intent_id",
+          "action",
+          "actor_id",
           "revision"
         ],
         "type": "object"
@@ -6234,6 +6298,57 @@
       ],
       "type": "object"
     },
+    "IssueFeedbackDetailReasonState": {
+      "enum": [
+        "feedback_unconfirmed"
+      ],
+      "type": "string"
+    },
+    "IssueFeedbackDetailState": {
+      "additionalProperties": false,
+      "properties": {
+        "comment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publication_attempts": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueFeedbackDetailReasonState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "publication_attempts"
+      ],
+      "type": "object"
+    },
+    "IssueFeedbackRecordAction": {
+      "enum": [
+        "comment_created",
+        "comment_updated",
+        "label_added",
+        "label_removed"
+      ],
+      "type": "string"
+    },
     "IssueFieldHash": {
       "properties": {
         "sha256": {
@@ -6761,7 +6876,8 @@
         "provider_unavailable",
         "malformed_response",
         "identity_mismatch",
-        "metadata_incomplete"
+        "metadata_incomplete",
+        "feedback_unconfirmed"
       ],
       "type": "string"
     },
@@ -7183,7 +7299,8 @@
         "awaiting_source",
         "approval_changed",
         "source_unavailable",
-        "submission_unavailable"
+        "submission_unavailable",
+        "feedback_unconfirmed"
       ],
       "type": "string"
     },
@@ -8823,6 +8940,16 @@
                   },
                   "type": "array"
                 },
+                "feedback": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueFeedbackDetailState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "item": {
                   "$ref": "#/$defs/IssueListItem"
                 },
@@ -9628,6 +9755,56 @@
             "issue",
             "work_order_id",
             "integration",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/IssueFeedbackRecordAction"
+            },
+            "actor_id": {
+              "type": "string"
+            },
+            "comment_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "intent_id": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_feedback_posted",
+              "type": "string"
+            },
+            "label_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "issue",
+            "intent_id",
+            "action",
+            "actor_id",
             "revision"
           ],
           "type": "object"

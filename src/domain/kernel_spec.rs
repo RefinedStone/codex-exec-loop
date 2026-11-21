@@ -601,6 +601,8 @@ spec_names! {
             "A local execution observation advanced the issue work lifecycle. Independent attempt counts and neutral terminal facts are recorded without worker output or answer text.";
         IssueIntegrated => "issue_integrated",
             "Trusted integration evidence was committed for an issue work order. Later validation failures cannot erase this fact.";
+        IssueFeedbackPosted => "issue_feedback_posted",
+            "A journaled issue feedback write was confirmed by readback. Only intent, actor, comment or label identity is recorded; the shared text and provider response are excluded.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",
             "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
     }

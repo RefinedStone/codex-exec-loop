@@ -7,10 +7,15 @@ use crate::adapter::outbound::db::sqlite_planning_authority_adapter::SqlitePlann
 use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
 use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJournalAdapter;
 use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
+use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
 use crate::adapter::outbound::git::issue_origin::GitIssueCollectionOriginAdapter;
+use crate::adapter::outbound::github::issue_feedback::GithubIssueFeedbackAdapter;
 use crate::adapter::outbound::github::issue_source::GithubIssueSourceAdapter;
+use crate::application::port::outbound::issue_feedback_store_port::IssueFeedbackStorePort;
+use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
 use crate::application::service::issue_collection::IssueCollectionService;
+use crate::application::service::issue_feedback::IssueFeedbackService;
 use crate::application::service::issue_policy::IssuePolicyService;
 use crate::application::service::issue_source_provenance::IssueSourceProvenanceService;
 use crate::application::service::issue_triage::IssueTriageService;
@@ -21,7 +26,25 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
         Ok(PathBuf::from(location.runtime_dir))
     }));
+    let publication: Arc<dyn IssuePublishIntentJournalPort> =
+        Arc::new(IssuePublishIntentJournalAdapter::new(|workspace| {
+            let location =
+                SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
+            Ok(PathBuf::from(location.runtime_dir))
+        }));
     let validation_source = Arc::new(FilesystemIssuePolicySourceAdapter::new());
+    let feedback = Arc::new(IssueFeedbackService::new(
+        workspace_dir.to_owned(),
+        store.clone(),
+        Arc::new(GithubIssueFeedbackAdapter::new(PathBuf::from(
+            workspace_dir,
+        ))),
+        publication.clone(),
+        IssueAutomationPolicyService::new(Arc::new(
+            FilesystemIssueAutomationPolicySourceAdapter::new(),
+        )),
+        IssuePolicyService::new(validation_source.clone()),
+    ));
     let triage = Arc::new(IssueTriageService::new(
         workspace_dir.to_string(),
         store.clone(),
@@ -30,19 +53,29 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
         )),
         IssuePolicyService::new(validation_source.clone()),
     ));
-    let source = Arc::new(IssueSourceProvenanceService::new(
-        Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
-        Arc::new(
-            IssueCreationJournalAdapter::new(|workspace| {
-                let location =
-                    SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
-                Ok(PathBuf::from(location.runtime_dir))
-            })
-            .with_workspace_resolver(|cwd| {
-                Ok(super::production::repository_kernel_target(cwd)?.workspace_root)
-            }),
+    let source = Arc::new(
+        IssueSourceProvenanceService::new(
+            Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
+            Arc::new(
+                IssueCreationJournalAdapter::new(|workspace| {
+                    let location =
+                        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(
+                            workspace,
+                        )?;
+                    Ok(PathBuf::from(location.runtime_dir))
+                })
+                .with_workspace_resolver(|cwd| {
+                    Ok(super::production::repository_kernel_target(cwd)?.workspace_root)
+                }),
+            ),
+        )
+        .with_feedback(
+            store.clone(),
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
         ),
-    ));
+    );
     let decisions = Arc::new(
         crate::application::service::issue_decision::IssueDecisionService::new(
             workspace_dir.to_owned(),
@@ -80,7 +113,9 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             decisions,
             IssuePolicyService::new(validation_source.clone()),
             execution,
-        ),
+        )
+        .with_feedback(feedback)
+        .with_publication_journal(publication.clone()),
     );
     Arc::new(
         IssueCollectionService::new(
@@ -93,7 +128,8 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
         .with_triage(triage)
         .with_autonomy(autonomy)
         .with_interactions(interactions)
-        .with_coordinator(coordinator),
+        .with_coordinator(coordinator)
+        .with_publication_journal(publication),
     )
 }
 
@@ -290,4 +326,13 @@ fn build_execution() -> Arc<crate::composition::issue_work_execution::AkraIssueW
             parallel,
         ),
     )
+}
+
+/// 직접 제목·본문 게시도 같은 private issue DB의 미확정 feedback을 확인한다.
+pub(crate) fn build_feedback_store() -> Arc<dyn IssueFeedbackStorePort> {
+    Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    }))
 }

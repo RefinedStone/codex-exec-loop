@@ -2193,6 +2193,16 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             },
             revision: 7,
         },
+        Record::IssueFeedbackPosted {
+            event_id: "feedback-posted-1".into(),
+            issue: (&sample_issue_reference()).into(),
+            intent_id: "feedback-intent-1".into(),
+            action: crate::domain::kernel_event::IssueFeedbackRecordAction::CommentCreated,
+            actor_id: "actor-stable".into(),
+            comment_id: Some("comment-stable".into()),
+            label_id: None,
+            revision: 8,
+        },
         Record::issue_automation_mode_changed(
             Some(crate::domain::issue_automation::collection::IssueCollectionMode::Observe),
             crate::domain::issue_automation::collection::IssueCollectionMode::Off,
