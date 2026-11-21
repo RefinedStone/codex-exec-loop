@@ -59,6 +59,6 @@
 
 | ID | 질문 | 기본값 |
 | --- | --- | --- |
-| Q-D1-1 | 장부를 저장소마다 두는가, `$AKRA_HOME` 에 하나 두는가 | 저장소마다. 회로 상태와 lease 만 머신 전체이다 (plan 29 Q-DE2) |
+| Q-D1-1 | 장부를 저장소마다 두는가, `$AKRA_HOME` 에 하나 두는가 | 저장소마다. `chatgpt_chat` 의 줄과 한도는 tunnel frontend 가 가진다 (plan 29 Q-DE2) |
 | Q-D1-2 | 관찰 값을 모두 저장하는가 | 시도마다 최근 16개와 마지막 진행 시각만 둔다 |
 | Q-D1-3 | `AgentBackendPort` 는 동기인가, async 인가 | 동기. 기존 outbound port 와 같다. 조정기가 블로킹 작업으로 부른다 |
