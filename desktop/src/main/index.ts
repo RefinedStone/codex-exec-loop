@@ -24,8 +24,8 @@ import { BrowserAutomation } from "./browserAgent/automation";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { contextMenuItems } from "./contextMenuItems";
 import { DelegatedChatDriver, delegatedChatHome } from "./delegatedChatDriver";
-import { connectDelegatedChat } from "./delegatedChatGateway";
 import { createDelegatedChatPage } from "./delegatedChatPage";
+import { startDelegatedChatProcess } from "./delegatedChatProcess";
 import { DelegatedChatWindow } from "./delegatedChatWindow";
 import { isDotsCloudEnabled, setDotsCloudEnabled } from "./dotsSettings";
 import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBranch";
@@ -312,7 +312,7 @@ const WINDOW_STATE_SAVE_DELAY_MS = 400;
 /** 열려 있는 본 창이다. dot 창과 블루프린트 창은 넣지 않는다. */
 const mainWindows = new Set<BrowserWindow>();
 const delegatedChatWindow = new DelegatedChatWindow();
-let delegatedChatConnection: GatewayConnection | undefined;
+let closeDelegatedChatProcess: (() => Promise<void>) | undefined;
 let delegatedChatDriver: DelegatedChatDriver | undefined;
 const mainRendererPath = join(__dirname, "../renderer/index.html");
 function delegatedChatEnabled(): boolean {
@@ -890,13 +890,16 @@ void app.whenReady().then(() => {
   if (delegatedChatEnabled()) {
     try {
       const endpoint = resolveGatewayEndpoint();
-      delegatedChatDriver = new DelegatedChatDriver({
+      const driver = new DelegatedChatDriver({
         home: delegatedChatHome(),
         pageFor: () => createDelegatedChatPage(delegatedChatWindow),
         manual: () => delegatedChatWindow.isManual,
         closePage: () => delegatedChatWindow.close(),
       });
-      delegatedChatConnection = connectDelegatedChat({ endpoint }, delegatedChatDriver);
+      delegatedChatDriver = driver;
+      closeDelegatedChatProcess = startDelegatedChatProcess(
+        join(__dirname, "delegatedChatGateway.js"), endpoint, driver.dispatch.bind(driver),
+      );
     } catch {
       // Main still opens normally if the local Gateway endpoint is unavailable.
     }
@@ -917,9 +920,9 @@ app.on("before-quit", (event) => {
   if (closingAgents) return;
   event.preventDefault();
   closingAgents = true;
-  delegatedChatConnection?.close();
   if (!delegatedChatDriver) delegatedChatWindow.close();
   void Promise.allSettled([
+    closeDelegatedChatProcess?.(),
     delegatedChatDriver?.close(),
     browserAgents.close().catch((error: unknown) => console.error("Browser bridge shutdown failed", error instanceof Error ? error.message : "unknown error")),
   ]).then(() => app.quit());

@@ -1,11 +1,11 @@
-import { GatewayConnection, type GatewayConnectionOptions } from "./gatewayConnection";
-import type { DelegatedChatDriver } from "./delegatedChatDriver";
+import { GatewayConnection, type GatewayConnectionOptions } from "../main/gatewayConnection";
+import type { ChatDispatch, ChatMethod } from "./messages";
 
 const PREFIX = "akra/delegationDriver/";
 
 export function connectDelegatedChat(
   options: Pick<GatewayConnectionOptions, "endpoint" | "startDaemon">,
-  driver: Pick<DelegatedChatDriver, "dispatch">,
+  dispatch: ChatDispatch,
 ): GatewayConnection {
   let epoch = 0;
   let closed = false;
@@ -32,7 +32,7 @@ export function connectDelegatedChat(
         return;
       }
       const { method, jobId, instruction } = request.command;
-      void driver.dispatch(method, jobId, instruction).then(
+      void dispatch(method, jobId, instruction).then(
         (result) => reply({ result }),
         () => reply({ error: { code: -32000, message: "Chat driver operation failed" } }),
       );
@@ -50,7 +50,7 @@ export function connectDelegatedChat(
 }
 
 function decodeRequest(text: string): { id: string; command?: {
-  method: "status" | "submit" | "observe" | "readResult" | "stop";
+  method: ChatMethod;
   jobId: string;
   instruction?: string;
 } } | undefined {

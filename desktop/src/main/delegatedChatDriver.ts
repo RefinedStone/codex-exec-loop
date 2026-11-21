@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import { acquireHostLease, ChatSessionService, type ChatObservation, type HostLease, type PagePort } from "akra-tunnel-core/chat";
 
+import type { ChatMethod } from "../delegation/messages";
 import { CHAT_CONVERSATION } from "./delegatedChatPage";
 
 const DELIVERY = {
@@ -51,7 +52,7 @@ export class DelegatedChatDriver {
     closePage(): void;
   }) {}
 
-  dispatch(method: "status" | "submit" | "observe" | "readResult" | "stop", id: string, instruction?: string): Promise<unknown> {
+  dispatch(method: ChatMethod, id: string, instruction?: string): Promise<unknown> {
     return this.run(async () => {
       const service = await this.core();
       if (method === "status") return service
@@ -68,12 +69,11 @@ export class DelegatedChatDriver {
         if (this.active?.id === id) {
           return this.active.observation ? this.view(this.active.observation) : WAITING;
         }
-        if (this.active || this.queued.size) {
+        if (this.active || this.queued.size || this.options.manual()) {
           if (this.queued.size >= 32) return { delivery: "not_sent", phase: "unreachable", reason: "chat_queue_full" };
           this.queued.set(id, instruction!);
-          return WAITING;
+          return this.options.manual() ? this.view(null) : WAITING;
         }
-        if (this.options.manual()) return this.view(null);
         this.start(service, id, instruction!);
         return WAITING;
       }
