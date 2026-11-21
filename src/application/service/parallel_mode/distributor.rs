@@ -47,8 +47,15 @@ const DISTRIBUTOR_ENQUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
 const DISTRIBUTOR_ENQUEUE_LOCK_RETRY: Duration = Duration::from_millis(25);
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
 mod delivery;
+mod work_permits;
+
 #[cfg(test)]
 pub(super) use self::delivery::install_before_distributor_cleanup_lock_hook;
+use self::work_permits::{
+    block_if_work_order_permit_denied, recheck_work_order_permit_wait, select_permitted_queue_head,
+    work_order_delivery_gate, work_order_permit_decision,
+};
+use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitStage;
 mod queue_keys;
 mod snapshot;
 mod store;
@@ -1158,14 +1165,16 @@ impl ParallelModeDistributorService {
             )
             .map_err(|(_, detail)| detail.to_string())?;
         }
-        let Some(mut preflight_head) = preflight_context
-            .distributor_queue_records
-            .iter()
-            .find(|record| record.queue_state != ParallelModeQueueItemState::Done)
-            .cloned()
+        let Some(preflight_head_index) = select_permitted_queue_head(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            &mut preflight_context,
+        )?
         else {
             return Ok(Vec::new());
         };
+        let mut preflight_head =
+            preflight_context.distributor_queue_records[preflight_head_index].clone();
         let blocked_head_can_recover = preflight_head.queue_state
             == ParallelModeQueueItemState::Blocked
             && (is_retryable_distributor_block(&preflight_head.integration_note)
@@ -1235,23 +1244,25 @@ impl ParallelModeDistributorService {
         )
         .map_err(|error| error.1)?;
         drop(pool_mutation_lock);
-        let context = self.recover_runtime_state_with_proof(
+        let mut context = self.recover_runtime_state_with_proof(
             workspace_dir,
             &integration_target,
             missing_handoff_recovery,
         )?;
-        let mut records = context.distributor_queue_records.clone();
-        let Some(head_index) = records
-            .iter()
-            .position(|record| record.queue_state != ParallelModeQueueItemState::Done)
+        let Some(head_index) = select_permitted_queue_head(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            &mut context,
+        )?
         else {
             return Ok(Vec::new());
         };
+        let mut records = context.distributor_queue_records.clone();
         let head = &mut records[head_index];
         /*
-        Done records stay in the durable trace, so "first not Done" is the queue
-        head. This preserves historical ordering while still preventing later
-        queued work from jumping ahead of a blocked or cleaning item.
+        Done records stay in the durable trace. Only a task waiting for its own
+        work-order permit yields to other tasks; operator and cleanup blocks
+        preserve the existing queue ordering.
         */
         if matches!(
             head.queue_state,
@@ -1339,9 +1350,11 @@ impl ParallelModeDistributorService {
             self.planning_authority.as_ref(),
             workspace_dir,
         ) {
-            Ok(context) => {
-                build_distributor_snapshot_from_context(self.parallel_runtime.as_ref(), &context)
-            }
+            Ok(context) => build_distributor_snapshot_from_context(
+                self.planning_authority.as_ref(),
+                self.parallel_runtime.as_ref(),
+                &context,
+            ),
             Err((_, detail)) => build_placeholder_distributor_snapshot(
                 "unavailable",
                 format!("distributor snapshot unavailable / {detail}"),
@@ -1506,6 +1519,16 @@ impl ParallelModeDistributorService {
                     &mut record,
                     detail,
                 )?;
+                context.distributor_queue_records[index] = record;
+                continue;
+            }
+            if recheck_work_order_permit_wait(
+                self.planning_authority.as_ref(),
+                self.parallel_runtime.as_ref(),
+                &context.repo_root,
+                &context.pool_root,
+                &mut record,
+            )? {
                 context.distributor_queue_records[index] = record;
                 continue;
             }

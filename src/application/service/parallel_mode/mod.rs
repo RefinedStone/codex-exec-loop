@@ -1157,7 +1157,32 @@ impl ParallelModeService {
             .into_iter()
             .filter(|slot| slot.state == ParallelModePoolSlotState::Idle)
             .count();
-        let excluded_task_ids = parallel_dispatch_excluded_task_ids(&context);
+        let mut excluded_task_ids = parallel_dispatch_excluded_task_ids(&context);
+        // Filter before the idle-capacity limit so a held task cannot hide a runnable one.
+        // The authoritative slot transaction repeats this check to close a concurrent revocation.
+        if let Some(projection) = planning_projection.queue_projection() {
+            for task in &projection.active_tasks {
+                let decision = self.planning_authority.check_work_order_permit_for_task(
+                    &context.repo_root,
+                    task.task_id.trim(),
+                    crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitStage::Dispatch,
+                    Some(&target.commit_sha),
+                ).map_err(|error| format!("dispatch permit inspection failed: {error}"))?;
+                if let Some(reason) = decision.blocked_reason() {
+                    excluded_task_ids.push(task.task_id.clone());
+                    crate::diagnostics::event_log::emit_lazy(
+                        "parallel_dispatch_work_order_blocked",
+                        || {
+                            serde_json::json!({
+                                "task_id": task.task_id,
+                                "stage": "dispatch",
+                                "reason": reason,
+                            })
+                        },
+                    );
+                }
+            }
+        }
         let failed_start_blockers = parallel_failed_start_dispatch_blockers(&context);
         let (selection, candidates) = planning_projection
             .queue_projection()

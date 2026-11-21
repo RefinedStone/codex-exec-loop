@@ -15,6 +15,9 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::application::port::outbound::planning_work_order_repository_port::{
+    PlanningWorkPermitDecision, PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -1383,6 +1386,35 @@ impl ParallelModeRuntimeEventLogPort for SqlitePlanningAuthorityAdapter {
 }
 
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
+    fn compare_and_swap_runtime_distributor_queue_record(
+        &self,
+        workspace_dir: &str,
+        expected: &PlanningAuthorityDistributorQueueRecord,
+        replacement: &PlanningAuthorityDistributorQueueRecord,
+    ) -> Result<bool> {
+        Self::compare_and_swap_runtime_distributor_queue_record(
+            workspace_dir,
+            expected,
+            replacement,
+        )
+    }
+
+    fn check_work_order_permit_for_task(
+        &self,
+        workspace_dir: &str,
+        task_id: &str,
+        stage: PlanningWorkPermitStage,
+        source_sha: Option<&str>,
+    ) -> Result<PlanningWorkPermitDecision> {
+        PlanningWorkPermitRepositoryPort::check_work_order_permit_for_task(
+            self,
+            workspace_dir,
+            task_id,
+            stage,
+            source_sha,
+        )
+    }
+
     fn current_process_claim_identity(&self) -> Result<(u32, String)> {
         let process_id = std::process::id();
         let start_identity = crate::process_liveness::required_process_start_identity(process_id)

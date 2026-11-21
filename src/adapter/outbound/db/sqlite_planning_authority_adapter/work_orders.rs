@@ -17,11 +17,16 @@ use super::{
     runtime_projection, table_exists,
 };
 
+mod permits;
+pub(super) use permits::check_work_order_permit_in_transaction;
+
 // Keep schema version 19: older binaries ignore these additive tables. There is deliberately no
 // foreign key to planning_tasks, whose rows can be removed or replaced independently of lineage.
 fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
     if table_exists(connection, "planning_work_orders")?
         && table_exists(connection, "planning_work_order_tasks")?
+        && table_exists(connection, "planning_work_order_permit_basis")?
+        && table_exists(connection, "planning_work_order_permit_revocations")?
     {
         return Ok(());
     }
@@ -37,6 +42,18 @@ fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
                 work_order_id TEXT NOT NULL,
                 ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
                 UNIQUE (work_order_id, ordinal),
+                FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_permit_basis (
+                work_order_id TEXT PRIMARY KEY NOT NULL,
+                basis_json TEXT NOT NULL,
+                FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_permit_revocations (
+                work_order_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                gate_revision TEXT NOT NULL,
+                PRIMARY KEY (work_order_id, stage),
                 FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
             );",
         )

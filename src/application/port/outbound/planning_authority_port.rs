@@ -531,7 +531,29 @@ pub struct PlanningAuthorityDocumentSnapshot {
  * authority store의 위치, shadow store 진단, parallel mode runtime projection, 분산 claim을 관리합니다.
  * application service는 이 trait만 보고 공식 SQLite authority인지 테스트용 Noop인지 구분하지 않습니다.
  */
+use crate::application::port::outbound::planning_work_order_repository_port::{
+    PlanningWorkPermitDecision, PlanningWorkPermitStage,
+};
+
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    /// Read the neutral planning ledger immediately before an external execution stage.
+    /// Only tasks without durable work-order lineage retain the legacy delivery policy.
+    fn check_work_order_permit_for_task(
+        &self,
+        workspace_dir: &str,
+        task_id: &str,
+        stage: PlanningWorkPermitStage,
+        source_sha: Option<&str>,
+    ) -> Result<PlanningWorkPermitDecision>;
+
+    /// Re-arm a permit wait only if no newer queue transition replaced the observed row.
+    fn compare_and_swap_runtime_distributor_queue_record(
+        &self,
+        workspace_dir: &str,
+        expected: &PlanningAuthorityDistributorQueueRecord,
+        replacement: &PlanningAuthorityDistributorQueueRecord,
+    ) -> Result<bool>;
+
     fn current_process_claim_identity(&self) -> Result<(u32, String)> {
         Err(anyhow::anyhow!(
             "planning authority process identity is unavailable"
@@ -1143,6 +1165,25 @@ impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
 
 #[cfg(test)]
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
+    fn compare_and_swap_runtime_distributor_queue_record(
+        &self,
+        _workspace_dir: &str,
+        _expected: &PlanningAuthorityDistributorQueueRecord,
+        _replacement: &PlanningAuthorityDistributorQueueRecord,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn check_work_order_permit_for_task(
+        &self,
+        _workspace_dir: &str,
+        _task_id: &str,
+        _stage: PlanningWorkPermitStage,
+        _source_sha: Option<&str>,
+    ) -> Result<PlanningWorkPermitDecision> {
+        Ok(PlanningWorkPermitDecision::Legacy)
+    }
+
     fn current_process_claim_identity(&self) -> Result<(u32, String)> {
         Ok((1, "noop-process-start".to_string()))
     }
