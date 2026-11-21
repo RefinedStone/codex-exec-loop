@@ -17,6 +17,12 @@ use crate::domain::planning::PriorityQueueService;
 use anyhow::{Result, anyhow, bail};
 use std::sync::Arc;
 
+mod answer;
+mod conversation;
+mod observation;
+mod recovery;
+mod source;
+
 pub(crate) struct AkraIssueWorkExecutionAdapter {
     repository: Arc<dyn PlanningWorkPermitRepositoryPort>,
     authority: Arc<dyn PlanningAuthorityPort>,
@@ -41,6 +47,55 @@ impl AkraIssueWorkExecutionAdapter {
 }
 
 impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
+    fn recover_execution(
+        &self,
+        workspace: &str,
+        request: &IssueWorkRecoveryRequest,
+    ) -> Result<IssueWorkRecoveryReceipt> {
+        recovery::recover(self, workspace, request)
+    }
+
+    fn execution_limit(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        max_attempts: u32,
+    ) -> Result<()> {
+        self.repository
+            .set_work_order_execution_limit(workspace, work_order_id, max_attempts)
+    }
+
+    fn permit_gate_revision(&self, workspace: &str, work_order_id: &str) -> Result<u64> {
+        self.repository
+            .work_order_permit_gate_revision(workspace, work_order_id)
+    }
+
+    fn answer_question(
+        &self,
+        workspace: &str,
+        request: &IssueWorkAnswerRequest,
+    ) -> Result<IssueWorkAnswerReceipt> {
+        answer::enqueue(self, workspace, request)
+    }
+
+    fn question_answer_receipt(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        command_id: &str,
+    ) -> Result<Option<IssueWorkAnswerReceipt>> {
+        answer::receipt(self, workspace, work_order_id, command_id)
+    }
+
+    fn observe_execution(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::execution::IssueWorkExecutionObservation>>
+    {
+        observation::observe(self, workspace, work_order_id)
+    }
+
     fn control(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkControl> {
         self.repository
             .load_work_order_control(workspace, work_order_id)
@@ -91,63 +146,11 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
         workspace: &str,
         work_order_id: &str,
     ) -> Result<Option<String>> {
-        let task_ids = self.task_ids(workspace, work_order_id)?;
-        let projections = self.authority.load_runtime_projections(workspace)?;
-        unique_conversation_thread_id(
-            &task_ids,
-            projections
-                .session_details
-                .iter()
-                .map(|session| (session.task_id.as_str(), session.thread_id.as_deref())),
-        )
+        conversation::thread_id(self, workspace, work_order_id)
     }
 
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot> {
-        let order = self.repository.load_work_order(workspace, work_order_id)?;
-        let task_ids = order
-            .as_ref()
-            .map(|order| order.task_ids.clone())
-            .unwrap_or_default();
-        let basis = self
-            .repository
-            .load_work_order_permit_basis(workspace, work_order_id)?;
-        let mut sources: Vec<String> = self
-            .authority
-            .load_runtime_projections(workspace)?
-            .distributor_queue_records
-            .into_iter()
-            .filter(|record| task_ids.contains(&record.task_id))
-            .map(|record| record.effective_source_commit_sha())
-            .filter(|source| !source.is_empty())
-            .collect();
-        sources.sort();
-        sources.dedup();
-        if sources.len() > 1 {
-            bail!("the work has ambiguous frozen source commits");
-        }
-        let frozen_source = sources.pop();
-        // 실제 dispatch와 동일한 configured remote/base를 새로 fetch/검증한다. checkout HEAD는 쓰지 않는다.
-        let dispatch_source = if basis.is_none() && frozen_source.is_none() {
-            Some(
-                self.parallel
-                    .work_order_dispatch_source_sha(workspace)
-                    .map_err(|_| anyhow!("the configured work dispatch source is unavailable"))?,
-            )
-        } else {
-            None
-        };
-        Ok(IssueWorkExecutionSnapshot {
-            task_ids,
-            dispatch_source,
-            frozen_source,
-            saved_source: basis.as_ref().map(|basis| basis.source_sha.clone()),
-            saved_gate_revision: basis.as_ref().map(|basis| basis.gate_revision).unwrap_or(0),
-            saved_authorization_epoch: basis
-                .as_ref()
-                .map(|basis| basis.authorization_epoch)
-                .unwrap_or(0),
-            blocked_reason: None,
-        })
+        source::snapshot(self, workspace, work_order_id)
     }
 
     fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {
@@ -299,73 +302,5 @@ fn issue_instruction_admission(
             IssueWorkInstructionAdmission::Queued { changed }
         }
         PlanningWorkInstructionAdmission::Active => IssueWorkInstructionAdmission::Active,
-    }
-}
-
-fn unique_conversation_thread_id<'a>(
-    task_ids: &[String],
-    sessions: impl Iterator<Item = (&'a str, Option<&'a str>)>,
-) -> Result<Option<String>> {
-    let mut threads = std::collections::BTreeSet::new();
-    for (task_id, thread) in sessions {
-        if task_ids.iter().any(|candidate| candidate == task_id)
-            && let Some(thread) = thread
-        {
-            if thread.is_empty()
-                || thread.len() > 4096
-                || thread
-                    .chars()
-                    .any(|value| value.is_control() || value.is_whitespace())
-            {
-                bail!("the issue work conversation identity is invalid");
-            }
-            threads.insert(thread.to_owned());
-        }
-    }
-    if threads.len() > 1 {
-        bail!("the issue work has multiple conversations");
-    }
-    Ok(threads.into_iter().next())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unique_conversation_thread_id;
-
-    #[test]
-    fn conversation_requires_one_valid_thread_from_this_work_order() {
-        let tasks = vec!["task-1".to_owned(), "task-2".to_owned()];
-        assert_eq!(
-            unique_conversation_thread_id(&tasks, [("unrelated", Some("other"))].into_iter())
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            unique_conversation_thread_id(
-                &tasks,
-                [
-                    ("task-1", Some("thread-1")),
-                    ("task-2", Some("thread-1")),
-                    ("unrelated", Some("other"))
-                ]
-                .into_iter()
-            )
-            .unwrap()
-            .as_deref(),
-            Some("thread-1")
-        );
-        assert!(
-            unique_conversation_thread_id(
-                &tasks,
-                [("task-1", Some("thread-1")), ("task-2", Some("thread-2"))].into_iter()
-            )
-            .is_err()
-        );
-        for invalid in ["", " thread", "thread\nother"] {
-            assert!(
-                unique_conversation_thread_id(&tasks, [("task-1", Some(invalid))].into_iter())
-                    .is_err()
-            );
-        }
     }
 }

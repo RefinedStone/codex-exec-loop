@@ -2454,7 +2454,13 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         let mut statement = connection
-            .prepare("SELECT content FROM runtime_pr_validation_records ORDER BY record_key")
+            .prepare(
+                "SELECT validation.content FROM runtime_pr_validation_records AS validation
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM planning_work_order_validation_recoveries AS recovery
+                    WHERE recovery.original_record_key=validation.record_key
+                 ) ORDER BY validation.record_key",
+            )
             .context("failed to prepare runtime PR validation operator lookup")?;
         let contents = statement
             .query_map([], |row| row.get::<_, String>(0))
@@ -2482,7 +2488,13 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         let mut statement = connection
-            .prepare("SELECT content FROM runtime_pr_validation_records ORDER BY record_key")
+            .prepare(
+                "SELECT validation.content FROM runtime_pr_validation_records AS validation
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM planning_work_order_validation_recoveries AS recovery
+                    WHERE recovery.original_record_key=validation.record_key
+                 ) ORDER BY validation.record_key",
+            )
             .context("failed to prepare runtime PR validation remediation lookup")?;
         let contents = statement
             .query_map([], |row| row.get::<_, String>(0))
@@ -3477,6 +3489,11 @@ impl SqlitePlanningAuthorityAdapter {
         if changed == 0 {
             return Ok(false);
         }
+        super::work_orders::link_validation_source_in_transaction(
+            &transaction,
+            &replacement.queue_item_id,
+            &replacement.task_id,
+        )?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         append_runtime_event(
             &transaction,
@@ -3515,6 +3532,11 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime distributor queue transaction")?;
         ensure_task_not_retired(&transaction, &record.task_id, "distributor queue record")?;
+        super::work_orders::link_validation_source_in_transaction(
+            &transaction,
+            &record.queue_item_id,
+            &record.task_id,
+        )?;
         // projection 변경 시각을 갱신해 외부 polling이 queue snapshot을 다시 읽을 수 있게 한다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         // queue_item_id가 같은 row는 최신 상태로 덮어쓴다.

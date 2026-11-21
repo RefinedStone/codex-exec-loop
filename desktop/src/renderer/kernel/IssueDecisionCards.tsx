@@ -22,6 +22,8 @@ function DecisionCard({ request, busy, state = request.state, reason, onAnswer }
   const open = state === "open";
   const tooLong = issueTextBytes(note) > 4_096;
   const selected = request.options.some((value) => value.id === option);
+  const noteRequired = request.kind === "agent_question" && option === "reply";
+  const missingNote = noteRequired && note.trim().length === 0;
   return (
     <section className="issues-decision-card" data-testid="issue-decision-card" data-decision-id={request.id} data-state={state} aria-label={ISSUE_DECISION_KIND_LABEL[request.kind] ?? "결정"}>
       <div className="issues-decision-heading">
@@ -45,13 +47,13 @@ function DecisionCard({ request, busy, state = request.state, reason, onAnswer }
       {open && (
         <>
           <label className="issues-input-label">
-            공유할 추가 설명 <span className="muted">(선택)</span>
-            <textarea value={note} onChange={(event) => setNote(event.target.value)} disabled={busy} rows={2} maxLength={4_096} aria-invalid={tooLong} placeholder="선택에 필요한 설명을 적어 주세요." data-testid="issue-decision-note" />
+            {noteRequired ? "공유할 답변" : "공유할 추가 설명"} <span className="muted">{noteRequired ? "(필수)" : "(선택)"}</span>
+            <textarea value={note} onChange={(event) => setNote(event.target.value)} disabled={busy} rows={2} maxLength={4_096} aria-invalid={tooLong} required={noteRequired} aria-required={noteRequired} placeholder={noteRequired ? "원래 대화를 확인한 뒤 답변을 적어 주세요." : "선택에 필요한 설명을 적어 주세요."} data-testid="issue-decision-note" />
           </label>
           {tooLong && <p className="issues-inline-notice error" role="alert">추가 설명은 4,096바이트 이내로 적어 주세요.</p>}
           <div className="issues-decision-footer">
             <span>시스템 확인 창에서 한 번 더 확인합니다.</span>
-            <button type="button" className="issues-action-button primary" disabled={busy || !selected || tooLong} onClick={() => void onAnswer(request.id, option, note)} data-testid="issue-decision-answer">{busy ? "처리 중…" : "선택 확인"}</button>
+            <button type="button" className="issues-action-button primary" disabled={busy || !selected || tooLong || missingNote} onClick={() => void onAnswer(request.id, option, note)} data-testid="issue-decision-answer">{busy ? "처리 중…" : "선택 확인"}</button>
           </div>
         </>
       )}

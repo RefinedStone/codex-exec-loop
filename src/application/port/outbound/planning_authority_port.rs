@@ -1,3 +1,6 @@
+mod continuation;
+pub use continuation::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -536,6 +539,97 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 };
 
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    /// Queue once while preserving the exact waiting task/session/worktree identity.
+    fn enqueue_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _request: &PlanningWorkerContinuationRequest,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    /// A read never retries an external turn, including an Unknown receipt.
+    fn worker_continuation_receipt(
+        &self,
+        _workspace_dir: &str,
+        _work_order_id: &str,
+        _command_id: &str,
+    ) -> Result<Option<PlanningWorkerContinuationReceipt>> {
+        Ok(None)
+    }
+
+    fn queued_worker_continuations(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Vec<PlanningWorkerContinuationRequest>> {
+        Ok(Vec::new())
+    }
+
+    /// Reject stale queued answers before filesystem preflight, which may itself be unavailable.
+    fn recheck_queued_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _command_id: &str,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    /// Atomically replaces the old generation and seals Unknown before any app-server action.
+    fn claim_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _command_id: &str,
+        _new_generation: &str,
+        _owner: Option<crate::domain::parallel_mode::ParallelModeSlotLeaseOwnerProcess>,
+    ) -> Result<PlanningWorkerContinuationClaimOutcome> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    fn validate_worker_continuation_start(
+        &self,
+        _workspace_dir: &str,
+        _claim: &PlanningWorkerContinuationClaim,
+    ) -> Result<()> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    /// Only a confirmed turn/start ACK can resolve Unknown; the identity must match the sealed lease.
+    fn acknowledge_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _claim: &PlanningWorkerContinuationClaim,
+        _thread_id: &str,
+        _turn_id: &str,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        anyhow::bail!("worker continuation receipts are unavailable")
+    }
+
+    /// A terminal stream with a waiting task retains its workspace instead of becoming complete.
+    fn preserve_worker_awaiting_user(
+        &self,
+        _workspace_dir: &str,
+        _expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn worker_task_requires_preservation(
+        &self,
+        _workspace_dir: &str,
+        _task_id: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Covers orphan-cleanup paths which no longer have a usable in-memory lease.
+    fn worker_worktree_requires_preservation(
+        &self,
+        _workspace_dir: &str,
+        _worktree_path: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     fn claim_work_order_launch(&self, workspace_dir:&str, expected:&ParallelModeSlotLeaseSnapshot)
     -> Result<Vec<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction>>{
         let decision = self.check_work_order_permit_for_task(
@@ -1038,6 +1132,16 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         Err(anyhow!(
             "PR validation poll settlement is unsupported by this adapter"
         ))
+    }
+
+    /// Only a durable recovery receipt may redirect an immutable validation identity.
+    /// Explicit record-key reads remain historical reads and never follow this chain.
+    fn resolve_runtime_pr_validation_successor_key(
+        &self,
+        _workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<PrValidationRecordKey> {
+        Ok(record_key.clone())
     }
 
     // Load one authoritative PR validation record across process/restart boundaries.

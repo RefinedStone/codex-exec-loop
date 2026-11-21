@@ -100,6 +100,14 @@ impl IssueTriageService {
         self.automation_policy.inspect(&self.workspace_dir)
     }
 
+    /// 실행 허가 전에 현재 사용자·프로젝트 상한을 읽는다. 표시용 문자열은 재해석하지 않는다.
+    pub(crate) fn execution_attempt_limit(&self) -> Result<u32> {
+        self.automation_policy
+            .resolve(&self.workspace_dir)
+            .map(|resolved| resolved.policy.budget.max_attempts)
+            .map_err(|_| anyhow!("the current execution attempt policy is unavailable"))
+    }
+
     /// 결정 답을 적용하기 직전에 현재 관찰과 현재 정책으로 다시 판정한다.
     /// 저장된 gate revision만 믿지 않으며, 정책을 읽지 못하면 기존 판으로 대신하지 않는다.
     pub(crate) fn assess_current(

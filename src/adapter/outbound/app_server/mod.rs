@@ -22,6 +22,7 @@ pub(crate) mod cloud_upstream;
 pub(crate) mod connection;
 mod execution_policy;
 mod kernel_skill;
+mod worker_continuation;
 // gateway_upstream.rs: akra-gateway 용 upstream app-server(--listen) 감시와 세션별 proxy 자식 프로세스.
 pub(crate) mod gateway_upstream;
 mod planning_worker;
@@ -79,7 +80,7 @@ use crate::application::port::outbound::conversation_thread_turn_options_port::{
 };
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::parallel_agent_worker_port::{
-    ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+    ParallelAgentWorkerPort, ParallelAgentWorkerResumeRequest, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
 use crate::application::port::outbound::startup_probe_port::{
@@ -1912,6 +1913,19 @@ impl PlanningThreadLauncher for CodexAppServerAdapter {
 }
 
 impl ParallelAgentWorkerPort for CodexAppServerAdapter {
+    fn run_isolated_resumed_thread_stream(
+        &self,
+        request: ParallelAgentWorkerResumeRequest<'_>,
+        event_sender: ConversationStreamSender,
+        start_authorization: &dyn crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerStartAuthorization,
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        worker_continuation::resume(self, request, event_sender, start_authorization)
+    }
+
+    fn archive_completed_isolated_thread(&self, cwd: &str, thread_id: &str) -> Result<()> {
+        worker_continuation::archive(self, cwd, thread_id)
+    }
+
     #[tracing::instrument(level = "trace", skip(self, request, event_sender))]
     fn run_isolated_new_thread_stream(
         &self,
@@ -1985,17 +1999,7 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                     thread_id: thread_id.clone(),
                 },
             );
-            if stream_result
-                .as_ref()
-                .is_ok_and(ConversationTurnTerminalReceipt::is_completed_and_confirmed)
-                && let Err(error) = connection.archive_thread(&thread_id)
-            {
-                tracing::warn!(
-                    %thread_id,
-                    error_chain_depth = error.chain().count(),
-                    "failed to archive completed parallel worker thread"
-                );
-            }
+            // The application owns completion and may still need this thread for AwaitingUser.
             stream_result
         });
 
@@ -2283,7 +2287,7 @@ mod tests {
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     #[cfg(unix)]
     use crate::application::port::outbound::parallel_agent_worker_port::{
-        ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+        ParallelAgentWorkerPort, ParallelAgentWorkerResumeRequest, ParallelAgentWorkerStreamRequest,
     };
     #[cfg(unix)]
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
@@ -3210,8 +3214,10 @@ mod tests {
             .iter()
             .filter(|request| request["method"] == "thread/archive")
             .collect::<Vec<_>>();
-        assert_eq!(thread_archives.len(), 1);
-        assert_eq!(thread_archives[0]["params"]["threadId"], "started-thread");
+        assert!(
+            thread_archives.is_empty(),
+            "application completion owns worker archiving"
+        );
     }
 
     #[cfg(unix)]
@@ -3264,14 +3270,19 @@ mod tests {
         let receipt = adapter
             .run_isolated_new_thread_stream(
                 ParallelAgentWorkerStreamRequest {
-                    cwd: "/repo/slot-1",
+                    cwd: "/repo",
                     prompt: "complete before archive failure",
                     developer_instructions: "test archive cleanup semantics",
                     service_name: "akra-parallel-worker",
                 },
                 event_sender,
             )
-            .expect("archive cleanup failure should remain nonfatal after confirmed completion");
+            .expect("stream completes before application-owned archive");
+        assert!(
+            adapter
+                .archive_completed_isolated_thread("/repo", &receipt.thread_id)
+                .is_err()
+        );
         let events = event_receiver.try_iter().collect::<Vec<_>>();
 
         assert!(receipt.is_completed_and_confirmed());
@@ -3294,6 +3305,176 @@ mod tests {
                 .iter()
                 .any(|request| request["method"] == "thread/archive")
         );
+    }
+
+    #[cfg(unix)]
+    fn allow_worker_continuation_start() -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_continuation_rechecks_authorization_after_resume_before_turn_start() {
+        let fake =
+            FakeCodex::install_with_scenario("continuation-control-change", "continuation_active");
+        let adapter = test_adapter_with_fake(&fake);
+        let (tx, _rx) = conversation_stream_channel();
+        let deny_start =
+            || -> Result<()> { anyhow::bail!("synthetic authorization epoch changed") };
+        assert!(
+            adapter
+                .run_isolated_resumed_thread_stream(
+                    ParallelAgentWorkerResumeRequest {
+                        cwd: "/repo",
+                        thread_id: "waiting-thread",
+                        prompt: "approved answer",
+                        service_name: "parallel-answer",
+                    },
+                    tx,
+                    &deny_start
+                )
+                .is_err()
+        );
+        let methods = fake.logged_methods();
+        assert!(methods.iter().any(|method| method == "thread/resume"));
+        assert!(
+            methods
+                .iter()
+                .all(|method| method != "turn/start" && method != "thread/start")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_continuation_resumes_exact_thread_and_unarchives_only_confirmed_archive() {
+        for scenario in ["continuation_active", "continuation_archived"] {
+            let fake = FakeCodex::install_with_scenario(scenario, scenario);
+            let adapter = test_adapter_with_fake(&fake);
+            let (tx, rx) = conversation_stream_channel();
+            let receipt = adapter
+                .run_isolated_resumed_thread_stream(
+                    ParallelAgentWorkerResumeRequest {
+                        cwd: "/repo",
+                        thread_id: "waiting-thread",
+                        prompt: "approved answer",
+                        service_name: "parallel-answer",
+                    },
+                    tx,
+                    &allow_worker_continuation_start,
+                )
+                .expect("same-thread answer should complete");
+            assert!(receipt.is_completed_and_confirmed());
+            assert_eq!(receipt.thread_id, "waiting-thread");
+            assert!(has_thread_prepared(
+                &rx.try_iter().collect::<Vec<_>>(),
+                "waiting-thread"
+            ));
+            let methods = fake.logged_methods();
+            assert_eq!(
+                methods
+                    .iter()
+                    .filter(|method| *method == "turn/start")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                methods
+                    .iter()
+                    .filter(|method| *method == "thread/resume")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                methods
+                    .iter()
+                    .filter(|method| *method == "thread/unarchive")
+                    .count(),
+                usize::from(scenario == "continuation_archived")
+            );
+            assert!(
+                methods
+                    .iter()
+                    .all(|method| method != "thread/start" && method != "thread/archive")
+            );
+            let requests = fake.logged_requests();
+            let list = requests
+                .iter()
+                .find(|request| request["method"] == "thread/list")
+                .unwrap();
+            assert_eq!(list["params"]["archived"], true);
+            assert_eq!(list["params"]["cwd"], "/repo");
+            assert_eq!(list["params"]["sourceKinds"].as_array().unwrap().len(), 10);
+            assert_eq!(list["params"]["modelProviders"], serde_json::json!([]));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_continuation_identity_failures_never_start_or_fallback() {
+        for scenario in [
+            "continuation_read_mismatch",
+            "continuation_cwd_mismatch",
+            "continuation_resume_mismatch",
+        ] {
+            let fake = FakeCodex::install_with_scenario(scenario, scenario);
+            let adapter = test_adapter_with_fake(&fake);
+            let (tx, _rx) = conversation_stream_channel();
+            assert!(
+                adapter
+                    .run_isolated_resumed_thread_stream(
+                        ParallelAgentWorkerResumeRequest {
+                            cwd: "/repo",
+                            thread_id: "waiting-thread",
+                            prompt: "approved answer",
+                            service_name: "parallel-answer",
+                        },
+                        tx,
+                        &allow_worker_continuation_start,
+                    )
+                    .is_err()
+            );
+            assert!(
+                fake.logged_methods()
+                    .iter()
+                    .all(|method| method != "thread/start"
+                        && method != "turn/start"
+                        && method != "thread/unarchive")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_continuation_turn_start_failure_is_not_retried() {
+        let fake = FakeCodex::install_with_scenario(
+            "continuation-start-failure",
+            "continuation_fail_turn_start",
+        );
+        let adapter = test_adapter_with_fake(&fake);
+        let (tx, _rx) = conversation_stream_channel();
+        assert!(
+            adapter
+                .run_isolated_resumed_thread_stream(
+                    ParallelAgentWorkerResumeRequest {
+                        cwd: "/repo",
+                        thread_id: "waiting-thread",
+                        prompt: "approved answer",
+                        service_name: "parallel-answer",
+                    },
+                    tx,
+                    &allow_worker_continuation_start,
+                )
+                .is_err()
+        );
+        let methods = fake.logged_methods();
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "turn/start")
+                .count(),
+            1
+        );
+        assert!(methods.iter().all(|method| method != "thread/start"));
     }
 
     #[test]
@@ -4698,19 +4879,21 @@ for line in sys.stdin:
         send({
             "id": request_id,
             "result": {
-                "data": [thread_record("listed-thread")],
-                "nextCursor": "cursor-next",
+                "data": ([thread_record("waiting-thread")] if scenario == "continuation_archived" else []) if scenario.startswith("continuation_") else [thread_record("listed-thread")],
+                "nextCursor": None if scenario.startswith("continuation_") else "cursor-next",
             },
         })
     elif method == "thread/name/set":
         send({"id": request_id, "result": {}})
+    elif method == "thread/unarchive":
+        send({"id": request_id, "result": {"thread": thread_record(params.get("threadId"))}})
     elif method == "thread/read":
-        send({
-            "id": request_id,
-            "result": {
-                "thread": thread_record(params.get("threadId", "read-thread")),
-            },
-        })
+        record = thread_record(params.get("threadId", "read-thread"))
+        if scenario == "continuation_read_mismatch":
+            record["id"] = "another-thread"
+        if scenario == "continuation_cwd_mismatch":
+            record["cwd"] = "/other"
+        send({"id": request_id, "result": {"thread": record}})
     elif method == "thread/start":
         if scenario == "pre_thread_response_settings":
             send_settings("started-thread", "stale-before-response", params.get("cwd") or "/repo")
@@ -4727,12 +4910,12 @@ for line in sys.stdin:
         send({
             "id": request_id,
             "result": {
-                "thread": thread_record(params.get("threadId", "resumed-thread")),
+                "thread": thread_record("another-thread" if scenario == "continuation_resume_mismatch" else params.get("threadId", "resumed-thread")),
                 **runtime_envelope(params, "gpt-resumed"),
             },
         })
     elif method == "turn/start":
-        if scenario == "fail_turn_start":
+        if scenario in ["fail_turn_start", "continuation_fail_turn_start"]:
             send_error(request_id, "forced turn/start failure")
             continue
         thread_id = params.get("threadId", "started-thread")

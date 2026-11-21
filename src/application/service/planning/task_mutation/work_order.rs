@@ -1,4 +1,6 @@
+mod supplemental;
 use std::sync::Arc;
+pub use supplemental::PlanningSupplementalWorkRequest;
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};

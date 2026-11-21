@@ -129,6 +129,16 @@ impl ParallelModeService {
             return Ok(None);
         };
         mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Ok(None);
+        }
         if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
             return Ok(None);
         }
@@ -286,6 +296,16 @@ impl ParallelModeService {
             return Ok(None);
         };
         mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Ok(None);
+        }
         if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
             return Ok(None);
         }
@@ -367,6 +387,16 @@ impl ParallelModeService {
         };
         mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
         if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
+            return Ok(None);
+        }
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
             return Ok(None);
         }
         // Running lease만 commit_ready로 갈 수 있다.
@@ -501,6 +531,16 @@ impl ParallelModeService {
             return Ok(None);
         };
         mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Ok(None);
+        }
         if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
             return Ok(None);
         }
@@ -558,6 +598,16 @@ impl ParallelModeService {
         else {
             return Ok(None);
         };
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Ok(None);
+        }
         // 이미 CleanupPending이면 이 함수는 멱등적으로 현재 lease snapshot을 그대로 돌려준다.
         if resolution.lease.state == ParallelModeSlotLeaseState::CleanupPending {
             return Ok(Some(resolution.lease));
@@ -628,6 +678,16 @@ impl ParallelModeService {
             return Ok(None);
         };
         mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Ok(None);
+        }
         // CleanupPending이 아니면 slot 정리를 실행하지 않는다.
         // 이 guard가 Running 작업의 worktree reset을 막는 마지막 방어선이다.
         if resolution.lease.state != ParallelModeSlotLeaseState::CleanupPending {

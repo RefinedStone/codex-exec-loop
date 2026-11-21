@@ -597,6 +597,10 @@ spec_names! {
             "An issue intervention advanced the authorization epoch and fenced previously granted work permits.";
         IssueWorkPermitGranted => "issue_work_permit_granted",
             "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.";
+        IssueExecutionProgressed => "issue_execution_progressed",
+            "A local execution observation advanced the issue work lifecycle. Independent attempt counts and neutral terminal facts are recorded without worker output or answer text.";
+        IssueIntegrated => "issue_integrated",
+            "Trusted integration evidence was committed for an issue work order. Later validation failures cannot erase this fact.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",
             "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
     }

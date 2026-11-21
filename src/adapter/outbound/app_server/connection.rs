@@ -1457,6 +1457,12 @@ impl AppServerConnection {
     }
 
     #[tracing::instrument(level = "trace", skip(self, thread_id))]
+    pub(super) fn unarchive_thread(&mut self, thread_id: &str) -> Result<ThreadReadResponse> {
+        self.ensure_initialized()?;
+        self.send_request("thread/unarchive", json!({ "threadId": thread_id }))
+    }
+
+    #[tracing::instrument(level = "trace", skip(self, thread_id))]
     pub(super) fn archive_thread(&mut self, thread_id: &str) -> Result<()> {
         self.ensure_initialized()?;
         let _: Value = self.send_request(
@@ -5033,6 +5039,8 @@ mod tests {
         let threads = harness
             .connection
             .list_threads(ThreadListParams {
+                cursor: None,
+                model_providers: None,
                 archived: Some(false),
                 cwd: Some("/repo".to_string()),
                 limit: Some(25),

@@ -101,6 +101,21 @@ impl std::fmt::Display for PlanningWorkOrderLaunchError {
 impl std::error::Error for PlanningWorkOrderLaunchError {}
 
 pub trait PlanningWorkControlRepositoryPort: Send + Sync {
+    /// The limit applies to distinct tasks that claim their first launch. A resumed task keeps
+    /// its original attempt, and changing the limit never interrupts an already running turn.
+    fn set_work_order_execution_limit(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        max_attempts: u32,
+    ) -> Result<()>;
+
+    fn started_work_order_task_ids(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Vec<String>>;
+
     fn load_work_order_control(
         &self,
         workspace: &str,

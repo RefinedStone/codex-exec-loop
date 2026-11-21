@@ -138,7 +138,10 @@ fn current_policy_failure_checks_later_pages_even_when_an_earlier_revoke_fails()
 
 // Model a restored second checkpoint through the normal approval and SQLite admission gates.
 // No second task is submitted: this test isolates revocation of already persisted work.
-fn seed_approved_work_checkpoint(h: &Harness, issue: &IssueReference) -> IssueWorkCheckpoint {
+pub(super) fn seed_approved_work_checkpoint(
+    h: &Harness,
+    issue: &IssueReference,
+) -> IssueWorkCheckpoint {
     let coordinator = h.coordinator();
     let (_, _, assessment) = coordinator.current(issue, &|_| {}).unwrap();
     let basis = coordinator.approval_basis(&assessment).unwrap();
