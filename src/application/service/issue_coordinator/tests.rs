@@ -256,6 +256,7 @@ struct FakeExecutionState {
     order: Option<IssueWorkOrder>,
     grants: Vec<IssueWorkPermitRequest>,
     frozen: Option<String>,
+    dispatch_source: Option<String>,
     saved_source: Option<String>,
     saved_revision: u64,
     registrations: usize,
@@ -316,7 +317,7 @@ impl IssueWorkExecutionPort for FakeExecution {
         }
         Ok(crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionSnapshot {
             task_ids: state.order.as_ref().map(|_| vec!["task-1".into()]).unwrap_or_default(),
-            dispatch_source: Some("a".repeat(40)), frozen_source: state.frozen.clone(),
+            dispatch_source: state.dispatch_source.clone(), frozen_source: state.frozen.clone(),
             saved_source: state.saved_source.clone(), saved_gate_revision: state.saved_revision, saved_authorization_epoch: state.saved_authorization_epoch,
             blocked_reason: None,
         })
@@ -424,7 +425,12 @@ impl Harness {
                 read: Mutex::new(IssueSourceRead::Observed(Box::new(observation))),
                 calls: std::sync::atomic::AtomicUsize::new(0),
             }),
-            execution: Arc::new(FakeExecution::default()),
+            execution: Arc::new(FakeExecution {
+                state: Mutex::new(FakeExecutionState {
+                    dispatch_source: Some("a".repeat(40)),
+                    ..Default::default()
+                }),
+            }),
         }
     }
     fn coordinator(&self) -> IssueCoordinatorService {
@@ -1086,6 +1092,7 @@ fn intervention_remote_hold_label_revokes_work_without_restarting_it() {
     assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
 }
 
+mod dispatch_source;
 mod policy_revalidation;
 
 mod autonomy;
