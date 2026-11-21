@@ -427,6 +427,7 @@ pub enum KernelEvent {
     },
     /// 영속 work-order 연결이 확정된 사실이다. handoff 본문은 포함하지 않는다.
     IssueWorkSubmitted {
+        event_id: String,
         issue: IssueEventReference,
         work_order_id: String,
         task_ids: Vec<String>,
@@ -434,6 +435,7 @@ pub enum KernelEvent {
     },
     /// 승인 판과 고정 source에 묶인 단계 허가의 확정 사실이다.
     IssueWorkPermitGranted {
+        event_id: String,
         issue: IssueEventReference,
         work_order_id: String,
         source_sha: String,
@@ -1730,6 +1732,7 @@ mod tests {
                 7,
             ),
             KernelEvent::IssueWorkSubmitted {
+                event_id: "work-submitted-1".into(),
                 issue: (&IssueReference {
                     provider: IssueProvider::GitHub,
                     server_id: "github.com".into(),
@@ -1745,6 +1748,7 @@ mod tests {
                 revision: 8,
             },
             KernelEvent::IssueWorkPermitGranted {
+                event_id: "work-permit-1".into(),
                 issue: (&IssueReference {
                     provider: IssueProvider::GitHub,
                     server_id: "github.com".into(),
@@ -2010,5 +2014,16 @@ mod tests {
             serde_json::to_value(settled("task-1")).expect("event should serialize")["kind"],
             settled("task-1").kind()
         );
+    }
+}
+
+impl KernelEvent {
+    /// 이슈 outbox 사실의 영속 dedupe 식별자다. 다른 사건은 기존 sequence 계약을 유지한다.
+    pub fn issue_work_event_id(&self) -> Option<&str> {
+        match self {
+            Self::IssueWorkSubmitted { event_id, .. }
+            | Self::IssueWorkPermitGranted { event_id, .. } => Some(event_id),
+            _ => None,
+        }
     }
 }

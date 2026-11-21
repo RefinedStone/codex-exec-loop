@@ -2097,12 +2097,14 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             3,
         ),
         Record::IssueWorkSubmitted {
+            event_id: "work-submitted-1".into(),
             issue: (&sample_issue_reference()).into(),
             work_order_id: "issue-work-1".into(),
             task_ids: vec!["task-1".into()],
             revision: 4,
         },
         Record::IssueWorkPermitGranted {
+            event_id: "work-permit-1".into(),
             issue: (&sample_issue_reference()).into(),
             work_order_id: "issue-work-1".into(),
             source_sha: "a".repeat(40),

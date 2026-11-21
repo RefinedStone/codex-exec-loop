@@ -144,6 +144,12 @@ pub enum IssueDecisionSaveResult {
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
 /// 같은 안정 ID의 재삽입은 기존 내용을 보존한다. 갱신은 revision CAS로만 한다.
 pub trait IssueAutomationStorePort: Send + Sync {
+    fn pending_issue_work_events(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkEvent>>;
+    fn acknowledge_issue_work_event(&self, workspace: &str, event_id: &str) -> Result<()>;
+
     fn get_issue_work(
         &self,
         workspace: &str,
