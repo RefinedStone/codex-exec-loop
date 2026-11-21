@@ -2,6 +2,7 @@
 use super::super::{
     SqlitePlanningAuthorityAdapter, load_direction_catalog_from_connection,
     load_task_authority_snapshot_from_connection, open_authority_connection, runtime_projection,
+    table_exists,
 };
 use super::{ensure_work_order_tables, load_task_membership, load_work_order_record, permits};
 use crate::application::port::outbound::planning_task_repository_port::{
@@ -347,6 +348,9 @@ pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter) fn valid
     connection: &Connection,
     candidate: &crate::domain::planning::TaskAuthorityDocument,
 ) -> Result<()> {
+    if !table_exists(connection, "planning_work_order_tasks")? {
+        return Ok(());
+    }
     ensure_work_order_tables(connection)?;
     let previous = load_task_authority_snapshot_from_connection(connection)?;
     for task in &candidate.tasks {
