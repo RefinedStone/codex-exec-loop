@@ -2096,6 +2096,15 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             "binding-1",
             3,
         ),
+        Record::issue_triaged(
+            &sample_issue_reference(),
+            "binding-1",
+            4,
+            1,
+            &"a".repeat(64),
+        ),
+        Record::issue_decision_requested(&sample_issue_decision_fact(), 5),
+        Record::issue_decision_resolved(&sample_issue_decision_fact(), 6),
         Record::IssueWorkSubmitted {
             event_id: "work-submitted-1".into(),
             issue: (&sample_issue_reference()).into(),
@@ -2112,15 +2121,6 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             delivery: false,
             revision: 5,
         },
-        Record::issue_triaged(
-            &sample_issue_reference(),
-            "binding-1",
-            4,
-            1,
-            &"a".repeat(64),
-        ),
-        Record::issue_decision_requested(&sample_issue_decision_fact(), 5),
-        Record::issue_decision_resolved(&sample_issue_decision_fact(), 6),
         Record::issue_automation_mode_changed(
             Some(crate::domain::issue_automation::collection::IssueCollectionMode::Observe),
             crate::domain::issue_automation::collection::IssueCollectionMode::Off,

@@ -537,16 +537,16 @@ spec_names! {
             "The checked-out commit or branch of the workspace differs from the last observation. The kernel looks periodically, so one record can cover several changes. It does not say who made the change. Without `previous_head`, this is the first observation in this log. This record has no thread: `thread_id` is empty in history.";
         IssueTracked => "issue_tracked",
             "A stable issue entered the collection ledger for the first time. Metadata-only withheld observations count once; rediscovery does not repeat this record.";
-        IssueWorkSubmitted => "issue_work_submitted",
-            "A durable issue work order was registered. Only stable identity and task IDs are recorded.";
-        IssueWorkPermitGranted => "issue_work_permit_granted",
-            "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.";
         IssueTriaged => "issue_triaged",
             "A deterministic issue assessment was committed to the local ledger. The record carries stable identity and policy/gate revisions, with no issue text or execution permit.";
         IssueDecisionRequested => "issue_decision_requested",
             "An open issue decision was committed to the issue ledger. Only stable identity and decision metadata are recorded; question and note text are excluded.";
         IssueDecisionResolved => "issue_decision_resolved",
             "An issue decision was closed by its first answer or superseded by a changed basis. An agent answer is not human confirmation and does not grant execution.";
+        IssueWorkSubmitted => "issue_work_submitted",
+            "A durable issue work order was registered. Only stable identity and task IDs are recorded.";
+        IssueWorkPermitGranted => "issue_work_permit_granted",
+            "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",
             "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
     }
