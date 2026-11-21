@@ -509,7 +509,8 @@ max_started_per_day = 20
 - Orca 의 스케줄러 구현. 읽지 않았다. 이 문서는 사용자의 말("특정 LLM 을 골라 실행한다")만 반영했다.
 - Akra Desktop 의 Electron 보기에서 chatgpt.com 에 로그인하고 보낼 수 있는가. akra-tunnel 의 launcher 는 Electron
   내장 브라우저로 한다. Akra Desktop 에서는 시험하지 않았다.
-- 숨긴 보기에서 ChatGPT 페이지가 정상으로 도는가 (배경 조절).
+- 숨긴 보기. akra-tunnel 의 주석은 `setVisible(false)` 와 화면 밖 보기가 ChatGPT 의 DOM 갱신을 멈춘다고 적는다. 그래서
+  akra-tunnel 은 숨긴 창 안에 보이는 보기를 둔다 (`continuation-browser-host.mjs`). Akra Desktop 에서는 시험하지 않았다.
 - 임시 대화에서 앱(tunnel)과 도구를 쓸 수 있는가.
 - 한도 알림과 챌린지 화면의 DOM. akra-tunnel 의 정규식은 한국어와 영어 일부만 확인했다.
 - `desktop_browser_bridge` 를 구동기의 호출 길로 다시 쓸 수 있는가. 머리 부분만 읽었다.
