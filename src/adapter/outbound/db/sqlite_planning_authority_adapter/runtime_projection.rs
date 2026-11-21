@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 // `Connection`은 helper 함수들이 트랜잭션 밖 조회를 수행할 때 필요하고,
 // `OptionalExtension`은 "행 없음"을 오류가 아닌 Option으로 바꿔 클레임 부재를 표현한다.
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::domain::planning::PlanningMutationRefusal;
 
@@ -2720,6 +2720,50 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime slot lease transaction")?;
         ensure_task_not_retired(&transaction, &lease.task_id, "slot lease")?;
+        let previous_lease: Option<String> = transaction
+            .query_row(
+                "SELECT content FROM runtime_slot_leases WHERE slot_id = ?1",
+                params![lease.slot_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("failed to inspect existing slot generation before permit check")?;
+        let same_generation = previous_lease
+            .map(|json| serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&json))
+            .transpose()
+            .context("failed to decode existing slot generation before permit check")?
+            .is_some_and(|previous| previous.same_generation_as(lease));
+        // An intervention fences new claims, but does not interrupt an already running turn.
+        if !same_generation {
+            let decision = super::work_orders::check_work_order_permit_in_transaction(
+                &transaction,
+                &lease.task_id,
+                crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitStage::Dispatch,
+                Some(lease.delivery_target.as_ref().map(|target| target.integration_base_commit_sha.as_str()).unwrap_or("")),
+            )?;
+            if let Some(reason) = decision.blocked_reason() {
+                append_runtime_event(
+                    &transaction,
+                    "work_order_permit_blocked",
+                    "work_order_permit",
+                    &lease.task_id,
+                    reason,
+                    &serde_json::json!({
+                        "task_id": lease.task_id,
+                        "stage": "dispatch",
+                        "reason": reason,
+                    })
+                    .to_string(),
+                )?;
+                transaction
+                    .commit()
+                    .context("failed to record blocked slot permit")?;
+                anyhow::bail!(
+                    "{reason}: dispatch permission denied for task {}",
+                    lease.task_id
+                );
+            }
+        }
         // projection 쪽 변경 신호는 claim heartbeat와 별도로 `last_runtime_projection_at`에 남긴다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         // slot_id를 primary identity로 보고, 같은 slot의 lease가 오면 updated_at/content만 최신화한다.
@@ -3382,6 +3426,70 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit runtime task dispatch block transaction")?;
         Ok(())
+    }
+
+    pub(crate) fn compare_and_swap_runtime_distributor_queue_record(
+        workspace_dir: &str,
+        expected: &PlanningAuthorityDistributorQueueRecord,
+        replacement: &PlanningAuthorityDistributorQueueRecord,
+    ) -> Result<bool> {
+        if expected.queue_item_id != replacement.queue_item_id
+            || expected.task_id != replacement.task_id
+            || expected.session_key != replacement.session_key
+        {
+            anyhow::bail!("distributor compare-and-swap must preserve queue ownership");
+        }
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_task_not_retired(
+            &transaction,
+            &replacement.task_id,
+            "distributor queue rearm",
+        )?;
+        clear_stale_runtime_claim(
+            &transaction,
+            DISTRIBUTOR_QUEUE_CLAIM_KIND,
+            &replacement.queue_item_id,
+        )?;
+        let expected_json = serde_json::to_string(expected)?;
+        let replacement_json = serde_json::to_string(replacement)?;
+        let changed = transaction
+            .execute(
+                "UPDATE runtime_distributor_queue
+             SET session_key = ?2, queue_state = ?3, enqueued_at = ?4, updated_at = ?5, content = ?6
+             WHERE queue_item_id = ?1 AND content = ?7
+             AND NOT EXISTS (
+                 SELECT 1 FROM runtime_claims WHERE claim_kind = ?8 AND scope_key = ?1
+             )",
+                params![
+                    replacement.queue_item_id,
+                    replacement.session_key,
+                    replacement.queue_state.label(),
+                    replacement.enqueued_at,
+                    replacement.updated_at,
+                    replacement_json,
+                    expected_json,
+                    DISTRIBUTOR_QUEUE_CLAIM_KIND,
+                ],
+            )
+            .context("failed to compare and swap distributor queue record")?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        append_runtime_event(
+            &transaction,
+            "distributor_queue_rearmed",
+            "distributor_queue",
+            &replacement.queue_item_id,
+            "current work-order permit rearmed a waiting task",
+            &replacement_json,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit distributor queue rearm")?;
+        Ok(true)
     }
 
     // distributor queue의 현재 item 상태를 runtime projection에 저장한다.
@@ -4049,7 +4157,7 @@ fn is_failed_start_session_detail(detail: &ParallelModeAgentSessionDetailSnapsho
 
 // runtime projection의 current row 변경을 시간순 이벤트로 남긴다.
 // 호출자는 이미 트랜잭션을 열어 두었고, 이 helper는 같은 트랜잭션 안에서 sequence 증가와 event insert를 함께 수행한다.
-fn append_runtime_event(
+pub(super) fn append_runtime_event(
     // current projection row를 저장/삭제하는 트랜잭션이다. event만 따로 commit되지 않게 빌려 쓴다.
     transaction: &rusqlite::Transaction<'_>,
     // upsert/remove 같은 event 동작 종류이다.

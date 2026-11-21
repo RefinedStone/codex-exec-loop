@@ -2,11 +2,13 @@
 // queue record 차단, slot lease context, Git 상태 조회와 같은 주변 흐름을 같은 어휘로 다루게 한다.
 use super::*;
 
+use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitDecision;
 use crate::application::service::parallel_mode::PoolMutationLock;
 use crate::application::service::parallel_mode::git_sequence::{GitCommandStep, run_git_sequence};
 use crate::application::service::parallel_mode::pool::{
     git_command_directory, git_worktree_destination,
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PreparedIntegrationState {
@@ -56,12 +58,44 @@ pub(super) fn prepare_distributor_integration_worktree(
         return Err(message);
     };
     let canonical_repo_root = resolution.context.canonical_repo_root.display().to_string();
-    let integration_path = derive_integration_worktree_path(
-        &resolution.context.pool_root,
-        &target.push_remote,
-        &target.github_repository,
-        &target.integration_branch,
-    );
+    let permit = match work_order_permit_decision(
+        planning_authority,
+        &resolution.context.repo_root,
+        record,
+        PlanningWorkPermitStage::Integrate,
+    ) {
+        Ok(permit) => permit,
+        Err(detail) => {
+            return block_integration_preparation(
+                planning_authority,
+                runtime,
+                resolution,
+                record,
+                detail,
+            );
+        }
+    };
+    if let Some(reason) = permit.blocked_reason() {
+        let detail = format!("{reason}: integrate / task {}", record.task_id);
+        return block_integration_preparation(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            detail,
+        );
+    }
+    let isolate_work_order = !matches!(permit, PlanningWorkPermitDecision::Legacy);
+    let integration_path = if isolate_work_order {
+        work_order_integration_path(&resolution.context.pool_root, &target, &record.slot_id)
+    } else {
+        derive_integration_worktree_path(
+            &resolution.context.pool_root,
+            &target.push_remote,
+            &target.github_repository,
+            &target.integration_branch,
+        )
+    };
     let integration_repo_root = integration_path.display().to_string();
 
     if let Some(notice) = block_if_automation_epoch_closed(
@@ -293,6 +327,74 @@ pub(super) fn prepare_distributor_integration_worktree(
         );
     };
 
+    // A held item retains its own slot and reviewed result. Other slots may advance
+    // the live target, leaving either a shared or per-slot worktree behind. Reuse it
+    // only without saved recovery evidence and with a literal ancestor of that target.
+    let local_head = if record.integration_base_commit_sha.is_none()
+        && local_head != remote_head
+        && command_succeeds_with_runtime(
+            runtime,
+            "git",
+            [
+                "-C",
+                integration_repo_root.as_str(),
+                "merge-base",
+                "--is-ancestor",
+                local_head.as_str(),
+                remote_head.as_str(),
+            ],
+        ) {
+        if let Some(notice) = block_if_automation_epoch_closed(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            automation_permit,
+            "completed integration worktree reuse",
+        )? {
+            return Err(notice);
+        }
+        mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        runtime
+            .ensure_git_execution_safe(&integration_path)
+            .map_err(|error| {
+                format!("completed integration worktree reuse was blocked: {error}")
+            })?;
+        // No force/reset: retain concurrent file changes, and require a clean result below.
+        let reuse = run_git_sequence(
+            runtime,
+            "advance completed integration worktree",
+            vec![GitCommandStep::new(
+                "checkout verified integration target",
+                [
+                    "-C",
+                    integration_repo_root.as_str(),
+                    "checkout",
+                    "--detach",
+                    remote_head.as_str(),
+                ],
+            )],
+        );
+        if !reuse.succeeded()
+            || resolve_workspace_head_sha_with_runtime(runtime, &integration_path).as_deref()
+                != Some(remote_head.as_str())
+            || !inspect_slot_git_status_with_runtime(runtime, &integration_path)
+                .is_ok_and(|status| status.is_clean_baseline())
+        {
+            return block_integration_preparation(
+                planning_authority,
+                runtime,
+                resolution,
+                record,
+                "completed integration worktree could not advance to the verified target"
+                    .to_string(),
+            );
+        }
+        remote_head.clone()
+    } else {
+        local_head
+    };
+
     let state = classify_prepared_integration_state(
         runtime,
         &integration_repo_root,
@@ -352,6 +454,26 @@ pub(super) fn prepare_distributor_integration_worktree(
         repo_root: integration_repo_root,
         state,
     })
+}
+
+/// A held work order owns its source slot until cleanup, so one integration worktree per
+/// slot preserves pending evidence without adding a worktree for every completed task.
+pub(in crate::application::service::parallel_mode) fn work_order_integration_path(
+    pool_root: &Path,
+    target: &PlanningAuthorityDistributorDeliveryTarget,
+    slot_id: &str,
+) -> std::path::PathBuf {
+    let path = derive_integration_worktree_path(
+        pool_root,
+        &target.push_remote,
+        &target.github_repository,
+        &target.integration_branch,
+    );
+    let identity = format!("{:x}", Sha256::digest(slot_id.as_bytes()));
+    let mut name = path.into_os_string();
+    name.push("-slot-");
+    name.push(&identity[..16]);
+    std::path::PathBuf::from(name)
 }
 
 fn block_integration_preparation<T>(

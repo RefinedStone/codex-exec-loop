@@ -10,6 +10,7 @@ use crate::application::service::parallel_mode::{
 // delivery는 GitHub-facing 단계와 local integration 단계를 나눠 각 boundary의 실패 복구를 독립시킨다.
 mod github;
 mod integration;
+pub(super) use self::integration::work_order_integration_path;
 
 use self::github::{
     distributor_prepare_pull_request_or_skip, distributor_push_source_branch,
@@ -210,6 +211,16 @@ pub(super) fn process_distributor_queue_record(
         })?;
     }
 
+    if let Some(notice) = block_if_work_order_permit_denied(
+        planning_authority,
+        runtime,
+        &resolution,
+        record,
+        PlanningWorkPermitStage::Integrate,
+    )? {
+        notices.push(notice);
+        return Ok(notices);
+    }
     // 이미 Cleaning인 record도 이 경로로 들어와 slot cleanup만 재시도할 수 있다.
     let cleanup_notice = distributor_cleanup_integrated_slot(
         planning_authority,
@@ -382,6 +393,15 @@ fn distributor_integrate_branch(
     let source_branch = record.effective_source_branch();
     let source_base_commit_sha = record.source_base_commit_sha.clone();
     let source_commit_sha = record.effective_source_commit_sha();
+    if let Some(notice) = block_if_work_order_permit_denied(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        PlanningWorkPermitStage::Integrate,
+    )? {
+        return Ok(notice);
+    }
     // slot git status는 cherry-pick 전에 pending merge/rebase metadata를 잡는 첫 guard이다.
     let slot_status = inspect_slot_git_status_with_runtime(runtime, &resolution.workspace_path)
         .map_err(|error| {
@@ -662,6 +682,15 @@ fn distributor_integrate_branch(
                 "cherry-pick".to_string(),
             ];
             cherry_pick_args.extend(pending_commits.iter().cloned());
+            if let Some(notice) = block_if_work_order_permit_denied(
+                planning_authority,
+                runtime,
+                resolution,
+                record,
+                PlanningWorkPermitStage::Integrate,
+            )? {
+                return Ok(notice);
+            }
             let cherry_pick = run_git_sequence(
                 runtime,
                 "cherry-pick frozen distributor source range",
@@ -763,28 +792,6 @@ fn distributor_integrate_branch(
     )? {
         return Ok(notice);
     }
-    if let Some(notice) = distributor_recheck_pull_request_before_integration_push(
-        planning_authority,
-        runtime,
-        resolution,
-        record,
-        github_automation,
-        claim_permit,
-        autonomous_delivery_allowed,
-    )? {
-        return Ok(notice);
-    }
-    if let Some(notice) = block_if_delivery_target_changed(
-        planning_authority,
-        runtime,
-        resolution,
-        record,
-        github_automation,
-        claim_permit,
-        "final integration push target verification",
-    )? {
-        return Ok(notice);
-    }
     let integration_base_commit_sha = record
         .integration_base_commit_sha
         .clone()
@@ -837,6 +844,17 @@ fn distributor_integrate_branch(
         }
     };
     claim_permit.renew("integration target push")?;
+    if let Some(notice) = distributor_recheck_pull_request_before_integration_push(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
+        claim_permit,
+        autonomous_delivery_allowed,
+    )? {
+        return Ok(notice);
+    }
     if integration_push_required
         && let Err(error) = github_automation.push_integration_branch_to_delivery_target(
             &repo_root,

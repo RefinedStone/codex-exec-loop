@@ -10,6 +10,13 @@ use super::planning_task_repository_port::{
     PlanningTaskAuthorityMutationAudit, PlanningTaskRepositoryPort,
 };
 
+mod permits_port;
+pub use permits_port::{
+    PlanningWorkPermit, PlanningWorkPermitBasis, PlanningWorkPermitBlockReason,
+    PlanningWorkPermitDecision, PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
+    evaluate_work_order_permit,
+};
+
 pub const MAX_WORK_ORDER_ID_BYTES: usize = 512;
 pub const MAX_WORK_ORDER_ORIGIN_BYTES: usize = 128;
 pub const MAX_WORK_ORDER_TASK_ID_BYTES: usize = 512;
@@ -21,9 +28,8 @@ pub struct PlanningWorkOrderRecord {
     pub origin: String,
     /// The first entry is the original task; supplemental tasks retain their attachment order.
     pub task_ids: Vec<String>,
-    /// Reserved storage only. Registration always initializes this to an empty list.
-    /// Granting, interpreting, and enforcing permits belong to the later execution-permit contract.
-    pub permits: Vec<serde_json::Value>,
+    /// Grants are interpreted only against the separately persisted current permit basis.
+    pub permits: Vec<PlanningWorkPermit>,
 }
 
 impl PlanningWorkOrderRecord {
@@ -52,6 +58,16 @@ impl PlanningWorkOrderRecord {
             validate_work_order_task_id(task_id)?;
             if !seen.insert(task_id) {
                 bail!("work order contains a duplicate task identity");
+            }
+        }
+        let mut stages = BTreeSet::new();
+        for permit in &self.permits {
+            permit.validate()?;
+            if permit.work_order_id != self.work_order_id {
+                bail!("permit belongs to another work order");
+            }
+            if !stages.insert(permit.stage) {
+                bail!("work order contains duplicate stage permits");
             }
         }
         Ok(())

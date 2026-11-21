@@ -23,6 +23,7 @@ use super::super::{open_authority_connection, table_exists};
 use super::{SqlitePlanningAuthorityAdapter, ensure_work_order_tables};
 
 mod lineage;
+mod permits;
 mod transactions;
 
 fn workspace(prefix: &str) -> String {

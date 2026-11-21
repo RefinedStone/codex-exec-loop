@@ -1888,3 +1888,5 @@ fn build_supervisor_snapshot_populates_idle_orchestrator_without_session_detail(
 mod blocked;
 mod rebase;
 mod recovery;
+
+mod work_permits;

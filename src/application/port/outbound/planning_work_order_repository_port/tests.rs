@@ -76,7 +76,7 @@ fn origin_collision_is_typed_and_does_not_change_the_record() {
 }
 
 #[test]
-fn lineage_round_trip_keeps_order_and_reserved_permits_without_interpreting_them() {
+fn lineage_round_trip_preserves_order_and_empty_initial_permits() {
     let original = record();
     let json = serde_json::to_value(&original).unwrap();
     assert_eq!(json["permits"], serde_json::json!([]));
