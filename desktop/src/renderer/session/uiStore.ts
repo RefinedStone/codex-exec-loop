@@ -224,7 +224,13 @@ function setRemoteAgents(enable: boolean): void {
  * dot 과의 대화를 옆 칸에 연다 (D-19). 보던 화면은 그대로 둔다. 좁은 창에서는 오른쪽 패널을 닫아 자리를 만든다.
  */
 export function showDot(host: string, dotId: string): void {
-  set((state) => ({ dotDock: { host, dotId }, chatDock: null, overlay: null, panel: isNarrowWindow() ? null : state.panel }));
+  set((state) => ({ dotDock: { host, dotId }, chatDock: null, overlay: null, panelMaximized: false, panel: isNarrowWindow() ? null : state.panel }));
+}
+
+/** 열린 dot 옆 칸이라도 최대화한 이슈 패널에 가려져 있으면 보고 있는 대화가 아니다. */
+export function isDotDockVisible(state: Pick<UiState, "dotDock" | "panel" | "panelMaximized">, host: string, dotId: string): boolean {
+  return state.dotDock?.host === host && state.dotDock.dotId === dotId
+    && !(state.panel === "issues" && state.panelMaximized);
 }
 
 /** dot 과의 대화 옆 칸을 닫는다. 쓰던 글과 보내기 허락은 남는다. */

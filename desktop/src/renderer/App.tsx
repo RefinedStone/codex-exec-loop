@@ -17,7 +17,7 @@ import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
 import { ATTENTION_TEXT, attentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
-import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
+import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, isDotDockVisible, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { SkillsPanel } from "./skills/SkillsPanel";
 import { folderName } from "./sidebar/threadStatus";
@@ -428,8 +428,7 @@ export function App() {
         for (const dot of state.dots) {
           const room = dot.messagingRoomId;
           if (room === null || (state.dotReplies[room] ?? 0) === (previous[room] ?? 0)) continue;
-          const docked = useUiStore.getState().dotDock;
-          if (!document.hidden && docked?.host === host && docked.dotId === dot.id) continue;
+          if (!document.hidden && isDotDockVisible(useUiStore.getState(), host, dot.id)) continue;
           window.akra.dots.hasWindow(host, dot.id).then(
             (inWindow) => inWindow || notifyDotReply(dot.displayName, () => showDot(host, dot.id)),
             () => undefined,
@@ -678,7 +677,7 @@ export function App() {
               {panel === "skills" && <SkillsPanel cwd={openCwd ?? null} connected={connected} skills={window.akra.skills} listCodexSkills={listCodexSkills} onSkillsChanged={onSkillsChanged} />}
             </RightPanel>
           )}
-          {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} />}
+          {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} visible={!panelMaximized} />}
           {chatDock !== null && chatDockVisible && <ChatDock key={JSON.stringify([chatDock.host, chatDock.chatId])} host={chatDock.host} chatId={chatDock.chatId} readChat={readChat} />}
         </div>
       </div>

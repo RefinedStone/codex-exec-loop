@@ -14,13 +14,14 @@ const electronPath = createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
 
 const endpoint = fake.uniqueTestEndpoint();
+const dotMessages = [
+  { id: "m1", createdAt: "2026-11-14T01:00:00Z", author: "Me", fromDot: false, text: "status?" },
+  { id: "m2", createdAt: "2026-11-14T01:00:05Z", author: "Mika", fromDot: true, text: "All **green**." },
+];
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   hosts: ["cloud"],
   dots: [{ id: "dot-1", displayName: "Mika", status: "active", kind: "orbit", paused: false, rootThreadId: "01a1abfb-8f0a-7581-a8e4-c2953347f470", messagingRoomId: "room-1" }],
-  dotMessages: [
-    { id: "m1", createdAt: "2026-11-14T01:00:00Z", author: "Me", fromDot: false, text: "status?" },
-    { id: "m2", createdAt: "2026-11-14T01:00:05Z", author: "Mika", fromDot: true, text: "All **green**." },
-  ],
+  dotMessages,
   chats: [{ id: "chat-1", title: "내 ChatGPT 대화" }],
   // 첫 목록 조회는 제한된다. 사용자가 다시 읽을 수 있어야 한다.
   chatsRateLimited: true,
@@ -192,6 +193,88 @@ try {
   const mainBox = await page.locator(".workspace-body > .main").boundingBox();
   const dockBox = await page.getByTestId("dot-dock").boundingBox();
   check("widened side columns leave the main view and stay in the window", mainBox.width >= 279 && dockBox.x + dockBox.width <= (await page.evaluate(() => window.innerWidth)) + 1);
+
+  // 이슈 최대화는 도크를 장착한 채 가린다. 숨김 시험 창에서도 화면 자체는 보이는 상황으로 한정한다.
+  // 운영체제 알림 대신 기록용 Notification을 쓰고, 읽음/가시성 판단은 실제 renderer 경로를 지난다.
+  await page.evaluate(() => {
+    globalThis.dotVisibilityFixture = {
+      hiddenDescriptor: Object.getOwnPropertyDescriptor(document, "hidden"),
+      notificationDescriptor: Object.getOwnPropertyDescriptor(window, "Notification"),
+      originalFocus: window.focus,
+      documentHidden: false,
+      notifications: [],
+    };
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => globalThis.dotVisibilityFixture.documentHidden,
+    });
+    window.Notification = class {
+      static permission = "granted";
+      constructor(title, options) {
+        this.title = title;
+        this.body = options.body;
+        globalThis.dotVisibilityFixture.notifications.push(this);
+      }
+      close() {}
+    };
+    window.focus = () => undefined;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.getByTestId("issues-toggle").click();
+  await page.getByTestId("dot-composer-input").fill("keep while covered");
+  const replyBehindPanel = async (text, count) => {
+    gateway.setDotLiveState(true, true);
+    await page.waitForFunction(() => document.querySelector('[data-testid="dot-status"]')?.textContent.includes("Thinking"));
+    dotMessages.push({ id: `covered-${count}`, createdAt: "2026-11-14T03:00:00Z", author: "Mika", fromDot: true, text });
+    gateway.setDotLiveState(true, false);
+    await page.waitForFunction((expected) => (
+      [...document.querySelectorAll('[data-testid="dot-message"]')].some((message) => message.textContent.includes(expected))
+    ), text);
+    await page.waitForFunction((expected) => globalThis.dotVisibilityFixture.notifications.length === expected, count);
+  };
+
+  await page.getByTestId("issues-maximize").click();
+  check("maximizing issues keeps the dot mounted but visually hidden", (await page.getByTestId("dot-dock").count()) === 1 && !(await page.getByTestId("dot-dock").isVisible()));
+  check("the covered dot is not selected as the visible conversation", (await page.getByTestId("remote-dot-entry").first().getAttribute("aria-pressed")) === "false");
+  await replyBehindPanel("A reply behind the issue panel.", 1);
+  check("a covered dot reply stays unread and creates one notification", (await page.getByTestId("dot-unread").count()) === 1 && (await page.evaluate(() => globalThis.dotVisibilityFixture.notifications[0].body)) === "새 답이 왔습니다.");
+  await page.getByTestId("issues-restore").click();
+  await page.getByTestId("dot-unread").waitFor({ state: "detached", timeout: 5_000 });
+  check("restoring shows the loaded answer and only then clears unread", await page.getByTestId("dot-dock").isVisible() && (await page.getByTestId("dot-chat").innerText()).includes("A reply behind the issue panel."));
+  check("the dot draft survives maximizing and restoring", (await page.getByTestId("dot-composer-input").inputValue()) === "keep while covered");
+
+  await page.getByTestId("issues-maximize").click();
+  await replyBehindPanel("Open this reply from its notification.", 2);
+  check("another covered reply remains unread before its notification is opened", (await page.getByTestId("dot-unread").count()) === 1);
+  await page.evaluate(() => globalThis.dotVisibilityFixture.notifications.at(-1).onclick());
+  await page.getByTestId("dot-unread").waitFor({ state: "detached", timeout: 5_000 });
+  check("opening the notification reveals the dot without closing the issues panel", await page.getByTestId("dot-dock").isVisible() && (await page.getByTestId("right-panel").getAttribute("data-maximized")) === "false" && (await page.getByTestId("issues-toggle").getAttribute("aria-pressed")) === "true");
+
+  await page.getByTestId("issues-maximize").click();
+  await page.evaluate(() => { globalThis.dotVisibilityFixture.documentHidden = true; });
+  await replyBehindPanel("Keep this unread until the window is visible.", 3);
+  await page.getByTestId("issues-restore").click();
+  check("restoring a dock inside a hidden window does not mark its answer read", (await page.getByTestId("dot-unread").count()) === 1);
+  await page.evaluate(() => {
+    globalThis.dotVisibilityFixture.documentHidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.getByTestId("dot-unread").waitFor({ state: "detached", timeout: 5_000 });
+  check("showing the window finally marks its loaded answer read", (await page.getByTestId("dot-unread").count()) === 0);
+
+  await page.getByTestId("issues-maximize").click();
+  await page.getByTestId("remote-dot-entry").first().click();
+  check("selecting a covered dot reveals it instead of closing it", await page.getByTestId("dot-dock").isVisible() && (await page.getByTestId("right-panel").getAttribute("data-maximized")) === "false");
+  await page.evaluate(() => {
+    const fixture = globalThis.dotVisibilityFixture;
+    if (fixture.hiddenDescriptor) Object.defineProperty(document, "hidden", fixture.hiddenDescriptor);
+    else delete document.hidden;
+    if (fixture.notificationDescriptor) Object.defineProperty(window, "Notification", fixture.notificationDescriptor);
+    else delete window.Notification;
+    window.focus = fixture.originalFocus;
+    delete globalThis.dotVisibilityFixture;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
   await mainWindow.evaluate((window) => window.setSize(1200, 800));
   await page.getByTestId("dot-dock").waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
   check("shrinking the window closes the side chat beside an open panel", (await page.getByTestId("dot-dock").count()) === 0);

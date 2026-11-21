@@ -29,6 +29,8 @@ export interface DotChatProps {
   /** 대화를 다시 읽어야 하는 횟수이다 (`dotRefreshes`): 답이 끝났거나 실시간 통로가 다시 붙었다. 늘면 읽는다. */
   replies: number;
   request: GatewayRequest;
+  /** 창 안에서 대화가 보인다. 최대화한 다른 패널에 가려져 있으면 false이다. */
+  visible?: boolean;
   /** 사용자가 이 대화의 새 메시지를 봤다. */
   onSeen(): void;
   /** 이 대화를 작은 창으로 옮긴다. 옆 칸에만 있다. */
@@ -47,7 +49,7 @@ export function DotAvatar({ name, size = 28 }: { name: string; size?: number }) 
   );
 }
 
-export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock, onClose }: DotChatProps) {
+export function DotChat({ dot, live, replies, request, visible = true, onSeen, onPopOut, onDock, onClose }: DotChatProps) {
   const [state, setState] = useState<ChatState>({ phase: "loading" });
   const [refresh, setRefresh] = useState(0);
   const [canSend, setCanSend] = useState(() => isDotSendingAllowed(dot.id));
@@ -62,6 +64,9 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
   const previousLive = useRef<Pick<DotLive, "connected" | "working"> | undefined>(undefined);
   const scroller = useRef<HTMLElement | null>(null);
   const roomId = dot.messagingRoomId;
+  // 읽기를 시작한 뒤 다른 패널이 대화를 가릴 수 있다. 완료 시점의 가시성을 확인한다.
+  const visibleNow = useRef(visible);
+  visibleNow.current = visible;
   const liveConnected = live?.connected === true;
   const working = liveConnected && live.working;
 
@@ -114,7 +119,7 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
   useEffect(() => {
     if (!working) return;
     const timer = window.setInterval(() => {
-      if (!document.hidden) setRefresh((count) => count + 1);
+      if (!document.hidden && visibleNow.current) setRefresh((count) => count + 1);
     }, REPLY_POLL_MS);
     return () => window.clearInterval(timer);
   }, [working]);
@@ -137,7 +142,7 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
   const reading = useRef<{ roomId: string; again: boolean } | null>(null);
   const seen = useRef(onSeen);
   seen.current = onSeen;
-  /** 창이 숨겨진 동안 대화를 새로 불러왔다. 창이 다시 보이면 읽은 것으로 한다. */
+  /** 창이나 대화가 가려진 동안 답을 불러왔다. 실제로 다시 보일 때 읽은 것으로 한다. */
   const loadedWhileHidden = useRef(false);
   useEffect(() => {
     if (roomId === null) return;
@@ -148,6 +153,8 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
     const read = () => {
       const ticket = { roomId, again: false };
       reading.current = ticket;
+      // 이전 성공 뒤에 새 읽기가 시작됐으면 그 결과를 기다린다. 실패한 새 답을 읽음 처리하지 않는다.
+      loadedWhileHidden.current = false;
       // 이미 보이는 대화는 다시 읽는 동안 그대로 둔다. 화면이 깜빡이지 않는다.
       setState((previous) => (previous.phase === "loaded" ? previous : { phase: "loading" }));
       // 이 읽기가 아직 유효하면 끝낸다. 밀린 요청이 있으면 다음 읽기를 시작한다. 돌려주는 값은 이 읽기가 가장 새
@@ -167,8 +174,8 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
           // 다음 읽기가 밀려 있으면 이 응답은 새 답을 담지 않았을 수 있다. 읽은 것으로 하지 않는다. 다음 읽기가
           // 성공하면 그때 한다.
           if (outcome === "superseded") return;
-          // 창이 보일 때만 읽은 것으로 한다. 숨겨진 동안 불러온 답은 창이 다시 보일 때 처리한다 (아래).
-          if (document.hidden) {
+          // 창과 대화가 모두 보일 때만 읽은 것으로 한다. 가려진 동안 불러온 답은 복원할 때 처리한다.
+          if (document.hidden || !visibleNow.current) {
             loadedWhileHidden.current = true;
           } else {
             seen.current();
@@ -190,17 +197,18 @@ export function DotChat({ dot, live, replies, request, onSeen, onPopOut, onDock,
     },
     [roomId],
   );
-  // 숨겨졌던 창이 다시 보이면, 숨겨진 동안 화면에 불러온 답만 읽은 것으로 한다. 아직 읽는 중이거나 읽기에
+  // 숨겨졌던 창이나 대화가 다시 보이면, 가려진 동안 화면에 불러온 답만 읽은 것으로 한다. 아직 읽는 중이거나 읽기에
   // 실패했으면 화면에 답이 없으므로 표시를 지우지 않는다. 읽는 중이던 것은 끝날 때 위에서 처리한다.
   useEffect(() => {
     const onVisible = () => {
-      if (document.hidden || !loadedWhileHidden.current) return;
+      if (document.hidden || !visibleNow.current || reading.current !== null || !loadedWhileHidden.current) return;
       loadedWhileHidden.current = false;
       seen.current();
     };
+    onVisible();
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, []);
+  }, [visible]);
 
   // 새 메시지가 오거나 dot 이 답을 만들기 시작하면 맨 아래를 보인다. 방은 최근 메시지만 주므로 개수는 그대로일 수
   // 있다. 가장 새 메시지의 id 로 새 메시지를 안다. 입력창이 나타나면 대화 영역이 줄어든다: 그때도 맨 아래를 보인다.
