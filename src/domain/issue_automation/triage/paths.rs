@@ -94,7 +94,13 @@ fn repository_path(value: &str) -> PathCandidate<'_> {
     {
         return PathCandidate::NotRepository;
     }
-    if !value.contains('/') && !value.contains('.') && !value.contains('\\') {
+    // 확장자가 없는 루트 파일도 보호/위험 패턴의 입력이다. 명령이나 markup 문자열은
+    // 경로로 추정하지 않되, 한 단어인 파일명 후보는 일반 상대 경로와 같은 검사를 거친다.
+    if !value.contains('/')
+        && !value.contains('.')
+        && !value.contains('\\')
+        && !root_file_name_candidate(value)
+    {
         return PathCandidate::NotRepository;
     }
     if value.len() > MAX_MENTIONED_PATH_BYTES
@@ -111,6 +117,12 @@ fn repository_path(value: &str) -> PathCandidate<'_> {
         return PathCandidate::Unreadable;
     }
     PathCandidate::Relative(value)
+}
+
+fn root_file_name_candidate(value: &str) -> bool {
+    // 명확한 markup과 복합 표현만 제외한다. 파일명 후보의 지원 불가 문자는
+    // repository_path의 공통 검증에서 Unreadable로 처리해야 한다.
+    !value.starts_with('<') && !value.chars().any(char::is_whitespace)
 }
 
 fn escaped(bytes: &[u8], index: usize) -> bool {

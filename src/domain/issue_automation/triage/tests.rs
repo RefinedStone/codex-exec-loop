@@ -610,6 +610,168 @@ fn only_explicit_inline_relative_paths_contribute_and_globs_have_segment_semanti
 }
 
 #[test]
+fn extensionless_root_files_match_builtin_and_added_protection_patterns() {
+    let mut policy = policy();
+    policy.protection.paths.push("Makefile".into());
+    for path in [
+        "credentials",
+        "credentials-prod",
+        "credentials-prod@v1",
+        "Makefile",
+    ] {
+        let mut current = source();
+        set_body(
+            &mut current,
+            format!("{VALID_BODY}\n변경 파일: \x60{path}\x60"),
+        );
+        let result = run(Some(&current), &policy, None).expect("protected root file");
+        assert_eq!(
+            result.eligibility(),
+            IssueTriageEligibility::Eligible,
+            "{path}"
+        );
+        assert_eq!(result.readiness(), IssueTriageReadiness::Ready, "{path}");
+        assert_eq!(
+            result.risk_class(),
+            IssueAutomationRiskClass::Normal,
+            "{path}"
+        );
+        assert!(
+            result
+                .reasons()
+                .contains(&IssueTriageReasonCode::ProtectedPath),
+            "{path}"
+        );
+        assert!(
+            !result
+                .reasons()
+                .contains(&IssueTriageReasonCode::UnsupportedContent),
+            "{path}"
+        );
+        assert!(
+            result
+                .gates()
+                .iter()
+                .all(|gate| gate.action == IssueAutomationGateAction::Human),
+            "{path}"
+        );
+        assert_eq!(
+            result.observation().disposition,
+            IssueObservationDisposition::HumanApproval,
+            "{path}"
+        );
+        assert_eq!(
+            result,
+            run(Some(&current), &policy, Some(&result)).expect("same root file")
+        );
+    }
+}
+
+#[test]
+fn unsupported_extensionless_root_files_require_human_approval() {
+    for path in [
+        "credentials!",
+        "credentials*",
+        "credentials?",
+        "credentials[prod]",
+        "credentials{prod}",
+        "credentials:prod",
+    ] {
+        let mut current = source();
+        set_body(
+            &mut current,
+            format!("{VALID_BODY}\n변경 파일: \x60{path}\x60"),
+        );
+        let result = run(Some(&current), &policy(), None).expect("unsupported root file");
+        assert_eq!(
+            result.eligibility(),
+            IssueTriageEligibility::Eligible,
+            "{path}"
+        );
+        assert_eq!(result.readiness(), IssueTriageReadiness::Ready, "{path}");
+        assert_eq!(
+            result.risk_class(),
+            IssueAutomationRiskClass::High,
+            "{path}"
+        );
+        assert!(
+            result
+                .reasons()
+                .contains(&IssueTriageReasonCode::UnsupportedContent),
+            "{path}"
+        );
+        assert!(
+            result
+                .gates()
+                .iter()
+                .all(|gate| gate.action == IssueAutomationGateAction::Human),
+            "{path}"
+        );
+        assert_eq!(
+            result.observation().disposition,
+            IssueObservationDisposition::HumanApproval,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn unprotected_root_names_and_inline_literals_do_not_require_human_approval() {
+    let mut current = source();
+    set_body(
+        &mut current,
+        format!(
+            "{VALID_BODY}\n\x60README\x60 \x60retries\x60 \x60true\x60 \x60cargo test\x60 \x60<!--\x60 \x60\x60<!-- \x60 note \x60 -->\x60\x60"
+        ),
+    );
+    let result = run(Some(&current), &policy(), None).expect("ordinary inline content");
+    assert_eq!(result.eligibility(), IssueTriageEligibility::Eligible);
+    assert_eq!(result.readiness(), IssueTriageReadiness::Ready);
+    assert_eq!(result.risk_class(), IssueAutomationRiskClass::Normal);
+    assert!(
+        !result
+            .reasons()
+            .contains(&IssueTriageReasonCode::ProtectedPath)
+    );
+    assert!(
+        !result
+            .reasons()
+            .contains(&IssueTriageReasonCode::UnsupportedContent)
+    );
+    assert_eq!(result.gates()[0].action, IssueAutomationGateAction::Auto);
+    assert_eq!(
+        result.observation().disposition,
+        IssueObservationDisposition::AutomaticStart
+    );
+}
+
+#[test]
+fn extensionless_root_file_limits_remain_fail_closed() {
+    let mut current = source();
+    let body = format!("{VALID_BODY}\n\x60credentials{}\x60", "x".repeat(1024));
+    set_body(&mut current, body);
+    let result = run(Some(&current), &policy(), None).expect("oversized root file");
+    assert_eq!(result.eligibility(), IssueTriageEligibility::Eligible);
+    assert_eq!(result.readiness(), IssueTriageReadiness::Ready);
+    assert_eq!(result.risk_class(), IssueAutomationRiskClass::High);
+    assert!(
+        result
+            .reasons()
+            .contains(&IssueTriageReasonCode::UnsupportedContent)
+    );
+    assert!(
+        result
+            .gates()
+            .iter()
+            .all(|gate| gate.action == IssueAutomationGateAction::Human)
+    );
+    assert_eq!(
+        result.observation().disposition,
+        IssueObservationDisposition::HumanApproval
+    );
+}
+
+#[test]
 fn reopened_comments_cannot_supply_completion_criteria() {
     for body in [
         "<!-- note --> <!--\n## 완료 기준\n- hidden criterion\n-->",
