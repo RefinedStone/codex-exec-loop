@@ -118,7 +118,7 @@ impl DelegationStore {
         }
         let now = now_ms();
         let mut view: Delegation = serde_json::from_str(&view)?;
-        if view.deadline.is_some_and(|at| now >= at) || view.state == State::Queued {
+        if now >= view.effective_deadline() || view.state == State::Queued {
             return Ok(None);
         }
         let phase = if is_result {
@@ -358,7 +358,7 @@ impl DelegationStorePort for DelegationStore {
             && next.state == State::Dispatching
             && let Some(attempt) = next.attempts.last()
         {
-            if old.deadline.is_some_and(|deadline| now_ms() >= deadline) {
+            if now_ms() >= old.effective_deadline() {
                 return Ok(false);
             }
             let route = load_route(&tx, &old.id)?;
@@ -501,8 +501,8 @@ impl DelegationStorePort for DelegationStore {
         let inserted = self.open()?.execute(
             "INSERT OR IGNORE INTO delegation_callback SELECT id, ?2 FROM delegation
              WHERE id = ?1 AND active = 1 AND json_extract(view, '$.state') = 'dispatching'
-             AND json_extract(view, '$.deadline') > ?3",
-            params![id, digest.as_slice(), now_ms()],
+             AND COALESCE(json_extract(view, '$.deadline'), json_extract(view, '$.created_at') + ?4) > ?3",
+            params![id, digest.as_slice(), now_ms(), crate::domain::delegation::policy::DEFAULT_DEADLINE_MS],
         )?;
         Ok((inserted == 1).then_some(token))
     }
@@ -765,6 +765,25 @@ mod tests {
         let old = store.active().unwrap().pop().unwrap().view;
         assert_ne!(serde_json::to_string(&old).unwrap(), view);
         old
+    }
+
+    #[test]
+    fn delegation_prerelease_callback_uses_creation_time_when_deadline_is_missing() {
+        let (_directory, store) = ledger();
+        insert_prerelease_active_row(&store);
+        let db = store.open().unwrap();
+        db.execute(
+            "UPDATE delegation SET view=json_set(view,'$.state','dispatching') WHERE id='legacy'",
+            [],
+        )
+        .unwrap();
+        assert!(store.issue_callback_capability("legacy").unwrap().is_none());
+        db.execute(
+            "UPDATE delegation SET view=json_set(view,'$.created_at',?1) WHERE id='legacy'",
+            [now_ms()],
+        )
+        .unwrap();
+        assert!(store.issue_callback_capability("legacy").unwrap().is_some());
     }
 
     #[test]

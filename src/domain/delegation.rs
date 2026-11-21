@@ -249,11 +249,7 @@ pub(crate) fn next_action(job: &Delegation, stop_pending: bool, now: i64) -> Nex
         NextAction::Stop
     } else if job.state.terminal() {
         NextAction::None
-    } else if now
-        >= job
-            .deadline
-            .unwrap_or_else(|| job.created_at.saturating_add(policy::DEFAULT_DEADLINE_MS))
-    {
+    } else if now >= job.effective_deadline() {
         NextAction::Expire
     } else if job.state == State::Queued && !job.outcome_unknown {
         NextAction::Select
@@ -263,6 +259,10 @@ pub(crate) fn next_action(job: &Delegation, stop_pending: bool, now: i64) -> Nex
 }
 
 impl Delegation {
+    pub(crate) fn effective_deadline(&self) -> i64 {
+        self.deadline
+            .unwrap_or_else(|| self.created_at.saturating_add(policy::DEFAULT_DEADLINE_MS))
+    }
     pub fn apply_observation(&mut self, delivery: Delivery, phase: Phase) {
         if delivery == Delivery::NotSent && phase == Phase::Unknown {
             return;
