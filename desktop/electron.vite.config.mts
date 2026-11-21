@@ -11,6 +11,7 @@ export default defineConfig({
         input: {
           index: resolve(import.meta.dirname, "src/main/index.ts"),
           browserMcp: resolve(import.meta.dirname, "src/browser-mcp/main.ts"),
+          issueConfirmation: resolve(import.meta.dirname, "src/confirmation/main.ts"),
         },
       },
     },

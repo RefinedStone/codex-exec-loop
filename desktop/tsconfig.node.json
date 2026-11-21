@@ -17,6 +17,7 @@
     "electron.vite.config.mts",
     "vitest.config.mts",
     "src/main/**/*.ts",
+    "src/confirmation/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "test/**/*.ts"

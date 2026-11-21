@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { IssueConfirmationQueue, IssueConfirmationService, type ConfirmationDisplay } from "../src/main/issueConfirmationService";
-import type { ConfirmationMethod } from "../src/main/issueConfirmationConnection";
+import { IssueConfirmationQueue, IssueConfirmationService, type ConfirmationDisplay } from "../src/confirmation/service";
+import type { ConfirmationMethod } from "../src/confirmation/connection";
 
 const REQUEST = { workspace: "/work/repo", decisionId: "decision-1", option: "approve", note: "공유 메모", key: "receipt-1" };
 const DISPLAY = { message: "서버의 확인 질문", detail: "서버가 정한 이슈·선택·공유 메모", confirm_label: "서버의 승인 문구" };
@@ -35,11 +35,12 @@ function harness(queue = new IssueConfirmationQueue()) {
   }));
   const createRpc = vi.fn((onClosed: () => void) => { rpcClosed = onClosed; return rpc; });
   const createHelper = vi.fn((onClosed: () => void) => { helperClosed = onClosed; return helper; });
+  const beforeSubmit = vi.fn(async (_signal: AbortSignal) => true);
   const service = new IssueConfirmationService({
-    rpc: createRpc, helper: createHelper, confirm, ownerAlive: () => alive,
+    rpc: createRpc, helper: createHelper, confirm, ownerAlive: () => alive, beforeSubmit,
   }, queue);
   return {
-    service, rpc, helper, confirm, native, createRpc, createHelper,
+    service, rpc, helper, confirm, native, createRpc, createHelper, beforeSubmit,
     closeOwner: () => { alive = false; service.invalidate(); },
     disconnect: () => rpcClosed(),
     closeHelper: () => helperClosed(),
@@ -48,7 +49,35 @@ function harness(queue = new IssueConfirmationQueue()) {
   };
 }
 
-describe("main issue confirmation", () => {
+describe("utility issue confirmation", () => {
+  it("rejects a server prompt that echoes a private registration before contacting native UI", async () => {
+    const h = harness();
+    const original = h.rpc.request.getMockImplementation()!;
+    h.rpc.request.mockImplementation(async (method, params) => method === "akra/kernel/confirmation/prepare"
+      ? { intent: INTENT, display: { ...DISPLAY, detail: REGISTRATION.session_file } }
+      : original(method, params));
+    await expect(h.service.confirmDecision(REQUEST)).rejects.toThrow(/^확인 요청을 완료하지 못했습니다/);
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(h.helper.approve).not.toHaveBeenCalled();
+    expect(h.submitted()).toHaveLength(0);
+  });
+
+  it("waits for the current native owner before submitting an already approved proof", async () => {
+    const h = harness();
+    const permission = deferred<boolean>();
+    h.beforeSubmit.mockImplementation(() => permission.promise);
+    const result = h.service.confirmDecision(REQUEST);
+    await h.untilDialog();
+    h.native.resolve(true);
+    await vi.waitFor(() => expect(h.beforeSubmit).toHaveBeenCalledOnce());
+    expect(h.helper.approve).toHaveBeenCalledOnce();
+    expect(h.submitted()).toHaveLength(0);
+    h.service.invalidate();
+    permission.resolve(true);
+    expect(await result).toEqual({ cancelled: true });
+    expect(h.submitted()).toHaveLength(0);
+  });
+
   it("uses the server's text and issues proof only after native approval, exactly once", async () => {
     const h = harness();
     const result = h.service.confirmDecision(REQUEST);

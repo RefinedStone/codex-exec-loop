@@ -12,17 +12,25 @@ Desktop main의 native 확인 창을 승인한 뒤 만든 증거를 Gateway가 �
 수집 수준을 올리는 것이다. 아직 지원하지 않는 Propose·Gated·Auto의 실행 기능을
 추가하지 않는다. 저장된 모드가 없을 때의 기존 기본 Observe 동작도 유지한다.
 
-## main, helper, Gateway의 역할
+## main, utility process, helper, Gateway의 역할
 
-main은 일반 renderer 중계와 별도의 Gateway 연결을 소유한다.
-이 연결의 응답을 renderer 메시지 버스로 전달하지 않는다.
-renderer는 결정 ID·선택지·메모·멱등 키 또는 목표 모드를 전용 IPC로 요청한다.
+main은 앱 창·main frame·수명을 검증하고 native 확인 창과 전역 확인 순서를 소유한다.
+JSON-RPC 연결·응답 해석·등록·준비·제출은 행동마다 새로 시작하는 Electron utility process에서
+처리한다. 해당 프로세스는 별도 번들로 빌드되며 renderer와 MessagePort를 공유하지 않는다.
+renderer는 결정 ID·선택지·메모·멱등 키 또는 목표 모드를 기존 전용 IPC로 요청한다.
 질문과 선택지 효과는 Gateway의 현재 공유 장부 조회에서 가져온다.
+main과 utility 사이에는 입력, 표시 문구, 승인/취소, 제출 직전 수명 확인, 정제된 결과만
+오간다. 등록·intent·proof·Gateway frame은 이 통로에도 전달하지 않는다.
 
-main은 고정 subcommand `desktop-confirmation-bridge`로 helper를 시작한다.
-비밀은 argv나 새 환경변수로 넘기지 않는다. helper의 stdin/stdout pipe를 main만
-보유하며, 확인 창의 기본·취소 선택은 취소다. 승인 전에는 proof를 만들거나
-답변 명령을 제출하지 않는다. 창·renderer·연결이 교체되면 대기 중 확인을 폐기한다.
+utility process는 고정 subcommand `desktop-confirmation-bridge`로 helper를 시작한다.
+비밀은 argv나 새 환경변수로 넘기지 않는다. helper의 stdin/stdout pipe는 해당 utility만
+보유하며, main 확인 창의 기본·취소 선택은 취소다. native 승인 응답 전에는 proof를 만들지
+않고, 제출 직전 main이 원래 창의 수명을 다시 확인한 뒤에만 명령을 보낸다.
+창·renderer·연결이 교체되면 대기 중 확인과 helper를 폐기한다. utility가 죽거나 제한 시간
+안에 시작하지 않으면 실패로 닫으며 재시작해서 요청을 재생하지 않는다. 제출을 허용한 뒤
+응답을 잃으면 취소가 아닌 결과 불명으로 반환한다. 정상 종료는 helper의 EOF 처리와
+종료를 기다려 등록 파일과 proof를 정리한다. 강제 종료 시에는 private IPC 연결을 잃은
+Gateway가 해당 등록을 더 이상 사용할 수 없다.
 
 helper의 등록은 브라우저 등록과 별개 목적과 이름 공간을 사용한다.
 등록 자격은 owner-only 임시 파일에 보관하고, Gateway는 소유권·권한·파일 정체성과
@@ -31,12 +39,12 @@ helper의 등록은 브라우저 등록과 별개 목적과 이름 공간을 사
 
 | 통로 | 허용하는 동작 |
 |---|---|
-| main이 보유한 helper stdin | 등록 준비, 승인 후 proof 생성, 철회 |
+| utility가 보유한 helper stdin | 등록 준비, 승인 후 proof 생성, 철회 |
 | 인증된 helper private IPC | 연결 바인딩, 수명 감시, proof 검증·소비 |
 | 일반 Gateway 명령 | agent 답변, 모드 하향·no-op, 기존 영수증 재전송 |
 
 private IPC에는 proof를 생성하는 approve 동작이 없다.
-등록 자격만 가진 일반 Gateway client도 main의 승인 경로를 대신 호출할 수 없다.
+등록 자격만 가진 일반 Gateway client도 native 승인 후에만 진행되는 utility 경로를 대신 호출할 수 없다.
 
 ## 공개 Gateway 계약
 

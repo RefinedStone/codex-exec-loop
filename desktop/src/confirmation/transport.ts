@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { isRecord } from "./issueConfirmationConnection";
+import { isRecord } from "./connection";
 
 const MAX_FRAME_BYTES = 64 * 1024;
 type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout };
@@ -22,6 +22,8 @@ export class IssueConfirmationTransport implements ConfirmationHelper {
   private sequence = 0;
   private bytes: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   private readonly pending = new Map<string, Pending>();
+  private resolveExit!: () => void;
+  private readonly exited = new Promise<void>((resolve) => { this.resolveExit = resolve; });
 
   constructor(private readonly command: string, private readonly onClosed: () => void) {}
 
@@ -47,6 +49,10 @@ export class IssueConfirmationTransport implements ConfirmationHelper {
     this.finish(false);
   }
 
+  waitClosed(): Promise<void> {
+    return this.exited;
+  }
+
   private start(): Promise<void> {
     if (this.closed) return Promise.reject(this.failure());
     if (this.starting) return this.starting;
@@ -66,7 +72,8 @@ export class IssueConfirmationTransport implements ConfirmationHelper {
       // helper의 오류 원문에도 증거가 포함될 수 있으므로 로그로 중계하지 않는다.
       child.stderr.resume();
       child.on("error", () => this.finish(true));
-      child.on("exit", () => this.finish(true));
+      child.on("exit", () => { this.resolveExit(); this.finish(true); });
+      child.once("close", () => this.resolveExit());
       child.stdout.on("end", () => this.finish(true));
       child.stdin.on("error", () => this.finish(true));
     } catch {
@@ -144,6 +151,7 @@ export class IssueConfirmationTransport implements ConfirmationHelper {
     }
     this.pending.clear();
     const child = this.child;
+    if (!child || child.exitCode !== null || child.signalCode !== null) this.resolveExit();
     if (child && child.exitCode === null && child.signalCode === null) {
       // EOF는 helper가 가진 등록과 아직 쓰지 않은 모든 증거를 폐기한다.
       child.stdin.end();
