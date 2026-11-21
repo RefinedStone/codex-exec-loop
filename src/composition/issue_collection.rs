@@ -30,29 +30,61 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
         )),
         IssuePolicyService::new(validation_source.clone()),
     ));
+    let source = Arc::new(IssueSourceProvenanceService::new(
+        Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
+        Arc::new(
+            IssueCreationJournalAdapter::new(|workspace| {
+                let location =
+                    SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
+                Ok(PathBuf::from(location.runtime_dir))
+            })
+            .with_workspace_resolver(|cwd| {
+                Ok(super::production::repository_kernel_target(cwd)?.workspace_root)
+            }),
+        ),
+    ));
+    let decisions = Arc::new(
+        crate::application::service::issue_decision::IssueDecisionService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            triage.clone(),
+            IssuePolicyService::new(validation_source.clone()),
+        ),
+    );
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let parallel = crate::application::service::parallel_mode::ParallelModeService::new(
+        authority.clone(),
+        Arc::new(crate::adapter::outbound::github::automation::GithubAutomationAdapter::new()),
+        Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
+    );
+    let execution = Arc::new(
+        crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
+            authority.clone(),
+            authority,
+            parallel,
+        ),
+    );
+    let coordinator = Arc::new(
+        crate::application::service::issue_coordinator::IssueCoordinatorService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            source.clone(),
+            triage.clone(),
+            decisions,
+            IssuePolicyService::new(validation_source.clone()),
+            execution,
+        ),
+    );
     Arc::new(
         IssueCollectionService::new(
-            workspace_dir.to_string(),
+            workspace_dir.to_owned(),
             store,
-            Arc::new(IssueSourceProvenanceService::new(
-                Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
-                Arc::new(
-                    IssueCreationJournalAdapter::new(|workspace| {
-                        let location =
-                            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(
-                                workspace,
-                            )?;
-                        Ok(PathBuf::from(location.runtime_dir))
-                    })
-                    .with_workspace_resolver(|cwd| {
-                        Ok(super::production::repository_kernel_target(cwd)?.workspace_root)
-                    }),
-                ),
-            )),
+            source,
             Arc::new(GitIssueCollectionOriginAdapter::new()),
             IssuePolicyService::new(validation_source),
         )
-        .with_triage(triage),
+        .with_triage(triage)
+        .with_coordinator(coordinator),
     )
 }
 

@@ -134,6 +134,7 @@ fn item(id: &str, mode: IssueAutomationAutonomy) -> IssueCollectionItem {
     let current = observed(&issue);
     let triage = projection(&issue, Some(&current), mode);
     IssueCollectionItem {
+        work: None,
         open_decisions: Vec::new(),
         issue,
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),

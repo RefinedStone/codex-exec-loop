@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
@@ -22,12 +22,28 @@ fn ensure_kernel_event_table(connection: &Connection) -> Result<()> {
                 thread_id TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
                 recorded_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS kernel_issue_work_event_receipts (
+                event_id TEXT PRIMARY KEY NOT NULL,
+                payload_json TEXT NOT NULL,
+                sequence INTEGER NOT NULL
             );",
         )
         .context("failed to ensure the kernel event table")
 }
 
 impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
+    fn has_issue_work_event(&self, workspace_dir: &str, event_id: &str) -> Result<bool> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        ensure_kernel_event_table(&connection)?;
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM kernel_issue_work_event_receipts WHERE event_id=?1)",
+            [event_id],
+            |row| row.get(0),
+        )?)
+    }
+
     fn append_kernel_events(
         &self,
         workspace_dir: &str,
@@ -46,6 +62,21 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
             let event = &record.event;
             let payload =
                 serde_json::to_string(event).context("failed to serialize a kernel event")?;
+            if let Some(event_id) = event.issue_work_event_id() {
+                use rusqlite::OptionalExtension;
+                let prior: Option<String> = transaction.query_row(
+                    "SELECT payload_json FROM kernel_issue_work_event_receipts WHERE event_id=?1",
+                    [event_id], |row| row.get(0)).optional()?;
+                if let Some(prior) = prior {
+                    if prior != payload {
+                        bail!("an issue work event identity cannot change");
+                    }
+                    continue;
+                }
+                transaction.execute(
+                    "INSERT INTO kernel_issue_work_event_receipts(event_id,payload_json,sequence) VALUES (?1,?2,?3)",
+                    params![event_id,payload,record.sequence])?;
+            }
             transaction
                 .execute(
                     "INSERT INTO kernel_events (sequence, kind, thread_id, payload_json, recorded_at)

@@ -4,6 +4,7 @@
 mod binding;
 // Observe 수집 설정과 현재 관찰 투영이다 (#2538).
 pub mod collection;
+pub mod coordinator;
 // 판에 묶인 결정 요청과 답이다 (#2544).
 pub mod decision;
 // 수집/실행과 독립된 자동화 정책의 typed 효과값이다 (#2540).

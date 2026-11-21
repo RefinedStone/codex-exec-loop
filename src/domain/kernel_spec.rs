@@ -543,6 +543,10 @@ spec_names! {
             "An open issue decision was committed to the issue ledger. Only stable identity and decision metadata are recorded; question and note text are excluded.";
         IssueDecisionResolved => "issue_decision_resolved",
             "An issue decision was closed by its first answer or superseded by a changed basis. An agent answer is not human confirmation and does not grant execution.";
+        IssueWorkSubmitted => "issue_work_submitted",
+            "A durable issue work order was registered. Only stable identity and task IDs are recorded.";
+        IssueWorkPermitGranted => "issue_work_permit_granted",
+            "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",
             "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
     }

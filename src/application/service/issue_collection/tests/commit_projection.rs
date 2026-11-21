@@ -133,6 +133,11 @@ impl IssueAutomationStorePort for RacingStore {
     }
 
     forward_store! {
+        fn pending_issue_work_events(workspace: &str) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkEvent>>;
+        fn acknowledge_issue_work_event(workspace: &str, event_id: &str) -> Result<()>;
+        fn get_issue_work(workspace: &str, issue: &IssueReference) -> Result<Option<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>>;
+        fn save_issue_work(workspace: &str, expected: IssueTriageFence, assessment: &IssueTriageAssessment, candidate: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint) -> Result<crate::application::port::outbound::issue_automation_store_port::IssueWorkSaveResult>;
+        fn apply_issue_resync(workspace: &str, expected: IssueCollectionFence, issue: &IssueReference, read: &IssueSourceRead) -> Result<IssueCollectionApplyResult>;
         fn insert_binding(workspace: &str, binding: &IssueAutomationBinding) -> Result<IssueAutomationBindingInsertResult>;
         fn get_binding(workspace: &str, binding_id: &IssueAutomationBindingId) -> Result<Option<StoredIssueAutomationBinding>>;
         fn list_bindings(workspace: &str) -> Result<Vec<StoredIssueAutomationBinding>>;

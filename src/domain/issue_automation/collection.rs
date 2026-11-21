@@ -183,6 +183,7 @@ pub struct IssueCollectionItem {
     pub triage: Option<IssueTriageProjection>,
     /// 같은 catalog snapshot에서 읽은 열린 결정 요청이다.
     pub open_decisions: Vec<super::decision::StoredIssueDecision>,
+    pub work: Option<super::coordinator::IssueWorkSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

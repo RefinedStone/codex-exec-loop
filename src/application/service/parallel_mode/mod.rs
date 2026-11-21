@@ -514,6 +514,15 @@ impl ParallelModeService {
         )
     }
 
+    /// 외부 작업 등록도 dispatch와 같은 원격/base 검증 경로의 SHA만 바인딩한다.
+    pub(crate) fn work_order_dispatch_source_sha(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<String, String> {
+        self.fetch_fresh_pool_integration_target(workspace_dir)
+            .map(|target| target.commit_sha)
+    }
+
     fn fetch_fresh_pool_integration_target(
         &self,
         workspace_dir: &str,

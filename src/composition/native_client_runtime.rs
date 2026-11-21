@@ -996,6 +996,15 @@ impl NativeClientRuntime {
         &mut self,
         completion: ParallelModeControlPlaneBackgroundEvent,
     ) -> NativeClientDispatchOutcome {
+        // 주기적인 제어면 조회는 원격 수집 주기와 실패 backoff를 앞당기지 않는다.
+        // 현재 작업자의 종료(성공 또는 실패)만 저장된 작업 상태의 재평가를 깨운다.
+        if let ParallelModeControlPlaneBackgroundEvent::WorkerEvent { event, .. } = &completion
+            && self.current_parallel_epoch_id_for_workspace(&event.workspace_directory)
+                == Some(event.epoch_id)
+            && let Some(observer) = &mut self.issue_observer
+        {
+            observer.request_sync(Instant::now());
+        }
         NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
             client_presentation_events(
                 self.parallel_control_plane
@@ -1635,6 +1644,7 @@ impl NativeClientRuntime {
         );
         // 열린 턴과 연산도 잃은 것으로 닫는다 (K4-4). 되돌린 프롬프트를 다시 내기 전에 적는다.
         self.record_kernel_events(lost_work);
+        self.drain_issue_work_outbox();
         if !open.is_empty() {
             // 아직 클라이언트가 없다. 결과는 조회로 보인다. 기록용 사건은 이 dispatch 안에서 기록된다.
             let _ = self.dispatch_core_input(CoreInput::Command(
@@ -1667,6 +1677,7 @@ impl NativeClientRuntime {
     ) -> anyhow::Result<()> {
         self.issue_observer = Some(IssueObserver::new(service.clone(), self.host_waker())?);
         self.issue_collection = Some(service);
+        self.drain_issue_work_outbox();
         Ok(())
     }
 
@@ -1744,6 +1755,7 @@ impl NativeClientRuntime {
     }
 
     fn poll_issue_observer(&mut self, now: Instant) {
+        let execution_enabled = self.parallel_mode_enabled();
         let Some(observer) = &mut self.issue_observer else {
             return;
         };
@@ -1752,6 +1764,7 @@ impl NativeClientRuntime {
             .unwrap_or_default()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
+        observer.set_execution_enabled(execution_enabled, now);
         let cycle = observer.poll(now, at_unix_ms);
         self.published_issue_change |= cycle.changed;
         self.record_issue_committed(cycle.committed);
@@ -1771,6 +1784,9 @@ impl NativeClientRuntime {
                 KernelEvent::issue_decision_resolved(fact, revision)
             };
         self.published_issue_change = true;
+        if let Some(observer) = &mut self.issue_observer {
+            observer.request_sync(Instant::now());
+        }
         self.record_kernel_events(vec![event]);
     }
 
@@ -1790,6 +1806,22 @@ impl NativeClientRuntime {
                 IssueObserverCommittedFact::Tracked(fact) => {
                     KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
                 }
+                IssueObserverCommittedFact::Coordinated(fact) => match fact {
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::Triaged(fact) => KernelEvent::issue_triaged(
+                        &fact.issue, fact.binding_id.as_str(), fact.revision, fact.gate_revision, &fact.policy_version,
+                    ),
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::Decision { fact, revision } => {
+                        if fact.state == crate::domain::issue_automation::decision::IssueDecisionState::Open {
+                            KernelEvent::issue_decision_requested(&fact, revision)
+                        } else { KernelEvent::issue_decision_resolved(&fact, revision) }
+                    }
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::WorkSubmitted {
+                        event_id, issue, work_order_id, task_ids, revision } => KernelEvent::IssueWorkSubmitted {
+                            event_id, issue: (&issue).into(), work_order_id, task_ids, revision },
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::WorkPermitGranted {
+                        event_id, issue, work_order_id, source_sha, gate_revision, delivery, revision } => KernelEvent::IssueWorkPermitGranted {
+                            event_id, issue: (&issue).into(), work_order_id, source_sha, gate_revision, delivery, revision },
+                },
                 IssueObserverCommittedFact::Triaged(fact) => KernelEvent::issue_triaged(
                     &fact.issue,
                     fact.binding_id.as_str(),
@@ -1798,8 +1830,75 @@ impl NativeClientRuntime {
                     &fact.policy_version,
                 ),
             })
-            .collect();
-        self.record_kernel_events(records);
+            .collect::<Vec<_>>();
+        for record in records {
+            if record.issue_work_event_id().is_some() {
+                self.record_issue_work_event(record);
+            } else {
+                self.record_kernel_events(vec![record]);
+            }
+        }
+    }
+
+    /// Observe가 Off여도 과거 확정 사실은 재접속 때 전달한다. 원격 호출은 없다.
+    fn drain_issue_work_outbox(&mut self) {
+        let Some(coordinator) = self
+            .issue_collection
+            .as_ref()
+            .and_then(|service| service.coordinator_service())
+        else {
+            return;
+        };
+        loop {
+            let Ok(pending) = coordinator.pending_facts() else {
+                return;
+            };
+            if pending.is_empty() {
+                return;
+            }
+            self.record_issue_committed(
+                pending
+                    .clone()
+                    .into_iter()
+                    .map(IssueObserverCommittedFact::Coordinated)
+                    .collect(),
+            );
+            if coordinator.pending_facts().ok().as_ref() == Some(&pending) {
+                return;
+            }
+        }
+    }
+
+    /// outbox 사실은 kernel append 확정 후에만 ack한다. ack 유실은 영속 receipt로 중복을 막는다.
+    fn record_issue_work_event(&mut self, event: KernelEvent) {
+        let Some(event_id) = event.issue_work_event_id().map(str::to_owned) else {
+            return;
+        };
+        let Some((log, workspace)) = self.kernel_event_log.clone() else {
+            return;
+        };
+        let result = (|| -> anyhow::Result<()> {
+            if !log.has_issue_work_event(&workspace, &event_id)? {
+                let records = self.number_kernel_records(vec![event]);
+                log.append_kernel_events(&workspace, &records)?;
+                self.recent_kernel_records.extend(records.iter().cloned());
+                while self.recent_kernel_records.len() > RECENT_KERNEL_RECORDS {
+                    self.recent_kernel_records.pop_front();
+                }
+                self.published_kernel_records.extend(records);
+            }
+            if let Some(coordinator) = self
+                .issue_collection
+                .as_ref()
+                .and_then(|service| service.coordinator_service())
+            {
+                coordinator.acknowledge_event(&event_id)?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            tracing::warn!("issue work event remains in the durable outbox");
+        }
     }
 
     pub(super) fn take_issue_collection_update(
@@ -2061,6 +2160,9 @@ impl NativeClientPort for NativeClientRuntime {
         NativeClientRuntime::recv_parallel_completion_for_test(self, timeout)
     }
 }
+
+#[cfg(test)]
+mod issue_observer_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {

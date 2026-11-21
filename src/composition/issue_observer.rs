@@ -20,16 +20,22 @@ const COLLECTION_INTERVAL: Duration = Duration::from_secs(5 * 60);
 pub(crate) enum IssueObserverCommittedFact {
     Tracked(IssueCollectionTrackedFact),
     Triaged(IssueTriagedFact),
+    Coordinated(crate::application::service::issue_coordinator::IssueCoordinatorFact),
 }
 
 type Reporter = dyn Fn(Vec<IssueObserverCommittedFact>) + Send + Sync;
-type Collect = dyn Fn(&IssueCollectionCancellation, u64, &Reporter) -> Result<IssueCollectionRunOutcome>
+type Collect = dyn Fn(&IssueCollectionCancellation, u64, bool, &Reporter) -> Result<IssueCollectionRunOutcome>
     + Send
     + Sync;
 
 #[cfg(test)]
 type TestCollect =
     dyn Fn(&IssueCollectionCancellation, u64) -> Result<IssueCollectionRunOutcome> + Send + Sync;
+
+#[cfg(test)]
+type TestCommittedCollect = dyn Fn(&IssueCollectionCancellation, u64, &Reporter) -> Result<IssueCollectionRunOutcome>
+    + Send
+    + Sync;
 
 /// 영속 투영에 이번 커널의 작업 상태만 더한다. 원문이나 공급자 응답은 보유하지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +57,8 @@ pub(crate) struct IssueObserver {
     projection: IssueCollectionProjection,
     in_flight: Option<InFlight>,
     next_run: Option<Instant>,
+    execution_enabled: bool,
+    sync_pending: bool,
     consecutive_failures: u32,
     committed_sender: Sender<Vec<IssueObserverCommittedFact>>,
     committed_receiver: Receiver<Vec<IssueObserverCommittedFact>>,
@@ -68,7 +76,7 @@ impl IssueObserver {
         let projection = service.projection()?;
         Ok(Self::with_collector(
             projection,
-            Arc::new(move |cancel, at, committed| {
+            Arc::new(move |cancel, at, execution_enabled, committed| {
                 let tracked = |facts: Vec<IssueCollectionTrackedFact>| {
                     committed(
                         facts
@@ -77,7 +85,7 @@ impl IssueObserver {
                             .collect(),
                     );
                 };
-                let outcome = service.collect_once_with_committed(cancel, at, &tracked)?;
+                let mut outcome = service.collect_once_with_committed(cancel, at, &tracked)?;
                 if !outcome.discarded
                     && !cancel.is_cancelled()
                     && let Some(triage) = service.triage_service()
@@ -91,6 +99,22 @@ impl IssueObserver {
                         );
                     };
                     triage.triage_all(cancel, &triaged)?;
+                }
+                if !outcome.discarded
+                    && !cancel.is_cancelled()
+                    && let Some(coordinator) = service.coordinator_service()
+                {
+                    coordinator.tick(cancel, at, execution_enabled, &|facts| {
+                        committed(
+                            facts
+                                .into_iter()
+                                .map(IssueObserverCommittedFact::Coordinated)
+                                .collect(),
+                        );
+                    })?;
+                }
+                if !cancel.is_cancelled() {
+                    outcome.projection = service.projection()?;
                 }
                 Ok(outcome)
             }),
@@ -113,6 +137,8 @@ impl IssueObserver {
             waker,
             in_flight: None,
             next_run: None,
+            execution_enabled: false,
+            sync_pending: false,
         }
     }
 
@@ -124,7 +150,7 @@ impl IssueObserver {
     ) -> Self {
         Self::with_collector(
             projection,
-            Arc::new(move |cancel, at, _| collect(cancel, at)),
+            Arc::new(move |cancel, at, _, _| collect(cancel, at)),
             waker,
         )
     }
@@ -132,10 +158,14 @@ impl IssueObserver {
     #[cfg(test)]
     pub(crate) fn for_test_with_committed(
         projection: IssueCollectionProjection,
-        collect: Arc<Collect>,
+        collect: Arc<TestCommittedCollect>,
         waker: CoreInputWaker,
     ) -> Self {
-        Self::with_collector(projection, collect, waker)
+        Self::with_collector(
+            projection,
+            Arc::new(move |cancel, at, _, report| collect(cancel, at, report)),
+            waker,
+        )
     }
 
     pub(crate) fn view(&self, now: Instant) -> IssueCollectionHostView {
@@ -160,9 +190,19 @@ impl IssueObserver {
     }
 
     /// 진행 중인 수집에 추가 요청을 합친다. Off의 요청은 실행하지 않는다.
+    pub(crate) fn set_execution_enabled(&mut self, enabled: bool, now: Instant) {
+        if self.execution_enabled != enabled {
+            self.execution_enabled = enabled;
+            self.request_sync(now);
+        }
+    }
+
     pub(crate) fn request_sync(&mut self, now: Instant) -> bool {
         if self.projection.state.config.mode == IssueCollectionMode::Off {
             return false;
+        }
+        if self.in_flight.is_some() {
+            self.sync_pending = true;
         }
         if self.in_flight.is_none() {
             self.next_run = Some(now);
@@ -240,6 +280,12 @@ impl IssueObserver {
                 }
             }
         }
+        if self.in_flight.is_none()
+            && std::mem::take(&mut self.sync_pending)
+            && self.projection.state.config.mode == IssueCollectionMode::Observe
+        {
+            self.next_run = Some(now);
+        }
         if self
             .next_deadline(now)
             .is_some_and(|deadline| deadline <= now)
@@ -269,6 +315,7 @@ impl IssueObserver {
         let cancel = Arc::new(IssueCollectionCancellation::new());
         let worker_cancel = cancel.clone();
         let collect = self.collect.clone();
+        let execution_enabled = self.execution_enabled;
         let waker = self.waker.clone();
         let committed_sender = self.committed_sender.clone();
         let committed_waker = self.waker.clone();
@@ -283,7 +330,7 @@ impl IssueObserver {
                         committed_waker.wake();
                     }
                 };
-                let result = collect(&worker_cancel, at_unix_ms, &report);
+                let result = collect(&worker_cancel, at_unix_ms, execution_enabled, &report);
                 let _ = send.send(result);
                 waker.wake();
             },

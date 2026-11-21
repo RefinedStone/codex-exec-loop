@@ -827,3 +827,217 @@ fn kernel_simulation_issue_decision_answers_after_planning_failure_without_refre
 }
 
 mod human_confirmation;
+
+#[test]
+fn kernel_simulation_propose_coordinator_survives_reconnect_without_live_turns() {
+    use crate::application::port::inbound::stored_command_port::{
+        StoredCommandContext, issue_confirmation::VerifiedHumanConfirmation,
+    };
+    use crate::application::port::outbound::issue_work_execution_port::{
+        IssueWorkExecutionPort, IssueWorkExecutionSnapshot, IssueWorkPermitRequest,
+    };
+    use crate::application::service::issue_coordinator::IssueCoordinatorService;
+    use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
+
+    #[derive(Default)]
+    struct Execution(Mutex<Option<IssueWorkOrder>>);
+    impl IssueWorkExecutionPort for Execution {
+        fn snapshot(&self, _: &str, _: &str) -> anyhow::Result<IssueWorkExecutionSnapshot> {
+            Ok(IssueWorkExecutionSnapshot {
+                dispatch_source: Some("a".repeat(40)),
+                ..Default::default()
+            })
+        }
+        fn submit(&self, _: &str, order: &IssueWorkOrder) -> anyhow::Result<Vec<String>> {
+            let mut stored = self.0.lock().unwrap();
+            if let Some(existing) = stored.as_ref() {
+                assert_eq!(existing, order);
+            } else {
+                *stored = Some(order.clone());
+            }
+            Ok(vec!["fake-task-1".into()])
+        }
+        fn grant(&self, _: &str, request: &IssueWorkPermitRequest) -> anyhow::Result<()> {
+            assert!(!request.delivery);
+            Ok(())
+        }
+        fn revoke(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+    const PROPOSE: &str = r#"
+[binding.github]
+mode = "propose"
+[select]
+mode = "all_open"
+trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision"}]
+"#;
+    let fixture = Fixture::new();
+    let source = Source::new();
+    let mut services = fixture.services_with_policy(source.clone(), PROPOSE);
+    services.seed();
+    let execution = Arc::new(Execution::default());
+    let coordinator = Arc::new(IssueCoordinatorService::new(
+        fixture.workspace.clone(),
+        services.store.clone(),
+        source.clone(),
+        services.triage.clone(),
+        services.decisions.clone(),
+        IssuePolicyService::new(Arc::new(DisclosurePolicy)),
+        execution.clone(),
+    ));
+    services.issues = Arc::new(
+        IssueCollectionService::new(
+            fixture.workspace.clone(),
+            services.store.clone(),
+            source.clone(),
+            Arc::new(Origin),
+            IssuePolicyService::new(Arc::new(DisclosurePolicy)),
+        )
+        .with_triage(services.triage.clone())
+        .with_coordinator(coordinator),
+    );
+    let state = services
+        .store
+        .get_collection(&fixture.workspace)
+        .unwrap()
+        .unwrap();
+    services
+        .store
+        .set_collection_mode(
+            &fixture.workspace,
+            Some(state.epoch),
+            IssueCollectionMode::Observe,
+        )
+        .unwrap();
+    let log = Arc::new(SimKernelLog::default());
+    let mut sim = fixture.boot(&services, log.clone());
+    let deadline = Instant::now() + WAIT;
+    let decision = loop {
+        sim.host
+            .run_cycle(Instant::now(), Duration::from_millis(20));
+        let page = services
+            .issues
+            .issues(&IssueCollectionQuery::default())
+            .unwrap();
+        if let Some(decision) = page.items[0].open_decisions.first()
+            && !sim
+                .host
+                .runtime
+                .issue_collection_view(Instant::now())
+                .unwrap()
+                .collecting
+        {
+            break decision.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "host did not open the propose decision"
+        );
+    };
+    assert!(execution.0.lock().unwrap().is_none());
+    let preview = services
+        .decisions
+        .prepare_confirmation(decision.request.id().as_str(), "start")
+        .unwrap();
+    let answer = services
+        .decisions
+        .answer(
+            decision.request.id().as_str(),
+            "start",
+            None,
+            &StoredCommandContext {
+                human_confirmation: Some(
+                    VerifiedHumanConfirmation::from_verified(
+                        preview.target,
+                        format!("desktop-confirmation:{}", "d".repeat(32)),
+                    )
+                    .unwrap(),
+                ),
+                caller: Some("Desktop".into()),
+                channel: "gateway".into(),
+                at: "2026-11-21T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+    sim.host.runtime.record_issue_decision_for_test(
+        &answer.commit.record.request.fact(),
+        answer.commit.catalog_revision,
+    );
+    let issue = decision.request.issue().clone();
+    let deadline = Instant::now() + WAIT;
+    loop {
+        sim.host
+            .run_cycle(Instant::now(), Duration::from_millis(20));
+        let work = services
+            .store
+            .get_issue_work(&fixture.workspace, &issue)
+            .unwrap();
+        if work
+            .as_ref()
+            .is_some_and(|work| work.permit_source.is_some())
+            && !sim
+                .host
+                .runtime
+                .issue_collection_view(Instant::now())
+                .unwrap()
+                .collecting
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "host did not submit approved work"
+        );
+    }
+    assert!(
+        sim.effects.take().is_empty(),
+        "the fake host must not start a model turn"
+    );
+    let work = services
+        .store
+        .get_issue_work(&fixture.workspace, &issue)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        work.blocked_reason,
+        Some(IssueWorkBlockReason::ExecutionDisabled)
+    );
+    let first_order = execution.0.lock().unwrap().clone();
+    drop(sim);
+    let mut restarted = fixture.boot(&services, log.clone());
+    let deadline = Instant::now() + WAIT;
+    loop {
+        restarted
+            .host
+            .run_cycle(Instant::now(), Duration::from_millis(20));
+        if !restarted
+            .host
+            .runtime
+            .issue_collection_view(Instant::now())
+            .unwrap()
+            .collecting
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    assert_eq!(*execution.0.lock().unwrap(), first_order);
+    assert!(restarted.effects.take().is_empty());
+    drop(restarted);
+    let records = log.0.lock().unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.event.kind() == "issue_work_submitted")
+            .count(),
+        1
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.event.kind() == "issue_work_permit_granted")
+            .count(),
+        1
+    );
+}

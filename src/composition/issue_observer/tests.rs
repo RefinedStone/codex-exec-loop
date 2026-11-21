@@ -217,7 +217,7 @@ fn local_store_failures_also_back_off_without_publishing_a_success() {
 }
 
 #[test]
-fn repeated_sync_and_due_ticks_share_one_in_flight_read() {
+fn repeated_sync_is_coalesced_into_one_follow_up_without_overlapping_reads() {
     let mut h = Harness::new(IssueCollectionMode::Observe);
     let now = Instant::now();
     h.observer.poll(now, 1_000);
@@ -234,11 +234,24 @@ fn repeated_sync_and_due_ticks_share_one_in_flight_read() {
         Ok(success(projection(IssueCollectionMode::Observe, 1))),
         now,
     );
+    // 진행 중 들어온 승인/동기화 wake를 한 번의 후속 읽기로 보존한다.
+    // 첫 worker가 끝난 뒤에만 시작하므로 중복 네트워크 읽기는 없다.
+    let follow_up = h.read();
+    assert_eq!(h.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(h.observer.next_deadline(now), None);
+    h.observer.poll(now + Duration::from_secs(86_400), 1_000);
+    h.assert_no_more_reads();
+    h.finish(
+        follow_up,
+        Ok(success(projection(IssueCollectionMode::Observe, 1))),
+        now,
+    );
     h.assert_no_more_reads();
     assert_eq!(
         h.observer.next_deadline(now),
         Some(now + COLLECTION_INTERVAL)
     );
+    assert_eq!(h.calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]

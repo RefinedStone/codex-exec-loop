@@ -114,6 +114,7 @@ pub mod issue_automation_store_port;
 pub mod issue_collection_origin_port;
 // 이슈 출처의 발견과 안정 ID 재동기화 계약이다 (#2537).
 pub mod issue_source_port;
+pub mod issue_work_execution_port;
 
 pub mod issue_creation_provenance_port;
 pub mod issue_form_repository_port;

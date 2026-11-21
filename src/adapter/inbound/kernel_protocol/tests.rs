@@ -2105,6 +2105,22 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         ),
         Record::issue_decision_requested(&sample_issue_decision_fact(), 5),
         Record::issue_decision_resolved(&sample_issue_decision_fact(), 6),
+        Record::IssueWorkSubmitted {
+            event_id: "work-submitted-1".into(),
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: "issue-work-1".into(),
+            task_ids: vec!["task-1".into()],
+            revision: 4,
+        },
+        Record::IssueWorkPermitGranted {
+            event_id: "work-permit-1".into(),
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: "issue-work-1".into(),
+            source_sha: "a".repeat(40),
+            gate_revision: 1,
+            delivery: false,
+            revision: 5,
+        },
         Record::issue_automation_mode_changed(
             Some(crate::domain::issue_automation::collection::IssueCollectionMode::Observe),
             crate::domain::issue_automation::collection::IssueCollectionMode::Off,

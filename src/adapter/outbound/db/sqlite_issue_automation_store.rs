@@ -37,7 +37,9 @@ use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 
 mod collection;
+mod coordinator;
 mod decision;
+mod events;
 mod private_store;
 mod triage;
 
@@ -47,7 +49,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -135,6 +137,43 @@ impl SqliteIssueAutomationStoreAdapter {
 }
 
 impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
+    fn pending_issue_work_events(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkEvent>> {
+        events::pending(self, workspace)
+    }
+    fn acknowledge_issue_work_event(&self, workspace: &str, event_id: &str) -> Result<()> {
+        events::acknowledge(self, workspace, event_id)
+    }
+
+    fn get_issue_work(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+    ) -> Result<Option<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>> {
+        coordinator::get(self, workspace, issue)
+    }
+    fn save_issue_work(
+        &self,
+        workspace: &str,
+        expected: IssueTriageFence,
+        assessment: &IssueTriageAssessment,
+        candidate: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+    ) -> Result<crate::application::port::outbound::issue_automation_store_port::IssueWorkSaveResult>
+    {
+        coordinator::save(self, workspace, expected, assessment, candidate)
+    }
+    fn apply_issue_resync(
+        &self,
+        workspace: &str,
+        expected: IssueCollectionFence,
+        issue: &IssueReference,
+        read: &IssueSourceRead,
+    ) -> Result<IssueCollectionApplyResult> {
+        collection::apply_one(self, workspace, expected, issue, read)
+    }
+
     fn insert_binding(
         &self,
         workspace_dir: &str,
@@ -567,7 +606,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=3) => {
+            (APPLICATION_ID, version @ 1..=4) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -580,7 +619,11 @@ fn ensure_schema(
                     transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
                     triage::seed_catalog(transaction)?;
                 }
-                transaction.execute_batch(decision::SCHEMA)?;
+                if version < 4 {
+                    transaction.execute_batch(decision::SCHEMA)?;
+                }
+                transaction.execute_batch(coordinator::SCHEMA)?;
+                transaction.execute_batch(events::SCHEMA)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -600,6 +643,8 @@ fn ensure_schema(
                 transaction.execute_batch(triage::CATALOG_SCHEMA)?;
                 transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
                 transaction.execute_batch(decision::SCHEMA)?;
+                transaction.execute_batch(coordinator::SCHEMA)?;
+                transaction.execute_batch(events::SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -621,7 +666,7 @@ fn validate_schema(connection: &Connection) -> Result<()> {
 }
 
 fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> {
-    if !matches!(version, 1 | 2 | 3 | SCHEMA_VERSION) {
+    if !matches!(version, 1 | 2 | 3 | 4 | SCHEMA_VERSION) {
         bail!("the issue automation schema version is unsupported")
     }
     let mut statement = connection.prepare(
@@ -645,6 +690,10 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 4 {
         expected.push((decision::TABLE, decision::SCHEMA));
+    }
+    if version >= 5 {
+        expected.push((coordinator::TABLE, coordinator::SCHEMA));
+        expected.push((events::TABLE, events::SCHEMA));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

@@ -400,5 +400,11 @@ pub fn triage_issue(
     Ok(result)
 }
 
+/// 판정과 동일한 Markdown 규칙으로 공유본의 완료 기준을 추출한다.
+pub fn issue_acceptance_criteria(body: &str) -> Result<Vec<String>, &'static str> {
+    criteria::extract_criteria(body)
+        .map_err(|_| "the shared issue has no usable acceptance criteria")
+}
+
 #[cfg(test)]
 mod tests;

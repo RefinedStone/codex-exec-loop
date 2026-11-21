@@ -13,10 +13,14 @@ pub(super) enum CriteriaProblem {
 /// 완료 기준의 존재와 목록 문법만 읽는다. 체크 상태는 승인·통과·실행 channel이 아니다.
 /// 한 항목은 한 줄의 비어 있지 않은 bullet/number/check 텍스트여야 한다.
 pub(super) fn count_criteria(body: &str) -> Result<usize, CriteriaProblem> {
+    extract_criteria(body).map(|items| items.len())
+}
+
+pub(super) fn extract_criteria(body: &str) -> Result<Vec<String>, CriteriaProblem> {
     let mut markdown = IssueMarkdownHeadings::default();
     let mut section_level = None;
     let mut found = false;
-    let mut count = 0;
+    let mut items = Vec::new();
     let mut saw_text = false;
     for line in body.lines() {
         match markdown.line(line) {
@@ -55,16 +59,16 @@ pub(super) fn count_criteria(body: &str) -> Result<usize, CriteriaProblem> {
                 {
                     return Err(CriteriaProblem::Unsupported);
                 }
-                count += 1;
-                if count > MAX_ISSUE_CRITERIA {
+                items.push(item.to_owned());
+                if items.len() > MAX_ISSUE_CRITERIA {
                     return Err(CriteriaProblem::TooLarge);
                 }
             }
             IssueMarkdownLine::Text(_) => {}
         }
     }
-    if count > 0 {
-        Ok(count)
+    if !items.is_empty() {
+        Ok(items)
     } else if found && saw_text {
         Err(CriteriaProblem::NotList)
     } else {
