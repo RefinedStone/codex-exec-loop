@@ -1,10 +1,10 @@
-// Electron main: 창마다 일반 Gateway 메시지를 그대로 중계한다. 사람 확인은 별도 main 전용 연결을 쓴다.
+// Electron main: Gateway 문자열 중계와 native UI를 소유한다. 확인 프로토콜은 별도 utility process에서 처리한다.
 import { spawn } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents, utilityProcess } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
@@ -30,9 +30,7 @@ import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, read
 import { readGitHubSummary, readProject, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { openIssueAutomationPolicyFile } from "./issueAutomationPolicyFile";
-import { IssueConfirmationConnection } from "./issueConfirmationConnection";
 import { IssueConfirmationQueue, IssueConfirmationService } from "./issueConfirmationService";
-import { IssueConfirmationTransport } from "./issueConfirmationTransport";
 import { LinearService, isLinearIssueUrl } from "./linearService";
 import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
@@ -514,7 +512,7 @@ ipcMain.handle(IPC_CHANNELS.gitOpenFile, async (_event, cwd: unknown, path: unkn
 });
 
 
-/** 이 두 IPC만 서버가 정한 확인 문구를 해석한다. 일반 JSON-RPC relay는 그대로 둔다. */
+/** 앱 소유 창의 요청과 native 확인만 중계한다. main과 renderer는 프로토콜/증거를 받지 않는다. */
 function issueConfirmationOf(event: IpcMainInvokeEvent): IssueConfirmationService {
   const window = BrowserWindow.fromWebContents(event.sender);
   const frame = event.senderFrame;
@@ -524,8 +522,11 @@ function issueConfirmationOf(event: IpcMainInvokeEvent): IssueConfirmationServic
   let service = issueConfirmations.get(event.sender.id);
   if (!service) {
     service = new IssueConfirmationService({
-      rpc: (onClosed) => new IssueConfirmationConnection(resolveGatewayEndpoint(), onClosed),
-      helper: (onClosed) => new IssueConfirmationTransport(resolveGatewayExecutable(repositoryRoot()), onClosed),
+      process: () => utilityProcess.fork(join(__dirname, "issueConfirmation.js"), [], {
+        serviceName: "Akra issue confirmation", stdio: "ignore",
+      }),
+      endpoint: resolveGatewayEndpoint,
+      executable: () => resolveGatewayExecutable(repositoryRoot()),
       ownerAlive: () => !window.isDestroyed() && !event.sender.isDestroyed() && event.sender.mainFrame === frame && mainWindows.has(window),
       confirm: async (display, signal) => {
         if (signal.aborted || window.isDestroyed()) return false;

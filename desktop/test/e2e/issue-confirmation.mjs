@@ -1,4 +1,4 @@
-// 사람 확인의 실제 Electron IPC·main 전용 WS·stdio 경로를 시험한다. 실제 모델 턴은 없다.
+// 사람 확인의 실제 Electron IPC·utility process 전용 WS·stdio 경로를 시험한다. 실제 모델 턴은 없다.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -101,8 +101,22 @@ try {
   });
   // Playwright의 앱 dispatcher는 종료 후 폐기되므로 실제 프로세스 핸들을 미리 보관한다.
   appProcess = app.process();
-  await app.evaluate(({ dialog }) => {
-    globalThis.confirmationFixture = { dialogs: [], aborted: 0, resolve: null };
+  await app.evaluate(({ dialog, utilityProcess }) => {
+    globalThis.confirmationFixture = { dialogs: [], aborted: 0, resolve: null, workers: [] };
+    const fork = utilityProcess.fork.bind(utilityProcess);
+    utilityProcess.fork = (modulePath, args, options) => {
+      const child = fork(modulePath, args, options);
+      if (options?.serviceName === "Akra issue confirmation") {
+        const worker = { modulePath, args, parentPid: process.pid, pid: null, events: [], controls: [] };
+        globalThis.confirmationFixture.workers.push(worker);
+        globalThis.confirmationFixture.child = child;
+        child.once("spawn", () => { worker.pid = child.pid; });
+        child.on("message", (event) => worker.events.push(event));
+        const postMessage = child.postMessage.bind(child);
+        child.postMessage = (control, ...rest) => { worker.controls.push(control); return postMessage(control, ...rest); };
+      }
+      return child;
+    };
     dialog.showMessageBox = (parent, options) => new Promise((resolve) => {
       const fixture = globalThis.confirmationFixture;
       fixture.dialogs.push({
@@ -168,6 +182,16 @@ try {
   assert.ok(!JSON.stringify(renderer).includes("private-session"));
   console.log("PASS mode confirmation shares the path and renderer receives no bridge secrets");
 
+  const workers = await app.evaluate(() => globalThis.confirmationFixture.workers);
+  assert.equal(workers.length, 3);
+  assert.ok(workers.every((worker) => worker.pid > 0 && worker.pid !== worker.parentPid && worker.modulePath.endsWith("issueConfirmation.js") && worker.args.length === 0));
+  assert.ok(workers.every((worker) => worker.events.every((event) => ["ready", "prompt", "will-submit", "result", "failed"].includes(event.type))));
+  assert.ok(workers.every((worker) => worker.controls.every((control) => ["begin", "answer", "submit", "cancel", "dispose"].includes(control.type))));
+  assert.ok(!JSON.stringify(workers).includes("fixture-private-"));
+  assert.ok(!JSON.stringify(workers).includes("private-session"));
+  assert.ok(!JSON.stringify(workers).includes("jsonrpc"));
+  console.log("PASS a separate utility PID owns RPC and neither parent channel direction carries confirmation secrets");
+
   const injected = await page.evaluate(async () => {
     try {
       await window.akra.confirmIssueDecision({ workspace: "/work/example-app", decisionId: "decision-1", option: "approve", key: "forged", confirmation: "renderer-forgery" });
@@ -203,6 +227,14 @@ try {
   console.log("PASS a new connection generation cannot submit the old confirmation");
 
   await begin();
+  await app.evaluate(() => globalThis.confirmationFixture.child.kill());
+  assert.deepEqual(await currentAnswer(), { failed: true });
+  await answer(0);
+  assert.equal((await approvals()).length, 2);
+  assert.equal(submitted().length, 2);
+  console.log("PASS utility crash aborts the native question without proof or replay");
+
+  await begin();
   const exited = new Promise((resolve) => appProcess.once("exit", resolve));
   await page.close();
   let timer;
@@ -210,6 +242,13 @@ try {
   clearTimeout(timer);
   assert.equal((await approvals()).length, 2);
   assert.equal(submitted().length, 2);
+  await until(async () => {
+    const calls = await fixture.metadata();
+    return calls.filter((entry) => entry.command === "start").every((entry) => {
+      if (calls.some((ended) => ended.command === "close" && ended.pid === entry.pid)) return true;
+      try { process.kill(entry.pid, 0); return false; } catch (error) { return error.code === "ESRCH"; }
+    });
+  });
   const helperCalls = await fixture.metadata();
   assert.ok(helperCalls.filter((entry) => entry.command === "start").every((entry) => entry.argv.length === 1 && entry.argv[0].endsWith("desktop-confirmation-bridge")));
   assert.ok(!gateway.receivedMethods.includes("turn/start") && !gateway.receivedMethods.includes("turn/steer"));

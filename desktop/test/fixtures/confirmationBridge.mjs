@@ -49,7 +49,7 @@ export async function createConfirmationFixture(parent) {
     'const metadata = ' + JSON.stringify(metadataPath) + ';',
     'const sessionFile = ' + JSON.stringify(sessionFile) + ';',
     'const registration = "fixture-private-registration-" + process.pid;',
-    'const record = (command) => fs.appendFileSync(metadata, JSON.stringify({command, argv:process.argv.slice(1)}) + "\\n");',
+    'const record = (command) => fs.appendFileSync(metadata, JSON.stringify({command, pid:process.pid, argv:process.argv.slice(1)}) + "\\n");',
     'const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");',
     'record("start");',
     'send({type:"ready"});',

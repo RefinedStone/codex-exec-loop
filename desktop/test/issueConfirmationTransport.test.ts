@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const childProcess = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawn: childProcess.spawn }));
 
-import { IssueConfirmationTransport } from "../src/main/issueConfirmationTransport";
+import { IssueConfirmationTransport } from "../src/confirmation/transport";
 
 function child() {
   const process = Object.assign(new EventEmitter(), {
@@ -34,6 +34,28 @@ function child() {
 }
 
 describe("confirmation helper pipe", () => {
+  it("keeps shutdown pending until the helper has exited after EOF", async () => {
+    const fake = child();
+    fake.process.stdin.removeAllListeners("finish");
+    childProcess.spawn.mockReturnValue(fake.process);
+    const transport = new IssueConfirmationTransport("/app/akra-gateway", vi.fn());
+    const prepared = transport.prepare();
+    fake.frame({ type: "ready" });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    fake.frame({ id: fake.sent[0]?.id, result: { registration_id: "registration-private", session_file: "/private/session" } });
+    await prepared;
+    transport.close();
+    let stopped = false;
+    const exited = transport.waitClosed().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(fake.process.stdin.writableEnded).toBe(true);
+    fake.process.exitCode = 0;
+    fake.process.emit("exit", 0);
+    await exited;
+    expect(stopped).toBe(true);
+  });
+
   beforeEach(() => childProcess.spawn.mockReset());
 
   it("uses a fixed argv and only pipe frames for registration, intent, and proof", async () => {

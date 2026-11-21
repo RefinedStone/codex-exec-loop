@@ -1,5 +1,5 @@
 import type { ConnectionState } from "../shared/bridge";
-import { GatewayConnection } from "./gatewayConnection";
+import { GatewayConnection } from "../main/gatewayConnection";
 
 export type ConfirmationMethod =
   | "akra/kernel/attach"
@@ -18,7 +18,7 @@ type Pending = {
   timer: NodeJS.Timeout;
 };
 
-/** 일반 renderer relay와 공유하지 않는 main 전용 연결이다. 끊어진 확인은 재연결하여 재생하지 않는다. */
+/** 일반 renderer relay와 공유하지 않는 utility process 전용 연결이다. 끊어진 확인은 재연결하여 재생하지 않는다. */
 export class IssueConfirmationConnection implements ConfirmationRpc {
   private readonly connection: GatewayConnection;
   private starting: Promise<void> | undefined;
