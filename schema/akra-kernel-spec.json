@@ -3499,6 +3499,82 @@
       }
     },
     {
+      "name": "issue_execution_progressed",
+      "summary": "A local execution observation advanced the issue work lifecycle. Independent attempt counts and neutral terminal facts are recorded without worker output or answer text.",
+      "payload": {
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_execution_progressed",
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/$defs/IssueExecutionProgress"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "work_order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "issue",
+          "work_order_id",
+          "progress",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_integrated",
+      "summary": "Trusted integration evidence was committed for an issue work order. Later validation failures cannot erase this fact.",
+      "payload": {
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "integration": {
+            "$ref": "#/$defs/IssueExecutionIntegration"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_integrated",
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "work_order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "issue",
+          "work_order_id",
+          "integration",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issue_automation_mode_changed",
       "summary": "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.",
       "payload": {
@@ -6020,6 +6096,141 @@
         "repository_id",
         "issue_id",
         "project_scope"
+      ],
+      "type": "object"
+    },
+    "IssueExecutionAttempts": {
+      "additionalProperties": false,
+      "properties": {
+        "execution": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "publication": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verification": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "execution",
+        "verification",
+        "publication"
+      ],
+      "type": "object"
+    },
+    "IssueExecutionIntegration": {
+      "additionalProperties": false,
+      "properties": {
+        "integration_sha": {
+          "type": "string"
+        },
+        "pull_request_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "source_sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record_id",
+        "source_sha",
+        "integration_sha"
+      ],
+      "type": "object"
+    },
+    "IssueExecutionProgress": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "$ref": "#/$defs/IssueExecutionAttempts"
+        },
+        "attempts_exhausted": {
+          "type": "boolean"
+        },
+        "integration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueExecutionIntegration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/IssueExecutionState"
+        },
+        "terminal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueExecutionTerminalRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "attempts",
+        "attempts_exhausted",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "IssueExecutionState": {
+      "enum": [
+        "queued",
+        "running",
+        "in_review",
+        "done",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "IssueExecutionTerminalClass": {
+      "enum": [
+        "rework_needed",
+        "observe_again",
+        "contract_recovery",
+        "identity_conflict",
+        "pull_request_closed",
+        "queue_recovery"
+      ],
+      "type": "string"
+    },
+    "IssueExecutionTerminalRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/IssueExecutionTerminalClass"
+        },
+        "record_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record_id",
+        "classification"
       ],
       "type": "object"
     },
@@ -9349,6 +9560,74 @@
             "source_sha",
             "gate_revision",
             "delivery",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_execution_progressed",
+              "type": "string"
+            },
+            "progress": {
+              "$ref": "#/$defs/IssueExecutionProgress"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "work_order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "issue",
+            "work_order_id",
+            "progress",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "integration": {
+              "$ref": "#/$defs/IssueExecutionIntegration"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_integrated",
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "work_order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "issue",
+            "work_order_id",
+            "integration",
             "revision"
           ],
           "type": "object"
