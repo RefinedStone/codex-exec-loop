@@ -50,6 +50,7 @@ fn detail(item: Option<IssueCollectionItem>) -> IssueCollectionDetail {
         revision: 31,
         item,
         report: Some(report()),
+        interaction: None,
     }
 }
 
@@ -208,4 +209,92 @@ fn issue_detail_unknown_has_no_content_fallback_and_uses_the_catalog_revision() 
     assert!(ready["item"]["presentation"]["number"].is_null());
     assert!(ready["item"].get("snapshot").is_none());
     assert_wire_matches_spec(&ready);
+}
+
+#[test]
+fn issue_detail_exposes_server_actions_and_only_the_selected_safe_conversation_target() {
+    use crate::domain::issue_automation::interaction::{
+        IssueActionCommand, IssueActionProjection, IssueControlProjection, IssueConversationTarget,
+        IssueInteractionProjection,
+    };
+    use crate::domain::issue_work::IssueSharedCopy;
+
+    let item = IssueCollectionItem {
+        issue: reference(),
+        binding_id: IssueAutomationBindingId::new("binding").unwrap(),
+        tracked: None,
+        current: None,
+        observation_revision: None,
+        tracked_revision: None,
+        triage: None,
+        work: None,
+        open_decisions: Vec::new(),
+    };
+    let mut detail = detail(Some(item));
+    let legacy = serde_json::to_value(IssueState::from_domain(&detail)).unwrap();
+    assert!(legacy.get("control").is_none());
+    assert_eq!(legacy["actions"], json!([]));
+    assert_eq!(legacy["decision_history"], json!([]));
+    assert_eq!(legacy["conversation"]["kind"], "unavailable");
+    detail.interaction = Some(IssueInteractionProjection {
+        control: Some(IssueControlProjection {
+            tracked: true,
+            held: true,
+            taken_over: false,
+            cancelled: false,
+            authorization_epoch: 7,
+        }),
+        actions: IssueActionCommand::ALL
+            .into_iter()
+            .map(|command| IssueActionProjection {
+                command,
+                enabled: command == IssueActionCommand::ReleaseIssue,
+                reason: (command != IssueActionCommand::ReleaseIssue)
+                    .then(|| "이슈가 보류 중입니다.".into()),
+            })
+            .collect(),
+        decision_history: Vec::new(),
+        conversation: IssueConversationTarget::Draft {
+            shared_copy: IssueSharedCopy {
+                title: "공유 제목".into(),
+                body: "공유 본문".into(),
+            },
+        },
+    });
+    let draft =
+        serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
+    assert_eq!(draft["control"]["held"], true);
+    assert_eq!(draft["control"]["authorization_epoch"], 7);
+    assert_eq!(draft["actions"].as_array().unwrap().len(), 8);
+    assert_eq!(draft["actions"][1]["command"], "release_issue");
+    assert_eq!(draft["actions"][1]["enabled"], true);
+    assert!(draft["actions"][1]["reason"].is_null());
+    assert!(draft["actions"][0]["reason"].is_string());
+    assert_eq!(
+        draft["conversation"],
+        json!({
+            "kind":"draft", "shared_copy":{"title":"공유 제목","body":"공유 본문"}
+        })
+    );
+    assert_wire_matches_spec(&draft);
+
+    detail.interaction.as_mut().unwrap().conversation = IssueConversationTarget::Thread {
+        thread_id: "thread-1".into(),
+    };
+    let thread =
+        serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
+    assert_eq!(
+        thread["conversation"],
+        json!({"kind":"thread","thread_id":"thread-1"})
+    );
+    assert_wire_matches_spec(&thread);
+
+    detail.interaction.as_mut().unwrap().conversation = IssueConversationTarget::Unavailable;
+    let unavailable =
+        serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
+    assert_eq!(unavailable["conversation"]["kind"], "unavailable");
+    assert!(unavailable["conversation"]["reason"].is_string());
+    assert!(unavailable["conversation"].get("shared_copy").is_none());
+    assert!(unavailable["conversation"].get("thread_id").is_none());
+    assert_wire_matches_spec(&unavailable);
 }

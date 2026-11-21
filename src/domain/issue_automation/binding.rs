@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
@@ -43,7 +44,9 @@ impl std::fmt::Display for IssueAutomationBindingId {
 }
 
 /// 설정된 자율 수준이다. 값이 Gated/Auto라고 실행 허가가 생기지는 않는다.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueAutomationAutonomy {
     Off,

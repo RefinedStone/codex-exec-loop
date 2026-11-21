@@ -550,6 +550,7 @@ function issueConfirmationOf(event: IpcMainInvokeEvent): IssueConfirmationServic
 
 ipcMain.handle(IPC_CHANNELS.confirmIssueDecision, (event, request: unknown) => issueConfirmationOf(event).confirmDecision(request));
 ipcMain.handle(IPC_CHANNELS.confirmIssueAutomationMode, (event, request: unknown) => issueConfirmationOf(event).confirmMode(request));
+ipcMain.handle(IPC_CHANNELS.confirmIssueAutonomy, (event, request: unknown) => issueConfirmationOf(event).confirmAutonomy(request));
 
 ipcMain.handle(IPC_CHANNELS.issueAutomationPolicyOpenFile, async (event, request: unknown) => {
   if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {

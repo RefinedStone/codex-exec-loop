@@ -296,6 +296,13 @@ pub(super) fn current_item(
     expected: IssueTriageFence,
     assessment: &IssueTriageAssessment,
 ) -> Result<Option<IssueCollectionItem>> {
+    if !super::autonomy::permits_assessment(
+        connection,
+        workspace,
+        assessment.basis().runtime_selection_revision,
+    )? {
+        return Ok(None);
+    }
     validate_expected_revision(expected.collection_epoch)?;
     for revision in [
         expected.observation_revision,
@@ -381,3 +388,26 @@ fn saved(
 
 #[cfg(test)]
 mod tests;
+
+/// 최신 인가/관문 판 순으로 제한된 종료 카드만 반환한다. 원문 공개 판단은 service가 한다.
+pub(super) fn closed(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+    issue: &IssueReference,
+    limit: u16,
+) -> Result<Vec<StoredIssueDecision>> {
+    validate_reference_scope(workspace, issue)?;
+    if limit == 0 || limit > 20 {
+        bail!("invalid decision history bound");
+    }
+    adapter.with_connection(workspace,|connection,_|{
+        let mut statement=connection.prepare(&format!(
+            "SELECT {COLUMNS} FROM issue_decision_requests WHERE workspace_dir=?1 AND provider=?2 AND server_id=?3 AND repository_id=?4 AND issue_id=?5 AND state!='open'
+             ORDER BY COALESCE(json_extract(request,'$.definition.basis.authorizationEpoch'),0) DESC,
+             COALESCE(json_extract(request,'$.definition.basis.gateRevision'),0) DESC, revision DESC, decision_id LIMIT ?6"))?;
+        let mut rows=statement.query(params![workspace,enum_name(&issue.provider)?,issue.server_id,issue.repository_id,issue.issue_id,limit])?;
+        let mut result=Vec::new();
+        while let Some(row)=rows.next()? { result.push(hydrate(row)?); }
+        Ok(result)
+    })
+}

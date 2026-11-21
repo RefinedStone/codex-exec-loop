@@ -36,6 +36,7 @@ use crate::domain::issue_automation::decision::{
 use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 
+mod autonomy;
 mod collection;
 mod coordinator;
 mod decision;
@@ -50,7 +51,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -138,6 +139,60 @@ impl SqliteIssueAutomationStoreAdapter {
 }
 
 impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
+    fn issue_autonomy_selection(
+        &self,
+        workspace: &str,
+    ) -> Result<crate::domain::issue_automation::autonomy::IssueAutonomySelection> {
+        self.with_connection(workspace, |connection, _| {
+            autonomy::read(connection, workspace)
+        })
+    }
+    fn get_issue_autonomy_command(
+        &self,
+        workspace: &str,
+        id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::autonomy::StoredIssueAutonomyCommand>> {
+        self.with_connection(workspace, |connection, _| {
+            autonomy::command(connection, workspace, id)
+        })
+    }
+    fn begin_issue_autonomy(
+        &self,
+        workspace: &str,
+        intent: &crate::domain::issue_automation::autonomy::IssueAutonomyIntent,
+    ) -> Result<crate::domain::issue_automation::autonomy::StoredIssueAutonomyCommand> {
+        autonomy::begin(self, workspace, intent)
+    }
+    fn claim_issue_autonomy_fence(
+        &self,
+        workspace: &str,
+        intent: &crate::domain::issue_automation::autonomy::IssueAutonomyIntent,
+        work: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+    ) -> Result<crate::domain::issue_automation::intervention::StoredIssueIntervention> {
+        autonomy::claim_fence(self, workspace, intent, work)
+    }
+    fn finish_issue_autonomy(
+        &self,
+        workspace: &str,
+        intent: &crate::domain::issue_automation::autonomy::IssueAutonomyIntent,
+    ) -> Result<crate::domain::issue_automation::autonomy::IssueAutonomyCommit> {
+        autonomy::finish(self, workspace, intent)
+    }
+    fn list_issue_work(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>> {
+        coordinator::list(self, workspace)
+    }
+    fn closed_issue_decisions(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+        limit: u16,
+    ) -> Result<Vec<StoredIssueDecision>> {
+        decision::closed(self, workspace, issue, limit)
+    }
+
     fn issue_authorization_epoch(&self, workspace: &str, issue: &IssueReference) -> Result<u64> {
         validate_reference_scope(workspace, issue)?;
         self.with_connection(workspace, |connection, _| {
@@ -650,7 +705,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=5) => {
+            (APPLICATION_ID, version @ 1..=6) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -670,8 +725,13 @@ fn ensure_schema(
                     transaction.execute_batch(coordinator::SCHEMA)?;
                     transaction.execute_batch(events::SCHEMA)?;
                 }
-                transaction.execute_batch(intervention::COMMAND_SCHEMA)?;
-                transaction.execute_batch(intervention::TRACKING_SCHEMA)?;
+                if version < 6 {
+                    transaction.execute_batch(intervention::COMMAND_SCHEMA)?;
+                    transaction.execute_batch(intervention::TRACKING_SCHEMA)?;
+                }
+                transaction.execute_batch(autonomy::SCHEMA)?;
+                transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
+                transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -695,6 +755,9 @@ fn ensure_schema(
                 transaction.execute_batch(events::SCHEMA)?;
                 transaction.execute_batch(intervention::COMMAND_SCHEMA)?;
                 transaction.execute_batch(intervention::TRACKING_SCHEMA)?;
+                transaction.execute_batch(autonomy::SCHEMA)?;
+                transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
+                transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -716,7 +779,7 @@ fn validate_schema(connection: &Connection) -> Result<()> {
 }
 
 fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> {
-    if !matches!(version, 1 | 2 | 3 | 4 | 5 | SCHEMA_VERSION) {
+    if !matches!(version, 1 | 2 | 3 | 4 | 5 | 6 | SCHEMA_VERSION) {
         bail!("the issue automation schema version is unsupported")
     }
     let mut statement = connection.prepare(
@@ -748,6 +811,11 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     if version >= 6 {
         expected.push((intervention::COMMAND_TABLE, intervention::COMMAND_SCHEMA));
         expected.push((intervention::TRACKING_TABLE, intervention::TRACKING_SCHEMA));
+    }
+    if version >= 7 {
+        expected.push((autonomy::TABLE, autonomy::SCHEMA));
+        expected.push((autonomy::COMMAND_TABLE, autonomy::COMMAND_SCHEMA));
+        expected.push((autonomy::FENCE_TABLE, autonomy::FENCE_SCHEMA));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

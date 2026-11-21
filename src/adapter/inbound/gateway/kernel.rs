@@ -453,6 +453,7 @@ impl KernelSession {
                 read_kernel_log(move || commands.issue_automation(KERNEL_CALL_TIMEOUT)).await?;
             return to_result(KernelQueryAnswer::IssueAutomation(
                 IssueAutomationState::from_domain(&state.projection)
+                    .with_autonomy(&state.autonomy)
                     .with_runtime(state.collecting, state.next_poll_after_ms),
             ));
         }
@@ -579,6 +580,7 @@ fn protocol_event(event: KernelHostEvent) -> Option<KernelEvent> {
         }
         KernelHostEvent::Issues(state) => Some(KernelEvent::Issues(
             IssueAutomationState::from_domain(&state.projection)
+                .with_autonomy(&state.autonomy)
                 .with_runtime(state.collecting, state.next_poll_after_ms),
         )),
         KernelHostEvent::IssueDecision {
@@ -672,7 +674,8 @@ fn confirmation_command(
     match input {
         KernelCommandInput::Stored(
             command @ (StoredCommand::AnswerIssueDecision { .. }
-            | StoredCommand::SetIssueAutomationMode { .. }),
+            | StoredCommand::SetIssueAutomationMode { .. }
+            | StoredCommand::SetIssueAutonomy { .. }),
         ) => Ok((command, descriptor)),
         _ => Err(invalid_confirmation()),
     }
@@ -702,6 +705,13 @@ fn target_matches_command(
             IssueConfirmationTarget::Mode { to, .. },
             StoredCommand::SetIssueAutomationMode { mode },
         ) => to == mode,
+        (
+            IssueConfirmationTarget::Autonomy { command_id, to, .. },
+            StoredCommand::SetIssueAutonomy {
+                command_id: id,
+                level,
+            },
+        ) => command_id == id && to == level,
         _ => false,
     }
 }

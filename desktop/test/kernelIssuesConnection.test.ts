@@ -1,8 +1,8 @@
 // 공급자와 모델 호출 없이, 응답 순서를 직접 바꾸어 연결·페이지·명령 경계를 검증한다.
-import { describe, expect, it } from "vitest";
-import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView } from "../src/renderer/kernel/kernelConnection";
+import { describe, expect, it, vi } from "vitest";
+import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView, type IssueConfirmationBridge } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
-import type { IssueEventReference } from "../src/renderer/kernel/protocol";
+import type { CommandResponse, IssueAutomationAnswer, IssueAutonomyLevel, IssueAutonomyState, IssueEventReference } from "../src/renderer/kernel/protocol";
 import type { ConfirmIssueAutomationModeRequest, IssueConfirmationResponse } from "../src/shared/issueConfirmation";
 
 interface Sent {
@@ -10,12 +10,12 @@ interface Sent {
   method: string;
   params: {
     query?: { type: string; after?: string | null; limit?: number; issue?: IssueEventReference };
-    command?: { type: string; mode?: string };
+    command?: { type: string; mode?: string; [key: string]: unknown };
     idempotency_key?: string;
   };
 }
 
-function automation(revision = 7, mode: "off" | "observe" = "observe") {
+function automation(revision = 7, mode: "off" | "observe" = "observe"): Extract<IssueAutomationAnswer, { status: "ready" }> {
   return {
     type: "issue_automation", status: "ready", mode, epoch: 1, revision,
     binding_id: null, binding: null, collecting: false, next_poll_after_ms: 300_000,
@@ -107,7 +107,7 @@ function overviewAnswer(type: string | undefined, maxTurns = 1): unknown {
   return { type: "parallel", enabled: false };
 }
 
-function harness({ autoPolicy = true, confirmMode }: { autoPolicy?: boolean; confirmMode?: (request: ConfirmIssueAutomationModeRequest) => Promise<IssueConfirmationResponse> } = {}) {
+function harness({ autoPolicy = true, confirmMode, confirmations }: { autoPolicy?: boolean; confirmMode?: (request: ConfirmIssueAutomationModeRequest) => Promise<IssueConfirmationResponse>; confirmations?: IssueConfirmationBridge } = {}) {
   let automaticPolicyReplies = autoPolicy;
   const sent: Sent[] = [];
   const listeners = new Set<() => void>();
@@ -124,7 +124,7 @@ function harness({ autoPolicy = true, confirmMode }: { autoPolicy?: boolean; con
   const connection = new KernelConnection(client, {
     getKernel: () => view,
     setKernel: (next: KernelView) => { view = next; changed(); },
-  }, confirmMode);
+  }, confirmMode, confirmations);
   const when = (condition: () => boolean): Promise<void> => {
     if (condition()) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -1129,4 +1129,401 @@ describe("issue kernel connection", () => {
     expect(JSON.stringify(h.view().issues.detail)).not.toContain("old-late-detail");
   });
 
+});
+
+
+function autonomyState(level: IssueAutonomyLevel = "observe"): Extract<IssueAutonomyState, { status: "ready" }> {
+  return {
+    status: "ready" as const, requested_level: level, effective_level: level, cap: "propose" as const,
+    revision: 1, policy_version: "runtime-policy-1", pending: false,
+    choices: (["off", "observe", "propose"] as const).map((choice) => ({
+      level: choice, enabled: true,
+      requires_confirmation: ["off", "observe", "propose"].indexOf(choice) > ["off", "observe", "propose"].indexOf(level),
+      reason: null,
+    })),
+  };
+}
+
+function decisionRequest(issue = issueReference(), id = "decision-1") {
+  return {
+    id, kind: "start_approval", subject: { kind: "issue", issue }, gate: "start", state: "open",
+    revision: 1, basis: { policy_version: "policy-v1", gate_revision: 1, authorization_epoch: 0 },
+    question: "공유된 질문만 표시합니다.", options: [
+      { id: "approve", label: "시작 승인", effect: "작업을 시작할 수 있습니다." },
+      { id: "hold", label: "보류", effect: "작업을 시작하지 않습니다." },
+    ], recommended: "approve", due_at: null, on_timeout: "wait",
+  };
+}
+
+function interactionDetail(issue = issueReference()) {
+  return {
+    ...issueDetail(issue), open_decisions: [decisionRequest(issue)], decision_history: [],
+    control: { tracked: true, held: false, taken_over: false, cancelled: false, authorization_epoch: 0 },
+    actions: ["hold_issue", "release_issue", "steer_issue", "take_over_issue", "retriage_issue", "cancel_issue_work", "track_issue", "untrack_issue"]
+      .map((command) => ({ command, enabled: true, reason: null })),
+    conversation: { kind: "draft", shared_copy: { title: "현재 공유 제목", body: "현재 공유 본문" } },
+  };
+}
+
+async function selectInteraction(h: ReturnType<typeof harness>) {
+  const selected = h.connection.selectIssue(issueReference());
+  h.reply(h.query("issue"), interactionDetail());
+  await selected;
+}
+
+async function completeInteractionRefresh(h: ReturnType<typeof harness>, before: number, state: Extract<IssueAutomationAnswer, { status: "ready" }> = { ...automation(), autonomy: autonomyState() }) {
+  await h.when(() => h.queries("issues").length > before);
+  h.answerIssueReads(issuePage(), state);
+  if (h.view().issues.selectedIssue) h.reply(h.query("issue"), interactionDetail());
+}
+
+function deferredValue<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { resolve, promise };
+}
+
+function interventionResponse(request: Sent | undefined, delivery: "queued" | "sent" | "unknown" | null, changed = true): CommandResponse {
+  const command = request?.params.command;
+  if (!command || typeof command.command_id !== "string") throw new Error("Intervention request is missing");
+  return { processed: true, result: { type: "issue_intervened", receipt: {
+    command_id: command.command_id, issue: issueReference(), action: command.type,
+    authorization_epoch: 0, delivery, changed,
+  } } };
+}
+
+describe("issue decisions and interventions", () => {
+  it("accepts policy-inherited autonomy when the wire response omits requested_level", async () => {
+    const h = harness();
+    const { requested_level: _requested, ...inherited } = autonomyState();
+    const state = { ...automation(), autonomy: inherited };
+    await h.openIssues(issuePage(), state);
+    expect(Object.hasOwn(inherited, "requested_level")).toBe(false);
+    expect(h.view().issues.automation).toEqual(state);
+    expect(h.view().issues.error).toBeNull();
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it.each(["unavailable", "policy_blocked"] as const)("accepts the generated %s autonomy state without a reason field", async (status) => {
+    const h = harness();
+    const autonomy: IssueAutonomyState = { status };
+    const state = { ...automation(), autonomy };
+    await h.openIssues(issuePage(), state);
+    expect(h.view().issues.automation).toEqual(state);
+    expect(h.view().issues.error).toBeNull();
+    await h.connection.setIssueAutonomy("propose");
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("cancels a native decision without any kernel write", async () => {
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: true as const }));
+    const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
+    await h.openIssues();
+    await selectInteraction(h);
+    await h.connection.answerIssueDecision("decision-1", "approve", "공유 메모");
+    expect(confirmation).toHaveBeenCalledTimes(1);
+    expect(confirmation.mock.calls[0]?.[0]).toMatchObject({ workspace: "/repo", decisionId: "decision-1", option: "approve", note: "공유 메모" });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.view().issues.commandPending).toBeNull();
+  });
+
+  it("allows only one native decision submission while a click is pending", async () => {
+    const native = deferredValue<IssueConfirmationResponse>();
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(() => native.promise);
+    const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const first = h.connection.answerIssueDecision("decision-1", "approve");
+    await h.connection.answerIssueDecision("decision-1", "hold");
+    expect(confirmation).toHaveBeenCalledTimes(1);
+    expect(h.view().issues.commandPending).toBe("decision");
+    native.resolve({ cancelled: false, response: { processed: true } });
+    await completeInteractionRefresh(h, before);
+    await first;
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.view().issues.notice).toBe("요청을 처리했습니다.");
+  });
+
+  it("re-reads after an unknown confirmation outcome without replaying the answer", async () => {
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: false as const, outcome: "unknown" as const }));
+    const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const pending = h.connection.answerIssueDecision("decision-1", "approve");
+    await completeInteractionRefresh(h, before);
+    await pending;
+    expect(confirmation).toHaveBeenCalledTimes(1);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.view().issues.error).toContain("명령을 다시 보내기 전에");
+  });
+
+  it("cannot answer a removed, foreign, or stale decision", async () => {
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: true as const }));
+    const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
+    await h.openIssues();
+    await selectInteraction(h);
+    await h.connection.answerIssueDecision("foreign-decision", "approve");
+    const refresh = h.connection.refreshIssueDetail();
+    await h.connection.answerIssueDecision("decision-1", "approve");
+    h.reply(h.query("issue"), { ...interactionDetail(), open_decisions: [decisionRequest(issueReference("other-issue"))] });
+    await refresh;
+    expect(h.view().issues.detail).toBeNull();
+    expect(h.view().issues.detailError).toContain("표시 계약");
+    expect(confirmation).not.toHaveBeenCalled();
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("uses a native confirmation for an enabled rise and refuses a disabled cap choice", async () => {
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueAutonomy"]>>(async () => ({ cancelled: true as const }));
+    const h = harness({ confirmations: { confirmIssueAutonomy: confirmation } });
+    const autonomy = autonomyState();
+    await h.openIssues(issuePage(), { ...automation(), autonomy });
+    await h.connection.setIssueAutonomy("propose");
+    expect(confirmation).toHaveBeenCalledTimes(1);
+    expect(confirmation.mock.calls[0]?.[0]).toMatchObject({ workspace: "/repo", level: "propose" });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    h.connection.handleEvent({ event: { ...automation(), type: "issues", autonomy: {
+      ...autonomy, choices: autonomy.choices.map((choice) => ({ ...choice, enabled: choice.level !== "propose", reason: choice.level === "propose" ? "상한 제한" : null })),
+    } } });
+    await h.connection.setIssueAutonomy("propose");
+    expect(confirmation).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a lower autonomy once with distinct command and transport identifiers", async () => {
+    const h = harness();
+    await h.openIssues(issuePage(), { ...automation(), autonomy: autonomyState("propose") });
+    const before = h.queries("issues").length;
+    const pending = h.connection.setIssueAutonomy("observe");
+    const request = h.requests("akra/kernel/command")[0];
+    expect(request?.params.command).toMatchObject({ type: "set_issue_autonomy", level: "observe" });
+    expect(request?.params.command?.command_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(request?.params.idempotency_key).not.toBe(request?.params.command?.command_id);
+    h.reply(request, { processed: true });
+    await completeInteractionRefresh(h, before);
+    await pending;
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+  });
+
+  it("requires explicit cancel confirmation and keeps Unknown steer terminal in the UI", async () => {
+    const h = harness();
+    await h.openIssues();
+    await selectInteraction(h);
+    expect(await h.connection.interveneIssue("cancel_issue_work")).toBe("cancelled");
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    const before = h.queries("issues").length;
+    const pending = h.connection.interveneIssue("steer_issue", "새 지시");
+    const request = h.requests("akra/kernel/command")[0];
+    expect(request?.params.command).toMatchObject({ type: "steer_issue", issue: issueReference(), message: "새 지시" });
+    h.reply(request, { processed: true, result: { type: "issue_intervened", receipt: {
+      command_id: request?.params.command?.command_id, issue: issueReference(), action: "steer_issue", changed: true,
+      authorization_epoch: 0, delivery: "unknown",
+    } } });
+    await completeInteractionRefresh(h, before);
+    expect(await pending).toBe("unknown");
+    expect(h.view().issues.notice).toContain("자동으로 다시 보내지 않습니다");
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+    const cancelBefore = h.queries("issues").length;
+    const cancelled = h.connection.interveneIssue("cancel_issue_work", undefined, true);
+    const cancelRequest = h.requests("akra/kernel/command").at(-1);
+    expect(cancelRequest?.params.command).toMatchObject({ type: "cancel_issue_work", issue: issueReference(), confirm: true });
+    h.reply(cancelRequest, interventionResponse(cancelRequest, null, false));
+    await completeInteractionRefresh(h, cancelBefore);
+    expect(await cancelled).toBe("succeeded");
+  });
+
+
+  it.each([
+    { delivery: "queued", changed: true }, { delivery: "queued", changed: false },
+    { delivery: "sent", changed: true }, { delivery: "sent", changed: false },
+  ] as const)("confirms the matching $delivery steer receipt even when changed=$changed", async ({ delivery, changed }) => {
+    const h = harness();
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const pending = h.connection.interveneIssue("steer_issue", "성공이 확인되면 비울 지시");
+    const request = h.requests("akra/kernel/command").at(-1);
+    h.reply(request, interventionResponse(request, delivery, changed));
+    await completeInteractionRefresh(h, before);
+    expect(await pending).toBe("succeeded");
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+  });
+
+  it.each(["rejected", "failure", "connection"] as const)("returns a non-success outcome for %s without replaying the intervention", async (kind) => {
+    const h = harness();
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const pending = h.connection.interveneIssue("steer_issue", "실패해도 보존할 지시");
+    const request = h.requests("akra/kernel/command").at(-1);
+    if (kind === "connection") h.fail(request, "Gateway 연결 결과를 확인하지 못했습니다.");
+    else h.reply(request, kind === "rejected"
+      ? { processed: false, rejection: { reason: "issue_automation_off", message: "수집이 꺼졌습니다.", next: [] } }
+      : { processed: false, failure: "작업자 응답을 확인하지 못했습니다." });
+    await completeInteractionRefresh(h, before);
+    expect(await pending).toBe(kind === "rejected" ? "rejected" : "failed");
+    expect(h.view().issues.error).toContain("이슈 요청을 완료하지 못했습니다");
+    expect(h.view().issues.commandPending).toBeNull();
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+  });
+
+  it.each(["absent", "command", "action", "issue", "delivery"] as const)("keeps an unconfirmed %s receipt distinct from successful delivery", async (kind) => {
+    const h = harness();
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const pending = h.connection.interveneIssue("steer_issue", "영수증을 확인할 때까지 보존할 지시");
+    const request = h.requests("akra/kernel/command").at(-1);
+    const response = interventionResponse(request, "queued");
+    if (response.result?.type !== "issue_intervened") throw new Error("Intervention receipt is missing");
+    const receipt = response.result.receipt;
+    h.reply(request, kind === "absent" ? { processed: true } : {
+      ...response, result: { type: "issue_intervened", receipt: {
+        ...receipt,
+        ...(kind === "command" ? { command_id: "another-command" } : {}),
+        ...(kind === "action" ? { action: "cancel_issue_work" } : {}),
+        ...(kind === "issue" ? { issue: issueReference("another-issue") } : {}),
+        ...(kind === "delivery" ? { delivery: null } : {}),
+      } },
+    });
+    await completeInteractionRefresh(h, before);
+    expect(await pending).toBe("unknown");
+    expect(h.view().issues.notice).toContain("자동으로 다시 보내지 않습니다");
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+  });
+
+  it("does not report a successful old submission after the selected detail lifetime is replaced", async () => {
+    const h = harness();
+    await h.openIssues();
+    await selectInteraction(h);
+    const pending = h.connection.interveneIssue("steer_issue", "이전 선택 수명의 지시");
+    const request = h.requests("akra/kernel/command").at(-1);
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    await h.answerAttach();
+    h.answerIssueReads();
+    await h.when(() => !h.view().issues.loading);
+    await selectInteraction(h);
+    const current = h.view().issues.detail;
+    h.reply(request, interventionResponse(request, "sent"));
+    expect(await pending).toBe("unavailable");
+    expect(h.view().issues.detail).toEqual(current);
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+  });
+
+  it("does not send an intervention without an available selected detail", async () => {
+    const h = harness();
+    expect(await h.connection.interveneIssue("steer_issue", "아직 연결되지 않은 지시")).toBe("unavailable");
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("re-reads a changed autonomy cap after confirmation failure without another submission", async () => {
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueAutonomy"]>>(async () => ({
+      cancelled: false as const,
+      response: { processed: false, failure: "자율 수준 상한이 확인 중 바뀌었습니다." },
+    }));
+    const h = harness({ confirmations: { confirmIssueAutonomy: confirmation } });
+    await h.openIssues(issuePage(), { ...automation(), autonomy: autonomyState() });
+    const before = h.queries("issues").length;
+    const changed = h.connection.setIssueAutonomy("propose");
+    const fresh: Extract<IssueAutonomyState, { status: "ready" }> = {
+      ...autonomyState(), cap: "observe" as const, revision: 2, policy_version: "runtime-policy-2",
+      choices: autonomyState().choices.map((choice) => ({
+        ...choice, enabled: choice.level !== "propose", reason: choice.level === "propose" ? "현재 정책 상한입니다." : null,
+      })),
+    };
+    await completeInteractionRefresh(h, before, { ...automation(), autonomy: fresh });
+    await changed;
+    expect(h.view().issues.automation).toMatchObject({ autonomy: fresh });
+    expect(h.view().issues.error).toContain("상한이 확인 중 바뀌었습니다");
+    expect(h.view().issues.commandPending).toBeNull();
+    await h.connection.setIssueAutonomy("propose");
+    expect(confirmation).toHaveBeenCalledTimes(1);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it.each(["steer", "confirmation"] as const)("retains an Unknown %s notice across same-kernel reconnect without replay", async (kind) => {
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: false as const, outcome: "unknown" as const }));
+    const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const pending = kind === "steer"
+      ? h.connection.interveneIssue("steer_issue", "공유된 추가 지시")
+      : h.connection.answerIssueDecision("decision-1", "approve");
+    if (kind === "steer") {
+      h.reply(h.requests("akra/kernel/command").at(-1), {
+        processed: true, result: { type: "issue_intervened", receipt: { delivery: "unknown" } },
+      });
+    }
+    await completeInteractionRefresh(h, before);
+    await pending;
+    const sentBefore = h.requests("akra/kernel/command").length;
+    const confirmedBefore = confirmation.mock.calls.length;
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    await h.answerAttach();
+    h.answerIssueReads();
+    await h.when(() => !h.view().issues.loading);
+    expect(h.view().issues.selectedIssue).toBeNull();
+    expect(h.view().issues.notice).toContain("확인하지 못했습니다");
+    expect(h.requests("akra/kernel/command")).toHaveLength(sentBefore);
+    expect(confirmation).toHaveBeenCalledTimes(confirmedBefore);
+
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    await h.answerAttach("another-kernel");
+    h.answerIssueReads();
+    await h.when(() => !h.view().issues.loading);
+    expect(h.view().issues.notice).toBeNull();
+    expect(h.requests("akra/kernel/command")).toHaveLength(sentBefore);
+    expect(confirmation).toHaveBeenCalledTimes(confirmedBefore);
+  });
+
+  it("opens only a fresh conversation target through a read and never takes over", async () => {
+    const h = harness();
+    await h.openIssues();
+    await selectInteraction(h);
+    const pending = h.connection.readIssueConversation();
+    h.reply(h.query("issue"), { ...interactionDetail(), conversation: { kind: "thread", thread_id: "verified-worker-thread" } });
+    expect(await pending).toEqual({ kind: "thread", thread_id: "verified-worker-thread" });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.requests("turn/start")).toHaveLength(0);
+    expect(h.requests("turn/steer")).toHaveLength(0);
+  });
+
+  it("keeps only metadata for background decisions and ignores duplicate recorded/direct events", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const shown = h.connection.show("/repo", ["issue_attention"]);
+    h.reply(h.requests("akra/kernel/attach")[0], { client_id: "1", protocol_version: 1, kernel: "repo" });
+    await shown;
+    expect(h.requests("akra/kernel/query")).toHaveLength(0);
+    const request = decisionRequest();
+    const fact = { decision_id: request.id, kind: request.kind, subject: request.subject, gate: request.gate, basis: request.basis, state: "open" };
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: fact, revision: 8 } });
+    const attention = h.view().issueAttention;
+    h.connection.handleEvent({ event: { type: "recorded", sequence: 1, recorded_at: "now", event: { kind: "issue_decision_requested", decision: fact, revision: 8 } } });
+    expect(h.view().issueAttention).toEqual(attention);
+    expect(attention).toEqual([{ workspace: "/repo", kernel: "repo", decisionId: "decision-1", issue: issueReference() }]);
+    expect(JSON.stringify(attention)).not.toContain(request.question);
+    expect(h.requests("akra/kernel/query")).toHaveLength(0);
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: { ...fact, state: "answered" }, revision: 9 } });
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: fact, revision: 8 } });
+    expect(h.view().issueAttention).toEqual([]);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("accepts a derived policy display value emitted by the server", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const pending = h.connection.refreshIssueAutomationPolicy();
+    const answer = policyAnswer();
+    answer.settings[0]!.resolution = "derived";
+    h.reply(h.query("issue_automation_policy"), answer);
+    await pending;
+    expect(h.view().issues.policy).toEqual(answer);
+    expect(h.view().issues.policyError).toBeNull();
+  });
 });

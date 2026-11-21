@@ -89,6 +89,22 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
             .any(|lease| ids.contains(&lease.task_id)))
     }
 
+    fn conversation_thread_id(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Option<String>> {
+        let task_ids = self.task_ids(workspace, work_order_id)?;
+        let projections = self.authority.load_runtime_projections(workspace)?;
+        unique_conversation_thread_id(
+            &task_ids,
+            projections
+                .session_details
+                .iter()
+                .map(|session| (session.task_id.as_str(), session.thread_id.as_deref())),
+        )
+    }
+
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot> {
         let order = self.repository.load_work_order(workspace, work_order_id)?;
         let task_ids = order
@@ -262,6 +278,32 @@ fn issue_instruction_admission(
         }
         PlanningWorkInstructionAdmission::Active => IssueWorkInstructionAdmission::Active,
     }
+}
+
+fn unique_conversation_thread_id<'a>(
+    task_ids: &[String],
+    sessions: impl Iterator<Item = (&'a str, Option<&'a str>)>,
+) -> Result<Option<String>> {
+    let mut threads = std::collections::BTreeSet::new();
+    for (task_id, thread) in sessions {
+        if task_ids.iter().any(|candidate| candidate == task_id)
+            && let Some(thread) = thread
+        {
+            if thread.is_empty()
+                || thread.len() > 4096
+                || thread
+                    .chars()
+                    .any(|value| value.is_control() || value.is_whitespace())
+            {
+                bail!("the issue work conversation identity is invalid");
+            }
+            threads.insert(thread.to_owned());
+        }
+    }
+    if threads.len() > 1 {
+        bail!("the issue work has multiple conversations");
+    }
+    Ok(threads.into_iter().next())
 }
 
 fn execution_snapshot(

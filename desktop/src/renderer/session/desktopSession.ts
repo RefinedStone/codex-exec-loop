@@ -29,7 +29,8 @@ import {
   prependOlderTurns,
   transcriptFromThread,
 } from "../conversation/transcript";
-import { KernelConnection, type KernelInterest } from "../kernel/kernelConnection";
+import { KernelConnection, type IssueDecisionAttention, type KernelInterest } from "../kernel/kernelConnection";
+import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "../kernel/issueInteractions";
 import { KERNEL_METHOD, type IssueAutomationModeRecord, type IssueEventReference } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
@@ -127,7 +128,7 @@ const DOTS_LIST_METHOD = "akra/dots/list";
 const DOTS_WATCH_METHOD = "akra/dots/watch";
 const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
-export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira" | "confirmIssueAutomationMode">> & {
+export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira" | "confirmIssueAutomationMode" | "confirmIssueDecision" | "confirmIssueAutonomy">> & {
   readonly chatHistory?: true;
 };
 
@@ -206,7 +207,10 @@ export class DesktopSession {
     this.chatHistory = readOnly && bridge.chatHistory ? new ChatHistory(this.client, store) : undefined;
     this.batcher = new FrameBatcher((batch) => this.store.updateTranscript((transcript) => applyNotifications(transcript, batch)), scheduler);
     this.client.setServerRequestHandler((method, params, id) => this.handleServerRequest(method, params, id));
-    this.kernel = new KernelConnection(this.client, store, readOnly ? undefined : bridge.confirmIssueAutomationMode);
+    this.kernel = new KernelConnection(this.client, store, readOnly ? undefined : bridge.confirmIssueAutomationMode, readOnly ? {} : {
+      confirmIssueDecision: bridge.confirmIssueDecision,
+      confirmIssueAutonomy: bridge.confirmIssueAutonomy,
+    });
   }
 
   start(): void {
@@ -286,6 +290,10 @@ export class DesktopSession {
     return this.kernel.selectIssue(issue);
   }
 
+  selectIssueFromAttention(attention: IssueDecisionAttention): Promise<void> {
+    return this.kernel.selectIssueFromAttention(attention);
+  }
+
   clearIssueSelection(): void {
     this.kernel.clearIssueSelection();
   }
@@ -304,6 +312,22 @@ export class DesktopSession {
 
   syncIssues(): Promise<void> {
     return this.kernel.syncIssues();
+  }
+
+  setIssueAutonomy(level: IssueAutonomyLevel): Promise<void> {
+    return this.kernel.setIssueAutonomy(level);
+  }
+
+  answerIssueDecision(decisionId: string, option: string, note: string): Promise<void> {
+    return this.kernel.answerIssueDecision(decisionId, option, note);
+  }
+
+  interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<IssueCommandOutcome> {
+    return this.kernel.interveneIssue(action, message, confirm);
+  }
+
+  readIssueConversation(): Promise<IssueConversationTarget | null> {
+    return this.kernel.readIssueConversation();
   }
 
   /** Codex 가 찾은 스킬을 읽는다 (#2383). `forceReload` 이면 캐시 대신 디스크를 다시 읽는다. 턴을 쓰지 않는다. */

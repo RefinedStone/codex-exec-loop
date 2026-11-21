@@ -630,6 +630,7 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
         StoredCommandOutcome::Rejected(rejection) => rejection.planning_revision?,
         StoredCommandOutcome::Done(
             StoredCommandResult::IssueAutomationModeChanged { .. }
+            | StoredCommandResult::IssueAutonomyChanged { .. }
             | StoredCommandResult::IssueDecisionResolved { .. }
             | StoredCommandResult::IssueIntervened { .. },
         ) => {

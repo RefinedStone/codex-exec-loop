@@ -175,6 +175,7 @@ mod tests {
         for command in [
             KernelCommandKind::AnswerIssueDecision,
             KernelCommandKind::SetIssueAutomationMode,
+            KernelCommandKind::SetIssueAutonomy,
         ] {
             assert!(
                 command

@@ -123,3 +123,69 @@ fn serialized_action_metadata_does_not_accept_unknown_authority_fields() {
         target()
     );
 }
+
+fn autonomy_target() -> IssueConfirmationTarget {
+    IssueConfirmationTarget::Autonomy {
+        workspace: "/workspace/repo".into(),
+        command_id: "autonomy-1".into(),
+        from: IssueAutomationAutonomy::Observe,
+        revision: 0,
+        policy_version: "a".repeat(64),
+        cap: IssueAutomationAutonomy::Auto,
+        to: IssueAutonomyLevel::Propose,
+    }
+}
+
+#[test]
+fn autonomy_confirmation_accepts_initial_revision_and_binds_every_authority_coordinate() {
+    let target = autonomy_target();
+    target.validate().unwrap();
+    let verified = VerifiedHumanConfirmation::from_verified(target.clone(), reference()).unwrap();
+    verified.require_target(&target).unwrap();
+    let encoded = serde_json::to_value(&target).unwrap();
+    for (field, changed) in [
+        ("workspace", serde_json::json!("/workspace/other")),
+        ("command_id", serde_json::json!("autonomy-2")),
+        ("from", serde_json::json!("off")),
+        ("revision", serde_json::json!(1)),
+        ("policy_version", serde_json::json!("b".repeat(64))),
+        ("cap", serde_json::json!("propose")),
+        ("to", serde_json::json!("observe")),
+    ] {
+        let mut changed_target = encoded.clone();
+        changed_target[field] = changed;
+        let changed_target: IssueConfirmationTarget =
+            serde_json::from_value(changed_target).unwrap();
+        changed_target.validate().unwrap();
+        assert_eq!(
+            verified.require_target(&changed_target),
+            Err(IssueConfirmationError::ScopeMismatch),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn autonomy_confirmation_rejects_invalid_identifiers_policy_and_exhausted_revision() {
+    for (field, invalid) in [
+        ("command_id", serde_json::json!("")),
+        ("command_id", serde_json::json!(" padded")),
+        ("command_id", serde_json::json!("x".repeat(257))),
+        ("policy_version", serde_json::json!("a".repeat(63))),
+        ("policy_version", serde_json::json!("z".repeat(64))),
+        ("revision", serde_json::json!(MAX_ISSUE_AUTOMATION_REVISION)),
+    ] {
+        let mut encoded = serde_json::to_value(autonomy_target()).unwrap();
+        encoded[field] = invalid;
+        let target: IssueConfirmationTarget = serde_json::from_value(encoded).unwrap();
+        assert_eq!(
+            target.validate(),
+            Err(IssueConfirmationError::Invalid),
+            "{field}"
+        );
+        assert_eq!(
+            VerifiedHumanConfirmation::from_verified(target, reference()),
+            Err(IssueConfirmationError::Invalid)
+        );
+    }
+}

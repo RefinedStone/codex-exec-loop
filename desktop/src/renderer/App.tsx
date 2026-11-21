@@ -13,9 +13,10 @@ import { Icon, type IconName } from "./design/icons";
 import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { IssuePanel } from "./kernel/IssuePanel";
+import type { IssueDecisionAttention, KernelInterest } from "./kernel/kernelConnection";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { ATTENTION_TEXT, attentionEvents } from "./session/attention";
+import { ATTENTION_TEXT, attentionEvents, issueDecisionAttentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
 import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, isDotDockVisible, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
@@ -24,7 +25,7 @@ import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { ChatDock } from "./views/ChatDock";
 import { DotDock } from "./views/DotDock";
-import { notifyDotReply, notifyOs } from "./views/notify";
+import { notifyDotReply, notifyIssueDecision, notifyOs } from "./views/notify";
 import { SettingsDialog } from "./views/SettingsDialog";
 import { useAppSettings } from "./views/useAppSettings";
 import { useZoom } from "./views/useZoom";
@@ -472,13 +473,22 @@ export function App() {
     [loadRemoteThread],
   );
 
-  // 두 패널은 같은 Gateway 연결과 커널 소유자를 쓰고, 열린 패널의 관심 영역만 읽는다.
-  const kernelWorkspace = panel === "kernel" || panel === "issues" ? openCwd : null;
-  const kernelInterest = panel === "issues" ? "issues" : "overview";
+  // 현재 저장소의 결정 이벤트만 계속 구독한다. 닫힌 이슈 탭의 상세나 목록은 읽지 않는다.
+  const [issueAttentionTarget, setIssueAttentionTarget] = useState<IssueDecisionAttention | null>(null);
+  const kernelWorkspace = panel === "issues" && issueAttentionTarget ? issueAttentionTarget.workspace : openCwd;
+  const kernelInterest: KernelInterest = panel === "issues" ? "issues" : panel === "kernel" ? "overview" : "issue_attention";
   const panelMaximized = useUiStore((state) => state.panel === "issues" && state.panelMaximized);
   useEffect(() => {
-    void session.current?.showKernel(kernelWorkspace, [kernelInterest]);
-  }, [kernelWorkspace, kernelInterest]);
+    let current = true;
+    const active = session.current;
+    void (async () => {
+      await active?.showKernel(kernelWorkspace, [kernelInterest, "issue_attention"]);
+      if (current && kernelInterest === "issues" && issueAttentionTarget) await active?.selectIssueFromAttention(issueAttentionTarget);
+    })();
+    return () => { current = false; };
+  }, [kernelWorkspace, kernelInterest, issueAttentionTarget]);
+  useEffect(() => { setIssueAttentionTarget(null); }, [openCwd]);
+  useEffect(() => { if (panel !== "issues") setIssueAttentionTarget(null); }, [panel]);
 
   const loadThread = useCallback((threadId: string) => {
     // 이미 열려서 기록이 있는 스레드는 다시 읽지 않는다. 다시 읽으면 실시간으로만 오는 값(턴 diff, 계획, 사용량)을 잃는다.
@@ -511,6 +521,9 @@ export function App() {
   useEffect(
     () =>
       useDesktopStore.subscribe((state, previous) => {
+        for (const event of issueDecisionAttentionEvents(previous, state)) {
+          notifyIssueDecision(() => { setIssueAttentionTarget(event); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`);
+        }
         for (const event of attentionEvents(previous, state)) {
           const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";
           notifyOs(title, ATTENTION_TEXT[event.kind], () => openThread(event.threadId), `akra:${event.kind}:${event.threadId}`);
@@ -529,6 +542,21 @@ export function App() {
   }, [view, panelMaximized]);
 
   /** 업무 패널이 만든 글을 새 스레드 화면의 입력창에 채운다. 폴더는 열린 스레드의 것을 먼저 고른다. 보내기는 사용자가 한다. */
+  const openIssueConversation = async () => {
+    const target = await session.current?.readIssueConversation();
+    if (!target) return;
+    if (target.kind === "unavailable") { toast(target.reason); return; }
+    if (target.kind === "thread") {
+      useUiStore.setState({ panel: null, panelMaximized: false });
+      openThread(target.thread_id);
+      return;
+    }
+    const workspace = useDesktopStore.getState().kernel.issues.selectedIssue?.project_scope.workspace_dir;
+    if (workspace) useUiStore.setState({ homeCwd: workspace });
+    useUiStore.setState({ panel: null, panelMaximized: false });
+    handOffToNewThread(`${target.shared_copy.title}\n\n${target.shared_copy.body}`);
+  };
+
   const handOff = async (text: string) => {
     const cwd = openThreadCwd(useDesktopStore.getState());
     if (cwd) useUiStore.setState({ homeCwd: cwd });
@@ -657,6 +685,7 @@ export function App() {
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} onOpenThread={openThread} />}
               {panel === "issues" && (
                 <IssuePanel
+                  key={issueAttentionTarget?.decisionId ?? kernelWorkspace}
                   onRefresh={async () => session.current?.refreshIssues()}
                   onSelectIssue={async (issue) => session.current?.selectIssue(issue)}
                   onClearIssueSelection={() => session.current?.clearIssueSelection()}
@@ -667,6 +696,10 @@ export function App() {
                   onPreviousPage={async () => session.current?.previousIssuesPage()}
                   onSetMode={async (mode) => session.current?.setIssueAutomationMode(mode)}
                   onSync={async () => session.current?.syncIssues()}
+                  onSetAutonomy={async (level) => session.current?.setIssueAutonomy(level)}
+                  onAnswerDecision={async (decisionId, option, note) => session.current?.answerIssueDecision(decisionId, option, note)}
+                  onIntervene={async (action, message, confirm) => session.current?.interveneIssue(action, message, confirm) ?? "unavailable"}
+                  onOpenConversation={openIssueConversation}
                   onOpenUrl={(url) => window.akra.github.openExternal(url)}
                 />
               )}

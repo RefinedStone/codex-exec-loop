@@ -51,17 +51,24 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             IssuePolicyService::new(validation_source.clone()),
         ),
     );
-    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let parallel = crate::application::service::parallel_mode::ParallelModeService::new(
-        authority.clone(),
-        Arc::new(crate::adapter::outbound::github::automation::GithubAutomationAdapter::new()),
-        Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
+    let execution = build_execution();
+    let autonomy = Arc::new(
+        crate::application::service::issue_autonomy::IssueAutonomyService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
+            execution.clone(),
+        ),
     );
-    let execution = Arc::new(
-        crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
-            authority.clone(),
-            authority,
-            parallel,
+    let interactions = Arc::new(
+        crate::application::service::issue_interactions::IssueInteractionsService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            execution.clone(),
+            triage.clone(),
+            IssuePolicyService::new(validation_source.clone()),
         ),
     );
     let coordinator = Arc::new(
@@ -84,6 +91,8 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             IssuePolicyService::new(validation_source),
         )
         .with_triage(triage)
+        .with_autonomy(autonomy)
+        .with_interactions(interactions)
         .with_coordinator(coordinator),
     )
 }
@@ -180,6 +189,23 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
         IssueAutomationPolicyService::new(Arc::new(TestAutomationPolicy)),
         IssuePolicyService::new(Arc::new(TestPolicy)),
     ));
+    let autonomy = Arc::new(
+        crate::application::service::issue_autonomy::IssueAutonomyService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            IssueAutomationPolicyService::new(Arc::new(TestAutomationPolicy)),
+            build_execution(),
+        ),
+    );
+    let interactions = Arc::new(
+        crate::application::service::issue_interactions::IssueInteractionsService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            build_execution(),
+            triage.clone(),
+            IssuePolicyService::new(Arc::new(TestPolicy)),
+        ),
+    );
     Arc::new(
         IssueCollectionService::new(
             workspace_dir.to_string(),
@@ -188,7 +214,9 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
             Arc::new(TestOrigin),
             IssuePolicyService::new(Arc::new(TestPolicy)),
         )
-        .with_triage(triage),
+        .with_triage(triage)
+        .with_autonomy(autonomy)
+        .with_interactions(interactions),
     )
 }
 
@@ -213,19 +241,7 @@ pub(crate) fn build_interventions(
         )),
         IssuePolicyService::new(validation_source.clone()),
     ));
-    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let parallel=crate::application::service::parallel_mode::ParallelModeService::new(
-        authority.clone(),
-        Arc::new(crate::adapter::outbound::github::automation::GithubAutomationAdapter::new()),
-        Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
-    );
-    let execution = Arc::new(
-        crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
-            authority.clone(),
-            authority,
-            parallel,
-        ),
-    );
+    let execution = build_execution();
     Arc::new(
         crate::application::service::issue_intervention::IssueInterventionService::new(
             workspace_dir.to_owned(),
@@ -235,5 +251,43 @@ pub(crate) fn build_interventions(
         )
         .with_triage(triage)
         .with_policy(IssuePolicyService::new(validation_source)),
+    )
+}
+
+/// Startup recovery constructs local adapters only; it does not fetch or start a worker.
+pub(crate) fn build_autonomy(
+    workspace_dir: &str,
+) -> Arc<crate::application::service::issue_autonomy::IssueAutonomyService> {
+    let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    }));
+    Arc::new(
+        crate::application::service::issue_autonomy::IssueAutonomyService::new(
+            workspace_dir.to_owned(),
+            store,
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
+            build_execution(),
+        ),
+    )
+}
+
+fn build_execution() -> Arc<crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter>
+{
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let parallel = crate::application::service::parallel_mode::ParallelModeService::new(
+        authority.clone(),
+        Arc::new(crate::adapter::outbound::github::automation::GithubAutomationAdapter::new()),
+        Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
+    );
+    Arc::new(
+        crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
+            authority.clone(),
+            authority,
+            parallel,
+        ),
     )
 }

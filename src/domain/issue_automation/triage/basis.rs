@@ -89,6 +89,7 @@ pub(super) fn build_basis(
         issue: input.issue.clone(),
         source: source.source,
         automation_policy_version: input.automation_policy_version.to_string(),
+        runtime_selection_revision: input.runtime_selection_revision,
         disclosure_policy_version: source.disclosure_policy_version,
         validation_policy_version: input.validation_policy_version.to_string(),
         field_hash: source.field_hash,
@@ -299,6 +300,11 @@ pub(super) fn canonical_hash<T: Serialize>(value: &T) -> String {
 }
 
 pub(super) fn validate_basis(basis: &IssueTriageBasis) -> Result<(), IssueTriageError> {
+    if basis.runtime_selection_revision
+        > crate::domain::issue_automation::MAX_ISSUE_AUTOMATION_REVISION
+    {
+        return Err(IssueTriageError::InvalidBasis);
+    }
     super::super::validate_reference(&basis.issue)
         .map_err(|_| IssueTriageError::InvalidIdentity)?;
     if basis.version != ISSUE_TRIAGE_BASIS_VERSION

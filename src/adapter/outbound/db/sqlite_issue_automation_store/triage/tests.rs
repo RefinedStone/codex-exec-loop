@@ -94,6 +94,7 @@ fn subject(fixture: &Fixture) -> (IssueTriageFence, IssueCollectionItem) {
 fn assess(item: &IssueCollectionItem, policy: Option<&str>) -> IssueTriageAssessment {
     let policy = resolve_issue_automation_policy(policy, None).unwrap();
     triage_issue(IssueTriageInput {
+        runtime_selection_revision: 0,
         issue: &item.issue,
         current: item.current.as_ref(),
         policy: &policy.policy,
@@ -434,7 +435,7 @@ fn v2_migration_preserves_workflow_observation_binding_and_collection_rows() {
         .get_binding(fixture.cwd(), &before.binding_id)
         .unwrap();
     adapter.with_connection(fixture.cwd(), |connection, _| {
-        connection.execute_batch("DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; DROP TABLE issue_triage_assessments; DROP TABLE issue_automation_catalog; PRAGMA user_version = 2;")?;
+        connection.execute_batch("DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; DROP TABLE issue_triage_assessments; DROP TABLE issue_automation_catalog; PRAGMA user_version = 2;")?;
         Ok(())
     }).unwrap();
 
