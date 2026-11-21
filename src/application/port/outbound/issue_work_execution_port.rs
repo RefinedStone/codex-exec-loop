@@ -6,7 +6,7 @@ use anyhow::Result;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueWorkExecutionSnapshot {
     pub task_ids: Vec<String>,
-    /// dispatch 전에 확인한 대표 checkout의 HEAD다.
+    /// 실행기와 같은 remote/base 해석으로 새로 검증한 dispatch source다.
     pub dispatch_source: Option<String>,
     /// host가 완료 결과에 고정한 SHA다. 임의 branch HEAD로 대신하지 않는다.
     pub frozen_source: Option<String>,
@@ -26,6 +26,10 @@ pub struct IssueWorkPermitRequest {
 
 pub trait IssueWorkExecutionPort: Send + Sync {
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot>;
+    /// 기존 등록을 읽는다. 실제 adapter는 원격 fetch와 독립된 영속 조회를 구현한다.
+    fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {
+        Ok(self.snapshot(workspace, work_order_id)?.task_ids)
+    }
     /// 영속 work_order_id로 멱등 등록한다. 반환 손실 뒤 재시도도 같은 task_ids다.
     fn submit(&self, workspace: &str, order: &IssueWorkOrder) -> Result<Vec<String>>;
     /// source/basis를 저장한 다음 단계별 허가를 만든다. integrate는 언제나 human review다.
