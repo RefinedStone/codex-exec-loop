@@ -27,7 +27,7 @@
 
 - thread 는 새로 연다. 사용자의 thread 에 붙지 않는다. kernel 의 "대화 턴 하나" 자리를 차지하지 않는다.
 - sandbox 는 읽기 전용이다. 승인 요청은 거절한다. 그래서 이 백엔드는 `read_only` 작업만 받는다.
-- 능력: `sessions = [new]`, `local_tools = true` (읽기), `structured_result = true`, `resume = false`, `stop = true`.
+- 능력: `sessions = [new]`, `local_tools = true` (읽기), `structured_result = true`, `self_recovery = false`, `stop = true`.
 - 끝 분류를 옮기는 표는 plan 29 §9 이다. 가리지 못한 끝은 `unknown` 이다. 성공으로 보지 않는다.
 - 스트림이 사는 동안의 사건은 `stream` 근거이다. 프로세스가 죽으면 시도는 `interrupted` 이다. 이 백엔드는 재개하지 않는다.
   읽기 전용이므로 새 시도가 안전하다.

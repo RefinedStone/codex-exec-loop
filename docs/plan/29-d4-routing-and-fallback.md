@@ -20,8 +20,8 @@
 | --- | --- | --- | --- |
 | D4-1 | 정책 파일: 백엔드 설정, 기능별 경로, 사용자 상한, `policy_blocked`, 유효한 값의 출처 | `DelegationPolicySourcePort`, `src/adapter/outbound/filesystem/` | D1-1 |
 | D4-2 | 건강과 회로, 전달 전의 대체: `health`, 회로 상태의 저장, `select_backend` 의 연결 | `src/application/service/delegation/` | D1-3, D4-1 |
-| D4-3 | 전달 뒤의 대체와 예산: 부작용 등급, `max_resumes`, 동시 실행과 하루 한도 | 같은 곳 | D4-2 |
-| D4-4 | 미리 보는 건강: Codex 의 사용 한도 읽기, ChatGPT 의 한도 알림 | 백엔드 adapter | D2-1, D3-4 |
+| D4-3 | 전달 뒤의 대체와 예산: 부작용 등급, 백엔드의 복구가 끝난 뒤의 대체, 동시 실행과 하루 한도 | 같은 곳 | D4-2 |
+| D4-4 | 미리 보는 건강: Codex 의 사용 한도 읽기, ChatGPT 의 한도 알림 | 백엔드 adapter | D2-1, D3-3 |
 
 ## 계약
 
@@ -42,7 +42,7 @@
 
 - [ ] 첫 백엔드가 `unavailable` 이면 보내기 없이 둘째 백엔드로 간다.
 - [ ] `quota` 뒤 `retry_at` 전에는 그 백엔드를 고르지 않는다. 재시작 뒤에도 같다.
-- [ ] `read_only` 작업은 전달 뒤 `interrupted` 에서 재개 한도 뒤에 다음 백엔드로 간다.
+- [ ] `read_only` 작업은 전달 뒤 `interrupted` 에서 백엔드의 복구가 `exhausted` 가 된 뒤에 다음 백엔드로 간다.
 - [ ] `side_effecting` 작업은 전달 뒤에 자동 대체가 0회이다. 주의 항목이 열린다.
 - [ ] 전달이 `uncertain` 인 동안 대체가 0회이다.
 - [ ] 저장소 파일이 사용자 파일에 없는 백엔드를 켜지 못한다. `tool_access` 를 올리지 못한다.

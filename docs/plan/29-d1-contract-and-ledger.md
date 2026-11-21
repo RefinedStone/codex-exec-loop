@@ -30,7 +30,7 @@
 - 장부는 저장소 runtime 폴더의 새 SQLite 파일이다. planning DB 를 건드리지 않는다.
 - 접수는 멱등 키로 조회하고, 없을 때만 만든다. 조회와 생성은 한 트랜잭션이다. kernel 명령의 멱등 키에 기대지 않는다
   (plan 28 §5.4 와 같은 이유이다).
-- 밖으로 나가는 행동(`dispatch`, `resume`)은 부르기 전에 장부에 적는다. 응답 없이 죽으면 그 시도는 `uncertain` 이고
+- 밖으로 나가는 행동(`dispatch`)은 부르기 전에 장부에 적는다. 응답 없이 죽으면 그 시도는 `uncertain` 이고
   작업은 `outcome_unknown` 이다.
 - 모듈은 planning, parallel, core 의 타입을 import 하지 않는다. architecture test 를 더한다.
 - 사건 기록에는 지시와 결과의 해시와 크기만 쓴다.

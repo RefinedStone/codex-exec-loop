@@ -21,7 +21,7 @@
 | ID | 결과 하나 | 바뀌는 곳 | 선행 |
 | --- | --- | --- | --- |
 | D5-1 | 기능 등록부와 저장소 바인딩: 기능의 닫힌 목록, `set_feature_binding`, 조회 `feature_bindings` | `src/domain/delegation/`, kernel spec | D1-4, D4-1 |
-| D5-2 | PR 리뷰 `observe`: 트리거, 지시 만들기, 결과 모양, 멱등, Desktop 에 보이기 | `src/application/service/`, `desktop/src/renderer/` | D5-1, D2-1 또는 D3-5 |
+| D5-2 | PR 리뷰 `observe`: 트리거, 지시 만들기, 결과 모양, 멱등, Desktop 에 보이기 | `src/application/service/`, `desktop/src/renderer/` | D5-1, D2-1 또는 D3-3 |
 | D5-3 | PR 리뷰 `on`: PR 댓글 쓰기, 마스킹, 일지, 결과 모름의 처리 | `src/application/service/`, GitHub adapter | D5-2 |
 | D5-4 | 주기 트리거: 마감 시각으로 도는 기능 | 런타임 호스트 | D5-1. plan 29 Q-DE8 |
 
