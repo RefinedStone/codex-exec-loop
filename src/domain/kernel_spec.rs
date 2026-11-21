@@ -97,6 +97,22 @@ spec_names! {
             "Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit.";
         AnswerIssueDecision => "answer_issue_decision",
             "Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
+        HoldIssue => "hold_issue",
+            "Hold one issue work order and revoke its unused work permits. Running turns are preserved. Reuse command_id to recover the same intervention receipt.";
+        ReleaseIssue => "release_issue",
+            "Release one issue hold. Previously revoked permits stay revoked until fresh approval and gate checks. Reuse command_id to recover the same intervention receipt.";
+        SteerIssue => "steer_issue",
+            "Queue guidance before execution, or steer the linked running thread once. An unknown delivery is not retried automatically. Reuse command_id to recover the same intervention receipt.";
+        TakeOverIssue => "take_over_issue",
+            "Take over one issue work order. Automatic continuation, delivery, and cleanup are disabled while its branch, worktree, and thread are preserved.";
+        RetriageIssue => "retriage_issue",
+            "Invalidate one issue assessment and revoke its existing work permits so that the current issue can be assessed again.";
+        CancelIssueWork => "cancel_issue_work",
+            "Cancel one issue work order and its task lineage. Requires confirm: true and revokes all unused work permits.";
+        TrackIssue => "track_issue",
+            "Track a stable issue reference in the attached workspace. Tracking does not grant work permits.";
+        UntrackIssue => "untrack_issue",
+            "Untrack one issue and stop its automatic work. Existing branches, worktrees, and threads are preserved.";
         SyncIssues => "sync_issues",
             "Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request.";
     }
@@ -356,7 +372,15 @@ impl KernelCommandKind {
             | Self::UpdateDirection
             | Self::DeleteDirection
             | Self::SetIssueAutomationMode
-            | Self::AnswerIssueDecision => CommandCompletion::Records,
+            | Self::AnswerIssueDecision
+            | Self::HoldIssue
+            | Self::ReleaseIssue
+            | Self::SteerIssue
+            | Self::TakeOverIssue
+            | Self::RetriageIssue
+            | Self::CancelIssueWork
+            | Self::TrackIssue
+            | Self::UntrackIssue => CommandCompletion::Records,
         };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (
@@ -435,6 +459,14 @@ impl KernelCommandKind {
                 Keyed,
                 &[Reason::HumanConfirmationRequired],
             ),
+            Self::HoldIssue
+            | Self::ReleaseIssue
+            | Self::SteerIssue
+            | Self::TakeOverIssue
+            | Self::RetriageIssue
+            | Self::TrackIssue
+            | Self::UntrackIssue => (CommandScope::Issue, Write, Keyed, &[]),
+            Self::CancelIssueWork => (CommandScope::Issue, Destructive, Keyed, &[]),
             Self::SyncIssues => (
                 CommandScope::Issue,
                 Read,
@@ -479,7 +511,15 @@ impl KernelCommandKind {
                 | Self::UpdateDirection
                 | Self::DeleteDirection
                 | Self::SetIssueAutomationMode
-                | Self::AnswerIssueDecision => CommandState::Store,
+                | Self::AnswerIssueDecision
+                | Self::HoldIssue
+                | Self::ReleaseIssue
+                | Self::SteerIssue
+                | Self::TakeOverIssue
+                | Self::RetriageIssue
+                | Self::CancelIssueWork
+                | Self::TrackIssue
+                | Self::UntrackIssue => CommandState::Store,
                 Self::LoadSessions
                 | Self::RenameSession
                 | Self::SubmitPrompt
@@ -545,6 +585,12 @@ spec_names! {
             "An issue decision was closed by its first answer or superseded by a changed basis. An agent answer is not human confirmation and does not grant execution.";
         IssueWorkSubmitted => "issue_work_submitted",
             "A durable issue work order was registered. Only stable identity and task IDs are recorded.";
+        IssueHeld => "issue_held",
+            "An issue hold was committed. New work is blocked while running turns and local work are preserved.";
+        IssueReleased => "issue_released",
+            "An issue hold was released. Previously revoked work permits are not restored.";
+        IssueWorkPermitRevoked => "issue_work_permit_revoked",
+            "An issue intervention advanced the authorization epoch and fenced previously granted work permits.";
         IssueWorkPermitGranted => "issue_work_permit_granted",
             "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",

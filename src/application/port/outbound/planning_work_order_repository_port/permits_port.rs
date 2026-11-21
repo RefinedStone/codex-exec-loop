@@ -38,6 +38,8 @@ impl PlanningWorkPermitStage {
 /// Independently persisted current evidence. A grant cannot update its own comparison basis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanningWorkPermitBasis {
+    #[serde(default)]
+    pub authorization_epoch: u64,
     pub policy_version: String,
     pub field_hash: String,
     pub gate_revision: u64,
@@ -152,7 +154,9 @@ pub fn evaluate_work_order_permit(
 }
 
 /// Planning owns grant/revoke persistence; dispatch and delivery never import issue automation.
-pub trait PlanningWorkPermitRepositoryPort: PlanningWorkOrderRepositoryPort {
+pub trait PlanningWorkPermitRepositoryPort:
+    PlanningWorkOrderRepositoryPort + super::PlanningWorkControlRepositoryPort
+{
     fn load_work_order_permit_basis(
         &self,
         workspace_dir: &str,

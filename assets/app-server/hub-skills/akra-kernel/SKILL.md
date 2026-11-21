@@ -46,6 +46,14 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel planning delete_direction --json` | destructive | Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 | `akra kernel issue set_issue_automation_mode --json` | write | Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit. |
 | `akra kernel issue answer_issue_decision --json` | write | Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt. |
+| `akra kernel issue hold_issue --json` | write | Hold one issue work order and revoke its unused work permits. Running turns are preserved. Reuse command_id to recover the same intervention receipt. |
+| `akra kernel issue release_issue --json` | write | Release one issue hold. Previously revoked permits stay revoked until fresh approval and gate checks. Reuse command_id to recover the same intervention receipt. |
+| `akra kernel issue steer_issue --json` | write | Queue guidance before execution, or steer the linked running thread once. An unknown delivery is not retried automatically. Reuse command_id to recover the same intervention receipt. |
+| `akra kernel issue take_over_issue --json` | write | Take over one issue work order. Automatic continuation, delivery, and cleanup are disabled while its branch, worktree, and thread are preserved. |
+| `akra kernel issue retriage_issue --json` | write | Invalidate one issue assessment and revoke its existing work permits so that the current issue can be assessed again. |
+| `akra kernel issue cancel_issue_work --json` | destructive | Cancel one issue work order and its task lineage. Requires confirm: true and revokes all unused work permits. |
+| `akra kernel issue track_issue --json` | write | Track a stable issue reference in the attached workspace. Tracking does not grant work permits. |
+| `akra kernel issue untrack_issue --json` | write | Untrack one issue and stop its automatic work. Existing branches, worktrees, and threads are preserved. |
 | `akra kernel issue sync_issues --json` | read | Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.

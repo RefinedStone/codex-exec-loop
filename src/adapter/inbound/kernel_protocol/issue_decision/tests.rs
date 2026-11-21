@@ -43,6 +43,7 @@ fn request() -> IssueDecisionRequest {
             }],
             recommended: Some("continue".to_owned()),
             basis: IssueDecisionBasis {
+                authorization_epoch: 0,
                 policy_version: "a".repeat(64),
                 field_hash: Some(IssueFieldHash::of_fields("source title", "source body")),
                 work_order_id: None,
@@ -320,4 +321,22 @@ fn superseded_is_a_committed_result_with_a_reason_and_no_applied_answer() {
     assert_schema("commands", "answer_issue_decision", "result", &wire);
     let event = IssueDecisionChangedState::from_fact(&fact, 42);
     assert_eq!(event.reason, Some(ReasonCode::DecisionSuperseded));
+}
+
+#[test]
+fn decision_record_preserves_intervention_epoch_and_reads_legacy_zero_epoch() {
+    use crate::domain::kernel_event::IssueDecisionBasisRecord;
+    let basis = IssueDecisionBasis {
+        policy_version: "policy-1".to_owned(),
+        field_hash: None,
+        work_order_id: Some("work-1".to_owned()),
+        gate_revision: 3,
+        authorization_epoch: 7,
+    };
+    let record = IssueDecisionBasisRecord::from(&basis);
+    let mut wire = serde_json::to_value(record).unwrap();
+    assert_eq!(wire["authorization_epoch"], 7);
+    wire.as_object_mut().unwrap().remove("authorization_epoch");
+    let legacy: IssueDecisionBasisRecord = serde_json::from_value(wire).unwrap();
+    assert_eq!(legacy.authorization_epoch, 0);
 }

@@ -244,6 +244,12 @@ impl IssueSourcePort for FakeSource {
 
 #[derive(Default)]
 struct FakeExecutionState {
+    control: crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl,
+    control_commands:std::collections::BTreeMap<String,(
+        crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControlAction,
+        crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl,
+    )>,
+    saved_authorization_epoch:u64,
     order: Option<IssueWorkOrder>,
     grants: Vec<IssueWorkPermitRequest>,
     frozen: Option<String>,
@@ -264,6 +270,28 @@ struct FakeExecution {
     state: Mutex<FakeExecutionState>,
 }
 impl IssueWorkExecutionPort for FakeExecution {
+    fn control(&self,_:&str,_:&str)->Result<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl>{
+        Ok(self.state.lock().unwrap().control.clone())
+    }
+    fn apply_control(
+        &self,_:&str,_:&str,command_id:&str,
+        action:crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControlAction,
+    )->Result<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl>{
+        let mut state = self.state.lock().unwrap();
+        if let Some((previous, result)) = state.control_commands.get(command_id) {
+            if *previous != action {
+                bail!("control command reused");
+            }
+            return Ok(result.clone());
+        }
+        state.control = state.control.apply(action)?;
+        state.revoked = true;
+        let result = state.control.clone();
+        state
+            .control_commands
+            .insert(command_id.to_owned(), (action, result.clone()));
+        Ok(result)
+    }
     fn snapshot(
         &self,
         _: &str,
@@ -278,7 +306,7 @@ impl IssueWorkExecutionPort for FakeExecution {
         Ok(crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionSnapshot {
             task_ids: state.order.as_ref().map(|_| vec!["task-1".into()]).unwrap_or_default(),
             dispatch_source: Some("a".repeat(40)), frozen_source: state.frozen.clone(),
-            saved_source: state.saved_source.clone(), saved_gate_revision: state.saved_revision,
+            saved_source: state.saved_source.clone(), saved_gate_revision: state.saved_revision, saved_authorization_epoch: state.saved_authorization_epoch,
             blocked_reason: None,
         })
     }
@@ -309,6 +337,7 @@ impl IssueWorkExecutionPort for FakeExecution {
     }
     fn grant(&self, _: &str, request: &IssueWorkPermitRequest) -> Result<()> {
         let mut state = self.state.lock().unwrap();
+        state.control.require_epoch(request.authorization_epoch)?;
         if state.revoked && request.gate_revision <= state.saved_revision {
             bail!("revoked permit");
         }
@@ -322,6 +351,8 @@ impl IssueWorkExecutionPort for FakeExecution {
         }
         state.saved_source = Some(request.source_sha.clone());
         state.saved_revision = request.gate_revision;
+        state.saved_authorization_epoch = request.authorization_epoch;
+        state.revoked = false;
         if !state.grants.contains(request) {
             state.grants.push(request.clone());
         }
@@ -695,6 +726,7 @@ fn reducer_table_covers_observe_propose_auto_flags_and_decisions() {
         for now_unix_ms in [0, u64::MAX] {
             assert_eq!(
                 next_action(IssueCoordinatorInput {
+                    authorization_epoch: 0,
                     state,
                     flags,
                     assessment: Some(&assessment),
@@ -713,6 +745,7 @@ fn reducer_table_covers_observe_propose_auto_flags_and_decisions() {
         let item = page(&h.triage).items.pop().unwrap();
         assert_eq!(
             next_action(IssueCoordinatorInput {
+                authorization_epoch: 0,
                 state: IssueAutomationState::Discovered,
                 flags: Default::default(),
                 assessment: item.triage.as_ref().map(|triage| &triage.assessment),
@@ -919,6 +952,122 @@ fn interrupted_registration_recovers_existing_task_links_even_after_approval_cha
             .count();
         assert_eq!(submitted, usize::from(registered));
     }
+}
+
+#[test]
+fn intervention_release_requires_new_human_epoch_before_same_work_resumes() {
+    use crate::application::port::inbound::issue_intervention_port::IssueInterventionPort;
+    use crate::application::port::inbound::stored_command_port::StoredCommandContext;
+    use crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering;
+    use crate::domain::issue_automation::intervention::{
+        IssueInterventionAction, IssueInterventionRequest,
+    };
+    let h = Harness::new();
+    h.tick(true).unwrap();
+    let initial_decision = h.decision().request.id().clone();
+    h.answer("start");
+    h.tick(true).unwrap();
+    let original = h.work().unwrap();
+    let service = crate::application::service::issue_intervention::IssueInterventionService::new(
+        h.fixture.workspace.clone(),
+        h.fixture.store(),
+        h.execution.clone(),
+        Arc::new(UnavailableIssueWorkSteering),
+    );
+    let context = StoredCommandContext {
+        human_confirmation: None,
+        caller: Some("test".into()),
+        channel: "test".into(),
+        at: "2026-11-21T00:00:00Z".into(),
+    };
+    let command = |id: &str, action| IssueInterventionRequest {
+        command_id: id.into(),
+        issue: h.fixture.reference("I_001"),
+        action,
+    };
+    service
+        .intervene(command("hold", IssueInterventionAction::Hold), &context)
+        .unwrap();
+    h.execution.state.lock().unwrap().frozen = Some("b".repeat(40));
+    h.tick(true).unwrap();
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
+    service
+        .intervene(
+            command("release", IssueInterventionAction::Release),
+            &context,
+        )
+        .unwrap();
+    h.tick(true).unwrap();
+    let renewed = h.decision();
+    assert_ne!(renewed.request.id(), &initial_decision);
+    assert_eq!(renewed.request.definition().basis.authorization_epoch, 2);
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
+    assert_eq!(h.execution.state.lock().unwrap().registrations, 1);
+    h.answer("start");
+    h.tick(true).unwrap();
+    let resumed = h.work().unwrap();
+    assert_eq!(resumed.order, original.order);
+    assert_eq!(resumed.decision_id, original.decision_id);
+    assert_eq!(resumed.approved_basis, original.approved_basis);
+    assert_eq!(resumed.current_authorization_basis().authorization_epoch, 2);
+    assert_eq!(resumed.permit_authorization_epoch, 2);
+    assert_eq!(resumed.task_ids, original.task_ids);
+    assert_eq!(h.execution.state.lock().unwrap().registrations, 1);
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), 2);
+}
+
+#[test]
+fn intervention_remote_hold_label_revokes_work_without_restarting_it() {
+    let h = Harness::new();
+    h.tick(true).unwrap();
+    h.answer("start");
+    h.tick(true).unwrap();
+    let mut observation = h.fixture.observation("I_001");
+    observation.labels.items.push(IssueSourceLabel {
+        id: "L_hold".into(),
+        name: "akra:hold".into(),
+    });
+    h.fixture.seed(vec![observation], &disclosure_version());
+    h.tick(true).unwrap();
+    assert!(h.execution.state.lock().unwrap().control.held);
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
+    assert_eq!(h.execution.state.lock().unwrap().registrations, 1);
+    // Release must recheck the still-present remote hold instead of replaying its old receipt.
+    let service = crate::application::service::issue_intervention::IssueInterventionService::new(
+        h.fixture.workspace.clone(),
+        h.fixture.store(),
+        h.execution.clone(),
+        Arc::new(crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering),
+    );
+    let request = crate::domain::issue_automation::intervention::IssueInterventionRequest {
+        command_id: "release-while-remotely-held".into(),
+        issue: h.fixture.reference("I_001"),
+        action: crate::domain::issue_automation::intervention::IssueInterventionAction::Release,
+    };
+    crate::application::port::inbound::issue_intervention_port::IssueInterventionPort::intervene(
+        &service,
+        request,
+        &crate::application::port::inbound::stored_command_port::StoredCommandContext {
+            human_confirmation: None,
+            caller: Some("operator".into()),
+            channel: "test".into(),
+            at: "2026-11-21T00:00:00Z".into(),
+        },
+    )
+    .unwrap();
+    assert!(!h.execution.state.lock().unwrap().control.held);
+    h.tick(true).unwrap();
+    assert!(h.execution.state.lock().unwrap().control.held);
+    assert_eq!(
+        h.execution
+            .state
+            .lock()
+            .unwrap()
+            .control
+            .authorization_epoch,
+        3
+    );
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
 }
 
 mod policy_revalidation;

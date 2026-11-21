@@ -7,6 +7,7 @@ use crate::application::port::inbound::stored_command_port::{
     StoredTaskFields,
 };
 use crate::domain::issue_automation::decision::{IssueDecisionOutcome, IssueDecisionState};
+use crate::domain::issue_automation::intervention::IssueInterventionAction;
 use crate::domain::kernel_event::IssueDecisionFactRecord;
 pub use crate::domain::kernel_event::ReasonCode;
 use crate::domain::kernel_event::{
@@ -50,6 +51,7 @@ mod confirmation;
 mod issue_automation;
 mod issue_automation_policy;
 mod issue_decision;
+mod issue_intervention;
 pub use confirmation::{
     ConfirmationPrepareRequest, ConfirmationPrepareResponse, ConfirmationRegisterRequest,
     ConfirmationRegisterResponse, ConfirmedCommandRequest, HumanConfirmationSubmission,
@@ -58,6 +60,7 @@ pub use confirmation::{
 pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssueState, IssuesState};
 pub use issue_automation_policy::IssueAutomationPolicyState;
 pub use issue_decision::{IssueDecisionChangedState, IssueDecisionRequestState};
+pub use issue_intervention::{IssueInterventionReceiptState, IssueSteerDeliveryState};
 
 /// 프로토콜 판이다. 전송 모양을 호환되지 않게 바꿀 때만 올린다. 필드를 더하는 것은 올리지 않는다. K4-1 에서
 /// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
@@ -271,6 +274,14 @@ impl CommandRequest {
             | KernelCommand::DeleteDirection { .. }
             | KernelCommand::SetIssueAutomationMode { .. }
             | KernelCommand::AnswerIssueDecision { .. }
+            | KernelCommand::HoldIssue { .. }
+            | KernelCommand::ReleaseIssue { .. }
+            | KernelCommand::SteerIssue { .. }
+            | KernelCommand::TakeOverIssue { .. }
+            | KernelCommand::RetriageIssue { .. }
+            | KernelCommand::CancelIssueWork { .. }
+            | KernelCommand::TrackIssue { .. }
+            | KernelCommand::UntrackIssue { .. }
             | KernelCommand::SyncIssues {} => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
@@ -380,6 +391,9 @@ pub struct CommandResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandResult {
+    IssueIntervened {
+        receipt: Box<IssueInterventionReceiptState>,
+    },
     IssueDecisionResolved {
         decision: Box<IssueDecisionFactRecord>,
         outcome: IssueDecisionOutcome,
@@ -427,6 +441,9 @@ pub enum CommandResult {
 impl CommandResult {
     fn from_stored(result: StoredCommandResult) -> Self {
         match result {
+            StoredCommandResult::IssueIntervened { receipt } => Self::IssueIntervened {
+                receipt: Box::new((*receipt).into()),
+            },
             StoredCommandResult::IssueDecisionResolved {
                 fact,
                 outcome,
@@ -512,6 +529,14 @@ impl CommandResult {
             KernelCommandKind::DeleteDirection => Some("direction_deleted"),
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
+            KernelCommandKind::HoldIssue
+            | KernelCommandKind::ReleaseIssue
+            | KernelCommandKind::SteerIssue
+            | KernelCommandKind::TakeOverIssue
+            | KernelCommandKind::RetriageIssue
+            | KernelCommandKind::CancelIssueWork
+            | KernelCommandKind::TrackIssue
+            | KernelCommandKind::UntrackIssue => Some("issue_intervened"),
             KernelCommandKind::LoadSessions
             | KernelCommandKind::RenameSession
             | KernelCommandKind::SubmitPrompt
@@ -775,6 +800,50 @@ pub enum KernelCommand {
         #[schemars(length(max = 4096))]
         note: Option<String>,
     },
+    HoldIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
+    ReleaseIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
+    SteerIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+        #[schemars(length(min = 1, max = 65536), regex(pattern = NON_BLANK))]
+        message: String,
+    },
+    TakeOverIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
+    RetriageIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
+    CancelIssueWork {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+        #[serde(default)]
+        confirm: bool,
+    },
+    TrackIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
+    UntrackIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
     /// Observe 모드에서 원격 읽기를 요청한다. 실행 완료 영수증을 만들지 않는다.
     SyncIssues {},
 }
@@ -953,6 +1022,14 @@ impl KernelCommand {
             Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
+            Self::HoldIssue { .. } => KernelCommandKind::HoldIssue,
+            Self::ReleaseIssue { .. } => KernelCommandKind::ReleaseIssue,
+            Self::SteerIssue { .. } => KernelCommandKind::SteerIssue,
+            Self::TakeOverIssue { .. } => KernelCommandKind::TakeOverIssue,
+            Self::RetriageIssue { .. } => KernelCommandKind::RetriageIssue,
+            Self::CancelIssueWork { .. } => KernelCommandKind::CancelIssueWork,
+            Self::TrackIssue { .. } => KernelCommandKind::TrackIssue,
+            Self::UntrackIssue { .. } => KernelCommandKind::UntrackIssue,
             Self::SyncIssues {} => KernelCommandKind::SyncIssues,
         }
     }
@@ -963,13 +1040,21 @@ impl KernelCommand {
         match self {
             Self::ResetPlanning { confirm, .. }
             | Self::DeleteTask { confirm, .. }
-            | Self::DeleteDirection { confirm, .. } => *confirm,
+            | Self::DeleteDirection { confirm, .. }
+            | Self::CancelIssueWork { confirm, .. } => *confirm,
             Self::CreateTask { .. }
             | Self::UpdateTask { .. }
             | Self::CreateDirection { .. }
             | Self::UpdateDirection { .. }
             | Self::SetIssueAutomationMode { .. }
-            | Self::AnswerIssueDecision { .. } => false,
+            | Self::AnswerIssueDecision { .. }
+            | Self::HoldIssue { .. }
+            | Self::ReleaseIssue { .. }
+            | Self::SteerIssue { .. }
+            | Self::TakeOverIssue { .. }
+            | Self::RetriageIssue { .. }
+            | Self::TrackIssue { .. }
+            | Self::UntrackIssue { .. } => false,
             Self::LoadSessions {}
             | Self::RenameSession { .. }
             | Self::SubmitPrompt { .. }
@@ -989,6 +1074,9 @@ impl KernelCommand {
      */
     pub fn from_stored(command: StoredCommand) -> Self {
         match command {
+            StoredCommand::InterveneIssue { request } => {
+                issue_intervention::command_from_request(request)
+            }
             StoredCommand::CreateTask { task } => Self::CreateTask {
                 task: TaskFields::from_stored(task),
             },
@@ -1053,6 +1141,62 @@ impl KernelCommand {
         workspace_directory: &str,
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
+            Self::HoldIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Hold,
+                workspace_directory,
+            )?,
+            Self::ReleaseIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Release,
+                workspace_directory,
+            )?,
+            Self::SteerIssue {
+                issue,
+                command_id,
+                message,
+            } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Steer { message },
+                workspace_directory,
+            )?,
+            Self::TakeOverIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::TakeOver,
+                workspace_directory,
+            )?,
+            Self::RetriageIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Retriage,
+                workspace_directory,
+            )?,
+            Self::CancelIssueWork {
+                issue,
+                command_id,
+                confirm,
+            } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Cancel { confirm },
+                workspace_directory,
+            )?,
+            Self::TrackIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Track,
+                workspace_directory,
+            )?,
+            Self::UntrackIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Untrack,
+                workspace_directory,
+            )?,
             Self::SyncIssues {} => return Ok(KernelCommandInput::SyncIssues),
             Self::AnswerIssueDecision {
                 decision_id,
@@ -1190,6 +1334,14 @@ impl KernelCommand {
             | Self::DeleteDirection { .. }
             | Self::SetIssueAutomationMode { .. }
             | Self::AnswerIssueDecision { .. }
+            | Self::HoldIssue { .. }
+            | Self::ReleaseIssue { .. }
+            | Self::SteerIssue { .. }
+            | Self::TakeOverIssue { .. }
+            | Self::RetriageIssue { .. }
+            | Self::CancelIssueWork { .. }
+            | Self::TrackIssue { .. }
+            | Self::UntrackIssue { .. }
             | Self::SyncIssues {} => {
                 return Err(KernelProtocolError::invalid_params(
                     "a host or stored command is not a core command",

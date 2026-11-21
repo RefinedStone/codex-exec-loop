@@ -730,6 +730,84 @@ impl ParallelModeService {
         )
     }
 
+    /// An authorization change before TurnStarted is not a worker startup failure.
+    /// Release only this unstarted generation without fencing the task until it changes.
+    pub(crate) fn release_unstarted_work_order_lease_for_control(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            &expected_lease.worktree_path,
+        )?;
+        let Some(resolution) = resolve_workspace_slot_lease_with_runtime(
+            self.parallel_runtime.as_ref(),
+            self.planning_authority.as_ref(),
+            &expected_lease.worktree_path,
+        )?
+        else {
+            return Ok(None);
+        };
+        if !resolution.lease.same_generation_as(expected_lease)
+            || resolution.lease.state != ParallelModeSlotLeaseState::Leased
+        {
+            return Ok(None);
+        }
+        let authority_workspace = resolution.context.canonical_repo_root.display().to_string();
+        if self
+            .planning_authority
+            .work_order_control_for_task(&authority_workspace, &resolution.lease.task_id)
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        if !self
+            .planning_authority
+            .work_order_cleanup_allowed_for_task(&authority_workspace, &resolution.lease.task_id)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(None);
+        }
+        let status = inspect_slot_git_status_with_runtime(
+            self.parallel_runtime.as_ref(),
+            &resolution.workspace_path,
+        )
+        .map_err(|error| error.to_string())?;
+        if !status.is_clean_baseline() {
+            return Err(format!(
+                "slot {} was preserved after work-order control changed because worktree is not clean: {}",
+                resolution.lease.slot_id,
+                status.detail_label()
+            ));
+        }
+        let integration_target_oid = self
+            .fetch_fresh_pool_integration_target(&resolution.context.repo_root)?
+            .commit_sha;
+        if !cleanup_slot_to_ref_locked(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            &PoolSlotCleanupIdentity::new(
+                &resolution.context.repo_root,
+                &resolution.context.canonical_repo_root,
+                &resolution.context.pool_root,
+                &resolution.lease.slot_id,
+                &resolution.workspace_path,
+                &resolution.lease.branch_name,
+            ),
+            &integration_target_oid,
+            PoolSlotCleanupLeaseAuthority::UnstartedWorkOrder(&resolution.lease),
+            &mutation_lock,
+        ) {
+            return Err(format!(
+                "slot {} was preserved because its unstarted work-order lease could not be safely released",
+                resolution.lease.slot_id,
+            ));
+        }
+        Ok(Some(resolution.lease))
+    }
+
     #[cfg(test)]
     pub(super) fn release_workspace_slot_lease_after_failed_start_with_test_hook<F>(
         &self,

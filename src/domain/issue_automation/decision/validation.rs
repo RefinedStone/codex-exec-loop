@@ -45,6 +45,7 @@ pub(super) fn basis(basis: &IssueDecisionBasis) -> Result<(), IssueDecisionError
     if !sha256(&basis.policy_version)
         || basis.gate_revision == 0
         || basis.gate_revision > MAX_ISSUE_AUTOMATION_REVISION
+        || basis.authorization_epoch > MAX_ISSUE_AUTOMATION_REVISION
         || basis
             .field_hash
             .as_ref()

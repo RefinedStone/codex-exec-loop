@@ -1,5 +1,6 @@
-use std::sync::Mutex;
+use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 
@@ -53,6 +54,7 @@ struct PendingTurnSteer {
     binding_id: u64,
     request_id: u64,
     result_sender: SyncSender<std::result::Result<ConversationTurnSteerReceipt, String>>,
+    allow_detached: bool,
 }
 
 #[derive(Default)]
@@ -69,6 +71,18 @@ pub(super) struct AppServerTurnSteerBroker {
 }
 
 impl AppServerTurnSteerBroker {
+    pub(super) fn active_turn_id(&self, thread_id: &str) -> Result<Option<String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("turn steering broker mutex was poisoned"))?;
+        Ok(state
+            .active
+            .as_ref()
+            .filter(|active| active.thread_id == thread_id)
+            .map(|active| active.turn_id.clone()))
+    }
+
     pub(super) fn bind(&self, thread_id: &str, turn_id: &str) -> Result<AppServerTurnSteerBinding> {
         if thread_id.is_empty() || turn_id.is_empty() {
             return Err(anyhow!(
@@ -102,6 +116,22 @@ impl AppServerTurnSteerBroker {
     pub(super) fn submit(
         &self,
         request: ConversationTurnSteerRequest,
+    ) -> Result<ConversationTurnSteerReceipt> {
+        self.submit_with_deadline(request, None)
+    }
+
+    pub(super) fn submit_bounded(
+        &self,
+        request: ConversationTurnSteerRequest,
+        timeout: std::time::Duration,
+    ) -> Result<ConversationTurnSteerReceipt> {
+        self.submit_with_deadline(request, Some(timeout))
+    }
+
+    fn submit_with_deadline(
+        &self,
+        request: ConversationTurnSteerRequest,
+        timeout: Option<std::time::Duration>,
     ) -> Result<ConversationTurnSteerReceipt> {
         if request.thread_id.is_empty()
             || request.expected_turn_id.is_empty()
@@ -139,6 +169,7 @@ impl AppServerTurnSteerBroker {
                 binding_id,
                 request_id,
                 result_sender,
+                allow_detached: timeout.is_some(),
             });
             let command = AppServerTurnSteerCommand {
                 binding_id,
@@ -158,10 +189,23 @@ impl AppServerTurnSteerBroker {
             }
         }
 
-        result_receiver
-            .recv()
-            .map_err(|_| anyhow!("active turn steering connection closed without a result"))?
-            .map_err(anyhow::Error::msg)
+        let response = if let Some(timeout) = timeout {
+            result_receiver
+                .recv_timeout(timeout)
+                .map_err(|error| match error {
+                    mpsc::RecvTimeoutError::Timeout => {
+                        anyhow!("worker steering delivery is unknown after the response deadline")
+                    }
+                    mpsc::RecvTimeoutError::Disconnected => {
+                        anyhow!("active turn steering connection closed without a result")
+                    }
+                })?
+        } else {
+            result_receiver
+                .recv()
+                .map_err(|_| anyhow!("active turn steering connection closed without a result"))?
+        };
+        response.map_err(anyhow::Error::msg)
     }
 
     pub(super) fn complete(
@@ -170,7 +214,7 @@ impl AppServerTurnSteerBroker {
         request_id: u64,
         result: std::result::Result<ConversationTurnSteerReceipt, String>,
     ) -> Result<()> {
-        let result_sender = {
+        let (result_sender, allow_detached) = {
             let mut state = self
                 .state
                 .lock()
@@ -183,12 +227,16 @@ impl AppServerTurnSteerBroker {
                 })
                 .ok_or_else(|| anyhow!("turn steering request is no longer pending"))?;
             let result_sender = pending.result_sender.clone();
+            let allow_detached = pending.allow_detached;
             state.pending = None;
-            result_sender
+            (result_sender, allow_detached)
         };
-        result_sender
-            .send(result)
-            .map_err(|_| anyhow!("turn steering caller is no longer waiting"))
+        // worker의 bounded 대기 종료는 모델 턴의 실패가 아니다. 늦은 응답만 소모한다.
+        match result_sender.send(result) {
+            Ok(()) => Ok(()),
+            Err(_) if allow_detached => Ok(()),
+            Err(_) => Err(anyhow!("turn steering caller is no longer waiting")),
+        }
     }
 
     pub(super) fn unbind(&self, binding_id: u64, reason: &str) {
@@ -221,6 +269,77 @@ impl AppServerTurnSteerBroker {
     }
 }
 
+/// 병렬 stream마다 독립 broker를 보관한다. main의 단일 실행/대기 계약은 그대로 둔다.
+#[derive(Default)]
+pub(super) struct AppServerParallelTurnSteerRegistry {
+    brokers: Mutex<BTreeMap<String, Arc<AppServerTurnSteerBroker>>>,
+}
+
+impl AppServerParallelTurnSteerRegistry {
+    pub(super) fn bind(
+        self: &Arc<Self>,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<AppServerParallelTurnSteerRegistration> {
+        let mut brokers = self
+            .brokers
+            .lock()
+            .map_err(|_| anyhow!("parallel turn steering registry mutex was poisoned"))?;
+        if brokers.contains_key(thread_id) {
+            return Err(anyhow!("another stream already owns this parallel thread"));
+        }
+        let broker = Arc::new(AppServerTurnSteerBroker::default());
+        let binding = broker.bind(thread_id, turn_id)?;
+        let binding_id = binding.binding_id();
+        brokers.insert(thread_id.to_owned(), broker.clone());
+        Ok(AppServerParallelTurnSteerRegistration {
+            registry: self.clone(),
+            thread_id: thread_id.to_owned(),
+            broker,
+            binding: Some(binding),
+            binding_id,
+        })
+    }
+
+    pub(super) fn broker(&self, thread_id: &str) -> Result<Option<Arc<AppServerTurnSteerBroker>>> {
+        Ok(self
+            .brokers
+            .lock()
+            .map_err(|_| anyhow!("parallel turn steering registry mutex was poisoned"))?
+            .get(thread_id)
+            .cloned())
+    }
+}
+
+/// 반환, 실패, panic에도 과거 등록을 남기지 않는다. 다른 세대의 소유권은 지우지 않는다.
+pub(super) struct AppServerParallelTurnSteerRegistration {
+    registry: Arc<AppServerParallelTurnSteerRegistry>,
+    thread_id: String,
+    pub(super) broker: Arc<AppServerTurnSteerBroker>,
+    binding: Option<AppServerTurnSteerBinding>,
+    binding_id: u64,
+}
+
+impl AppServerParallelTurnSteerRegistration {
+    pub(super) fn take_binding(&mut self) -> Option<AppServerTurnSteerBinding> {
+        self.binding.take()
+    }
+}
+
+impl Drop for AppServerParallelTurnSteerRegistration {
+    fn drop(&mut self) {
+        self.broker
+            .unbind(self.binding_id, "parallel turn stream ended");
+        if let Ok(mut brokers) = self.registry.brokers.lock()
+            && brokers
+                .get(&self.thread_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &self.broker))
+        {
+            brokers.remove(&self.thread_id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -234,6 +353,148 @@ mod tests {
             expected_turn_id: turn_id.to_string(),
             prompt: prompt.to_string(),
         }
+    }
+
+    #[test]
+    fn bounded_worker_steer_keeps_pending_fence_and_accepts_a_late_reply_without_ending_turn() {
+        let broker = AppServerTurnSteerBroker::default();
+        let binding = broker.bind("worker", "turn").unwrap();
+        assert!(
+            broker
+                .submit_bounded(
+                    request("worker", "turn", "instruction"),
+                    std::time::Duration::from_millis(5)
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("unknown")
+        );
+        assert_eq!(broker.pending_count(), 1);
+        assert!(
+            broker
+                .submit_bounded(
+                    request("worker", "turn", "another instruction"),
+                    std::time::Duration::from_millis(5)
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("already pending")
+        );
+        let command = binding.try_receive().unwrap().unwrap();
+        broker
+            .complete(
+                command.binding_id(),
+                command.request_id(),
+                Ok(ConversationTurnSteerReceipt {
+                    turn_id: "turn".to_owned(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(broker.pending_count(), 0);
+        assert_eq!(
+            broker.active_turn_id("worker").unwrap().as_deref(),
+            Some("turn")
+        );
+        assert!(
+            broker
+                .complete(
+                    command.binding_id(),
+                    command.request_id(),
+                    Ok(ConversationTurnSteerReceipt {
+                        turn_id: "turn".to_owned()
+                    })
+                )
+                .is_err()
+        );
+        broker.unbind(binding.binding_id(), "done");
+    }
+
+    #[test]
+    fn parallel_steering_routes_exact_turns_without_replacing_other_workers_or_main() {
+        let registry = Arc::new(AppServerParallelTurnSteerRegistry::default());
+        let main = AppServerTurnSteerBroker::default();
+        let main_binding = main.bind("main-thread", "main-turn").unwrap();
+        let mut first = registry.bind("worker-a", "turn-a").unwrap();
+        let mut second = registry.bind("worker-b", "turn-b").unwrap();
+        let first_binding = first.take_binding().unwrap();
+        let second_binding = second.take_binding().unwrap();
+        assert!(registry.bind("worker-a", "replacement-turn").is_err());
+        assert!(
+            first
+                .broker
+                .submit(request("worker-a", "old-turn", "stale"))
+                .is_err()
+        );
+        let first_broker = registry.broker("worker-a").unwrap().unwrap();
+        let second_broker = registry.broker("worker-b").unwrap().unwrap();
+        let first_call =
+            thread::spawn(move || first_broker.submit(request("worker-a", "turn-a", "a")));
+        let second_call =
+            thread::spawn(move || second_broker.submit(request("worker-b", "turn-b", "b")));
+        for (binding, broker, expected) in [
+            (&first_binding, &first.broker, "turn-a"),
+            (&second_binding, &second.broker, "turn-b"),
+        ] {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let command = loop {
+                if let Some(command) = binding.try_receive().unwrap() {
+                    break command;
+                }
+                assert!(std::time::Instant::now() < deadline, "steer was not routed");
+                thread::yield_now();
+            };
+            assert_eq!(command.request.expected_turn_id, expected);
+            broker
+                .complete(
+                    command.binding_id(),
+                    command.request_id(),
+                    Ok(ConversationTurnSteerReceipt {
+                        turn_id: expected.to_owned(),
+                    }),
+                )
+                .unwrap();
+        }
+        assert_eq!(first_call.join().unwrap().unwrap().turn_id, "turn-a");
+        assert_eq!(second_call.join().unwrap().unwrap().turn_id, "turn-b");
+        drop(first);
+        assert!(registry.broker("worker-a").unwrap().is_none());
+        assert_eq!(
+            second.broker.active_turn_id("worker-b").unwrap().as_deref(),
+            Some("turn-b")
+        );
+        assert_eq!(
+            main.active_turn_id("main-thread").unwrap().as_deref(),
+            Some("main-turn")
+        );
+        main.unbind(main_binding.binding_id(), "done");
+    }
+
+    #[test]
+    fn parallel_steering_stream_end_rejects_pending_delivery_and_allows_new_generation() {
+        let registry = Arc::new(AppServerParallelTurnSteerRegistry::default());
+        let registration = registry.bind("worker-a", "turn-a").unwrap();
+        let broker = registration.broker.clone();
+        let sender = broker.clone();
+        let call =
+            thread::spawn(move || sender.submit(request("worker-a", "turn-a", "instruction")));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while broker.pending_count() == 0 {
+            assert!(std::time::Instant::now() < deadline, "steer was not queued");
+            thread::yield_now();
+        }
+        drop(registration);
+        assert!(call.join().unwrap().is_err());
+        assert!(broker.active_turn_id("worker-a").unwrap().is_none());
+        let next = registry.bind("worker-a", "turn-b").unwrap();
+        assert!(
+            next.broker
+                .submit(request("worker-a", "turn-a", "late old request"))
+                .is_err()
+        );
+        assert_eq!(
+            next.broker.active_turn_id("worker-a").unwrap().as_deref(),
+            Some("turn-b")
+        );
     }
 
     #[test]

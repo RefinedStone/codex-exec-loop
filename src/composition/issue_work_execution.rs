@@ -2,8 +2,9 @@
 use crate::application::port::outbound::issue_work_execution_port::*;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkOrderRepositoryPort, PlanningWorkPermit, PlanningWorkPermitBasis,
-    PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
+    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkInstruction,
+    PlanningWorkInstructionAdmission, PlanningWorkOrderRepositoryPort, PlanningWorkPermit,
+    PlanningWorkPermitBasis, PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
 };
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
@@ -37,6 +38,39 @@ impl AkraIssueWorkExecutionAdapter {
 }
 
 impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
+    fn control(&self, workspace: &str, work_order_id: &str) -> Result<PlanningWorkControl> {
+        self.repository
+            .load_work_order_control(workspace, work_order_id)
+    }
+    fn apply_control(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        command_id: &str,
+        action: PlanningWorkControlAction,
+    ) -> Result<PlanningWorkControl> {
+        self.repository
+            .apply_work_order_control(workspace, work_order_id, command_id, action)
+    }
+    fn queue_instruction(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        instruction: &PlanningWorkInstruction,
+    ) -> Result<PlanningWorkInstructionAdmission> {
+        self.repository
+            .append_work_order_instruction(workspace, work_order_id, instruction)
+    }
+    fn has_active_lease(&self, workspace: &str, work_order_id: &str) -> Result<bool> {
+        let ids = self.task_ids(workspace, work_order_id)?;
+        Ok(self
+            .authority
+            .load_runtime_projections(workspace)?
+            .slot_leases
+            .values()
+            .any(|lease| ids.contains(&lease.task_id)))
+    }
+
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot> {
         let order = self.repository.load_work_order(workspace, work_order_id)?;
         let task_ids = order
@@ -77,6 +111,10 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
             frozen_source,
             saved_source: basis.as_ref().map(|basis| basis.source_sha.clone()),
             saved_gate_revision: basis.as_ref().map(|basis| basis.gate_revision).unwrap_or(0),
+            saved_authorization_epoch: basis
+                .as_ref()
+                .map(|basis| basis.authorization_epoch)
+                .unwrap_or(0),
             blocked_reason: None,
         })
     }
@@ -132,12 +170,19 @@ Work order: {}",
     }
 
     fn grant(&self, workspace: &str, request: &IssueWorkPermitRequest) -> Result<()> {
+        request.approval.validate()?;
+        if request.authorization_epoch != request.approval.authorization_epoch
+            || request.gate_revision < request.approval.gate_revision
+        {
+            bail!("the work permit does not match its approved authorization epoch");
+        }
         let hash = request
             .approval
             .field_hash
             .as_ref()
             .ok_or_else(|| anyhow!("the work approval has no field hash"))?;
         let basis = PlanningWorkPermitBasis {
+            authorization_epoch: request.authorization_epoch,
             policy_version: request.approval.policy_version.clone(),
             field_hash: format!("v{}:{}", hash.version, hash.sha256),
             gate_revision: request.gate_revision,

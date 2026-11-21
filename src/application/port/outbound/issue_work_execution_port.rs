@@ -1,4 +1,8 @@
 //! 이슈 자동화와 작업 실행기를 잇는 중립 경계다. 런타임 객체를 공유하지 않는다.
+use super::planning_work_order_repository_port::{
+    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkInstruction,
+    PlanningWorkInstructionAdmission,
+};
 use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
 use crate::domain::issue_automation::decision::IssueDecisionBasis;
 use anyhow::Result;
@@ -12,11 +16,13 @@ pub struct IssueWorkExecutionSnapshot {
     pub frozen_source: Option<String>,
     pub saved_source: Option<String>,
     pub saved_gate_revision: u64,
+    pub saved_authorization_epoch: u64,
     pub blocked_reason: Option<IssueWorkBlockReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueWorkPermitRequest {
+    pub authorization_epoch: u64,
     pub work_order_id: String,
     pub approval: IssueDecisionBasis,
     pub source_sha: String,
@@ -25,6 +31,30 @@ pub struct IssueWorkPermitRequest {
 }
 
 pub trait IssueWorkExecutionPort: Send + Sync {
+    fn control(&self, _workspace: &str, _work_order_id: &str) -> Result<PlanningWorkControl> {
+        Ok(PlanningWorkControl::default())
+    }
+    fn apply_control(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _command_id: &str,
+        _action: PlanningWorkControlAction,
+    ) -> Result<PlanningWorkControl> {
+        anyhow::bail!("work intervention control is unavailable")
+    }
+    fn queue_instruction(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _instruction: &PlanningWorkInstruction,
+    ) -> Result<PlanningWorkInstructionAdmission> {
+        anyhow::bail!("work instruction delivery is unavailable")
+    }
+    fn has_active_lease(&self, _workspace: &str, _work_order_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot>;
     /// 기존 등록을 읽는다. 실제 adapter는 원격 fetch와 독립된 영속 조회를 구현한다.
     fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {

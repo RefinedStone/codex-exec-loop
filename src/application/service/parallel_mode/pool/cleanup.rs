@@ -2,6 +2,9 @@ use std::path::Path;
 
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_work_order_repository_port::{
+    PlanningWorkPermitDecision, PlanningWorkPermitStage,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchBlockReason,
     ParallelModePoolSlotCleanupDecision, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
@@ -30,6 +33,7 @@ const STALE_LEASED_SLOT_RELEASE_AFTER_SECS: i64 = 120;
 
 pub(in crate::application::service::parallel_mode) enum PoolSlotCleanupLeaseAuthority<'a> {
     CleanupPending(&'a ParallelModeSlotLeaseSnapshot),
+    UnstartedWorkOrder(&'a ParallelModeSlotLeaseSnapshot),
     NoLease,
     StaleStartup {
         lease: &'a ParallelModeSlotLeaseSnapshot,
@@ -40,7 +44,9 @@ pub(in crate::application::service::parallel_mode) enum PoolSlotCleanupLeaseAuth
 impl PoolSlotCleanupLeaseAuthority<'_> {
     fn expected_lease(&self) -> Option<&ParallelModeSlotLeaseSnapshot> {
         match self {
-            Self::CleanupPending(lease) | Self::StaleStartup { lease, .. } => Some(lease),
+            Self::CleanupPending(lease)
+            | Self::UnstartedWorkOrder(lease)
+            | Self::StaleStartup { lease, .. } => Some(lease),
             Self::NoLease => None,
         }
     }
@@ -58,6 +64,7 @@ impl PoolSlotCleanupLeaseAuthority<'_> {
             Self::CleanupPending(lease) => {
                 lease.state == ParallelModeSlotLeaseState::CleanupPending
             }
+            Self::UnstartedWorkOrder(lease) => lease.state == ParallelModeSlotLeaseState::Leased,
             Self::NoLease => true,
             Self::StaleStartup {
                 lease,
@@ -351,6 +358,32 @@ pub(super) fn cleanup_stale_leased_startup_slots(
         if !stale_leased_startup_slot_can_be_released(runtime, lease, session_details) {
             continue;
         }
+        // Takeover owns even an exited startup lease. Do not invent a startup failure for it.
+        if !planning_authority
+            .work_order_cleanup_allowed_for_task(context.repo_root, &lease.task_id)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let control_stopped = match planning_authority
+            .work_order_control_for_task(context.repo_root, &lease.task_id)
+        {
+            Ok(None) => false,
+            Ok(Some(_)) => match planning_authority.check_work_order_permit_for_task(
+                context.repo_root,
+                &lease.task_id,
+                PlanningWorkPermitStage::Dispatch,
+                lease
+                    .delivery_target
+                    .as_ref()
+                    .map(|target| target.integration_base_commit_sha.as_str()),
+            ) {
+                Ok(PlanningWorkPermitDecision::Denied(_)) => true,
+                Ok(PlanningWorkPermitDecision::Granted { .. }) => false,
+                Ok(PlanningWorkPermitDecision::Legacy) | Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
         let slot_path = context.pool_root.join(&lease.slot_id);
         let Some(worktree_record) = context
             .worktree_records
@@ -368,17 +401,29 @@ pub(super) fn cleanup_stale_leased_startup_slots(
         if !slot_status.is_clean_baseline() {
             continue;
         }
-        let failed_at = current_timestamp();
-        if record_failed_start_dispatch_block(
-            planning_authority,
-            context.repo_root,
-            lease,
-            &failed_at,
-        )
-        .is_err()
-        {
-            continue;
-        }
+        let failed_at = if control_stopped {
+            None
+        } else {
+            let failed_at = current_timestamp();
+            if record_failed_start_dispatch_block(
+                planning_authority,
+                context.repo_root,
+                lease,
+                &failed_at,
+            )
+            .is_err()
+            {
+                continue;
+            }
+            Some(failed_at)
+        };
+        let authority = match failed_at.as_deref() {
+            Some(dispatch_blocked_at) => PoolSlotCleanupLeaseAuthority::StaleStartup {
+                lease,
+                dispatch_blocked_at,
+            },
+            None => PoolSlotCleanupLeaseAuthority::UnstartedWorkOrder(lease),
+        };
         if cleanup_slot_to_ref_locked(
             planning_authority,
             runtime,
@@ -391,20 +436,19 @@ pub(super) fn cleanup_stale_leased_startup_slots(
                 &lease.branch_name,
             ),
             context.integration_target_oid,
-            PoolSlotCleanupLeaseAuthority::StaleStartup {
-                lease,
-                dispatch_blocked_at: &failed_at,
-            },
+            authority,
             mutation_lock,
         ) {
-            let _ = record_failed_start_session_detail(
-                planning_authority,
-                runtime,
-                context.repo_root,
-                context.pool_root,
-                lease,
-                &failed_at,
-            );
+            if let Some(failed_at) = failed_at {
+                let _ = record_failed_start_session_detail(
+                    planning_authority,
+                    runtime,
+                    context.repo_root,
+                    context.pool_root,
+                    lease,
+                    &failed_at,
+                );
+            }
             cleaned_slots += 1;
         }
     }
@@ -431,7 +475,11 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
     let mut cleaned_slots = 0;
 
     for lease in context.slot_leases.values() {
-        if lease.state != ParallelModeSlotLeaseState::CleanupPending {
+        if lease.state != ParallelModeSlotLeaseState::CleanupPending
+            || !planning_authority
+                .work_order_cleanup_allowed_for_task(context.repo_root, &lease.task_id)
+                .unwrap_or(false)
+        {
             continue;
         }
         let slot_path = context.pool_root.join(&lease.slot_id);
@@ -492,6 +540,9 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
             }
         }
         if mutation_lock.verify_pool_root(context.pool_root).is_err()
+            || !planning_authority
+                .work_order_cleanup_allowed_for_task(context.repo_root, &lease.task_id)
+                .unwrap_or(false)
             || !remove_slot_lease(
                 planning_authority,
                 runtime,
@@ -856,6 +907,11 @@ fn projection_still_allows_cleanup(
         return false;
     };
     authority.allows_projection(&projection, identity.slot_id)
+        && authority.expected_lease().is_none_or(|lease| {
+            planning_authority
+                .work_order_cleanup_allowed_for_task(identity.repo_root, &lease.task_id)
+                .unwrap_or(false)
+        })
         && authority.expected_lease().is_none_or(|lease| {
             lease.slot_id == identity.slot_id
                 && lease.branch_name == identity.branch_name

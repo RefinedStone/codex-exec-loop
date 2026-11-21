@@ -40,6 +40,7 @@ mod collection;
 mod coordinator;
 mod decision;
 mod events;
+mod intervention;
 mod private_store;
 mod triage;
 
@@ -49,7 +50,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -137,6 +138,13 @@ impl SqliteIssueAutomationStoreAdapter {
 }
 
 impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
+    fn issue_authorization_epoch(&self, workspace: &str, issue: &IssueReference) -> Result<u64> {
+        validate_reference_scope(workspace, issue)?;
+        self.with_connection(workspace, |connection, _| {
+            intervention::authorization_epoch(connection, workspace, issue)
+        })
+    }
+
     fn pending_issue_work_events(
         &self,
         workspace: &str,
@@ -145,6 +153,42 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
     }
     fn acknowledge_issue_work_event(&self, workspace: &str, event_id: &str) -> Result<()> {
         events::acknowledge(self, workspace, event_id)
+    }
+    fn get_issue_intervention(
+        &self,
+        workspace: &str,
+        command_id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::intervention::StoredIssueIntervention>>
+    {
+        intervention::get(self, workspace, command_id)
+    }
+    fn claim_issue_steer_delivery(
+        &self,
+        workspace: &str,
+        request: &crate::domain::issue_automation::intervention::IssueInterventionRequest,
+        receipt: &crate::domain::issue_automation::intervention::IssueInterventionReceipt,
+    ) -> Result<bool> {
+        intervention::claim_steer(self, workspace, request, receipt)
+    }
+    fn begin_issue_intervention(
+        &self,
+        workspace: &str,
+        request: &crate::domain::issue_automation::intervention::IssueInterventionRequest,
+    ) -> Result<crate::domain::issue_automation::intervention::StoredIssueIntervention> {
+        intervention::begin(self, workspace, request)
+    }
+    fn finish_issue_intervention(
+        &self,
+        workspace: &str,
+        receipt: &crate::domain::issue_automation::intervention::IssueInterventionReceipt,
+    ) -> Result<()> {
+        intervention::finish(self, workspace, receipt)
+    }
+    fn pending_issue_interventions(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::intervention::StoredIssueIntervention>> {
+        intervention::pending(self, workspace)
     }
 
     fn get_issue_work(
@@ -606,7 +650,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=4) => {
+            (APPLICATION_ID, version @ 1..=5) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -622,8 +666,12 @@ fn ensure_schema(
                 if version < 4 {
                     transaction.execute_batch(decision::SCHEMA)?;
                 }
-                transaction.execute_batch(coordinator::SCHEMA)?;
-                transaction.execute_batch(events::SCHEMA)?;
+                if version < 5 {
+                    transaction.execute_batch(coordinator::SCHEMA)?;
+                    transaction.execute_batch(events::SCHEMA)?;
+                }
+                transaction.execute_batch(intervention::COMMAND_SCHEMA)?;
+                transaction.execute_batch(intervention::TRACKING_SCHEMA)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -645,6 +693,8 @@ fn ensure_schema(
                 transaction.execute_batch(decision::SCHEMA)?;
                 transaction.execute_batch(coordinator::SCHEMA)?;
                 transaction.execute_batch(events::SCHEMA)?;
+                transaction.execute_batch(intervention::COMMAND_SCHEMA)?;
+                transaction.execute_batch(intervention::TRACKING_SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -666,7 +716,7 @@ fn validate_schema(connection: &Connection) -> Result<()> {
 }
 
 fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> {
-    if !matches!(version, 1 | 2 | 3 | 4 | SCHEMA_VERSION) {
+    if !matches!(version, 1 | 2 | 3 | 4 | 5 | SCHEMA_VERSION) {
         bail!("the issue automation schema version is unsupported")
     }
     let mut statement = connection.prepare(
@@ -694,6 +744,10 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     if version >= 5 {
         expected.push((coordinator::TABLE, coordinator::SCHEMA));
         expected.push((events::TABLE, events::SCHEMA));
+    }
+    if version >= 6 {
+        expected.push((intervention::COMMAND_TABLE, intervention::COMMAND_SCHEMA));
+        expected.push((intervention::TRACKING_TABLE, intervention::TRACKING_SCHEMA));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

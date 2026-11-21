@@ -13,6 +13,7 @@ use super::{
 
 fn basis(revision: u64) -> PlanningWorkPermitBasis {
     PlanningWorkPermitBasis {
+        authorization_epoch: 0,
         policy_version: "policy-1".into(),
         field_hash: "field-1".into(),
         gate_revision: revision,
@@ -469,3 +470,5 @@ fn work_permit_concurrent_independent_grants_preserve_every_stage() {
     });
     assert_eq!(stored(&workspace, "order-1").permits.len(), 4);
 }
+
+mod control;
