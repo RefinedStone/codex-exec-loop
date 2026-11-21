@@ -10,12 +10,28 @@ interface SentRequest {
   readonly params: CommandRequest;
 }
 
+const issue = {
+  provider: "github",
+  server_id: "github.com",
+  repository_id: "owner/repository",
+  issue_id: "42",
+  project_scope: { workspace_dir: "/workspace" },
+} as const;
+
 const commands = {
   load_sessions: { type: "load_sessions" },
   refresh_planning: { type: "refresh_planning" },
   set_issue_automation_mode: { type: "set_issue_automation_mode", mode: "observe" },
   sync_issues: { type: "sync_issues" },
   answer_issue_decision: { type: "answer_issue_decision", decision_id: "decision-1", option: "continue", note: "Shared note" },
+  hold_issue: { type: "hold_issue", issue, command_id: "hold-1" },
+  release_issue: { type: "release_issue", issue, command_id: "release-1" },
+  steer_issue: { type: "steer_issue", issue, command_id: "steer-1", message: "Check the migration" },
+  take_over_issue: { type: "take_over_issue", issue, command_id: "take-over-1" },
+  retriage_issue: { type: "retriage_issue", issue, command_id: "retriage-1" },
+  cancel_issue_work: { type: "cancel_issue_work", issue, command_id: "cancel-1", confirm: true },
+  track_issue: { type: "track_issue", issue, command_id: "track-1" },
+  untrack_issue: { type: "untrack_issue", issue, command_id: "untrack-1" },
   rename_session: { type: "rename_session", thread_id: "thread-1", name: "Renamed" },
   submit_prompt: { type: "submit_prompt", thread_id: "thread-1", prompt: "Hello" },
   steer_turn: { type: "steer_turn", thread_id: "thread-1", expected_turn_id: "turn-1", prompt: "Stop here" },
