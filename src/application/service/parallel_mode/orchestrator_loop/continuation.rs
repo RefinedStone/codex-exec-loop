@@ -121,7 +121,8 @@ fn claim_and_replace_mirror(
     let relative = PathBuf::from(".leases").join(format!("{}.json", resolution.lease.slot_id));
     let observed = service
         .parallel_runtime
-        .read_runtime_mirror_optional(&resolution.context.pool_root, &relative)?;
+        .read_runtime_mirror_optional(&resolution.context.pool_root, &relative)
+        .map_err(|error| format!("waiting lease mirror read failed: {error}"))?;
     if let Some(body) = observed.as_deref() {
         let mirror: ParallelModeSlotLeaseSnapshot = serde_json::from_str(body)
             .map_err(|_| "waiting lease mirror is invalid".to_string())?;
@@ -152,7 +153,12 @@ fn claim_and_replace_mirror(
                 &relative,
                 observed.as_deref(),
                 Some(&body),
-            )?
+            )
+            .map_err(|error| {
+                format!(
+                    "continuation lease mirror update failed; delivery remains unknown: {error}"
+                )
+            })?
         {
             // The authority has sealed Unknown and a new generation. Never roll it back and
             // accidentally admit a late old-generation event or a retry of this answer.
