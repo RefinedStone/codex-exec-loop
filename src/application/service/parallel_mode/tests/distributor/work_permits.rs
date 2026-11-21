@@ -951,3 +951,5 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
         "permission filtering must happen before applying the idle-slot limit"
     );
 }
+
+mod shared_integration;
