@@ -271,6 +271,8 @@ impl CommandRequest {
             | KernelCommand::DeleteDirection { .. }
             | KernelCommand::SetIssueAutomationMode { .. }
             | KernelCommand::AnswerIssueDecision { .. }
+            | KernelCommand::SubmitDelegation { .. }
+            | KernelCommand::CancelDelegation { .. }
             | KernelCommand::SyncIssues {} => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
@@ -380,6 +382,12 @@ pub struct CommandResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandResult {
+    DelegationSubmitted {
+        delegation: crate::domain::delegation::Delegation,
+    },
+    DelegationCancelled {
+        delegation: crate::domain::delegation::Delegation,
+    },
     IssueDecisionResolved {
         decision: Box<IssueDecisionFactRecord>,
         outcome: IssueDecisionOutcome,
@@ -512,6 +520,8 @@ impl CommandResult {
             KernelCommandKind::DeleteDirection => Some("direction_deleted"),
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
+            KernelCommandKind::SubmitDelegation => Some("delegation_submitted"),
+            KernelCommandKind::CancelDelegation => Some("delegation_cancelled"),
             KernelCommandKind::LoadSessions
             | KernelCommandKind::RenameSession
             | KernelCommandKind::SubmitPrompt
@@ -777,6 +787,13 @@ pub enum KernelCommand {
     },
     /// Observe 모드에서 원격 읽기를 요청한다. 실행 완료 영수증을 만들지 않는다.
     SyncIssues {},
+    SubmitDelegation {
+        instruction: String,
+        idempotency_key: String,
+    },
+    CancelDelegation {
+        id: String,
+    },
 }
 
 /*
@@ -914,6 +931,13 @@ pub enum KernelCommandInput {
     Core(AppCommand),
     Stored(StoredCommand),
     SyncIssues,
+    SubmitDelegation {
+        instruction: String,
+        idempotency_key: String,
+    },
+    CancelDelegation {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -954,6 +978,8 @@ impl KernelCommand {
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::SyncIssues {} => KernelCommandKind::SyncIssues,
+            Self::SubmitDelegation { .. } => KernelCommandKind::SubmitDelegation,
+            Self::CancelDelegation { .. } => KernelCommandKind::CancelDelegation,
         }
     }
 
@@ -979,7 +1005,9 @@ impl KernelCommand {
             | Self::SetAutoFollowMaxTurns { .. }
             | Self::PauseAutoFollow {}
             | Self::RefreshPlanning {}
-            | Self::SyncIssues {} => false,
+            | Self::SyncIssues {}
+            | Self::SubmitDelegation { .. }
+            | Self::CancelDelegation { .. } => false,
         }
     }
 
@@ -1054,6 +1082,18 @@ impl KernelCommand {
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
             Self::SyncIssues {} => return Ok(KernelCommandInput::SyncIssues),
+            Self::SubmitDelegation {
+                instruction,
+                idempotency_key,
+            } => {
+                return Ok(KernelCommandInput::SubmitDelegation {
+                    instruction,
+                    idempotency_key,
+                });
+            }
+            Self::CancelDelegation { id } => {
+                return Ok(KernelCommandInput::CancelDelegation { id });
+            }
             Self::AnswerIssueDecision {
                 decision_id,
                 option,
@@ -1190,7 +1230,9 @@ impl KernelCommand {
             | Self::DeleteDirection { .. }
             | Self::SetIssueAutomationMode { .. }
             | Self::AnswerIssueDecision { .. }
-            | Self::SyncIssues {} => {
+            | Self::SyncIssues {}
+            | Self::SubmitDelegation { .. }
+            | Self::CancelDelegation { .. } => {
                 return Err(KernelProtocolError::invalid_params(
                     "a host or stored command is not a core command",
                 ));
@@ -1214,6 +1256,14 @@ fn non_blank(field: &str, value: String) -> Result<String, KernelProtocolError> 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelQuery {
+    Delegations {},
+    Delegation {
+        id: String,
+    },
+    DelegationResult {
+        id: String,
+    },
+    DelegationBackends {},
     Sessions {},
     AutoFollow {},
     ThreadActivity {},
@@ -1330,6 +1380,17 @@ impl KernelQuery {
             }
             Self::Issues { .. } => KernelQueryAnswer::Issues(IssuesState::unavailable()),
             Self::Issue { .. } => KernelQueryAnswer::Issue(IssueState::unavailable()),
+            Self::Delegations {} => KernelQueryAnswer::Delegations {
+                delegations: Vec::new(),
+            },
+            Self::Delegation { .. } => KernelQueryAnswer::Delegation { delegation: None },
+            Self::DelegationResult { .. } => KernelQueryAnswer::DelegationResult { text: None },
+            Self::DelegationBackends {} => KernelQueryAnswer::DelegationBackends {
+                chatgpt_chat: crate::domain::delegation::BackendStatus {
+                    state: crate::domain::delegation::BackendState::Unavailable,
+                    reason: Some("gateway_unavailable".to_owned()),
+                },
+            },
         }
     }
 }
@@ -1337,6 +1398,10 @@ impl KernelQuery {
 spec_names! {
     /// 조회의 종류이다.
     pub(crate) enum KernelQueryKind {
+        Delegations => "delegations", "List the 100 most recent text-only delegations.";
+        Delegation => "delegation", "Read one text-only delegation by ID.";
+        DelegationResult => "delegation_result", "Read the stored text result for a delegation.";
+        DelegationBackends => "delegation_backends", "Check the live Desktop chat backend.";
         Sessions => "sessions",
             "The session list of the workspace and its load state.";
         AutoFollow => "auto_follow",
@@ -1369,6 +1434,18 @@ spec_names! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KernelQueryAnswer {
+    Delegations {
+        delegations: Vec<crate::domain::delegation::Delegation>,
+    },
+    Delegation {
+        delegation: Option<crate::domain::delegation::Delegation>,
+    },
+    DelegationResult {
+        text: Option<String>,
+    },
+    DelegationBackends {
+        chatgpt_chat: crate::domain::delegation::BackendStatus,
+    },
     Sessions(SessionsState),
     AutoFollow(AutoFollowSettings),
     ThreadActivity {

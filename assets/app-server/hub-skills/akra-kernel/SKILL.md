@@ -47,11 +47,17 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel issue set_issue_automation_mode --json` | write | Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit. |
 | `akra kernel issue answer_issue_decision --json` | write | Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt. |
 | `akra kernel issue sync_issues --json` | read | Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request. |
+| `akra kernel delegation submit_delegation --json` | write | Accept one text-only ChatGPT delegation using a durable request key. |
+| `akra kernel delegation cancel_delegation --json` | write | Cancel one text-only ChatGPT delegation by ID. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.
 
 ## Queries
 
+- `akra kernel query delegations --json`: List the 100 most recent text-only delegations.
+- `akra kernel query delegation --json`: Read one text-only delegation by ID.
+- `akra kernel query delegation_result --json`: Read the stored text result for a delegation.
+- `akra kernel query delegation_backends --json`: Check the live Desktop chat backend.
 - `akra kernel query sessions --json`: The session list of the workspace and its load state.
 - `akra kernel query auto_follow --json`: The automatic follow-up settings. They are the same for every thread.
 - `akra kernel query thread_activity --json`: The threads that still have work: a running turn, a pending approval, or automatic follow-up.

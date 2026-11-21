@@ -259,6 +259,10 @@ const bridge: AkraBridge = {
     open: (issueUrl) => ipcRenderer.invoke(IPC_CHANNELS.vaultRestoreOpen, issueUrl),
     projectChanged: () => ipcRenderer.send(IPC_CHANNELS.vaultRestoreProjectChanged),
   },
+  delegatedChat: {
+    enabled: () => ipcRenderer.invoke(IPC_CHANNELS.delegatedChatEnabled),
+    open: () => ipcRenderer.invoke(IPC_CHANNELS.delegatedChatOpen),
+  },
   skills: {
     list: (request) => ipcRenderer.invoke(IPC_CHANNELS.skillsList, request),
     link: (identity, source) => ipcRenderer.invoke(IPC_CHANNELS.skillsLink, identity, source),

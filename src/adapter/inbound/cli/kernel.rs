@@ -193,6 +193,10 @@ fn parse(args: &[OsString]) -> Result<Invocation> {
         .context("missing input properties")?;
     let mut input = Map::new();
     input.insert("type".into(), json!(name));
+    if scope == Some("delegation") && name == "submit_delegation" {
+        let delegation_key = key.get_or_insert_with(random_key);
+        input.insert("idempotency_key".into(), json!(delegation_key));
+    }
     for (name, raw) in fields {
         let property = properties
             .get(&name)

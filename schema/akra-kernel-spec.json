@@ -26,6 +26,10 @@
       {
         "name": "issue",
         "summary": "Issue collection settings and observations."
+      },
+      {
+        "name": "delegation",
+        "summary": "Text-only ChatGPT delegations."
       }
     ],
     "state": [
@@ -1175,9 +1179,260 @@
       "output": {
         "$ref": "#/$defs/CommandResponse"
       }
+    },
+    {
+      "name": "submit_delegation",
+      "scope": "delegation",
+      "state": "runtime",
+      "summary": "Accept one text-only ChatGPT delegation using a durable request key.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          },
+          "type": {
+            "const": "submit_delegation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "instruction",
+          "idempotency_key"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "delegation": {
+            "$ref": "#/$defs/Delegation"
+          },
+          "type": {
+            "const": "delegation_submitted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "delegation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "cancel_delegation",
+      "scope": "delegation",
+      "state": "runtime",
+      "summary": "Cancel one text-only ChatGPT delegation by ID.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "cancel_delegation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "delegation": {
+            "$ref": "#/$defs/Delegation"
+          },
+          "type": {
+            "const": "delegation_cancelled",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "delegation"
+        ],
+        "type": "object"
+      }
     }
   ],
   "queries": [
+    {
+      "name": "delegations",
+      "summary": "List the 100 most recent text-only delegations.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "delegations",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "delegations": {
+            "items": {
+              "$ref": "#/$defs/Delegation"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "delegations",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "delegations"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delegation",
+      "summary": "Read one text-only delegation by ID.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "delegation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "delegation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Delegation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "const": "delegation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delegation_result",
+      "summary": "Read the stored text result for a delegation.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "delegation_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "delegation_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delegation_backends",
+      "summary": "Check the live Desktop chat backend.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "delegation_backends",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "chatgpt_chat": {
+            "$ref": "#/$defs/BackendStatus"
+          },
+          "type": {
+            "const": "delegation_backends",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "chatgpt_chat"
+        ],
+        "type": "object"
+      }
+    },
     {
       "name": "sessions",
       "summary": "The session list of the workspace and its load state.",
@@ -3575,6 +3830,30 @@
       ],
       "type": "object"
     },
+    "BackendState": {
+      "enum": [
+        "ready",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "BackendStatus": {
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/BackendState"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
     "CommandCompletion": {
       "enum": [
         "accepted",
@@ -3674,6 +3953,38 @@
     },
     "CommandResult": {
       "oneOf": [
+        {
+          "properties": {
+            "delegation": {
+              "$ref": "#/$defs/Delegation"
+            },
+            "type": {
+              "const": "delegation_submitted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delegation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delegation": {
+              "$ref": "#/$defs/Delegation"
+            },
+            "type": {
+              "const": "delegation_cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delegation"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "catalog_revision": {
@@ -3965,6 +4276,69 @@
         "confirmation"
       ],
       "type": "object"
+    },
+    "Delegation": {
+      "properties": {
+        "caller": {
+          "type": "string"
+        },
+        "conversation_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "outcome_unknown": {
+          "type": "boolean"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "updated_at": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "caller",
+        "state",
+        "delivery",
+        "phase",
+        "outcome_unknown",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "Delivery": {
+      "enum": [
+        "not_sent",
+        "sending",
+        "accepted",
+        "observed",
+        "uncertain"
+      ],
+      "type": "string"
     },
     "DirectionFields": {
       "additionalProperties": false,
@@ -6198,6 +6572,44 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotency_key": {
+              "type": "string"
+            },
+            "instruction": {
+              "type": "string"
+            },
+            "type": {
+              "const": "submit_delegation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instruction",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel_delegation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -6498,6 +6910,66 @@
           "additionalProperties": false,
           "properties": {
             "type": {
+              "const": "delegations",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "delegation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "delegation_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "delegation_backends",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
               "const": "sessions",
               "type": "string"
             }
@@ -6684,6 +7156,81 @@
     },
     "KernelQueryAnswer": {
       "oneOf": [
+        {
+          "properties": {
+            "delegations": {
+              "items": {
+                "$ref": "#/$defs/Delegation"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "delegations",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delegations"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delegation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Delegation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "delegation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "delegation_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "chatgpt_chat": {
+              "$ref": "#/$defs/BackendStatus"
+            },
+            "type": {
+              "const": "delegation_backends",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "chatgpt_chat"
+          ],
+          "type": "object"
+        },
         {
           "$ref": "#/$defs/SessionsState",
           "properties": {
@@ -8313,6 +8860,19 @@
       ],
       "type": "object"
     },
+    "Phase": {
+      "enum": [
+        "working",
+        "complete",
+        "stopped",
+        "failed",
+        "disconnected",
+        "blocked",
+        "unreachable",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "PlanningDirectionState": {
       "enum": [
         "active",
@@ -8740,6 +9300,19 @@
         "reason"
       ],
       "type": "object"
+    },
+    "State": {
+      "enum": [
+        "queued",
+        "dispatching",
+        "running",
+        "interrupted",
+        "awaiting_human",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
     },
     "TaskFields": {
       "additionalProperties": false,

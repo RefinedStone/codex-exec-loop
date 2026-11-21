@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
 
 export type View = "home" | "thread" | "fleet" | "remote";
-export type PanelId = "review" | "graph" | "kernel" | "issues" | "browser" | "work" | "docs" | "skills";
+export type PanelId = "review" | "graph" | "kernel" | "issues" | "browser" | "work" | "docs" | "skills" | "delegation";
 export type Theme = "light" | "dark";
 export type Overlay = "palette" | "shortcuts" | "settings";
 

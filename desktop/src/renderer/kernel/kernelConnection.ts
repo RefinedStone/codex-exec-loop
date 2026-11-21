@@ -24,7 +24,7 @@ import {
 import { sendKernelCommand } from "./sendKernelCommand";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
-export type KernelInterest = "overview" | "issues";
+export type KernelInterest = "overview" | "issues" | "delegation";
 
 export interface KernelIssuesView {
   automation: IssueAutomationAnswer | null;

@@ -657,6 +657,21 @@ pub(crate) fn resolve_active_planning_workspace_root(workspace_dir: &str) -> Pat
     SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir)
 }
 
+pub(crate) fn delegation_runtime(workspace: &str) -> Result<PathBuf> {
+    SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)
+        .map(|location| PathBuf::from(location.runtime_dir))
+}
+
+pub(crate) fn delegation_store(
+    runtime: PathBuf,
+    existing_only: bool,
+) -> Option<Arc<dyn crate::application::port::outbound::delegation_store_port::DelegationStorePort>>
+{
+    let store =
+        crate::adapter::outbound::db::sqlite_delegation_store::DelegationStore::new(runtime);
+    (!existing_only || store.exists()).then(|| Arc::new(store) as Arc<_>)
+}
+
 /// `workspace_dir` 가 속한 저장소의 커널 잠금을 잡는다 (plan 18 K3-4). 결정 고리를 돌리는 프로세스는 런타임을
 /// 조립하기 전에 이것을 잡는다. 다른 프로세스가 쥐고 있으면 `RepositoryKernelLockHeld` 오류이다.
 /// 잠금 파일은 planning 기준 데이터와 같은 사용자 전용 runtime 디렉터리에 둔다.

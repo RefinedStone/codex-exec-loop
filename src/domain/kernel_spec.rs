@@ -99,6 +99,10 @@ spec_names! {
             "Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
         SyncIssues => "sync_issues",
             "Request an immediate issue collection cycle. Concurrent requests coalesce. The command accepts scheduling; the issues event reports a later ledger revision. Off mode rejects the request.";
+        SubmitDelegation => "submit_delegation",
+            "Accept one text-only ChatGPT delegation using a durable request key.";
+        CancelDelegation => "cancel_delegation",
+            "Cancel one text-only ChatGPT delegation by ID.";
     }
 }
 
@@ -113,6 +117,7 @@ spec_names! {
         AutoFollow => "auto_follow", "The automatic follow-up settings.";
         Planning => "planning", "The planning queue and directions.";
         Issue => "issue", "Issue collection settings and observations.";
+        Delegation => "delegation", "Text-only ChatGPT delegations.";
     }
 }
 
@@ -342,7 +347,9 @@ impl KernelCommandKind {
             | Self::RefreshPlanning
             | Self::SetAutoFollowMaxTurns
             | Self::PauseAutoFollow
-            | Self::SyncIssues => CommandCompletion::Accepted,
+            | Self::SyncIssues
+            | Self::SubmitDelegation
+            | Self::CancelDelegation => CommandCompletion::Accepted,
             Self::SubmitPrompt
             | Self::RenameSession
             | Self::SteerTurn
@@ -441,6 +448,12 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::KernelUnreachable, Reason::IssueAutomationOff],
             ),
+            Self::SubmitDelegation | Self::CancelDelegation => (
+                CommandScope::Delegation,
+                Write,
+                Natural,
+                &[Reason::KernelUnreachable],
+            ),
             Self::ResetPlanning => (CommandScope::Planning, Destructive, Natural, &[]),
             Self::RefreshPlanning => (
                 CommandScope::Planning,
@@ -489,7 +502,9 @@ impl KernelCommandKind {
                 | Self::SetAutoFollowMaxTurns
                 | Self::PauseAutoFollow
                 | Self::RefreshPlanning
-                | Self::SyncIssues => CommandState::Runtime,
+                | Self::SyncIssues
+                | Self::SubmitDelegation
+                | Self::CancelDelegation => CommandState::Runtime,
             },
             effect,
             idempotency,

@@ -8,6 +8,7 @@
 mod chats;
 mod confirmation;
 mod context;
+mod delegation;
 mod dots;
 mod git;
 mod hosts;
@@ -128,6 +129,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             mcp_hub: Some(mcp_hub.clone()),
             work_context: Some(work_context),
             resource_versions: Some(resource_versions),
+            delegations: Default::default(),
             git_graph: Some(git_graph),
             git_operations: Some(git_operations),
             issue_handoff: Some(issue_handoff),

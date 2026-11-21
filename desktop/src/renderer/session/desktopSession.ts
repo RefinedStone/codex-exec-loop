@@ -265,6 +265,11 @@ export class DesktopSession {
     return this.kernel.show(workspace, interests);
   }
 
+  requestDelegation<T>(method: typeof KERNEL_METHOD.query | typeof KERNEL_METHOD.command, params: unknown): Promise<T> {
+    if (!this.connected) return Promise.reject(new Error("Gateway 에 연결되어 있지 않습니다."));
+    return this.client.request<T>(method, params);
+  }
+
   /** 커널 패널의 상태를 다시 읽는다. */
   refreshKernel(): Promise<void> {
     return this.kernel.refresh();

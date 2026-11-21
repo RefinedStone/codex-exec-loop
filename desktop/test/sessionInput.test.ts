@@ -23,6 +23,7 @@ function harness(readOnly = false) {
   const messageListeners = new Set<(text: string) => void>();
   const stateListeners = new Set<(state: ConnectionState) => void>();
   const bridge: AkraBridge = {
+    delegatedChat: { enabled: async () => false, open: async () => false },
     send: (text) => {
       const message = JSON.parse(text) as Sent;
       sent.push(message);
