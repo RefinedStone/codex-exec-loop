@@ -65,7 +65,7 @@ export class DelegatedChatDriver {
         throw new Error("chat_host_busy");
       }
       if (method === "submit") {
-        if (this.queued.has(id)) return WAITING;
+        if (this.queued.has(id)) return this.options.manual() ? this.view(null) : WAITING;
         if (this.active?.id === id) {
           return this.active.observation ? this.view(this.active.observation) : WAITING;
         }
