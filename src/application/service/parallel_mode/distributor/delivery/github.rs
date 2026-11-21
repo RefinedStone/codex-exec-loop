@@ -116,6 +116,15 @@ pub(super) fn distributor_push_source_branch(
         return Ok(notice);
     }
     claim_permit.renew("exact frozen source push")?;
+    if let Some(notice) = block_if_work_order_permit_denied(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        PlanningWorkPermitStage::Push,
+    )? {
+        return Ok(notice);
+    }
     if let Err(error) = github_automation.push_frozen_commit_to_delivery_target(
         &repo_root,
         &push_remote,
@@ -207,6 +216,28 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
         }
     };
 
+    // A per-task review condition narrows the parent process opt-in even on PR fallback paths.
+    let requires_human_review = match work_order_permit_decision(
+        planning_authority,
+        &repo_root,
+        record,
+        PlanningWorkPermitStage::Integrate,
+    ) {
+        Ok(decision) => decision.requires_human_review(),
+        Err(detail) => {
+            return Ok(vec![block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                detail,
+            )?]);
+        }
+    };
+    let autonomous_delivery = autonomous_delivery && !requires_human_review;
+
     if mode == PullRequestDeliveryMode::Disabled {
         if !autonomous_delivery {
             return Ok(vec![block_distributor_queue_record(
@@ -216,8 +247,12 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
                 record,
-                "direct integration is disabled unless AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1 is set in the parent process"
-                    .to_string(),
+                if requires_human_review {
+                    "work-order integration requires human review through a pull request"
+                        .to_string()
+                } else {
+                    "direct integration is disabled unless AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1 is set in the parent process".to_string()
+                },
             )?]);
         }
         return Ok(vec![distributor_skip_pull_request_workflow(
@@ -394,6 +429,15 @@ pub(super) fn distributor_ensure_pull_request(
         return Ok(notice);
     }
     claim_permit.renew("pull request ensure")?;
+    if let Some(notice) = block_if_work_order_permit_denied(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        PlanningWorkPermitStage::PullRequest,
+    )? {
+        return Ok(notice);
+    }
     let pull_request = match github_automation.ensure_pull_request_for_delivery_target(
         &repo_root,
         &push_remote,
@@ -538,6 +582,26 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
         .map(|target| target.integration_branch.clone())
         .unwrap_or_else(|| "unknown".to_string());
     record.pull_request_url = Some(pull_request.url.clone());
+    let requires_human_review = match work_order_delivery_gate(
+        planning_authority,
+        &resolution.context.repo_root,
+        record,
+        PlanningWorkPermitStage::Integrate,
+    ) {
+        Ok(required) => required,
+        Err(detail) => {
+            return block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                detail,
+            );
+        }
+    };
+    let autonomous_delivery = autonomous_delivery && !requires_human_review;
     if let Some(detail) = pull_request_readiness_error(
         &pull_request,
         record,
@@ -583,8 +647,30 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
     claim_permit: &DistributorQueueHeadClaimPermit,
     autonomous_delivery_allowed: &Result<bool, String>,
 ) -> Result<Option<String>, String> {
+    // Direct integration has no PR reinspection, but still requires a current task permit.
     let Some(pr_number) = record.pull_request_number else {
-        return Ok(None);
+        let detail = match work_order_delivery_gate(
+            planning_authority,
+            &resolution.context.repo_root,
+            record,
+            PlanningWorkPermitStage::Integrate,
+        ) {
+            Ok(false) => return Ok(None),
+            Ok(true) => {
+                "work-order integration requires human review through a pull request".to_string()
+            }
+            Err(detail) => detail,
+        };
+        return block_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            detail,
+        )
+        .map(Some);
     };
     claim_permit.renew("pre-push autonomous delivery policy inspection")?;
     let target = record
@@ -635,6 +721,27 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
         }
     };
     record.pull_request_url = Some(pull_request.url.clone());
+    let requires_human_review = match work_order_delivery_gate(
+        planning_authority,
+        &resolution.context.repo_root,
+        record,
+        PlanningWorkPermitStage::Integrate,
+    ) {
+        Ok(required) => required,
+        Err(detail) => {
+            return block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                detail,
+            )
+            .map(Some);
+        }
+    };
+    let autonomous_delivery = autonomous_delivery && !requires_human_review;
     if let Some(detail) = pull_request_readiness_error(
         &pull_request,
         record,

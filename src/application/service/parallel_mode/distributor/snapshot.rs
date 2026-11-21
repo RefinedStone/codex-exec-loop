@@ -4,9 +4,15 @@ use super::super::{
     derive_integration_worktree_path, distributor_integration_branch_for_repo,
     inspect_slot_git_status_with_runtime, integration_worktree_head, short_sha,
 };
+use super::delivery::work_order_integration_path;
+use super::work_permits::{is_work_order_permit_wait, work_order_permit_decision};
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeEventRecord;
+use crate::application::port::outbound::planning_work_order_repository_port::{
+    PlanningWorkPermitDecision, PlanningWorkPermitStage,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeCompletionFeedEntry,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModeQueueItemState,
@@ -23,14 +29,12 @@ distributor snapshot은 durable queue와 session history를 TUI용 읽기 모델
 distributor 패널이 같은 "현재 가장 볼 만한 세션" 기준을 공유해야 하기 때문이다.
 */
 pub(super) fn build_distributor_snapshot_from_context(
+    authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
 ) -> ParallelModeDistributorSnapshot {
     let history = context.session_details.clone();
-    let integration_branch = context
-        .distributor_queue_records
-        .iter()
-        .find(|record| record.queue_state.is_active())
+    let integration_branch = active_distributor_queue_head(&context.distributor_queue_records)
         .and_then(|record| record.delivery_target.as_ref())
         .map(|target| target.integration_branch.clone())
         .unwrap_or_else(|| distributor_integration_branch_for_repo(runtime, &context.repo_root));
@@ -61,7 +65,9 @@ pub(super) fn build_distributor_snapshot_from_context(
         )
         .with_head_blocked_detail(blocked_head_detail(queue_head))
         .with_head_rebase_provenance(rebase_provenance_label(queue_head, &integration_branch))
-        .with_orchestrator_status(build_orchestrator_status(runtime, context, queue_head))
+        .with_orchestrator_status(build_orchestrator_status(
+            authority, runtime, context, queue_head,
+        ))
         .with_runtime_event_feed(runtime_event_feed);
     }
     let Some(detail) = selected_runtime_session_detail(context, &history, &queue_records) else {
@@ -69,7 +75,7 @@ pub(super) fn build_distributor_snapshot_from_context(
             ParallelModeQueueItemState::Idle.label(),
             "no distributor queue items are waiting",
         )
-        .with_orchestrator_status(build_idle_orchestrator_status(runtime, context))
+        .with_orchestrator_status(build_idle_orchestrator_status(authority, runtime, context))
         .with_runtime_event_feed(runtime_event_feed);
     };
     /*
@@ -104,7 +110,7 @@ pub(super) fn build_distributor_snapshot_from_context(
     };
     ParallelModeDistributorSnapshot::new(queue_items, completion_feed, head_summary, note)
         .with_head_rebase_provenance(history_rebase_provenance(&detail))
-        .with_orchestrator_status(build_idle_orchestrator_status(runtime, context))
+        .with_orchestrator_status(build_idle_orchestrator_status(authority, runtime, context))
         .with_runtime_event_feed(runtime_event_feed)
 }
 
@@ -134,6 +140,7 @@ orchestrator status는 queue head 하나가 왜 진행 중이거나 막혀 있�
 이 값은 단순 queue item 목록보다 "다음에 무엇을 복구해야 하는가"에 초점을 둔다.
 */
 fn build_orchestrator_status(
+    authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
     queue_head: &ParallelModeDistributorQueueRecord,
@@ -165,12 +172,26 @@ fn build_orchestrator_status(
                 .filter(|note| !note.trim().is_empty())
         }),
         conflict_files: queue_head.conflict_files.clone(),
-        held_queue_count: active_record_count.saturating_sub(1),
-        integration_worktree_readiness: inspect_integration_worktree_readiness(runtime, context),
+        held_queue_count: if is_work_order_permit_wait(queue_head) {
+            0
+        } else {
+            context
+                .distributor_queue_records
+                .iter()
+                .filter(|record| {
+                    record.queue_state.is_active() && !is_work_order_permit_wait(record)
+                })
+                .count()
+                .saturating_sub(1)
+        },
+        integration_worktree_readiness: inspect_integration_worktree_readiness(
+            authority, runtime, context,
+        ),
         slot_return_wait_reason: slot_return_wait_reason(queue_head, matching_lease),
     }
 }
 fn build_idle_orchestrator_status(
+    authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
 ) -> ParallelModeOrchestratorStatus {
@@ -180,7 +201,7 @@ fn build_idle_orchestrator_status(
     동안 dirty branch를 먼저 고치면 다음 commit_ready가 들어왔을 때 즉시 처리할 수 있다.
     */
     status.integration_worktree_readiness =
-        inspect_integration_worktree_readiness(runtime, context);
+        inspect_integration_worktree_readiness(authority, runtime, context);
     status
 }
 fn orchestrator_barrier_state(
@@ -192,6 +213,9 @@ fn orchestrator_barrier_state(
     필요하다는 뜻이고, cleaning은 slot 반환이 남았다는 뜻이며, 여러 active record가
     있으면 head가 뒤 작업을 의도적으로 잡고 있음을 표시한다.
     */
+    if is_work_order_permit_wait(queue_head) {
+        return "permit wait".to_string();
+    }
     match queue_head.queue_state {
         ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed => {
             "blocked".to_string()
@@ -214,25 +238,33 @@ integration worktree readiness는 queue가 비어 있을 때도 계속 보여 �
 생기기 전에 작업대를 정리할 수 있다.
 */
 fn inspect_integration_worktree_readiness(
+    authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
 ) -> String {
-    let Some(record) = context
-        .distributor_queue_records
-        .iter()
-        .find(|record| record.queue_state.is_active())
-    else {
+    let Some(record) = active_distributor_queue_head(&context.distributor_queue_records) else {
         return "ready: no active delivery needs a dedicated integration worktree".to_string();
     };
     let Some(target) = record.delivery_target.as_ref() else {
         return "blocked: active legacy queue item has no immutable delivery target".to_string();
     };
-    let integration_path = derive_integration_worktree_path(
-        &context.pool_root,
-        &target.push_remote,
-        &target.github_repository,
-        &target.integration_branch,
-    );
+    let integration_path = match work_order_permit_decision(
+        authority,
+        &context.repo_root,
+        record,
+        PlanningWorkPermitStage::Integrate,
+    ) {
+        Ok(PlanningWorkPermitDecision::Legacy) => derive_integration_worktree_path(
+            &context.pool_root,
+            &target.push_remote,
+            &target.github_repository,
+            &target.integration_branch,
+        ),
+        Ok(_) => work_order_integration_path(&context.pool_root, target, &record.slot_id),
+        Err(_) => {
+            return "unknown: work-order integration authority could not be inspected".to_string();
+        }
+    };
     if !runtime.path_exists(&integration_path) {
         return format!(
             "ready: dedicated integration worktree will be created at {}",
@@ -312,7 +344,12 @@ fn active_distributor_queue_head(
 ) -> Option<&ParallelModeDistributorQueueRecord> {
     queue_records
         .iter()
-        .find(|record| record.queue_state.is_active())
+        .find(|record| record.queue_state.is_active() && !is_work_order_permit_wait(record))
+        .or_else(|| {
+            queue_records
+                .iter()
+                .find(|record| record.queue_state.is_active())
+        })
 }
 fn blocked_head_detail(record: &ParallelModeDistributorQueueRecord) -> Option<String> {
     /*

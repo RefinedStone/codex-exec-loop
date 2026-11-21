@@ -142,6 +142,30 @@ pub(super) fn write_distributor_queue_record(
         })
 }
 
+pub(super) fn compare_and_swap_distributor_queue_record(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    expected: &ParallelModeDistributorQueueRecord,
+    replacement: &ParallelModeDistributorQueueRecord,
+) -> Result<bool, String> {
+    let changed = planning_authority
+        .compare_and_swap_runtime_distributor_queue_record(workspace_dir, expected, replacement)
+        .map_err(|error| format!("failed to rearm distributor permit wait: {error}"))?;
+    if changed {
+        let body = serde_json::to_string_pretty(replacement).map_err(|error| error.to_string())?;
+        runtime
+            .write_runtime_mirror_atomic(
+                pool_root,
+                &distributor_queue_record_relative_path(&replacement.queue_item_id),
+                &body,
+            )
+            .map_err(|error| format!("failed to mirror distributor permit rearm: {error}"))?;
+    }
+    Ok(changed)
+}
+
 /*
 block_distributor_queue_record는 delivery의 공통 실패 전이이다. queue state와
 integration state를 blocked로 바꾸고, 최초 recovery_note를 보존하며, 최신 integration_note에는

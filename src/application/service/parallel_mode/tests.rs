@@ -856,6 +856,29 @@ struct FakePullRequestReadinessOverrides {
     required_checks_passed: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FakeGithubAutomationBoundary {
+    SourcePushPreflight,
+    SourcePushed,
+    PullRequestEnsured,
+    IntegrationPushReadiness,
+}
+
+#[derive(Clone)]
+struct FakeGithubAutomationHook {
+    boundary: FakeGithubAutomationBoundary,
+    action: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl std::fmt::Debug for FakeGithubAutomationHook {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FakeGithubAutomationHook")
+            .field("boundary", &self.boundary)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FakeGithubAutomationPort {
     capabilities: GithubAutomationCapabilities,
@@ -888,6 +911,7 @@ struct FakeGithubAutomationPort {
     remote_branch_listing_error: Arc<Mutex<Option<String>>>,
     integration_remote_head_after_reads: Arc<Mutex<Option<(usize, String)>>>,
     source_branch_cleanup_calls: Arc<Mutex<usize>>,
+    boundary_hook: Arc<Mutex<Option<FakeGithubAutomationHook>>>,
 }
 impl FakeGithubAutomationPort {
     fn ready() -> Self {
@@ -949,8 +973,43 @@ impl FakeGithubAutomationPort {
             remote_branch_listing_error: Arc::new(Mutex::new(None)),
             integration_remote_head_after_reads: Arc::new(Mutex::new(None)),
             source_branch_cleanup_calls: Arc::new(Mutex::new(0)),
+            boundary_hook: Arc::new(Mutex::new(None)),
         }
     }
+    fn set_boundary_hook(
+        &self,
+        boundary: FakeGithubAutomationBoundary,
+        action: impl Fn() + Send + Sync + 'static,
+    ) {
+        *self
+            .boundary_hook
+            .lock()
+            .expect("fake github boundary hook mutex poisoned") = Some(FakeGithubAutomationHook {
+            boundary,
+            action: Arc::new(action),
+        });
+    }
+
+    fn run_boundary_hook(&self, boundary: FakeGithubAutomationBoundary) {
+        let hook = {
+            let mut pending = self
+                .boundary_hook
+                .lock()
+                .expect("fake github boundary hook mutex poisoned");
+            if pending
+                .as_ref()
+                .is_some_and(|hook| hook.boundary == boundary)
+            {
+                pending.take()
+            } else {
+                None
+            }
+        };
+        if let Some(hook) = hook {
+            (hook.action)();
+        }
+    }
+
     fn with_capabilities(capabilities: GithubAutomationCapabilities) -> Self {
         Self {
             capabilities,
@@ -1207,6 +1266,7 @@ impl FakeGithubAutomationPort {
 }
 impl GithubAutomationPort for FakeGithubAutomationPort {
     fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+        self.run_boundary_hook(FakeGithubAutomationBoundary::SourcePushPreflight);
         self.capabilities.clone()
     }
     fn repository_identity(&self, _repo_root: &str) -> anyhow::Result<String> {
@@ -1385,6 +1445,7 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         }
         let refspec = format!("{source_commit_sha}:refs/heads/{branch_name}");
         run_git_result(Path::new(repo_root), &["push", push_remote, &refspec])?;
+        self.run_boundary_hook(FakeGithubAutomationBoundary::SourcePushed);
         Ok(())
     }
     fn push_frozen_commit_to_delivery_target(
@@ -1475,6 +1536,7 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
                     .cloned()
                     .collect::<Vec<_>>()
             });
+        self.run_boundary_hook(FakeGithubAutomationBoundary::PullRequestEnsured);
         Ok(pull_request)
     }
     fn ensure_pull_request_for_delivery_target(
@@ -1523,6 +1585,9 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
                 !closing_inspection && inspection_count == 1,
             )
         };
+        if pre_push_inspection {
+            self.run_boundary_hook(FakeGithubAutomationBoundary::IntegrationPushReadiness);
+        }
         let pre_push_overrides = pre_push_inspection
             .then(|| {
                 self.pre_push_inspect_overrides

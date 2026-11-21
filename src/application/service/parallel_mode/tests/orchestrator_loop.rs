@@ -356,7 +356,41 @@ impl ParallelModeRuntimeEventLogPort for FaultyPlanningAuthorityAdapter {
     }
 }
 
+use crate::application::port::outbound::planning_work_order_repository_port::{
+    PlanningWorkPermitDecision, PlanningWorkPermitStage,
+};
+
 impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
+    fn compare_and_swap_runtime_distributor_queue_record(
+        &self,
+        workspace_dir: &str,
+        expected: &PlanningAuthorityDistributorQueueRecord,
+        replacement: &PlanningAuthorityDistributorQueueRecord,
+    ) -> anyhow::Result<bool> {
+        PlanningAuthorityPort::compare_and_swap_runtime_distributor_queue_record(
+            self.inner.as_ref(),
+            workspace_dir,
+            expected,
+            replacement,
+        )
+    }
+
+    fn check_work_order_permit_for_task(
+        &self,
+        workspace_dir: &str,
+        task_id: &str,
+        stage: PlanningWorkPermitStage,
+        source_sha: Option<&str>,
+    ) -> anyhow::Result<PlanningWorkPermitDecision> {
+        PlanningAuthorityPort::check_work_order_permit_for_task(
+            self.inner.as_ref(),
+            workspace_dir,
+            task_id,
+            stage,
+            source_sha,
+        )
+    }
+
     fn resolve_authority_location(
         &self,
         workspace_dir: &str,
