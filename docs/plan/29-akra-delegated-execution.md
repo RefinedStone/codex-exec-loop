@@ -132,9 +132,8 @@ Akra 의 기능은 일 하나를 "위임 작업"으로 낸다. 경로 정책이 
 | `DelegationStorePort` | outbound | 장부 | SQLite. 저장소 runtime 폴더의 새 파일이다 |
 | `DelegationPolicySourcePort` | outbound | 경로 정책 파일 | 파일 |
 | `BackendLeasePort` | outbound | 머신 전체에서 백엔드 자원 하나를 작업 하나에 묶는다 | `telegram_global_runner_lease` 의 방식 |
-| `ChatDriverPort` | outbound | Desktop 구동기에 내는 호출 (§8.2). `chatgpt_chat` adapter 만 쓴다 | Gateway 의 되묻기 |
+| `ChatDriverPort` | outbound | Desktop 구동기에 내는 호출 (§8.2). tunnel 의 상태도 이 길로 온다. `chatgpt_chat` adapter 만 쓴다 | Gateway 의 되묻기 |
 | `ChatsPort` (있음) | outbound | 대화 목록과 한 건 읽기. 끝을 확인하는 보조 근거이다 | `cloud_chats` |
-| `TunnelStatusPort` | outbound | tunnel 이 준비됐는가 | `akra-tunnel status` |
 
 - 모듈은 planning, parallel, core 의 타입을 import 하지 않는다. architecture test 가 이것을 막는다 (plan 28 §5.2 와 같다).
 - 기존 `ParallelAgentWorkerPort`, `PlanningWorkerPort`, `InteractiveTurnRuntimePort` 는 바꾸지 않는다.
@@ -349,7 +348,7 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 
 | 호출 | 하는 일 |
 | --- | --- |
-| `status` | 구동기가 있는가, 로그인했는가, host 를 쥐었는가 |
+| `status` | 구동기가 있는가, 로그인했는가, host 를 쥐었는가, tunnel 이 준비됐는가 (core 의 `AkraTunnelService.status()`) |
 | `submit(job, session, envelope)` | 대화를 열고 보낸다. 전달 단계와 대화 참조를 돌려준다. 같은 작업 ID 는 한 번만 보낸다 |
 | `observe(job)` | 단계, 근거, 복구 상태를 돌려준다 |
 | `read_result(job)` | 표식 뒤의 마지막 답을 돌려준다 |
@@ -374,8 +373,8 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 ### 8.4 tunnel 과의 관계
 
 - tunnel 은 선택이다. 글만 주고받는 작업은 tunnel 이 필요 없다.
-- tunnel 의 연결과 감시는 akra-tunnel 에 남는다 (launcher 나 CLI). Akra 는 상태만 읽는다 (`TunnelStatusPort`). 첫 범위에서
-  Akra 는 tunnel 을 켜거나 끄지 않는다 (§15 Q-DE16).
+- tunnel 의 연결과 감시는 akra-tunnel 에 남는다 (launcher 나 CLI). Akra 는 상태만 읽는다. 구동기의 `status` 가 core 의
+  tunnel 상태를 돌려준다. 따로 port 를 두지 않는다. 첫 범위에서 Akra 는 tunnel 을 켜거나 끄지 않는다 (§15 Q-DE16).
 - home 하나에 host 는 하나이다. broker 의 pipe 이름이 home 에서 나온다. Akra Desktop 이 host 를 쥐면 MCP 런타임의 도구 호출
   신호 (`call_observed`) 가 Akra Desktop 으로 온다. 그것이 `tunnel` 근거이다. 감시 엔진도 하나가 된다. 그래서 두 앱이 같은
   대화를 재개하지 않는다.
