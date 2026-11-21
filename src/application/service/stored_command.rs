@@ -3,6 +3,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 
+use crate::application::port::inbound::issue_intervention_port::IssueInterventionPort;
 use crate::application::port::inbound::stored_command_port::issue_confirmation::IssueConfirmationError;
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandContext, StoredCommandOutcome, StoredCommandPort,
@@ -25,6 +26,7 @@ pub struct StoredCommandService {
     planning: PlanningAdminFacadeService,
     issues: Option<Arc<IssueCollectionService>>,
     decisions: Option<Arc<IssueDecisionService>>,
+    interventions: Option<Arc<dyn IssueInterventionPort>>,
 }
 
 impl StoredCommandService {
@@ -33,6 +35,7 @@ impl StoredCommandService {
             planning,
             issues: None,
             decisions: None,
+            interventions: None,
         }
     }
 
@@ -46,12 +49,32 @@ impl StoredCommandService {
         self
     }
 
+    pub fn with_issue_interventions(
+        mut self,
+        interventions: Arc<dyn IssueInterventionPort>,
+    ) -> Self {
+        self.interventions = Some(interventions);
+        self
+    }
+
     fn run(
         &self,
         command: StoredCommand,
         context: Option<&StoredCommandContext>,
     ) -> Result<StoredCommandResult> {
         match command {
+            StoredCommand::InterveneIssue { request } => {
+                let context = context
+                    .ok_or_else(|| anyhow::anyhow!("issue interventions require server context"))?;
+                let receipt = self
+                    .interventions
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("issue interventions are unavailable"))?
+                    .intervene(request, context)?;
+                Ok(StoredCommandResult::IssueIntervened {
+                    receipt: Box::new(receipt),
+                })
+            }
             StoredCommand::AnswerIssueDecision {
                 decision_id,
                 option,

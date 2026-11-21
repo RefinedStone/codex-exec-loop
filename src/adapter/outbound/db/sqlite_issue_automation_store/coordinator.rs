@@ -90,11 +90,22 @@ pub(super) fn save(
             || super::decision::current_item(tx, workspace, fence, assessment)?.is_none() {
             return Ok(IssueWorkSaveResult::Conflict);
         }
+        if super::intervention::has_pending(tx, workspace, &candidate.order.issue)?
+            || !super::intervention::is_tracked(tx, workspace, &candidate.order.issue)? {
+            return Ok(IssueWorkSaveResult::Conflict);
+        }
         let existing = read(tx, workspace, &candidate.order.issue)?;
         if let Some(current) = &existing {
             if current.order != candidate.order || current.decision_id != candidate.decision_id
                 || current.approved_basis != candidate.approved_basis {
                 bail!("a registered issue work identity cannot change");
+            }
+            if current.authorization != candidate.authorization {
+                let Some(authorization)=&candidate.authorization else { bail!("work authorization cannot be removed"); };
+                if authorization.basis.authorization_epoch <= current.current_authorization_basis().authorization_epoch {
+                    bail!("renewed work authorization requires a newer intervention epoch");
+                }
+                validate_authorization(tx,workspace,assessment,&candidate.order.issue,&authorization.decision_id,&authorization.basis)?;
             }
             if current.revision != candidate.revision { return Ok(IssueWorkSaveResult::Conflict); }
             if current == candidate {
@@ -110,8 +121,9 @@ pub(super) fn save(
             let Some(decision) = super::decision::read(tx, workspace, &candidate.decision_id)? else {
                 bail!("the issue work approval was not found");
             };
-            let basis = crate::domain::issue_automation::decision::IssueDecisionBasis::from_assessment(
+            let mut basis = crate::domain::issue_automation::decision::IssueDecisionBasis::from_assessment(
                 assessment, crate::domain::issue_automation::policy::IssueAutomationGate::Start, None)?;
+            basis.authorization_epoch=super::intervention::authorization_epoch(tx,workspace,&candidate.order.issue)?;
             if !human_start(&decision.request) || decision.request.issue() != &candidate.order.issue
                 || decision.request.definition().basis != candidate.approved_basis
                 || basis != candidate.approved_basis {
@@ -150,4 +162,31 @@ pub(super) fn save(
         super::events::append(tx, workspace, existing.as_ref(), &record, catalog_revision)?;
         Ok(IssueWorkSaveResult::Saved { record: Box::new(record), catalog_revision, changed: true })
     }))
+}
+
+fn validate_authorization(
+    tx: &Connection,
+    workspace: &str,
+    assessment: &IssueTriageAssessment,
+    issue: &IssueReference,
+    decision_id: &crate::domain::issue_automation::decision::IssueDecisionId,
+    approved: &crate::domain::issue_automation::decision::IssueDecisionBasis,
+) -> Result<()> {
+    let decision = super::decision::read(tx, workspace, decision_id)?
+        .ok_or_else(|| anyhow!("renewed work approval is missing"))?;
+    let mut basis = crate::domain::issue_automation::decision::IssueDecisionBasis::from_assessment(
+        assessment,
+        crate::domain::issue_automation::policy::IssueAutomationGate::Start,
+        None,
+    )?;
+    basis.authorization_epoch = super::intervention::authorization_epoch(tx, workspace, issue)?;
+    if !human_start(&decision.request)
+        || decision.request.issue() != issue
+        || decision.request.definition().basis != *approved
+        || basis != *approved
+        || !crate::domain::issue_automation::coordinator::ready_for_propose(assessment)
+    {
+        bail!("renewed work authorization requires a current human approval");
+    }
+    Ok(())
 }

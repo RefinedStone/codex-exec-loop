@@ -1148,6 +1148,441 @@
       }
     },
     {
+      "name": "hold_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Hold one issue work order and revoke its unused work permits. Running turns are preserved. Reuse command_id to recover the same intervention receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "hold_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "release_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Release one issue hold. Previously revoked permits stay revoked until fresh approval and gate checks. Reuse command_id to recover the same intervention receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "release_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "steer_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Queue guidance before execution, or steer the linked running thread once. An unknown delivery is not retried automatically. Reuse command_id to recover the same intervention receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "message": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "steer_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id",
+          "message"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "take_over_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Take over one issue work order. Automatic continuation, delivery, and cleanup are disabled while its branch, worktree, and thread are preserved.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "take_over_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "retriage_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Invalidate one issue assessment and revoke its existing work permits so that the current issue can be assessed again.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "retriage_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "cancel_issue_work",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Cancel one issue work order and its task lineage. Requires confirm: true and revokes all unused work permits.",
+      "effect": "destructive",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "cancel_issue_work",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "track_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Track a stable issue reference in the attached workspace. Tracking does not grant work permits.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "track_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "untrack_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Untrack one issue and stop its automatic work. Existing branches, worktrees, and threads are preserved.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "untrack_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "sync_issues",
       "scope": "issue",
       "state": "runtime",
@@ -2814,6 +3249,102 @@
       }
     },
     {
+      "name": "issue_held",
+      "summary": "An issue hold was committed. New work is blocked while running turns and local work are preserved.",
+      "payload": {
+        "properties": {
+          "authorization_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_held",
+            "type": "string"
+          },
+          "work_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "authorization_epoch"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_released",
+      "summary": "An issue hold was released. Previously revoked work permits are not restored.",
+      "payload": {
+        "properties": {
+          "authorization_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_released",
+            "type": "string"
+          },
+          "work_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "authorization_epoch"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_work_permit_revoked",
+      "summary": "An issue intervention advanced the authorization epoch and fenced previously granted work permits.",
+      "payload": {
+        "properties": {
+          "authorization_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_work_permit_revoked",
+            "type": "string"
+          },
+          "work_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "authorization_epoch"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issue_work_permit_granted",
       "summary": "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.",
       "payload": {
@@ -3765,6 +4296,22 @@
       "oneOf": [
         {
           "properties": {
+            "receipt": {
+              "$ref": "#/$defs/IssueInterventionReceiptState"
+            },
+            "type": {
+              "const": "issue_intervened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "catalog_revision": {
               "format": "uint64",
               "minimum": 0,
@@ -4653,6 +5200,11 @@
     "IssueDecisionBasis": {
       "additionalProperties": false,
       "properties": {
+        "authorizationEpoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "fieldHash": {
           "anyOf": [
             {
@@ -4687,6 +5239,12 @@
     "IssueDecisionBasisRecord": {
       "additionalProperties": false,
       "properties": {
+        "authorization_epoch": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "field_hash": {
           "anyOf": [
             {
@@ -5021,6 +5579,62 @@
       "required": [
         "version",
         "sha256"
+      ],
+      "type": "object"
+    },
+    "IssueInterventionReceiptState": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "authorization_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueSteerDeliveryState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handoff": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueSharedCopyState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issue": {
+          "$ref": "#/$defs/IssueEventReference"
+        },
+        "work_order_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "issue",
+        "command_id",
+        "action",
+        "authorization_epoch",
+        "changed"
       ],
       "type": "object"
     },
@@ -5461,6 +6075,14 @@
         "malformed_response",
         "identity_mismatch",
         "metadata_incomplete"
+      ],
+      "type": "string"
+    },
+    "IssueSteerDeliveryState": {
+      "enum": [
+        "queued",
+        "sent",
+        "unknown"
       ],
       "type": "string"
     },
@@ -6325,6 +6947,209 @@
             "type",
             "decision_id",
             "option"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "hold_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "release_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "message": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "steer_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "take_over_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "retriage_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "confirm": {
+              "default": false,
+              "type": "boolean"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "cancel_issue_work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "track_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "untrack_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
           ],
           "type": "object"
         },
@@ -7854,6 +8679,90 @@
             "work_order_id",
             "task_ids",
             "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "authorization_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_held",
+              "type": "string"
+            },
+            "work_order_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "authorization_epoch"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "authorization_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_released",
+              "type": "string"
+            },
+            "work_order_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "authorization_epoch"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "authorization_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_work_permit_revoked",
+              "type": "string"
+            },
+            "work_order_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "authorization_epoch"
           ],
           "type": "object"
         },

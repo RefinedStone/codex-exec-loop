@@ -64,7 +64,7 @@ use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
 };
-use self::steering::AppServerTurnSteerBroker;
+use self::steering::{AppServerParallelTurnSteerRegistry, AppServerTurnSteerBroker};
 use crate::application::port::conversation_stream::{
     ConversationStreamEvent, ConversationStreamSender,
 };
@@ -628,6 +628,7 @@ pub struct CodexAppServerAdapter {
     turn_interrupt_signal: AppServerTurnInterruptSignal,
     approval_broker: Arc<AppServerApprovalBroker>,
     turn_steer_broker: Arc<AppServerTurnSteerBroker>,
+    parallel_turn_steer_registry: Arc<AppServerParallelTurnSteerRegistry>,
     planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
     prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
@@ -747,6 +748,7 @@ impl CodexAppServerAdapter {
             turn_interrupt_signal: AppServerTurnInterruptSignal::default(),
             approval_broker: Arc::new(AppServerApprovalBroker::default()),
             turn_steer_broker: Arc::new(AppServerTurnSteerBroker::default()),
+            parallel_turn_steer_registry: Arc::new(AppServerParallelTurnSteerRegistry::default()),
             planning_worker_skill_adapter: PlanningWorkerSkillAdapter::new(),
             prompt_log_port,
             thread_turn_options_port,
@@ -1398,12 +1400,24 @@ impl CodexAppServerAdapter {
                 "turn/start response did not provide nonempty thread and turn identifiers"
             );
         }
-        let turn_steer_binding = (prompt_trace_context.session_kind == "main")
+        let mut parallel_steer_registration = (prompt_trace_context.session_kind
+            == "parallel-worker")
             .then(|| {
-                self.turn_steer_broker
+                self.parallel_turn_steer_registry
                     .bind(&trace_thread_id, &turn_response.turn.id)
             })
             .transpose()?;
+        let turn_steer_broker = parallel_steer_registration.as_ref().map_or_else(
+            || self.turn_steer_broker.clone(),
+            |registration| registration.broker.clone(),
+        );
+        let turn_steer_binding = if let Some(registration) = parallel_steer_registration.as_mut() {
+            registration.take_binding()
+        } else {
+            (prompt_trace_context.session_kind == "main")
+                .then(|| turn_steer_broker.bind(&trace_thread_id, &turn_response.turn.id))
+                .transpose()?
+        };
         if let Err(error) = send_required_app_server_event(
             event_sender,
             ConversationStreamEvent::TurnStarted {
@@ -1413,7 +1427,7 @@ impl CodexAppServerAdapter {
             "turn/started",
         ) {
             if let Some(binding) = turn_steer_binding.as_ref() {
-                self.turn_steer_broker.unbind(
+                turn_steer_broker.unbind(
                     binding.binding_id(),
                     "turn start could not be delivered to the application",
                 );
@@ -1429,7 +1443,7 @@ impl CodexAppServerAdapter {
                     interrupt_signal,
                     observed_interrupt_generation,
                     event_sender,
-                    &self.turn_steer_broker,
+                    &turn_steer_broker,
                     binding,
                 ),
                 None => connection.wait_for_turn_stream(
@@ -1451,7 +1465,7 @@ impl CodexAppServerAdapter {
                 interrupt_signal,
                 observed_interrupt_generation,
                 &stream_event_sender,
-                &self.turn_steer_broker,
+                &turn_steer_broker,
                 binding,
             ),
             None => connection.wait_for_turn_stream(
@@ -1725,10 +1739,24 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         self.approval_broker.resolve(approval_id, decision)
     }
 
+    fn active_worker_turn_id(&self, thread_id: &str) -> Result<Option<String>> {
+        self.parallel_turn_steer_registry
+            .broker(thread_id)?
+            .map(|broker| broker.active_turn_id(thread_id))
+            .transpose()
+            .map(Option::flatten)
+    }
+
     fn steer_turn(
         &self,
         request: ConversationTurnSteerRequest,
     ) -> Result<ConversationTurnSteerReceipt> {
+        if let Some(broker) = self
+            .parallel_turn_steer_registry
+            .broker(&request.thread_id)?
+        {
+            return broker.submit_bounded(request, std::time::Duration::from_secs(1));
+        }
         self.turn_steer_broker.submit(request)
     }
 

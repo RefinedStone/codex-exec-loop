@@ -639,16 +639,20 @@ async fn read_kernel_log<T: Send + 'static>(
         .map_err(unavailable)
 }
 
-/// 결정 답의 가리기 전 note는 녹화 입력에서 제외한다. 실제 검증은 명령 decoder가 맡는다.
-pub(super) fn is_issue_decision_command(method: &str, text: &str) -> bool {
+/// 결정 답과 개입의 가리기 전 원문은 녹화 입력에서 제외한다. 실제 검증은 명령 decoder가 맡는다.
+pub(super) fn is_sensitive_issue_command(method: &str, text: &str) -> bool {
     method == METHOD_COMMAND
         && serde_json::from_str::<Value>(text)
             .ok()
-            .is_some_and(|message| is_issue_decision_params(&message["params"]))
+            .is_some_and(|message| sensitive_issue_command_error(&message["params"]).is_some())
 }
 
-fn is_issue_decision_params(params: &Value) -> bool {
-    params.pointer("/command/type").and_then(Value::as_str) == Some("answer_issue_decision")
+fn sensitive_issue_command_error(params: &Value) -> Option<&'static str> {
+    match params.pointer("/command/type").and_then(Value::as_str) {
+        Some("answer_issue_decision") => Some("invalid issue decision answer parameters"),
+        Some("steer_issue") => Some("invalid issue steer parameters"),
+        _ => None,
+    }
 }
 
 fn confirmation_command(
@@ -712,12 +716,12 @@ fn invalid_confirmation() -> KernelProtocolError {
 }
 
 fn parse_command_params(params: Value) -> Result<CommandRequest, KernelProtocolError> {
-    let sensitive = is_issue_decision_params(&params);
+    let sensitive = sensitive_issue_command_error(&params);
     parse_params(params).map_err(|error| {
-        if sensitive {
+        if let Some(message) = sensitive {
             KernelProtocolError {
                 code: ERROR_INVALID_PARAMS,
-                message: "invalid issue decision answer parameters".to_string(),
+                message: message.to_string(),
             }
         } else {
             error
@@ -944,6 +948,7 @@ mod tests {
                 }],
                 recommended: Some("continue".to_owned()),
                 basis: IssueDecisionBasis {
+                    authorization_epoch: 0,
                     policy_version: "a".repeat(64),
                     field_hash: None,
                     work_order_id: None,

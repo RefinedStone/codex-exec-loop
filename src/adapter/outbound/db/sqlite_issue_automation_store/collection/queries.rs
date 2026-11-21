@@ -101,10 +101,15 @@ pub(in super::super) fn item(
     Ok(Some(IssueCollectionItem {
         issue: reference.clone(),
         binding_id,
-        tracked: tracked.map(|issue| IssueTrackedSummary {
-            state: issue.state(),
-            flags: issue.flags(),
-        }),
+        // Untracking hides workflow state, not the persisted identity, binding, or CAS revision.
+        tracked: if super::super::intervention::is_tracked(connection, workspace, reference)? {
+            tracked.map(|issue| IssueTrackedSummary {
+                state: issue.state(),
+                flags: issue.flags(),
+            })
+        } else {
+            None
+        },
         current: observation.map(|item| item.current),
         observation_revision,
         tracked_revision,

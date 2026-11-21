@@ -1308,6 +1308,7 @@ impl NativeClientRuntime {
             &command,
             StoredCommand::SetIssueAutomationMode { .. }
                 | StoredCommand::AnswerIssueDecision { .. }
+                | StoredCommand::InterveneIssue { .. }
         );
         let context =
             crate::application::port::inbound::stored_command_port::StoredCommandContext {
@@ -1366,6 +1367,18 @@ impl NativeClientRuntime {
         )) = &end
         {
             self.record_issue_decision(fact, *catalog_revision);
+        }
+        if let StoredCommandEnd::Finished(StoredCommandOutcome::Done(
+            StoredCommandResult::IssueIntervened { receipt },
+        )) = &end
+        {
+            if receipt.changed {
+                self.published_issue_change = true;
+                if let Some(observer) = &mut self.issue_observer {
+                    observer.request_sync(Instant::now());
+                }
+            }
+            self.record_kernel_events(KernelEvent::issue_intervened(receipt));
         }
         let rejection = match &end {
             StoredCommandEnd::Finished(StoredCommandOutcome::Rejected(rejection)) => {

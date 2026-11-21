@@ -8,6 +8,9 @@ use super::super::{
 use super::*;
 use crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort;
 use crate::application::port::outbound::issue_source_port::IssueDiscoveryTarget;
+use crate::domain::issue_automation::intervention::{
+    IssueInterventionAction, IssueInterventionReceipt, IssueInterventionRequest,
+};
 use crate::domain::issue_automation::source::{
     IssueContentWithheldReason, IssueDiscoverySelection, IssueMetadataCompleteness,
     IssueMetadataList, IssuePrPresence, IssueRemoteState, IssueSourceContent,
@@ -820,6 +823,189 @@ fn catalog_pagination_is_a_binary_union_and_never_fills_unobserved_rows_from_leg
         .unwrap();
     assert_eq!(filtered.items.len(), 1);
     assert_eq!(filtered.items[0].issue, other_reference);
+}
+
+fn finish_tracking_intervention(
+    fixture: &Fixture,
+    issue: &crate::domain::issue_work::IssueReference,
+    command_id: &str,
+    action: IssueInterventionAction,
+) -> IssueInterventionReceipt {
+    let adapter = fixture.adapter();
+    let receipt = IssueInterventionReceipt {
+        issue: issue.clone(),
+        command_id: command_id.to_owned(),
+        action: action.label().to_owned(),
+        work_order_id: None,
+        authorization_epoch: adapter
+            .issue_authorization_epoch(fixture.cwd(), issue)
+            .unwrap()
+            + 1,
+        changed: true,
+        delivery: None,
+        handoff: None,
+    };
+    adapter
+        .begin_issue_intervention(
+            fixture.cwd(),
+            &IssueInterventionRequest {
+                command_id: command_id.to_owned(),
+                issue: issue.clone(),
+                action,
+            },
+        )
+        .unwrap();
+    adapter
+        .finish_issue_intervention(fixture.cwd(), &receipt)
+        .unwrap();
+    receipt
+}
+
+#[test]
+fn untracked_legacy_rows_remain_in_catalog_and_triage_pages() {
+    let fixture = Fixture::new("collector-untracked-legacy-pages");
+    let adapter = fixture.adapter();
+    let (binding, still_tracked) = fixture.insert();
+    let legacy = adapter
+        .insert_issue(
+            fixture.cwd(),
+            &discovered(&binding, "I_0", "unobserved historical copy"),
+        )
+        .unwrap()
+        .issue;
+    adapter.ensure_collection(fixture.cwd()).unwrap();
+    finish_tracking_intervention(
+        &fixture,
+        legacy.reference(),
+        "untrack-legacy",
+        IssueInterventionAction::Untrack,
+    );
+
+    // Reopen the adapter so identity and tracking come from the durable rows.
+    let adapter = fixture.adapter();
+    let mut query = IssueCollectionQuery {
+        binding_id: Some(binding.id().clone()),
+        after: None,
+        limit: 1,
+    };
+    let first = adapter
+        .query_collection_issues(fixture.cwd(), &query)
+        .unwrap();
+    assert_eq!(first.items.len(), 1);
+    let item = &first.items[0];
+    assert_eq!(&item.issue, legacy.reference());
+    assert_eq!(&item.binding_id, binding.id());
+    assert!(item.tracked.is_none());
+    assert_eq!(item.tracked_revision, Some(legacy.revision()));
+    assert!(item.current.is_none());
+    assert!(item.observation_revision.is_none());
+    assert!(!format!("{item:?}").contains("unobserved historical copy"));
+    assert_eq!(first.next_after.as_ref(), Some(legacy.reference()));
+
+    let triage = adapter.read_triage_batch(fixture.cwd(), None, 1).unwrap();
+    assert_eq!(triage.items, first.items);
+    assert_eq!(triage.next_after, first.next_after);
+    query.after = first.next_after;
+    let second = adapter
+        .query_collection_issues(fixture.cwd(), &query)
+        .unwrap();
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(&second.items[0].issue, still_tracked.reference());
+    assert!(second.items[0].tracked.is_some());
+    assert!(second.next_after.is_none());
+    assert_eq!(
+        adapter
+            .get_issue(fixture.cwd(), legacy.reference())
+            .unwrap(),
+        Some(legacy.clone())
+    );
+
+    finish_tracking_intervention(
+        &fixture,
+        legacy.reference(),
+        "track-legacy",
+        IssueInterventionAction::Track,
+    );
+    query.after = None;
+    let retracked = adapter
+        .query_collection_issues(fixture.cwd(), &query)
+        .unwrap();
+    assert_eq!(retracked.items.len(), 1);
+    assert_eq!(&retracked.items[0].issue, legacy.reference());
+    assert!(retracked.items[0].tracked.is_some());
+    assert!(retracked.items[0].current.is_none());
+    assert_eq!(
+        adapter
+            .get_issue(fixture.cwd(), legacy.reference())
+            .unwrap(),
+        Some(legacy)
+    );
+}
+
+#[test]
+fn untracked_legacy_rows_resync_without_retracking() {
+    for batched in [false, true] {
+        for unavailable in [false, true] {
+            let fixture = Fixture::new("collector-untracked-legacy-resync");
+            let adapter = fixture.adapter();
+            let (binding, legacy) = fixture.insert();
+            let state = adapter.ensure_collection(fixture.cwd()).unwrap();
+            let receipt = finish_tracking_intervention(
+                &fixture,
+                legacy.reference(),
+                "untrack-legacy",
+                IssueInterventionAction::Untrack,
+            );
+            let batch = adapter
+                .read_resync_batch(fixture.cwd(), state.fence(), 1)
+                .unwrap()
+                .unwrap();
+            assert_eq!(batch.targets, vec![legacy.reference().clone()]);
+            let read = if unavailable {
+                unknown(legacy.reference())
+            } else {
+                IssueSourceRead::Observed(Box::new(observed(&fixture, "I_1", "fresh shared copy")))
+            };
+            let result = if batched {
+                adapter
+                    .apply_resync_batch(fixture.cwd(), &batch, std::slice::from_ref(&read))
+                    .unwrap()
+            } else {
+                adapter
+                    .apply_issue_resync(fixture.cwd(), state.fence(), legacy.reference(), &read)
+                    .unwrap()
+            };
+            let applied = commit(result);
+            assert!(applied.newly_tracked.is_empty());
+            let page = fixture
+                .adapter()
+                .query_collection_issues(fixture.cwd(), &IssueCollectionQuery::default())
+                .unwrap();
+            assert_eq!(page.items.len(), 1);
+            let item = &page.items[0];
+            assert_eq!(&item.issue, legacy.reference());
+            assert_eq!(&item.binding_id, binding.id());
+            assert!(item.tracked.is_none());
+            assert_eq!(item.current.as_ref(), Some(&read));
+            assert!(item.observation_revision.is_some());
+            let persisted = adapter
+                .get_issue(fixture.cwd(), legacy.reference())
+                .unwrap()
+                .unwrap();
+            assert_eq!(persisted.reference(), legacy.reference());
+            assert_eq!(persisted.binding_id(), binding.id());
+            assert_eq!(persisted.state(), legacy.state());
+            assert_eq!(item.tracked_revision, Some(persisted.revision()));
+            assert_eq!(
+                adapter
+                    .get_issue_intervention(fixture.cwd(), "untrack-legacy")
+                    .unwrap()
+                    .unwrap()
+                    .receipt,
+                Some(receipt)
+            );
+        }
+    }
 }
 
 #[test]

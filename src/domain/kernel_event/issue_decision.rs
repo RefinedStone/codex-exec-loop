@@ -46,6 +46,8 @@ pub struct IssueDecisionBasisRecord {
     pub field_hash: Option<IssueDecisionFieldHashRecord>,
     pub work_order_id: Option<String>,
     pub gate_revision: u64,
+    #[serde(default)]
+    pub authorization_epoch: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -106,6 +108,7 @@ impl From<&IssueDecisionBasis> for IssueDecisionBasisRecord {
                 }),
             work_order_id: basis.work_order_id.clone(),
             gate_revision: basis.gate_revision,
+            authorization_epoch: basis.authorization_epoch,
         }
     }
 }

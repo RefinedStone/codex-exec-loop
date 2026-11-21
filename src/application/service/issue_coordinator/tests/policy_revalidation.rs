@@ -141,8 +141,7 @@ fn current_policy_failure_checks_later_pages_even_when_an_earlier_revoke_fails()
 fn seed_approved_work_checkpoint(h: &Harness, issue: &IssueReference) -> IssueWorkCheckpoint {
     let coordinator = h.coordinator();
     let (_, _, assessment) = coordinator.current(issue, &|_| {}).unwrap();
-    let basis =
-        IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None).unwrap();
+    let basis = coordinator.approval_basis(&assessment).unwrap();
     let decision_id = start_decision_id(issue, &basis);
     h.decisions
         .ensure_request(decision_id.clone(), start_definition(issue, basis).unwrap())
@@ -179,7 +178,8 @@ fn seed_approved_work_checkpoint(h: &Harness, issue: &IssueReference) -> IssueWo
     let mut work = coordinator.build_work(&item, &decision.request).unwrap();
     work.task_ids = vec!["task-restored-last-page".into()];
     work.permit_source = Some("a".repeat(40));
-    work.permit_revision = work.approved_basis.gate_revision.max(1);
+    work.permit_revision = work.current_authorization_basis().gate_revision.max(1);
+    work.permit_authorization_epoch = work.current_authorization_basis().authorization_epoch;
     work.blocked_reason = Some(IssueWorkBlockReason::AwaitingSource);
     let IssueWorkSaveResult::Saved { record, .. } = h
         .fixture
@@ -193,8 +193,9 @@ fn seed_approved_work_checkpoint(h: &Harness, issue: &IssueReference) -> IssueWo
         .grant(
             &h.fixture.workspace,
             &IssueWorkPermitRequest {
+                authorization_epoch: record.current_authorization_basis().authorization_epoch,
                 work_order_id: record.order.work_order_id.clone(),
-                approval: record.approved_basis.clone(),
+                approval: record.current_authorization_basis().clone(),
                 source_sha: record.permit_source.clone().unwrap(),
                 gate_revision: record.permit_revision,
                 delivery: false,

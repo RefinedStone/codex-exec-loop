@@ -17,6 +17,8 @@ use super::{
     runtime_projection, table_exists,
 };
 
+mod control;
+pub(super) use control::{claim_work_order_launch, validate_cancelled_lineage};
 mod permits;
 pub(super) use permits::check_work_order_permit_in_transaction;
 
@@ -27,6 +29,10 @@ fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
         && table_exists(connection, "planning_work_order_tasks")?
         && table_exists(connection, "planning_work_order_permit_basis")?
         && table_exists(connection, "planning_work_order_permit_revocations")?
+        && table_exists(connection, "planning_work_order_controls")?
+        && table_exists(connection, "planning_work_order_control_commands")?
+        && table_exists(connection, "planning_work_order_instructions")?
+        && table_exists(connection, "planning_work_order_launch_seals")?
     {
         return Ok(());
     }
@@ -55,6 +61,30 @@ fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
                 gate_revision TEXT NOT NULL,
                 PRIMARY KEY (work_order_id, stage),
                 FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_controls (
+                work_order_id TEXT PRIMARY KEY NOT NULL,
+                control_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_control_commands (
+                command_id TEXT PRIMARY KEY NOT NULL,
+                work_order_id TEXT NOT NULL,
+                action_json TEXT NOT NULL,
+                result_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_instructions (
+                work_order_id TEXT NOT NULL,
+                command_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                PRIMARY KEY (work_order_id, command_id),
+                UNIQUE (work_order_id, ordinal)
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_launch_seals (
+                work_order_id TEXT NOT NULL,
+                slot_id TEXT NOT NULL,
+                session_key TEXT NOT NULL,
+                PRIMARY KEY (work_order_id, slot_id)
             );",
         )
         .context("failed to ensure planning work-order tables")
@@ -146,13 +176,31 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         }
         validate_new_task_candidate(&existing, registration)?;
 
+        let mut candidate = registration.task_authority.clone();
+        let task = candidate
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == registration.initial_task_id)
+            .context("the initial work-order task is missing")?;
+        control::append_pending_instructions(&transaction, registration.work_order_id, task)?;
+        if control::load_control(&transaction, registration.work_order_id)?.cancelled {
+            task.status = crate::domain::planning::TaskStatus::Cancelled;
+        }
+        let projection = if candidate == *registration.task_authority {
+            registration.queue_projection.clone()
+        } else {
+            let directions = super::load_direction_catalog_from_connection(&transaction)?
+                .context("planning directions are unavailable")?;
+            crate::domain::planning::PriorityQueueService::new()
+                .build_projection(&directions, &candidate)?
+        };
         let planning_revision = Self::write_task_authority_change_in_transaction(
             &transaction,
             &location,
             PlanningTaskAuthorityCommit {
                 observed_planning_revision: Some(registration.observed_planning_revision),
-                task_authority: registration.task_authority,
-                queue_projection: registration.queue_projection,
+                task_authority: &candidate,
+                queue_projection: &projection,
             },
             Some(&existing.task_authority),
             Some(registration.audit),
@@ -242,6 +290,9 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
             .context("planning work-order lineage is too large")?;
         insert_task_membership(&transaction, work_order_id, task_id, ordinal)?;
         work_order.task_ids.push(task_id.to_string());
+        if control::load_control(&transaction, work_order_id)?.cancelled {
+            control::cancel_lineage(&transaction, &location, &work_order.task_ids)?;
+        }
         let planning_revision = bump_planning_revision(&transaction)?;
         transaction
             .commit()
