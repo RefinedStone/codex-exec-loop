@@ -207,6 +207,8 @@ pub struct IssueListItem {
     pub presentation: IssueListPresentation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triage: Option<IssueTriageState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<crate::domain::issue_automation::coordinator::IssueWorkSummary>,
 }
 
 impl From<&IssueCollectionItem> for IssueListItem {
@@ -216,6 +218,7 @@ impl From<&IssueCollectionItem> for IssueListItem {
             binding_id: item.binding_id.as_str().to_string(),
             presentation: IssueListPresentation::from_domain(item),
             triage: item.triage.as_ref().map(Into::into),
+            work: item.work.clone(),
             tracked: item.tracked.as_ref().map(|tracked| IssueTrackedState {
                 state: tracked.state.into(),
                 held: tracked.flags.held,

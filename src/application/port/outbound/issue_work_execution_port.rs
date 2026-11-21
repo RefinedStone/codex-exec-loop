@@ -1,0 +1,34 @@
+//! 이슈 자동화와 작업 실행기를 잇는 중립 경계다. 런타임 객체를 공유하지 않는다.
+use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
+use crate::domain::issue_automation::decision::IssueDecisionBasis;
+use anyhow::Result;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IssueWorkExecutionSnapshot {
+    pub task_ids: Vec<String>,
+    /// dispatch 전에 확인한 대표 checkout의 HEAD다.
+    pub dispatch_source: Option<String>,
+    /// host가 완료 결과에 고정한 SHA다. 임의 branch HEAD로 대신하지 않는다.
+    pub frozen_source: Option<String>,
+    pub saved_source: Option<String>,
+    pub saved_gate_revision: u64,
+    pub blocked_reason: Option<IssueWorkBlockReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueWorkPermitRequest {
+    pub work_order_id: String,
+    pub approval: IssueDecisionBasis,
+    pub source_sha: String,
+    pub gate_revision: u64,
+    pub delivery: bool,
+}
+
+pub trait IssueWorkExecutionPort: Send + Sync {
+    fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot>;
+    /// 영속 work_order_id로 멱등 등록한다. 반환 손실 뒤 재시도도 같은 task_ids다.
+    fn submit(&self, workspace: &str, order: &IssueWorkOrder) -> Result<Vec<String>>;
+    /// source/basis를 저장한 다음 단계별 허가를 만든다. integrate는 언제나 human review다.
+    fn grant(&self, workspace: &str, request: &IssueWorkPermitRequest) -> Result<()>;
+    fn revoke(&self, workspace: &str, work_order_id: &str) -> Result<()>;
+}

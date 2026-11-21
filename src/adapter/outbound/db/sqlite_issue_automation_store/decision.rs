@@ -76,7 +76,7 @@ pub(super) fn get_commit(
     })
 }
 
-fn read(
+pub(super) fn read(
     connection: &Connection,
     workspace: &str,
     id: &IssueDecisionId,
@@ -288,7 +288,7 @@ pub(super) fn save(
     })
 }
 
-fn current_item(
+pub(super) fn current_item(
     connection: &Connection,
     workspace: &str,
     expected: IssueTriageFence,

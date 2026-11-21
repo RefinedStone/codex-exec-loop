@@ -25,6 +25,7 @@ fn item(id: &str, state: Option<IssueAutomationState>) -> IssueCollectionItem {
         },
     };
     IssueCollectionItem {
+        work: None,
         open_decisions: Vec::new(),
         observation_revision: None,
         tracked_revision: None,
