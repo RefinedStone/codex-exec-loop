@@ -435,6 +435,7 @@
 
 .work-panel input,
 .work-panel select,
+.delegation-form textarea,
 .browser-toolbar input,
 .browser-toolbar select {
   padding: 2px 6px;
@@ -474,6 +475,20 @@
 
 .work-form button {
   align-self: flex-start;
+}
+
+.delegation-form textarea {
+  resize: vertical;
+}
+
+.delegation-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.work-link[aria-pressed="true"] {
+  font-weight: 600;
 }
 
 .work-scroll {

@@ -65,6 +65,7 @@ pub(super) fn websocket_config() -> WebSocketConfig {
 /// 것만 채운다.
 #[derive(Clone, Default)]
 pub(super) struct GatewayServices {
+    pub(super) delegations: Arc<super::delegation::Delegations>,
     pub(super) mcp_hub: Option<Arc<GatewayMcpHub>>,
     pub(super) work_context: Option<Arc<dyn WorkContextPort>>,
     pub(super) resource_versions:
@@ -162,8 +163,15 @@ where
         let _ = client_sink.close().await;
     });
     // 커널 요청은 따로 처리한다. 읽기 고리는 커널을 기다리지 않고 app-server 메시지를 계속 전달한다.
-    let kernel_requests =
-        is_local.then(|| KernelRequests::start(kernels, outbox.clone(), recording.clone()));
+    let kernel_requests = is_local.then(|| {
+        KernelRequests::start(
+            kernels,
+            outbox.clone(),
+            recording.clone(),
+            services.delegations.clone(),
+        )
+    });
+    let delegation_driver = is_local.then(|| services.delegations.connection(outbox.clone()));
     let provider_session = if is_local {
         services
             .resource_versions
@@ -188,6 +196,12 @@ where
             match message {
                 Message::Text(text) => match route_client_text(text.as_str()) {
                     ClientTextRoute::Forward => {
+                        if let Some((id, response)) = super::delegation::response(text.as_str()) {
+                            if let Some(driver) = &delegation_driver {
+                                driver.answer(id, response);
+                            }
+                            continue;
+                        }
                         if is_confirmation_frame(text.as_str()) {
                             let response = serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"invalid human confirmation request"}});
                             if outbox
@@ -216,6 +230,8 @@ where
                         if !is_issue_draft_method(&method)
                             && !is_issue_decision_command(&method, text.as_str())
                             && !sensitive_confirmation
+                            && !method.starts_with(super::delegation::PREFIX)
+                            && !super::delegation::private_kernel_payload(&method, text.as_str())
                         {
                             record(RecordDirection::Client, text.as_str());
                         }
@@ -256,6 +272,11 @@ where
                                 outbox.clone(),
                             );
                             None
+                        } else if method.starts_with(super::delegation::PREFIX) {
+                            Some(match &delegation_driver {
+                                Some(driver) => driver.request(id, &method),
+                                None => refuse_kernel_on_remote_host(id, &method),
+                            })
                         } else if method.starts_with(resource_version::METHOD_PREFIX) {
                             Some(match &provider_session {
                                 Some(provider) => provider.request(id, &method, text.as_str()),
@@ -385,6 +406,12 @@ where
             match message {
                 Message::Text(_) | Message::Binary(_) => {
                     if let Message::Text(text) = &message {
+                        if matches!(route_client_text(text.as_str()),
+                            ClientTextRoute::AkraRequest { method, .. } | ClientTextRoute::AkraNotification { method }
+                                if method.starts_with(super::delegation::PREFIX))
+                        {
+                            continue;
+                        }
                         record(RecordDirection::Gateway, text.as_str());
                     }
                     if outbox.send(message).await.is_err() {
@@ -419,6 +446,7 @@ where
         end = upstream_restarted => end,
     };
     drop(provider_session);
+    drop(delegation_driver);
     // Kernel workers can hold additional outbox senders; stop them before flushing.
     if let Some(kernel_requests) = kernel_requests {
         kernel_requests.stop().await;

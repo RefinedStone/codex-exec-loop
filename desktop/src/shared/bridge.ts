@@ -66,6 +66,8 @@ export const IPC_CHANNELS = {
   browserAgentResume: "akra:browser-agent-resume",
   browserAgentStatus: "akra:browser-agent-status",
   browserAgentState: "akra:browser-agent-state",
+  delegatedChatEnabled: "akra:delegated-chat-enabled",
+  delegatedChatOpen: "akra:delegated-chat-open",
   githubSummary: "akra:github-summary",
   githubReviewPrompt: "akra:github-review-prompt",
   githubProject: "akra:github-project",
@@ -462,6 +464,11 @@ export interface AkraBridge {
   remote: RemoteHostBridge;
   terminal: TerminalBridge;
   browser: BrowserBridge;
+  delegatedChat: {
+    enabled(): Promise<boolean>;
+    /** Opens the isolated ChatGPT window for manual use. */
+    open(): Promise<boolean>;
+  };
   github: GitHubBridge;
   jira: JiraBridge;
   linear: LinearBridge;

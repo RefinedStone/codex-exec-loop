@@ -24,6 +24,7 @@ use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandContext, StoredCommandOutcome, StoredCommandRejection,
     StoredCommandResult,
 };
+use crate::application::port::outbound::delegation_store_port::DelegationStorePort;
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::application::port::outbound::planning_reset_route_port::{
     PlanningResetRouteOutcome, PlanningResetRoutePort,
@@ -417,6 +418,40 @@ impl CommandOnlyKernel {
         inspect: impl FnOnce(&str) -> Option<IssueAutomationPolicyInspection>,
     ) -> Result<Value> {
         let query: KernelQuery = serde_json::from_value(input)?;
+        if matches!(
+            query,
+            KernelQuery::Delegations {}
+                | KernelQuery::Delegation { .. }
+                | KernelQuery::DelegationResult { .. }
+        ) {
+            let location =
+                SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&self.workspace)?;
+            let store = crate::adapter::outbound::db::sqlite_delegation_store::DelegationStore::new(
+                location.runtime_dir.into(),
+            );
+            return Ok(serde_json::to_value(match query {
+                KernelQuery::Delegations {} => KernelQueryAnswer::Delegations {
+                    delegations: store.list()?,
+                },
+                KernelQuery::Delegation { id } => KernelQueryAnswer::Delegation {
+                    delegation: store.find(&id)?,
+                },
+                KernelQuery::DelegationResult { id } => KernelQueryAnswer::DelegationResult {
+                    text: store.result(&id)?,
+                },
+                _ => unreachable!(),
+            })?);
+        }
+        if matches!(query, KernelQuery::DelegationBackends {}) {
+            return Ok(serde_json::to_value(
+                KernelQueryAnswer::DelegationBackends {
+                    chatgpt_chat: crate::domain::delegation::BackendStatus {
+                        state: crate::domain::delegation::BackendState::Unavailable,
+                        reason: Some("gateway_unavailable".to_owned()),
+                    },
+                },
+            )?);
+        }
         if matches!(query, KernelQuery::IssueAutomationPolicy {}) {
             let inspection = inspect(&self.workspace);
             let state = inspection

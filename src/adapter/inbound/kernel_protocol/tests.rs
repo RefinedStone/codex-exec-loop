@@ -76,6 +76,11 @@ fn sample_commands() -> Vec<KernelCommand> {
             note: None,
         },
         KernelCommand::SyncIssues {},
+        KernelCommand::SubmitDelegation {
+            instruction: "Explain the test result.".into(),
+            idempotency_key: "delegation-request-1".into(),
+        },
+        KernelCommand::CancelDelegation { id: "job-1".into() },
     ]
 }
 
@@ -170,6 +175,12 @@ fn every_command_maps_to_its_own_execution_boundary() {
                 assert!(CommandResult::name_for(kind).is_some(), "{label}");
             }
             KernelCommandInput::SyncIssues => assert_eq!(kind, KernelCommandKind::SyncIssues),
+            KernelCommandInput::SubmitDelegation { .. } => {
+                assert_eq!(kind, KernelCommandKind::SubmitDelegation)
+            }
+            KernelCommandInput::CancelDelegation { .. } => {
+                assert_eq!(kind, KernelCommandKind::CancelDelegation)
+            }
         }
     }
     assert_eq!(
@@ -640,8 +651,12 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 11);
+    assert_eq!(queries.len(), 15);
     for (name, query) in queries.iter().map(|query| query.name).zip([
+        KernelQuery::Delegations {},
+        KernelQuery::Delegation { id: "job-1".into() },
+        KernelQuery::DelegationResult { id: "job-1".into() },
+        KernelQuery::DelegationBackends {},
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},
@@ -1536,7 +1551,8 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
             "approval",
             "auto_follow",
             "planning",
-            "issue"
+            "issue",
+            "delegation"
         ]
     );
     let notifications = spec["methods"]
@@ -2155,6 +2171,10 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         spec["records"].as_array().expect("records").len()
     );
     for query in [
+        KernelQuery::Delegations {},
+        KernelQuery::Delegation { id: "job-1".into() },
+        KernelQuery::DelegationResult { id: "job-1".into() },
+        KernelQuery::DelegationBackends {},
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},

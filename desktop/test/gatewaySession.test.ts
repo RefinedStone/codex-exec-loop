@@ -61,6 +61,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     reconnectMaxMs: 200,
   });
   const bridge: AkraBridge = {
+    delegatedChat: { enabled: async () => false, open: async () => false },
     send: (text) => void connection.send(text),
     onMessage: (listener) => {
       messageListeners.add(listener);

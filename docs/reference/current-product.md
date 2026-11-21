@@ -785,6 +785,11 @@ The Gateway records the external documents that a thread mentions, without a mod
   read-only with `thread/read` and `thread/turns/list`, shows a banner, and disables the composer. The banner's
   "다시 연결" tries `thread/resume` again and reads the newest history when the lock is still held
   (`desktop/src/renderer/session/desktopSession.ts`).
+- Set `AKRA_DESKTOP_DELEGATED_CHAT=1` before starting Desktop to enable its chat driver.
+  In the work panel, open **ChatGPT 위임**, enter a text instruction, and select **텍스트 위임**.
+  Open an item to see its status, the last recorded delivery and phase, and the result when it succeeds.
+  **위임 취소** cancels an active item. **ChatGPT 로그인 열기** opens the dedicated login view.
+  Desktop reports when the connected Gateway does not support delegation.
 - Desktop basics (plan 26 U1): one zoom factor for all windows (view menu, `Cmd/Ctrl` `+` `-` `0`, `Cmd/Ctrl`
   + wheel, pinch), saved with the main window's size and position in `userData/window-state.json`; the
   browser panel and the macOS window buttons follow the factor. On macOS the main window has an inset title

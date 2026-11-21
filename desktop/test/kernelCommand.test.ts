@@ -11,6 +11,8 @@ interface SentRequest {
 }
 
 const commands = {
+  submit_delegation: { type: "submit_delegation", instruction: "Summarize the draft", idempotency_key: "delegation-1" },
+  cancel_delegation: { type: "cancel_delegation", id: "delegation-1" },
   load_sessions: { type: "load_sessions" },
   refresh_planning: { type: "refresh_planning" },
   set_issue_automation_mode: { type: "set_issue_automation_mode", mode: "observe" },

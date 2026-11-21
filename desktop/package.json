@@ -12,6 +12,7 @@
     "start": "electron-vite preview",
     "check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
+    "test:delegated-chat-window": "electron test/fixtures/delegated-chat.electron.mjs",
     "e2e:publish": "electron-vite build && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/branch-publish.mjs",
     "e2e:hunks": "electron-vite build && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/hunk-actions.mjs",
     "e2e:jira": "electron-vite build && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/jira-versions.mjs",
@@ -23,6 +24,7 @@
   "dependencies": {
     "@pierre/diffs": "1.6.4",
     "@shikijs/langs": "4.6.0",
+    "akra-tunnel-core": "git+https://github.com/RefinedStone/akra-tunnel-core.git#239deb9b344da3008a8c03abc9ef104437a06afb",
     "node-pty": "1.1.0",
     "ws": "8.22.1"
   },

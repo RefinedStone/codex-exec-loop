@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents, utilityProcess } from "electron";
 
@@ -22,6 +23,10 @@ import { BrowserAgentTransport } from "./browserAgentTransport";
 import { BrowserAutomation } from "./browserAgent/automation";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { contextMenuItems } from "./contextMenuItems";
+import { DelegatedChatDriver, delegatedChatHome } from "./delegatedChatDriver";
+import { connectDelegatedChat } from "./delegatedChatGateway";
+import { createDelegatedChatPage } from "./delegatedChatPage";
+import { DelegatedChatWindow } from "./delegatedChatWindow";
 import { isDotsCloudEnabled, setDotsCloudEnabled } from "./dotsSettings";
 import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBranch";
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
@@ -306,6 +311,32 @@ const WINDOW_STATE_SAVE_DELAY_MS = 400;
 
 /** 열려 있는 본 창이다. dot 창과 블루프린트 창은 넣지 않는다. */
 const mainWindows = new Set<BrowserWindow>();
+const delegatedChatWindow = new DelegatedChatWindow();
+let delegatedChatConnection: GatewayConnection | undefined;
+let delegatedChatDriver: DelegatedChatDriver | undefined;
+const mainRendererPath = join(__dirname, "../renderer/index.html");
+function delegatedChatEnabled(): boolean {
+  return process.env.AKRA_DESKTOP_DELEGATED_CHAT === "1"
+    && !BLUEPRINT && !HIDDEN_WINDOWS && !process.env.ELECTRON_RENDERER_URL
+    && !app.commandLine.hasSwitch("remote-debugging-port")
+    && !app.commandLine.hasSwitch("remote-debugging-pipe")
+    && ![...process.argv, ...process.execArgv].some((arg) => /^--(?:inspect|remote-debugging)/.test(arg))
+    && !/(?:^|\s)--inspect/.test(process.env.NODE_OPTIONS ?? "");
+}
+
+function isDelegatedChatSender(event: IpcMainInvokeEvent): boolean {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const frame = event.senderFrame;
+  return Boolean(owner && mainWindows.has(owner) && frame && frame === event.sender.mainFrame
+    && frame.url.split("#")[0] === pathToFileURL(mainRendererPath).href);
+}
+
+ipcMain.handle(IPC_CHANNELS.delegatedChatEnabled, (event) => isDelegatedChatSender(event) && delegatedChatEnabled());
+ipcMain.handle(IPC_CHANNELS.delegatedChatOpen, (event) => {
+  if (!isDelegatedChatSender(event) || !delegatedChatEnabled()) return false;
+  delegatedChatWindow.openForManualUse();
+  return true;
+});
 
 /** `dotQuery` 가 있으면 dot 창이다: 작고, renderer 가 그 dot 의 대화만 그린다. */
 function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWindow {
@@ -354,7 +385,11 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
       clearTimeout(rememberTimer);
       remember();
     });
-    window.once("closed", () => mainWindows.delete(window));
+    window.once("closed", () => {
+      mainWindows.delete(window);
+      // A hidden chat host must not keep Desktop alive after the last application window closes.
+      if (!BrowserWindow.getAllWindows().length && process.platform !== "darwin") app.quit();
+    });
   }
   // 확대 값은 페이지를 읽을 때마다 다시 적용한다.
   contents.on("did-finish-load", () => applyZoom(window));
@@ -852,6 +887,20 @@ void app.whenReady().then(() => {
   powerMonitor.on("lock-screen", () => vaultRestores.lockAll("os_lock"));
   powerMonitor.on("suspend", () => vaultRestores.lockAll("suspend"));
   createWindow();
+  if (delegatedChatEnabled()) {
+    try {
+      const endpoint = resolveGatewayEndpoint();
+      delegatedChatDriver = new DelegatedChatDriver({
+        home: delegatedChatHome(),
+        pageFor: () => createDelegatedChatPage(delegatedChatWindow),
+        manual: () => delegatedChatWindow.isManual,
+        closePage: () => delegatedChatWindow.close(),
+      });
+      delegatedChatConnection = connectDelegatedChat({ endpoint }, delegatedChatDriver);
+    } catch {
+      // Main still opens normally if the local Gateway endpoint is unavailable.
+    }
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -868,8 +917,12 @@ app.on("before-quit", (event) => {
   if (closingAgents) return;
   event.preventDefault();
   closingAgents = true;
-  void browserAgents.close().catch((error: unknown) => console.error("Browser bridge shutdown failed", error instanceof Error ? error.message : "unknown error"))
-    .finally(() => app.quit());
+  delegatedChatConnection?.close();
+  if (!delegatedChatDriver) delegatedChatWindow.close();
+  void Promise.allSettled([
+    delegatedChatDriver?.close(),
+    browserAgents.close().catch((error: unknown) => console.error("Browser bridge shutdown failed", error instanceof Error ? error.message : "unknown error")),
+  ]).then(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
