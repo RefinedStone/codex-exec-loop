@@ -247,6 +247,7 @@ struct FakeExecutionState {
     order: Option<IssueWorkOrder>,
     grants: Vec<IssueWorkPermitRequest>,
     frozen: Option<String>,
+    dispatch_source: Option<String>,
     saved_source: Option<String>,
     saved_revision: u64,
     registrations: usize,
@@ -277,7 +278,7 @@ impl IssueWorkExecutionPort for FakeExecution {
         }
         Ok(crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionSnapshot {
             task_ids: state.order.as_ref().map(|_| vec!["task-1".into()]).unwrap_or_default(),
-            dispatch_source: Some("a".repeat(40)), frozen_source: state.frozen.clone(),
+            dispatch_source: state.dispatch_source.clone(), frozen_source: state.frozen.clone(),
             saved_source: state.saved_source.clone(), saved_gate_revision: state.saved_revision,
             blocked_reason: None,
         })
@@ -377,7 +378,12 @@ impl Harness {
                 read: Mutex::new(IssueSourceRead::Observed(Box::new(observation))),
                 calls: std::sync::atomic::AtomicUsize::new(0),
             }),
-            execution: Arc::new(FakeExecution::default()),
+            execution: Arc::new(FakeExecution {
+                state: Mutex::new(FakeExecutionState {
+                    dispatch_source: Some("a".repeat(40)),
+                    ..Default::default()
+                }),
+            }),
         }
     }
     fn coordinator(&self) -> IssueCoordinatorService {
@@ -921,4 +927,5 @@ fn interrupted_registration_recovers_existing_task_links_even_after_approval_cha
     }
 }
 
+mod dispatch_source;
 mod policy_revalidation;
