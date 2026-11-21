@@ -20,7 +20,7 @@
 | ID | 결과 하나 | 바뀌는 곳 | 선행 |
 | --- | --- | --- | --- |
 | D6-1 | 에이전트 명령: `submit`, `wait`, `status`, 결과 읽기. skill 문서. 깊이와 예산의 한도 | kernel spec, 생성 skill | D1-4 |
-| D6-2 | 콜백: `checkpoint_delegation`, `report_delegation_result`, 작업별 토큰, `callback` 근거 | kernel spec, `src/application/service/delegation/` | D1-4. 실제 확인은 D3-7 |
+| D6-2 | 콜백: `checkpoint_delegation`, `report_delegation_result`, 작업별 토큰, `callback` 근거 | kernel spec, `src/application/service/delegation/` | D1-4. 실제 확인은 D3-5 |
 | D6-3 | Desktop 의 위임 화면: 목록, 상세 (시도, 근거, 결과), 취소와 다시 내기 | `desktop/src/renderer/` | D1-4 |
 | D6-4 | Desktop 의 백엔드와 주의: 건강, 회로, 내 차례 (로그인, 챌린지, 결과 모름), 구동기 보기 열기 | `desktop/src/renderer/`, `desktop/src/main/` | D4-2, D3-1 |
 
@@ -51,7 +51,7 @@
 ## 검증
 
 - `command`: 시뮬레이션 시험, CLI 의 JSON 시험, Desktop 의 vitest 와 가짜 Gateway e2e (숨긴 창).
-- 실제 계정: 콜백은 D3-7 과 함께 사용자가 허락한 한 번.
+- 실제 계정: 콜백은 D3-5 와 함께 사용자가 허락한 한 번.
 
 ## 제외
 
