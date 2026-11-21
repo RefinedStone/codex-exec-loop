@@ -32,7 +32,7 @@
   (plan 28 §5.4 와 같은 이유이다).
 - 밖으로 나가는 행동(`dispatch`)은 부르기 전에 장부에 적는다. 응답 없이 죽으면 그 시도는 `uncertain` 이고
   작업은 `outcome_unknown` 이다.
-- 모듈은 planning, parallel, core 의 타입을 import 하지 않는다. architecture test 를 더한다.
+- 모듈은 planning, parallel, `src/core` 의 타입을 import 하지 않는다. architecture test 를 더한다.
 - 사건 기록에는 지시와 결과의 해시와 크기만 쓴다.
 
 ## 완료 기준
