@@ -74,11 +74,7 @@ pub(in super::super) fn item(
     reference: &IssueReference,
 ) -> Result<Option<IssueCollectionItem>> {
     validate_reference_scope(workspace, reference)?;
-    let tracked = if super::super::intervention::is_tracked(connection, workspace, reference)? {
-        read_issue(connection, workspace, reference)?
-    } else {
-        None
-    };
+    let tracked = read_issue(connection, workspace, reference)?;
     let observation = observations::read(connection, workspace, reference)?;
     if tracked.is_none() && observation.is_none() {
         return Ok(None);
@@ -105,10 +101,15 @@ pub(in super::super) fn item(
     Ok(Some(IssueCollectionItem {
         issue: reference.clone(),
         binding_id,
-        tracked: tracked.map(|issue| IssueTrackedSummary {
-            state: issue.state(),
-            flags: issue.flags(),
-        }),
+        // Untracking hides workflow state, not the persisted identity, binding, or CAS revision.
+        tracked: if super::super::intervention::is_tracked(connection, workspace, reference)? {
+            tracked.map(|issue| IssueTrackedSummary {
+                state: issue.state(),
+                flags: issue.flags(),
+            })
+        } else {
+            None
+        },
         current: observation.map(|item| item.current),
         observation_revision,
         tracked_revision,
@@ -186,11 +187,7 @@ pub(super) fn binding_for_reference(
     workspace: &str,
     reference: &IssueReference,
 ) -> Result<IssueAutomationBinding> {
-    let tracked = if super::super::intervention::is_tracked(connection, workspace, reference)? {
-        read_issue(connection, workspace, reference)?
-    } else {
-        None
-    };
+    let tracked = read_issue(connection, workspace, reference)?;
     let observation = observations::read(connection, workspace, reference)?;
     if let (Some(tracked), Some(observation)) = (&tracked, &observation)
         && *tracked.binding_id() != observation.binding_id
