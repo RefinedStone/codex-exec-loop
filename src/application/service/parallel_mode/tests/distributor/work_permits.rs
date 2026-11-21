@@ -952,4 +952,5 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
     );
 }
 
+mod rearm_conflict;
 mod shared_integration;
