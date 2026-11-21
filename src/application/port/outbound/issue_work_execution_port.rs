@@ -1,10 +1,9 @@
 //! 이슈 자동화와 작업 실행기를 잇는 중립 경계다. 런타임 객체를 공유하지 않는다.
-use super::planning_work_order_repository_port::{
-    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkInstruction,
-    PlanningWorkInstructionAdmission,
-};
 use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
 use crate::domain::issue_automation::decision::IssueDecisionBasis;
+use crate::domain::issue_automation::work_control::{
+    IssueWorkControl, IssueWorkControlAction, IssueWorkInstruction, IssueWorkInstructionAdmission,
+};
 use anyhow::Result;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -31,24 +30,24 @@ pub struct IssueWorkPermitRequest {
 }
 
 pub trait IssueWorkExecutionPort: Send + Sync {
-    fn control(&self, _workspace: &str, _work_order_id: &str) -> Result<PlanningWorkControl> {
-        Ok(PlanningWorkControl::default())
+    fn control(&self, _workspace: &str, _work_order_id: &str) -> Result<IssueWorkControl> {
+        Ok(IssueWorkControl::default())
     }
     fn apply_control(
         &self,
         _workspace: &str,
         _work_order_id: &str,
         _command_id: &str,
-        _action: PlanningWorkControlAction,
-    ) -> Result<PlanningWorkControl> {
+        _action: IssueWorkControlAction,
+    ) -> Result<IssueWorkControl> {
         anyhow::bail!("work intervention control is unavailable")
     }
     fn queue_instruction(
         &self,
         _workspace: &str,
         _work_order_id: &str,
-        _instruction: &PlanningWorkInstruction,
-    ) -> Result<PlanningWorkInstructionAdmission> {
+        _instruction: &IssueWorkInstruction,
+    ) -> Result<IssueWorkInstructionAdmission> {
         anyhow::bail!("work instruction delivery is unavailable")
     }
     fn has_active_lease(&self, _workspace: &str, _work_order_id: &str) -> Result<bool> {
