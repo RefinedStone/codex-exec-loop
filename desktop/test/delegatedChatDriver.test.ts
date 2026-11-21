@@ -46,7 +46,15 @@ test("the chat host serializes fresh sessions, supports manual pauses and cancel
     expect(await driver.dispatch("status", "")).toEqual({ state: "ready" });
     manual = true;
     expect(await driver.dispatch("submit", "blocked", "Fixture")).toMatchObject({ delivery: "not_sent", phase: "blocked" });
+    expect(await driver.dispatch("observe", "blocked")).toMatchObject({ phase: "blocked" });
+    expect(sends).toEqual([]);
     manual = false;
+    expect(await driver.dispatch("observe", "blocked")).toMatchObject({ delivery: "sending" });
+    await vi.waitFor(async () => {
+      expect(await driver.dispatch("submit", "blocked", "Fixture")).toMatchObject({ delivery: "accepted" });
+    });
+    expect(await driver.dispatch("observe", "blocked")).toMatchObject({ phase: "complete" });
+    expect(sends.splice(0)).toEqual(["blocked"]);
     expect(await driver.dispatch("submit", "first", "Fixture 1")).toEqual({ delivery: "not_sent", phase: "unknown" });
     expect(await driver.dispatch("submit", "second", "Fixture 2")).toEqual({ delivery: "not_sent", phase: "unknown" });
     expect(await driver.dispatch("submit", "cancelled", "Fixture 3")).toEqual({ delivery: "not_sent", phase: "unknown" });

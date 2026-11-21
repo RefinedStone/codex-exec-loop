@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { connectDelegatedChat } from "../src/main/delegatedChatGateway";
+import { connectDelegatedChat } from "../src/delegation/gateway";
 
 test("the dedicated local socket registers, handles only chat callbacks, and unregisters", async () => {
   const temp = await mkdtemp(join(tmpdir(), "akra-chat-gateway-"));
@@ -23,7 +23,7 @@ test("the dedicated local socket registers, handles only chat callbacks, and unr
       resolve(ws);
     });
   }));
-  const connection = connectDelegatedChat({ endpoint }, { dispatch });
+  const connection = connectDelegatedChat({ endpoint }, dispatch);
   try {
     const ws = await established;
     const reply = once(ws, "message");

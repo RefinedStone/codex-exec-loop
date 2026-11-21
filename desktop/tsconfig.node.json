@@ -18,6 +18,7 @@
     "vitest.config.mts",
     "src/main/**/*.ts",
     "src/confirmation/**/*.ts",
+    "src/delegation/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "test/**/*.ts"
