@@ -77,6 +77,7 @@ pub struct IssueJournaledPublishService {
     vault: Arc<dyn EvidenceVaultStorePort>,
     // 의도 확인과 기록 사이에 다른 게시가 끼지 않게 한다. 게시하는 프로세스는 Gateway 하나이다.
     publishing: Mutex<()>,
+    feedback: Option<Arc<dyn crate::application::port::outbound::issue_feedback_store_port::IssueFeedbackStorePort>>,
 }
 
 impl IssueJournaledPublishService {
@@ -92,7 +93,17 @@ impl IssueJournaledPublishService {
             journal,
             vault,
             publishing: Mutex::new(()),
+            feedback: None,
         }
+    }
+
+    /// 제목·본문과 자동 피드백은 같은 publication lease 안에서 서로의 미확정 의도를 막는다.
+    pub fn with_feedback_store(
+        mut self,
+        feedback: Arc<dyn crate::application::port::outbound::issue_feedback_store_port::IssueFeedbackStorePort>,
+    ) -> Self {
+        self.feedback = Some(feedback);
+        self
     }
 
     /// 승인한 글을 기존 이슈에 쓴다. `Err` 는 일지나 쓰기 전 원격 읽기의 실패이다. `Err` 일 때 쓰기는 보내지
@@ -114,6 +125,11 @@ impl IssueJournaledPublishService {
         let workspace_dir = publish.issue.project_scope.workspace_dir.clone();
         let lease = self.journal.acquire_publication_lease(&workspace_dir)?;
         lease.verify_identity()?;
+        if let Some(feedback) = &self.feedback
+            && !feedback.unresolved(&publish.issue)?.is_empty()
+        {
+            anyhow::bail!("feedback_unconfirmed");
+        }
         let records = self.journal.load(&workspace_dir)?;
         let sequence = records
             .iter()
@@ -629,6 +645,23 @@ mod tests {
             vault_key,
             ..request()
         }
+    }
+
+    #[test]
+    fn unresolved_feedback_blocks_body_publish_for_the_same_remote_issue_alias() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let mut feedback_owner = issue();
+        feedback_owner.project_scope.workspace_dir = "/same-runtime-alias".into();
+        let feedback =
+            crate::application::service::issue_feedback::tests::support::pending_feedback(
+                feedback_owner,
+            );
+        let service = fixture.service().with_feedback_store(feedback);
+
+        let error = service.publish(request()).unwrap_err();
+        assert!(error.to_string().contains("feedback_unconfirmed"));
+        assert_eq!((fixture.writes(), fixture.reads()), (0, 0));
+        assert!(fixture.saved_states().is_empty());
     }
 
     fn sent_record() -> IssuePublishIntentRecord {

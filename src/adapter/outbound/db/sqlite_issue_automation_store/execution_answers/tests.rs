@@ -779,7 +779,7 @@ fn version_six_and_seven_migrations_preserve_rows_and_create_exact_answer_schema
         let connection = Connection::open(fixture.database()).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE issue_execution_answers;
+                "DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers;
                  DROP TABLE issue_execution_receipts;
                  DROP TABLE issue_execution_progress;",
             )
@@ -807,7 +807,7 @@ fn version_six_and_seven_migrations_preserve_rows_and_create_exact_answer_schema
         let connection = Connection::open(fixture.database()).unwrap();
         assert_eq!(
             super::super::schema_identity(&connection).unwrap(),
-            (super::super::APPLICATION_ID, 8)
+            (super::super::APPLICATION_ID, super::super::SCHEMA_VERSION)
         );
         super::super::validate_schema(&connection).unwrap();
         for (name, expected) in std::iter::once((TABLE, SCHEMA)).chain(INDEXES) {
@@ -1047,7 +1047,7 @@ fn version_seven_migration_preserves_completed_and_pending_owned_autonomy_fences
         let before = persisted_owner_and_receipts(&connection);
         connection
             .execute_batch(
-                "DROP TABLE issue_execution_answers;
+                "DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers;
                  DROP TABLE issue_execution_receipts;
                  DROP TABLE issue_execution_progress;",
             )
@@ -1089,7 +1089,7 @@ fn version_seven_migration_preserves_completed_and_pending_owned_autonomy_fences
         let connection = Connection::open(fixture.database()).unwrap();
         assert_eq!(
             super::super::schema_identity(&connection).unwrap(),
-            (super::super::APPLICATION_ID, 8)
+            (super::super::APPLICATION_ID, super::super::SCHEMA_VERSION)
         );
         super::super::validate_schema(&connection).unwrap();
         assert_eq!(persisted_owner_and_receipts(&connection), before);

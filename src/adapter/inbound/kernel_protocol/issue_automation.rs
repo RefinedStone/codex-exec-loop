@@ -158,6 +158,7 @@ pub enum IssueSourceFailureState {
     MalformedResponse,
     IdentityMismatch,
     MetadataIncomplete,
+    FeedbackUnconfirmed,
 }
 
 impl From<IssueSourceFailure> for IssueSourceFailureState {
@@ -170,6 +171,7 @@ impl From<IssueSourceFailure> for IssueSourceFailureState {
             IssueSourceFailure::MalformedResponse => Self::MalformedResponse,
             IssueSourceFailure::IdentityMismatch => Self::IdentityMismatch,
             IssueSourceFailure::MetadataIncomplete => Self::MetadataIncomplete,
+            IssueSourceFailure::FeedbackUnconfirmed => Self::FeedbackUnconfirmed,
         }
     }
 }

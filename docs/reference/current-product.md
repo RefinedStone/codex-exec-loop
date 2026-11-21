@@ -277,8 +277,8 @@ receipts advance verification counts.
 `budget.max_attempts` applies to implementation attempts, including supplemental tasks, at durable
 execution admission. An answer that resumes the same logical task consumes no additional
 implementation attempt. When rework is still needed at the execution limit, the issue becomes
-`failed` and requires human recovery. Publication accounting belongs to the feedback follow-up
-(#2552).
+`failed` and requires human recovery. Publication attempts are counted by the durable feedback send journal, separately from these execution facts
+(see [Issue Automation Feedback](#issue-automation-feedback)).
 
 | Terminal classification | Execution response |
 | --- | --- |
@@ -307,8 +307,51 @@ implementation task; post-integration queue recovery is blocked. A previously ex
 issue may become `done` when trusted integration arrives, while cancellation and the held flag are
 preserved.
 
-External feedback (#2552), provider closing policy (#2553), expanded Desktop execution tracking
-(#2554), and the complete results-return validation (#2555) remain separate IA4 slices.
+Provider closing policy (#2553), expanded Desktop execution tracking (#2554), and the complete
+results-return validation (#2555) remain separate IA4 slices.
+
+## Issue Automation Feedback
+
+IA4-2 ([#2552](https://github.com/RefinedStone/codex-exec-loop/issues/2552)) is implemented
+on `codex/issue-2552-github-feedback`, based on the unmerged #2638 execution branch.
+It adds GitHub status comments and the existing `akra:running` label. Assignee changes and provider
+closing remain outside this slice.
+
+Only user-policy `feedback.comment` and `feedback.labels` permit these writes; both default to
+false. A repository policy cannot turn them on. The status body is a deterministic projection of
+saved work state and execution/verification counts, passed through the shared-copy masking policy
+and secret detector. It accepts no raw agent message. The publication count stays in local feedback
+metadata so posting a status does not itself trigger another status update.
+
+The private issue SQLite database stores immutable intentions before dispatch. Only the successful
+`Recorded -> Sent` claimant may invoke one remote mutation. Recovery abandons an unsent recorded
+intent and only reads a sent or uncertain intent; it never resends it. The single status-comment
+owner is fixed by the full issue identity, stable actor ID, comment ID, intent marker, and body hash.
+A lost create response can bind ownership only after a complete, unique readback. Conflicting
+acknowledgements or ownership changes remain unresolved. An unresolved feedback intention blocks
+new feedback and direct title/body publication for the same remote issue, including workspace
+aliases; an unresolved title/body publication also blocks feedback.
+
+Before the first execution grant, enabled label feedback confirms an owned start marker. An existing
+foreign marker is not adopted, and a missing repository label is not created. Control, selection,
+classification, or human-required label conflicts block use of the marker. Confirmed owned labels
+are removed after done, cancellation, or failure when current policy still permits writing. Off,
+held, stale, unknown, and pending-intervention states prevent new writes; readback of an already
+sent intention remains available independently.
+
+Collection and feedback share the existing repository-wide, process-shared publication lease from provider read through
+observation commit. Only the exact confirmed label event is excluded from semantic observation.
+An uncertain label mutation defers observation without changing its stored basis or flags; new execution
+grants wait until readback settles it. A later event from the same account remains visible, and current policy is checked before exclusion,
+so a policy change cannot hide a newly meaningful hold or selection label. Comment timestamps are
+not triage inputs.
+
+Confirmed actions atomically enqueue `issue_feedback_posted` with identity metadata and no body.
+The issue detail query exposes the confirmed comment ID, publication-attempt count, and
+`feedback_unconfirmed` reason. Attempts count each durable send claim once, including an uncertain
+outcome; repeated reconciliation, confirmation, and event acknowledgement do not increase it.
+The count is independent of the implementation-attempt budget. Wire generation and fake-provider
+tests require no real GitHub write or model turn.
 
 ## Parallel Contract
 

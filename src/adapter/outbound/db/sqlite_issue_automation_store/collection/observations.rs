@@ -9,7 +9,8 @@ use crate::application::port::outbound::issue_source_port::{
 };
 use crate::domain::issue_automation::collection::StoredIssueCollection;
 use crate::domain::issue_automation::source::{
-    IssueSourceContent, IssueSourceObservation, IssueSourceRead, IssueSourceRepository,
+    IssueSourceContent, IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
+    IssueSourceRepository,
 };
 use crate::domain::issue_automation::{
     IssueAutomationBinding, IssueAutomationBindingId, IssueAutomationFlag, TrackedIssue,
@@ -199,6 +200,17 @@ pub(super) fn apply(
         .context("the source observation binding is missing")?
         .binding;
     validate_read(workspace, &binding, value)?;
+    if matches!(
+        value,
+        IssueSourceRead::Unknown {
+            reason: IssueSourceFailure::FeedbackUnconfirmed,
+            ..
+        }
+    ) {
+        // Retain the last semantic source and its stored decision facts.
+        // The caller must defer this issue, while other batch items still apply.
+        return Ok(false);
+    }
     let newly_tracked = previous.is_none() && tracked.is_none();
     match tracked {
         Some(current) => {

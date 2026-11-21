@@ -20,20 +20,22 @@ impl IssueCoordinatorService {
         };
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
+        let feedback_error = self.reconcile_feedback(cancel).err();
         self.report_pending(committed)?;
         super::super::issue_intervention::recover_pending_controls(
             &self.workspace,
             self.store.as_ref(),
             self.execution.as_ref(),
         )?;
-        track(
+        let result = track(
             self,
             cancel,
             now_unix_ms,
             execution_enabled,
             committed,
             &mut std::collections::BTreeSet::new(),
-        )
+        );
+        result.and_then(|()| feedback_error.map_or(Ok(()), Err))
     }
 }
 
@@ -78,6 +80,9 @@ pub(super) fn track(
             })();
             if let Err(error) = result {
                 failed_work_orders.insert(issue_work_order_id(&item.issue));
+                first_error.get_or_insert(error);
+            }
+            if let Err(error) = service.sync_issue_feedback(&item.issue, now_unix_ms, cancel) {
                 first_error.get_or_insert(error);
             }
             // 앞 작업의 조회/회수 실패가 다음 작업의 사실 반영과 제어를 막지 않는다.
