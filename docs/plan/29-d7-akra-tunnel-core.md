@@ -53,8 +53,8 @@ akra-tunnel 을 akra-tunnel-core 라이브러리와 frontend 로 나눈다 (사�
 | ID | 결과 하나 | 바뀌는 곳 | 선행 |
 | --- | --- | --- | --- |
 | D7-1 | 새 저장소 `RefinedStone/akra-tunnel-core` 를 만들고 Electron 을 모르는 코드를 옮긴다. akra-tunnel 은 그것을 의존성으로 쓴다. 시험이 Electron import 를 막는다 | 새 저장소, akra-tunnel 의 `package.json`, 런타임 overlay 의 경로 | - |
-| D7-2 | 페이지 키트를 akra-tunnel-core 로: DOM 읽기, 입력 순서, cloud 와 push 해석. `PageHandle` 과 `CdpSession` interface, 타입 | `launcher/*-dom.mjs`, `continuation-input.mjs`, `continuation-cloud-snapshot.mjs`, `continuation-discovery-network.mjs` | D7-1 |
-| D7-3 | host 가르기: broker 서버, `dispatch`, tick, 발견 루프를 akra-tunnel-core 로. frontend 는 보기와 handle 만 준다. launcher 가 새 akra-tunnel-core 로 돈다 | `continuation-browser-host.mjs` | D7-2 |
+| D7-2 | 페이지 키트를 akra-tunnel-core 로: DOM 읽기, 입력 순서, cloud 와 push 해석. `PagePort` 와 `CdpPort`, 타입 | `launcher/*-dom.mjs`, `continuation-input.mjs`, `continuation-cloud-snapshot.mjs`, `continuation-discovery-network.mjs` | D7-1 |
+| D7-3 | host 가르기: broker 서버, `dispatch`, tick, 발견 루프를 akra-tunnel-core 로. frontend 는 보기와 port 만 준다. launcher 가 새 akra-tunnel-core 로 돈다 | `continuation-browser-host.mjs` | D7-2 |
 | D7-4 | host 임대: home 하나에 host 하나. 둘째 frontend 는 client 로 돈다 | akra-tunnel-core, launcher | D7-3 |
 | D7-5 | 글 작업 보내기 (chat job): 새 대화, 임시 대화, 지정한 대화. 표식, 전달 확인, 결과 글 읽기, `requestId` 멱등 | akra-tunnel-core | D7-3 |
 | D7-6 | 배포: 버전, 고정하는 방법, Akra Desktop 의 의존성 | 릴리스 절차 | D7-1 |
@@ -63,8 +63,8 @@ akra-tunnel 을 akra-tunnel-core 라이브러리와 frontend 로 나눈다 (사�
 
 - **akra-tunnel-core 가 가지는 것.** 페이지 읽기와 입력, 세션 감시와 복구, 발견과 요청 간격, broker, 세션의 저장, 계약 타입, tunnel
   런타임 서비스.
-- **frontend 가 주는 것.** 보기 만들기 (partition, 숨긴 창, 이동 제한, 새 창 거절), `PageHandle`, 전원과 잠금의 사건, 화면.
-- `PageHandle` 은 작다: `evaluate(fn, args)`, `insertText`, `focus`, `load(url)`, `url()`, 그리고 선택으로 `CdpSession`.
+- **frontend 가 주는 것.** 보기 만들기 (partition, 숨긴 창, 이동 제한, 새 창 거절), `PagePort` 의 구현, 작업의 줄, 전원과 잠금의 사건, 화면.
+- `PagePort` 는 작다: `evaluate(fn, args)`, `insertText`, `focus`, `load(url)`, `url()`, 그리고 선택으로 `CdpPort`.
 - akra-tunnel-core 는 `electron` 을 import 하지 않는다. Electron 의 버전에 묶이지 않는다. akra-tunnel 은 `^44`, Akra Desktop 은
   `45.2.3` 이다.
 - akra-tunnel-core 패키지의 의존성에 `sharp` 와 `playwright-core` 가 없다. 그것을 쓰는 파일은 다른 패키지에 둔다.
@@ -84,7 +84,7 @@ akra-tunnel 을 akra-tunnel-core 라이브러리와 frontend 로 나눈다 (사�
 
 - [ ] akra-tunnel-core 에 `electron` import 가 0건이다. 시험이 이것을 확인한다.
 - [ ] launcher 가 새 akra-tunnel-core 로 돈다. `smoke:continuation`, `smoke:continuation-broker`, `smoke:launcher` 가 통과한다.
-- [ ] 가짜 `PageHandle` 로 관찰, 보내기, 복구의 시험이 Electron 없이 돈다.
+- [ ] 가짜 `PagePort` 로 관찰, 보내기, 복구의 시험이 Electron 없이 돈다.
 - [ ] 두 frontend 가 같은 home 으로 뜨면 host 는 하나이다. 둘째는 보내기가 0회이다.
 - [ ] chat job 이 fixture 페이지에서 새 대화를 열고, 보내고, 표식 뒤의 답을 읽는다.
 - [ ] akra-tunnel-core 만 설치하면 `sharp` 와 `playwright-core` 가 설치되지 않는다.
@@ -92,7 +92,7 @@ akra-tunnel 을 akra-tunnel-core 라이브러리와 frontend 로 나눈다 (사�
 
 ## 검증
 
-- `command`: `npm run verify`, 기존 smoke 시험, 가짜 `PageHandle` 의 단위 시험.
+- `command`: `npm run verify`, 기존 smoke 시험, 가짜 `PagePort` 의 단위 시험.
 - 실제 계정: chat job 은 사용자가 허락한 한 번.
 
 ## 제외
