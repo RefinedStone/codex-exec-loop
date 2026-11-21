@@ -73,7 +73,7 @@ fn delivery(lease: &ParallelModeSlotLeaseSnapshot, source: char) -> crate::appli
 }
 
 fn no_fetch() -> Result<String> {
-    panic!("frozen or running work must preserve its actual source")
+    panic!("assigned, frozen, or running work must preserve its actual source")
 }
 
 #[test]
@@ -132,6 +132,95 @@ fn base_advance_before_initial_dispatch_is_rechecked_even_with_a_saved_basis() {
     let result = project(Some(&loaded), Some(&basis('a')), || Ok("b".repeat(40))).unwrap();
     assert_eq!(result.dispatch_source, Some("b".repeat(40)));
     assert_eq!(result.saved_source, Some("a".repeat(40)));
+}
+
+#[test]
+fn a_ready_or_proposed_task_with_a_lease_preserves_its_saved_dispatch_source() {
+    for status in [TaskStatus::Ready, TaskStatus::Proposed] {
+        let mut loaded = observed(&["initial"], "initial", IssueExecutionPhase::Queued, status);
+        let mut current = lease("initial", 'a');
+        current.state = ParallelModeSlotLeaseState::Leased;
+        current.running_started_at = None;
+        loaded
+            .runtime
+            .slot_leases
+            .insert(current.slot_id.clone(), current);
+
+        let result = project(Some(&loaded), Some(&basis('a')), no_fetch).unwrap();
+
+        assert!(result.dispatch_source.is_none());
+        assert!(result.frozen_source.is_none());
+        assert_eq!(result.saved_source, Some("a".repeat(40)));
+        assert_eq!(result.saved_gate_revision, 7);
+        assert_eq!(result.saved_authorization_epoch, 3);
+        assert_eq!(result.task_ids, ["initial"]);
+    }
+}
+
+#[test]
+fn a_leased_task_without_a_saved_basis_does_not_fetch_a_new_dispatch_source() {
+    let mut loaded = observed(
+        &["initial"],
+        "initial",
+        IssueExecutionPhase::Queued,
+        TaskStatus::Ready,
+    );
+    let mut current = lease("initial", 'a');
+    current.state = ParallelModeSlotLeaseState::Leased;
+    current.running_started_at = None;
+    loaded
+        .runtime
+        .slot_leases
+        .insert(current.slot_id.clone(), current);
+
+    let result = project(Some(&loaded), None, no_fetch).unwrap();
+
+    assert!(result.dispatch_source.is_none());
+    assert!(result.frozen_source.is_none());
+    assert!(result.saved_source.is_none());
+    assert_eq!(result.saved_gate_revision, 0);
+    assert_eq!(result.saved_authorization_epoch, 0);
+    assert_eq!(result.task_ids, ["initial"]);
+}
+
+#[test]
+fn a_ready_supplement_fetches_its_base_with_only_an_older_tasks_lease() {
+    for state in [
+        ParallelModeSlotLeaseState::Running,
+        ParallelModeSlotLeaseState::CleanupPending,
+    ] {
+        let mut loaded = observed(
+            &["initial", "supplement"],
+            "supplement",
+            IssueExecutionPhase::Queued,
+            TaskStatus::Ready,
+        );
+        let mut previous = lease("initial", 'a');
+        previous.state = state;
+        loaded
+            .runtime
+            .distributor_queue_records
+            .push(delivery(&previous, 'a'));
+        loaded
+            .runtime
+            .slot_leases
+            .insert(previous.slot_id.clone(), previous);
+        let calls = Cell::new(0);
+
+        let result = project(Some(&loaded), Some(&basis('a')), || {
+            calls.set(calls.get() + 1);
+            Ok("c".repeat(40))
+        })
+        .unwrap();
+
+        assert_eq!(calls.get(), 1);
+        assert!(result.frozen_source.is_none());
+        assert_eq!(result.dispatch_source, Some("c".repeat(40)));
+        assert_eq!(result.saved_source, Some("a".repeat(40)));
+        assert_eq!(result.saved_gate_revision, 7);
+        assert_eq!(result.saved_authorization_epoch, 3);
+        assert_eq!(result.task_ids, ["initial", "supplement"]);
+    }
 }
 
 #[test]
