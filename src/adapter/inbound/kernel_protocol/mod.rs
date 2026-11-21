@@ -249,6 +249,11 @@ impl CommandRequest {
             .map(valid_idempotency_key)
             .transpose()?;
         let kind = self.command.kind();
+        if kind == KernelCommandKind::RetryDelegation && idempotency_key.is_none() {
+            return Err(KernelProtocolError::invalid_params(
+                "retry_delegation requires idempotency_key".to_owned(),
+            ));
+        }
         if !kind.is_recorded() {
             return Ok(None);
         }
@@ -273,6 +278,9 @@ impl CommandRequest {
             | KernelCommand::AnswerIssueDecision { .. }
             | KernelCommand::SubmitDelegation { .. }
             | KernelCommand::CancelDelegation { .. }
+            | KernelCommand::CheckpointDelegation { .. }
+            | KernelCommand::ReportDelegationResult { .. }
+            | KernelCommand::RetryDelegation { .. }
             | KernelCommand::SyncIssues {} => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
@@ -386,6 +394,15 @@ pub enum CommandResult {
         delegation: crate::domain::delegation::Delegation,
     },
     DelegationCancelled {
+        delegation: crate::domain::delegation::Delegation,
+    },
+    DelegationCheckpointed {
+        delegation: crate::domain::delegation::Delegation,
+    },
+    DelegationResultReported {
+        delegation: crate::domain::delegation::Delegation,
+    },
+    DelegationRetried {
         delegation: crate::domain::delegation::Delegation,
     },
     IssueDecisionResolved {
@@ -522,6 +539,9 @@ impl CommandResult {
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
             KernelCommandKind::SubmitDelegation => Some("delegation_submitted"),
             KernelCommandKind::CancelDelegation => Some("delegation_cancelled"),
+            KernelCommandKind::CheckpointDelegation => Some("delegation_checkpointed"),
+            KernelCommandKind::ReportDelegationResult => Some("delegation_result_reported"),
+            KernelCommandKind::RetryDelegation => Some("delegation_retried"),
             KernelCommandKind::LoadSessions
             | KernelCommandKind::RenameSession
             | KernelCommandKind::SubmitPrompt
@@ -790,8 +810,23 @@ pub enum KernelCommand {
     SubmitDelegation {
         instruction: String,
         idempotency_key: String,
+        #[serde(default)]
+        session: crate::domain::delegation::ChatSession,
     },
     CancelDelegation {
+        id: String,
+    },
+    CheckpointDelegation {
+        id: String,
+        token: String,
+        message: String,
+    },
+    ReportDelegationResult {
+        id: String,
+        token: String,
+        result: String,
+    },
+    RetryDelegation {
         id: String,
     },
 }
@@ -934,8 +969,22 @@ pub enum KernelCommandInput {
     SubmitDelegation {
         instruction: String,
         idempotency_key: String,
+        session: crate::domain::delegation::ChatSession,
     },
     CancelDelegation {
+        id: String,
+    },
+    CheckpointDelegation {
+        id: String,
+        token: String,
+        message: String,
+    },
+    ReportDelegationResult {
+        id: String,
+        token: String,
+        result: String,
+    },
+    RetryDelegation {
         id: String,
     },
 }
@@ -980,6 +1029,9 @@ impl KernelCommand {
             Self::SyncIssues {} => KernelCommandKind::SyncIssues,
             Self::SubmitDelegation { .. } => KernelCommandKind::SubmitDelegation,
             Self::CancelDelegation { .. } => KernelCommandKind::CancelDelegation,
+            Self::CheckpointDelegation { .. } => KernelCommandKind::CheckpointDelegation,
+            Self::ReportDelegationResult { .. } => KernelCommandKind::ReportDelegationResult,
+            Self::RetryDelegation { .. } => KernelCommandKind::RetryDelegation,
         }
     }
 
@@ -1007,7 +1059,10 @@ impl KernelCommand {
             | Self::RefreshPlanning {}
             | Self::SyncIssues {}
             | Self::SubmitDelegation { .. }
-            | Self::CancelDelegation { .. } => false,
+            | Self::CancelDelegation { .. }
+            | Self::CheckpointDelegation { .. }
+            | Self::ReportDelegationResult { .. }
+            | Self::RetryDelegation { .. } => false,
         }
     }
 
@@ -1085,14 +1140,30 @@ impl KernelCommand {
             Self::SubmitDelegation {
                 instruction,
                 idempotency_key,
+                session,
             } => {
+                if !session.valid() {
+                    return Err(KernelProtocolError::invalid_params(
+                        "invalid ChatGPT conversation URL",
+                    ));
+                }
                 return Ok(KernelCommandInput::SubmitDelegation {
                     instruction,
                     idempotency_key,
+                    session,
                 });
             }
             Self::CancelDelegation { id } => {
                 return Ok(KernelCommandInput::CancelDelegation { id });
+            }
+            Self::CheckpointDelegation { id, token, message } => {
+                return Ok(KernelCommandInput::CheckpointDelegation { id, token, message });
+            }
+            Self::ReportDelegationResult { id, token, result } => {
+                return Ok(KernelCommandInput::ReportDelegationResult { id, token, result });
+            }
+            Self::RetryDelegation { id } => {
+                return Ok(KernelCommandInput::RetryDelegation { id });
             }
             Self::AnswerIssueDecision {
                 decision_id,
@@ -1232,7 +1303,10 @@ impl KernelCommand {
             | Self::AnswerIssueDecision { .. }
             | Self::SyncIssues {}
             | Self::SubmitDelegation { .. }
-            | Self::CancelDelegation { .. } => {
+            | Self::CancelDelegation { .. }
+            | Self::CheckpointDelegation { .. }
+            | Self::ReportDelegationResult { .. }
+            | Self::RetryDelegation { .. } => {
                 return Err(KernelProtocolError::invalid_params(
                     "a host or stored command is not a core command",
                 ));
@@ -1264,6 +1338,12 @@ pub enum KernelQuery {
         id: String,
     },
     DelegationBackends {},
+    DelegationMyTurn {},
+    FeatureBindings {},
+    PrReviewResult {
+        #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+        number: u64,
+    },
     Sessions {},
     AutoFollow {},
     ThreadActivity {},
@@ -1385,11 +1465,20 @@ impl KernelQuery {
             },
             Self::Delegation { .. } => KernelQueryAnswer::Delegation { delegation: None },
             Self::DelegationResult { .. } => KernelQueryAnswer::DelegationResult { text: None },
+            Self::DelegationMyTurn {} => KernelQueryAnswer::DelegationMyTurn { items: Vec::new() },
+            Self::FeatureBindings {} => KernelQueryAnswer::FeatureBindings {
+                repository: None,
+                pr_review: Default::default(),
+            },
+            Self::PrReviewResult { number } => KernelQueryAnswer::PrReviewResult {
+                number,
+                review: None,
+            },
             Self::DelegationBackends {} => KernelQueryAnswer::DelegationBackends {
-                chatgpt_chat: crate::domain::delegation::BackendStatus {
-                    state: crate::domain::delegation::BackendState::Unavailable,
-                    reason: Some("gateway_unavailable".to_owned()),
-                },
+                chatgpt_chat: crate::domain::delegation::ChatBackendStatus::unavailable(
+                    "gateway_unavailable",
+                ),
+                codex_thread: crate::domain::delegation::CodexBackendStatus::gateway_unavailable(),
             },
         }
     }
@@ -1402,6 +1491,9 @@ spec_names! {
         Delegation => "delegation", "Read one text-only delegation by ID.";
         DelegationResult => "delegation_result", "Read the stored text result for a delegation.";
         DelegationBackends => "delegation_backends", "Check the live Desktop chat backend.";
+        DelegationMyTurn => "delegation_my_turn", "List delegations that require human attention.";
+        FeatureBindings => "feature_bindings", "Read the attached repository's stored PR review mode.";
+        PrReviewResult => "pr_review_result", "Read the latest stored review for a pull request in the attached repository.";
         Sessions => "sessions",
             "The session list of the workspace and its load state.";
         AutoFollow => "auto_follow",
@@ -1444,7 +1536,20 @@ pub enum KernelQueryAnswer {
         text: Option<String>,
     },
     DelegationBackends {
-        chatgpt_chat: crate::domain::delegation::BackendStatus,
+        chatgpt_chat: crate::domain::delegation::ChatBackendStatus,
+        #[serde(default = "crate::domain::delegation::CodexBackendStatus::gateway_unavailable")]
+        codex_thread: crate::domain::delegation::CodexBackendStatus,
+    },
+    FeatureBindings {
+        repository: Option<String>,
+        pr_review: crate::application::service::pr_review::ReviewMode,
+    },
+    DelegationMyTurn {
+        items: Vec<crate::domain::delegation::MyTurn>,
+    },
+    PrReviewResult {
+        number: u64,
+        review: Option<crate::application::service::pr_review::StoredPrReview>,
     },
     Sessions(SessionsState),
     AutoFollow(AutoFollowSettings),

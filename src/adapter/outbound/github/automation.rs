@@ -1465,13 +1465,17 @@ impl GithubNetworkCredentials {
             .into_iter()
             .find_map(|name| safe_secret(std::env::var_os(name)))
             .or_else(|| github_cli_auth_token(executables));
-        let login = safe_login(std::env::var_os("AKRA_GITHUB_LOGIN")).or_else(|| {
-            run_git_stdout(repo_root, &["config", "--get", "akra.githubLogin"])
-                .ok()
-                .and_then(|value| safe_login(Some(value.into())))
-        });
+        let login = configured_github_write_login(repo_root);
         Self { token, login }
     }
+}
+
+pub(super) fn configured_github_write_login(repo_root: &str) -> Option<OsString> {
+    safe_login(std::env::var_os("AKRA_GITHUB_LOGIN")).or_else(|| {
+        run_git_stdout(repo_root, &["config", "--get", "akra.githubLogin"])
+            .ok()
+            .and_then(|value| safe_login(Some(value.into())))
+    })
 }
 
 fn github_cli_auth_token(executables: &TrustedGithubExecutables) -> Option<OsString> {

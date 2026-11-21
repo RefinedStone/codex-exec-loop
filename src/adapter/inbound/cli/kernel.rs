@@ -1,7 +1,7 @@
 //! Machine CLI. The embedded protocol specification owns command names and input fields.
 
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -39,6 +39,64 @@ pub(super) fn describe(args: &[OsString], stdout: &mut impl Write) -> Result<i32
 
 pub(super) fn run(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
     run_with(args, execute, stdout)
+}
+
+/// Local operator entry. The machine command and Gateway surfaces expose no setter.
+pub(super) fn pr_review_settings(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
+    use crate::application::service::pr_review::ReviewMode;
+    let result = (|| {
+        let (mode, workspace) = match args {
+            [mode] => (mode, std::env::current_dir()?),
+            [mode, flag, path] if flag == "--workspace" => (mode, PathBuf::from(path)),
+            _ => bail!("usage: akra pr-review-settings <off|observe|on> [--workspace <path>]"),
+        };
+        let mode = match mode.to_str() {
+            Some("set-api-key") => {
+                use std::io::Read;
+                let stdin = std::io::stdin();
+                ensure!(
+                    !stdin.is_terminal(),
+                    "pipe the dedicated API credential on stdin"
+                );
+                let (repository, _) = production::pr_review_settings(&workspace)?;
+                let mut key = zeroize::Zeroizing::new(String::new());
+                stdin.lock().take(515).read_to_string(&mut key)?;
+                ensure!(key.len() < 515, "invalid PR review API credential");
+                crate::adapter::outbound::openai_review::set_key(
+                    &repository,
+                    key.trim_end_matches(['\r', '\n']),
+                )?;
+                return Ok(json!({"repository":repository,"credential_saved":true}));
+            }
+            Some("off") => ReviewMode::Off,
+            Some("observe") => ReviewMode::Observe,
+            Some("on") => ReviewMode::On,
+            _ => bail!("expected off, observe, or on"),
+        };
+        let stdin = std::io::stdin();
+        let mut stderr = std::io::stderr();
+        ensure!(
+            stdin.is_terminal() && stderr.is_terminal(),
+            "PR review settings require an interactive terminal"
+        );
+        let (repository, journal) = production::pr_review_settings(&workspace)?;
+        let confirmation = format!("{} {repository}", mode.as_str());
+        write!(
+            stderr,
+            "Set PR review to {} for {repository}. Type `{confirmation}` to confirm: ",
+            mode.as_str()
+        )?;
+        stderr.flush()?;
+        let mut response = String::new();
+        stdin.read_line(&mut response)?;
+        ensure!(
+            response.trim_end_matches(['\r', '\n']) == confirmation,
+            "PR review settings were not changed"
+        );
+        journal.set_mode(&repository, mode)?;
+        Ok(json!({ "repository": repository, "pr_review": mode }))
+    })();
+    render(result, None, stdout)
 }
 
 fn run_with(
@@ -153,6 +211,18 @@ fn parse(args: &[OsString]) -> Result<Invocation> {
         index += 1;
     }
     let (section, name, scope) = match positional.as_slice() {
+        ["delegation", "submit"] => ("commands", "submit_delegation", Some("delegation")),
+        ["delegation", verb @ ("status" | "result" | "wait"), id] => {
+            ensure!(!fields.contains_key("id"), "duplicate delegation id");
+            fields.insert("id".into(), Value::String((*id).into()));
+            wait |= *verb == "wait";
+            let name = if *verb == "result" {
+                "delegation_result"
+            } else {
+                "delegation"
+            };
+            ("queries", name, None)
+        }
         ["query", name] => ("queries", *name, None),
         ["history"] => {
             ensure!(fields.contains_key("after"), "history requires --after");
@@ -184,8 +254,8 @@ fn parse(args: &[OsString]) -> Result<Invocation> {
             "--idempotency-key is only valid for commands"
         );
         ensure!(
-            !wait || matches!(name, "history" | "operation"),
-            "--wait is only valid for history and operation"
+            !wait || matches!(name, "history" | "operation" | "delegation"),
+            "--wait is only valid for history, operation and delegation"
         );
     }
     let properties = entry["input"]["properties"]
@@ -661,6 +731,20 @@ mod tests {
                 })]
             );
         }
+    }
+
+    #[test]
+    fn delegation_wait_uses_the_read_query_and_preserves_the_job_id() {
+        let port = FakeKernelPort {
+            requests: Mutex::new(Vec::new()),
+            answer: json!({"type":"delegation","delegation":null}),
+        };
+        let invocation = parse(&arguments(&["delegation", "wait", "job-1", "--json"])).unwrap();
+        execute_with_port(invocation, &port).unwrap();
+        assert_eq!(
+            *port.requests.lock().unwrap(),
+            vec![json!({"query":{"type":"delegation","id":"job-1"},"wait":true})]
+        );
     }
 
     #[test]

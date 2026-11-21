@@ -1631,6 +1631,7 @@ fn fake_adapter(curl_path: &Path) -> GithubReviewPollerAdapter {
         api_base_url: "https://api.test".to_string(),
         user_agent: "akra-test".to_string(),
         token: "secret-token".to_string(),
+        write_login: None,
         subprocess_timeout: NON_TIMEOUT_TEST_WAIT,
     }
 }

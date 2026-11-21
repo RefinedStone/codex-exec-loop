@@ -252,6 +252,13 @@ fn arguments_accept_help_and_desktop_browser_bridge() {
 async fn connect_kernel_client(
     kernels: Arc<crate::composition::repository_kernel::RepositoryKernelRegistry>,
 ) -> WebSocketStream<DuplexStream> {
+    connect_kernel_client_with_services(kernels, super::session::GatewayServices::default()).await
+}
+
+async fn connect_kernel_client_with_services(
+    kernels: Arc<crate::composition::repository_kernel::RepositoryKernelRegistry>,
+    services: super::session::GatewayServices,
+) -> WebSocketStream<DuplexStream> {
     let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let upstream = EchoUpstream::new(true);
     tokio::spawn(async move {
@@ -259,7 +266,7 @@ async fn connect_kernel_client(
             gateway_side,
             GatewayHosts::new(upstream, Vec::new()),
             kernels,
-            super::session::GatewayServices::default(),
+            services,
             None,
         )
         .await;
@@ -272,6 +279,201 @@ async fn connect_kernel_client(
     .await
     .expect("client handshake through the gateway session should succeed");
     websocket
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delegation_selected_chat_crosses_gateway_with_account_and_bounded_recovery() {
+    let folder = KernelTestFolder::new("selected-chat");
+    let auth_path = folder.path.join("fixture-auth.json");
+    const ACCOUNT: &str = "fixture-account";
+    const URL: &str = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc";
+    std::fs::write(
+        &auth_path,
+        json!({"tokens":{"access_token":"fixture", "account_id":ACCOUNT}}).to_string(),
+    )
+    .unwrap();
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut delegation = super::delegation::Delegations::default();
+    delegation.auth_path = Some(auth_path);
+    let services = super::session::GatewayServices {
+        delegations: Arc::new(delegation),
+        ..Default::default()
+    };
+    let mut client = connect_kernel_client_with_services(kernels.clone(), services.clone()).await;
+    let mut browser = connect_kernel_client_with_services(kernels, services).await;
+    attach_kernel(&mut client, "attach", &folder.workspace()).await;
+    let registration = kernel_request(
+        &mut browser,
+        "register",
+        "akra/delegationDriver/register",
+        json!({}),
+    )
+    .await;
+    assert!(registration.get("result").is_some(), "{registration}");
+    let callback_root = std::fs::canonicalize(folder.workspace()).unwrap();
+    let driver = tokio::spawn(async move {
+        let mut submits = 0;
+        let mut observations = 0;
+        loop {
+            let request =
+                next_json_matching(&mut browser, |message| message["method"].is_string()).await;
+            let result = match request["method"].as_str().unwrap() {
+                "akra/delegationDriver/status" => {
+                    if !request["params"]["expectedAccountId"].is_null() {
+                        assert_eq!(request["params"]["expectedAccountId"], ACCOUNT);
+                    }
+                    json!({"state":"ready","accountMatch":"match",
+                        "tunnel":{"host":true,"readiness":"ready","install":"ready","connection":"unknown"}})
+                }
+                "akra/delegationDriver/submit" => {
+                    submits += 1;
+                    assert_eq!(
+                        request["params"]["session"],
+                        json!({"mode":"continue","chatUrl":URL})
+                    );
+                    assert_eq!(request["params"]["expectedAccountId"], ACCOUNT);
+                    assert_eq!(
+                        std::fs::canonicalize(
+                            request["params"]["callback"]["workspace"].as_str().unwrap()
+                        )
+                        .unwrap(),
+                        callback_root
+                    );
+                    assert!(
+                        request["params"]["maxResumes"]
+                            .as_u64()
+                            .is_some_and(|n| n <= 2)
+                    );
+                    assert!(
+                        request["params"]["callback"]["token"]
+                            .as_str()
+                            .is_some_and(|s| s.len() == 64)
+                    );
+                    json!({"delivery":"accepted","phase":"working","conversationUrl":URL,"recovery":"none","resumes":0})
+                }
+                "akra/delegationDriver/observe" => {
+                    observations += 1;
+                    if observations == 1 {
+                        json!({"delivery":"observed","phase":"disconnected","recovery":"in_progress","resumes":1})
+                    } else {
+                        json!({"delivery":"observed","phase":"disconnected","recovery":"exhausted","resumes":2})
+                    }
+                }
+                method => panic!("unexpected delegated fixture method {method}"),
+            };
+            assert!(submits <= 1, "observation must not resend the job");
+            browser
+                .send(Message::text(
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string(),
+                ))
+                .await
+                .unwrap();
+        }
+    });
+
+    let status = kernel_request(
+        &mut client,
+        "backends",
+        "akra/kernel/query",
+        json!({"query":{"type":"delegation_backends"}}),
+    )
+    .await;
+    assert_eq!(
+        status["result"]["chatgpt_chat"]["account_match"], "match",
+        "{status}"
+    );
+    assert_eq!(
+        status["result"]["chatgpt_chat"]["tunnel"]["connection"],
+        "unknown"
+    );
+    assert_eq!(status["result"]["chatgpt_chat"]["circuit"], "closed");
+    let submit = |url| {
+        json!({"command":{
+            "type":"submit_delegation","instruction":"Fixture request","idempotency_key":"selected-chat",
+            "session":{"mode":"continue","chat_url":url}
+        }})
+    };
+    let invalid = kernel_request(
+        &mut client,
+        "invalid",
+        "akra/kernel/command",
+        submit("https://example.test/c/abc"),
+    )
+    .await;
+    assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
+    let accepted = kernel_request(&mut client, "submit", "akra/kernel/command", submit(URL)).await;
+    let job = &accepted["result"]["result"]["delegation"];
+    assert_eq!(job["session"]["chat_url"], URL, "{accepted}");
+    let id = job["id"].as_str().unwrap();
+    let changed = kernel_request(
+        &mut client,
+        "changed",
+        "akra/kernel/command",
+        submit("https://chatgpt.com/c/abcdefab-1234-1234-1234-123456789abc"),
+    )
+    .await;
+    assert!(changed["result"]["failure"].is_string(), "{changed}");
+    tokio::time::timeout(Duration::from_secs(12), async {
+        let mut observed_recovery = false;
+        loop {
+            let detail = kernel_request(
+                &mut client,
+                "detail",
+                "akra/kernel/query",
+                json!({"query":{"type":"delegation","id":id}}),
+            )
+            .await;
+            let job = &detail["result"]["delegation"];
+            assert_eq!(job["session"]["chat_url"], URL, "{detail}");
+            assert_eq!(job["can_cancel"], true, "{detail}");
+            assert_eq!(job["can_retry"], false, "{detail}");
+            assert!(!detail.to_string().contains(ACCOUNT));
+            if job["attempts"][0]["recovery"] == "in_progress" {
+                assert_eq!(job["current_backend"], "chatgpt_chat");
+                assert_eq!(job["attempts"][0]["resumes"], 1);
+                assert!(job["fallbacks"].is_null());
+                observed_recovery = true;
+            }
+            if job["state"] == "awaiting_human" && job["attempts"][0]["recovery"] == "exhausted" {
+                assert!(observed_recovery);
+                assert_eq!(job["attempts"][0]["resumes"], 2);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("driver recovery should reach My Turn");
+    let attention = kernel_request(
+        &mut client,
+        "my-turn",
+        "akra/kernel/query",
+        json!({"query":{"type":"delegation_my_turn"}}),
+    )
+    .await;
+    assert_eq!(
+        attention["result"]["items"],
+        json!([{"id":id,"reason":"chat_recovery_exhausted"}]),
+        "{attention}"
+    );
+    let store = crate::composition::production::delegation_store(
+        crate::composition::production::delegation_runtime(&folder.workspace()).unwrap(),
+        true,
+    )
+    .unwrap();
+    let persisted = store
+        .active()
+        .unwrap()
+        .into_iter()
+        .find(|job| job.view.id == id)
+        .unwrap();
+    assert_eq!(persisted.view.session.selected_url(), Some(URL));
+    assert_eq!(
+        persisted.account_digest.as_deref(),
+        Some(super::delegation::account_fingerprint(ACCOUNT).as_slice())
+    );
+    driver.abort();
 }
 
 async fn next_json_matching(
@@ -299,6 +501,121 @@ async fn kernel_request(
         .await
         .unwrap();
     next_json_matching(websocket, |value| value["id"] == json!(id)).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delegation_commands_scope_callbacks_and_replay_retry_keys() {
+    use crate::adapter::inbound::desktop_confirmation_bridge::storage::random_id;
+    use crate::composition::production::{delegation_runtime, delegation_store};
+    use crate::domain::delegation::State;
+
+    let folder = crate::test_utils::platform_safe_temp_dir().join(format!(
+        "akra-gateway-delegation-{}",
+        random_id(12).unwrap()
+    ));
+    std::fs::create_dir(&folder).unwrap();
+    let workspace = folder.to_str().unwrap();
+    let store = delegation_store(delegation_runtime(workspace).unwrap(), false).unwrap();
+    let seed = |key| {
+        let job = store
+            .submit(key, "fixture instruction", "gateway-test")
+            .unwrap();
+        let mut dispatching = job.clone();
+        dispatching.state = State::Dispatching;
+        assert!(store.update(&job, &mut dispatching, None, false).unwrap());
+        let token = store.issue_callback_capability(&job.id).unwrap().unwrap();
+        (dispatching, token)
+    };
+    let retryable = store
+        .submit("retryable", "fixture instruction", "gateway-test")
+        .unwrap();
+    store.cancel(&retryable.id).unwrap().unwrap();
+    let (active, capability) = seed("active");
+    let (expired, expired_capability) = seed("expired");
+    let mut past_deadline = expired.clone();
+    past_deadline.deadline = Some(0);
+    assert!(
+        store
+            .update(&expired, &mut past_deadline, None, false)
+            .unwrap()
+    );
+
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut client = connect_kernel_client(kernels).await;
+    let attach = kernel_request(
+        &mut client,
+        "attach",
+        "akra/kernel/attach",
+        json!({"workspace": workspace, "client_name": "gateway-test", "transient": true}),
+    )
+    .await;
+    assert!(attach["result"]["kernel"].is_string(), "{attach}");
+
+    for (id, token) in [
+        (&active.id, "wrong"),
+        (&active.id, expired_capability.as_str()),
+        (&expired.id, expired_capability.as_str()),
+    ] {
+        let rejected = kernel_request(
+            &mut client,
+            "callback",
+            "akra/kernel/command",
+            json!({"command": {"type": "report_delegation_result", "id": id, "token": token, "result": "fixture"}}),
+        )
+        .await;
+        assert_eq!(
+            rejected["result"]["failure"],
+            "delegation callback rejected"
+        );
+        assert!(!rejected.to_string().contains(token));
+    }
+    for (kind, field, expected) in [
+        (
+            "checkpoint_delegation",
+            "message",
+            "delegation_checkpointed",
+        ),
+        (
+            "report_delegation_result",
+            "result",
+            "delegation_result_reported",
+        ),
+    ] {
+        let mut command = json!({"type": kind, "id": active.id, "token": capability});
+        command[field] = json!("fixture");
+        let response = kernel_request(
+            &mut client,
+            "callback",
+            "akra/kernel/command",
+            json!({"command": command}),
+        )
+        .await;
+        assert_eq!(response["result"]["result"]["type"], expected, "{response}");
+        assert!(!response.to_string().contains(&capability));
+    }
+    assert_eq!(
+        store.result(&active.id).unwrap().as_deref(),
+        Some("fixture")
+    );
+
+    let params = json!({
+        "command": {"type": "retry_delegation", "id": retryable.id},
+        "idempotency_key": "same-retry",
+    });
+    let mut new_id = None;
+    for _ in 0..2 {
+        let response =
+            kernel_request(&mut client, "retry", "akra/kernel/command", params.clone()).await;
+        let result = &response["result"]["result"];
+        assert_eq!(result["type"], "delegation_retried", "{response}");
+        let id = result["delegation"]["id"].as_str().unwrap();
+        assert_ne!(id, retryable.id);
+        assert_eq!(id, new_id.get_or_insert_with(|| id.to_owned()).as_str());
+    }
+    client.close(None).await.unwrap();
+    drop(client);
+    let _ = std::fs::remove_dir_all(folder);
 }
 
 #[tokio::test(flavor = "multi_thread")]

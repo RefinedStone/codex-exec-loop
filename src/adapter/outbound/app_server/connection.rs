@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -263,6 +263,7 @@ pub(super) struct AppServerConnectionConfig {
     executable_prefix_args: Vec<OsString>,
     executable_resolution_error: Option<String>,
     command_environment: Vec<(OsString, OsString)>,
+    isolated_cwd: Option<PathBuf>,
     shell_environment_inherit: ShellEnvironmentInherit,
     process_environment_policy: ProcessEnvironmentPolicy,
     api_key_auth: bool,
@@ -289,6 +290,7 @@ impl Default for AppServerConnectionConfig {
             executable_prefix_args: Vec::new(),
             executable_resolution_error: None,
             command_environment: Vec::new(),
+            isolated_cwd: None,
             shell_environment_inherit: ShellEnvironmentInherit::Core,
             process_environment_policy: ProcessEnvironmentPolicy::Scrubbed,
             api_key_auth: false,
@@ -309,6 +311,56 @@ impl Default for AppServerConnectionConfig {
 }
 
 impl AppServerConnectionConfig {
+    pub(super) fn isolated_delegation(cwd: &Path, home: &Path) -> Result<Self> {
+        let binary = crate::trusted_executable::pinned_codex_command()?;
+        let mut config = Self::isolated_delegation_process(cwd, home);
+        config.executable = binary.program;
+        config.executable_prefix_args = binary.prefix_args;
+        if configured_api_key_auth() {
+            for name in APP_SERVER_API_KEY_ENV_VARS {
+                if let Some(key) = std::env::var_os(name) {
+                    config.command_environment.push(((*name).into(), key));
+                }
+            }
+        }
+        Ok(config)
+    }
+
+    fn isolated_delegation_process(cwd: &Path, home: &Path) -> Self {
+        let mut command_environment = ["SYSTEMROOT", "WINDIR", "COMSPEC"]
+            .into_iter()
+            .filter_map(|name| std::env::var_os(name).map(|value| (name.into(), value)))
+            .collect::<Vec<_>>();
+        for name in [
+            "HOME",
+            "USERPROFILE",
+            "CODEX_HOME",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+        ] {
+            command_environment.push((name.into(), home.as_os_str().to_owned()));
+        }
+        Self {
+            isolated_cwd: Some(cwd.into()),
+            command_environment,
+            shell_environment_inherit: ShellEnvironmentInherit::None,
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn isolated_delegation_fixture(cwd: &Path, home: &Path, command: &Path) -> Self {
+        let mut config = Self::isolated_delegation_process(cwd, home);
+        config.executable = command.into();
+        config
+    }
+
     pub(super) const fn runtime_launch_environment(&self) -> ConversationRuntimeLaunchEnvironment {
         let process_environment = match self.process_environment_policy {
             ProcessEnvironmentPolicy::Scrubbed => ConversationRuntimeProcessEnvironment::Scrubbed,
@@ -860,6 +912,12 @@ fn app_server_command_with_environment(
         .arg("-c")
         .arg(DISABLE_LOGIN_SHELL_OVERRIDE)
         .envs(config.command_environment.iter().cloned());
+    if let Some(cwd) = &config.isolated_cwd {
+        command
+            .env_clear()
+            .envs(config.command_environment.iter().cloned())
+            .current_dir(cwd);
+    }
     command
 }
 
@@ -1385,6 +1443,37 @@ impl AppServerConnection {
     pub(super) fn read_account(&mut self) -> Result<AccountReadResponse> {
         self.ensure_initialized()?;
         self.send_request("account/read", json!({}))
+    }
+
+    pub(super) fn isolated_request(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.ensure_initialized()?;
+        anyhow::ensure!(
+            self.config.isolated_cwd.is_some(),
+            "isolated connection required"
+        );
+        self.send_request(method, params)
+    }
+
+    pub(super) fn start_isolated_turn(
+        &mut self,
+        params: Value,
+        event_sender: &dyn AppServerEventSender,
+        signal: &AppServerTurnInterruptSignal,
+    ) -> Result<TurnStartResponse> {
+        self.ensure_initialized()?;
+        anyhow::ensure!(
+            self.config.isolated_cwd.is_some(),
+            "isolated connection required"
+        );
+        self.send_request_with_event_sender_and_interrupt(
+            "turn/start",
+            params,
+            event_sender,
+            ApprovalInterruptContext {
+                signal,
+                observed_generation: 0,
+            },
+        )
     }
 
     #[tracing::instrument(
@@ -9251,6 +9340,7 @@ mod tests {
             executable_prefix_args: Vec::new(),
             executable_resolution_error: None,
             command_environment: Vec::new(),
+            isolated_cwd: None,
             shell_environment_inherit: ShellEnvironmentInherit::Core,
             process_environment_policy: ProcessEnvironmentPolicy::Scrubbed,
             api_key_auth: false,

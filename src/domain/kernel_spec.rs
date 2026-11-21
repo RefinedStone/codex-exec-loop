@@ -103,6 +103,12 @@ spec_names! {
             "Accept one text-only ChatGPT delegation using a durable request key.";
         CancelDelegation => "cancel_delegation",
             "Cancel one text-only ChatGPT delegation by ID.";
+        CheckpointDelegation => "checkpoint_delegation",
+            "Record progress through the trusted delegation callback channel.";
+        ReportDelegationResult => "report_delegation_result",
+            "Finish a delegation through the trusted delegation callback channel.";
+        RetryDelegation => "retry_delegation",
+            "Create a new job for a safely retryable delegation. Reuse the request idempotency key for the same retry.";
     }
 }
 
@@ -349,7 +355,10 @@ impl KernelCommandKind {
             | Self::PauseAutoFollow
             | Self::SyncIssues
             | Self::SubmitDelegation
-            | Self::CancelDelegation => CommandCompletion::Accepted,
+            | Self::CancelDelegation
+            | Self::CheckpointDelegation
+            | Self::ReportDelegationResult
+            | Self::RetryDelegation => CommandCompletion::Accepted,
             Self::SubmitPrompt
             | Self::RenameSession
             | Self::SteerTurn
@@ -448,10 +457,19 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::KernelUnreachable, Reason::IssueAutomationOff],
             ),
-            Self::SubmitDelegation | Self::CancelDelegation => (
+            Self::SubmitDelegation
+            | Self::CancelDelegation
+            | Self::CheckpointDelegation
+            | Self::ReportDelegationResult => (
                 CommandScope::Delegation,
                 Write,
                 Natural,
+                &[Reason::KernelUnreachable],
+            ),
+            Self::RetryDelegation => (
+                CommandScope::Delegation,
+                Write,
+                Keyed,
                 &[Reason::KernelUnreachable],
             ),
             Self::ResetPlanning => (CommandScope::Planning, Destructive, Natural, &[]),
@@ -504,7 +522,10 @@ impl KernelCommandKind {
                 | Self::RefreshPlanning
                 | Self::SyncIssues
                 | Self::SubmitDelegation
-                | Self::CancelDelegation => CommandState::Runtime,
+                | Self::CancelDelegation
+                | Self::CheckpointDelegation
+                | Self::ReportDelegationResult
+                | Self::RetryDelegation => CommandState::Runtime,
             },
             effect,
             idempotency,
@@ -516,6 +537,10 @@ impl KernelCommandKind {
     /// 판단 사건 기록에 남는 명령인가이다. 읽기 명령은 남지 않는다.
     pub const fn is_recorded(self) -> bool {
         !matches!(self.spec().effect, CommandEffect::Read)
+            && !matches!(
+                self,
+                Self::CheckpointDelegation | Self::ReportDelegationResult | Self::RetryDelegation
+            )
     }
 }
 

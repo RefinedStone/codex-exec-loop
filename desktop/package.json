@@ -24,7 +24,7 @@
   "dependencies": {
     "@pierre/diffs": "1.6.4",
     "@shikijs/langs": "4.6.0",
-    "akra-tunnel-core": "git+https://github.com/RefinedStone/akra-tunnel-core.git#239deb9b344da3008a8c03abc9ef104437a06afb",
+    "akra-tunnel-core": "git+https://github.com/RefinedStone/akra-tunnel-core.git#9d7fbc1deaf1e7f1db9beb0cc433c4af2abe9898",
     "node-pty": "1.1.0",
     "ws": "8.22.1"
   },

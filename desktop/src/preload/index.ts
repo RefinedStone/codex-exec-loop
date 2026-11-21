@@ -261,7 +261,7 @@ const bridge: AkraBridge = {
   },
   delegatedChat: {
     enabled: () => ipcRenderer.invoke(IPC_CHANNELS.delegatedChatEnabled),
-    open: () => ipcRenderer.invoke(IPC_CHANNELS.delegatedChatOpen),
+    open: (conversationUrl) => ipcRenderer.invoke(IPC_CHANNELS.delegatedChatOpen, conversationUrl),
   },
   skills: {
     list: (request) => ipcRenderer.invoke(IPC_CHANNELS.skillsList, request),

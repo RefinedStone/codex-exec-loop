@@ -79,8 +79,20 @@ fn sample_commands() -> Vec<KernelCommand> {
         KernelCommand::SubmitDelegation {
             instruction: "Explain the test result.".into(),
             idempotency_key: "delegation-request-1".into(),
+            session: Default::default(),
         },
         KernelCommand::CancelDelegation { id: "job-1".into() },
+        KernelCommand::CheckpointDelegation {
+            id: "job-1".into(),
+            token: "fixture".into(),
+            message: "In progress".into(),
+        },
+        KernelCommand::ReportDelegationResult {
+            id: "job-1".into(),
+            token: "fixture".into(),
+            result: "Finished".into(),
+        },
+        KernelCommand::RetryDelegation { id: "job-1".into() },
     ]
 }
 
@@ -114,6 +126,31 @@ fn no_parallel() -> ParallelSource<'static> {
         enabled: false,
         supervisor: None,
         status: None,
+    }
+}
+
+#[test]
+fn delegation_callbacks_and_retry_use_the_ledger_without_history_descriptors() {
+    for command in sample_commands().into_iter().filter(|command| {
+        matches!(
+            command.kind(),
+            KernelCommandKind::CheckpointDelegation
+                | KernelCommandKind::ReportDelegationResult
+                | KernelCommandKind::RetryDelegation
+        )
+    }) {
+        if command.kind() == KernelCommandKind::RetryDelegation {
+            assert!(
+                command_request(serde_json::to_value(&command).unwrap(), None)
+                    .descriptor()
+                    .is_err()
+            );
+        }
+        let request = CommandRequest {
+            command,
+            idempotency_key: Some("fixture-key".to_owned()),
+        };
+        assert_eq!(request.descriptor().unwrap(), None);
     }
 }
 
@@ -180,6 +217,15 @@ fn every_command_maps_to_its_own_execution_boundary() {
             }
             KernelCommandInput::CancelDelegation { .. } => {
                 assert_eq!(kind, KernelCommandKind::CancelDelegation)
+            }
+            KernelCommandInput::CheckpointDelegation { .. } => {
+                assert_eq!(kind, KernelCommandKind::CheckpointDelegation)
+            }
+            KernelCommandInput::ReportDelegationResult { .. } => {
+                assert_eq!(kind, KernelCommandKind::ReportDelegationResult)
+            }
+            KernelCommandInput::RetryDelegation { .. } => {
+                assert_eq!(kind, KernelCommandKind::RetryDelegation)
             }
         }
     }
@@ -657,6 +703,9 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::Delegation { id: "job-1".into() },
         KernelQuery::DelegationResult { id: "job-1".into() },
         KernelQuery::DelegationBackends {},
+        KernelQuery::DelegationMyTurn {},
+        KernelQuery::FeatureBindings {},
+        KernelQuery::PrReviewResult { number: 42 },
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},
@@ -2175,6 +2224,9 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         KernelQuery::Delegation { id: "job-1".into() },
         KernelQuery::DelegationResult { id: "job-1".into() },
         KernelQuery::DelegationBackends {},
+        KernelQuery::DelegationMyTurn {},
+        KernelQuery::FeatureBindings {},
+        KernelQuery::PrReviewResult { number: 42 },
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},

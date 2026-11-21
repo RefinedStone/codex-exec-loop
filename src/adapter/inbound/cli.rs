@@ -80,6 +80,9 @@ where
         [command, rest @ ..] if command == OsStr::new("kernel") => {
             Ok(Some(kernel::run(rest, stdout)?))
         }
+        [command, rest @ ..] if command == OsStr::new("pr-review-settings") => {
+            Ok(Some(kernel::pr_review_settings(rest, stdout)?))
+        }
         [flag] if is_help_flag(flag) => {
             writeln!(stdout, "{ADMIN_SERVER_USAGE}")?;
             writeln!(stdout, "{ADMIN_SERVER_ALIAS_USAGE}")?;
@@ -95,6 +98,10 @@ where
             writeln!(stdout, "{MCP_USAGE}")?;
             writeln!(stdout, "{}", issue_form::USAGE)?;
             writeln!(stdout, "Usage: akra describe --json")?;
+            writeln!(
+                stdout,
+                "Usage: akra pr-review-settings <off|observe|on> [--workspace <path>]"
+            )?;
             writeln!(
                 stdout,
                 "Usage: akra kernel <scope> <command> [--field value] --json"

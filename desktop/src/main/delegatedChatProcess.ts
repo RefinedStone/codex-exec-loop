@@ -8,9 +8,11 @@ export function startDelegatedChatProcess(entry: string, endpoint: string, dispa
   let stop: NodeJS.Timeout | undefined;
   const send = (message: ChatWorkerMessage) => child.postMessage(message);
 
-  child.on("message", ({ id, method, jobId, instruction }: ChatWorkerRequest) => {
+  child.on("message", ({ id, method, jobId, instruction, options }: ChatWorkerRequest) => {
     if (closed) return;
-    void dispatch(method, jobId, instruction).then(
+    void dispatch(method, jobId, instruction, options, (report) => {
+      if (!closed) send({ type: "callback", jobId, report });
+    }).then(
       (value) => { if (!closed) send({ type: "result", id, value }); },
       () => { if (!closed) send({ type: "error", id }); },
     );

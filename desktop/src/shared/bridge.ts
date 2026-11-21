@@ -467,7 +467,7 @@ export interface AkraBridge {
   delegatedChat: {
     enabled(): Promise<boolean>;
     /** Opens the isolated ChatGPT window for manual use. */
-    open(): Promise<boolean>;
+    open(conversationUrl?: string): Promise<boolean>;
   };
   github: GitHubBridge;
   jira: JiraBridge;

@@ -3,6 +3,7 @@
  * 이 파일은 service 관점의 의존성 지도를 보여 주며, adapter/outbound가 각 port를 실제 I/O로 구현한다.
  */
 // app-server prompt log port는 main/worker Codex session 입출력 trace를 admin surface에 제공한다.
+pub(crate) mod agent_backend_port;
 pub mod app_server_prompt_log_port;
 // conversation thread turn options keep user-selected model/effort scoped to an app-server thread.
 pub mod conversation_thread_turn_options_port;

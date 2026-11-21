@@ -401,6 +401,17 @@ pub struct IssueCreationRestartRequest {
 }
 
 pub trait IssueDraftPort: Send + Sync {
+    fn validated_review_draft(
+        &self,
+        _request: IssueDraftPreviewRequest,
+        _approval: IssueDraftApproval,
+    ) -> Result<(
+        String,
+        crate::domain::issue_validation::IssueValidationPassed,
+    )> {
+        anyhow::bail!("issue draft review is unavailable")
+    }
+
     fn creation_open(&self, _target: IssueCreationTarget) -> Result<IssueCreationOpened> {
         anyhow::bail!("new-issue creation is unavailable")
     }

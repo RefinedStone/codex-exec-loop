@@ -24,9 +24,12 @@ import { BrowserAutomation } from "./browserAgent/automation";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { contextMenuItems } from "./contextMenuItems";
 import { DelegatedChatDriver, delegatedChatHome } from "./delegatedChatDriver";
+import { chatAccountStatus } from "./delegatedChatAccount";
+import { delegatedTunnelStatus } from "./delegatedTunnelStatus";
 import { createDelegatedChatPage } from "./delegatedChatPage";
 import { startDelegatedChatProcess } from "./delegatedChatProcess";
 import { DelegatedChatWindow } from "./delegatedChatWindow";
+import { CHAT_CONVERSATION } from "../shared/delegatedChat";
 import { isDotsCloudEnabled, setDotsCloudEnabled } from "./dotsSettings";
 import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBranch";
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
@@ -332,10 +335,15 @@ function isDelegatedChatSender(event: IpcMainInvokeEvent): boolean {
 }
 
 ipcMain.handle(IPC_CHANNELS.delegatedChatEnabled, (event) => isDelegatedChatSender(event) && delegatedChatEnabled());
-ipcMain.handle(IPC_CHANNELS.delegatedChatOpen, (event) => {
+ipcMain.handle(IPC_CHANNELS.delegatedChatOpen, async (event, url: unknown) => {
   if (!isDelegatedChatSender(event) || !delegatedChatEnabled()) return false;
-  delegatedChatWindow.openForManualUse();
-  return true;
+  if (url !== undefined && (typeof url !== "string" || !CHAT_CONVERSATION.test(url))) return false;
+  try {
+    await delegatedChatWindow.openForManualUse(url);
+    return true;
+  } catch {
+    return false;
+  }
 });
 
 /** `dotQuery` 가 있으면 dot 창이다: 작고, renderer 가 그 dot 의 대화만 그린다. */
@@ -890,9 +898,12 @@ void app.whenReady().then(() => {
   if (delegatedChatEnabled()) {
     try {
       const endpoint = resolveGatewayEndpoint();
+      const home = delegatedChatHome();
       const driver = new DelegatedChatDriver({
-        home: delegatedChatHome(),
+        home,
         pageFor: () => createDelegatedChatPage(delegatedChatWindow),
+        pageStatus: chatAccountStatus,
+        tunnelStatus: () => delegatedTunnelStatus(home),
         manual: () => delegatedChatWindow.isManual,
         closePage: () => delegatedChatWindow.close(),
       });

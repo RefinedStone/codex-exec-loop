@@ -418,9 +418,25 @@ impl CommandOnlyKernel {
         inspect: impl FnOnce(&str) -> Option<IssueAutomationPolicyInspection>,
     ) -> Result<Value> {
         let query: KernelQuery = serde_json::from_value(input)?;
+        match query {
+            KernelQuery::FeatureBindings {} => {
+                return Ok(serde_json::to_value(super::production::query_pr_review(
+                    &self.workspace,
+                    None,
+                )?)?);
+            }
+            KernelQuery::PrReviewResult { number } => {
+                return Ok(serde_json::to_value(super::production::query_pr_review(
+                    &self.workspace,
+                    Some(number),
+                )?)?);
+            }
+            _ => {}
+        }
         if matches!(
             query,
             KernelQuery::Delegations {}
+                | KernelQuery::DelegationMyTurn {}
                 | KernelQuery::Delegation { .. }
                 | KernelQuery::DelegationResult { .. }
         ) {
@@ -434,7 +450,10 @@ impl CommandOnlyKernel {
                     delegations: store.list()?,
                 },
                 KernelQuery::Delegation { id } => KernelQueryAnswer::Delegation {
-                    delegation: store.find(&id)?,
+                    delegation: store.detail(&id)?,
+                },
+                KernelQuery::DelegationMyTurn {} => KernelQueryAnswer::DelegationMyTurn {
+                    items: store.my_turn()?,
                 },
                 KernelQuery::DelegationResult { id } => KernelQueryAnswer::DelegationResult {
                     text: store.result(&id)?,
@@ -445,10 +464,11 @@ impl CommandOnlyKernel {
         if matches!(query, KernelQuery::DelegationBackends {}) {
             return Ok(serde_json::to_value(
                 KernelQueryAnswer::DelegationBackends {
-                    chatgpt_chat: crate::domain::delegation::BackendStatus {
-                        state: crate::domain::delegation::BackendState::Unavailable,
-                        reason: Some("gateway_unavailable".to_owned()),
-                    },
+                    codex_thread:
+                        crate::domain::delegation::CodexBackendStatus::gateway_unavailable(),
+                    chatgpt_chat: crate::domain::delegation::ChatBackendStatus::unavailable(
+                        "gateway_unavailable",
+                    ),
                 },
             )?);
         }

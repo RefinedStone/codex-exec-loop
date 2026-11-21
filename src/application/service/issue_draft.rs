@@ -187,6 +187,30 @@ impl IssueDraftService {
 }
 
 impl IssueDraftPort for IssueDraftService {
+    fn validated_review_draft(
+        &self,
+        request: IssueDraftPreviewRequest,
+        approval: IssueDraftApproval,
+    ) -> Result<(String, IssueValidationPassed)> {
+        let target = self.scoped_target(request.target)?;
+        let conventions = self.conventions(&target.cwd)?;
+        let (preview, passed) = evaluate(&conventions, &request.text, None);
+        let (
+            IssueDraftPreview::Ready {
+                approval: current, ..
+            },
+            Some((passed, _)),
+        ) = (preview, passed)
+        else {
+            anyhow::bail!("issue draft did not pass masking and validation");
+        };
+        anyhow::ensure!(
+            approval == current,
+            "issue draft approval no longer matches"
+        );
+        Ok((target.cwd, passed))
+    }
+
     fn creation_open(&self, target: IssueCreationTarget) -> Result<IssueCreationOpened> {
         creation::open(self, target)
     }
@@ -906,6 +930,35 @@ mod tests {
             }]
         );
         assert!(!publishable);
+    }
+
+    #[test]
+    fn codex_thread_review_receives_only_the_approved_masked_draft() {
+        let fixture = fixture(false);
+        let mut request = IssueDraftPreviewRequest {
+            target: target(),
+            text: text_with_span(Some(IssueSensitiveSpanClass::Secret)),
+            expected_labels: Vec::new(),
+        };
+        let IssueDraftPreview::Ready { approval, .. } =
+            fixture.service.preview(request.clone()).unwrap()
+        else {
+            panic!("expected reviewable draft");
+        };
+        let (_, passed) = fixture
+            .service
+            .validated_review_draft(request.clone(), approval.clone())
+            .unwrap();
+        let model = crate::application::service::issue_review::model_request(&passed);
+        assert!(!model.draft_json.contains(FAKE_SECRET));
+        assert!(model.draft_json.contains("[removed]"));
+        request.text.title.push_str(" changed");
+        assert!(
+            fixture
+                .service
+                .validated_review_draft(request, approval)
+                .is_err()
+        );
     }
 
     #[test]

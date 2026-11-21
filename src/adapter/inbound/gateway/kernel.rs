@@ -246,7 +246,8 @@ impl KernelSession {
         let (client, kernel, issue_workspace, runtime) =
             attached?.map_err(|error| unavailable(format!("{error:#}")))?;
         if let Some(store) = delegation_store(runtime.clone(), true) {
-            self.delegations.track(runtime, store);
+            self.delegations
+                .track(runtime, store, issue_workspace.clone());
         }
         tracing::info!(
             client_name = %request.client_name,
@@ -373,12 +374,13 @@ impl KernelSession {
         &self,
         workspace: &str,
     ) -> Result<delegation::DelegationStore, KernelProtocolError> {
-        let workspace = workspace.to_owned();
-        let runtime = blocking(move || delegation_runtime(&workspace))
+        let root = workspace.to_owned();
+        let runtime = blocking(move || delegation_runtime(&root))
             .await?
             .map_err(|error| unavailable(error.to_string()))?;
         let store = delegation_store(runtime.clone(), false).expect("store creation enabled");
-        self.delegations.track(runtime, store.clone());
+        self.delegations
+            .track(runtime, store.clone(), workspace.to_owned());
         Ok(store)
     }
 
@@ -397,6 +399,7 @@ impl KernelSession {
                 caller,
                 ..descriptor
             });
+        let request_key = request.idempotency_key;
         let command = match request.command.into_input(&attached.workspace)? {
             KernelCommandInput::Core(command) => KernelClientCommand::Core(command),
             KernelCommandInput::Stored(command) => match confirmation {
@@ -410,11 +413,37 @@ impl KernelSession {
             KernelCommandInput::SubmitDelegation {
                 instruction,
                 idempotency_key,
+                session,
             } => {
                 let store = self.delegation_store(&attached.issue_workspace).await?;
-                let caller = attached.client_name.clone();
+                let caller = if attached.client_name
+                    == crate::application::service::issue_review::ISSUE_DRAFT_REVIEW_FEATURE
+                {
+                    "manual".to_owned()
+                } else {
+                    attached.client_name.clone()
+                };
+                let workspace = attached.issue_workspace.clone();
+                let digest = if session.selected_url().is_some() {
+                    self.delegations
+                        .account_id()
+                        .await
+                        .as_deref()
+                        .map(delegation::account_fingerprint)
+                } else {
+                    None
+                };
                 let outcome = delegation::db(store, move |store| {
-                    store.submit(&idempotency_key, &instruction, &caller)
+                    let route =
+                        crate::composition::production::delegation_route(&workspace, "manual");
+                    store.submit_session(
+                        &idempotency_key,
+                        &instruction,
+                        &caller,
+                        route,
+                        session,
+                        digest.as_ref().map(|value| value.as_slice()),
+                    )
                 })
                 .await;
                 let mut response = CommandResponse::from_core(Some(&[]));
@@ -438,6 +467,32 @@ impl KernelSession {
                     Err(error) => response.failure = Some(error.to_string()),
                 }
                 return to_result(response);
+            }
+            KernelCommandInput::CheckpointDelegation { id, token, message } => {
+                let store = self.delegation_store(&attached.issue_workspace).await?;
+                return delegation_command_result(
+                    delegation::db(store, move |store| store.checkpoint(&id, &token, &message))
+                        .await,
+                    |delegation| CommandResult::DelegationCheckpointed { delegation },
+                    "delegation callback rejected",
+                );
+            }
+            KernelCommandInput::ReportDelegationResult { id, token, result } => {
+                let store = self.delegation_store(&attached.issue_workspace).await?;
+                return delegation_command_result(
+                    delegation::db(store, move |store| store.report(&id, &token, &result)).await,
+                    |delegation| CommandResult::DelegationResultReported { delegation },
+                    "delegation callback rejected",
+                );
+            }
+            KernelCommandInput::RetryDelegation { id } => {
+                let store = self.delegation_store(&attached.issue_workspace).await?;
+                let key = request_key.expect("validated retry request key");
+                return delegation_command_result(
+                    delegation::db(store, move |store| store.retry(&id, &key)).await,
+                    |delegation| CommandResult::DelegationRetried { delegation },
+                    "delegation not found",
+                );
             }
         };
         let commands = attached.commands.clone();
@@ -493,12 +548,38 @@ impl KernelSession {
         let attached = self.attached()?;
         let request: QueryRequest = parse_params(params)?;
         match request.query {
+            KernelQuery::FeatureBindings {} | KernelQuery::PrReviewResult { .. } => {
+                let number = match request.query {
+                    KernelQuery::PrReviewResult { number } => Some(number),
+                    _ => None,
+                };
+                let workspace = attached.issue_workspace.clone();
+                let answer = blocking(move || {
+                    crate::composition::production::query_pr_review(&workspace, number)
+                })
+                .await?
+                .map_err(|error| unavailable(error.to_string()))?;
+                return to_result(answer);
+            }
             KernelQuery::DelegationBackends {} => {
+                let workspace = attached.issue_workspace.clone();
+                let store = self.delegation_store(&workspace).await?;
+                let (mut chatgpt_chat, mut codex_thread, circuits) = tokio::join!(
+                    self.delegations.status(),
+                    self.delegations.codex_status(),
+                    self.delegations.circuits(store, workspace),
+                );
+                if let Ok((chat, codex)) = circuits {
+                    chatgpt_chat.circuit = Some(chat);
+                    codex_thread.circuit = Some(codex);
+                }
                 return to_result(KernelQueryAnswer::DelegationBackends {
-                    chatgpt_chat: self.delegations.status().await,
+                    chatgpt_chat,
+                    codex_thread,
                 });
             }
             KernelQuery::Delegations {}
+            | KernelQuery::DelegationMyTurn {}
             | KernelQuery::Delegation { .. }
             | KernelQuery::DelegationResult { .. } => {
                 let store = self.delegation_store(&attached.issue_workspace).await?;
@@ -508,7 +589,10 @@ impl KernelSession {
                             delegations: store.list()?,
                         },
                         KernelQuery::Delegation { id } => KernelQueryAnswer::Delegation {
-                            delegation: store.find(&id)?,
+                            delegation: store.detail(&id)?,
+                        },
+                        KernelQuery::DelegationMyTurn {} => KernelQueryAnswer::DelegationMyTurn {
+                            items: store.my_turn()?,
                         },
                         KernelQuery::DelegationResult { id } => {
                             KernelQueryAnswer::DelegationResult {
@@ -803,9 +887,18 @@ fn invalid_confirmation() -> KernelProtocolError {
 }
 
 fn parse_command_params(params: Value) -> Result<CommandRequest, KernelProtocolError> {
+    let callback = matches!(
+        params["command"]["type"].as_str(),
+        Some("checkpoint_delegation" | "report_delegation_result")
+    );
     let sensitive = is_issue_decision_params(&params);
     parse_params(params).map_err(|error| {
-        if sensitive {
+        if callback {
+            KernelProtocolError {
+                code: ERROR_INVALID_PARAMS,
+                message: "invalid delegation callback parameters".to_owned(),
+            }
+        } else if sensitive {
             KernelProtocolError {
                 code: ERROR_INVALID_PARAMS,
                 message: "invalid issue decision answer parameters".to_string(),
@@ -821,6 +914,20 @@ fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, KernelProtocolE
         code: ERROR_INVALID_PARAMS,
         message: error.to_string(),
     })
+}
+
+fn delegation_command_result(
+    outcome: anyhow::Result<Option<crate::domain::delegation::Delegation>>,
+    success: impl FnOnce(crate::domain::delegation::Delegation) -> CommandResult,
+    missing: &str,
+) -> Result<Value, KernelProtocolError> {
+    let mut response = CommandResponse::from_core(Some(&[]));
+    match outcome {
+        Ok(Some(delegation)) => response.result = Some(success(delegation)),
+        Ok(None) => response.failure = Some(missing.to_owned()),
+        Err(error) => response.failure = Some(error.to_string()),
+    }
+    to_result(response)
 }
 
 fn to_result(value: impl serde::Serialize) -> Result<Value, KernelProtocolError> {

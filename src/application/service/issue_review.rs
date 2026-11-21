@@ -22,6 +22,7 @@ use crate::domain::issue_validation::IssueValidationPassed;
 /// 검토 스킬의 지시문이다.
 pub const ISSUE_DRAFT_REVIEW_SKILL_TEXT: &str =
     include_str!("../../../assets/app-server/skills/akra-issue-draft-review/SKILL.md");
+pub(crate) const ISSUE_DRAFT_REVIEW_FEATURE: &str = "issue_draft_review";
 
 #[derive(Serialize)]
 struct IssueReviewDraftInput<'a> {
@@ -38,7 +39,8 @@ struct IssueReviewModelReply {
 }
 
 /// 검토 한 번의 결과이다.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum IssueReviewOutcome {
     /// 구조화된 권고이다. 빈 목록은 "문제 없음"이다.
     Suggestions(Vec<IssueReviewSuggestion>),
@@ -53,17 +55,7 @@ pub fn review_issue_draft(
     passed: &IssueValidationPassed,
     model: &dyn IssueReviewModelPort,
 ) -> IssueReviewOutcome {
-    let shared_copy = passed.shared_copy();
-    let draft_json = serde_json::to_string(&IssueReviewDraftInput {
-        title: &shared_copy.title,
-        body: &shared_copy.body,
-    })
-    .expect("issue review input is plain text fields");
-
-    match model.review(IssueReviewModelRequest {
-        instructions: ISSUE_DRAFT_REVIEW_SKILL_TEXT.to_string(),
-        draft_json,
-    }) {
+    match model.review(model_request(passed)) {
         Ok(reply) => parse_model_reply(&reply),
         Err(error) => IssueReviewOutcome::Failed {
             reason: format!("the review model failed: {error:#}"),
@@ -71,7 +63,19 @@ pub fn review_issue_draft(
     }
 }
 
-fn parse_model_reply(reply: &str) -> IssueReviewOutcome {
+pub(crate) fn model_request(passed: &IssueValidationPassed) -> IssueReviewModelRequest {
+    let shared_copy = passed.shared_copy();
+    IssueReviewModelRequest {
+        instructions: ISSUE_DRAFT_REVIEW_SKILL_TEXT.to_owned(),
+        draft_json: serde_json::to_string(&IssueReviewDraftInput {
+            title: &shared_copy.title,
+            body: &shared_copy.body,
+        })
+        .expect("issue review input is plain text fields"),
+    }
+}
+
+pub(crate) fn parse_model_reply(reply: &str) -> IssueReviewOutcome {
     // 모델은 JSON 을 코드 울타리로 감싸기도 한다.
     let json = reply
         .trim()
