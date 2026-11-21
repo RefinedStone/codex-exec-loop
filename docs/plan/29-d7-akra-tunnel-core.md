@@ -104,4 +104,5 @@ akra-tunnel 을 akra-tunnel-core 라이브러리와 frontend 로 나눈다 (사�
 | Q-D7-2 | 배포 방법 | git 의존성. 태그와 커밋 SHA 로 고정한다. npm 등록은 뒤에 정한다 |
 | Q-D7-3 | 보기를 만드는 코드 (숨긴 창, 이동 제한) 도 나누는가 | 선택 모듈로 둔다. Electron 을 인자로 받는다. frontend 가 쓰지 않아도 된다 |
 | Q-D7-4 | 파일이 다른 저장소로 가면 런타임 overlay 는 의존성 패키지의 파일을 읽는다. 런타임 schema 가 오른다. 받아들이는가 | 예. overlay 에 들어가는 파일의 경로를 한 번만 바꾼다 |
+| Q-D7-6 | akra-tunnel-core 를 Rust 로 옮기는가 | 지금은 옮기지 않는다. TypeScript 로 먼저 나눈다. 그 뒤에 세션 엔진 (약 57 KB, 시험 77개) 만 다시 본다. 측정 (2026-11-21, `7cd0de6`): `src/` 805 KB 중 약 460 KB 는 Node MCP 런타임 안에서 돌고, 페이지 JS 54 KB 는 브라우저 안에서 돈다. 둘은 옮기지 못한다 |
 | Q-D7-5 | host 를 뺏는 명령을 두는가 (launcher 가 쥔 host 를 Akra Desktop 이 가져온다) | 두지 않는다. 사용자가 한쪽을 끈다 |
