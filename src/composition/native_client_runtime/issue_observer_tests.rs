@@ -103,7 +103,9 @@ impl Harness {
                 requests
                     .send(ReadRequest { response })
                     .expect("the test receives every fake collection");
-                answer.recv().expect("the test releases the fake collection")
+                answer
+                    .recv()
+                    .expect("the test releases the fake collection")
             }),
             runtime.host_waker(),
         );
@@ -145,7 +147,10 @@ impl Harness {
         now: Instant,
     ) {
         // 이전 수동 깨우기가 남아 있어도 실제 수집 완료를 읽을 때까지 기다린다.
-        request.response.send(result).expect("the worker is reading");
+        request
+            .response
+            .send(result)
+            .expect("the worker is reading");
         let deadline = Instant::now() + WAIT;
         while !self.poll(now) {
             let remaining = deadline.saturating_duration_since(Instant::now());
