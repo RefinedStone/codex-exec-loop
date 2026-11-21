@@ -295,7 +295,9 @@ async fn delegation_selected_chat_crosses_gateway_with_account_and_bounded_recov
     let kernels =
         Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
     let mut delegation = super::delegation::Delegations::default();
-    delegation.auth_path = Some(auth_path);
+    delegation.set_test_account_reader(move || {
+        crate::adapter::outbound::app_server::cloud_upstream::chat_account_id(&auth_path)
+    });
     let services = super::session::GatewayServices {
         delegations: Arc::new(delegation),
         ..Default::default()

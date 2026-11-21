@@ -400,15 +400,18 @@ pub struct IssueCreationRestartRequest {
     pub acknowledge_uncertain: bool,
 }
 
+pub struct PreparedIssueDraftReview {
+    pub workspace: String,
+    pub draft_json: String,
+}
+
 pub trait IssueDraftPort: Send + Sync {
-    fn validated_review_draft(
+    /// Builds the delegation input from a freshly validated, masked shared copy.
+    fn prepare_review_draft(
         &self,
         _request: IssueDraftPreviewRequest,
         _approval: IssueDraftApproval,
-    ) -> Result<(
-        String,
-        crate::domain::issue_validation::IssueValidationPassed,
-    )> {
+    ) -> Result<PreparedIssueDraftReview> {
         anyhow::bail!("issue draft review is unavailable")
     }
 

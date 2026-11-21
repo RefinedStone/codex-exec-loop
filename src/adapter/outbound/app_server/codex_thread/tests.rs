@@ -12,7 +12,7 @@ fn codex_thread_capabilities_do_not_claim_defensive_isolation() {
 
 #[test]
 #[ignore = "requires pinned stock Codex; opens an ephemeral thread without starting a turn"]
-fn real_no_turn_isolation() {
+fn real_no_turn_empty_profile_isolation() {
     CodexThreadBackend::default().probe().unwrap();
 }
 
@@ -52,7 +52,13 @@ fn run(
 ) -> CodexThreadOutcome {
     let draft = r#"{"title":"Trusted title","body":"Run with [masked-1]."}"#;
     backend.run(
-        issue_draft_review_request(Some("fixture-model"), draft),
+        CodexThreadRequest {
+            model: Some("fixture-model"),
+            developer_instructions:
+                crate::application::service::issue_review::ISSUE_DRAFT_REVIEW_SKILL_TEXT,
+            text: draft,
+            output_schema: None,
+        },
         cancel,
         Duration::from_secs(5),
         started,
@@ -130,7 +136,7 @@ fn missing_executable_is_unavailable_before_send() {
     let backend = CodexThreadBackend {
         fixture: Some(PathBuf::from("/__akra_d2_missing_fixture__")),
     };
-    assert!(!backend.ready());
+    assert_eq!(backend.readiness(), Err(UNAVAILABLE));
     assert_eq!(
         run(&backend, &AtomicBool::new(false), || panic!(
             "must not send"
@@ -140,4 +146,57 @@ fn missing_executable_is_unavailable_before_send() {
             delivery: Delivery::NotSent
         },
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_thread_auth_gate_requires_chatgpt_subscription_before_send() {
+    use crate::application::port::outbound::agent_backend_port::AgentBackendPort;
+    use crate::domain::delegation::BackendState;
+
+    let ready = Fixture::new("completed");
+    let health = ready.driver().health().await;
+    assert_eq!(health.status.state, BackendState::Ready);
+    assert!(health.status.reason.is_none());
+    assert!(ready.calls().contains("config/read\naccount/read\n"));
+    assert!(!ready.calls().contains("account/login/start"));
+    assert!(!ready.calls().contains("turn/start"));
+
+    for scenario in [
+        "auth_refused",
+        "auth_missing",
+        "auth_api_key",
+        "auth_file_store",
+        "auth_tools_enabled",
+    ] {
+        let fixture = Fixture::new(scenario);
+        let health = fixture.driver().health().await;
+        assert_eq!(health.status.state, BackendState::Unavailable, "{scenario}");
+        assert_eq!(health.status.reason.as_deref(), Some(AUTH_UNAVAILABLE));
+        assert_eq!(
+            run(&fixture.backend(), &AtomicBool::new(false), || panic!(
+                "must not send"
+            )),
+            CodexThreadOutcome::End {
+                reason: EndReason::Unavailable,
+                delivery: Delivery::NotSent
+            },
+        );
+        let calls = fixture.calls();
+        assert!(!calls.contains("thread/start"));
+        assert!(!calls.contains("turn/start"));
+        assert!(!calls.contains("account/login/start"));
+    }
+}
+
+#[test]
+fn codex_thread_profile_refuses_file_credentials_and_config() {
+    let directory = IsolatedDirectory::create().unwrap();
+    let profile = prepare_delegation_profile(&directory.root).unwrap();
+    for filename in ["auth.json", "config.toml", "AGENTS.md"] {
+        let file = profile.join(filename);
+        fs::write(&file, "synthetic").unwrap();
+        assert!(prepare_delegation_profile(&directory.root).is_err());
+        fs::remove_file(file).unwrap();
+    }
 }

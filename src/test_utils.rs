@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 
+pub(crate) mod pr_review_loopback;
+
 /*
  * 시험의 git 명령이다. 시험을 돌린 셸의 `GIT_*` 를 물려받지 않는다. git hook 이나 일부 에이전트 환경은 `GIT_DIR`
  * 같은 값을 내보낸다. 그 값이 남으면 `git -C <시험 폴더>` 도 시험 폴더가 아니라 그 저장소를 가리켜서, 시험의

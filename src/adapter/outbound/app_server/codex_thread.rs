@@ -25,6 +25,8 @@ mod driver;
 pub(crate) use driver::CodexThreadDriver;
 
 const MAX_TEXT_BYTES: usize = 1_048_576;
+const AUTH_UNAVAILABLE: &str = "codex_auth_unavailable";
+const UNAVAILABLE: &str = "codex_unavailable";
 const POLL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Default)]
@@ -55,20 +57,34 @@ impl CodexThreadBackend {
         let directory = IsolatedDirectory::create()?;
         let signal = AppServerTurnInterruptSignal::default();
         let mut connection = self.connect(&directory, signal)?;
+        ensure!(
+            !subscription_available(&mut connection, &directory.cwd)?,
+            "fresh test profile unexpectedly authenticated"
+        );
         prepare_thread(&mut connection, &directory.cwd, None, "")?;
         Ok(())
     }
 
-    pub(crate) fn ready(&self) -> bool {
-        self.connect_ready().is_ok()
+    pub(crate) fn readiness(&self) -> std::result::Result<(), &'static str> {
+        let directory = IsolatedDirectory::create().map_err(|_| UNAVAILABLE)?;
+        let (mut connection, _) = self.connect_authenticated(&directory)?;
+        prepare_thread(&mut connection, &directory.cwd, None, "").map_err(|_| UNAVAILABLE)?;
+        Ok(())
     }
 
-    fn connect_ready(&self) -> Result<()> {
-        let directory = IsolatedDirectory::create()?;
-        let mut connection = self.connect(&directory, AppServerTurnInterruptSignal::default())?;
-        require_configured_auth(&mut connection)?;
-        prepare_thread(&mut connection, &directory.cwd, None, "")?;
-        Ok(())
+    fn connect_authenticated(
+        &self,
+        directory: &IsolatedDirectory,
+    ) -> std::result::Result<(AppServerConnection, AppServerTurnInterruptSignal), &'static str>
+    {
+        let signal = AppServerTurnInterruptSignal::default();
+        let mut connection = self
+            .connect(directory, signal.clone())
+            .map_err(|_| UNAVAILABLE)?;
+        if !subscription_available(&mut connection, &directory.cwd).unwrap_or(false) {
+            return Err(AUTH_UNAVAILABLE);
+        }
+        Ok((connection, signal))
     }
 
     pub(crate) fn run(
@@ -100,9 +116,9 @@ impl CodexThreadBackend {
         }
         let prepared = (|| {
             let directory = IsolatedDirectory::create()?;
-            let signal = AppServerTurnInterruptSignal::default();
-            let mut connection = self.connect(&directory, signal.clone())?;
-            require_configured_auth(&mut connection)?;
+            let (mut connection, signal) = self
+                .connect_authenticated(&directory)
+                .map_err(anyhow::Error::msg)?;
             let thread = prepare_thread(
                 &mut connection,
                 &directory.cwd,
@@ -215,20 +231,32 @@ impl CodexThreadBackend {
         directory: &IsolatedDirectory,
         signal: AppServerTurnInterruptSignal,
     ) -> Result<AppServerConnection> {
+        // Unit tests and the stock no-turn probe use an empty profile that
+        // cannot address an operator's real keyring entry.
+        #[cfg(test)]
+        let profile = prepare_delegation_profile(&directory.root)?;
+        #[cfg(not(test))]
+        let profile = delegation_profile()?;
         #[cfg(test)]
         let config = match &self.fixture {
             Some(fixture) => AppServerConnectionConfig::isolated_delegation_fixture(
                 &directory.cwd,
                 &directory.home,
+                &profile,
                 fixture,
             ),
-            None => {
-                AppServerConnectionConfig::isolated_delegation(&directory.cwd, &directory.home)?
-            }
+            None => AppServerConnectionConfig::isolated_delegation(
+                &directory.cwd,
+                &directory.home,
+                &profile,
+            )?,
         };
         #[cfg(not(test))]
-        let config =
-            AppServerConnectionConfig::isolated_delegation(&directory.cwd, &directory.home)?;
+        let config = AppServerConnectionConfig::isolated_delegation(
+            &directory.cwd,
+            &directory.home,
+            &profile,
+        )?;
         let mut connection = AppServerConnection::spawn(
             "akra-codex-delegation".into(),
             env!("CARGO_PKG_VERSION").into(),
@@ -312,37 +340,63 @@ fn prepare_thread(
     Ok(thread_id.to_owned())
 }
 
-fn require_configured_auth(connection: &mut AppServerConnection) -> Result<()> {
-    let account = connection.isolated_request("account/read", json!({"refreshToken":false}))?;
-    ensure!(account["account"].is_object(), "no isolated Codex account");
-    Ok(())
+fn subscription_available(connection: &mut AppServerConnection, cwd: &Path) -> Result<bool> {
+    let config = connection.isolated_request("config/read", json!({"cwd":cwd}))?;
+    ensure!(
+        config["config"]["cli_auth_credentials_store"] == "keyring",
+        "isolated Codex must use the OS credential store"
+    );
+    for feature in [
+        "shell_tool",
+        "unified_exec",
+        "code_mode",
+        "view_image",
+        "apps",
+        "plugins",
+        "secret_auth_storage",
+    ] {
+        ensure!(
+            config["config"]["features"][feature] == false,
+            "Codex did not apply credential-profile isolation"
+        );
+    }
+    let account = connection
+        .isolated_request("account/read", json!({"refreshToken":false}))
+        .map_err(|_| anyhow::anyhow!(AUTH_UNAVAILABLE))?;
+    Ok(account["account"]["type"] == "chatgpt")
 }
 
-/// The draft JSON comes from the masked, validated draft service, not from a
-/// provider response or the general delegation entry point.
-pub(crate) fn issue_draft_review_request<'a>(
-    model: Option<&'a str>,
-    draft_json: &'a str,
-) -> CodexThreadRequest<'a> {
-    use crate::application::service::issue_review::ISSUE_DRAFT_REVIEW_SKILL_TEXT;
-    CodexThreadRequest {
-        model,
-        developer_instructions: ISSUE_DRAFT_REVIEW_SKILL_TEXT,
-        text: draft_json,
-        output_schema: None,
-    }
+fn delegation_profile() -> Result<PathBuf> {
+    prepare_delegation_profile(&crate::configuration::akra_home_dir()?)
 }
 
-pub(crate) fn issue_draft_review_reply(reply: String) -> CodexThreadOutcome {
-    use crate::application::service::issue_review::{IssueReviewOutcome, parse_model_reply};
-    let response = parse_model_reply(&reply);
-    if matches!(response, IssueReviewOutcome::Failed { .. }) {
-        return CodexThreadOutcome::End {
-            reason: EndReason::ResultInvalid,
-            delivery: Delivery::Observed,
-        };
+fn prepare_delegation_profile(akra_home: &Path) -> Result<PathBuf> {
+    let profile = akra_home.join("codex-delegation-auth");
+    crate::private_directory::ensure_private_directory(&profile)?;
+    for name in [
+        "config.toml",
+        "auth.json",
+        "AGENTS.md",
+        "AGENTS.override.md",
+    ] {
+        ensure!(
+            match fs::symlink_metadata(profile.join(name)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(error) => return Err(error.into()),
+                Ok(_) => false,
+            },
+            "delegation profile must contain no Codex config, instructions, or file credentials"
+        );
     }
-    CodexThreadOutcome::Complete(reply)
+    Ok(profile)
+}
+
+pub(crate) fn login() -> Result<i32> {
+    let profile = delegation_profile()?;
+    let directory = IsolatedDirectory::create()?;
+    let succeeded =
+        super::connection::isolated_delegation_login(&directory.cwd, &directory.home, &profile)?;
+    Ok(if succeeded { 0 } else { 1 })
 }
 
 #[derive(Default)]

@@ -71,6 +71,11 @@ where
     // None 반환은 native TUI가 계속 booting해야 한다는 뜻이다. 처리된 subcommand는 모두 explicit exit code를 돌린다.
     match args.as_slice() {
         [] => Ok(None),
+        [command, action]
+            if command == OsStr::new("codex-delegation") && action == OsStr::new("login") =>
+        {
+            Ok(Some(production::login_codex_delegation()?))
+        }
         [command, rest @ ..] if command == OsStr::new("describe") => {
             Ok(Some(kernel::describe(rest, stdout)?))
         }
@@ -96,6 +101,7 @@ where
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
             writeln!(stdout, "{CONFIG_USAGE}")?;
             writeln!(stdout, "{MCP_USAGE}")?;
+            writeln!(stdout, "Usage: akra codex-delegation login")?;
             writeln!(stdout, "{}", issue_form::USAGE)?;
             writeln!(stdout, "Usage: akra describe --json")?;
             writeln!(

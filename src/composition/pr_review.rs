@@ -1,14 +1,15 @@
 use super::production::{delegation_route, delegation_runtime, delegation_store};
 use crate::adapter::outbound::openai_review::ReviewCall;
 use crate::application::port::outbound::delegation_store_port::DelegationStorePort;
-use crate::application::service::pr_review::{
-    DefensivePrReviewBackend, ReviewInput, ReviewOutput, ReviewProgress,
+use crate::application::port::outbound::pr_review_port::{
+    DefensivePrReviewBackend, PrReviewModelCall, ReviewInput, ReviewOutput, ReviewProgress,
 };
 use crate::domain::delegation::{
     EndReason, State,
     policy::{OPENAI_TEXT, Route},
 };
 use crate::domain::github_review::GithubPullRequestTarget;
+use crate::domain::pr_review::ReviewRecord;
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -73,7 +74,7 @@ impl DefensivePrReviewBackend for RoutedPrReview {
                 && let Some(old_head) = job.instruction.strip_prefix(&prefix)
                 && matches!(
                     journal.result(target, old_head)?,
-                    Some(crate::application::service::pr_review::ReviewRecord::Cancelled)
+                    Some(ReviewRecord::Cancelled)
                 )
             {
                 store.cancel(&job.view.id)?;
@@ -88,7 +89,7 @@ fn drive_review(
     route: Route,
     target: &GithubPullRequestTarget,
     head: &str,
-    call: &ReviewCall,
+    call: &dyn PrReviewModelCall,
 ) -> Result<ReviewProgress> {
     // Source data and credentials live only in this watcher call. Store a stable
     // revision identity to recover the same job after a poller or kernel restart.

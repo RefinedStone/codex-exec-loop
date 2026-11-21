@@ -417,7 +417,7 @@ impl KernelSession {
             } => {
                 let store = self.delegation_store(&attached.issue_workspace).await?;
                 let caller = if attached.client_name
-                    == crate::application::service::issue_review::ISSUE_DRAFT_REVIEW_FEATURE
+                    == crate::domain::delegation::ISSUE_DRAFT_REVIEW_FEATURE
                 {
                     "manual".to_owned()
                 } else {

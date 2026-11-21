@@ -1545,11 +1545,11 @@ pub enum KernelQueryAnswer {
     },
     FeatureBindings {
         repository: Option<String>,
-        pr_review: crate::application::service::pr_review::ReviewMode,
+        pr_review: crate::domain::pr_review::ReviewMode,
     },
     PrReviewResult {
         number: u64,
-        review: Option<crate::application::service::pr_review::StoredPrReview>,
+        review: Option<crate::domain::pr_review::StoredPrReview>,
     },
     Sessions(SessionsState),
     AutoFollow(AutoFollowSettings),

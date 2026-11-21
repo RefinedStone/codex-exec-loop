@@ -7,19 +7,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::adapter::outbound::app_server::codex_thread::CodexThreadDriver;
-use crate::adapter::outbound::openai_review::ReviewCall;
 use crate::application::port::outbound::agent_backend_port::{
     AgentBackendPort, BackendCapabilities, BackendHealth, Dispatch, Observation,
+    TextDispatchProfile,
 };
 use crate::application::port::outbound::delegation_store_port::{DelegationStorePort, Job};
-use crate::application::service::issue_review::ISSUE_DRAFT_REVIEW_FEATURE;
+use crate::application::port::outbound::pr_review_port::PrReviewModelCall;
+use crate::domain::delegation::ISSUE_DRAFT_REVIEW_FEATURE;
 use crate::domain::delegation::policy::{CHAT, CODEX, OPENAI_TEXT};
 use crate::domain::delegation::{
     Attempt, BackendState, ChatBackendStatus, Circuit, Delivery, EndReason, Evidence,
@@ -33,15 +34,21 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(4);
 type PendingReplies = HashMap<u64, (u64, oneshot::Sender<Value>)>;
 pub(super) type DelegationStore = Arc<dyn DelegationStorePort>;
 
-#[derive(Default)]
-pub(super) struct Delegations {
+pub(crate) struct Delegations {
     sequence: AtomicU64,
     driver: Mutex<Option<(u64, mpsc::Sender<Message>)>>,
     pending: Mutex<PendingReplies>,
     workers: Mutex<BTreeMap<PathBuf, tokio::task::AbortHandle>>,
-    codex: CodexThreadDriver,
-    #[cfg(test)]
-    pub(super) auth_path: Option<PathBuf>,
+    codex: Arc<dyn AgentBackendPort>,
+    read_account: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    issue_review_profile: TextDispatchProfile,
+}
+
+#[cfg(test)]
+impl Default for Delegations {
+    fn default() -> Self {
+        crate::composition::production::build_delegations()
+    }
 }
 
 impl Drop for Delegations {
@@ -53,6 +60,30 @@ impl Drop for Delegations {
 }
 
 impl Delegations {
+    pub(crate) fn new(
+        codex: Arc<dyn AgentBackendPort>,
+        read_account: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+        issue_review_profile: TextDispatchProfile,
+    ) -> Self {
+        Self {
+            sequence: AtomicU64::default(),
+            driver: Mutex::default(),
+            pending: Mutex::default(),
+            workers: Mutex::default(),
+            codex,
+            read_account,
+            issue_review_profile,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_test_account_reader(
+        &mut self,
+        read_account: impl Fn() -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.read_account = Arc::new(read_account);
+    }
+
     fn next_id(&self) -> u64 {
         self.sequence.fetch_add(1, Ordering::Relaxed)
     }
@@ -96,12 +127,8 @@ impl Delegations {
     }
 
     pub(super) async fn account_id(&self) -> Option<String> {
-        use crate::adapter::outbound::app_server::cloud_upstream::chat_account_id;
-        #[cfg(test)]
-        let path = self.auth_path.clone()?;
-        #[cfg(not(test))]
-        let path = crate::adapter::outbound::app_server::cloud_upstream::codex_auth_path().ok()?;
-        tokio::task::spawn_blocking(move || chat_account_id(&path))
+        let read_account = self.read_account.clone();
+        tokio::task::spawn_blocking(move || read_account())
             .await
             .ok()
             .flatten()
@@ -203,7 +230,7 @@ impl Delegations {
         &self,
         store: &DelegationStore,
         job: Job,
-        review: Option<&ReviewCall>,
+        review: Option<&dyn PrReviewModelCall>,
         workspace: &str,
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp_millis();
@@ -470,7 +497,8 @@ impl Delegations {
                 callback_token: "",
                 callback_workspace: workspace,
                 model: backend.model.as_deref(),
-                issue_draft: old.caller == ISSUE_DRAFT_REVIEW_FEATURE,
+                profile: (old.caller == ISSUE_DRAFT_REVIEW_FEATURE)
+                    .then_some(self.issue_review_profile),
                 timeout: Duration::from_millis(
                     old.deadline
                         .unwrap_or(now)
@@ -772,14 +800,14 @@ impl Delegations {
 pub(crate) async fn advance_pr_review(
     store: DelegationStore,
     id: &str,
-    review: &ReviewCall,
+    review: &dyn PrReviewModelCall,
 ) -> Result<()> {
     if let Some(job) = store.active()?.into_iter().find(|j| j.view.id == id) {
         anyhow::ensure!(
             job.route.requires_defensive_isolation,
             "invalid review route"
         );
-        Delegations::default()
+        crate::composition::production::build_delegations()
             .advance(&store, job, Some(review), "")
             .await?;
     }
@@ -790,7 +818,7 @@ pub(crate) async fn advance_pr_review(
 /// before admitting work, including claims left behind by a stopped watcher.
 pub(crate) async fn expire_pr_reviews(store: &DelegationStore) -> Result<()> {
     let now = chrono::Utc::now().timestamp_millis();
-    let coordinator = Delegations::default();
+    let coordinator = crate::composition::production::build_delegations();
     for job in store.active()? {
         if job.route.requires_defensive_isolation
             && job.route.backends.iter().any(|b| b.kind == OPENAI_TEXT)
@@ -814,46 +842,54 @@ impl AgentBackendPort for Delegations {
         }
     }
 
-    async fn health(&self) -> BackendHealth {
-        self.call("status", json!({}))
-            .await
-            .unwrap_or(BackendHealth {
-                status: ChatBackendStatus::unavailable("desktop_unavailable").status,
-                retry_at: None,
-            })
+    fn health(&self) -> BoxFuture<'_, BackendHealth> {
+        Box::pin(async move {
+            self.call("status", json!({}))
+                .await
+                .unwrap_or(BackendHealth {
+                    status: ChatBackendStatus::unavailable("desktop_unavailable").status,
+                    retry_at: None,
+                })
+        })
     }
 
-    async fn dispatch(&self, request: Dispatch<'_>) -> Result<Observation> {
-        let mut params = json!({
-            "jobId": request.attempt_id,
-            "instruction": request.instruction,
-            "callback": {"jobId": request.job_id, "token": request.callback_token, "workspace": request.callback_workspace},
-        });
-        if let Some(limit) = request.max_resumes {
-            params["maxResumes"] = json!(limit);
-        }
-        if let Some((session, account_id)) = request.chat_session {
-            params["session"] = json!({"mode":"continue", "chatUrl": session.selected_url()});
-            params["expectedAccountId"] = json!(account_id);
-        }
-        self.call("submit", params).await
+    fn dispatch<'a>(&'a self, request: Dispatch<'a>) -> BoxFuture<'a, Result<Observation>> {
+        Box::pin(async move {
+            let mut params = json!({
+                "jobId": request.attempt_id,
+                "instruction": request.instruction,
+                "callback": {"jobId": request.job_id, "token": request.callback_token, "workspace": request.callback_workspace},
+            });
+            if let Some(limit) = request.max_resumes {
+                params["maxResumes"] = json!(limit);
+            }
+            if let Some((session, account_id)) = request.chat_session {
+                params["session"] = json!({"mode":"continue", "chatUrl": session.selected_url()});
+                params["expectedAccountId"] = json!(account_id);
+            }
+            self.call("submit", params).await
+        })
     }
 
-    async fn observe(&self, attempt_id: &str) -> Result<Observation> {
-        self.call("observe", json!({"jobId": attempt_id})).await
+    fn observe<'a>(&'a self, attempt_id: &'a str) -> BoxFuture<'a, Result<Observation>> {
+        Box::pin(async move { self.call("observe", json!({"jobId": attempt_id})).await })
     }
 
-    async fn collect(&self, attempt_id: &str) -> Result<String> {
-        let response: TextResult = self
-            .call("readResult", json!({"jobId": attempt_id}))
-            .await?;
-        Ok(response.text)
+    fn collect<'a>(&'a self, attempt_id: &'a str) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move {
+            let response: TextResult = self
+                .call("readResult", json!({"jobId": attempt_id}))
+                .await?;
+            Ok(response.text)
+        })
     }
 
-    async fn stop(&self, attempt_id: &str) -> Result<()> {
-        self.call::<Value>("stop", json!({"jobId": attempt_id}))
-            .await?;
-        Ok(())
+    fn stop<'a>(&'a self, attempt_id: &'a str) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.call::<Value>("stop", json!({"jobId": attempt_id}))
+                .await?;
+            Ok(())
+        })
     }
 }
 
@@ -1050,7 +1086,7 @@ mod tests {
         let instruction = r#"{"title":"Trusted title","body":"Run with [masked-1]."}"#;
         let fixture = CodexThreadFixture::new("completed");
         let mut service = Delegations::default();
-        service.codex = fixture.driver();
+        service.codex = Arc::new(fixture.driver());
         let job = store
             .submit_with_route(
                 "d2-review",
@@ -1115,7 +1151,7 @@ mod tests {
         );
         drop(service);
         let mut restarted = Delegations::default();
-        restarted.codex = fixture.driver();
+        restarted.codex = Arc::new(fixture.driver());
         restarted.reconcile(&store).await.unwrap();
         let updated = store.find(&claimed.id).unwrap().unwrap();
         assert_eq!(updated.attempts[0].reason, Some(EndReason::Interrupted));

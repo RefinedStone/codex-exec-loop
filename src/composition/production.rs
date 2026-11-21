@@ -438,6 +438,40 @@ pub(crate) struct GatewayBackend {
     /// 이슈 초안, 미리보기, 게시이다 (#2426).
     pub(crate) issue_drafts:
         Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>,
+    pub(crate) delegations: Arc<crate::adapter::inbound::gateway::Delegations>,
+}
+
+pub(crate) fn build_delegations() -> crate::adapter::inbound::gateway::Delegations {
+    use crate::adapter::outbound::app_server::codex_thread::CodexThreadDriver;
+    use crate::application::port::outbound::agent_backend_port::TextDispatchProfile;
+    use crate::application::service::issue_review::{
+        ISSUE_DRAFT_REVIEW_SKILL_TEXT, IssueReviewOutcome, parse_model_reply,
+    };
+
+    crate::adapter::inbound::gateway::Delegations::new(
+        Arc::new(CodexThreadDriver::default()),
+        Arc::new(|| {
+            #[cfg(test)]
+            return None;
+            #[cfg(not(test))]
+            {
+                use crate::adapter::outbound::app_server::cloud_upstream::{
+                    chat_account_id, codex_auth_path,
+                };
+                chat_account_id(&codex_auth_path().ok()?)
+            }
+        }),
+        TextDispatchProfile {
+            developer_instructions: ISSUE_DRAFT_REVIEW_SKILL_TEXT,
+            accepts_reply: |reply| {
+                !matches!(parse_model_reply(reply), IssueReviewOutcome::Failed { .. })
+            },
+        },
+    )
+}
+
+pub(crate) fn login_codex_delegation() -> Result<i32> {
+    crate::adapter::outbound::app_server::codex_thread::login()
 }
 
 pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
@@ -490,6 +524,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         dots: build_dots()?,
         chats: build_chats()?,
         issue_drafts: build_issue_drafts()?,
+        delegations: Arc::new(build_delegations()),
     })
 }
 
@@ -999,16 +1034,34 @@ pub(crate) fn discover_github_review_poller_service_for_current_branch(
     Ok(Some((target, compose_pr_review_poller(repo_root, adapter))))
 }
 
-pub(crate) fn pr_review_settings(
-    repo_root: &Path,
-) -> Result<(
-    String,
-    crate::adapter::outbound::db::sqlite_pr_review_journal::ReviewJournal,
-)> {
+pub(crate) fn pr_review_settings(repo_root: &Path) -> Result<PrReviewSettings> {
     use crate::adapter::outbound::db::sqlite_pr_review_journal::ReviewJournal;
     let repository = GithubReviewPollerAdapter::review_repository(repo_root)?;
     let runtime = delegation_runtime(repo_root.to_str().context("workspace is not UTF-8")?)?;
-    Ok((repository, ReviewJournal::new(runtime)))
+    Ok(PrReviewSettings {
+        repository,
+        journal: ReviewJournal::new(runtime),
+    })
+}
+
+/// Local operator settings bound to the repository resolved from the workspace.
+pub(crate) struct PrReviewSettings {
+    repository: String,
+    journal: crate::adapter::outbound::db::sqlite_pr_review_journal::ReviewJournal,
+}
+
+impl PrReviewSettings {
+    pub(crate) fn repository(&self) -> &str {
+        &self.repository
+    }
+
+    pub(crate) fn set_mode(&self, mode: crate::domain::pr_review::ReviewMode) -> Result<()> {
+        self.journal.set_mode(&self.repository, mode)
+    }
+
+    pub(crate) fn set_api_key(&self, key: &str) -> Result<()> {
+        crate::adapter::outbound::openai_review::set_key(&self.repository, key)
+    }
 }
 
 pub(crate) fn query_pr_review(
@@ -1016,8 +1069,11 @@ pub(crate) fn query_pr_review(
     number: Option<u64>,
 ) -> Result<crate::adapter::inbound::kernel_protocol::KernelQueryAnswer> {
     use crate::adapter::inbound::kernel_protocol::KernelQueryAnswer;
-    use crate::application::service::pr_review::PrReviewJournal;
-    let (repository, journal) = pr_review_settings(Path::new(workspace))?;
+    use crate::application::port::outbound::pr_review_port::PrReviewJournalPort;
+    let PrReviewSettings {
+        repository,
+        journal,
+    } = pr_review_settings(Path::new(workspace))?;
     Ok(match number {
         None => KernelQueryAnswer::FeatureBindings {
             pr_review: journal.mode(&repository)?,
@@ -1045,7 +1101,10 @@ fn compose_pr_review_poller(
     let port: Arc<dyn GithubReviewPollerPort> = adapter.clone();
     let service = GithubReviewPollerService::new(port);
     let review = || {
-        let (repository, journal) = pr_review_settings(repo_root).ok()?;
+        let PrReviewSettings {
+            repository,
+            journal,
+        } = pr_review_settings(repo_root).ok()?;
         let backend = super::pr_review::RoutedPrReview::new(repo_root.to_str()?, &repository);
         Some(PrReviewService::new(
             repository,

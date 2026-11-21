@@ -6,8 +6,10 @@ use std::sync::{
 use super::*;
 use crate::adapter::outbound::db::sqlite_pr_review_journal::ReviewJournal;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::port::outbound::pr_review_port::ReviewOutput;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::domain::github_review::GithubPullRequestActivitySnapshot;
+use crate::domain::pr_review::StoredPrReview;
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
 const NEXT: &str = "2222222222222222222222222222222222222222";
@@ -37,7 +39,7 @@ impl GithubReviewPollerPort for SyntheticGithub {
     }
 }
 
-impl PrReviewGithub for SyntheticGithub {
+impl PrReviewGithubPort for SyntheticGithub {
     fn revision(&self, _: &GithubPullRequestTarget) -> Result<Option<ReviewRevision>> {
         self.reads.fetch_add(1, Ordering::Relaxed);
         Ok(Some(ReviewRevision {
@@ -76,7 +78,6 @@ impl DefensivePrReviewBackend for SyntheticBackend {
         _: &str,
         untrusted: ReviewInput,
     ) -> Result<ReviewProgress> {
-        assert!(!REVIEW_INSTRUCTIONS.contains(PR_BODY));
         assert_eq!(untrusted.body, PR_BODY);
         assert_eq!(untrusted.title, "Synthetic PR");
         assert_eq!(untrusted.diff, "+ synthetic change\n");

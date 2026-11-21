@@ -22,7 +22,6 @@ use crate::domain::issue_validation::IssueValidationPassed;
 /// 검토 스킬의 지시문이다.
 pub const ISSUE_DRAFT_REVIEW_SKILL_TEXT: &str =
     include_str!("../../../assets/app-server/skills/akra-issue-draft-review/SKILL.md");
-pub(crate) const ISSUE_DRAFT_REVIEW_FEATURE: &str = "issue_draft_review";
 
 #[derive(Serialize)]
 struct IssueReviewDraftInput<'a> {
