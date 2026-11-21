@@ -25,6 +25,8 @@ let nextDelivery = "queued";
 let conversation = { kind: "draft", shared_copy: { title: "공유 작업 · 검색 응답 개선", body: "공유된 요구 사항을 검토하고 이어서 작업합니다." } };
 let supersedeAnswer = false;
 let heldDetailReply = null;
+let heldInterventionReply = null;
+let nextInterventionFailure = null;
 const title = "검색 응답을 빠르게 하고 결과를 보존하기";
 const question = "공유된 계획을 기준으로 이 작업을 시작할까요?";
 const requestDecision = (id = "decision-start") => ({
@@ -124,6 +126,14 @@ const kernel = {
     }
     assert.deepEqual(command.issue, issue);
     assert.match(command.command_id, /^[0-9a-f-]{36}$/);
+    if (nextInterventionFailure) {
+      const failure = nextInterventionFailure;
+      nextInterventionFailure = null;
+      if (failure === "connection") return { error: { code: -32013, message: "fixture Gateway 응답을 확인하지 못했습니다." } };
+      return { result: failure === "rejected"
+        ? { processed: false, rejection: { reason: "issue_automation_off", message: "fixture 요청이 거절됐습니다.", next: [] } }
+        : { processed: false, failure: "fixture 작업자 응답을 확인하지 못했습니다." } };
+    }
     if (command.type === "cancel_issue_work") { assert.equal(command.confirm, true); control.cancelled = true; }
     if (command.type === "hold_issue") control.held = true;
     if (command.type === "release_issue") control.held = false;
@@ -132,10 +142,16 @@ const kernel = {
     if (command.type === "untrack_issue") control.tracked = false;
     if (command.type !== "steer_issue") control.authorization_epoch++;
     revision++;
-    return { result: { processed: true, result: { type: "issue_intervened", receipt: {
+    const reply = { result: { processed: true, result: { type: "issue_intervened", receipt: {
       issue, command_id: command.command_id, action: command.type, work_order_id: "work-order-fixture",
       authorization_epoch: control.authorization_epoch, changed: true, delivery: command.type === "steer_issue" ? nextDelivery : null,
     } } } };
+    if (!heldInterventionReply) return reply;
+    const held = heldInterventionReply;
+    heldInterventionReply = null;
+    held.requested = true;
+    // 같은 socket의 후속 resync 읽기를 늦은 응답이 도착했다는 bounded barrier로 쓴다.
+    return { ...reply, replyAfter: held.replyAfter, events: [{ type: "resync" }] };
   },
 };
 const endpoint = fake.uniqueTestEndpoint();
@@ -163,6 +179,14 @@ const holdNextDetailReply = () => {
   const replyAfter = new Promise((resolve) => { release = resolve; });
   const held = { replyAfter, release, requested: false };
   heldDetailReply = held;
+  return held;
+};
+const holdNextInterventionReply = () => {
+  assert.equal(heldInterventionReply, null);
+  let release;
+  const replyAfter = new Promise((resolve) => { release = resolve; });
+  const held = { replyAfter, release, requested: false };
+  heldInterventionReply = held;
   return held;
 };
 const capture = async (suffix) => {
@@ -318,6 +342,8 @@ try {
   await currentCard().getByTestId("issue-decision-answer").click();
   await until(async () => await currentCard().getByTestId("issue-decision-answer").isEnabled());
   assert.equal(commandRequests("answer_issue_decision").length, 0);
+  assert.equal(await currentCard().locator('input[value="approve"]').isChecked(), true);
+  assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), "공유 가능한 검증 메모입니다.");
   await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
   await currentCard().getByTestId("issue-decision-answer").click();
   await until(async () => commandRequests("answer_issue_decision").length === 1 && (await panel.locator('[data-testid="issue-decision-card"][data-state="open"]').count()) === 0);
@@ -390,6 +416,15 @@ try {
     await panel.getByTestId("issue-steer-message").fill("시험 추가 지시 " + delivery);
     await panel.getByTestId("issue-steer-send").click();
     await until(async () => commandRequests("steer_issue").some((entry) => entry.request.command.message.endsWith(delivery)) && await action("steer_issue").isEnabled());
+    if (delivery === "unknown") {
+      assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), "시험 추가 지시 unknown");
+      assert.equal(await panel.getByTestId("issue-steer-send").isEnabled(), true);
+    } else {
+      await panel.getByTestId("issue-steer-message").waitFor({ state: "detached" });
+      await action("steer_issue").click();
+      assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), "");
+      await action("steer_issue").click();
+    }
   }
   assert.match(await panel.getByTestId("issues-command-notice").innerText(), /자동으로 다시 보내지 않습니다/);
   const steerCommands = commandRequests("steer_issue");
@@ -436,7 +471,70 @@ try {
   await panel.getByTestId("issue-cancel-confirm").click();
   await until(async () => control.cancelled && await action("cancel_issue_work").isDisabled());
   assert.equal(commandRequests("cancel_issue_work")[0].request.command.confirm, true);
+  assert.equal(await panel.getByTestId("issue-cancel-confirm").count(), 0);
   console.log("PASS fresh conversation navigation creates only a draft/read; takeover and cancel remain explicit");
+
+  control = { ...control, held: false, taken_over: false, cancelled: false, authorization_epoch: control.authorization_epoch + 1 };
+  revision++;
+  gateway.sendKernelEvent(state("issues"));
+  await until(async () => await action("steer_issue").isEnabled());
+  await action("steer_issue").click();
+  const retainedMessage = "응답 실패 뒤에도 보존할 작업자 지시";
+  await panel.getByTestId("issue-steer-message").fill(retainedMessage);
+  for (const failure of ["rejected", "failure", "connection"]) {
+    const before = commandRequests("steer_issue").length;
+    nextInterventionFailure = failure;
+    await panel.getByTestId("issue-steer-send").click();
+    await until(async () => commandRequests("steer_issue").length === before + 1
+      && await panel.getByTestId("issue-steer-send").isEnabled()
+      && await panel.getByTestId("issues-error").count() === 1, failure + " preserves the steer form");
+    assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), retainedMessage);
+    assert.equal(commandRequests("steer_issue").length, before + 1);
+  }
+  await action("cancel_issue_work").click();
+  const beforeRejectedCancel = commandRequests("cancel_issue_work").length;
+  nextInterventionFailure = "rejected";
+  await panel.getByTestId("issue-cancel-confirm").click();
+  await until(async () => commandRequests("cancel_issue_work").length === beforeRejectedCancel + 1
+    && await panel.getByTestId("issue-cancel-confirm").isEnabled(), "a rejected cancel keeps its confirmation form");
+  assert.equal(await panel.getByTestId("issue-cancel-confirm").isVisible(), true);
+  await panel.getByRole("button", { name: "돌아가기", exact: true }).click();
+  assert.equal(commandRequests("cancel_issue_work").length, beforeRejectedCancel + 1);
+  await action("steer_issue").click();
+  assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), retainedMessage);
+  console.log("PASS kernel rejection, failure and connection errors preserve drafts; rejected cancel preserves its form");
+
+  for (const changedBasis of [false, true]) {
+    const held = holdNextInterventionReply();
+    nextDelivery = "queued";
+    const before = commandRequests("steer_issue").length;
+    await panel.getByTestId("issue-steer-message").fill("이전 선택에서 보낸 지시");
+    await panel.getByTestId("issue-steer-send").click();
+    await until(() => held.requested, "the delayed intervention receipt");
+    assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), "이전 선택에서 보낸 지시");
+    try {
+      await page.getByTestId("issues-toggle").click();
+      await panel.waitFor({ state: "detached" });
+      if (changedBasis) control = { ...control, authorization_epoch: control.authorization_epoch + 1 };
+      revision++;
+      await page.getByTestId("issues-toggle").click();
+      await panel.getByTestId("issues-title").click();
+      await until(async () => await action("steer_issue").isEnabled());
+      await action("steer_issue").click();
+      const freshMessage = changedBasis ? "새 기준에서 작성한 지시" : "같은 기준에서 새로 작성한 지시";
+      await panel.getByTestId("issue-steer-message").fill(freshMessage);
+      const detailReads = requests.filter((entry) => entry.params.query?.type === "issue").length;
+      held.release();
+      await until(async () => requests.filter((entry) => entry.params.query?.type === "issue").length > detailReads
+        && await panel.getByTestId("issue-steer-send").isEnabled(), "the resync after a late receipt");
+      assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), freshMessage);
+      assert.equal(commandRequests("steer_issue").length, before + 1);
+    } finally {
+      held.release();
+    }
+  }
+  console.log("PASS pending submission preserves its draft and a late success cannot erase a newer draft or basis");
+
 
   await page.getByTestId("issues-toggle").click();
   await panel.waitFor({ state: "detached" });
@@ -457,7 +555,7 @@ try {
   await until(async () => (await app.evaluate(() => globalThis.issueInterventionFixture.focusChecks)) > checks);
   assert.equal(await page.evaluate(() => window.issueNotifications.length), 0);
   await app.evaluate(() => { globalThis.issueInterventionFixture.focused = false; });
-  control = { tracked: true, held: false, taken_over: false, cancelled: false, authorization_epoch: 8 };
+  control = { tracked: true, held: false, taken_over: false, cancelled: false, authorization_epoch: control.authorization_epoch + 1 };
   openDecisions = [requestDecision("background-decision")]; revision++;
   const backgroundFact = fact(openDecisions[0]);
   const beforeBackgroundReads = requests.filter((entry) => entry.method === "akra/kernel/query").length;
