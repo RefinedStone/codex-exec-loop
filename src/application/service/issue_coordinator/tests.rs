@@ -745,6 +745,8 @@ fn delivery_waits_for_host_frozen_source_then_revalidates_and_raises_revision() 
         fact,
         IssueCoordinatorFact::WorkPermitGranted { delivery: true, .. }
     )));
+    // 이후 branch head가 바뀌어도 이미 동결한 전달 결과를 다시 승인하지 않는다.
+    h.execution.state.lock().unwrap().dispatch_source = Some("c".repeat(40));
     h.tick(true).unwrap();
     assert_eq!(h.execution.state.lock().unwrap().grants.len(), 2);
     assert_eq!(h.source.calls.load(Ordering::SeqCst), 2);

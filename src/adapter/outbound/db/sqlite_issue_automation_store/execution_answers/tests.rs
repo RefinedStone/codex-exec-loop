@@ -352,8 +352,8 @@ fn first_claim_is_durable_and_replay_never_regrants_delivery_or_stores_the_answe
     assert_eq!(first.record.status, IssueExecutionAnswerStatus::Unknown);
     assert_eq!(first.record.revision, 1);
     assert_eq!(
-        pending_records(&fixture, &prepared.work),
-        [first.record.clone()]
+        pending_records(&fixture, &prepared.work).as_slice(),
+        std::slice::from_ref(&first.record)
     );
     let encoded: String = adapter
         .with_connection(fixture.cwd(), |connection, _| {

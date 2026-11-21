@@ -83,18 +83,17 @@ fn from_current_lease(
     {
         bail!("the current issue work session differs from its lease");
     }
-    if let Some(question) = &current.observation.question {
-        if current.active_task_status != Some(TaskStatus::AwaitingUser)
+    if let Some(question) = &current.observation.question
+        && (current.active_task_status != Some(TaskStatus::AwaitingUser)
             || question.task_id != lease.task_id
             || question.session_key != session_key
             || question.slot_id != lease.slot_id
             || question.worktree_path != lease.worktree_path
             || question.branch_name != lease.branch_name
             || lease.lease_generation.as_deref() != Some(question.lease_generation.as_str())
-            || detail.thread_id.as_deref() != Some(question.thread_id.as_str())
-        {
-            bail!("the current work question belongs to another session");
-        }
+            || detail.thread_id.as_deref() != Some(question.thread_id.as_str()))
+    {
+        bail!("the current work question belongs to another session");
     }
     // Unknown continuations may be inspected, but this selector never resumes a thread,
     // changes ownership, answers a question, or starts a turn.
