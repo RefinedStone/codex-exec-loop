@@ -10,8 +10,8 @@ use super::planning_task_repository_port::{
     PlanningTaskAuthorityMutationAudit, PlanningTaskRepositoryPort,
 };
 
-mod permits;
-pub use permits::{
+mod permits_port;
+pub use permits_port::{
     PlanningWorkPermit, PlanningWorkPermitBasis, PlanningWorkPermitBlockReason,
     PlanningWorkPermitDecision, PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
     evaluate_work_order_permit,
