@@ -20,6 +20,17 @@ pub(crate) fn prepare(
         StoredCommand::SetIssueAutomationMode { mode } => {
             super::issue_collection::build(workspace).prepare_mode_confirmation(*mode)
         }
+        StoredCommand::SetIssueAutonomy { command_id, level } => {
+            #[cfg(not(test))]
+            let collection = super::issue_collection::build(workspace);
+            // Registry의 kernel fixture와 같은 정책원을 사용한다.
+            #[cfg(test)]
+            let collection = super::issue_collection::build_for_kernel_test(workspace);
+            collection
+                .autonomy_service()
+                .ok_or_else(|| anyhow::anyhow!("issue autonomy is unavailable"))?
+                .prepare_confirmation(command_id, *level)
+        }
         _ => bail!("this command does not support human confirmation"),
     }
 }

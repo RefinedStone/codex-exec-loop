@@ -110,6 +110,23 @@ impl StoredCommandService {
                     changed: change.changed,
                 })
             }
+            StoredCommand::SetIssueAutonomy { command_id, level } => {
+                let service = self
+                    .issues
+                    .as_ref()
+                    .and_then(|issues| issues.autonomy_service())
+                    .ok_or_else(|| anyhow::anyhow!("issue autonomy is unavailable"))?;
+                let change = service.set(
+                    command_id,
+                    level,
+                    context.and_then(|value| value.human_confirmation.as_ref()),
+                )?;
+                Ok(StoredCommandResult::IssueAutonomyChanged {
+                    command_id: change.command_id,
+                    changed: change.changed,
+                    autonomy: Box::new(change.autonomy),
+                })
+            }
             StoredCommand::CreateTask { task } => {
                 let change = self.planning.apply_operator_task_command(
                     PlanningTaskMutationCommand::CreateTask(create_input(task)),

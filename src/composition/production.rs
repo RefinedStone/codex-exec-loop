@@ -745,7 +745,8 @@ pub(crate) fn recover_pending_issue_interventions(workspace_dir: &str) -> Result
     super::issue_collection::build_interventions(
         &workspace,
         Arc::new(crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering),
-    ).recover_before_runtime()
+    ).recover_before_runtime()?;
+    super::issue_collection::build_autonomy(&workspace).recover_before_runtime()
 }
 
 fn native_tui_workspace_dir() -> String {

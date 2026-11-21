@@ -54,6 +54,15 @@ pub trait IssueWorkExecutionPort: Send + Sync {
         Ok(false)
     }
 
+    /// Read-only, uniquely attributable worker conversation. Never creates or resumes a turn.
+    fn conversation_thread_id(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot>;
     /// 기존 등록을 읽는다. 실제 adapter는 원격 fetch와 독립된 영속 조회를 구현한다.
     fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {

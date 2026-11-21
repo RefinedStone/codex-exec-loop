@@ -2,12 +2,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::issue_automation::MAX_ISSUE_AUTOMATION_REVISION;
+use crate::domain::issue_automation::autonomy::{IssueAutonomyLevel, validate_command_id};
 use crate::domain::issue_automation::collection::IssueCollectionMode;
 use crate::domain::issue_automation::decision::{
     IssueDecisionBasis, IssueDecisionId, MAX_ISSUE_DECISION_OPTION_BYTES,
     validate_issue_decision_confirmation_reference,
 };
+use crate::domain::issue_automation::{IssueAutomationAutonomy, MAX_ISSUE_AUTOMATION_REVISION};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -18,6 +19,15 @@ pub enum IssueConfirmationTarget {
         option: String,
         basis: IssueDecisionBasis,
         decision_revision: u64,
+    },
+    Autonomy {
+        workspace: String,
+        command_id: String,
+        from: IssueAutomationAutonomy,
+        revision: u64,
+        policy_version: String,
+        cap: IssueAutomationAutonomy,
+        to: IssueAutonomyLevel,
     },
     Mode {
         workspace: String,
@@ -31,7 +41,9 @@ pub enum IssueConfirmationTarget {
 impl IssueConfirmationTarget {
     pub fn workspace(&self) -> &str {
         match self {
-            Self::Decision { workspace, .. } | Self::Mode { workspace, .. } => workspace,
+            Self::Decision { workspace, .. }
+            | Self::Mode { workspace, .. }
+            | Self::Autonomy { workspace, .. } => workspace,
         }
     }
 
@@ -54,6 +66,20 @@ impl IssueConfirmationTarget {
                 if !identifier(option, MAX_ISSUE_DECISION_OPTION_BYTES)
                     || !valid_revision(*decision_revision)
                     || basis.validate().is_err()
+                {
+                    return Err(IssueConfirmationError::Invalid);
+                }
+            }
+            Self::Autonomy {
+                command_id,
+                revision,
+                policy_version,
+                ..
+            } => {
+                if validate_command_id(command_id).is_err()
+                    || *revision >= MAX_ISSUE_AUTOMATION_REVISION
+                    || policy_version.len() != 64
+                    || !policy_version.bytes().all(|byte| byte.is_ascii_hexdigit())
                 {
                     return Err(IssueConfirmationError::Invalid);
                 }

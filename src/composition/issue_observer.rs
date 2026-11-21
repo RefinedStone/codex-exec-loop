@@ -14,6 +14,7 @@ use crate::application::service::issue_collection::{
 use crate::application::service::issue_triage::IssueTriagedFact;
 use crate::composition::core_effect_worker::try_spawn_worker_with_panic_fallback;
 use crate::core::runtime::CoreInputWaker;
+use crate::domain::issue_automation::autonomy::IssueAutonomyProjection;
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
 
 const COLLECTION_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -41,6 +42,7 @@ type TestCommittedCollect = dyn Fn(&IssueCollectionCancellation, u64, &Reporter)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IssueCollectionHostView {
     pub(crate) projection: IssueCollectionProjection,
+    pub(crate) autonomy: IssueAutonomyProjection,
     pub(crate) collecting: bool,
     pub(crate) next_poll_after_ms: Option<u64>,
 }
@@ -171,6 +173,7 @@ impl IssueObserver {
     pub(crate) fn view(&self, now: Instant) -> IssueCollectionHostView {
         IssueCollectionHostView {
             projection: self.projection.clone(),
+            autonomy: IssueAutonomyProjection::Unavailable,
             collecting: self.in_flight.as_ref().is_some_and(|flight| {
                 !flight.cancel.is_cancelled() && flight.epoch == self.projection.state.epoch
             }),

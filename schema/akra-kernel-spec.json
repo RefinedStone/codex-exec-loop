@@ -985,6 +985,69 @@
       }
     },
     {
+      "name": "set_issue_autonomy",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "human_confirmation_required"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/$defs/IssueAutonomyLevel"
+          },
+          "type": {
+            "const": "set_issue_autonomy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "command_id",
+          "level"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "autonomy": {
+            "$ref": "#/$defs/IssueAutonomyState"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "issue_autonomy_changed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "command_id",
+          "changed",
+          "autonomy"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "set_issue_automation_mode",
       "scope": "issue",
       "state": "store",
@@ -1883,6 +1946,12 @@
           },
           {
             "properties": {
+              "autonomy": {
+                "$ref": "#/$defs/IssueAutonomyState",
+                "default": {
+                  "status": "unavailable"
+                }
+              },
               "binding": {
                 "anyOf": [
                   {
@@ -2260,6 +2329,37 @@
           },
           {
             "properties": {
+              "actions": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/IssueActionState"
+                },
+                "type": "array"
+              },
+              "control": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueControlState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "conversation": {
+                "$ref": "#/$defs/IssueConversationState",
+                "default": {
+                  "kind": "unavailable",
+                  "reason": "안전한 대화 연결을 확인할 수 없습니다."
+                }
+              },
+              "decision_history": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/IssueDecisionHistoryState"
+                },
+                "type": "array"
+              },
               "item": {
                 "$ref": "#/$defs/IssueListItem"
               },
@@ -2472,6 +2572,12 @@
           },
           {
             "properties": {
+              "autonomy": {
+                "$ref": "#/$defs/IssueAutonomyState",
+                "default": {
+                  "status": "unavailable"
+                }
+              },
               "binding": {
                 "anyOf": [
                   {
@@ -4488,6 +4594,30 @@
         },
         {
           "properties": {
+            "autonomy": {
+              "$ref": "#/$defs/IssueAutonomyState"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "issue_autonomy_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "command_id",
+            "changed",
+            "autonomy"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "changed": {
               "type": "boolean"
             },
@@ -4682,6 +4812,41 @@
       ],
       "type": "object"
     },
+    "IssueActionCommand": {
+      "enum": [
+        "hold_issue",
+        "release_issue",
+        "steer_issue",
+        "take_over_issue",
+        "retriage_issue",
+        "cancel_issue_work",
+        "track_issue",
+        "untrack_issue"
+      ],
+      "type": "string"
+    },
+    "IssueActionState": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/IssueActionCommand"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "enabled"
+      ],
+      "type": "object"
+    },
     "IssueActorState": {
       "additionalProperties": false,
       "properties": {
@@ -4697,6 +4862,16 @@
         "login"
       ],
       "type": "object"
+    },
+    "IssueAutomationAutonomy": {
+      "enum": [
+        "off",
+        "observe",
+        "propose",
+        "gated",
+        "auto"
+      ],
+      "type": "string"
     },
     "IssueAutomationModeRecord": {
       "enum": [
@@ -4870,6 +5045,122 @@
         "resolution_summary"
       ],
       "type": "object"
+    },
+    "IssueAutonomyChoiceState": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "level": {
+          "$ref": "#/$defs/IssueAutonomyLevel"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requires_confirmation": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "level",
+        "enabled",
+        "requires_confirmation"
+      ],
+      "type": "object"
+    },
+    "IssueAutonomyLevel": {
+      "enum": [
+        "off",
+        "observe",
+        "propose"
+      ],
+      "type": "string"
+    },
+    "IssueAutonomyState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "policy_blocked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cap": {
+              "$ref": "#/$defs/IssueAutomationAutonomy"
+            },
+            "choices": {
+              "items": {
+                "$ref": "#/$defs/IssueAutonomyChoiceState"
+              },
+              "type": "array"
+            },
+            "effective_level": {
+              "$ref": "#/$defs/IssueAutomationAutonomy"
+            },
+            "pending": {
+              "type": "boolean"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "requested_level": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IssueAutonomyLevel"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "const": "ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "effective_level",
+            "cap",
+            "revision",
+            "policy_version",
+            "pending",
+            "choices"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "IssueBasisState": {
       "additionalProperties": false,
@@ -5088,6 +5379,49 @@
         {
           "additionalProperties": false,
           "properties": {
+            "cap": {
+              "$ref": "#/$defs/IssueAutomationAutonomy"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "from": {
+              "$ref": "#/$defs/IssueAutomationAutonomy"
+            },
+            "kind": {
+              "const": "autonomy",
+              "type": "string"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "to": {
+              "$ref": "#/$defs/IssueAutonomyLevel"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace",
+            "command_id",
+            "from",
+            "revision",
+            "policy_version",
+            "cap",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "epoch": {
               "format": "uint64",
               "minimum": 0,
@@ -5182,6 +5516,91 @@
             "kind",
             "basis",
             "policy_version",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IssueControlState": {
+      "additionalProperties": false,
+      "properties": {
+        "authorization_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "held": {
+          "type": "boolean"
+        },
+        "taken_over": {
+          "type": "boolean"
+        },
+        "tracked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "tracked",
+        "held",
+        "taken_over",
+        "cancelled",
+        "authorization_epoch"
+      ],
+      "type": "object"
+    },
+    "IssueConversationState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "thread",
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "draft",
+              "type": "string"
+            },
+            "shared_copy": {
+              "$ref": "#/$defs/IssueSharedCopyState"
+            }
+          },
+          "required": [
+            "kind",
+            "shared_copy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unavailable",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
             "reason"
           ],
           "type": "object"
@@ -5353,6 +5772,38 @@
       ],
       "type": "string"
     },
+    "IssueDecisionHistoryState": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/IssueDecisionFactRecord"
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDecisionRequestState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolution_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDecisionResolutionReasonState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "type": "object"
+    },
     "IssueDecisionId": {
       "type": "string"
     },
@@ -5458,6 +5909,31 @@
         "on_timeout",
         "state",
         "revision"
+      ],
+      "type": "object"
+    },
+    "IssueDecisionResolutionCode": {
+      "enum": [
+        "answered",
+        "expired",
+        "withdrawn",
+        "basis_changed"
+      ],
+      "type": "string"
+    },
+    "IssueDecisionResolutionReasonState": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/IssueDecisionResolutionCode"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary"
       ],
       "type": "object"
     },
@@ -6919,6 +7395,30 @@
         {
           "additionalProperties": false,
           "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "level": {
+              "$ref": "#/$defs/IssueAutonomyLevel"
+            },
+            "type": {
+              "const": "set_issue_autonomy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "command_id",
+            "level"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "decision_id": {
               "maxLength": 128,
               "minLength": 1,
@@ -7295,6 +7795,12 @@
             },
             {
               "properties": {
+                "autonomy": {
+                  "$ref": "#/$defs/IssueAutonomyState",
+                  "default": {
+                    "status": "unavailable"
+                  }
+                },
                 "binding": {
                   "anyOf": [
                     {
@@ -7764,6 +8270,12 @@
             },
             {
               "properties": {
+                "autonomy": {
+                  "$ref": "#/$defs/IssueAutonomyState",
+                  "default": {
+                    "status": "unavailable"
+                  }
+                },
                 "binding": {
                   "anyOf": [
                     {
@@ -8069,6 +8581,37 @@
             },
             {
               "properties": {
+                "actions": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/$defs/IssueActionState"
+                  },
+                  "type": "array"
+                },
+                "control": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueControlState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "conversation": {
+                  "$ref": "#/$defs/IssueConversationState",
+                  "default": {
+                    "kind": "unavailable",
+                    "reason": "안전한 대화 연결을 확인할 수 없습니다."
+                  }
+                },
+                "decision_history": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/$defs/IssueDecisionHistoryState"
+                  },
+                  "type": "array"
+                },
                 "item": {
                   "$ref": "#/$defs/IssueListItem"
                 },

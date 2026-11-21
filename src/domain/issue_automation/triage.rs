@@ -33,6 +33,8 @@ pub struct IssueTriageInput<'a> {
     pub current: Option<&'a IssueSourceRead>,
     pub policy: &'a IssueAutomationPolicy,
     pub automation_policy_version: &'a str,
+    /// Same durable runtime selection snapshot as the effective policy.
+    pub runtime_selection_revision: u64,
     pub requirements: &'a IssueRequirements,
     /// required_sections와 공개 정책을 해석한 기존 issue-policy의 판이다.
     pub validation_policy_version: &'a str,
@@ -57,6 +59,8 @@ pub struct IssueTriageBasis {
     pub issue: IssueReference,
     pub source: IssueTriageSourceState,
     pub automation_policy_version: String,
+    #[serde(default, skip_serializing_if = "is_zero_revision")]
+    pub runtime_selection_revision: u64,
     /// 현재 관찰의 공개 정책 판이다. Unknown/legacy에는 이전 판을 가져오지 않는다.
     pub disclosure_policy_version: Option<String>,
     pub validation_policy_version: String,
@@ -408,3 +412,7 @@ pub fn issue_acceptance_criteria(body: &str) -> Result<Vec<String>, &'static str
 
 #[cfg(test)]
 mod tests;
+
+fn is_zero_revision(value: &u64) -> bool {
+    *value == 0
+}
