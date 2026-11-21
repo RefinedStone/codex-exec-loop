@@ -12,7 +12,7 @@
 [D3 ChatGPT 채팅 백엔드](29-d3-chatgpt-chat-backend.md), [D4 경로와 대체](29-d4-routing-and-fallback.md),
 [D5 기능 바인딩과 PR 자동 리뷰](29-d5-feature-binding-and-pr-review.md),
 [D6 에이전트 입구와 Desktop 화면](29-d6-agent-entry-and-desktop.md),
-[D7 akra-tunnel core 분리](29-d7-akra-tunnel-core.md) (akra-tunnel 저장소의 일)
+[D7 akra-tunnel-core 분리](29-d7-akra-tunnel-core.md) (새 저장소 `RefinedStone/akra-tunnel-core` 와 akra-tunnel 의 일)
 
 ## 한 줄 요약
 
@@ -42,7 +42,7 @@ Akra 의 기능은 일 하나를 "위임 작업"으로 낸다. 경로 정책이 
 | 경로 (route) | 기능 하나의 백엔드 우선순위 목록 | - |
 | 대체 (fallback) | 시도가 끝나지 못해 다음 백엔드로 넘어가는 것 | - |
 | 기능 바인딩 (feature binding) | 저장소 하나와 기능 하나의 연결: 수준과 경로 | plan 28 의 바인딩 |
-| akra-tunnel-core | akra-tunnel 에서 나눈 라이브러리. 페이지 읽기와 입력, 세션 감시와 복구, tunnel 런타임 서비스를 가진다. Electron 을 import 하지 않는다 | akra-tunnel 의 `src/` 와 `launcher/*-dom.mjs` ([D7](29-d7-akra-tunnel-core.md)) |
+| akra-tunnel-core | akra-tunnel 에서 나눈 라이브러리. 페이지 읽기와 입력, 세션 감시와 복구, tunnel 런타임 서비스를 가진다. Electron 을 import 하지 않는다. Akra 의 `src/core` 와 다른 것이다. 이 문서는 `core` 로 줄여 쓰지 않는다 | akra-tunnel 의 `src/` 와 `launcher/*-dom.mjs` ([D7](29-d7-akra-tunnel-core.md)) |
 | 구동기 (chat host) | Desktop main 에서 akra-tunnel-core 를 돌리고 브라우저 보기를 주는 부품. Akra Desktop 이 만드는 frontend 이다 | R9 의 `BrowserAgentService`, akra-tunnel 의 `continuation-browser-host` |
 
 ## 3. 이미 있는 것과 없는 것
@@ -135,7 +135,7 @@ Akra 의 기능은 일 하나를 "위임 작업"으로 낸다. 경로 정책이 
 | `ChatDriverPort` | outbound | Desktop 구동기에 내는 호출 (§8.2). tunnel 의 상태도 이 길로 온다. `chatgpt_chat` adapter 만 쓴다 | Gateway 의 되묻기 |
 | `ChatsPort` (있음) | outbound | 대화 목록과 한 건 읽기. 끝을 확인하는 보조 근거이다 | `cloud_chats` |
 
-- 모듈은 planning, parallel, core 의 타입을 import 하지 않는다. architecture test 가 이것을 막는다 (plan 28 §5.2 와 같다).
+- 모듈은 planning, parallel, `src/core` 의 타입을 import 하지 않는다. architecture test 가 이것을 막는다 (plan 28 §5.2 와 같다).
 - 기존 `ParallelAgentWorkerPort`, `PlanningWorkerPort`, `InteractiveTurnRuntimePort` 는 바꾸지 않는다.
 - `IssueReviewModelPort` 같은 소비자 port 는 남는다. 그 adapter 가 위임 작업을 낸다. 소비자의 코드는 바뀌지 않는다.
 
@@ -331,7 +331,7 @@ max_started_per_day = 20
 6. 대화 참조를 장부에 적는다.
 7. 마감 시각마다 관찰한다. 근거를 합친다 (§6.3).
 8. 끝나면 결과를 읽는다. 콜백이 먼저이고, 없으면 표식 뒤의 마지막 답이다.
-9. 중단되면 core 가 복구한다: 새로 고침 (연결 끊김), 재개 (실패, 멈춤). 페이지의 "다시 시도" 버튼은 누르지 않는다.
+9. 중단되면 akra-tunnel-core 가 복구한다: 새로 고침 (연결 끊김), 재개 (실패, 멈춤). 페이지의 "다시 시도" 버튼은 누르지 않는다.
    그 버튼은 메시지를 다시 보낼 수 있다 (akra-tunnel `18b4aae`). 복구 한도를 넘으면 kernel 이 대체를 고른다.
 10. lease 를 돌려준다. 정책이 켜면 작업자 대화를 지운다 (기본은 꺼짐).
 
@@ -342,13 +342,13 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 | 쪽 | 가지는 것 |
 | --- | --- |
 | akra-tunnel-core (라이브러리) | 페이지 읽기와 입력, 세션 감시와 복구, 전달 확인, 결과 읽기, broker, 세션의 저장 |
-| 구동기 (Akra Desktop 이 만든다) | 전용 partition 의 보기, 숨긴 창, 이동 제한, core 가 요구하는 페이지 handle, 화면 |
+| 구동기 (Akra Desktop 이 만든다) | 전용 partition 의 보기, 숨긴 창, 이동 제한, akra-tunnel-core 가 요구하는 페이지 handle, 화면 |
 
-`ChatDriverPort` 의 호출은 다섯 개이다. 구동기는 이것을 core 의 호출로 옮긴다.
+`ChatDriverPort` 의 호출은 다섯 개이다. 구동기는 이것을 akra-tunnel-core 의 호출로 옮긴다.
 
 | 호출 | 하는 일 |
 | --- | --- |
-| `status` | 구동기가 있는가, 로그인했는가, host 를 쥐었는가, tunnel 이 준비됐는가 (core 의 `AkraTunnelService.status()`) |
+| `status` | 구동기가 있는가, 로그인했는가, host 를 쥐었는가, tunnel 이 준비됐는가 (akra-tunnel-core 의 `AkraTunnelService.status()`) |
 | `submit(job, session, envelope)` | 대화를 열고 보낸다. 전달 단계와 대화 참조를 돌려준다. 같은 작업 ID 는 한 번만 보낸다 |
 | `observe(job)` | 단계, 근거, 복구 상태를 돌려준다 |
 | `read_result(job)` | 표식 뒤의 마지막 답을 돌려준다 |
@@ -356,10 +356,10 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 
 - 구동기는 전용 partition 의 전용 보기를 쓴다. 사용자의 브라우저 패널과 섞지 않는다. 사용자는 그 보기에서 한 번 로그인한다.
   akra-tunnel launcher 의 로그인은 넘어오지 않는다. partition 은 Electron 앱마다 따로이다.
-- Rust 는 이 라이브러리를 import 하지 못한다. 그래서 core 는 Desktop main 에서만 돈다. Desktop 이 꺼지면 세션 감시도 멈춘다.
-- 상태 저장소는 둘이다. kernel 의 장부는 작업을 가진다. core 의 저장소는 세션을 가진다. kernel 은 core 의 저장소를 읽지
+- Rust 는 이 라이브러리를 import 하지 못한다. 그래서 akra-tunnel-core 는 Desktop main 에서만 돈다. Desktop 이 꺼지면 세션 감시도 멈춘다.
+- 상태 저장소는 둘이다. kernel 의 장부는 작업을 가진다. akra-tunnel-core 의 저장소는 세션을 가진다. kernel 은 akra-tunnel-core 의 저장소를 읽지
   않는다.
-- DOM 을 읽는 코드는 core 에만 있다. DOM 이 바뀌어 읽지 못하면 단계는 `unknown` 이고 백엔드 건강은 `degraded`
+- DOM 을 읽는 코드는 akra-tunnel-core 에만 있다. DOM 이 바뀌어 읽지 못하면 단계는 `unknown` 이고 백엔드 건강은 `degraded`
   (`dom_contract_changed`) 이다.
 
 ### 8.3 결과가 돌아오는 길
@@ -373,7 +373,7 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 ### 8.4 tunnel 과의 관계
 
 - tunnel 은 선택이다. 글만 주고받는 작업은 tunnel 이 필요 없다.
-- tunnel 의 연결과 감시는 akra-tunnel 에 남는다 (launcher 나 CLI). Akra 는 상태만 읽는다. 구동기의 `status` 가 core 의
+- tunnel 의 연결과 감시는 akra-tunnel 에 남는다 (launcher 나 CLI). Akra 는 상태만 읽는다. 구동기의 `status` 가 akra-tunnel-core 의
   tunnel 상태를 돌려준다. 따로 port 를 두지 않는다. 첫 범위에서 Akra 는 tunnel 을 켜거나 끄지 않는다 (§15 Q-DE16).
 - home 하나에 host 는 하나이다. broker 의 pipe 이름이 home 에서 나온다. Akra Desktop 이 host 를 쥐면 MCP 런타임의 도구 호출
   신호 (`call_observed`) 가 Akra Desktop 으로 온다. 그것이 `tunnel` 근거이다. 감시 엔진도 하나가 된다. 그래서 두 앱이 같은
@@ -469,13 +469,14 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 | --- | --- | --- | --- |
 | [D1](29-d1-contract-and-ledger.md) | domain 의 상태와 순수 함수, 장부, `AgentBackendPort`, 가짜 백엔드, 조정기, kernel 범위 `delegation` | 없다. 가짜 백엔드로만 돈다 | - |
 | [D2](29-d2-codex-thread-backend.md) | `codex_thread` adapter, 첫 소비자 (이슈 초안 검토) | 이슈 초안 검토가 실제 모델로 돈다 | D1 |
-| [D3](29-d3-chatgpt-chat-backend.md) | 구동기 (core 의 frontend), Rust 와 Desktop 의 호출 길, `chatgpt_chat` adapter, `ChatsPort` 정리, tunnel | ChatGPT 채팅으로 작업이 간다 | D1, D7 |
+| [D3](29-d3-chatgpt-chat-backend.md) | 구동기 (akra-tunnel-core 의 frontend), Rust 와 Desktop 의 호출 길, `chatgpt_chat` adapter, `ChatsPort` 정리, tunnel | ChatGPT 채팅으로 작업이 간다 | D1, D7 |
 | [D4](29-d4-routing-and-fallback.md) | 정책 파일, 건강과 회로, 선택, 대체, 예산 | 백엔드가 막히면 다음으로 넘어간다 | D1. 끝-끝 확인은 D2, D3 |
 | [D5](29-d5-feature-binding-and-pr-review.md) | 기능 등록부, 저장소 바인딩, PR 자동 리뷰 | 저장소에서 PR 리뷰를 켠다 | D2 또는 D3, D4 |
 | [D6](29-d6-agent-entry-and-desktop.md) | 에이전트 명령과 skill, 콜백, Desktop 화면 | 에이전트가 위임한다. 화면에 보인다 | D1. 콜백은 D3 |
-| [D7](29-d7-akra-tunnel-core.md) | akra-tunnel 저장소의 일: core 와 frontend 나누기, 페이지 키트, host 가르기와 임대, 글 작업 보내기, 배포 | akra-tunnel 의 동작은 같다. Akra 가 core 를 import 할 수 있다 | - |
+| [D7](29-d7-akra-tunnel-core.md) | 새 저장소와 akra-tunnel 의 일: akra-tunnel-core 와 frontend 나누기, 페이지 키트, host 가르기와 임대, 글 작업 보내기, 배포 | akra-tunnel 의 동작은 같다. Akra 가 akra-tunnel-core 를 import 할 수 있다 | - |
 
-- D7 은 다른 저장소의 일이다. D1 과 같이 시작할 수 있다. D7 의 서브 이슈는 akra-tunnel 저장소에 둔다.
+- D7 은 다른 저장소의 일이다. D1 과 같이 시작할 수 있다. D7 의 서브 이슈는 그 일이 있는 저장소에 둔다
+  (`RefinedStone/akra-tunnel-core`, `akra-devs/akra-tunnel`).
 - D3 은 D7 을 기다린다. D2 와 D4 의 순수 함수는 D1 뒤에 바로 할 수 있다.
 - 모든 조각은 kernel 시뮬레이션 시험 (`src/composition/kernel_host/simulation.rs`) 을 통과한다. 시험은 가짜 백엔드와
   가짜 시계를 쓴다. 모델 턴이 없다.
@@ -496,11 +497,12 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 | DE-07 | 백엔드의 허락과 `tool_access` 는 사용자 파일에서만 온다 | 제안 |
 | DE-08 | 주 실행 경로(사용자 대화, 병렬 슬롯)는 바꾸지 않는다 | 제안 |
 | DE-09 | tunnel 은 선택이다. Akra 는 tunnel 의 상태만 읽는다 | 제안 |
-| DE-10 | akra-tunnel 을 core 라이브러리와 frontend 로 나눈다. Akra Desktop 은 core 를 import 하고 자기 frontend 를 만든다 | 사용자의 방향 (2026-11-21) |
+| DE-10 | akra-tunnel 을 akra-tunnel-core 라이브러리와 frontend 로 나눈다. Akra Desktop 은 akra-tunnel-core 를 import 하고 자기 frontend 를 만든다. akra-tunnel-core 는 새 public 저장소 `RefinedStone/akra-tunnel-core` 이다 | 사용자의 방향 (2026-11-21) |
+| DE-11 | 이름은 `akra-tunnel-core` 이다. 범위는 akra-tunnel 에서 frontend 를 뺀 전부이다. 영역은 subpath (`/chat`, `/tunnel`) 로 나눈다. Akra 의 문서와 코드는 `core` 로 줄여 쓰지 않는다 ([D7](29-d7-akra-tunnel-core.md) 의 "이름") | 제안 |
 
 | ID | 질문 | 기본값 (답이 없을 때) |
 | --- | --- | --- |
-| Q-DE1 | 세션의 복구(새로 고침, 재개)를 akra-tunnel-core 에 두는가, kernel 에 두는가 | core 에 둔다. 있는 규칙을 Rust 로 다시 쓰지 않는다. kernel 은 복구 상태만 본다 |
+| Q-DE1 | 세션의 복구(새로 고침, 재개)를 akra-tunnel-core 에 두는가, kernel 에 두는가 | akra-tunnel-core 에 둔다. 있는 규칙을 Rust 로 다시 쓰지 않는다. kernel 은 복구 상태만 본다 |
 | Q-DE2 | 장부와 조정기의 주인은 저장소 kernel 인가, Gateway (머신) 인가 | 저장소 kernel. 백엔드 자원만 머신 전체 lease 이다 |
 | Q-DE3 | Desktop 이 꺼져 있을 때 `chatgpt_chat` 은 어떻게 하는가 | `unavailable` 이고 다음 백엔드로 간다. 숨긴 창을 스스로 띄우지 않는다 |
 | Q-DE4 | `tool_access = "tunnel"` 을 언제 허락하는가 | 기본은 꺼짐. 사용자 파일에서 기능별로 켠다. 신뢰하지 않는 입력에는 쓰지 못한다 |
