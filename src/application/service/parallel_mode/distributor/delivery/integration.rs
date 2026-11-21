@@ -327,11 +327,10 @@ pub(super) fn prepare_distributor_integration_worktree(
         );
     };
 
-    // A held item retains its own slot and reviewed result. A different slot can keep
-    // delivering without replacing that evidence. Reuse the bounded per-slot worktree
-    // only when its previous result is already a literal ancestor of the live target.
-    let local_head = if isolate_work_order
-        && record.integration_base_commit_sha.is_none()
+    // A held item retains its own slot and reviewed result. Other slots may advance
+    // the live target, leaving either a shared or per-slot worktree behind. Reuse it
+    // only without saved recovery evidence and with a literal ancestor of that target.
+    let local_head = if record.integration_base_commit_sha.is_none()
         && local_head != remote_head
         && command_succeeds_with_runtime(
             runtime,
@@ -351,7 +350,7 @@ pub(super) fn prepare_distributor_integration_worktree(
             resolution,
             record,
             automation_permit,
-            "completed per-slot integration worktree reuse",
+            "completed integration worktree reuse",
         )? {
             return Err(notice);
         }
@@ -364,7 +363,7 @@ pub(super) fn prepare_distributor_integration_worktree(
         // No force/reset: retain concurrent file changes, and require a clean result below.
         let reuse = run_git_sequence(
             runtime,
-            "advance completed per-slot integration worktree",
+            "advance completed integration worktree",
             vec![GitCommandStep::new(
                 "checkout verified integration target",
                 [
@@ -387,7 +386,7 @@ pub(super) fn prepare_distributor_integration_worktree(
                 runtime,
                 resolution,
                 record,
-                "completed per-slot integration worktree could not advance to the verified target"
+                "completed integration worktree could not advance to the verified target"
                     .to_string(),
             );
         }
