@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn read_commands_are_not_recorded_and_issue_sync_can_reject_when_off() {
-        // The recording rule is derived from the effect. It is not a second list.
+        // Progress, results, and retry receipts live in the delegation ledger.
         let unrecorded = KernelCommandKind::ALL
             .iter()
             .filter(|kind| !kind.is_recorded())
@@ -621,7 +621,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             unrecorded,
-            ["load_sessions", "refresh_planning", "sync_issues"]
+            [
+                "load_sessions",
+                "refresh_planning",
+                "sync_issues",
+                "checkpoint_delegation",
+                "report_delegation_result",
+                "retry_delegation"
+            ]
         );
         for kind in KernelCommandKind::ALL {
             if !kind.is_recorded() {
