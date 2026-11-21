@@ -8042,6 +8042,25 @@
         },
         {
           "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/MyTurn"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "delegation_my_turn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "pr_review": {
               "$ref": "#/$defs/ReviewMode"
             },
@@ -8059,25 +8078,6 @@
           "required": [
             "type",
             "pr_review"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "items": {
-              "items": {
-                "$ref": "#/$defs/MyTurn"
-              },
-              "type": "array"
-            },
-            "type": {
-              "const": "delegation_my_turn",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "items"
           ],
           "type": "object"
         },

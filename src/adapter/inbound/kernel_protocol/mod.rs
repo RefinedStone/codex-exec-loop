@@ -1540,12 +1540,12 @@ pub enum KernelQueryAnswer {
         #[serde(default = "crate::domain::delegation::CodexBackendStatus::gateway_unavailable")]
         codex_thread: crate::domain::delegation::CodexBackendStatus,
     },
+    DelegationMyTurn {
+        items: Vec<crate::domain::delegation::MyTurn>,
+    },
     FeatureBindings {
         repository: Option<String>,
         pr_review: crate::application::service::pr_review::ReviewMode,
-    },
-    DelegationMyTurn {
-        items: Vec<crate::domain::delegation::MyTurn>,
     },
     PrReviewResult {
         number: u64,

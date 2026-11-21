@@ -697,7 +697,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 15);
+    assert_eq!(queries.len(), 18);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Delegations {},
         KernelQuery::Delegation { id: "job-1".into() },
