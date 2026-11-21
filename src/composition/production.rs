@@ -72,6 +72,7 @@ use crate::application::port::outbound::parallel_agent_profile_repository_port::
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::port::outbound::pr_validation_rollout_evidence_store_port::PrValidationRolloutEvidenceStorePort;
@@ -145,6 +146,7 @@ struct ProductionSharedPorts {
     app_server_adapter: Arc<CodexAppServerAdapter>,
     planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    planning_work_order_repository_port: Arc<dyn PlanningWorkOrderRepositoryPort>,
     review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort>,
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
@@ -842,7 +844,8 @@ fn store_planning_services(
         FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(store.clone()),
     );
     let planning =
-        PlanningServices::from_ports(workspace.clone(), store.clone(), store.clone(), worker);
+        PlanningServices::from_ports(workspace.clone(), store.clone(), store.clone(), worker)
+            .with_work_order_repository(store.clone());
     (planning, workspace, store)
 }
 
@@ -1073,6 +1076,8 @@ fn build_shared_ports_with_app_server(
     );
     let planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort> =
         planning_authority_adapter.clone();
+    let planning_work_order_repository_port: Arc<dyn PlanningWorkOrderRepositoryPort> =
+        planning_authority_adapter.clone();
     let review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort> =
         planning_authority_adapter.clone();
     let pr_validation_rollout_evidence_store_port: Arc<dyn PrValidationRolloutEvidenceStorePort> =
@@ -1096,6 +1101,7 @@ fn build_shared_ports_with_app_server(
         app_server_adapter,
         planning_authority_port,
         planning_task_repository_port,
+        planning_work_order_repository_port,
         review_center_repository_port,
         planning_workspace_port,
         planning_worker_port,
@@ -1117,6 +1123,7 @@ fn planning_services_from_ports(ports: &ProductionSharedPorts) -> PlanningServic
         ports.planning_task_repository_port.clone(),
         ports.planning_worker_port.clone(),
     )
+    .with_work_order_repository(ports.planning_work_order_repository_port.clone())
 }
 
 fn parallel_agent_profile_service_from_ports(

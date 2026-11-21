@@ -9,6 +9,7 @@ use std::fmt;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::parallel_mode::PrValidationRecord;
 use crate::domain::planning::{PriorityQueueProjection, TaskAuthorityDocument};
 
 use super::planning_task_repository_port::{
@@ -113,11 +114,109 @@ pub enum PlanningWorkOrderRegistrationResult {
     },
 }
 
+/// One planning snapshot fences lineage, grants, evidence and intervention ownership together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningWorkOrderAdmissionSnapshot {
+    pub work_order: PlanningWorkOrderRecord,
+    pub control: PlanningWorkControl,
+    pub permit_basis: Option<PlanningWorkPermitBasis>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlanningWorkOrderSupplementalAdmission<'a> {
+    pub admission_key: &'a str,
+    pub expected: &'a PlanningWorkOrderAdmissionSnapshot,
+    pub observed_planning_revision: i64,
+    pub task_id: &'a str,
+    pub task_authority: &'a TaskAuthorityDocument,
+    pub queue_projection: &'a PriorityQueueProjection,
+    pub audit: PlanningTaskAuthorityMutationAudit<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningWorkOrderSupplementalAdmissionResult {
+    Admitted {
+        snapshot: PlanningWorkOrderAdmissionSnapshot,
+        task_id: String,
+        planning_revision: i64,
+        created: bool,
+    },
+    Existing {
+        snapshot: PlanningWorkOrderAdmissionSnapshot,
+        task_id: String,
+    },
+    RevisionConflict {
+        observed_planning_revision: i64,
+        current_planning_revision: i64,
+    },
+    WorkOrderConflict {
+        current: PlanningWorkOrderAdmissionSnapshot,
+    },
+    TaskIdConflict {
+        task_id: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningWorkOrderLinkResult {
     pub work_order: PlanningWorkOrderRecord,
     pub linked: bool,
     pub planning_revision: i64,
+}
+
+/// Immutable correlation survives distributor queue pruning and task document replacement.
+/// None ownership is verified legacy; no source record at all is unavailable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningValidationSource {
+    pub validation_record_key: String,
+    pub source_task_id: String,
+    pub work_order_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningWorkOrderValidationLink {
+    pub validation_record_key: String,
+    pub work_order_id: String,
+    pub source_task_id: String,
+}
+
+/// 기존 검증 종료를 변경하지 않고 후속 기록과 영수증을 함께 등록하는 종류다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningValidationRecoveryKind {
+    ObserveAgain,
+    QueueRecovery,
+}
+
+/// observed_*는 새 등록의 CAS 입력이며 완료 영수증의 불변 payload에는 포함하지 않는다.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanningValidationRecoveryRequest<'a> {
+    pub command_id: &'a str,
+    pub work_order_id: &'a str,
+    pub terminal_record_id: &'a str,
+    pub kind: PlanningValidationRecoveryKind,
+    pub authorization_epoch: u64,
+    pub gate_revision: u64,
+    pub policy_version: &'a str,
+    pub original: &'a PrValidationRecord,
+    pub observed_work_order: &'a PlanningWorkOrderRecord,
+    pub observed_planning_revision: i64,
+    pub is_current_terminal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningValidationRecoveryReceipt {
+    pub command_id: String,
+    pub terminal_record_id: String,
+    pub outcome: PlanningValidationRecoveryOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanningValidationRecoveryOutcome {
+    Registered { validation_record_key: String },
+    Blocked { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +256,49 @@ impl std::error::Error for PlanningWorkOrderError {}
 /// A neutral outbound boundary owned by planning. One implementation also owns its task authority,
 /// so callers cannot accidentally persist the task and its durable lineage in different stores.
 pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
+    /// 원본 CAS, 현재 제어/정책 세대, 후속 기록/계보/성공 영수증을 같은 transaction에서 검사한다.
+    fn recover_work_order_validation(
+        &self,
+        _workspace: &str,
+        _request: PlanningValidationRecoveryRequest<'_>,
+    ) -> Result<PlanningValidationRecoveryReceipt> {
+        bail!("work-order validation recovery is unavailable")
+    }
+
+    /// 등록된 후속 기록만 최초 원본의 보완 admission identity를 상속한다.
+    fn load_work_order_validation_recovery_origin(
+        &self,
+        _workspace: &str,
+        _validation_record_key: &str,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn load_work_order_admission_snapshot(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+    ) -> Result<Option<PlanningWorkOrderAdmissionSnapshot>> {
+        bail!("atomic work-order supplemental admission is unavailable")
+    }
+
+    fn load_work_order_supplemental_task(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _admission_key: &str,
+    ) -> Result<Option<String>> {
+        bail!("atomic work-order supplemental admission is unavailable")
+    }
+
+    fn admit_supplemental_work_order_task(
+        &self,
+        _workspace: &str,
+        _request: PlanningWorkOrderSupplementalAdmission<'_>,
+    ) -> Result<PlanningWorkOrderSupplementalAdmissionResult> {
+        bail!("atomic work-order supplemental admission is unavailable")
+    }
+
     fn load_work_order(
         &self,
         workspace_dir: &str,
@@ -168,6 +310,40 @@ pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
         workspace_dir: &str,
         task_id: &str,
     ) -> Result<Option<PlanningWorkOrderRecord>>;
+
+    /// A legacy source task has no work-order correlation and returns None.
+    fn link_work_order_validation_record(
+        &self,
+        _workspace_dir: &str,
+        _validation_record_key: &str,
+        _source_task_id: &str,
+    ) -> Result<Option<PlanningWorkOrderValidationLink>> {
+        bail!("work-order validation correlation is unavailable")
+    }
+
+    fn load_work_order_validation_source(
+        &self,
+        _workspace: &str,
+        _validation_record_key: &str,
+    ) -> Result<Option<PlanningValidationSource>> {
+        bail!("work-order validation source is unavailable")
+    }
+
+    fn load_work_order_validation_link(
+        &self,
+        _workspace_dir: &str,
+        _validation_record_key: &str,
+    ) -> Result<Option<PlanningWorkOrderValidationLink>> {
+        bail!("work-order validation correlation is unavailable")
+    }
+
+    fn work_order_validation_record_keys(
+        &self,
+        _workspace_dir: &str,
+        _work_order_id: &str,
+    ) -> Result<Vec<String>> {
+        bail!("work-order validation correlation is unavailable")
+    }
 
     /// Existing identity wins before revision, authority guard, or candidate validation.
     /// An existing ID with a different origin is a typed OriginConflict error.
@@ -187,6 +363,10 @@ pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
         work_order_id: &str,
         task_id: &str,
     ) -> Result<PlanningWorkOrderLinkResult>;
+}
+
+pub(crate) fn validate_admission_key(value: &str) -> Result<()> {
+    validate_opaque_key(value, "work order task admission key", 1024)
 }
 
 pub(crate) fn validate_work_order_identity(work_order_id: &str, origin: &str) -> Result<()> {

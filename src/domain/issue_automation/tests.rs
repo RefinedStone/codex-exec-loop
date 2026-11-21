@@ -259,7 +259,7 @@ fn persisted_transition_table_rejects_every_unlisted_edge() {
             "failed",
             State::Failed,
             None,
-            &["failed", "await_failed", "discovered", "cancelled"],
+            &["failed", "await_failed", "discovered", "done", "cancelled"],
         ),
         ("cancelled", State::Cancelled, None, &["cancelled"]),
         (
@@ -435,6 +435,26 @@ fn execution_and_review_report_facts_without_clearing_flags_or_issuing_revisions
     assert!(!issue.transition(IssueTransition::Complete).unwrap());
     assert!(issue.transition(IssueTransition::Cancel).is_err());
     assert!(issue.transition(IssueTransition::Reassess).is_err());
+}
+
+#[test]
+fn trusted_completion_after_exhaustion_is_a_single_fact_transition_and_preserves_flags() {
+    let mut failed = persisted(IssueAutomationState::Failed, None);
+    failed.set_flag(IssueAutomationFlag::Held, true);
+    failed.set_flag(IssueAutomationFlag::Stale, true);
+    failed.set_flag(IssueAutomationFlag::Unknown, true);
+    let current = failed.clone();
+    assert!(failed.transition(IssueTransition::Complete).unwrap());
+    assert_eq!(failed.state(), IssueAutomationState::Done);
+    assert_eq!(failed.flags(), current.flags());
+    assert_eq!(failed.revision(), current.revision());
+    current.validate_replacement(&failed).unwrap();
+    assert!(!failed.transition(IssueTransition::Complete).unwrap());
+
+    let mut cancelled = persisted(IssueAutomationState::Cancelled, None);
+    let preserved = cancelled.clone();
+    assert!(cancelled.transition(IssueTransition::Complete).is_err());
+    assert_eq!(cancelled, preserved);
 }
 
 #[test]

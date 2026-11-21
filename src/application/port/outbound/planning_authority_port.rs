@@ -525,6 +525,102 @@ pub struct PlanningAuthorityDocumentSnapshot {
     pub result_output_markdown: String,
 }
 
+/// Explicit answers resume an owned worker session; they never acquire a fresh slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningWorkerQuestionIdentity {
+    pub question_id: String,
+    pub task_id: String,
+    pub session_key: String,
+    pub thread_id: String,
+    pub slot_id: String,
+    pub worktree_path: String,
+    pub branch_name: String,
+    pub lease_generation: String,
+    pub awaiting_task_updated_at: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningWorkerContinuationRequest {
+    pub authorization_epoch: u64,
+    pub command_id: String,
+    pub work_order_id: String,
+    pub question: PlanningWorkerQuestionIdentity,
+    pub message: String,
+}
+
+impl std::fmt::Debug for PlanningWorkerContinuationRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PlanningWorkerContinuationRequest")
+            .field("command_id", &self.command_id)
+            .field("work_order_id", &self.work_order_id)
+            .field("question_id", &self.question.question_id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningWorkerContinuationReceipt {
+    pub command_id: String,
+    pub question_id: String,
+    pub delivery: PlanningWorkerContinuationDelivery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanningWorkerContinuationDelivery {
+    Queued,
+    Unknown,
+    Accepted {
+        thread_id: String,
+        turn_id: String,
+        lease_generation: String,
+    },
+    RejectedBeforeStart {
+        reason: PlanningWorkerContinuationRejection,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningWorkerContinuationRejection {
+    StaleQuestion,
+    WorkControlled,
+    InvalidLease,
+    PermitUnavailable,
+    ContinuationPending,
+}
+
+impl PlanningWorkerContinuationRejection {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::StaleQuestion => "stale_question",
+            Self::WorkControlled => "work_controlled",
+            Self::InvalidLease => "invalid_lease",
+            Self::PermitUnavailable => "permit_unavailable",
+            Self::ContinuationPending => "continuation_pending",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningWorkerContinuationClaim {
+    pub request: PlanningWorkerContinuationRequest,
+    pub task: crate::domain::planning::TaskDefinition,
+    pub previous_lease: ParallelModeSlotLeaseSnapshot,
+    pub lease: ParallelModeSlotLeaseSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningWorkerContinuationClaimOutcome {
+    Claimed(Box<PlanningWorkerContinuationClaim>),
+    Waiting,
+    Settled(PlanningWorkerContinuationReceipt),
+}
+
 /*
  * `PlanningAuthorityPort`는 planning authority 저장소의 운영 제어면입니다.
  * task/direction 문서 자체는 `PlanningTaskRepositoryPort`가 다루고, 이 포트는 그 문서들이 놓인
@@ -536,6 +632,97 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 };
 
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    /// Queue once while preserving the exact waiting task/session/worktree identity.
+    fn enqueue_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _request: &PlanningWorkerContinuationRequest,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    /// A read never retries an external turn, including an Unknown receipt.
+    fn worker_continuation_receipt(
+        &self,
+        _workspace_dir: &str,
+        _work_order_id: &str,
+        _command_id: &str,
+    ) -> Result<Option<PlanningWorkerContinuationReceipt>> {
+        Ok(None)
+    }
+
+    fn queued_worker_continuations(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Vec<PlanningWorkerContinuationRequest>> {
+        Ok(Vec::new())
+    }
+
+    /// Reject stale queued answers before filesystem preflight, which may itself be unavailable.
+    fn recheck_queued_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _command_id: &str,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    /// Atomically replaces the old generation and seals Unknown before any app-server action.
+    fn claim_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _command_id: &str,
+        _new_generation: &str,
+        _owner: Option<crate::domain::parallel_mode::ParallelModeSlotLeaseOwnerProcess>,
+    ) -> Result<PlanningWorkerContinuationClaimOutcome> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    fn validate_worker_continuation_start(
+        &self,
+        _workspace_dir: &str,
+        _claim: &PlanningWorkerContinuationClaim,
+    ) -> Result<()> {
+        anyhow::bail!("worker continuation claims are unavailable")
+    }
+
+    /// Only a confirmed turn/start ACK can resolve Unknown; the identity must match the sealed lease.
+    fn acknowledge_worker_continuation(
+        &self,
+        _workspace_dir: &str,
+        _claim: &PlanningWorkerContinuationClaim,
+        _thread_id: &str,
+        _turn_id: &str,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        anyhow::bail!("worker continuation receipts are unavailable")
+    }
+
+    /// A terminal stream with a waiting task retains its workspace instead of becoming complete.
+    fn preserve_worker_awaiting_user(
+        &self,
+        _workspace_dir: &str,
+        _expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn worker_task_requires_preservation(
+        &self,
+        _workspace_dir: &str,
+        _task_id: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Covers orphan-cleanup paths which no longer have a usable in-memory lease.
+    fn worker_worktree_requires_preservation(
+        &self,
+        _workspace_dir: &str,
+        _worktree_path: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     fn claim_work_order_launch(&self, workspace_dir:&str, expected:&ParallelModeSlotLeaseSnapshot)
     -> Result<Vec<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction>>{
         let decision = self.check_work_order_permit_for_task(
@@ -1038,6 +1225,16 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         Err(anyhow!(
             "PR validation poll settlement is unsupported by this adapter"
         ))
+    }
+
+    /// Only a durable recovery receipt may redirect an immutable validation identity.
+    /// Explicit record-key reads remain historical reads and never follow this chain.
+    fn resolve_runtime_pr_validation_successor_key(
+        &self,
+        _workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<PrValidationRecordKey> {
+        Ok(record_key.clone())
     }
 
     // Load one authoritative PR validation record across process/restart boundaries.

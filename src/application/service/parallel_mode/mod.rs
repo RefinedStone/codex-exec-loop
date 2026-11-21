@@ -1360,6 +1360,21 @@ impl ParallelModeService {
                 Some(command.trigger),
             )));
         }
+        // A waiting session has no ordinary ready-queue command. The durable answer queue must
+        // still wake the orchestrator; its dedicated claim keeps the existing slot and thread.
+        if !self
+            .planning_authority
+            .queued_worker_continuations(workspace_dir)
+            .map_err(|error| error.to_string())?
+            .is_empty()
+        {
+            return Ok(Some(ParallelModeControlPlaneWake::new(
+                workspace_dir,
+                ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+                epoch_id,
+                None,
+            )));
+        }
         let Some(command) = Self::next_stale_epoch_dispatch_command(&snapshot, epoch_id) else {
             return Ok(None);
         };

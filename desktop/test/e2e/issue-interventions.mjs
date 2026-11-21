@@ -112,6 +112,10 @@ const kernel = {
       assert.equal(method, "akra/kernel/command_confirmed");
       const current = openDecisions.find((value) => value.id === command.decision_id);
       assert.ok(current);
+      if (current.kind === "agent_question" && command.option === "reply") {
+        assert.equal(typeof command.note, "string");
+        assert.ok(command.note.trim().length > 0, "an agent reply requires shared answer text");
+      }
       revision++;
       const resolved = supersedeAnswer ? "superseded" : "answered";
       const decision = { ...fact(current, resolved), option: supersedeAnswer ? null : command.option, answer_by: supersedeAnswer ? null : "human" };
@@ -331,6 +335,8 @@ try {
   console.log("PASS same-basis refresh preserves decision and intervention drafts; changed basis cannot submit old forms");
 
   await currentCard().locator('input[value="approve"]').check();
+  assert.equal(await currentCard().getByTestId("issue-decision-answer").isEnabled(), true, "a regular approval keeps the shared note optional");
+  assert.equal(await currentCard().getByTestId("issue-decision-note").getAttribute("aria-required"), "false");
   await currentCard().getByTestId("issue-decision-note").fill("공유 가능한 검증 메모입니다.");
   await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 1; });
   await currentCard().getByTestId("issue-decision-answer").click();
@@ -359,6 +365,44 @@ try {
   assert.equal(await superseded.locator("input").first().isDisabled(), true);
   assert.match(await superseded.innerText(), /판정 기준이 바뀌어/);
   console.log("PASS issue-only cards, native cancellation, one answer and superseded disabled history");
+
+  const waitingQuestion = {
+    ...requestDecision("decision-agent-question"),
+    kind: "agent_question", gate: "spec",
+    basis: { ...requestDecision().basis, work_order_id: "work-order-fixture" },
+    question: "원래 대화를 확인한 뒤 작업자 질문에 답변해 주세요.",
+    options: [{ id: "reply", label: "답변 보내기", effect: "공유한 답변을 같은 작업 대화에 전달합니다." }],
+    recommended: "reply",
+  };
+  supersedeAnswer = false;
+  openDecisions = [waitingQuestion]; revision++;
+  gateway.sendKernelEvent({ type: "issue_decision", decision: fact(waitingQuestion), revision });
+  await currentCard().waitFor();
+  await currentCard().locator('input[value="reply"]').check();
+  const questionNote = currentCard().getByTestId("issue-decision-note");
+  const questionAnswer = currentCard().getByTestId("issue-decision-answer");
+  const answersBeforeQuestion = commandRequests("answer_issue_decision").length;
+  const dialogsBeforeQuestion = await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length);
+  assert.match(await currentCard().locator(".issues-input-label").innerText(), /공유할 답변\s*\(필수\)/);
+  assert.equal(await questionNote.getAttribute("aria-required"), "true");
+  assert.equal(await questionAnswer.isDisabled(), true);
+  await questionNote.fill(" \t\n ");
+  assert.equal(await questionAnswer.isDisabled(), true);
+  assert.equal(commandRequests("answer_issue_decision").length, answersBeforeQuestion);
+  assert.equal(await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length), dialogsBeforeQuestion);
+  const answerText = "공유 답변: 기존 검색 결과의 정렬 순서를 유지해 주세요.";
+  await questionNote.fill(answerText);
+  await until(async () => await questionAnswer.isEnabled());
+  await capture("agent-question");
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
+  await questionAnswer.click();
+  await until(async () => commandRequests("answer_issue_decision").length === answersBeforeQuestion + 1
+    && (await panel.locator('[data-testid="issue-decision-card"][data-state="open"]').count()) === 0);
+  const sentAnswer = commandRequests("answer_issue_decision").at(-1);
+  assert.equal(sentAnswer.method, "akra/kernel/command_confirmed");
+  assert.equal(sentAnswer.request.command.option, "reply");
+  assert.equal(sentAnswer.request.command.note, answerText);
+  console.log("PASS agent-question reply requires nonblank shared text and keeps ordinary notes optional");
 
   const action = (name) => panel.getByTestId("issue-action-" + name);
   await action("hold_issue").click();

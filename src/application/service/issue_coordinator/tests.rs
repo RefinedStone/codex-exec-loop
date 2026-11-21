@@ -244,6 +244,20 @@ impl IssueSourcePort for FakeSource {
 
 #[derive(Default)]
 struct FakeExecutionState {
+    observation: Option<crate::domain::issue_automation::execution::IssueWorkExecutionObservation>,
+    observations_by_work: std::collections::BTreeMap<
+        String,
+        crate::domain::issue_automation::execution::IssueWorkExecutionObservation,
+    >,
+    execution_limits: Vec<(String, u32)>,
+    observed_work_orders: Vec<String>,
+    fail_observation_work_order: Option<String>,
+    after_observation: Option<Box<dyn Fn() + Send + Sync>>,
+    recoveries: Vec<
+        crate::application::port::outbound::issue_work_execution_port::IssueWorkRecoveryRequest,
+    >,
+    permit_floor: u64,
+    dispatch_source: Option<String>,
     control: crate::domain::issue_automation::work_control::IssueWorkControl,
     control_commands: std::collections::BTreeMap<
         String,
@@ -256,7 +270,6 @@ struct FakeExecutionState {
     order: Option<IssueWorkOrder>,
     grants: Vec<IssueWorkPermitRequest>,
     frozen: Option<String>,
-    dispatch_source: Option<String>,
     saved_source: Option<String>,
     saved_revision: u64,
     registrations: usize,
@@ -275,6 +288,67 @@ struct FakeExecution {
     state: Mutex<FakeExecutionState>,
 }
 impl IssueWorkExecutionPort for FakeExecution {
+    fn execution_limit(&self, _: &str, work_order_id: &str, max_attempts: u32) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        let entry = (work_order_id.to_string(), max_attempts);
+        if state.execution_limits.last() != Some(&entry) {
+            state.execution_limits.push(entry);
+        }
+        Ok(())
+    }
+
+    fn permit_gate_revision(&self, _: &str, _: &str) -> Result<u64> {
+        Ok(self.state.lock().unwrap().permit_floor)
+    }
+
+    fn observe_execution(
+        &self,
+        _: &str,
+        work_order_id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::execution::IssueWorkExecutionObservation>>
+    {
+        let mut state = self.state.lock().unwrap();
+        state.observed_work_orders.push(work_order_id.to_string());
+        if state.fail_observation_work_order.as_deref() == Some(work_order_id) {
+            bail!("simulated execution observation failure");
+        }
+        let value = state
+            .observations_by_work
+            .get(work_order_id)
+            .cloned()
+            .or_else(|| state.observation.clone());
+        let hook = state.after_observation.take();
+        drop(state);
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(value)
+    }
+
+    fn recover_execution(
+        &self,
+        _: &str,
+        request: &crate::application::port::outbound::issue_work_execution_port::IssueWorkRecoveryRequest,
+    ) -> Result<
+        crate::application::port::outbound::issue_work_execution_port::IssueWorkRecoveryReceipt,
+    > {
+        use crate::application::port::outbound::issue_work_execution_port::{
+            IssueWorkRecoveryOutcome, IssueWorkRecoveryReceipt,
+        };
+        let mut state = self.state.lock().unwrap();
+        state.control.require_epoch(request.authorization_epoch)?;
+        if !state.recoveries.contains(request) {
+            state.recoveries.push(request.clone());
+        }
+        Ok(IssueWorkRecoveryReceipt {
+            command_id: request.command_id.clone(),
+            terminal_record_id: request.terminal.record_id.clone(),
+            outcome: IssueWorkRecoveryOutcome::Registered {
+                validation_record_key: format!("successor-{}", request.terminal.record_id),
+            },
+        })
+    }
+
     fn control(
         &self,
         _: &str,
@@ -317,7 +391,7 @@ impl IssueWorkExecutionPort for FakeExecution {
         }
         Ok(crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionSnapshot {
             task_ids: state.order.as_ref().map(|_| vec!["task-1".into()]).unwrap_or_default(),
-            dispatch_source: state.dispatch_source.clone(), frozen_source: state.frozen.clone(),
+            dispatch_source: Some(state.dispatch_source.clone().unwrap_or_else(|| "a".repeat(40))), frozen_source: state.frozen.clone(),
             saved_source: state.saved_source.clone(), saved_gate_revision: state.saved_revision, saved_authorization_epoch: state.saved_authorization_epoch,
             blocked_reason: None,
         })
@@ -345,7 +419,11 @@ impl IssueWorkExecutionPort for FakeExecution {
         if std::mem::take(&mut state.fail_after_register) {
             bail!("simulated crash after durable registration");
         }
-        Ok(vec!["task-1".into()])
+        Ok(state
+            .observation
+            .as_ref()
+            .map(|value| value.task_ids.clone())
+            .unwrap_or_else(|| vec!["task-1".into()]))
     }
     fn grant(&self, _: &str, request: &IssueWorkPermitRequest) -> Result<()> {
         let mut state = self.state.lock().unwrap();
@@ -425,12 +503,7 @@ impl Harness {
                 read: Mutex::new(IssueSourceRead::Observed(Box::new(observation))),
                 calls: std::sync::atomic::AtomicUsize::new(0),
             }),
-            execution: Arc::new(FakeExecution {
-                state: Mutex::new(FakeExecutionState {
-                    dispatch_source: Some("a".repeat(40)),
-                    ..Default::default()
-                }),
-            }),
+            execution: Arc::new(FakeExecution::default()),
         }
     }
     fn coordinator(&self) -> IssueCoordinatorService {
@@ -672,6 +745,8 @@ fn delivery_waits_for_host_frozen_source_then_revalidates_and_raises_revision() 
         fact,
         IssueCoordinatorFact::WorkPermitGranted { delivery: true, .. }
     )));
+    // 이후 branch head가 바뀌어도 이미 동결한 전달 결과를 다시 승인하지 않는다.
+    h.execution.state.lock().unwrap().dispatch_source = Some("c".repeat(40));
     h.tick(true).unwrap();
     assert_eq!(h.execution.state.lock().unwrap().grants.len(), 2);
     assert_eq!(h.source.calls.load(Ordering::SeqCst), 2);
@@ -1097,4 +1172,6 @@ mod policy_revalidation;
 
 mod autonomy;
 
+mod execution_lifecycle;
+mod execution_questions;
 mod interactions;

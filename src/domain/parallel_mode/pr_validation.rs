@@ -1335,6 +1335,45 @@ impl PrValidationRecord {
         }
     }
 
+    /// A new identity starts a fresh observation while retaining the original
+    /// contract and already admitted remediation tasks. The terminal record remains immutable.
+    /// Pending remediation state is restored from current task facts using the ordinary events.
+    pub fn fresh_recovery_successor(
+        &self,
+        key: PrValidationRecordKey,
+    ) -> Result<Self, PrValidationTransitionRejection> {
+        if key == self.key
+            || !matches!(
+                self.phase,
+                PrValidationPhase::Blocked | PrValidationPhase::Failed
+            )
+            || !matches!(
+                self.terminal_reason,
+                Some(
+                    PrValidationTerminalReason::ObservationFailed
+                        | PrValidationTerminalReason::RemediationAdmissionFailed
+                )
+            )
+            || (self.evidence_sha().is_some()
+                && self.terminal_reason != Some(PrValidationTerminalReason::ObservationFailed))
+        {
+            return Err(PrValidationTransitionRejection::InvalidTransition {
+                phase: self.phase,
+                event: "register_recovery_successor",
+            });
+        }
+        let mut successor = Self::register(key, self.target.clone(), self.target_shas.clone());
+        successor.post_merge_validation_contract = self.post_merge_validation_contract.clone();
+        successor.findings = self.findings.clone();
+        successor.remediations = self.remediations.clone();
+        successor.integration_attestation = self.integration_attestation.clone();
+        successor.merge_sha = self.merge_sha.clone();
+        if successor.evidence_sha().is_some() {
+            successor.phase = PrValidationPhase::PostMergeObservation;
+        }
+        Ok(successor)
+    }
+
     pub fn key(&self) -> &PrValidationRecordKey {
         &self.key
     }
@@ -2000,3 +2039,6 @@ fn non_empty(value: impl Into<String>, label: &str) -> Result<String, String> {
         Ok(value)
     }
 }
+
+#[cfg(test)]
+mod recovery_tests;

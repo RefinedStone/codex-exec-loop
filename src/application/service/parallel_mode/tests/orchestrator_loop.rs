@@ -13,6 +13,7 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningWorkerContinuationRequest, PlanningWorkerQuestionIdentity,
 };
 use crate::application::port::outbound::planning_worker_port::{
     NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
@@ -284,6 +285,7 @@ impl PlanningWorkerPort for FailingPlanningWorkerPort {
 
 struct FaultyPlanningAuthorityAdapter {
     inner: Arc<SqlitePlanningAuthorityAdapter>,
+    queued_continuations: Mutex<Vec<PlanningWorkerContinuationRequest>>,
     fail_enqueue: AtomicUsize,
     fail_claim: AtomicUsize,
     fail_update: AtomicUsize,
@@ -301,6 +303,7 @@ impl FaultyPlanningAuthorityAdapter {
     fn new(inner: Arc<SqlitePlanningAuthorityAdapter>) -> Self {
         Self {
             inner,
+            queued_continuations: Mutex::new(Vec::new()),
             fail_enqueue: AtomicUsize::new(0),
             fail_claim: AtomicUsize::new(0),
             fail_update: AtomicUsize::new(0),
@@ -361,6 +364,13 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 };
 
 impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
+    fn queued_worker_continuations(
+        &self,
+        _workspace_dir: &str,
+    ) -> anyhow::Result<Vec<PlanningWorkerContinuationRequest>> {
+        Ok(self.queued_continuations.lock().unwrap().clone())
+    }
+
     fn compare_and_swap_runtime_distributor_queue_record(
         &self,
         workspace_dir: &str,
@@ -874,6 +884,76 @@ fn dispatch_tick_reports_no_pending_durable_command_without_mutating_queue() {
         .load_runtime_projections(&workspace_dir)
         .expect("runtime projections should load");
     assert!(projections.dispatch_commands.is_empty());
+}
+
+#[test]
+fn pending_continuation_wakes_without_creating_an_ordinary_dispatch_command() {
+    let repo = TempGitRepo::new("orchestrator-answer-wake");
+    let workspace = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace);
+    let port = Arc::new(FaultyPlanningAuthorityAdapter::new(authority.clone()));
+    let service = ParallelModeService::new(
+        port.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    assert!(
+        service
+            .pending_dispatch_wake(&workspace, 224)
+            .unwrap()
+            .is_none()
+    );
+    port.queued_continuations
+        .lock()
+        .unwrap()
+        .push(PlanningWorkerContinuationRequest {
+            authorization_epoch: 7,
+            command_id: "answer-a".into(),
+            work_order_id: "order-a".into(),
+            message: "Synthetic shared answer".into(),
+            question: PlanningWorkerQuestionIdentity {
+                question_id: "question-a".into(),
+                task_id: "task-a".into(),
+                session_key: "waiting-session".into(),
+                thread_id: "waiting-thread".into(),
+                slot_id: "slot-1".into(),
+                worktree_path: "/fixture/slot-1".into(),
+                branch_name: "akra-agent/task-a".into(),
+                lease_generation: "a".repeat(64),
+                awaiting_task_updated_at: "2026-11-21T00:00:00Z".into(),
+            },
+        });
+    let wake = service
+        .pending_dispatch_wake(&workspace, 224)
+        .unwrap()
+        .unwrap();
+    assert_eq!(wake.workspace_directory, workspace);
+    assert_eq!(wake.epoch_id, 224);
+    assert!(
+        wake.enqueue_trigger.is_none(),
+        "a continuation must not enqueue a new task"
+    );
+    assert!(
+        authority
+            .load_runtime_projections(&workspace)
+            .unwrap()
+            .dispatch_commands
+            .is_empty()
+    );
+    assert_eq!(
+        port.queued_continuations.lock().unwrap().len(),
+        1,
+        "polling does not claim or resend an answer"
+    );
+    port.queued_continuations.lock().unwrap().clear();
+    assert!(
+        service
+            .pending_dispatch_wake(&workspace, 224)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

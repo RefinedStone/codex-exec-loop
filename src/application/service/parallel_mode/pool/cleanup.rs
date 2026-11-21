@@ -906,7 +906,13 @@ fn projection_still_allows_cleanup(
     let Ok(projection) = planning_authority.load_runtime_projections(identity.repo_root) else {
         return false;
     };
-    authority.allows_projection(&projection, identity.slot_id)
+    !planning_authority
+        .worker_worktree_requires_preservation(
+            identity.repo_root,
+            &identity.slot_path.display().to_string(),
+        )
+        .unwrap_or(true)
+        && authority.allows_projection(&projection, identity.slot_id)
         && authority.expected_lease().is_none_or(|lease| {
             planning_authority
                 .work_order_cleanup_allowed_for_task(identity.repo_root, &lease.task_id)

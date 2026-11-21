@@ -153,6 +153,9 @@ fn project_head_pr_validation(
         .identity
         .as_ref()
         .and_then(|identity| PrValidationRecordKey::new(&identity.queue_item_id).ok())?;
+    let record_key = planning_authority
+        .resolve_runtime_pr_validation_successor_key(workspace_dir, &record_key)
+        .ok()?;
     planning_authority
         .load_runtime_pr_validation_record(workspace_dir, &record_key)
         .ok()

@@ -1,9 +1,6 @@
 //! Akra planning 등록/permit을 중립 이슈 실행 계약으로 옮긴다.
 use crate::application::port::outbound::issue_work_execution_port::*;
-use crate::application::port::outbound::planning_authority_port::{
-    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
-};
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthoritySnapshot;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkControl, PlanningWorkControlAction, PlanningWorkInstruction,
     PlanningWorkInstructionAdmission, PlanningWorkOrderRepositoryPort, PlanningWorkPermit,
@@ -16,9 +13,15 @@ use crate::domain::issue_automation::coordinator::IssueWorkOrder;
 use crate::domain::issue_automation::work_control::{
     IssueWorkControl, IssueWorkControlAction, IssueWorkInstruction, IssueWorkInstructionAdmission,
 };
-use crate::domain::planning::{PriorityQueueService, TaskStatus};
+use crate::domain::planning::PriorityQueueService;
 use anyhow::{Result, anyhow, bail};
 use std::sync::Arc;
+
+mod answer;
+mod conversation;
+mod observation;
+mod recovery;
+mod source;
 
 pub(crate) struct AkraIssueWorkExecutionAdapter {
     repository: Arc<dyn PlanningWorkPermitRepositoryPort>,
@@ -44,6 +47,57 @@ impl AkraIssueWorkExecutionAdapter {
 }
 
 impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
+    fn recover_execution(
+        &self,
+        workspace: &str,
+        request: &IssueWorkRecoveryRequest,
+    ) -> Result<IssueWorkRecoveryReceipt> {
+        recovery::recover(self, workspace, request)
+    }
+
+    fn execution_limit(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        max_attempts: u32,
+    ) -> Result<()> {
+        self.repository
+            .set_work_order_execution_limit(workspace, work_order_id, max_attempts)
+    }
+
+    fn permit_gate_revision(&self, workspace: &str, work_order_id: &str) -> Result<u64> {
+        let basis = self
+            .repository
+            .load_work_order_permit_basis(workspace, work_order_id)?;
+        Ok(basis.map_or(0, |basis| basis.gate_revision))
+    }
+
+    fn answer_question(
+        &self,
+        workspace: &str,
+        request: &IssueWorkAnswerRequest,
+    ) -> Result<IssueWorkAnswerReceipt> {
+        answer::enqueue(self, workspace, request)
+    }
+
+    fn question_answer_receipt(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        command_id: &str,
+    ) -> Result<Option<IssueWorkAnswerReceipt>> {
+        answer::receipt(self, workspace, work_order_id, command_id)
+    }
+
+    fn observe_execution(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::execution::IssueWorkExecutionObservation>>
+    {
+        observation::observe(self, workspace, work_order_id)
+    }
+
     fn control(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkControl> {
         self.repository
             .load_work_order_control(workspace, work_order_id)
@@ -94,38 +148,11 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
         workspace: &str,
         work_order_id: &str,
     ) -> Result<Option<String>> {
-        let task_ids = self.task_ids(workspace, work_order_id)?;
-        let projections = self.authority.load_runtime_projections(workspace)?;
-        unique_conversation_thread_id(
-            &task_ids,
-            projections
-                .session_details
-                .iter()
-                .map(|session| (session.task_id.as_str(), session.thread_id.as_deref())),
-        )
+        conversation::thread_id(self, workspace, work_order_id)
     }
 
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot> {
-        let order = self.repository.load_work_order(workspace, work_order_id)?;
-        let task_ids = order
-            .as_ref()
-            .map(|order| order.task_ids.clone())
-            .unwrap_or_default();
-        let basis = self
-            .repository
-            .load_work_order_permit_basis(workspace, work_order_id)?;
-        let runtime = self.authority.load_runtime_projections(workspace)?;
-        execution_snapshot(
-            task_ids,
-            basis.as_ref(),
-            &runtime,
-            || self.repository.load_task_authority_snapshot(workspace),
-            || {
-                self.parallel
-                    .work_order_dispatch_source_sha(workspace)
-                    .map_err(|_| anyhow!("the configured work dispatch source is unavailable"))
-            },
-        )
+        source::snapshot(self, workspace, work_order_id)
     }
 
     fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {
@@ -279,94 +306,3 @@ fn issue_instruction_admission(
         PlanningWorkInstructionAdmission::Active => IssueWorkInstructionAdmission::Active,
     }
 }
-
-fn unique_conversation_thread_id<'a>(
-    task_ids: &[String],
-    sessions: impl Iterator<Item = (&'a str, Option<&'a str>)>,
-) -> Result<Option<String>> {
-    let mut threads = std::collections::BTreeSet::new();
-    for (task_id, thread) in sessions {
-        if task_ids.iter().any(|candidate| candidate == task_id)
-            && let Some(thread) = thread
-        {
-            if thread.is_empty()
-                || thread.len() > 4096
-                || thread
-                    .chars()
-                    .any(|value| value.is_control() || value.is_whitespace())
-            {
-                bail!("the issue work conversation identity is invalid");
-            }
-            threads.insert(thread.to_owned());
-        }
-    }
-    if threads.len() > 1 {
-        bail!("the issue work has multiple conversations");
-    }
-    Ok(threads.into_iter().next())
-}
-
-fn execution_snapshot(
-    task_ids: Vec<String>,
-    basis: Option<&PlanningWorkPermitBasis>,
-    runtime: &PlanningAuthorityRuntimeProjectionSnapshot,
-    load_tasks: impl FnOnce() -> Result<Option<PlanningTaskAuthoritySnapshot>>,
-    fetch_dispatch_source: impl FnOnce() -> Result<String>,
-) -> Result<IssueWorkExecutionSnapshot> {
-    let mut sources: Vec<String> = runtime
-        .distributor_queue_records
-        .iter()
-        .filter(|record| task_ids.contains(&record.task_id))
-        .map(|record| record.effective_source_commit_sha())
-        .filter(|source| !source.is_empty())
-        .collect();
-    sources.sort();
-    sources.dedup();
-    if sources.len() > 1 {
-        bail!("the work has ambiguous frozen source commits");
-    }
-    let frozen_source = sources.pop();
-    // Leased 단계도 배정이 끝난 상태다. 실제 실행/전달 source를 새 integration HEAD로 바꾸지 않는다.
-    let pending_dispatch = if frozen_source.is_some()
-        || runtime
-            .slot_leases
-            .values()
-            .any(|lease| task_ids.contains(&lease.task_id))
-    {
-        false
-    } else if task_ids.is_empty() {
-        true
-    } else {
-        let tasks =
-            load_tasks()?.ok_or_else(|| anyhow!("the planning execution tasks are unavailable"))?;
-        let mut pending = true;
-        for task_id in &task_ids {
-            let task = tasks
-                .task_authority
-                .tasks
-                .iter()
-                .find(|task| &task.id == task_id)
-                .ok_or_else(|| anyhow!("the work task is missing from planning authority"))?;
-            pending &= matches!(task.status, TaskStatus::Ready | TaskStatus::Proposed);
-        }
-        pending
-    };
-    // 슬롯 대기 중에는 저장된 permit basis가 있어도 실제 dispatch와 같은 configured remote/base를 읽는다.
-    let dispatch_source = if pending_dispatch {
-        Some(fetch_dispatch_source()?)
-    } else {
-        None
-    };
-    Ok(IssueWorkExecutionSnapshot {
-        task_ids,
-        dispatch_source,
-        frozen_source,
-        saved_source: basis.map(|basis| basis.source_sha.clone()),
-        saved_gate_revision: basis.map(|basis| basis.gate_revision).unwrap_or(0),
-        saved_authorization_epoch: basis.map(|basis| basis.authorization_epoch).unwrap_or(0),
-        blocked_reason: None,
-    })
-}
-
-#[cfg(test)]
-mod tests;

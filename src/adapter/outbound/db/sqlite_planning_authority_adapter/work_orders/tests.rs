@@ -25,6 +25,7 @@ use super::{SqlitePlanningAuthorityAdapter, ensure_work_order_tables};
 mod lineage;
 mod permits;
 mod transactions;
+mod validation_recovery;
 
 fn workspace(prefix: &str) -> String {
     let path = crate::test_utils::platform_safe_temp_dir().join(format!(
@@ -410,14 +411,16 @@ fn work_order_registration_rejects_changes_to_other_tasks_or_extra_creations() {
 }
 
 #[test]
-fn work_order_tables_are_added_to_existing_v19_and_legacy_queries_still_read() {
-    // This synthetic fixture remains on disk for root's archived-binary compatibility probe.
-    let workspace = workspace("compatibility-v19");
+fn work_order_tables_are_additive_to_the_current_authority_schema() {
+    // This probes additive work-order registration on the current authority schema.
+    let schema_version = super::super::AUTHORITY_STORE_SCHEMA_VERSION;
+    let expected_schema_version = schema_version.to_string();
+    let workspace = workspace("work-order-additive-current-schema");
     let before = seed(&workspace, vec![task("legacy-task")]);
     let initial_metadata = metadata(&workspace);
     assert_eq!(
         initial_metadata.get("schema_version").map(String::as_str),
-        Some("19")
+        Some(expected_schema_version.as_str())
     );
     {
         let connection = connection(&workspace);
@@ -447,7 +450,7 @@ fn work_order_tables_are_added_to_existing_v19_and_legacy_queries_still_read() {
         SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
             .unwrap();
     println!(
-        "work_order_compatibility_fixture={}",
+        "work_order_additive_current_schema_probe={}",
         serde_json::json!({
             "workspace": workspace,
             "authority_store_path": location.authority_store_path,
@@ -456,7 +459,8 @@ fn work_order_tables_are_added_to_existing_v19_and_legacy_queries_still_read() {
             "work_order_id": record.work_order_id,
             "initial_task_id": record.initial_task_id().unwrap(),
             "planning_revision": after.planning_revision,
-            "schema_version": 19,
+            "schema_version": schema_version,
+            "probe": "work_order_additive_current_schema",
         })
     );
 }
@@ -492,3 +496,8 @@ fn work_order_unknown_reads_do_not_change_legacy_tasks_or_revision() {
     assert_eq!(snapshot(&workspace).task_authority, changed);
     assert_eq!(count(&workspace, "planning_work_orders"), 0);
 }
+
+mod admission;
+
+mod remediation;
+mod validation;

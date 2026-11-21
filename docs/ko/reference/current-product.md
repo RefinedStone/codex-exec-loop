@@ -136,6 +136,51 @@ Git과 non-Git workspace 모두 `${AKRA_HOME:-~/.akra}/projects/<project>/runtim
 아래의 권한 저장소를 사용합니다. Git 저장소는 canonical Git common directory의 private incarnation
 marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 
+## 이슈 자동화 실행
+
+적용 범위는 IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551))의
+[PR #2638 구현 브랜치](https://github.com/RefinedStone/codex-exec-loop/pull/2638)입니다.
+미병합 구현과 부모 체인의 상태는 [plan 28](../../plan/28-akra-issue-automation.md#ia4-조각-상태)에 기록합니다.
+
+이슈 조정기는 중립 실행 port를 통해 기존 작업 지시의 task 계보, worker 세션, PR 검증 사실을 읽고
+큐 대기·실행 중·리뷰 중·통합 상태를 이슈 장부에 맞춥니다. 로컬 추적은 원격 이슈 수집과 별도로 돌며,
+수집이 꺼져 있어도 기존 작업의 사실을 확인합니다. 사실을 추적하는 것만으로 새 실행·전달 허가를
+부여하지 않으며, 해당 행동은 현재 정책·소스·관문·개입 상태를 계속 검사합니다. 반영한 진행은
+`issue_execution_progressed`, 최초의 신뢰된 통합은 `issue_integrated`로 기록합니다.
+
+실행·검증·게시 횟수는 분리합니다. 안정된 실행·종료 영수증 식별자로 반복 관측이나 재시작 뒤에도
+같은 사실을 두 번 세지 않습니다. 새 실행 영수증은 실행 횟수를, 새 `observe_again` 또는
+`queue_recovery` 종료 영수증은 검증 횟수를 올립니다. `budget.max_attempts`는 보완 task를 포함한 구현 시도에 적용하며,
+영속 실행 admission에서 검사합니다. 같은 논리 task의 질문에 답해 재개하는 것은 구현 시도를 추가로
+차감하지 않습니다. 실행 한도에 도달한 뒤에도 보완이 필요하면 이슈는 `failed`가 되고 사람의 복구
+결정을 요구합니다. 게시 횟수의 처리는 피드백 후속 조각(#2552)의 범위입니다.
+
+| 종료 분류 | 실행 대응 |
+| --- | --- |
+| `rework_needed` | 기존 PR 검증이 실행 한도 안에서 보완 task 생성과 작업 지시 계보 등록을 원자적으로 처리합니다. |
+| `observe_again` | 영속 복구 영수증과 새 검증 후속 기록을 등록해 다시 관찰합니다. |
+| `queue_recovery` | 원래 멱등 키와 task 연결을 사용해 기존 보완 작업의 큐를 복구합니다. |
+| `contract_recovery`, `identity_conflict`, `pull_request_closed` | 사람의 복구 결정을 엽니다. 구현을 자동 재시도하지 않습니다. |
+
+복구는 원본 종료 기록과 관측 revision에 묶입니다. 같은 요청은 기존 영수증과 후속 기록을 재사용하며,
+원본 종료 기록과 기존 PR 검증 FSM을 유지합니다. 새 관측 회차에는 별도 식별자를 부여합니다.
+검증 복구는 구현 시도를 차감하지 않습니다.
+
+`awaiting_user` task는 현재 질문에 대한 결정 요청 하나를 엽니다. 재개에 필요한 worktree와 세션을
+보존합니다. 답변에는 검증된 사람 확인과 비어 있지 않은 공유 답변이 필요합니다. 영속 재개 claim은
+질문의 task·세션·thread·worktree·lease generation과 현재 허가를 검사한 뒤 같은 thread로 전달합니다.
+새 thread로 대신 시작하지 않습니다. 전송 결과가 불확실하면 `unknown`으로 남기고 자동 재전송하지
+않습니다. “내 대화로 열기”는 확인된 현재 thread나 공유본 초안을 열며, 내가 맡기와 턴 전송은 별도 행동입니다.
+대화의 신원이 모호하면 열 수 없는 상태로 둡니다.
+
+신뢰된 통합은 변경할 수 없는 작업 사실입니다. 실행 진행을 `done`으로 고정하고, 외부 이슈의 열림·닫힘은
+따로 둡니다. 이후 `observe_again` 복구는 이 상태와 최초 통합 신원을 보존하면서 통합 후 검증을 다시
+관찰합니다. 새 구현 task를 만들지 않으며, 통합 후 큐 복구는 차단합니다. 한도 소진으로 `failed`였던
+이슈도 뒤늦게 신뢰된 통합이 확인되면 `done`으로 바뀔 수 있지만, 취소 상태와 보류 표시는 보존합니다.
+
+외부 피드백(#2552), 외부 이슈 닫힘 정책(#2553), Desktop 실행 추적 표시 확장(#2554),
+결과 반환까지의 전체 흐름 검증(#2555)은 IA4의 별도 조각입니다.
+
 ## Parallel 계약
 
 - 인자 없는 `:parallel`/`:pa`가 enable-or-refresh 진입점이며 `:parallel on`은 없습니다.

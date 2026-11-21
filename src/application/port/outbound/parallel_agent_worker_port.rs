@@ -19,6 +19,37 @@ pub struct ParallelAgentWorkerStreamRequest<'a> {
     pub service_name: &'a str,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct ParallelAgentWorkerResumeRequest<'a> {
+    pub cwd: &'a str,
+    pub thread_id: &'a str,
+    pub prompt: &'a str,
+    pub service_name: &'a str,
+}
+
+impl std::fmt::Debug for ParallelAgentWorkerResumeRequest<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ParallelAgentWorkerResumeRequest")
+            .field("thread_id", &self.thread_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Revalidate the application-owned claim after reattachment and immediately before turn/start.
+pub trait ParallelAgentWorkerStartAuthorization: Send + Sync {
+    fn validate(&self) -> Result<()>;
+}
+
+impl<F> ParallelAgentWorkerStartAuthorization for F
+where
+    F: Fn() -> Result<()> + Send + Sync,
+{
+    fn validate(&self) -> Result<()> {
+        self()
+    }
+}
+
 // `ParallelAgentWorkerPort`는 parallel mode가 leased worktree에서 isolated Codex session을
 // 시작하기 위해 outbound app-server adapter에 요구하는 최소 계약이다. 일반
 // `InteractiveTurnRuntimePort`와 달리 기존 user thread에 붙지 않고, distributor가 slot에 배정한
@@ -29,6 +60,21 @@ pub struct ParallelAgentWorkerStreamRequest<'a> {
 // distributor가 나중에 담당한다. port를 분리하면 adapter는 같은 app-server transport를 쓰더라도
 // "사용자 대화 turn"과 "고립된 작업자 실행"의 계약을 혼동하지 않는다.
 pub trait ParallelAgentWorkerPort: Send + Sync {
+    /// Read/resume the exact existing thread and start one answer turn. No thread/start fallback.
+    fn run_isolated_resumed_thread_stream(
+        &self,
+        _request: ParallelAgentWorkerResumeRequest<'_>,
+        _event_sender: ConversationStreamSender,
+        _start_authorization: &dyn ParallelAgentWorkerStartAuthorization,
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        anyhow::bail!("isolated worker continuation is unavailable")
+    }
+
+    /// Called only after the application has ruled out AwaitingUser and committed completion.
+    fn archive_completed_isolated_thread(&self, _cwd: &str, _thread_id: &str) -> Result<()> {
+        Ok(())
+    }
+
     // leased worktree directory에서 isolated new thread를 시작하고 app-server가 확정한
     // terminal receipt를 반환한다. `Ok`는 transport 성공이며, caller는 receipt의 outcome과
     // stream에 투영된 terminal event가 일치하는지를 다시 검증해야 한다.
