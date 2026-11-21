@@ -244,7 +244,8 @@ impl PlanningWorkControlRepositoryPort for SqlitePlanningAuthorityAdapter {
         let Some(order) = load_task_membership(&connection, task_id)? else {
             return Ok(true);
         };
-        Ok(!load_control(&connection, &order)?.taken_over)
+        let control = load_control(&connection, &order)?;
+        Ok(control.tracked && !control.taken_over)
     }
 }
 

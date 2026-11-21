@@ -277,6 +277,60 @@ fn work_control_stale_startup_recovers_hold_without_permanently_blocking_later_a
 }
 
 #[test]
+fn work_control_untrack_preserves_clean_integrated_cleanup_pending_slot_after_restart() {
+    let (repo, _, mut lease, _) = unstarted_fixture("control-untrack-cleanup-pending");
+    lease.state = ParallelModeSlotLeaseState::CleanupPending;
+    crate::application::service::parallel_mode::write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .unwrap();
+    let mirror_before = fs::read(repo.slot_lease_path(1)).unwrap();
+    let untracked = SqlitePlanningAuthorityAdapter::new()
+        .apply_work_order_control(
+            &repo.workspace_dir(),
+            WORK_ORDER_ID,
+            "untrack",
+            PlanningWorkControlAction::Untrack,
+        )
+        .unwrap();
+    assert!(!untracked.tracked);
+    assert!(!untracked.taken_over);
+
+    let restarted = SqlitePlanningAuthorityAdapter::new();
+    for _ in 0..2 {
+        reconcile_pool_board(&restarted, &test_parallel_runtime(), &repo.workspace_dir());
+        let projection =
+            SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+                .unwrap();
+        assert_eq!(projection.slot_leases.get(&lease.slot_id), Some(&lease));
+        assert_eq!(fs::read(repo.slot_lease_path(1)).unwrap(), mirror_before);
+        assert!(repo.branch_exists(&lease.branch_name));
+        assert!(Path::new(&lease.worktree_path).is_dir());
+        assert!(projection.task_dispatch_blocks.is_empty());
+    }
+
+    // 같은 깨끗한 통합 슬롯은 명시적으로 다시 추적한 뒤 정상 정리할 수 있다.
+    restarted
+        .apply_work_order_control(
+            &repo.workspace_dir(),
+            WORK_ORDER_ID,
+            "track",
+            PlanningWorkControlAction::Track,
+        )
+        .unwrap();
+    reconcile_pool_board(&restarted, &test_parallel_runtime(), &repo.workspace_dir());
+    let projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir()).unwrap();
+    assert!(!projection.slot_leases.contains_key(&lease.slot_id));
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!repo.branch_exists(&lease.branch_name));
+}
+
+#[test]
 fn work_control_takeover_preserves_a_branchless_cleanup_pending_lease_after_restart() {
     let (repo, _, mut lease, basis) = unstarted_fixture("control-takeover-branchless");
     lease.state = ParallelModeSlotLeaseState::CleanupPending;

@@ -1,9 +1,14 @@
+import { useState } from "react";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import { IssueTriageView } from "./IssueTriageView";
 import { IssueDecisionCards } from "./IssueDecisionCards";
 import { IssueInterventions } from "./IssueInterventions";
-import type { IssueInterventionName } from "./issueInteractions";
+import {
+  EMPTY_ISSUE_DECISION_DRAFT, EMPTY_ISSUE_INTERVENTION_DRAFT,
+  decisionDraftIdentity, interventionDraftIdentity, issueDraftIdentity,
+  type IssueDecisionDraft, type IssueInterventionName,
+} from "./issueInteractions";
 import type { IssueDetailAnswer, IssueEventReference } from "./protocol";
 
 interface IssueDetailProps {
@@ -28,9 +33,39 @@ function sameIssue(left: IssueEventReference, right: IssueEventReference): boole
     && left.project_scope.workspace_dir === right.project_scope.workspace_dir;
 }
 
+export function IssueDetail(props: IssueDetailProps) {
+  return <SelectedIssueDetail key={issueDraftIdentity(props.selectedIssue)} {...props} />;
+}
+
 /** 현재 선택과 일치하는 최신 응답에서만 공유본을 읽는다. 저장된 판정의 stale 여부는 본문과 별개다. */
-export function IssueDetail({ selectedIssue, detail, loading, stale, error, busy, onAnswer, onIntervene, onOpenConversation, onBack, onOpenUrl }: IssueDetailProps) {
+function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, busy, onAnswer, onIntervene, onOpenConversation, onBack, onOpenUrl }: IssueDetailProps) {
   const current = !stale && detail?.status === "ready" && sameIssue(selectedIssue, detail.item.issue) ? detail : null;
+  // 재조회 중에는 서버의 과거 표시값을 숨기되 사용자 초안만 이슈 상세 수명에 보관한다.
+  const [storedDrafts, setDrafts] = useState(() => ({
+    basis: "",
+    decisions: new Map<string, IssueDecisionDraft>(),
+    interventionBasis: "",
+    intervention: EMPTY_ISSUE_INTERVENTION_DRAFT,
+  }));
+  let drafts = storedDrafts;
+  if (current) {
+    const decisionKeys = (current.open_decisions ?? []).map(decisionDraftIdentity);
+    const interventionBasis = interventionDraftIdentity(current);
+    const basis = JSON.stringify([decisionKeys, interventionBasis]);
+    if (basis !== drafts.basis) {
+      drafts = {
+        basis,
+        decisions: new Map<string, IssueDecisionDraft>(decisionKeys.map((key) => [key, drafts.decisions.get(key) ?? EMPTY_ISSUE_DECISION_DRAFT])),
+        interventionBasis,
+        intervention: interventionBasis === drafts.interventionBasis ? drafts.intervention : EMPTY_ISSUE_INTERVENTION_DRAFT,
+      };
+      // 새 기준의 첫 표시부터 오래된 선택을 쓰지 않고, 사라진 결정의 초안도 폐기한다.
+      setDrafts(drafts);
+    }
+  } else if (!stale && detail?.status === "not_found" && drafts.basis !== "") {
+    drafts = { basis: "", decisions: new Map<string, IssueDecisionDraft>(), interventionBasis: "", intervention: EMPTY_ISSUE_INTERVENTION_DRAFT };
+    setDrafts(drafts);
+  }
   const item = current?.item ?? null;
   const shared = item?.current.status === "observed" && item.current.content.kind === "shared" ? item.current.content.shared_copy : null;
   return (
@@ -53,8 +88,18 @@ export function IssueDetail({ selectedIssue, detail, loading, stale, error, busy
             <p className="issues-detail-reason">{item.presentation.reason.summary}</p>
           </header>
           {current && <>
-            <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} busy={busy} onAnswer={onAnswer} />
-            <IssueInterventions key={JSON.stringify(selectedIssue)} detail={current} busy={busy} onIntervene={onIntervene} onOpenConversation={onOpenConversation} />
+            <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} busy={busy || loading} onAnswer={onAnswer} drafts={drafts.decisions} onDraftChange={(key, draft) => {
+              setDrafts((previous) => {
+                if (!previous.decisions.has(key)) return previous;
+                const decisions = new Map(previous.decisions);
+                decisions.set(key, draft);
+                return { ...previous, decisions };
+              });
+            }} />
+            <IssueInterventions detail={current} busy={busy || loading} onIntervene={onIntervene} onOpenConversation={onOpenConversation} draft={drafts.intervention} onDraftChange={(draft) => {
+              const expected = drafts.interventionBasis;
+              setDrafts((previous) => previous.interventionBasis === expected ? { ...previous, intervention: draft } : previous);
+            }} />
           </>}
           <div className="issues-detail-columns">
             <section className="issues-detail-section" aria-label="현재 공유본">
