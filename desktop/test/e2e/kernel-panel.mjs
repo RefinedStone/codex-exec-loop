@@ -1,8 +1,8 @@
 // 화면 시험 (plan 18 K3-6): 빌드한 앱을 가짜 Gateway 와 가짜 저장소 커널에 붙여 커널 패널을 확인한다. 실제 codex 와
-// 턴은 쓰지 않는다. 패널을 열면 열린 스레드의 저장소 커널에 붙고, 조회와 이벤트로 그린 뒤, 닫으면 뗀다.
+// 턴은 쓰지 않는다. 패널을 열면 저장소 커널의 상세를 읽고, 닫으면 결정 알림용 구독만 유지한다.
 // 창은 숨긴 채로 돌리고 패널의 글을 출력한다 (숨긴 창 텍스트 캡처).
 import { createRequire } from "node:module";
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -77,9 +77,9 @@ const kernel = {
 };
 
 const endpoint = fake.uniqueTestEndpoint();
-const requests = new EventEmitter();
+const requests = [];
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
-  kernel, onRequest: (method) => requests.emit(method),
+  kernel, onRequest: (method, params) => requests.push({ method, params: structuredClone(params) }),
 });
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -137,11 +137,43 @@ try {
   console.log(await page.getByTestId("kernel-panel").innerText());
   console.log("-------------------------");
 
-  const detached = once(requests, "akra/kernel/detach", { signal: AbortSignal.timeout(5_000) });
+  const beforeClose = requests.length;
   await page.getByTestId("kernel-toggle").click();
   await page.getByTestId("kernel-panel").waitFor({ state: "detached", timeout: 10_000 });
-  await detached;
-  check("closing the panel detaches from the kernel", gateway.receivedMethods.includes("akra/kernel/detach"));
+  check("closing the kernel panel removes its view", (await page.getByTestId("kernel-panel").count()) === 0);
+
+  // 실제 구독으로 resync를 받은 뒤 같은 연결의 응답까지 기다려, 단순 지연 없이 후속 요청을 확인한다.
+  await page.evaluate(() => {
+    globalThis.kernelPanelClosedResync = new Promise((resolve, reject) => {
+      const id = "kernel-panel-closed-resync";
+      const timer = setTimeout(() => {
+        unsubscribe();
+        reject(new Error("the closed kernel subscription did not complete its resync barrier"));
+      }, 5_000);
+      const unsubscribe = window.akra.onMessage((text) => {
+        const message = JSON.parse(text);
+        if (message.method === "akra/kernel/event" && message.params?.event?.type === "resync") {
+          window.akra.send(JSON.stringify({ jsonrpc: "2.0", id, method: "akra/gateway/info" }));
+        } else if (message.id === id) {
+          clearTimeout(timer);
+          unsubscribe();
+          if (message.error) reject(new Error("the closed kernel resync barrier failed"));
+          else resolve(true);
+        }
+      });
+    });
+  });
+  gateway.sendKernelEvent({ type: "resync" });
+  check("the closed panel retains its live metadata-only kernel subscription", await page.evaluate(() => globalThis.kernelPanelClosedResync));
+  await page.evaluate(() => { delete globalThis.kernelPanelClosedResync; });
+
+  const closedRequests = requests.slice(beforeClose);
+  check("closing the panel keeps the existing kernel attachment", !closedRequests.some(({ method }) => method === "akra/kernel/detach" || method === "akra/kernel/attach"));
+  check("the closed panel stops overview and planning reads after resync", !closedRequests.some(({ method, params }) =>
+    (method === "akra/kernel/query" && ["thread_activity", "auto_follow", "planning", "parallel"].includes(params.query?.type)) ||
+    (method === "akra/kernel/command" && params.command?.type === "refresh_planning")));
+  check("the closed panel does not read issue content after resync", !closedRequests.some(({ method, params }) =>
+    method === "akra/kernel/query" && ["issues", "issue", "issue_automation", "issue_automation_policy"].includes(params.query?.type)));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
