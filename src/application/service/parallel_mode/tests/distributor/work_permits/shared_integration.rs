@@ -119,10 +119,11 @@ fn legacy_delivery_advances_shared_worktree_after_work_order_integration() {
         .enqueue_workspace_commit_ready_result(&lease.worktree_path)
         .expect("legacy C should enqueue")
         .expect("legacy C should have a queue identity");
-    let queued = load_distributor_queue_records(&test_parallel_runtime(), &fixture.repo.pool_root())
-        .into_iter()
-        .find(|record| record.task_id == "task-3")
-        .expect("legacy C should retain its queue record");
+    let queued =
+        load_distributor_queue_records(&test_parallel_runtime(), &fixture.repo.pool_root())
+            .into_iter()
+            .find(|record| record.task_id == "task-3")
+            .expect("legacy C should retain its queue record");
     assert!(queued.integration_base_commit_sha.is_none());
     assert!(queued.integration_commit_sha.is_none());
 
@@ -185,10 +186,11 @@ fn legacy_shared_worktree_reuse_preserves_saved_dirty_and_diverged_state() {
         let operations = github.operations.clone();
         let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github));
         blocked::enqueue_single_commit_ready_result(&service, &repo, scenario);
-        let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
-            .into_iter()
-            .next()
-            .expect("the legacy delivery should be queued");
+        let mut record =
+            load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+                .into_iter()
+                .next()
+                .expect("the legacy delivery should be queued");
         let target = record.delivery_target.as_ref().unwrap();
         let shared_path = derive_integration_worktree_path(
             &repo.pool_root(),
@@ -272,15 +274,18 @@ fn legacy_shared_worktree_reuse_preserves_saved_dirty_and_diverged_state() {
             "{scenario}: {}; notices: {notices:?}",
             blocked.integration_note
         );
-        assert_eq!(head_at(), local_before, "{scenario}: preserve the local HEAD");
+        assert_eq!(
+            head_at(),
+            local_before,
+            "{scenario}: preserve the local HEAD"
+        );
         assert_eq!(
             remote_integration_head(&repo),
             remote_before,
             "{scenario}: do not publish"
         );
         assert_eq!(
-            blocked.integration_base_commit_sha,
-            record.integration_base_commit_sha,
+            blocked.integration_base_commit_sha, record.integration_base_commit_sha,
             "{scenario}: preserve the saved integration evidence"
         );
         assert!(blocked.integration_commit_sha.is_none());
