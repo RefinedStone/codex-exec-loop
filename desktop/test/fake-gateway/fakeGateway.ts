@@ -117,7 +117,11 @@ export function loadReplaySegments(recordingPath: string): ReplaySegment[] {
 export type FakeKernelReply = (
   | { result: unknown; error?: never }
   | { error: { code: number; message: string }; result?: never }
-) & { events?: unknown[] };
+) & {
+  events?: unknown[];
+  /** 선택한 시험 요청만 명시적으로 해제할 때까지 보류한다. 생략하면 기존 동기 순서다. */
+  replyAfter?: Promise<void>;
+};
 
 export interface FakeKernel {
   /** 붙기 결과의 저장소 신원이다. null 이면 다른 프로세스가 잠금을 쥔 것처럼 -32012 로 거절한다. */
@@ -134,10 +138,15 @@ function answerKernel(kernel: FakeKernel, socket: WebSocket, message: JsonRpcEnv
   const respond = (body: object) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...body }));
   const custom = kernel.onRequest?.(message.method ?? "", message.params ?? {});
   if (custom !== undefined) {
-    respond(custom.error ? { error: custom.error } : { result: custom.result });
-    for (const event of custom.events ?? []) {
-      socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
-    }
+    const reply = () => {
+      respond(custom.error ? { error: custom.error } : { result: custom.result });
+      for (const event of custom.events ?? []) {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
+      }
+    };
+    if (custom.replyAfter) {
+      void custom.replyAfter.then(() => { if (socket.readyState === WebSocket.OPEN) reply(); });
+    } else reply();
     return custom.error === undefined;
   }
   switch (message.method) {
