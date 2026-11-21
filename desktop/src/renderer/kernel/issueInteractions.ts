@@ -9,6 +9,9 @@ export type IssueInterventionName = Extract<KernelCommand, { type:
 }>["type"];
 export type IssueConversationTarget = ReadyIssueDetail["conversation"];
 
+/** RPC 완료와 구분한 명령 결과다. 사용자 초안은 succeeded일 때만 비운다. */
+export type IssueCommandOutcome = "succeeded" | "cancelled" | "rejected" | "failed" | "unknown" | "unavailable";
+
 export const ISSUE_AUTONOMY_LABEL: Record<string, string> = {
   off: "끄기", observe: "관찰", propose: "제안", gated: "단계별 승인", auto: "자동",
 };

@@ -30,7 +30,7 @@ import {
   transcriptFromThread,
 } from "../conversation/transcript";
 import { KernelConnection, type IssueDecisionAttention, type KernelInterest } from "../kernel/kernelConnection";
-import type { IssueAutonomyLevel, IssueConversationTarget, IssueInterventionName } from "../kernel/issueInteractions";
+import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "../kernel/issueInteractions";
 import { KERNEL_METHOD, type IssueAutomationModeRecord, type IssueEventReference } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
@@ -322,7 +322,7 @@ export class DesktopSession {
     return this.kernel.answerIssueDecision(decisionId, option, note);
   }
 
-  interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<void> {
+  interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<IssueCommandOutcome> {
     return this.kernel.interveneIssue(action, message, confirm);
   }
 
