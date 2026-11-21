@@ -6,6 +6,11 @@
 이 조각의 일은 두 저장소에서 한다: 새 저장소 `RefinedStone/akra-tunnel-core` (public. 사용자의 결정, 2026-11-21) 와
 akra-tunnel (`akra-devs/akra-tunnel`, private). 서브 이슈는 그 일이 있는 저장소에 둔다.
 
+등록한 이슈 (2026-11-21, `RefinedStone/akra-tunnel-core`): 상위는
+[#1](https://github.com/RefinedStone/akra-tunnel-core/issues/1) 이다. D7-1 ~ D7-6 은 #3 ~ #8 (S1 ~ S6) 이다. Q-D7-6 과
+Q-D7-7 은 결정 이슈 [#2](https://github.com/RefinedStone/akra-tunnel-core/issues/2) 이다. akra-tunnel 저장소 쪽의 일
+(의존성 전환, 런타임 overlay 의 경로) 은 아직 이슈가 없다.
+
 ## 이름
 
 - 이름은 `akra-tunnel-core` 이다. `core` 는 헥사고날의 뜻으로 쓴다: host 를 모르는 안쪽이다. port 를 정의하고 frontend 가
