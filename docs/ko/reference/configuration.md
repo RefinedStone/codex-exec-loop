@@ -104,6 +104,15 @@ Hidden planning/parallel worker는 명시적 모델 정책을 유지하며 inter
 
 필수 게시 검증과 Vault 사용자 잠금 해제는 항상 켜져 있습니다. 어느 scope에서도 끌 수 없습니다. `publish.required_validation = false`나 `vault.user_unlock = false`가 있으면 그 파일은 잘못된 파일입니다. 파일을 읽을 수 없거나, 형식이 틀리거나, 모르는 key·종류·처리가 있거나, schema_version을 지원하지 않거나, template 경로가 저장소 밖이면 잘못된 파일의 scope와 함께 `IssuePolicyBlocked`를 돌려줍니다. 호출자는 그 프로젝트의 게시와 AI 전달을 막아야 합니다. 기본 정책으로 대신하지 않습니다. 두 파일은 config.toml과 같은 읽기 안전 규칙을 씁니다.
 
+## 이슈 자동화 정책 연결
+
+별도 `issue-automation.toml`은 수집 대상, 자율 수준 상한, 위험 규칙, 관문, 예산과 외부 피드백 권한을
+선언합니다. 수집기·결정적 판정기·propose 조정기는 병합한 정책을 사용하며, 작업에는 현재 결정과 단계별
+허가가 필요합니다. IA4-1 구현은 실행 admission에서 `budget.max_attempts`도 검사합니다.
+외부 피드백 쓰기는 #2552의 후속 범위입니다. 설정의 전체 계약은
+[정본](../../reference/configuration.md#issue-automation-policy-file), 구현 PR과 미병합 부모 체인의
+상태는 [plan 28](../../plan/28-akra-issue-automation.md#ia4-조각-상태)을 따릅니다.
+
 ## 의도적인 제외와 Codex 차이
 
 Akra TOML에는 AKRA_HOME, credential/token, allowlist, app-server process/shell environment, API-key forwarding, approval/reviewer/sandbox 정책, public-repository/autonomous-delivery opt-in을 넣지 않습니다. Telegram은 private telegram.env, parallel agent profile은 .akra/parallel-agent-profiles.json의 별도 계약을 유지합니다.

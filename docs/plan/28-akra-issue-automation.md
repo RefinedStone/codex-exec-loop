@@ -1,6 +1,6 @@
 # 28. 이슈 자동화 (issue automation)
 
-상태: **Proposed**. 현재 제품 동작을 설명하지 않는다. 세부 계약은 조각마다 다시 정한다. · 기준일: 2026-11-20 (Asia/Seoul) ·
+상태: **Proposed**. 현재 제품 동작을 설명하지 않는다. 세부 계약은 조각마다 다시 정한다. 구현 PR의 조각별 상태는 §17에 기록한다. · 기준일: 2026-11-20 (Asia/Seoul) ·
 기준 커밋: `d1ee3ad0` (`origin/prerelease`) ·
 관련: [plan 17 Akra Desktop](17-akra-desktop/README.md), [plan 18 kernel](18-akra-kernel-architecture.md),
 [plan 19 kernel 성질 목표](19-akra-kernel-quality-goals.md), [plan 20 관찰-제안](20-akra-observe-and-offer.md),
@@ -228,8 +228,8 @@ permit: { work_order_id, stage, policy_version, field_hash, gate_revision, sourc
 | `queued` | 작업 지시를 냈다. task 가 큐에 있다 | `running`, `cancelled` |
 | `running` | 실행기가 일한다 | `in_review`, `awaiting_decision`, `failed` |
 | `in_review` | PR 이 열려 있다. CI, 리뷰, 통합을 기다린다 | `done`, `running` (수정), `failed` |
-| `done` | 통합 브랜치에 통합했고 검증이 끝났다. 외부 이슈의 닫힘은 따로 본다 (§12.2) | 끝 |
-| `failed` | 시도 한도를 넘었다 | 사람의 결정 |
+| `done` | 신뢰된 통합 증거가 확인됐다. 통합 후 검증·복구와 외부 이슈의 닫힘은 따로 기록한다 (§12.1, §12.2) | 끝 |
+| `failed` | 구현 시도 한도를 소진했다 | 사람의 결정. 뒤늦게 신뢰된 통합을 확인하면 `done` |
 | `cancelled` | 이슈가 닫혔거나 사람이 취소했다 | 끝 |
 
 상태와 따로 표시 두 개가 있다.
@@ -511,7 +511,7 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
    `work_order_id` 는 같은 task 를 돌려준다.
 3. **실행.** 병렬 모드가 켜져 있고 `dispatch` 허가가 있으면 슬롯이 task 를 가져간다. 병렬 모드가 꺼져 있으면 task 는 큐에
    남고 화면이 이유를 보인다. 이슈 자동화는 병렬 모드를 스스로 켜지 않는다 (§19 Q-IA8).
-4. **보면서 하기.** 승인 화면의 다른 선택 "내 대화로 열기"는 지금의 넘기기이다. 그 이슈는 `take_over` 가 된다.
+4. **보면서 하기.** "내 대화로 열기"는 확인된 현재 thread로 이동하거나 공유본 초안을 연다. `take_over`와 턴 전송은 별도 행동이며, 대화를 여는 것만으로 실행하지 않는다.
 5. **전달.** 지금의 순서 그대로이다. push, PR 작성, 통합은 각각 그 단계의 허가를 확인한다 (§5.4). 더하는 것은 PR 의
    참조이다: 이슈 주소, Jira 키, Linear 의 브랜치 이름. 지금의 PR 본문은 고정 양식이고 참조가 없다
    (`build_distributor_pull_request_body`, `src/application/service/parallel_mode/distributor/delivery/github.rs`).
@@ -529,25 +529,18 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 
 ### 12.1 실행의 끝과 다시 하기
 
-PR 검증의 `Blocked` 와 `Failed` 는 모두 "다시 구현하라"가 아니다. 기존 FSM 은 끝의 원인과 복구 행동을 가른다
-(`PrValidationTerminalReason`, `recovery_action`). 실행 port 는 끝의 원인을 중립 분류로 준다. Akra 의 adapter 가 기존
-원인을 그 분류로 옮긴다. 분류의 이름은 IA4 에서 정한다.
+IA4-1의 실행 추적 계약은 [현재 제품 reference](../reference/current-product.md#issue-automation-execution)
+([한국어](../ko/reference/current-product.md#이슈-자동화-실행))에 둔다. 구현 PR #2638의 병합 상태와
+IA4의 남은 조각은 §17에 기록한다.
 
-| 분류 (제안) | Akra 의 원인 (예) | 조정기의 대응 | 오르는 횟수 |
-| --- | --- | --- | --- |
-| `rework_needed` | 검증이 낸 고칠 수 있는 지적, 통합 전 CI 실패 | 보완 실행. 같은 작업 지시의 보완 task 이다 | 실행 |
-| `observe_again` | `ObservationFailed`, provider 의 활동을 기다림 | 검증을 다시 읽는다. 코드를 다시 만들지 않는다 | 검증 |
-| `contract_recovery` | `PostMergeContractBlocked`, `IntegrationEvidenceMissing` | 구현을 다시 실행하지 않는다. 복구 행동을 사람에게 보인다 | 없음 |
-| `identity_conflict` | `IdentityViolation`, `IntegrationAuthorityConflict` | 보류한다. 사람에게 묻는다 | 없음 |
-| `pull_request_closed` | `PullRequestClosedWithoutMerge` | 결정 요청 (다시 열기 / 새 PR / 취소) | 없음 |
-| `queue_recovery` | `RemediationAdmissionFailed` | 큐를 복구한 뒤 검증을 다시 한다 | 검증 |
-| `publish_unknown` | 댓글이나 라벨 쓰기의 결과를 모름 | 다시 읽어 확인한다. 자동으로 다시 쓰지 않는다 | 게시 |
+실행 port의 중립 종료 분류는 `rework_needed`, `observe_again`, `contract_recovery`,
+`identity_conflict`, `pull_request_closed`, `queue_recovery`이다. 원인별 대응, 실행·검증 횟수,
+같은 task의 질문 답변 재개, 통합 후 `done` 보존은 reference의 계약을 따른다. 기존 PR 검증 FSM과
+원본 종료 기록은 유지하며, 보완 task 생성과 작업 지시 계보 등록은 같은 admission 트랜잭션에서 처리한다.
 
-- 횟수는 셋이고 따로 센다: 실행 (구현과 보완), 검증 (조회와 재검증), 게시 (쓰기의 재시도). 시도 한도
-  (`max_attempts`) 는 실행 횟수에만 든다.
-- 같은 끝 기록을 여러 번 읽어도 횟수는 한 번만 오른다. 끝 기록의 식별자로 가른다.
-- 이미 통합한 작업은 다시 구현하지 않는다.
-- 보완 task 는 기존 PR 검증이 만든다 (`remediate` 모드). adapter 는 그 task 를 작업 지시의 계보에 잇는다.
+게시 결과를 모르는 `publish_unknown`과 게시 횟수의 처리는 IA4-2 (#2552)의 남은 범위이다.
+댓글이나 라벨 쓰기의 결과를 다시 읽어 확인하고, 결과를 확정하기 전에는 자동으로 다시 쓰지 않는 계약을
+해당 조각에서 구현·검증한다.
 
 ### 12.2 통합과 외부 이슈의 닫힘
 
@@ -559,7 +552,8 @@ PR 검증의 `Blocked` 와 `Failed` 는 모두 "다시 구현하라"가 아니�
 - 이 저장소의 기본 브랜치는 `main` 이다. 병렬 통합 브랜치의 기본값은 `prerelease` 이다. distributor 는 PR 의 base 가 통합
   브랜치인지 확인한다. 그래서 `Closes owner/name#N` 은 이 전달 경로에서 이슈를 닫지 않는다.
 - `done` 은 외부 닫힘을 요구하지 않는다. 화면은 "통합함"과 "외부 이슈가 열려 있음"을 따로 보인다.
-- 닫기는 정책 `close.when` 이 정한다.
+- 닫기 정책의 실행은 IA4-3 (#2553)의 범위이다. IA4-1은 통합 사실을 기록하며 외부 이슈를 닫지 않는다.
+- 아래 `close.when` 동작은 IA4-3의 후속 계약이다.
 
 | `close.when` | 뜻 | 조건 |
 | --- | --- | --- |
@@ -697,6 +691,18 @@ PR 검증의 `Blocked` 와 `Failed` 는 모두 "다시 구현하라"가 아니�
   - A03 (인계 manifest) 은 작업 지시의 자료 연결을 맡는다.
   - 이 계획은 #2481 의 새 작업군 후보이다 (§19 Q-IA9).
 
+### IA4 조각 상태
+
+| 조각 | 상태 | 계약과 남은 범위 |
+| --- | --- | --- |
+| IA4-1 · #2551 | 구현 PR [#2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638) · 미병합 | 실행 추적·종료 원인별 복구·횟수 분리·질문 답변. [reference](../reference/current-product.md#issue-automation-execution) |
+| IA4-2 ~ IA4-5 | 후속 | 외부 피드백 #2552, 닫힘 정책 #2553, Desktop 추적 표시 #2554, 전체 흐름 검증 #2555 |
+
+PR #2638은 선행 [PR #2637](https://github.com/RefinedStone/codex-exec-loop/pull/2637)의
+`codex/issue-2550-desktop-interventions` 브랜치를 base로 하는 연계 PR이다. 부모 체인도 미병합이며,
+`prerelease` 반영 뒤 상태를 갱신한다. 검증 결과는 해당 PR의 실행 SHA별 증거에 기록한다.
+IA4 전체의 완료 기준은 후속 조각까지 포함한다.
+
 ## 18. 조각의 완료 기준
 
 plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
@@ -707,6 +713,7 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 | IA2 | 같은 이슈와 같은 정책은 같은 판정이다. 깨진 정책 파일은 `policy_blocked` 이고 내장 값으로 돌지 않는다. 저장소 파일이 상한을 올리지 못한다 | `command`: 표 기반 단위 시험 |
 | IA3 | 승인은 task 를 하나만 만든다 (재전송, 재시작, 기록의 정리 포함). 거절과 보류는 task 를 만들지 않는다. 이슈가 바뀌면 `stale` 이다. 허가가 없는 단계는 실행되지 않는다. 판이 다른 답은 적용되지 않는다 | `command`: 시뮬레이션 시험 |
 | IA4 | 응답을 잃어도 댓글이 하나이다. 댓글의 글은 공유본이다. 자기 댓글은 다시 판정을 일으키지 않는다. 같은 끝 기록을 두 번 읽어도 횟수가 한 번만 오른다 | `command`: 가짜 provider 시험 |
+| IA4-1 · #2551 | 같은 실행·끝 기록은 한 번만 센다. 한도까지 실행해도 보완이 필요하면 `failed`와 사람 결정으로 이어진다. 취소는 보완 계보에도 적용된다. 현재 질문의 답은 같은 thread로 한 번 시도하며, 결과 모름은 자동 재전송하지 않는다. 통합 후 복구는 새 구현과 실행 횟수 증가 없이 통합 사실을 보존한다 | `command`: domain·SQLite·가짜 실행기·kernel 시뮬레이션 시험. 결과는 구현 PR의 검증 증거 |
 | IA5 | 예산을 넘겨 시작하지 않는다. 보호 경로를 건드린 diff 는 `human` 관문으로 간다. 3번 실패하면 `failed` 이다. 임의 시점에 죽였다 살려도 결과가 같다 | `command`: 시뮬레이션 시험 (seed) |
 | IA6 | 중재자가 사람 필수 관문을 넘지 못한다. 사람의 답이 먼저이면 중재자의 답을 버린다. 판이 바뀐 뒤에 온 중재자의 답은 `superseded` 이다. 일시 정지 뒤에 새 행동이 없다 | `command`: 시뮬레이션 시험 |
 
@@ -786,8 +793,6 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
   이름 규칙 (`branch_names.rs`) 은 읽지 않았다.
 - dispatcher 가 슬롯을 배분하는 트랜잭션과 distributor 의 push, PR 작성, 통합의 직전에 허가 확인을 넣는 크기. 리뷰가
   가리킨 자리 (`orchestrator_loop.rs`, `distributor/delivery/github.rs` 의 `pull_request_readiness_error`) 만 읽었다.
-- PR 검증의 보완 task 를 작업 지시의 계보에 잇는 방법. 지금의 `PrValidationRemediationRequest` 에는 작업 지시의 값이
-  없다.
 - 닫는 키워드의 동작. GitHub 문서의 내용이다. 이 저장소에서 따로 시험하지 않았다.
 - GitHub GraphQL 로 "누가 라벨을 붙였는가"를 읽는 비용 (timeline 조회)과 요청 한도.
 - Jira 의 전이 API 와 Linear 의 상태 쓰기 API. 기억 기준이다. 구현 전에 공식 문서를 본다.
