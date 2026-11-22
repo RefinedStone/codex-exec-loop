@@ -840,8 +840,28 @@ fn kernel_simulation_propose_coordinator_survives_reconnect_without_live_turns()
     use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
 
     #[derive(Default)]
-    struct Execution(Mutex<Option<IssueWorkOrder>>);
+    struct Execution {
+        order: Mutex<Option<IssueWorkOrder>>,
+        applied_limit: Mutex<Option<(String, u32)>>,
+    }
     impl IssueWorkExecutionPort for Execution {
+        fn execution_limit(
+            &self,
+            _: &str,
+            work_order_id: &str,
+            max_attempts: u32,
+        ) -> anyhow::Result<()> {
+            let order = self.order.lock().unwrap();
+            assert_eq!(
+                order
+                    .as_ref()
+                    .expect("work is registered before its cap")
+                    .work_order_id,
+                work_order_id
+            );
+            *self.applied_limit.lock().unwrap() = Some((work_order_id.into(), max_attempts));
+            Ok(())
+        }
         fn snapshot(&self, _: &str, _: &str) -> anyhow::Result<IssueWorkExecutionSnapshot> {
             Ok(IssueWorkExecutionSnapshot {
                 dispatch_source: Some("a".repeat(40)),
@@ -849,7 +869,7 @@ fn kernel_simulation_propose_coordinator_survives_reconnect_without_live_turns()
             })
         }
         fn submit(&self, _: &str, order: &IssueWorkOrder) -> anyhow::Result<Vec<String>> {
-            let mut stored = self.0.lock().unwrap();
+            let mut stored = self.order.lock().unwrap();
             if let Some(existing) = stored.as_ref() {
                 assert_eq!(existing, order);
             } else {
@@ -858,6 +878,11 @@ fn kernel_simulation_propose_coordinator_survives_reconnect_without_live_turns()
             Ok(vec!["fake-task-1".into()])
         }
         fn grant(&self, _: &str, request: &IssueWorkPermitRequest) -> anyhow::Result<()> {
+            assert_eq!(
+                *self.applied_limit.lock().unwrap(),
+                Some((request.work_order_id.clone(), 2)),
+                "the policy cap must reach the executor before a permit"
+            );
             assert!(!request.delivery);
             Ok(())
         }
@@ -868,6 +893,8 @@ fn kernel_simulation_propose_coordinator_survives_reconnect_without_live_turns()
     const PROPOSE: &str = r#"
 [binding.github]
 mode = "propose"
+[budget]
+max_attempts = 2
 [select]
 mode = "all_open"
 trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision"}]
@@ -935,7 +962,7 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
             "host did not open the propose decision"
         );
     };
-    assert!(execution.0.lock().unwrap().is_none());
+    assert!(execution.order.lock().unwrap().is_none());
     let preview = services
         .decisions
         .prepare_confirmation(decision.request.id().as_str(), "start")
@@ -1003,7 +1030,7 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
         work.blocked_reason,
         Some(IssueWorkBlockReason::ExecutionDisabled)
     );
-    let first_order = execution.0.lock().unwrap().clone();
+    let first_order = execution.order.lock().unwrap().clone();
     drop(sim);
     let mut restarted = fixture.boot(&services, log.clone());
     let deadline = Instant::now() + WAIT;
@@ -1022,7 +1049,12 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
         }
         assert!(Instant::now() < deadline);
     }
-    assert_eq!(*execution.0.lock().unwrap(), first_order);
+    assert_eq!(*execution.order.lock().unwrap(), first_order);
+    assert_eq!(
+        *execution.applied_limit.lock().unwrap(),
+        Some((work.order.work_order_id.clone(), 2)),
+        "reconnect preserves the configured work-order cap"
+    );
     assert!(restarted.effects.take().is_empty());
     drop(restarted);
     let records = log.0.lock().unwrap();

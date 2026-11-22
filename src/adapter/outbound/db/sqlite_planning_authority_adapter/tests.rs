@@ -1065,7 +1065,7 @@ fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "19");
+        assert_eq!(version, "20");
         assert_eq!(
             migrated
                 .query_row(
@@ -1165,7 +1165,7 @@ fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_v
         );
     }
 
-    for unsupported_version in ["6", "20", "not-a-version"] {
+    for unsupported_version in ["6", "21", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -1287,7 +1287,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "19"
+        "20"
     );
     drop(migrated);
 
@@ -1490,7 +1490,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "19");
+    assert_eq!(version, "20");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -7261,6 +7261,8 @@ fn runtime_projection_write_error_contexts_report_broken_tables() {
 
 #[test]
 fn runtime_projection_event_append_errors_keep_projection_context() {
+    use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderRepositoryPort;
+
     let adapter = SqlitePlanningAuthorityAdapter::new();
 
     let enqueue_workspace = temp_workspace("runtime-event-error-dispatch-enqueue");
@@ -7381,6 +7383,14 @@ fn runtime_projection_event_append_errors_keep_projection_context() {
     );
 
     let queue_workspace = temp_workspace("runtime-event-error-queue");
+    // Source registration has its own event. Commit it first so this fixture reaches
+    // the distributor event after writing the queue row in the same transaction.
+    assert!(
+        adapter
+            .link_work_order_validation_record(&queue_workspace, "queue-event", "task-event-queue",)
+            .expect("the legacy validation source should be recorded")
+            .is_none()
+    );
     corrupt_runtime_events_schema(&queue_workspace);
     assert_error_contains(
         adapter.upsert_runtime_distributor_queue_record(
@@ -7388,6 +7398,17 @@ fn runtime_projection_event_append_errors_keep_projection_context() {
             &queue_record_for_task("queue-event", "session-event", "task-event-queue"),
         ),
         "failed to append runtime event `distributor_queue_upsert`",
+    );
+    let queue_rows: i64 = authority_connection(&queue_workspace)
+        .query_row(
+            "SELECT count(*) FROM runtime_distributor_queue WHERE queue_item_id='queue-event'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        queue_rows, 0,
+        "event failure must roll back the queue INSERT"
     );
 
     let abandoned_workspace = temp_workspace("runtime-event-error-official-abandon");

@@ -172,27 +172,106 @@ fn a_new_epoch_and_human_answer_cannot_resend_unknown_queued_or_accepted_questio
 #[test]
 fn a_rejected_question_requires_a_higher_epoch_even_with_a_new_basis_and_human_answer() {
     let (h, execution, original) = claimed_question(rejected());
+    let authorized = h.work().unwrap();
+    let grants = h.execution.state.lock().unwrap().grants.len();
     *h.policy.text.lock().unwrap() = AUTO_POLICY.replace("merge = \"auto\"", "merge = \"human\"");
-    approve_fresh_start(&h, &execution);
+    full_tick(&h, &execution);
+    // A policy change fences the old Start; a Spec reply cannot renew it in the same epoch.
+    assert!(
+        page(&h.triage).items[0]
+            .open_decisions
+            .iter()
+            .all(|decision| decision.request.definition().kind != IssueDecisionKind::StartApproval)
+    );
+    let blocked = h.work().unwrap();
+    assert_eq!(
+        blocked.current_authorization_basis(),
+        authorized.current_authorization_basis()
+    );
+    assert_eq!(
+        blocked.blocked_reason,
+        Some(IssueWorkBlockReason::ApprovalChanged)
+    );
     track(&h, &execution, true).unwrap();
     let renewed = reply(&h);
     let intent = answer_intent(&h, &renewed);
     assert_ne!(intent.decision_id, original.intent.decision_id);
+    assert_ne!(
+        renewed.request.definition().basis.policy_version,
+        authorized.current_authorization_basis().policy_version
+    );
     assert_eq!(
         intent.authorization_epoch,
         original.intent.authorization_epoch
     );
 
-    let error = track(&h, &execution, true).unwrap_err();
-    assert!(format!("{error:#}").contains("requires a newer authorization epoch"));
+    // The coordinator stops before a claim because the current Start no longer matches.
+    track(&h, &execution, true).unwrap();
     assert!(execution.calls.lock().unwrap().is_empty());
     assert!(pending(&h).is_empty());
-    assert!(
-        h.fixture
-            .store()
-            .claim_issue_execution_answer(&h.fixture.workspace, &intent)
-            .is_err()
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), grants);
+    // The durable ledger independently rejects a new claim for the rejected epoch.
+    let error = h
+        .fixture
+        .store()
+        .claim_issue_execution_answer(&h.fixture.workspace, &intent)
+        .expect_err("a new policy and human reply must not reuse the rejected epoch");
+    assert!(format!("{error:#}").contains("requires a newer authorization epoch"));
+    assert!(pending(&h).is_empty());
+    assert_original_receipt(&h, &original);
+}
+
+#[test]
+fn a_new_human_answer_on_the_current_start_basis_cannot_reuse_a_rejected_epoch() {
+    let (h, execution, original) = claimed_question(rejected());
+    let previous = h
+        .fixture
+        .store()
+        .get_issue_decision(&h.fixture.workspace, &original.intent.decision_id)
+        .unwrap()
+        .unwrap();
+    let mut definition = previous.request.definition().clone();
+    definition.question =
+        IssueDecisionSharedText::new_shared("동일한 작업 질문의 답변을 다시 확인해 주세요.")
+            .unwrap();
+    let alternative = h
+        .decisions
+        .ensure_request(
+            IssueDecisionId::new("same-epoch-question-approval").unwrap(),
+            definition,
+        )
+        .unwrap()
+        .record;
+    let answered = h
+        .decisions
+        .answer(
+            alternative.request.id().as_str(),
+            "reply",
+            Some(REPLY),
+            &context(&h, &alternative, "reply"),
+        )
+        .unwrap();
+    assert_eq!(answered.outcome, IssueDecisionOutcome::Answered);
+    assert_eq!(
+        answered.commit.record.request.definition().basis,
+        previous.request.definition().basis
     );
+    let intent = answer_intent(&h, &answered.commit.record);
+    assert_ne!(intent.decision_id, original.intent.decision_id);
+    assert_ne!(intent.command_id, original.intent.command_id);
+    assert_eq!(
+        intent.authorization_epoch,
+        original.intent.authorization_epoch
+    );
+    let error = h
+        .fixture
+        .store()
+        .claim_issue_execution_answer(&h.fixture.workspace, &intent)
+        .expect_err("a fresh human answer must not reuse the rejected epoch");
+    assert!(format!("{error:#}").contains("requires a newer authorization epoch"));
+    track(&h, &execution, true).unwrap();
+    assert!(execution.calls.lock().unwrap().is_empty());
+    assert!(pending(&h).is_empty());
     assert_original_receipt(&h, &original);
 }
 

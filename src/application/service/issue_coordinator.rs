@@ -65,6 +65,35 @@ pub enum IssueCoordinatorFact {
 }
 type Reporter<'a> = dyn Fn(Vec<IssueCoordinatorFact>) + Send + Sync + 'a;
 
+// 한 tick에서 같은 영속 이벤트는 한 번 보고한다. ACK하지 않은 이벤트는 다음 tick에 다시 전달한다.
+fn work_event_reporter<'a>(
+    committed: &'a Reporter<'a>,
+) -> impl Fn(Vec<IssueCoordinatorFact>) + Send + Sync + 'a {
+    let reported = Mutex::new(std::collections::BTreeSet::new());
+    move |facts| {
+        let fresh: Vec<_> = {
+            let mut reported = reported.lock().expect("work event reporter lock poisoned");
+            facts
+                .into_iter()
+                .filter(|fact| match fact {
+                    IssueCoordinatorFact::ExecutionProgressed { event_id, .. }
+                    | IssueCoordinatorFact::Integrated { event_id, .. }
+                    | IssueCoordinatorFact::WorkSubmitted { event_id, .. }
+                    | IssueCoordinatorFact::WorkPermitGranted { event_id, .. } => {
+                        reported.insert(event_id.clone())
+                    }
+                    IssueCoordinatorFact::Triaged(_) | IssueCoordinatorFact::Decision { .. } => {
+                        true
+                    }
+                })
+                .collect()
+        };
+        if !fresh.is_empty() {
+            committed(fresh);
+        }
+    }
+}
+
 pub struct IssueCoordinatorService {
     workspace: String,
     store: Arc<dyn IssueAutomationStorePort>,
@@ -109,6 +138,8 @@ impl IssueCoordinatorService {
         let Ok(_guard) = self.tick_gate.try_lock() else {
             return Ok(());
         };
+        let report_once = work_event_reporter(committed);
+        let committed: &Reporter<'_> = &report_once;
         self.report_pending(committed)?;
         super::issue_intervention::recover_pending_controls(
             &self.workspace,
@@ -385,10 +416,11 @@ impl IssueCoordinatorService {
                     .permit_gate_revision(&self.workspace, &work.order.work_order_id),
             )?;
             if floor > work.permit_revision
-                || execution
-                    .dispatch_source
-                    .as_ref()
-                    .is_some_and(|source| work.permit_source.as_ref() != Some(source))
+                || (execution.frozen_source.is_none()
+                    && execution
+                        .dispatch_source
+                        .as_ref()
+                        .is_some_and(|source| work.permit_source.as_ref() != Some(source)))
             {
                 // New lineage or a changed pre-dispatch base needs the normal fresh approval check.
                 action = IssueCoordinatorAction::SubmitWork;

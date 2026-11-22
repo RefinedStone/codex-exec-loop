@@ -124,6 +124,18 @@ fn collection_off_still_tracks_integration_without_remote_reads_or_registration(
         })
         .collect();
     assert_eq!(integrated_facts.len(), 1);
+    let unacknowledged: Vec<_> = track(&h, false)
+        .unwrap()
+        .into_iter()
+        .filter_map(|fact| match fact {
+            IssueCoordinatorFact::Integrated { event_id, .. } => Some(event_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        unacknowledged, integrated_facts,
+        "per-tick deduplication must not acknowledge or lose the durable integration event"
+    );
     for fact in facts {
         match fact {
             IssueCoordinatorFact::Integrated { event_id, .. }
