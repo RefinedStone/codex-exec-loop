@@ -1,6 +1,6 @@
 import type { IssueConfirmationResponse } from "./issueConfirmation";
 
-export type ConfirmationKind = "decision" | "mode";
+export type ConfirmationKind = "decision" | "mode" | "autonomy";
 export interface ConfirmationDisplay {
   message: string;
   detail: string;

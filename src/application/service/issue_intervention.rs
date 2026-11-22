@@ -245,6 +245,12 @@ impl IssueInterventionPort for IssueInterventionService {
         _context: &StoredCommandContext,
     ) -> Result<IssueInterventionReceipt> {
         request.validate()?;
+        if request
+            .command_id
+            .starts_with(crate::domain::issue_automation::autonomy::ISSUE_AUTONOMY_CONTROL_PREFIX)
+        {
+            bail!("the intervention command ID uses a reserved autonomy namespace");
+        }
         if request.issue.project_scope.workspace_dir != self.workspace {
             bail!("the issue intervention belongs to another workspace");
         }

@@ -3,7 +3,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{KernelProtocolError, KernelQuery};
+use super::{IssueAutonomyState, KernelProtocolError, KernelQuery};
+use crate::domain::issue_automation::autonomy::IssueAutonomyProjection;
 use crate::domain::issue_automation::collection::{
     IssueCollectionFailure, IssueCollectionItem, IssueCollectionPage, IssueCollectionProjection,
 };
@@ -44,6 +45,8 @@ pub enum IssueAutomationState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IssueAutomationReadyState {
+    #[serde(default)]
+    pub autonomy: IssueAutonomyState,
     pub mode: IssueAutomationMode,
     pub epoch: u64,
     /// 목록과 같은 catalog 판이다. 수집 control의 CAS 판과는 별개다.
@@ -91,6 +94,7 @@ impl IssueAutomationState {
     pub fn from_domain(projection: &IssueCollectionProjection) -> Self {
         let state = &projection.state;
         Self::Ready(Box::new(IssueAutomationReadyState {
+            autonomy: IssueAutonomyState::default(),
             mode: state.config.mode.into(),
             epoch: state.epoch,
             revision: projection.catalog_revision,
@@ -103,6 +107,13 @@ impl IssueAutomationState {
             collecting: None,
             next_poll_after_ms: None,
         }))
+    }
+
+    pub fn with_autonomy(mut self, projection: &IssueAutonomyProjection) -> Self {
+        if let Self::Ready(state) = &mut self {
+            state.autonomy = IssueAutonomyState::from_domain(projection);
+        }
+        self
     }
 
     pub fn with_runtime(mut self, collecting: bool, next_poll_after_ms: Option<u64>) -> Self {

@@ -293,6 +293,7 @@ impl KernelCommandPort for CommandOnlyKernel {
                 CommandOnlyWork::Stored(
                     StoredCommand::AnswerIssueDecision { .. }
                         | StoredCommand::InterveneIssue { .. }
+                        | StoredCommand::SetIssueAutonomy { .. }
                 )
             ) {
                 return unreachable_answer(
@@ -539,9 +540,11 @@ impl CommandOnlyKernel {
             }
             // planning 은 저장된 데이터이다. 커널이 없어도 저장소에서 읽는다 (plan 18 K4-9d).
             KernelQuery::IssueAutomation {} => {
-                KernelQueryAnswer::IssueAutomation(IssueAutomationState::from_domain(
-                    &super::issue_collection::build(&self.workspace).projection()?,
-                ))
+                let service = super::issue_collection::build(&self.workspace);
+                KernelQueryAnswer::IssueAutomation(
+                    IssueAutomationState::from_domain(&service.projection()?)
+                        .with_autonomy(&service.autonomy_state()),
+                )
             }
             KernelQuery::Planning {} => KernelQueryAnswer::Planning(PlanningState::from_core(
                 &super::production::stored_planning_projection(&self.workspace),

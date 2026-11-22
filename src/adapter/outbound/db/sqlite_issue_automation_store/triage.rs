@@ -236,6 +236,9 @@ pub(super) fn save(
     assessment.validate_for(reference)?;
     adapter.with_connection(workspace, |connection, guard| {
         transaction(connection, guard, |transaction| {
+            if !super::autonomy::permits_assessment(transaction, workspace, assessment.basis().runtime_selection_revision)? {
+                return Ok(IssueTriageSaveResult::Conflict);
+            }
             let Some(collection) = read_control(transaction, workspace)? else {
                 return Ok(IssueTriageSaveResult::Conflict);
             };

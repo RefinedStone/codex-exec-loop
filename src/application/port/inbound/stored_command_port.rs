@@ -3,6 +3,7 @@ pub mod issue_confirmation;
 
 use anyhow::Result;
 
+use crate::domain::issue_automation::autonomy::{IssueAutonomyLevel, IssueAutonomyProjection};
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
 use crate::domain::issue_automation::decision::{IssueDecisionFact, IssueDecisionOutcome};
 use crate::domain::issue_automation::intervention::{
@@ -88,6 +89,10 @@ pub enum StoredCommand {
     SetIssueAutomationMode {
         mode: IssueCollectionMode,
     },
+    SetIssueAutonomy {
+        command_id: String,
+        level: IssueAutonomyLevel,
+    },
     CreateTask {
         task: StoredTaskFields,
     },
@@ -130,6 +135,7 @@ impl StoredCommand {
                 IssueInterventionAction::Untrack => KernelCommandKind::UntrackIssue,
             },
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
+            Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
@@ -157,6 +163,11 @@ pub enum StoredCommandResult {
         previous: Option<IssueCollectionMode>,
         projection: Box<IssueCollectionProjection>,
         changed: bool,
+    },
+    IssueAutonomyChanged {
+        command_id: String,
+        changed: bool,
+        autonomy: Box<IssueAutonomyProjection>,
     },
     TaskCreated {
         task_id: String,

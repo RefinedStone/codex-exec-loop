@@ -439,6 +439,7 @@ fn a_fresh_assessment_gate_revision_is_part_of_the_decision_basis() {
     let version = "a".repeat(64);
     let validation_version = "b".repeat(64);
     let first = triage_issue(IssueTriageInput {
+        runtime_selection_revision: 0,
         issue: &issue,
         current: None,
         policy: &policy,
@@ -451,6 +452,7 @@ fn a_fresh_assessment_gate_revision_is_part_of_the_decision_basis() {
     })
     .unwrap();
     let after = triage_issue(IssueTriageInput {
+        runtime_selection_revision: 0,
         issue: &issue,
         current: None,
         policy: &policy,

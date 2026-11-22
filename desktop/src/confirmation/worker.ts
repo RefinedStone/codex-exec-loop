@@ -24,7 +24,7 @@ export class IssueConfirmationWorker {
       this.cancel();
     } else if (value.type === "begin" && !this.begun && !this.cancelled &&
       onlyFields(value, ["type", "kind", "input", "endpoint", "executable"]) &&
-      (value.kind === "decision" || value.kind === "mode") && pathText(value.endpoint) && pathText(value.executable)) {
+      (value.kind === "decision" || value.kind === "mode" || value.kind === "autonomy") && pathText(value.endpoint) && pathText(value.executable)) {
       this.begun = true;
       void this.run(value as Extract<ConfirmationControl, { type: "begin" }>);
     } else if (value.type === "answer" && onlyFields(value, ["type", "approved"]) &&
@@ -70,7 +70,8 @@ export class IssueConfirmationWorker {
     try {
       const response = await (message.kind === "decision"
         ? this.service.confirmDecision(message.input)
-        : this.service.confirmMode(message.input));
+        : message.kind === "mode" ? this.service.confirmMode(message.input)
+          : this.service.confirmAutonomy(message.input));
       if (!this.disposed) this.send({ type: "result", response });
     } catch {
       if (!this.disposed) this.send({ type: "failed" });

@@ -47,6 +47,7 @@ pub struct IssueTriageRunOutcome {
 
 struct TriageContext {
     automation: ResolvedIssueAutomationPolicy,
+    runtime_selection_revision: u64,
     requirements: IssueRequirements,
     validation_policy_version: String,
 }
@@ -54,6 +55,7 @@ struct TriageContext {
 impl TriageContext {
     fn assess(&self, item: &IssueCollectionItem) -> Result<IssueTriageAssessment> {
         triage_issue(IssueTriageInput {
+            runtime_selection_revision: self.runtime_selection_revision,
             issue: &item.issue,
             current: item.current.as_ref(),
             policy: &self.automation.policy,
@@ -258,6 +260,7 @@ impl IssueTriageService {
             revision: report.revision,
             item,
             report: Some(report),
+            interaction: None,
         })
     }
 
@@ -305,11 +308,28 @@ impl IssueTriageService {
         Ok(report)
     }
 
+    pub fn autonomy_projection(
+        &self,
+    ) -> crate::domain::issue_automation::autonomy::IssueAutonomyProjection {
+        super::issue_autonomy::projection(
+            &self.workspace_dir,
+            self.store.as_ref(),
+            &self.automation_policy,
+        )
+    }
+
     fn context(&self) -> Option<TriageContext> {
-        let automation = self.automation_policy.resolve(&self.workspace_dir).ok()?;
+        let (automation, runtime_selection_revision) =
+            super::issue_autonomy::resolve_runtime_policy(
+                &self.workspace_dir,
+                self.store.as_ref(),
+                &self.automation_policy,
+            )
+            .ok()?;
         let validation = self.validation_policy.resolve(&self.workspace_dir).ok()?;
         Some(TriageContext {
             automation,
+            runtime_selection_revision,
             requirements: IssueRequirements {
                 template_fields: Vec::new(),
                 required_sections: validation.convention.required_sections.clone(),

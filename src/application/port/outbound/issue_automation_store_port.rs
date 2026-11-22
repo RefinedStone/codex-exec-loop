@@ -144,6 +144,57 @@ pub enum IssueDecisionSaveResult {
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
 /// 같은 안정 ID의 재삽입은 기존 내용을 보존한다. 갱신은 revision CAS로만 한다.
 pub trait IssueAutomationStorePort: Send + Sync {
+    fn issue_autonomy_selection(
+        &self,
+        _workspace: &str,
+    ) -> Result<crate::domain::issue_automation::autonomy::IssueAutonomySelection> {
+        Ok(Default::default())
+    }
+    fn get_issue_autonomy_command(
+        &self,
+        _workspace: &str,
+        _command_id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::autonomy::StoredIssueAutonomyCommand>> {
+        Ok(None)
+    }
+    fn begin_issue_autonomy(
+        &self,
+        _workspace: &str,
+        _intent: &crate::domain::issue_automation::autonomy::IssueAutonomyIntent,
+    ) -> Result<crate::domain::issue_automation::autonomy::StoredIssueAutonomyCommand> {
+        anyhow::bail!("issue autonomy persistence is unavailable")
+    }
+    /// Reserve a new Retriage intent and its autonomy ownership in one transaction.
+    fn claim_issue_autonomy_fence(
+        &self,
+        _workspace: &str,
+        _intent: &crate::domain::issue_automation::autonomy::IssueAutonomyIntent,
+        _work: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+    ) -> Result<crate::domain::issue_automation::intervention::StoredIssueIntervention> {
+        anyhow::bail!("owned issue autonomy fences are unavailable")
+    }
+    fn finish_issue_autonomy(
+        &self,
+        _workspace: &str,
+        _intent: &crate::domain::issue_automation::autonomy::IssueAutonomyIntent,
+    ) -> Result<crate::domain::issue_automation::autonomy::IssueAutonomyCommit> {
+        anyhow::bail!("issue autonomy persistence is unavailable")
+    }
+    fn list_issue_work(
+        &self,
+        _workspace: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>> {
+        Ok(Vec::new())
+    }
+    fn closed_issue_decisions(
+        &self,
+        _workspace: &str,
+        _issue: &IssueReference,
+        _limit: u16,
+    ) -> Result<Vec<StoredIssueDecision>> {
+        Ok(Vec::new())
+    }
+
     fn issue_authorization_epoch(&self, _workspace: &str, _issue: &IssueReference) -> Result<u64> {
         Ok(0)
     }

@@ -198,6 +198,7 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
     let detail = IssueCollectionDetail {
         revision: 41,
         report: None,
+        interaction: None,
         item: Some(IssueCollectionItem {
             issue: reference(),
             binding_id: IssueAutomationBindingId::new("binding").unwrap(),
@@ -339,4 +340,90 @@ fn decision_record_preserves_intervention_epoch_and_reads_legacy_zero_epoch() {
     wire.as_object_mut().unwrap().remove("authorization_epoch");
     let legacy: IssueDecisionBasisRecord = serde_json::from_value(wire).unwrap();
     assert_eq!(legacy.authorization_epoch, 0);
+}
+
+#[test]
+fn decision_history_omits_withheld_text_and_keeps_closed_requests_read_only() {
+    use crate::adapter::inbound::kernel_protocol::issue_interaction::IssueDecisionHistoryState;
+    use crate::domain::issue_automation::interaction::{
+        IssueDecisionHistory, IssueDecisionResolutionCode,
+    };
+
+    let open = request();
+    let answered = open
+        .answer_agent(&open.definition().basis, answer())
+        .unwrap()
+        .request;
+    for (resolution, state, expected_code) in [
+        (
+            IssueDecisionResolutionCode::Answered,
+            IssueDecisionState::Answered,
+            "answered",
+        ),
+        (
+            IssueDecisionResolutionCode::Expired,
+            IssueDecisionState::Expired,
+            "expired",
+        ),
+        (
+            IssueDecisionResolutionCode::Withdrawn,
+            IssueDecisionState::Withdrawn,
+            "withdrawn",
+        ),
+        (
+            IssueDecisionResolutionCode::BasisChanged,
+            IssueDecisionState::Superseded,
+            "basis_changed",
+        ),
+    ] {
+        let closed = if state == IssueDecisionState::Answered {
+            answered.clone()
+        } else {
+            let mut record = open.to_record();
+            record.state = state;
+            IssueDecisionRequest::hydrate(record).unwrap()
+        };
+        let history = IssueDecisionHistory {
+            decision: closed.fact(),
+            request: Some(StoredIssueDecision {
+                request: closed,
+                revision: 5,
+            }),
+            resolution,
+        };
+        let visible = serde_json::to_value(IssueDecisionHistoryState::from(&history)).unwrap();
+        assert_eq!(
+            visible["request"]["state"],
+            serde_json::to_value(state).unwrap()
+        );
+        assert_eq!(visible["request"]["question"], "공유된 질문 [removed]");
+        assert_eq!(visible["resolution_reason"]["code"], expected_code);
+        assert!(visible["resolution_reason"]["summary"].is_string());
+        for forbidden in [
+            "answer-note-canary",
+            "Desktop",
+            "asked_by",
+            "evidence",
+            "confirmation",
+            "caller",
+        ] {
+            assert!(!visible.to_string().contains(forbidden), "{forbidden}");
+        }
+        let withheld = IssueDecisionHistory {
+            request: None,
+            ..history
+        };
+        let opaque = serde_json::to_value(IssueDecisionHistoryState::from(&withheld)).unwrap();
+        assert!(opaque.get("request").is_none());
+        assert!(opaque["decision"]["decision_id"].is_string());
+        for forbidden in [
+            "공유된 질문",
+            "question",
+            "options",
+            "recommended",
+            "answer-note-canary",
+        ] {
+            assert!(!opaque.to_string().contains(forbidden), "{forbidden}");
+        }
+    }
 }
