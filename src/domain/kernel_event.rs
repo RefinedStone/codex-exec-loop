@@ -1742,6 +1742,23 @@ mod tests {
                 "origin-binding",
                 7,
             ),
+            KernelEvent::issue_triaged(
+                &IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".to_string(),
+                    repository_id: "R_stable".to_string(),
+                    issue_id: "I_stable".to_string(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".to_string(),
+                    },
+                },
+                "origin-binding",
+                8,
+                2,
+                &"a".repeat(64),
+            ),
+            KernelEvent::issue_decision_requested(&open_decision, 9),
+            KernelEvent::issue_decision_resolved(&answered_decision, 10),
             KernelEvent::IssueWorkSubmitted {
                 event_id: "work-submitted-1".into(),
                 issue: (&IssueReference {
@@ -1776,23 +1793,6 @@ mod tests {
                 delivery: false,
                 revision: 9,
             },
-            KernelEvent::issue_triaged(
-                &IssueReference {
-                    provider: IssueProvider::GitHub,
-                    server_id: "github.com".to_string(),
-                    repository_id: "R_stable".to_string(),
-                    issue_id: "I_stable".to_string(),
-                    project_scope: IssueProjectScope {
-                        workspace_dir: "/work/project".to_string(),
-                    },
-                },
-                "origin-binding",
-                8,
-                2,
-                &"a".repeat(64),
-            ),
-            KernelEvent::issue_decision_requested(&open_decision, 9),
-            KernelEvent::issue_decision_resolved(&answered_decision, 10),
             KernelEvent::issue_automation_mode_changed(
                 Some(IssueCollectionMode::Observe),
                 IssueCollectionMode::Off,
