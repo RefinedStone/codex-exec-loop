@@ -554,7 +554,7 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
   브랜치인지 확인한다. 그래서 `Closes owner/name#N` 은 이 전달 경로에서 이슈를 닫지 않는다.
 - `done` 은 외부 닫힘을 요구하지 않는다. 화면은 "통합함"과 "외부 이슈가 열려 있음"을 따로 보인다.
 - 닫기 정책의 실행은 IA4-3 (#2553)의 범위이다. IA4-1은 통합 사실을 기록하며 외부 이슈를 닫지 않는다.
-- 아래 `close.when` 동작은 IA4-3의 후속 계약이다.
+- 아래 `close.when` 동작은 IA4-3 구현 계약이다. [현재 동작](../reference/current-product.md#issue-integration-and-external-closure)을 따른다.
 
 | `close.when` | 뜻 | 조건 |
 | --- | --- | --- |
@@ -696,13 +696,14 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
 
 | 조각 | 상태 | 계약과 남은 범위 |
 | --- | --- | --- |
-| IA4-1 · #2551 | 구현 PR [#2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638) · 미병합 | 실행 추적·종료 원인별 복구·횟수 분리·질문 답변. [reference](../reference/current-product.md#issue-automation-execution) |
-| IA4-2 · #2552 | 구현 브랜치 `codex/issue-2552-github-feedback` · 미병합 | 상태 댓글·진행 라벨·전송 일지·읽기 재확인·게시 횟수. [reference](../reference/current-product.md#issue-automation-feedback) |
-| IA4-3 ~ IA4-5 | 후속 | 닫힘 정책 #2553, Desktop 추적 표시 #2554, 전체 흐름 검증 #2555 |
+| IA4-1 · #2551 | PR [#2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638) · prerelease 반영 | 실행 추적·종료 원인별 복구·횟수 분리·질문 답변. [reference](../reference/current-product.md#issue-automation-execution) |
+| IA4-2 · #2552 | PR [#2640](https://github.com/RefinedStone/codex-exec-loop/pull/2640) · prerelease 반영 | 상태 댓글·진행 라벨·전송 일지·읽기 재확인·게시 횟수. [reference](../reference/current-product.md#issue-automation-feedback) |
+| IA4-3 · #2553 | 구현 브랜치 `codex/issue-2553-integration-close` | 통합·외부 상태 분리, 사람 닫기 승인, 단일 전송 일지, 작업 지시의 PR 참조 |
+| IA4-4 ~ IA4-5 | 후속 | Desktop 추적 표시 #2554, 전체 흐름 검증 #2555 |
 
 PR #2638은 선행 [PR #2637](https://github.com/RefinedStone/codex-exec-loop/pull/2637)의
-`codex/issue-2550-desktop-interventions` 브랜치를 base로 하는 연계 PR이다. 부모 체인도 미병합이며,
-`prerelease` 반영 뒤 상태를 갱신한다. 검증 결과는 해당 PR의 실행 SHA별 증거에 기록한다.
+`codex/issue-2550-desktop-interventions` 브랜치를 base로 한 연계 PR이었다. 부모 체인은 2026-11-22
+`prerelease`에 반영됐다. 검증 결과는 해당 PR의 실행 SHA별 증거에 기록한다.
 IA4 전체의 완료 기준은 후속 조각까지 포함한다.
 
 ## 18. 조각의 완료 기준

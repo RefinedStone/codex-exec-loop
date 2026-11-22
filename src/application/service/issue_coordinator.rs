@@ -5,6 +5,7 @@ use super::issue_feedback::IssueFeedbackService;
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::domain::issue_automation::feedback::IssueFeedbackEvent;
 
+mod closure;
 mod feedback;
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
 use super::issue_triage::{IssueTriageService, IssueTriagedFact};
@@ -52,6 +53,13 @@ pub enum IssueCoordinatorFact {
         integration: crate::domain::issue_automation::execution::IssueExecutionIntegration,
         revision: u64,
     },
+    ExternalClosed {
+        event_id: String,
+        issue: IssueReference,
+        work_order_id: String,
+        observation_revision: u64,
+        revision: u64,
+    },
     WorkSubmitted {
         event_id: String,
         issue: IssueReference,
@@ -84,6 +92,7 @@ fn work_event_reporter<'a>(
                 .filter(|fact| match fact {
                     IssueCoordinatorFact::ExecutionProgressed { event_id, .. }
                     | IssueCoordinatorFact::Integrated { event_id, .. }
+                    | IssueCoordinatorFact::ExternalClosed { event_id, .. }
                     | IssueCoordinatorFact::WorkSubmitted { event_id, .. }
                     | IssueCoordinatorFact::WorkPermitGranted { event_id, .. } => {
                         reported.insert(event_id.clone())
@@ -197,7 +206,8 @@ impl IssueCoordinatorService {
                 let issue = item.issue.clone();
                 let result =
                     self.reconcile(item, cancel, now_unix_ms, execution_enabled, committed);
-                if let Err(error) = self.sync_issue_feedback(&issue, now_unix_ms, cancel) {
+                if let Err(error) = self.sync_issue_feedback(&issue, now_unix_ms, cancel, committed)
+                {
                     first_error.get_or_insert(error);
                 }
                 self.report_pending(committed)?;
@@ -255,6 +265,15 @@ impl IssueCoordinatorService {
                         revision: event.revision,
                     }
                 }
+                IssueWorkEventKind::ExternalClosed {
+                    observation_revision,
+                } => IssueCoordinatorFact::ExternalClosed {
+                    event_id: event.event_id,
+                    issue: event.issue,
+                    work_order_id: event.work_order_id,
+                    observation_revision,
+                    revision: event.revision,
+                },
                 IssueWorkEventKind::Submitted { task_ids } => IssueCoordinatorFact::WorkSubmitted {
                     event_id: event.event_id,
                     issue: event.issue,
@@ -638,6 +657,23 @@ impl IssueCoordinatorService {
             Some(work) => work,
             None => self.build_work(&item, decision)?,
         };
+        let provider_link = self.revoke_on_current_error(
+            Some(&work),
+            self.triage.provider_link_for_policy(&basis.policy_version),
+        )?;
+        if work.order.provider_link != provider_link {
+            cancel.commit_if_active(|| {
+                self.execution
+                    .revoke(&self.workspace, &work.order.work_order_id)
+            })?;
+            self.block_work(
+                &work,
+                IssueWorkBlockReason::ApprovalChanged,
+                cancel,
+                committed,
+            )?;
+            return Ok(());
+        }
         if work.current_authorization_basis() != &basis {
             if work.order.field_hash
                 != *basis
@@ -1063,6 +1099,9 @@ impl IssueCoordinatorService {
                 scope: self.workspace.clone(),
                 branch_hint: None,
                 link_reference: observation.web.as_ref().map(|web| web.url.clone()),
+                provider_link: self
+                    .triage
+                    .provider_link_for_policy(&decision.definition().basis.policy_version)?,
                 profile: None,
                 priority: 80,
                 attempt: 1,

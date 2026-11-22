@@ -259,8 +259,8 @@ Git common directory so linked worktrees share one authority and independent clo
 
 Implementation scope: IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551)),
 on the [#2638 PR branch](https://github.com/RefinedStone/codex-exec-loop/pull/2638).
-The unmerged implementation and its parent chain are tracked in
-[plan 28](../plan/28-akra-issue-automation.md#ia4-조각-상태).
+The implementation and its parent chain were integrated into prerelease on 2026-11-22;
+[plan 28](../plan/28-akra-issue-automation.md#ia4-조각-상태) tracks the remaining slices.
 
 The issue coordinator reads the existing work order's task lineage, worker sessions, and PR
 validation facts through a neutral execution port. It projects queued, running, in-review, and
@@ -307,13 +307,13 @@ implementation task; post-integration queue recovery is blocked. A previously ex
 issue may become `done` when trusted integration arrives, while cancellation and the held flag are
 preserved.
 
-Provider closing policy (#2553), expanded Desktop execution tracking (#2554), and the complete
-results-return validation (#2555) remain separate IA4 slices.
+Expanded Desktop execution tracking (#2554) and the complete results-return validation (#2555)
+remain separate IA4 slices. Provider closing follows the contract below.
 
 ## Issue Automation Feedback
 
 IA4-2 ([#2552](https://github.com/RefinedStone/codex-exec-loop/issues/2552)) is implemented
-on `codex/issue-2552-github-feedback`, based on the unmerged #2638 execution branch.
+in prerelease through PR #2640 and its #2638 parent chain.
 It adds GitHub status comments and the existing `akra:running` label. Assignee changes and provider
 closing remain outside this slice.
 
@@ -352,6 +352,43 @@ The issue detail query exposes the confirmed comment ID, publication-attempt cou
 outcome; repeated reconciliation, confirmation, and event acknowledgement do not increase it.
 The count is independent of the implementation-attempt budget. Wire generation and fake-provider
 tests require no real GitHub write or model turn.
+
+## Issue Integration and External Closure
+
+IA4-3 ([#2553](https://github.com/RefinedStone/codex-exec-loop/issues/2553)) keeps trusted
+integration and the current provider state separate. The detail query exposes the immutable
+integration record and the latest observed external state (`open`, `closed`, or `unknown`).
+An old confirmed close receipt never overrides a later reopen or an unavailable observation.
+
+| Policy | Behavior |
+| --- | --- |
+| `close.when = "never"` (default) | Keep the issue open after integration. Enabled status feedback still reports completion. |
+| `close.when = "integration"` | Require user-policy `feedback.transition = true`, trusted integration without a pending human recovery, and a separate verified human Close decision. |
+| `close.when = "provider_link"` | Carry a canonical issue reference through the immutable work-order lineage and delivery queue. Add a closing keyword only when the actual target repository default branch equals the PR base/integration branch. |
+
+A Close decision binds the work order, current shared-content and policy hashes, authorization
+epoch, gate revision, integration record, source SHA, and integrated SHA. A Start approval grants
+no closing permission. Before consuming a Close approval, the coordinator refreshes the external
+issue and its assessment. Changed or unavailable content, held/stale state, and pending
+interventions prevent the mutation. Declining or leaving the decision unanswered preserves `done`
+and leaves the provider issue open.
+
+Closing uses the existing feedback journal and publication lease: persist the immutable intent,
+claim `Sent` once, issue one mutation, then read the provider. A lost response never triggers a
+second close request. Confirmation requires a persisted, matching mutation acknowledgement and the
+same issue/repository/account with exactly one new close event after the observed basis. Without the
+acknowledgement, a same-account human close is indistinguishable from the lost mutation, so the intent
+stays unconfirmed while the query still reports the observed provider state. Reopen or intervening
+events remain unconfirmed. This confirms the accepted operation and observed result, not exclusive
+causation in a concurrent provider session. A confirmed
+close is not automatically repeated after a human reopens the issue.
+
+`issue_integrated` and `issue_closed` are distinct durable records. Confirmed feedback and a
+provider-observed Open-to-Closed transition are marked by different origins; an observation does
+not claim to know who closed the issue. Ordinary tasks without an issue work order retain their
+existing PR body. `provider_link` does not guarantee provider closure: the distributor's existing
+integration/PR lifecycle is unchanged, and external closure remains an observed fact. The
+`prerelease`-to-`main` promotion is outside this workflow.
 
 ## Parallel Contract
 

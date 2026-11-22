@@ -1,3 +1,6 @@
+mod link_reference;
+pub use link_reference::PlanningWorkLinkReference;
+
 mod control_port;
 pub use control_port::{
     PlanningWorkControl, PlanningWorkControlAction, PlanningWorkControlRepositoryPort,
@@ -32,6 +35,9 @@ pub const MAX_WORK_ORDER_TASK_ID_BYTES: usize = 512;
 pub struct PlanningWorkOrderRecord {
     pub work_order_id: String,
     pub origin: String,
+    /// Publication metadata is immutable across retries, resets, and supplemental tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_reference: Option<PlanningWorkLinkReference>,
     /// The first entry is the original task; supplemental tasks retain their attachment order.
     pub task_ids: Vec<String>,
     /// Grants are interpreted only against the separately persisted current permit basis.
@@ -59,6 +65,9 @@ impl PlanningWorkOrderRecord {
     pub fn validate(&self) -> Result<()> {
         validate_work_order_identity(&self.work_order_id, &self.origin)?;
         self.initial_task_id()?;
+        if let Some(reference) = &self.link_reference {
+            reference.validate()?;
+        }
         let mut seen = BTreeSet::new();
         for task_id in &self.task_ids {
             validate_work_order_task_id(task_id)?;
@@ -87,6 +96,7 @@ impl PlanningWorkOrderRecord {
 pub struct PlanningWorkOrderRegistration<'a> {
     pub work_order_id: &'a str,
     pub origin: &'a str,
+    pub link_reference: Option<&'a PlanningWorkLinkReference>,
     pub initial_task_id: &'a str,
     pub observed_planning_revision: i64,
     pub task_authority: &'a TaskAuthorityDocument,

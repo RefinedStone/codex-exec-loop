@@ -390,6 +390,28 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         }
     }
 
+    fn repository_default_branch_for_push_url(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+    ) -> Result<String> {
+        let branch = run_github_script_command_for_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
+            &["repo", "default-branch"],
+        )?;
+        let branch = branch.trim();
+        if branch.is_empty() || branch.chars().any(char::is_control) {
+            bail!("GitHub repository default branch response was unavailable");
+        }
+        run_git_stdout(
+            repo_root,
+            &["check-ref-format", &format!("refs/heads/{branch}")],
+        )?;
+        Ok(branch.to_owned())
+    }
+
     fn push_branch(
         &self,
         repo_root: &str,

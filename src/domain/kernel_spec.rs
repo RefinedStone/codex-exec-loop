@@ -641,6 +641,8 @@ spec_names! {
             "A local execution observation advanced the issue work lifecycle. Independent attempt counts and neutral terminal facts are recorded without worker output or answer text.";
         IssueIntegrated => "issue_integrated",
             "Trusted integration evidence was committed for an issue work order. Later validation failures cannot erase this fact.";
+        IssueClosed => "issue_closed",
+            "An external issue closure was observed independently of integration. confirmed_feedback records a journaled write receipt; provider_observation records a persisted open-to-closed transition for submitted issue work without inferring who or what closed it. These origins have distinct durable outbox IDs, and both may be recorded after a lost write response. A later reopen does not erase either historical fact.";
         IssueFeedbackPosted => "issue_feedback_posted",
             "A journaled issue feedback write was confirmed by readback. Only intent, actor, comment or label identity is recorded; the shared text and provider response are excluded.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",

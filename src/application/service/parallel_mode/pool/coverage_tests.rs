@@ -194,6 +194,7 @@ fn queue_record(
     task_id: &str,
 ) -> PlanningAuthorityDistributorQueueRecord {
     PlanningAuthorityDistributorQueueRecord {
+        link_reference: None,
         queue_item_id: queue_item_id.to_string(),
         queue_order_key: 1,
         session_key: format!("{slot_id}@2026-05-23T00:00:00Z"),

@@ -198,6 +198,7 @@ pub(super) fn admit(
             &existing,
             PlanningWorkOrderRegistration {
                 work_order_id,
+                link_reference: current.work_order.link_reference.as_ref(),
                 origin: &current.work_order.origin,
                 initial_task_id: request.task_id,
                 observed_planning_revision: request.observed_planning_revision,

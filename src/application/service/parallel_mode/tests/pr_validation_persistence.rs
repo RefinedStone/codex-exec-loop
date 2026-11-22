@@ -249,6 +249,7 @@ fn distributor_attestation() -> IntegrationAttestation {
 
 fn distributor_queue_record(key: &str) -> PlanningAuthorityDistributorQueueRecord {
     PlanningAuthorityDistributorQueueRecord {
+        link_reference: None,
         queue_item_id: key.to_string(),
         queue_order_key: 1,
         session_key: "session-attestation-race".to_string(),

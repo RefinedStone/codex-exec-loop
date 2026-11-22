@@ -1,5 +1,7 @@
 use super::*;
-use crate::application::port::outbound::issue_feedback_port::IssueFeedbackLabelEvent;
+use crate::application::port::outbound::issue_feedback_port::{
+    IssueFeedbackClosureEvent, IssueFeedbackClosureSnapshot, IssueFeedbackLabelEvent,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) enum WriteBehavior {
@@ -19,6 +21,7 @@ pub(crate) struct FakeProvider {
     pub reconciles: AtomicUsize,
     pub actor_reads: AtomicUsize,
     pub label: Mutex<IssueFeedbackLabelSnapshot>,
+    pub closure: Mutex<IssueFeedbackClosureSnapshot>,
     pub write_behavior: Mutex<WriteBehavior>,
     pub read_behavior: Mutex<ReadBehavior>,
     pub after_actor: Hook,
@@ -39,6 +42,12 @@ impl FakeProvider {
                     name: ISSUE_FEEDBACK_PROGRESS_LABEL.into(),
                 }),
                 present: false,
+                latest_event: None,
+                complete: true,
+            }),
+            closure: Mutex::new(IssueFeedbackClosureSnapshot {
+                issue: issue(),
+                closed: false,
                 latest_event: None,
                 complete: true,
             }),
@@ -69,6 +78,12 @@ impl IssueFeedbackPort for FakeProvider {
         assert_eq!(name, ISSUE_FEEDBACK_PROGRESS_LABEL);
         Ok(self.label.lock().unwrap().clone())
     }
+    fn read_closure(&self, issue: &IssueReference) -> Result<IssueFeedbackClosureSnapshot> {
+        self.assert_lease();
+        let state = self.closure.lock().unwrap().clone();
+        assert_eq!(state.issue, *issue);
+        Ok(state)
+    }
     fn write(&self, intent: &IssueFeedbackIntent) -> Result<IssueFeedbackWriteResult> {
         self.assert_lease();
         let stored = self.store.record();
@@ -92,6 +107,18 @@ impl IssueFeedbackPort for FakeProvider {
                     actor_id: Some(intent.actor_id.clone()),
                     applied,
                 }),
+            };
+        }
+        if matches!(&intent.operation, IssueFeedbackOperation::CloseIssue { .. }) {
+            *self.closure.lock().unwrap() = IssueFeedbackClosureSnapshot {
+                issue: intent.issue.clone(),
+                closed: true,
+                latest_event: Some(IssueFeedbackClosureEvent {
+                    event_id: format!("CE_{}", writes.len()),
+                    actor_id: Some(intent.actor_id.clone()),
+                    closed: true,
+                }),
+                complete: true,
             };
         }
         Ok(match *self.write_behavior.lock().unwrap() {
@@ -129,6 +156,17 @@ impl IssueFeedbackPort for FakeProvider {
                     body_sha256: body_sha256.clone(),
                 }
             }
+            IssueFeedbackOperation::CloseIssue { .. } => IssueFeedbackEvidence::Closed {
+                event_id: self
+                    .closure
+                    .lock()
+                    .unwrap()
+                    .latest_event
+                    .as_ref()
+                    .unwrap()
+                    .event_id
+                    .clone(),
+            },
             IssueFeedbackOperation::AddLabel { label, .. }
             | IssueFeedbackOperation::RemoveLabel { label, .. } => {
                 let state = self.label.lock().unwrap();

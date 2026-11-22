@@ -307,6 +307,7 @@ pub(super) fn save(
                         request.definition().kind,
                         crate::domain::issue_automation::decision::IssueDecisionKind::AgentQuestion
                             | crate::domain::issue_automation::decision::IssueDecisionKind::FailureRecovery
+                            | crate::domain::issue_automation::decision::IssueDecisionKind::CloseApproval
                     )))
                 && request.answer().is_none_or(|answer|
                     answer.by != crate::domain::issue_automation::decision::IssueDecisionAnswerBy::Human
@@ -456,6 +457,11 @@ pub(super) fn work_context_current(
                 .is_some_and(|terminal| {
                     definition.evidence == [format!("terminal:{}", terminal.record_id)]
                 })
+        }
+        IssueDecisionKind::CloseApproval => {
+            crate::domain::issue_automation::closure::close_work_context_matches(
+                definition, &work, &execution,
+            )
         }
         _ => false,
     })

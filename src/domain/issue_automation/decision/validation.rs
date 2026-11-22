@@ -92,6 +92,17 @@ pub(super) fn definition(value: &IssueDecisionDefinition) -> Result<(), IssueDec
         IssueDecisionKind::PlanApproval if value.gate != IssueAutomationGate::Plan => {
             return Err(IssueDecisionError::InvalidField { field: "gate" });
         }
+        IssueDecisionKind::CloseApproval
+            if value.gate != IssueAutomationGate::Close
+                || value.basis.work_order_id.is_none()
+                || value.basis.field_hash.is_none()
+                || value.on_timeout != super::IssueDecisionTimeout::Wait
+                || value.due_at.is_some() =>
+        {
+            return Err(IssueDecisionError::InvalidField {
+                field: "close_approval",
+            });
+        }
         _ => {}
     }
     options(value)

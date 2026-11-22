@@ -1,4 +1,4 @@
-//! 상태 댓글과 진행 라벨만 쓰는 GitHub 경계이다 (#2552).
+//! 상태 댓글·진행 라벨·승인된 닫기를 쓰는 GitHub 경계이다 (#2552, #2553).
 //! 쓰기 재시도는 없다. ACK와 별개로 읽기 확인이 성공해야 영수증을 발급한다.
 use std::path::PathBuf;
 
@@ -8,8 +8,8 @@ use serde::de::DeserializeOwned;
 use super::issue_snapshot::{GhApiRunner, ensure_node_id, graphql_arguments, run_gh_api};
 use super::resource_version::GITHUB_HOSTNAME;
 use crate::application::port::outbound::issue_feedback_port::{
-    IssueFeedbackLabelSnapshot, IssueFeedbackPort, IssueFeedbackReadResult,
-    IssueFeedbackWriteResult,
+    IssueFeedbackClosureSnapshot, IssueFeedbackLabelSnapshot, IssueFeedbackPort,
+    IssueFeedbackReadResult, IssueFeedbackWriteResult,
 };
 use crate::domain::issue_automation::feedback::{
     IssueFeedbackEvidence, IssueFeedbackIntent, IssueFeedbackOperation, IssueFeedbackReceipt,
@@ -17,6 +17,7 @@ use crate::domain::issue_automation::feedback::{
 };
 use crate::domain::issue_work::IssueReference;
 
+mod closure;
 mod comments;
 mod graphql;
 mod labels;
@@ -88,6 +89,13 @@ impl GithubIssueFeedbackAdapter {
                 ensure_node_id(&label.id)?;
                 ensure_node_id(owned_event_id)?;
             }
+            IssueFeedbackOperation::CloseIssue {
+                previous_event_id, ..
+            } => {
+                if let Some(id) = previous_event_id {
+                    ensure_node_id(id)?;
+                }
+            }
             IssueFeedbackOperation::CreateComment { .. } => {}
         }
         Ok(())
@@ -155,6 +163,12 @@ impl IssueFeedbackPort for GithubIssueFeedbackAdapter {
             .map(|observation| observation.snapshot)
     }
 
+    fn read_closure(&self, issue: &IssueReference) -> Result<IssueFeedbackClosureSnapshot> {
+        Self::validate_issue(issue)?;
+        self.closure_observation(issue)
+            .map(|observation| observation.snapshot)
+    }
+
     fn write(&self, intent: &IssueFeedbackIntent) -> Result<IssueFeedbackWriteResult> {
         Self::validate_intent(intent)?;
         // The journal owns the single Sent claim; this fresh read does not resend anything.
@@ -168,6 +182,7 @@ impl IssueFeedbackPort for GithubIssueFeedbackAdapter {
             | IssueFeedbackOperation::UpdateComment { .. } => self.write_comment(intent),
             IssueFeedbackOperation::AddLabel { .. }
             | IssueFeedbackOperation::RemoveLabel { .. } => self.write_label(intent),
+            IssueFeedbackOperation::CloseIssue { .. } => self.write_closure(intent),
         }
     }
 
@@ -178,6 +193,7 @@ impl IssueFeedbackPort for GithubIssueFeedbackAdapter {
             | IssueFeedbackOperation::UpdateComment { .. } => self.reconcile_comment(intent),
             IssueFeedbackOperation::AddLabel { .. }
             | IssueFeedbackOperation::RemoveLabel { .. } => self.reconcile_label(intent),
+            IssueFeedbackOperation::CloseIssue { .. } => self.reconcile_closure(intent),
         };
         // Read failures never become absence proofs or permission to write again.
         Ok(result.unwrap_or(IssueFeedbackReadResult::NeedsConfirmation))

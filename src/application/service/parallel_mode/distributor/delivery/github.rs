@@ -115,6 +115,15 @@ pub(super) fn distributor_push_source_branch(
     )? {
         return Ok(notice);
     }
+    if let Some(notice) = block_if_work_link_invalid(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
+    )? {
+        return Ok(notice);
+    }
     claim_permit.renew("exact frozen source push")?;
     if let Some(notice) = block_if_work_order_permit_denied(
         planning_authority,
@@ -236,7 +245,12 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
             )?]);
         }
     };
-    let autonomous_delivery = autonomous_delivery && !requires_human_review;
+    let requires_provider_link = record
+        .link_reference
+        .as_ref()
+        .is_some_and(|link| link.close_on_merge);
+    let autonomous_delivery =
+        autonomous_delivery && !requires_human_review && !requires_provider_link;
 
     if mode == PullRequestDeliveryMode::Disabled {
         if !autonomous_delivery {
@@ -247,7 +261,9 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
                 record,
-                if requires_human_review {
+                if requires_provider_link {
+                    "close.when: provider_link requires a pull request workflow".to_string()
+                } else if requires_human_review {
                     "work-order integration requires human review through a pull request"
                         .to_string()
                 } else {
@@ -425,6 +441,15 @@ pub(super) fn distributor_ensure_pull_request(
         github_automation,
         claim_permit,
         "pull request ensure",
+    )? {
+        return Ok(notice);
+    }
+    if let Some(notice) = block_if_work_link_invalid(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
     )? {
         return Ok(notice);
     }
@@ -874,7 +899,7 @@ PR body에는 distributor가 나중에 복구하거나 사람이 확인할 수 �
 queue record 없이 GitHub 화면만 봐도 이 PR이 어떤 slot 결과를 대변하는지 추적할 수 있다.
 */
 fn build_distributor_pull_request_body(record: &ParallelModeDistributorQueueRecord) -> String {
-    format!(
+    let body = format!(
         "Automated distributor delivery for a supersession result.\n\n- Agent: {}\n- Task ID: {}\n- Branch: `{}`\n- Commit: `{}`\n- Validation: {}\n- Official refresh: {}",
         record.agent_id,
         record.task_id,
@@ -882,7 +907,67 @@ fn build_distributor_pull_request_body(record: &ParallelModeDistributorQueueReco
         record.effective_source_commit_sha(),
         record.validation_summary.trim(),
         record.authority_refresh_outcome.trim()
-    )
+    );
+    append_work_link_reference(body, record.link_reference.as_ref())
+}
+
+fn append_work_link_reference(
+    mut body: String,
+    reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
+) -> String {
+    if let Some(reference) = reference {
+        body.push_str("\n\nIssue: ");
+        body.push_str(&reference.url);
+        if reference.close_on_merge {
+            body.push_str("\n\nCloses ");
+            body.push_str(&reference.url);
+        }
+    }
+    body
+}
+
+fn block_if_work_link_invalid(
+    authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+    github: &dyn GithubAutomationPort,
+) -> Result<Option<String>, String> {
+    let check = (|| {
+        let current = authority
+            .work_order_link_reference_for_task(&resolution.context.repo_root, &record.task_id)
+            .map_err(|_| "work-order publication reference is unavailable".to_string())?;
+        if current != record.link_reference {
+            return Err(
+                "work-order publication reference differs from the frozen queue".to_string(),
+            );
+        }
+        if let Some(reference) = &record.link_reference {
+            let target = record.delivery_target.as_ref().ok_or_else(|| {
+                "work-order publication has no frozen delivery target".to_string()
+            })?;
+            crate::application::service::parallel_mode::work_link::validate_delivery_target(
+                github,
+                &resolution.context.repo_root,
+                target,
+                reference,
+            )?;
+        }
+        Ok(())
+    })();
+    match check {
+        Ok(()) => Ok(None),
+        Err(detail) => block_distributor_queue_record(
+            authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            detail,
+        )
+        .map(Some),
+    }
 }
 
 fn resolve_pull_request_delivery_mode(

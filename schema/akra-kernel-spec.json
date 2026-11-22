@@ -4142,6 +4142,66 @@
       }
     },
     {
+      "name": "issue_closed",
+      "summary": "An external issue closure was observed independently of integration. confirmed_feedback records a journaled write receipt; provider_observation records a persisted open-to-closed transition for submitted issue work without inferring who or what closed it. These origins have distinct durable outbox IDs, and both may be recorded after a lost write response. A later reopen does not erase either historical fact.",
+      "payload": {
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "closure_event_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_closed",
+            "type": "string"
+          },
+          "observation_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "origin": {
+            "$ref": "#/$defs/IssueClosureRecordOrigin"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "issue",
+          "origin",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issue_feedback_posted",
       "summary": "A journaled issue feedback write was confirmed by readback. Only intent, actor, comment or label identity is recorded; the shared text and provider response are excluded.",
       "payload": {
@@ -6408,6 +6468,13 @@
       ],
       "type": "string"
     },
+    "IssueClosureRecordOrigin": {
+      "enum": [
+        "confirmed_feedback",
+        "provider_observation"
+      ],
+      "type": "string"
+    },
     "IssueCollectionFailureState": {
       "oneOf": [
         {
@@ -7010,7 +7077,8 @@
         "risk_exception",
         "issue_changed",
         "failure_recovery",
-        "agent_question"
+        "agent_question",
+        "close_approval"
       ],
       "type": "string"
     },
@@ -7353,6 +7421,14 @@
       ],
       "type": "object"
     },
+    "IssueExternalStateRecord": {
+      "enum": [
+        "open",
+        "closed",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "IssueFeedbackDetailReasonState": {
       "enum": [
         "feedback_unconfirmed"
@@ -7366,6 +7442,20 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "external_state": {
+          "$ref": "#/$defs/IssueExternalStateRecord",
+          "default": "unknown"
+        },
+        "integration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueExecutionIntegration"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "publication_attempts": {
@@ -11180,6 +11270,62 @@
             "issue",
             "work_order_id",
             "integration",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "closure_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "intent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_closed",
+              "type": "string"
+            },
+            "observation_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "origin": {
+              "$ref": "#/$defs/IssueClosureRecordOrigin"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "issue",
+            "origin",
             "revision"
           ],
           "type": "object"

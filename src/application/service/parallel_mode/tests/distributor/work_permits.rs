@@ -20,8 +20,16 @@ struct WorkPermitDeliveryFixture {
 
 impl WorkPermitDeliveryFixture {
     fn new(prefix: &str, github: FakeGithubAutomationPort) -> Self {
+        Self::with_link_reference(prefix, github, None)
+    }
+
+    fn with_link_reference(
+        prefix: &str,
+        github: FakeGithubAutomationPort,
+        reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
+    ) -> Self {
         let repo = TempGitRepo::new(prefix);
-        register_delivery_work_order(&repo);
+        register_delivery_work_order_with_link(&repo, reference);
         let initial_basis = PlanningWorkPermitBasis {
             authorization_epoch: 0,
             policy_version: "delivery-policy-v1".to_string(),
@@ -144,6 +152,13 @@ impl WorkPermitDeliveryFixture {
 }
 
 fn register_delivery_work_order(repo: &TempGitRepo) {
+    register_delivery_work_order_with_link(repo, None);
+}
+
+fn register_delivery_work_order_with_link(
+    repo: &TempGitRepo,
+    reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
+) {
     let adapter = SqlitePlanningAuthorityAdapter::new();
     let workspace = repo.workspace_dir();
     let empty_projection = PriorityQueueProjection {
@@ -212,6 +227,7 @@ fn register_delivery_work_order(repo: &TempGitRepo) {
         .register_work_order(
             &workspace,
             PlanningWorkOrderRegistration {
+                link_reference: reference,
                 work_order_id: WORK_ORDER_ID,
                 origin: "synthetic-permit-regression",
                 initial_task_id: TASK_ID,
@@ -955,5 +971,6 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
 }
 
 mod control_cleanup;
+mod link_reference;
 mod rearm_conflict;
 mod shared_integration;

@@ -2,6 +2,7 @@ use super::*;
 
 pub(crate) struct FakeStore {
     pub data: Mutex<Data>,
+    pub after_snapshot: Hook,
     pub after_record: Hook,
     pub after_record_read: Hook,
     pub fail_ack_save: AtomicBool,
@@ -19,6 +20,7 @@ impl FakeStore {
                 records: Vec::new(),
                 events: Vec::new(),
             }),
+            after_snapshot: Mutex::new(None),
             after_record: Mutex::new(None),
             after_record_read: Mutex::new(None),
             fail_ack_save: AtomicBool::new(false),
@@ -40,6 +42,9 @@ impl IssueFeedbackStorePort for FakeStore {
             .last()
             .is_some_and(|record| record.state == IssueFeedbackIntentState::Recorded);
         drop(data);
+        if let Some(hook) = self.after_snapshot.lock().unwrap().take() {
+            hook();
+        }
         if recorded && let Some(hook) = self.after_record_read.lock().unwrap().take() {
             hook();
         }
@@ -96,6 +101,7 @@ impl IssueFeedbackStorePort for FakeStore {
             receipt: None,
             acknowledged_comment_id: None,
             contradictory_response: false,
+            closure_acknowledged: false,
         };
         data.records.push(record.clone());
         data.snapshot.state.revision += 1;
@@ -167,6 +173,17 @@ impl IssueFeedbackStorePort for FakeStore {
             return Ok(None);
         }
         match completion {
+            IssueFeedbackCompletion::CloseAcknowledged => {
+                anyhow::ensure!(
+                    matches!(
+                        &next.intent.operation,
+                        IssueFeedbackOperation::CloseIssue { .. }
+                    ),
+                    "not a close intent"
+                );
+                next.closure_acknowledged = true;
+                next.state = IssueFeedbackIntentState::NeedsConfirmation;
+            }
             IssueFeedbackCompletion::Abandoned => {
                 anyhow::ensure!(
                     next.state == IssueFeedbackIntentState::Recorded,
@@ -315,6 +332,9 @@ fn update_owner(
             state.label_removal_confirmed = false;
         }
         (IssueFeedbackOperation::RemoveLabel { .. }, _) => state.label_removal_confirmed = true,
+        (IssueFeedbackOperation::CloseIssue { .. }, IssueFeedbackEvidence::Closed { .. }) => {
+            state.close_proof = Some(receipt.clone())
+        }
         _ => panic!("receipt was validated before this point"),
     }
 }

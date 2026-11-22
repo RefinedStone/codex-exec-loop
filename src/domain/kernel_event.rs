@@ -16,7 +16,7 @@ use crate::domain::kernel_spec::{
 use crate::domain::planning::ManualPromptMainSessionHandoff;
 
 mod issue_feedback;
-pub use issue_feedback::IssueFeedbackRecordAction;
+pub use issue_feedback::{IssueClosureRecordOrigin, IssueFeedbackRecordAction};
 
 mod issue_decision;
 pub use issue_decision::{
@@ -481,6 +481,21 @@ pub enum KernelEvent {
         integration: IssueExecutionIntegration,
         revision: u64,
     },
+    /// 닫기 전송의 확인과 외부 관찰은 서로 다른 origin의 사실이다. 통합 완료와 독립적이다.
+    IssueClosed {
+        event_id: String,
+        issue: IssueEventReference,
+        origin: IssueClosureRecordOrigin,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        intent_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        closure_event_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        observation_revision: Option<u64>,
+        revision: u64,
+    },
     /// 원격 재조회로 확인된 피드백의 감사 기록이다. 댓글 본문과 provider 응답은 싣지 않는다.
     IssueFeedbackPosted {
         event_id: String,
@@ -818,6 +833,7 @@ impl KernelEvent {
             Self::IssueWorkPermitGranted { .. } => KernelRecordKind::IssueWorkPermitGranted,
             Self::IssueExecutionProgressed { .. } => KernelRecordKind::IssueExecutionProgressed,
             Self::IssueIntegrated { .. } => KernelRecordKind::IssueIntegrated,
+            Self::IssueClosed { .. } => KernelRecordKind::IssueClosed,
             Self::IssueFeedbackPosted { .. } => KernelRecordKind::IssueFeedbackPosted,
             Self::IssueDecisionRequested { .. } => KernelRecordKind::IssueDecisionRequested,
             Self::IssueDecisionResolved { .. } => KernelRecordKind::IssueDecisionResolved,
@@ -849,6 +865,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitGranted { .. }
             | Self::IssueExecutionProgressed { .. }
             | Self::IssueIntegrated { .. }
+            | Self::IssueClosed { .. }
             | Self::IssueFeedbackPosted { .. }
             | Self::IssueHeld { .. }
             | Self::IssueReleased { .. }
@@ -896,6 +913,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitGranted { .. }
             | Self::IssueExecutionProgressed { .. }
             | Self::IssueIntegrated { .. }
+            | Self::IssueClosed { .. }
             | Self::IssueFeedbackPosted { .. }
             | Self::IssueHeld { .. }
             | Self::IssueReleased { .. }
@@ -953,6 +971,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitGranted { .. }
             | Self::IssueExecutionProgressed { .. }
             | Self::IssueIntegrated { .. }
+            | Self::IssueClosed { .. }
             | Self::IssueFeedbackPosted { .. }
             | Self::IssueHeld { .. }
             | Self::IssueReleased { .. }
@@ -1293,6 +1312,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitGranted { event_id, .. }
             | Self::IssueExecutionProgressed { event_id, .. }
             | Self::IssueIntegrated { event_id, .. }
+            | Self::IssueClosed { event_id, .. }
             | Self::IssueFeedbackPosted { event_id, .. } => Some(event_id),
             _ => None,
         }
@@ -2049,6 +2069,25 @@ mod tests {
                     pull_request_url: Some("https://github.com/example/project/pull/1".into()),
                 },
                 revision: 11,
+            },
+            KernelEvent::IssueClosed {
+                event_id: "issue-feedback:closed-intent-1".into(),
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                origin: IssueClosureRecordOrigin::ConfirmedFeedback,
+                intent_id: Some("closed-intent-1".into()),
+                actor_id: Some("U_actor".into()),
+                closure_event_id: Some("CE_closed".into()),
+                observation_revision: None,
+                revision: 12,
             },
             KernelEvent::IssueFeedbackPosted {
                 event_id: "issue-feedback:intent-1".into(),

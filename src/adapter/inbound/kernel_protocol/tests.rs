@@ -2258,6 +2258,16 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             },
             revision: 7,
         },
+        Record::IssueClosed {
+            event_id: "feedback-closed-1".into(),
+            issue: (&sample_issue_reference()).into(),
+            origin: crate::domain::kernel_event::IssueClosureRecordOrigin::ConfirmedFeedback,
+            intent_id: Some("closed-intent-1".into()),
+            actor_id: Some("actor-stable".into()),
+            closure_event_id: Some("closure-stable".into()),
+            observation_revision: None,
+            revision: 8,
+        },
         Record::IssueFeedbackPosted {
             event_id: "feedback-posted-1".into(),
             issue: (&sample_issue_reference()).into(),

@@ -85,7 +85,18 @@ impl IssueFeedbackService {
                         return self.unconfirmed(&sent, true, None);
                     }
                 }
-                let Some(record) = self.unconfirmed(&sent, false, comment_id)? else {
+                let acknowledged =
+                    if matches!(&intent.operation, IssueFeedbackOperation::CloseIssue { .. }) {
+                        self.store.complete(
+                            &intent.issue,
+                            &intent.intent_id,
+                            sent.revision,
+                            &IssueFeedbackCompletion::CloseAcknowledged,
+                        )?
+                    } else {
+                        self.unconfirmed(&sent, false, comment_id)?
+                    };
+                let Some(record) = acknowledged else {
                     return Ok(None);
                 };
                 record
@@ -105,7 +116,9 @@ impl IssueFeedbackService {
         };
         Ok(automation.version == intent.automation_policy_version
             && issue_policy_version(&disclosure) == intent.disclosure_policy_version
-            && if intent.operation.is_comment() {
+            && if matches!(&intent.operation, IssueFeedbackOperation::CloseIssue { .. }) {
+                self.close_policy_current(intent, snapshot, &automation.policy)
+            } else if intent.operation.is_comment() {
                 automation.policy.feedback.comment
             } else {
                 automation.policy.feedback.labels
@@ -169,6 +182,13 @@ impl IssueFeedbackService {
         lease.verify_identity()?;
         match answer {
             IssueFeedbackReadResult::Confirmed(receipt) => {
+                if matches!(
+                    &record.intent.operation,
+                    IssueFeedbackOperation::CloseIssue { .. }
+                ) && !record.closure_acknowledged
+                {
+                    return self.unconfirmed(&record, false, None);
+                }
                 let ack_differs = record.acknowledged_comment_id.as_ref().is_some_and(|id| {
                     !matches!(&receipt.evidence, IssueFeedbackEvidence::Comment { comment_id, .. } if comment_id == id)
                 });

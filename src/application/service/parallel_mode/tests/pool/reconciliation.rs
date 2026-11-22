@@ -235,6 +235,7 @@ fn unrelated_session_detail(repo: &TempGitRepo) -> ParallelModeAgentSessionDetai
 
 fn unrelated_queue_record(repo: &TempGitRepo) -> PlanningAuthorityDistributorQueueRecord {
     PlanningAuthorityDistributorQueueRecord {
+        link_reference: None,
         queue_item_id: "queue-elsewhere".to_string(),
         queue_order_key: 1,
         session_key: "session-elsewhere".to_string(),
@@ -1839,6 +1840,7 @@ fn parallel_initial_setup_preserves_active_runtime_when_pool_worktree_is_missing
     SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
         &repo.workspace_dir(),
         &PlanningAuthorityDistributorQueueRecord {
+            link_reference: None,
             queue_item_id: "stale-queue-1".to_string(),
             queue_order_key: 1,
             session_key: lease.session_key(),

@@ -28,7 +28,7 @@ impl IssueCoordinatorService {
         issue: &IssueReference,
     ) -> Result<Option<crate::domain::issue_automation::collection::IssueFeedbackDetail>> {
         use crate::domain::issue_automation::collection::{
-            IssueFeedbackDetail, IssueFeedbackDetailReason,
+            IssueExternalState, IssueFeedbackDetail, IssueFeedbackDetailReason,
         };
 
         let Some(feedback) = &self.feedback else {
@@ -39,13 +39,22 @@ impl IssueCoordinatorService {
         };
         let unresolved = feedback.unresolved(issue)?;
         let needs_confirmation = unresolved.iter().any(|record| record.state.is_unresolved());
-        if snapshot.state.revision == 0 && snapshot.publication_attempts == 0 && !needs_confirmation
+        let integration = snapshot
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.progress.integration.clone());
+        if snapshot.state.revision == 0
+            && snapshot.publication_attempts == 0
+            && !needs_confirmation
+            && integration.is_none()
         {
             return Ok(None);
         }
         Ok(Some(IssueFeedbackDetail {
             revision: snapshot.state.revision,
             publication_attempts: snapshot.publication_attempts,
+            integration,
+            external_state: IssueExternalState::from_current(snapshot.item.current.as_ref()),
             comment_id: snapshot
                 .state
                 .comment_owner
@@ -67,9 +76,32 @@ impl IssueCoordinatorService {
         issue: &IssueReference,
         now_unix_ms: u64,
         cancel: &IssueCollectionCancellation,
+        committed: &Reporter<'_>,
     ) -> Result<()> {
         if let Some(feedback) = &self.feedback {
-            feedback.sync_issue(issue, now_unix_ms, cancel)?;
+            let close_decision_id = feedback.snapshot(issue)?.and_then(|snapshot| {
+                if snapshot.state.close_proof.is_some() {
+                    return None;
+                }
+                snapshot
+                    .authorized_close()
+                    .map(|approval| approval.request.id().clone())
+            });
+            if let Some(decision_id) = close_decision_id {
+                // Bind the recheck to the approval captured before resync. A later answer waits for the next poll.
+                if !self.fresh_resync(issue, cancel)? {
+                    return Ok(());
+                }
+                super::execution::current_assessment(self, issue, committed)?;
+                feedback.sync_issue_after_close_recheck(
+                    issue,
+                    now_unix_ms,
+                    cancel,
+                    &decision_id,
+                )?;
+            } else {
+                feedback.sync_issue(issue, now_unix_ms, cancel)?;
+            }
         }
         Ok(())
     }

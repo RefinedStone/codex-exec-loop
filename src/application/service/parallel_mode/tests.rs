@@ -881,6 +881,8 @@ impl std::fmt::Debug for FakeGithubAutomationHook {
 
 #[derive(Debug, Clone)]
 struct FakeGithubAutomationPort {
+    default_branch: Arc<Mutex<String>>,
+    pull_request_bodies: Arc<Mutex<Vec<String>>>,
     capabilities: GithubAutomationCapabilities,
     repository_identity: Arc<Mutex<String>>,
     repository_visibility: GithubRepositoryVisibility,
@@ -916,6 +918,8 @@ struct FakeGithubAutomationPort {
 impl FakeGithubAutomationPort {
     fn ready() -> Self {
         Self {
+            default_branch: Arc::new(Mutex::new("main".to_string())),
+            pull_request_bodies: Arc::new(Mutex::new(Vec::new())),
             capabilities: GithubAutomationCapabilities::new(
                 ParallelModeCapabilitySnapshot::new(
                     ParallelModeCapabilityKey::PushRemote,
@@ -1265,6 +1269,14 @@ impl FakeGithubAutomationPort {
     }
 }
 impl GithubAutomationPort for FakeGithubAutomationPort {
+    fn repository_default_branch_for_push_url(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        _push_url: &str,
+    ) -> anyhow::Result<String> {
+        Ok(self.default_branch.lock().unwrap().clone())
+    }
     fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
         self.run_boundary_hook(FakeGithubAutomationBoundary::SourcePushPreflight);
         self.capabilities.clone()
@@ -1464,8 +1476,12 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         base_branch: &str,
         head_branch: &str,
         _title: &str,
-        _body: &str,
+        body: &str,
     ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.pull_request_bodies
+            .lock()
+            .unwrap()
+            .push(body.to_string());
         *self
             .base_branch
             .lock()

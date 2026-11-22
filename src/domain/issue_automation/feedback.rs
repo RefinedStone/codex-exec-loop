@@ -116,6 +116,12 @@ pub enum IssueFeedbackOperation {
         label: IssueSourceLabel,
         owned_event_id: String,
     },
+    CloseIssue {
+        integration_record_id: String,
+        integration_sha: String,
+        decision_id: String,
+        previous_event_id: Option<String>,
+    },
 }
 impl std::fmt::Debug for IssueFeedbackOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -145,6 +151,18 @@ impl std::fmt::Debug for IssueFeedbackOperation {
                 .debug_tuple("RemoveLabel")
                 .field(label)
                 .field(owned_event_id)
+                .finish(),
+            Self::CloseIssue {
+                integration_record_id,
+                integration_sha,
+                decision_id,
+                previous_event_id,
+            } => f
+                .debug_struct("CloseIssue")
+                .field("integration_record_id", integration_record_id)
+                .field("integration_sha", integration_sha)
+                .field("decision_id", decision_id)
+                .field("previous_event_id", previous_event_id)
                 .finish(),
         }
     }
@@ -249,6 +267,23 @@ impl IssueFeedbackIntent {
                 validate_label(label)?;
                 validate_feedback_id(owned_event_id)?;
             }
+            IssueFeedbackOperation::CloseIssue {
+                integration_record_id,
+                integration_sha,
+                decision_id,
+                previous_event_id,
+            } => {
+                validate_feedback_id(integration_record_id)?;
+                validate_feedback_id(decision_id)?;
+                if !matches!(integration_sha.len(), 40 | 64)
+                    || !integration_sha.bytes().all(|b| b.is_ascii_hexdigit())
+                {
+                    return Err("invalid integration proof for issue close");
+                }
+                if let Some(id) = previous_event_id {
+                    validate_feedback_id(id)?;
+                }
+            }
         }
         Ok(())
     }
@@ -294,6 +329,9 @@ pub enum IssueFeedbackEvidence {
         label: IssueSourceLabel,
         event_id: String,
         applied: bool,
+    },
+    Closed {
+        event_id: String,
     },
 }
 impl IssueFeedbackReceipt {
@@ -346,6 +384,12 @@ impl IssueFeedbackReceipt {
                     applied: false,
                 },
             ) if label == observed && owned_event_id != event_id => validate_feedback_id(event_id),
+            (
+                IssueFeedbackOperation::CloseIssue {
+                    previous_event_id, ..
+                },
+                IssueFeedbackEvidence::Closed { event_id },
+            ) if previous_event_id.as_ref() != Some(event_id) => validate_feedback_id(event_id),
             _ => Err("feedback receipt does not prove its intent"),
         }
     }
@@ -363,6 +407,9 @@ pub struct IssueFeedbackIntentRecord {
     pub acknowledged_comment_id: Option<String>,
     /// 명백히 다른 ACK/소유자를 본 증거는 재조회로 지우지 않는다.
     pub contradictory_response: bool,
+    /// Close readback cannot distinguish an unsent intent from a human using the same account.
+    #[serde(default)]
+    pub closure_acknowledged: bool,
 }
 impl IssueFeedbackIntentRecord {
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -384,8 +431,24 @@ impl IssueFeedbackIntentRecord {
                 return Err("feedback receipt differs from its acknowledged comment");
             }
         }
+        if self.closure_acknowledged
+            && (!matches!(
+                &self.intent.operation,
+                IssueFeedbackOperation::CloseIssue { .. }
+            ) || matches!(
+                self.state,
+                IssueFeedbackIntentState::Recorded | IssueFeedbackIntentState::Abandoned
+            ))
+        {
+            return Err("invalid close acknowledgement");
+        }
         if let Some(receipt) = &self.receipt {
             receipt.validate_for(&self.intent)?;
+            if matches!(&receipt.evidence, IssueFeedbackEvidence::Closed { .. })
+                && !self.closure_acknowledged
+            {
+                return Err("close confirmation requires a durable acknowledgement");
+            }
         }
         if (self.state == IssueFeedbackIntentState::Confirmed) != self.receipt.is_some()
             || (self.contradictory_response
@@ -408,6 +471,9 @@ pub struct IssueFeedbackState {
     /// Remove 확인 뒤에도 이전 raw 관측의 exact Add proof를 보존한다.
     #[serde(default)]
     pub label_removal_confirmed: bool,
+    /// A confirmed transition remains a historical fact after a human reopens the issue.
+    #[serde(default)]
+    pub close_proof: Option<IssueFeedbackReceipt>,
 }
 impl IssueFeedbackState {
     pub fn new(issue: IssueReference) -> Self {
@@ -419,6 +485,7 @@ impl IssueFeedbackState {
             comment_owner: None,
             label_proof: None,
             label_removal_confirmed: false,
+            close_proof: None,
         }
     }
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -447,6 +514,17 @@ impl IssueFeedbackState {
         {
             return Err("invalid owned feedback label proof");
         }
+        if let Some(proof) = &self.close_proof {
+            if proof.issue != self.issue {
+                return Err("invalid owned close proof");
+            }
+            validate_feedback_id(&proof.intent_id)?;
+            validate_feedback_id(&proof.actor_id)?;
+            match &proof.evidence {
+                IssueFeedbackEvidence::Closed { event_id } => validate_feedback_id(event_id)?,
+                _ => return Err("invalid owned close proof"),
+            }
+        }
         Ok(())
     }
 }
@@ -457,6 +535,7 @@ pub enum IssueFeedbackAction {
     CommentUpdated,
     LabelAdded,
     LabelRemoved,
+    IssueClosed,
 }
 impl IssueFeedbackOperation {
     pub fn action(&self) -> IssueFeedbackAction {
@@ -465,6 +544,7 @@ impl IssueFeedbackOperation {
             Self::UpdateComment { .. } => IssueFeedbackAction::CommentUpdated,
             Self::AddLabel { .. } => IssueFeedbackAction::LabelAdded,
             Self::RemoveLabel { .. } => IssueFeedbackAction::LabelRemoved,
+            Self::CloseIssue { .. } => IssueFeedbackAction::IssueClosed,
         }
     }
 }

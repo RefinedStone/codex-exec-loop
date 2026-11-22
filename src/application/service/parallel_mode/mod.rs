@@ -53,6 +53,7 @@ mod slot_lifecycle;
 pub(crate) mod supervisor;
 mod support;
 pub(crate) mod turn;
+mod work_link;
 mod worker_commit;
 pub(crate) use self::automation_guard::{
     ParallelDispatchWorkerActivity, ParallelModeAutomationEpochClosed, ParallelModeAutomationGuard,

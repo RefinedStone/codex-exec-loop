@@ -28,7 +28,7 @@ export const ISSUE_DECISION_STATE_LABEL: Record<string, string> = {
 
 export const ISSUE_DECISION_KIND_LABEL: Record<string, string> = {
   start_approval: "작업 시작", spec_confirmation: "사양 확인", plan_approval: "계획 승인",
-  risk_exception: "위험 예외", issue_changed: "이슈 변경", failure_recovery: "실패 복구", agent_question: "작업자 질문",
+  risk_exception: "위험 예외", issue_changed: "이슈 변경", failure_recovery: "실패 복구", agent_question: "작업자 질문", close_approval: "이슈 닫기 승인",
 };
 
 export function issueTextBytes(value: string): number {

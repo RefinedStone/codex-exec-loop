@@ -2,6 +2,7 @@ use super::*;
 
 fn record() -> PlanningWorkOrderRecord {
     PlanningWorkOrderRecord {
+        link_reference: None,
         work_order_id: "source:item:hash:attempt-1".to_string(),
         origin: "example_module".to_string(),
         task_ids: vec!["task-first".to_string(), "task-followup".to_string()],

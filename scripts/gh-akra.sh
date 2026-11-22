@@ -482,7 +482,7 @@ verify_api_login_if_requested() {
 
 github_command_is_read_only() {
   case "${1-}:${2-}" in
-    pr:list|pr:view|repo:visibility)
+    pr:list|pr:view|repo:visibility|repo:default-branch)
       return 0
       ;;
     *)
@@ -1226,6 +1226,17 @@ send_review_comment_reply_with_api() {
   api_request POST "/repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" "${payload}" >/dev/null
 }
 
+repo_default_branch_with_api() {
+  local response_body
+  local default_branch
+  response_body="$(api_request GET "/repos/${repo_full_name}")"
+  default_branch="$(json_string_field "${response_body}" "default_branch")"
+  if [[ -z "${default_branch}" ]] || ! git check-ref-format "refs/heads/${default_branch}" >/dev/null 2>&1; then
+    usage_error "GitHub repository default branch response was unavailable"
+  fi
+  printf '%s\n' "${default_branch}"
+}
+
 repo_visibility_with_api() {
   local response_body
   local visibility
@@ -1322,7 +1333,7 @@ fi
 if command -v gh >/dev/null 2>&1; then
   gh_exec_token="$(resolve_gh_exec_token)"
   verify_gh_login_if_requested
-  if [[ "${1-}:${2-}" == "repo:visibility" ]]; then
+  if [[ "${1-}:${2-}" == "repo:visibility" || "${1-}:${2-}" == "repo:default-branch" ]]; then
     token="${gh_exec_token}"
     if [[ -z "${token}" ]]; then
       token="$(resolve_token)"
@@ -1330,8 +1341,13 @@ if command -v gh >/dev/null 2>&1; then
     if [[ -z "${token}" ]]; then
       usage_error "repo visibility requires a GitHub token from $(credential_source_help)"
     fi
+    repo_query="${2}"
     shift 2
-    repo_visibility_with_api "$@"
+    if [[ "${repo_query}" == "default-branch" ]]; then
+      repo_default_branch_with_api "$@"
+    else
+      repo_visibility_with_api "$@"
+    fi
     exit 0
   fi
   if [[ "${1-}" == "review-reply" ]]; then
@@ -1402,6 +1418,11 @@ case "${1-}:${2-}" in
     shift 2
     merge_pr_with_api "$@"
     ;;
+  repo:default-branch)
+    verify_api_login_if_requested
+    shift 2
+    repo_default_branch_with_api "$@"
+    ;;
   repo:visibility)
     verify_api_login_if_requested
     shift 2
@@ -1412,6 +1433,6 @@ case "${1-}:${2-}" in
     send_review_comment_reply_with_api
     ;;
   *)
-    usage_error "gh is not installed and direct fallback supports 'auth status', 'repo visibility', 'pr create', 'pr list', 'pr view', 'pr close', 'pr merge', and 'review-reply'"
+    usage_error "gh is not installed and direct fallback supports 'auth status', 'repo visibility', 'repo default-branch', 'pr create', 'pr list', 'pr view', 'pr close', 'pr merge', and 'review-reply'"
     ;;
 esac

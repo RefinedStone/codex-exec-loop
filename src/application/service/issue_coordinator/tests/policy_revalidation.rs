@@ -239,3 +239,55 @@ fn lost_delivery_grant_response_remains_recoverable_with_valid_current_approval(
     assert_eq!(state.grants.len(), 2);
     assert_eq!(state.registrations, 1);
 }
+
+#[test]
+fn changing_provider_link_policy_does_not_reauthorize_an_immutable_closing_reference() {
+    let h = Harness::new();
+    *h.policy.text.lock().unwrap() = format!("{AUTO_POLICY}\n[close]\nwhen = \"provider_link\"\n");
+    h.tick(true).unwrap();
+    h.answer("start");
+    h.tick(true).unwrap();
+    let original = h.work().unwrap();
+    assert!(original.order.provider_link);
+    let grants_before = h.execution.state.lock().unwrap().grants.len();
+
+    *h.policy.text.lock().unwrap() = AUTO_POLICY.into();
+    h.tick(true).unwrap();
+    // A policy change revokes the old grant. Explicit retriage creates the new authorization
+    // epoch before the operator can approve this same work again.
+    let store = h.fixture.store();
+    store
+        .begin_issue_intervention(
+            &h.fixture.workspace,
+            &crate::domain::issue_automation::intervention::IssueInterventionRequest {
+                command_id: "provider-link-policy-reapproval".into(),
+                issue: original.order.issue.clone(),
+                action: crate::domain::issue_automation::intervention::IssueInterventionAction::Retriage,
+            },
+        )
+        .unwrap();
+    crate::application::service::issue_intervention::recover_pending_controls(
+        &h.fixture.workspace,
+        store.as_ref(),
+        h.execution.as_ref(),
+    )
+    .unwrap();
+    h.tick(true).unwrap();
+    assert!(
+        h.decision().request.definition().basis.authorization_epoch
+            > original.current_authorization_basis().authorization_epoch
+    );
+    h.answer("start");
+    h.tick(true).unwrap();
+
+    let current = h.work().unwrap();
+    assert_eq!(current.order, original.order);
+    assert_eq!(
+        current.blocked_reason,
+        Some(IssueWorkBlockReason::ApprovalChanged)
+    );
+    let execution = h.execution.state.lock().unwrap();
+    assert!(execution.revoked);
+    assert_eq!(execution.registrations, 1);
+    assert_eq!(execution.grants.len(), grants_before);
+}

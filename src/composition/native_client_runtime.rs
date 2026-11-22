@@ -1859,6 +1859,17 @@ impl NativeClientRuntime {
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::Integrated {
                         event_id, issue, work_order_id, integration, revision } => KernelEvent::IssueIntegrated {
                             event_id, issue: (&issue).into(), work_order_id, integration, revision },
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::ExternalClosed {
+                        event_id, issue, observation_revision, revision, .. } => KernelEvent::IssueClosed {
+                            event_id,
+                            issue: (&issue).into(),
+                            origin: crate::domain::kernel_event::IssueClosureRecordOrigin::ProviderObservation,
+                            intent_id: None,
+                            actor_id: None,
+                            closure_event_id: None,
+                            observation_revision: Some(observation_revision),
+                            revision,
+                        },
                 },
                 IssueObserverCommittedFact::Triaged(fact) => KernelEvent::issue_triaged(
                     &fact.issue,

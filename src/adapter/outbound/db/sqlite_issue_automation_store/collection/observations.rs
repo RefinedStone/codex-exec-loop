@@ -9,8 +9,8 @@ use crate::application::port::outbound::issue_source_port::{
 };
 use crate::domain::issue_automation::collection::StoredIssueCollection;
 use crate::domain::issue_automation::source::{
-    IssueSourceContent, IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
-    IssueSourceRepository,
+    IssueRemoteState, IssueSourceContent, IssueSourceFailure, IssueSourceObservation,
+    IssueSourceRead, IssueSourceRepository,
 };
 use crate::domain::issue_automation::{
     IssueAutomationBinding, IssueAutomationBindingId, IssueAutomationFlag, TrackedIssue,
@@ -267,6 +267,31 @@ pub(super) fn apply(
             reference.issue_id, workspace, binding.id().as_str(), encoded, sql_revision(collection_revision)?,
         ],
     )?;
+    let became_closed = matches!(
+        previous.as_ref().map(|previous| &previous.current),
+        Some(IssueSourceRead::Observed(observation))
+            if observation.remote_state == IssueRemoteState::Open
+    ) && matches!(
+        value,
+        IssueSourceRead::Observed(observation)
+            if observation.remote_state == IssueRemoteState::Closed
+    );
+    if became_closed
+        && let Some(work) = super::super::coordinator::read(transaction, workspace, reference)?
+        && !work.task_ids.is_empty()
+    {
+        // Store the observed transition atomically. Replaying the same closed observation
+        // takes the identical-observation return above and cannot create another event.
+        super::super::events::append_fact(
+            transaction,
+            workspace,
+            &work,
+            crate::domain::issue_automation::coordinator::IssueWorkEventKind::ExternalClosed {
+                observation_revision: collection_revision,
+            },
+            collection_revision,
+        )?;
+    }
     Ok(newly_tracked)
 }
 

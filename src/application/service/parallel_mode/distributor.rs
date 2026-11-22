@@ -945,6 +945,18 @@ impl ParallelModeDistributorService {
             &lease_delivery_target.integration_base_commit_sha,
             &commit_sha,
         )?;
+        let link_reference = self
+            .planning_authority
+            .work_order_link_reference_for_task(&repo_root, &resolution.lease.task_id)
+            .map_err(|error| format!("work-order publication reference unavailable: {error}"))?;
+        if let Some(reference) = &link_reference {
+            super::work_link::validate_delivery_target(
+                self.github_automation.as_ref(),
+                &repo_root,
+                &delivery_target,
+                reference,
+            )?;
+        }
         let github_capabilities = self.github_automation.inspect_capabilities(&repo_root);
         let updated_at = current_timestamp();
         let enqueued_at = DateTime::parse_from_rfc3339(&detail.updated_at)
@@ -963,6 +975,7 @@ impl ParallelModeDistributorService {
             agent_id: resolution.lease.agent_id.clone(),
             task_id: resolution.lease.task_id.clone(),
             task_title: resolution.lease.task_title.clone(),
+            link_reference,
             delivery_target: Some(delivery_target),
             source_branch: resolution.lease.branch_name.clone(),
             source_base_commit_sha,

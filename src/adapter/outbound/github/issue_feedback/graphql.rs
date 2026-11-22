@@ -127,6 +127,41 @@ mutation AkraFeedbackRemoveLabel($id: ID!, $label: ID!, $intent: String!) {
   }
 }"#;
 
+pub(super) const CLOSURE_EVENTS: &str = r#"
+query AkraFeedbackClosureEvents($id: ID!, $after: String) {
+  node(id: $id) {
+    __typename
+    ... on Issue {
+      id state repository { id }
+      closureEvents: timelineItems(first: 100, after: $after, itemTypes: [CLOSED_EVENT, REOPENED_EVENT]) {
+        nodes {
+          __typename
+          ... on ClosedEvent {
+            id
+            actor { __typename ... on Node { id } }
+            closable { __typename ... on Issue { id repository { id } } }
+          }
+          ... on ReopenedEvent {
+            id
+            actor { __typename ... on Node { id } }
+            closable { __typename ... on Issue { id repository { id } } }
+          }
+        }
+        totalCount
+        pageInfo { endCursor hasNextPage }
+      }
+    }
+  }
+}"#;
+
+pub(super) const CLOSE_ISSUE: &str = r#"
+mutation AkraFeedbackCloseIssue($id: ID!, $intent: String!) {
+  feedback: closeIssue(input: {issueId: $id, stateReason: COMPLETED, clientMutationId: $intent}) {
+    clientMutationId
+    issue { __typename id state repository { id } }
+  }
+}"#;
+
 pub(super) fn with_comment_fragment(query: &str) -> String {
     format!("{query}\n{COMMENT_FRAGMENT}")
 }
@@ -176,6 +211,8 @@ pub(super) struct IssueNode {
     pub comments: Option<Connection<Comment>>,
     pub labels: Option<Connection<Label>>,
     pub timeline_items: Option<Connection<LabelEvent>>,
+    pub closure_events: Option<Connection<ClosureEvent>>,
+    pub state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +247,15 @@ pub(super) struct LabelEvent {
 }
 
 #[derive(Deserialize)]
+pub(super) struct ClosureEvent {
+    #[serde(rename = "__typename")]
+    pub typename: String,
+    pub id: String,
+    pub actor: Option<Actor>,
+    pub closable: IssueNode,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Connection<T> {
     pub nodes: Option<Vec<Option<T>>>,
@@ -236,6 +282,7 @@ pub(super) struct MutationPayload {
     pub comment_edge: Option<CommentEdge>,
     pub issue_comment: Option<Comment>,
     pub labelable: Option<IssueNode>,
+    pub issue: Option<IssueNode>,
 }
 
 #[derive(Deserialize)]

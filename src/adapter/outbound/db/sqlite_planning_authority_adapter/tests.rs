@@ -8830,6 +8830,7 @@ fn queue_record_for_task(
     task_id: &str,
 ) -> PlanningAuthorityDistributorQueueRecord {
     PlanningAuthorityDistributorQueueRecord {
+        link_reference: None,
         queue_item_id: queue_item_id.to_string(),
         queue_order_key: 1,
         session_key: session_key.to_string(),

@@ -1467,6 +1467,17 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         work_orders::claim_work_order_launch(workspace_dir, expected)
     }
 
+    fn work_order_link_reference_for_task(
+        &self,
+        workspace_dir: &str,
+        task_id: &str,
+    ) -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>>{
+        use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderRepositoryPort;
+        Ok(self
+            .load_work_order_for_task(workspace_dir, task_id)?
+            .and_then(|order| order.link_reference))
+    }
+
     fn work_order_control_for_task(&self, workspace_dir:&str, task_id:&str)
     -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl>>{
         use crate::application::port::outbound::planning_work_order_repository_port::{
