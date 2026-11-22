@@ -54,7 +54,8 @@ delete env.ELECTRON_RUN_AS_NODE;
 let app;
 try {
   app = await electron.launch({executablePath:createRequire(import.meta.url)("electron"),args:[root,...(process.env.CI?["--no-sandbox"]:[])],env});
-  const page = await app.firstWindow();
+  const page = await app.firstWindow({timeout: 30_000});
+  page.setDefaultTimeout(15_000);
   await page.getByTestId("connection-phase").filter({hasText:"연결됨"}).waitFor();
   await page.getByTestId("thread-entry").first().click();
   await app.evaluate(({Menu})=>Menu.getApplicationMenu().getMenuItemById("open-settings").click());
