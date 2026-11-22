@@ -34,3 +34,4 @@ pub mod issue_creation_journal;
 pub use self::issue_creation_journal::IssueCreationJournalAdapter;
 
 pub(crate) mod private_runtime_lease;
+pub(crate) mod vault_restore_workspace;

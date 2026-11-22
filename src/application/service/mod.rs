@@ -87,4 +87,5 @@ pub mod evidence_vault_backup;
 pub mod issue_form_install;
 pub mod issue_source_provenance;
 
+pub(crate) mod desktop_vault_restore;
 pub mod issue_intervention;

@@ -1,5 +1,6 @@
 //! 보호된 복원 채널만 평문을 직렬화한다. 일반 Gateway wire 타입과 공유하지 않는다.
-use crate::domain::issue_work::{IssueLocator, IssueProjectScope, IssueProvider, IssueReference};
+use crate::application::port::inbound::vault_restore_session_port::VaultRestoreSessionHold;
+use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -77,38 +78,6 @@ fn node_id(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"_-=".contains(&byte))
 }
-pub(super) fn locator(url: &str) -> Option<IssueLocator> {
-    let suffix = url.strip_prefix("https://github.com/")?;
-    let segments = suffix.split('/').collect::<Vec<_>>();
-    if segments.len() != 4 || segments[2] != "issues" {
-        return None;
-    }
-    let valid_name = |name: &str| {
-        !name.is_empty()
-            && name.len() <= 100
-            && name != "."
-            && name != ".."
-            && name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-    };
-    if !valid_name(segments[0])
-        || !valid_name(segments[1])
-        || segments[3].starts_with('0')
-        || !segments[3].bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    let number = segments[3].parse::<u64>().ok()?;
-    if number == 0 || number > i64::MAX as u64 {
-        return None;
-    }
-    Some(IssueLocator {
-        owner: segments[0].to_owned(),
-        repository: segments[1].to_owned(),
-        number,
-    })
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Hold {
@@ -123,6 +92,23 @@ pub(super) enum Hold {
     MarkerDuplicated,
     MarkerMissing,
     RecordUnavailable,
+}
+impl From<VaultRestoreSessionHold> for Hold {
+    fn from(reason: VaultRestoreSessionHold) -> Self {
+        match reason {
+            VaultRestoreSessionHold::PlatformUnsupported => Self::PlatformUnsupported,
+            VaultRestoreSessionHold::ConfirmationCancelled => Self::ConfirmationCancelled,
+            VaultRestoreSessionHold::SourceUnavailable => Self::SourceUnavailable,
+            VaultRestoreSessionHold::Locked => Self::Locked,
+            VaultRestoreSessionHold::LatestReadFailed => Self::LatestReadFailed,
+            VaultRestoreSessionHold::NotBound => Self::NotBound,
+            VaultRestoreSessionHold::PublishedCopyChanged => Self::PublishedCopyChanged,
+            VaultRestoreSessionHold::MarkerMoved => Self::MarkerMoved,
+            VaultRestoreSessionHold::MarkerDuplicated => Self::MarkerDuplicated,
+            VaultRestoreSessionHold::MarkerMissing => Self::MarkerMissing,
+            VaultRestoreSessionHold::RecordUnavailable => Self::RecordUnavailable,
+        }
+    }
 }
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
