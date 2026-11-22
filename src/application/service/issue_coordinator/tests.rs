@@ -1167,6 +1167,7 @@ fn intervention_remote_hold_label_revokes_work_without_restarting_it() {
     assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
 }
 
+mod dispatch_source;
 mod policy_revalidation;
 
 mod autonomy;
