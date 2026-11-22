@@ -183,7 +183,7 @@ fn version_six_migration_preserves_tracked_issues_and_has_no_override() {
     let (binding, issue) = fixture.insert();
     {
         let connection = Connection::open(fixture.database()).unwrap();
-        connection.execute_batch("DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; PRAGMA user_version=6;").unwrap();
+        connection.execute_batch("DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; PRAGMA user_version=6;").unwrap();
     }
     let adapter = fixture.adapter();
     assert_eq!(

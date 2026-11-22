@@ -304,6 +304,55 @@ impl std::fmt::Debug for ParallelModeTurnService {
     }
 }
 impl ParallelModeTurnService {
+    pub(crate) fn validate_worker_continuation_start(
+        &self,
+        workspace: &str,
+        claim: &crate::application::port::outbound::planning_authority_port::PlanningWorkerContinuationClaim,
+    ) -> Result<(), String> {
+        let resolution = super::pool::resolve_workspace_slot_lease_with_runtime(
+            self.parallel_mode_service.parallel_runtime.as_ref(),
+            self.parallel_mode_service.planning_authority.as_ref(),
+            &claim.lease.worktree_path,
+        )?
+        .ok_or_else(|| "답변을 받을 작업 공간의 현재 소유권을 확인하지 못했습니다.".to_string())?;
+        if !resolution.lease.same_generation_as(&claim.lease) {
+            return Err("답변을 받을 작업 공간의 실행 세대가 바뀌었습니다.".into());
+        }
+        self.parallel_mode_service
+            .planning_authority
+            .validate_worker_continuation_start(workspace, claim)
+            .map_err(|_| "답변 전달의 실행 경계가 바뀌어 전송을 보류했습니다.".to_string())
+    }
+
+    pub(crate) fn acknowledge_worker_continuation(
+        &self,
+        workspace: &str,
+        claim: &crate::application::port::outbound::planning_authority_port::PlanningWorkerContinuationClaim,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<(), String> {
+        self.parallel_mode_service
+            .planning_authority
+            .acknowledge_worker_continuation(workspace, claim, thread_id, turn_id)
+            .map(|_| ())
+            .map_err(|_| {
+                "답변 전달 확인을 저장하지 못했습니다. 자동으로 다시 보내지 않습니다.".to_string()
+            })
+    }
+
+    pub(crate) fn preserve_worker_awaiting_user(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool, String> {
+        self.parallel_mode_service
+            .planning_authority
+            .preserve_worker_awaiting_user(workspace, expected)
+            .map_err(|_| {
+                "사용자 답변 대기 상태를 확인하지 못해 작업 공간을 보존했습니다.".to_string()
+            })
+    }
+
     pub fn new(parallel_mode_service: ParallelModeService) -> Self {
         Self {
             parallel_mode_service,
@@ -632,6 +681,19 @@ impl ParallelModeTurnService {
         &self,
         expected_lease: &ParallelModeSlotLeaseSnapshot,
     ) -> Vec<String> {
+        if self
+            .parallel_mode_service
+            .planning_authority
+            .worker_task_requires_preservation(
+                &expected_lease.worktree_path,
+                &expected_lease.task_id,
+            )
+            .unwrap_or(true)
+        {
+            return vec![
+                "작업자 종료 후에도 답변 대기 또는 전달 불명 상태의 작업 공간을 보존합니다.".into(),
+            ];
+        }
         let mut notices = Vec::new();
         /*
          * An outer worker panic loses the local stream evidence, and the isolated
@@ -671,6 +733,20 @@ impl ParallelModeTurnService {
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
         evidence: ParallelTurnStreamCompletionEvidence<'_>,
     ) -> ParallelTurnStreamCompletionOutcome {
+        if let Some(expected) = expected_lease
+            && self
+                .parallel_mode_service
+                .planning_authority
+                .worker_task_requires_preservation(workspace_directory, &expected.task_id)
+                .unwrap_or(true)
+        {
+            return ParallelTurnStreamCompletionOutcome {
+                runtime_notice: Some(
+                    "사용자 답변 또는 전달 확인을 기다리는 작업 공간을 보존합니다.".into(),
+                ),
+                invalidate_supervisor_snapshot: true,
+            };
+        }
         let ParallelTurnStreamCompletionEvidence {
             saw_turn_started,
             saw_failed_before_turn_started,

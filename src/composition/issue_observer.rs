@@ -1,5 +1,5 @@
 //! 호스트 시계가 구동하는 이슈 관찰 작업이다 (#2538).
-//! 원격 읽기는 한 작업 스레드에서만 수행하며, 주기 대기는 커널 호스트가 맡는다.
+//! 원격 수집과 로컬 실행 추적은 서로 다른 작업·취소·마감을 가지며, 주기 대기는 커널 호스트가 맡는다.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -18,6 +18,7 @@ use crate::domain::issue_automation::autonomy::IssueAutonomyProjection;
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
 
 const COLLECTION_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const TRACKING_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) enum IssueObserverCommittedFact {
     Tracked(IssueCollectionTrackedFact),
     Triaged(IssueTriagedFact),
@@ -28,6 +29,7 @@ type Reporter = dyn Fn(Vec<IssueObserverCommittedFact>) + Send + Sync;
 type Collect = dyn Fn(&IssueCollectionCancellation, u64, bool, &Reporter) -> Result<IssueCollectionRunOutcome>
     + Send
     + Sync;
+type Track = dyn Fn(&IssueCollectionCancellation, u64, bool, &Reporter) -> Result<()> + Send + Sync;
 
 #[cfg(test)]
 type TestCollect =
@@ -53,12 +55,21 @@ struct InFlight {
     completion: Receiver<Result<IssueCollectionRunOutcome>>,
 }
 
+struct TrackingInFlight {
+    cancel: Arc<IssueCollectionCancellation>,
+    completion: Receiver<Result<()>>,
+}
+
 pub(crate) struct IssueObserver {
     collect: Arc<Collect>,
+    track: Option<Arc<Track>>,
     waker: CoreInputWaker,
     projection: IssueCollectionProjection,
     in_flight: Option<InFlight>,
     next_run: Option<Instant>,
+    tracking_in_flight: Option<TrackingInFlight>,
+    next_tracking_run: Option<Instant>,
+    tracking_pending: bool,
     execution_enabled: bool,
     sync_pending: bool,
     consecutive_failures: u32,
@@ -76,7 +87,8 @@ impl IssueObserver {
     pub(crate) fn new(service: Arc<IssueCollectionService>, waker: CoreInputWaker) -> Result<Self> {
         // 최초 Observe 행의 로컬 저장과 기존 Off 읽기를 마친 뒤에만 스케줄러를 만든다.
         let projection = service.projection()?;
-        Ok(Self::with_collector(
+        let coordinator = service.coordinator_service();
+        let mut observer = Self::with_collector(
             projection,
             Arc::new(move |cancel, at, execution_enabled, committed| {
                 let tracked = |facts: Vec<IssueCollectionTrackedFact>| {
@@ -121,7 +133,20 @@ impl IssueObserver {
                 Ok(outcome)
             }),
             waker,
-        ))
+        );
+        if let Some(coordinator) = coordinator {
+            observer.track = Some(Arc::new(move |cancel, at, execution_enabled, committed| {
+                coordinator.track_execution(cancel, at, execution_enabled, &|facts| {
+                    committed(
+                        facts
+                            .into_iter()
+                            .map(IssueObserverCommittedFact::Coordinated)
+                            .collect(),
+                    );
+                })
+            }));
+        }
+        Ok(observer)
     }
 
     fn with_collector(
@@ -136,9 +161,13 @@ impl IssueObserver {
             consecutive_failures: projection.state.status.consecutive_failures,
             projection,
             collect,
+            track: None,
             waker,
             in_flight: None,
             next_run: None,
+            tracking_in_flight: None,
+            next_tracking_run: None,
+            tracking_pending: false,
             execution_enabled: false,
             sync_pending: false,
         }
@@ -170,6 +199,24 @@ impl IssueObserver {
         )
     }
 
+    /// 수집만 구현한 기존 fake는 로컬 추적 주기를 만들지 않는다.
+    #[cfg(test)]
+    pub(crate) fn for_test_with_tracking(
+        projection: IssueCollectionProjection,
+        collect: Arc<TestCollect>,
+        track: Arc<Track>,
+        waker: CoreInputWaker,
+    ) -> Self {
+        let mut observer = Self::for_test(projection, collect, waker);
+        observer.track = Some(track);
+        observer
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tracking_in_flight_for_test(&self) -> bool {
+        self.tracking_in_flight.is_some()
+    }
+
     pub(crate) fn view(&self, now: Instant) -> IssueCollectionHostView {
         IssueCollectionHostView {
             projection: self.projection.clone(),
@@ -177,7 +224,7 @@ impl IssueObserver {
             collecting: self.in_flight.as_ref().is_some_and(|flight| {
                 !flight.cancel.is_cancelled() && flight.epoch == self.projection.state.epoch
             }),
-            next_poll_after_ms: self.next_deadline(now).map(|deadline| {
+            next_poll_after_ms: self.collection_deadline(now).map(|deadline| {
                 deadline
                     .saturating_duration_since(now)
                     .as_millis()
@@ -187,6 +234,18 @@ impl IssueObserver {
     }
 
     pub(crate) fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        self.collection_deadline(now)
+            .into_iter()
+            .chain(self.tracking_deadline(now))
+            .min()
+    }
+
+    fn tracking_deadline(&self, now: Instant) -> Option<Instant> {
+        (self.track.is_some() && self.tracking_in_flight.is_none())
+            .then_some(self.next_tracking_run.unwrap_or(now))
+    }
+
+    fn collection_deadline(&self, now: Instant) -> Option<Instant> {
         (self.projection.state.config.mode == IssueCollectionMode::Observe
             && self.in_flight.is_none())
         .then_some(self.next_run.unwrap_or(now))
@@ -197,7 +256,25 @@ impl IssueObserver {
         if self.execution_enabled != enabled {
             self.execution_enabled = enabled;
             self.request_sync(now);
+            if let Some(flight) = &self.tracking_in_flight {
+                flight.cancel.cancel();
+            }
+            self.request_tracking(now);
         }
+    }
+
+    /// 기존 실행의 사실은 수집 Off에서도 추적한다. 원격 수집 마감은 바꾸지 않는다.
+    pub(crate) fn request_tracking(&mut self, now: Instant) -> bool {
+        if self.track.is_none() {
+            return false;
+        }
+        if self.tracking_in_flight.is_some() {
+            self.tracking_pending = true;
+        } else {
+            self.next_tracking_run = Some(now);
+            self.waker.wake();
+        }
+        true
     }
 
     pub(crate) fn request_sync(&mut self, now: Instant) -> bool {
@@ -232,6 +309,7 @@ impl IssueObserver {
             self.next_run =
                 (projection.state.config.mode == IssueCollectionMode::Observe).then_some(now);
             self.consecutive_failures = projection.state.status.consecutive_failures;
+            self.request_tracking(now);
         }
         self.projection = projection;
         true
@@ -290,12 +368,13 @@ impl IssueObserver {
             self.next_run = Some(now);
         }
         if self
-            .next_deadline(now)
+            .collection_deadline(now)
             .is_some_and(|deadline| deadline <= now)
         {
             self.start(now, at_unix_ms);
             cycle.changed = true;
         }
+        self.poll_tracking(now, at_unix_ms);
         cycle.committed.extend(self.take_committed());
         cycle.changed |= !cycle.committed.is_empty();
         cycle
@@ -306,12 +385,90 @@ impl IssueObserver {
         if let Some(flight) = &self.in_flight {
             flight.cancel.cancel();
         }
+        if let Some(flight) = &self.tracking_in_flight {
+            flight.cancel.cancel();
+        }
         self.take_committed()
     }
 
     fn take_committed(&self) -> Vec<IssueObserverCommittedFact> {
         // 채널 순서를 보존한다. 종류별로 나누면 서로 다른 commit의 감사 순서가 바뀔 수 있다.
         self.committed_receiver.try_iter().flatten().collect()
+    }
+
+    fn poll_tracking(&mut self, now: Instant, at_unix_ms: u64) {
+        let completion = self.tracking_in_flight.as_ref().and_then(|flight| {
+            match flight.completion.try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(Err(anyhow::anyhow!(
+                    "issue execution tracking worker stopped"
+                ))),
+            }
+        });
+        if let Some(result) = completion {
+            let flight = self
+                .tracking_in_flight
+                .take()
+                .expect("tracking worker completed");
+            if !flight.cancel.is_cancelled() && result.is_err() {
+                // 로컬 추적 실패는 원격 공급자의 실패 횟수나 수집 커서에 영향을 주지 않는다.
+                tracing::warn!("issue execution tracking could not complete its local update");
+            }
+            self.next_tracking_run = Some(now + TRACKING_INTERVAL);
+        }
+        if self.tracking_in_flight.is_none() && std::mem::take(&mut self.tracking_pending) {
+            self.next_tracking_run = Some(now);
+        }
+        if self
+            .tracking_deadline(now)
+            .is_some_and(|deadline| deadline <= now)
+        {
+            self.start_tracking(now, at_unix_ms);
+        }
+    }
+
+    fn start_tracking(&mut self, now: Instant, at_unix_ms: u64) {
+        let Some(track) = self.track.clone() else {
+            return;
+        };
+        let cancel = Arc::new(IssueCollectionCancellation::new());
+        let worker_cancel = cancel.clone();
+        let execution_enabled = self.execution_enabled;
+        let waker = self.waker.clone();
+        let committed_sender = self.committed_sender.clone();
+        let committed_waker = self.waker.clone();
+        let (send, completion) = mpsc::channel();
+        let panic_completion = send.clone();
+        let panic_waker = self.waker.clone();
+        let spawned = try_spawn_worker_with_panic_fallback(
+            move || {
+                let report = move |facts: Vec<IssueObserverCommittedFact>| {
+                    if !facts.is_empty() && committed_sender.send(facts).is_ok() {
+                        committed_waker.wake();
+                    }
+                };
+                let result = track(&worker_cancel, at_unix_ms, execution_enabled, &report);
+                let _ = send.send(result);
+                waker.wake();
+            },
+            move || {
+                let _ = panic_completion.send(Err(anyhow::anyhow!(
+                    "issue execution tracking worker panicked"
+                )));
+                panic_waker.wake();
+            },
+        );
+        match spawned {
+            Ok(_detached_worker) => {
+                self.tracking_in_flight = Some(TrackingInFlight { cancel, completion });
+                self.next_tracking_run = None;
+            }
+            Err(_) => {
+                self.next_tracking_run = Some(now + TRACKING_INTERVAL);
+                tracing::warn!("issue execution tracking could not start");
+            }
+        }
     }
 
     fn start(&mut self, now: Instant, at_unix_ms: u64) {
@@ -367,6 +524,9 @@ impl IssueObserver {
 impl Drop for IssueObserver {
     fn drop(&mut self) {
         if let Some(flight) = &self.in_flight {
+            flight.cancel.cancel();
+        }
+        if let Some(flight) = &self.tracking_in_flight {
             flight.cancel.cancel();
         }
         // 네트워크 응답을 기다리며 join하지 않는다. 서비스가 취소와 DB epoch를 재검사한다.

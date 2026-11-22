@@ -46,6 +46,23 @@ fn validate_command_id(command_id: &str) -> Result<()> {
 }
 
 impl PlanningWorkControlRepositoryPort for SqlitePlanningAuthorityAdapter {
+    fn set_work_order_execution_limit(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        max_attempts: u32,
+    ) -> Result<()> {
+        super::execution::set_limit(workspace, work_order_id, max_attempts)
+    }
+
+    fn started_work_order_task_ids(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Vec<String>> {
+        super::execution::started_task_ids(workspace, work_order_id)
+    }
+
     fn load_work_order_control(
         &self,
         workspace: &str,
@@ -392,6 +409,18 @@ pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter) fn claim
     let Some(work_order_id) = load_task_membership(&tx, &expected.task_id)? else {
         return Ok(Vec::new());
     };
+    let tasks = load_task_authority_snapshot_from_connection(&tx)?
+        .context("worker launch task authority is unavailable")?;
+    let task = tasks
+        .task_authority
+        .tasks
+        .iter()
+        .find(|task| task.id == expected.task_id)
+        .context("worker launch task disappeared")?;
+    if task.status == TaskStatus::AwaitingUser {
+        bail!("awaiting-user work requires its isolated answer continuation");
+    }
+
     let json: Option<String> = tx
         .query_row(
             "SELECT content FROM runtime_slot_leases WHERE slot_id=?1",
@@ -428,6 +457,7 @@ pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter) fn claim
     if let Some(reason) = permit.blocked_reason() {
         bail!("{reason}: the worker launch is no longer authorized");
     }
+    super::execution::claim_task_attempt(&tx, &work_order_id, &current)?;
     let mut statement=tx.prepare(
         "SELECT command_id,message FROM planning_work_order_instructions WHERE work_order_id=?1 ORDER BY ordinal",
     )?;

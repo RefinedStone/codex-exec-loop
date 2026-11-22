@@ -12,7 +12,12 @@ pub trait KernelEventLogPort: Send + Sync {
         Ok(self
             .load_kernel_events(
                 workspace_dir,
-                &["issue_work_submitted", "issue_work_permit_granted"],
+                &[
+                    "issue_work_submitted",
+                    "issue_work_permit_granted",
+                    "issue_execution_progressed",
+                    "issue_integrated",
+                ],
             )?
             .iter()
             .any(|event| event.issue_work_event_id() == Some(event_id)))
@@ -47,5 +52,76 @@ pub trait KernelEventLogPort: Send + Sync {
             next_after: after,
             recorder: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::issue_automation::execution::{
+        IssueExecutionIntegration, IssueExecutionProgress,
+    };
+    use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
+
+    struct StoredEvents(Vec<KernelEvent>);
+    impl KernelEventLogPort for StoredEvents {
+        fn append_kernel_events(&self, _: &str, _: &[RecordedKernelEvent]) -> Result<()> {
+            unreachable!("the recovery lookup never writes")
+        }
+
+        fn load_kernel_events(&self, _: &str, kinds: &[&str]) -> Result<Vec<KernelEvent>> {
+            Ok(self
+                .0
+                .iter()
+                .filter(|event| kinds.contains(&event.kind()))
+                .cloned()
+                .collect())
+        }
+    }
+
+    #[test]
+    fn default_outbox_lookup_finds_execution_and_integration_receipts() {
+        let issue = IssueReference {
+            provider: IssueProvider::GitHub,
+            server_id: "github.com".into(),
+            repository_id: "R_stable".into(),
+            issue_id: "I_stable".into(),
+            project_scope: IssueProjectScope {
+                workspace_dir: "/work/project".into(),
+            },
+        };
+        let log = StoredEvents(vec![
+            KernelEvent::IssueExecutionProgressed {
+                event_id: "execution-1".into(),
+                issue: (&issue).into(),
+                work_order_id: "work-1".into(),
+                progress: IssueExecutionProgress::default(),
+                revision: 1,
+            },
+            KernelEvent::IssueIntegrated {
+                event_id: "integrated-1".into(),
+                issue: (&issue).into(),
+                work_order_id: "work-1".into(),
+                integration: IssueExecutionIntegration {
+                    record_id: "integration-1".into(),
+                    source_sha: "a".repeat(40),
+                    integration_sha: "b".repeat(40),
+                    pull_request_url: None,
+                },
+                revision: 2,
+            },
+        ]);
+        assert!(
+            log.has_issue_work_event("/work/project", "execution-1")
+                .unwrap()
+        );
+        assert!(
+            log.has_issue_work_event("/work/project", "integrated-1")
+                .unwrap()
+        );
+        assert!(
+            !log.has_issue_work_event("/work/project", "missing")
+                .unwrap()
+        );
     }
 }

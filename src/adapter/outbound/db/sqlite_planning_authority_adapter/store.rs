@@ -278,6 +278,42 @@ pub(super) fn ensure_schema(
                 content TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS runtime_worker_continuations (
+                command_id TEXT PRIMARY KEY NOT NULL,
+                question_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                work_order_id TEXT NOT NULL,
+                worktree_path TEXT NOT NULL,
+                delivery_state TEXT NOT NULL CHECK (delivery_state IN ('queued','unknown','accepted','rejected')),
+                updated_at TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_worker_continuation_active_question
+                ON runtime_worker_continuations(work_order_id, question_id)
+                WHERE delivery_state IN ('queued','unknown','accepted');
+            CREATE INDEX IF NOT EXISTS idx_runtime_worker_continuation_question_history
+                ON runtime_worker_continuations(work_order_id, question_id, delivery_state);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_worker_continuation_pending_task
+                ON runtime_worker_continuations(task_id)
+                WHERE delivery_state IN ('queued','unknown');
+            CREATE INDEX IF NOT EXISTS idx_runtime_worker_continuation_pending_path
+                ON runtime_worker_continuations(worktree_path, delivery_state);
+
+            CREATE TABLE IF NOT EXISTS planning_work_order_validation_recoveries (
+                command_id TEXT PRIMARY KEY NOT NULL,
+                work_order_id TEXT NOT NULL,
+                terminal_record_id TEXT NOT NULL,
+                original_record_key TEXT NOT NULL,
+                original_revision INTEGER NOT NULL CHECK (original_revision >= 0),
+                remediation_origin_record_key TEXT NOT NULL,
+                successor_record_key TEXT NOT NULL UNIQUE,
+                request_json TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                UNIQUE (work_order_id, terminal_record_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_work_order_validation_recovery_original
+                ON planning_work_order_validation_recoveries(original_record_key);
+
             CREATE TABLE IF NOT EXISTS runtime_invalid_slot_leases (
                 slot_id TEXT PRIMARY KEY,
                 detected_at TEXT NOT NULL

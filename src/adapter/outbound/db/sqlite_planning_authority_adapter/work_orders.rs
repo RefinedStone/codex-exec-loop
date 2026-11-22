@@ -7,8 +7,8 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkOrderError, PlanningWorkOrderLinkResult, PlanningWorkOrderRecord,
     PlanningWorkOrderRegistration, PlanningWorkOrderRegistrationResult,
-    PlanningWorkOrderRepositoryPort, validate_work_order_id, validate_work_order_identity,
-    validate_work_order_task_id,
+    PlanningWorkOrderRepositoryPort, PlanningWorkOrderValidationLink, validate_work_order_id,
+    validate_work_order_identity, validate_work_order_task_id,
 };
 
 use super::{
@@ -17,14 +17,18 @@ use super::{
     runtime_projection, table_exists,
 };
 
+mod admission;
 mod control;
+mod execution;
+mod validation_links;
+mod validation_recovery;
 pub(super) use control::{claim_work_order_launch, validate_cancelled_lineage};
 mod permits;
 pub(super) use permits::check_work_order_permit_in_transaction;
 
 // Keep schema version 19: older binaries ignore these additive tables. There is deliberately no
 // foreign key to planning_tasks, whose rows can be removed or replaced independently of lineage.
-fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
+pub(super) fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
     if table_exists(connection, "planning_work_orders")?
         && table_exists(connection, "planning_work_order_tasks")?
         && table_exists(connection, "planning_work_order_permit_basis")?
@@ -33,6 +37,10 @@ fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
         && table_exists(connection, "planning_work_order_control_commands")?
         && table_exists(connection, "planning_work_order_instructions")?
         && table_exists(connection, "planning_work_order_launch_seals")?
+        && table_exists(connection, "planning_work_order_validation_links")?
+        && table_exists(connection, "planning_work_order_execution_limits")?
+        && table_exists(connection, "planning_work_order_started_tasks")?
+        && table_exists(connection, "planning_work_order_task_admissions")?
     {
         return Ok(());
     }
@@ -85,12 +93,114 @@ fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
                 slot_id TEXT NOT NULL,
                 session_key TEXT NOT NULL,
                 PRIMARY KEY (work_order_id, slot_id)
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_validation_links (
+                validation_record_key TEXT PRIMARY KEY NOT NULL,
+                work_order_id TEXT,
+                source_task_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+                UNIQUE (work_order_id, ordinal),
+                FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
+            );
+            CREATE INDEX IF NOT EXISTS planning_work_order_validation_links_owner
+                ON planning_work_order_validation_links(work_order_id, validation_record_key);
+            CREATE TABLE IF NOT EXISTS planning_work_order_execution_limits (
+                work_order_id TEXT PRIMARY KEY NOT NULL,
+                max_attempts INTEGER NOT NULL CHECK (max_attempts >= 0)
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_started_tasks (
+                work_order_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                first_session_key TEXT NOT NULL,
+                PRIMARY KEY (work_order_id, task_id)
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_task_admissions (
+                admission_key TEXT PRIMARY KEY NOT NULL,
+                work_order_id TEXT NOT NULL,
+                task_id TEXT NOT NULL UNIQUE,
+                FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
             );",
         )
         .context("failed to ensure planning work-order tables")
 }
 
+pub(super) fn resolve_validation_successor_key(
+    workspace: &str,
+    key: &crate::domain::parallel_mode::PrValidationRecordKey,
+) -> Result<crate::domain::parallel_mode::PrValidationRecordKey> {
+    validation_recovery::resolve_successor_key(workspace, key)
+}
+
 impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
+    fn recover_work_order_validation(
+        &self,
+        workspace: &str,
+        request: crate::application::port::outbound::planning_work_order_repository_port::PlanningValidationRecoveryRequest<'_>,
+    ) -> Result<crate::application::port::outbound::planning_work_order_repository_port::PlanningValidationRecoveryReceipt>{
+        validation_recovery::recover(workspace, request)
+    }
+
+    fn load_work_order_validation_recovery_origin(
+        &self,
+        workspace: &str,
+        validation_record_key: &str,
+    ) -> Result<Option<String>> {
+        validation_recovery::load_origin(workspace, validation_record_key)
+    }
+
+    fn load_work_order_admission_snapshot(
+        &self, workspace: &str, work_order_id: &str,
+    ) -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderAdmissionSnapshot>>{
+        admission::load_snapshot(workspace, work_order_id)
+    }
+
+    fn load_work_order_supplemental_task(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        admission_key: &str,
+    ) -> Result<Option<String>> {
+        admission::load_admitted_task(workspace, work_order_id, admission_key)
+    }
+
+    fn admit_supplemental_work_order_task(
+        &self, workspace: &str,
+        request: crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderSupplementalAdmission<'_>,
+    ) -> Result<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderSupplementalAdmissionResult>{
+        admission::admit(workspace, request)
+    }
+
+    fn link_work_order_validation_record(
+        &self,
+        workspace_dir: &str,
+        validation_record_key: &str,
+        source_task_id: &str,
+    ) -> Result<Option<PlanningWorkOrderValidationLink>> {
+        validation_links::link(workspace_dir, validation_record_key, source_task_id)
+    }
+
+    fn load_work_order_validation_source(
+        &self, workspace: &str, validation_record_key: &str,
+    ) -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningValidationSource>>{
+        validation_links::load_source(workspace, validation_record_key)
+    }
+
+    fn load_work_order_validation_link(
+        &self,
+        workspace_dir: &str,
+        validation_record_key: &str,
+    ) -> Result<Option<PlanningWorkOrderValidationLink>> {
+        validation_links::load(workspace_dir, validation_record_key)
+    }
+
+    fn work_order_validation_record_keys(
+        &self,
+        workspace_dir: &str,
+        work_order_id: &str,
+    ) -> Result<Vec<String>> {
+        validation_links::keys(workspace_dir, work_order_id)
+    }
+
     fn load_work_order(
         &self,
         workspace_dir: &str,
@@ -288,8 +398,11 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         }
         let ordinal = i64::try_from(work_order.task_ids.len())
             .context("planning work-order lineage is too large")?;
+        validation_links::ensure_unowned_validation_source_can_be_linked(&transaction, task_id)?;
         insert_task_membership(&transaction, work_order_id, task_id, ordinal)?;
         work_order.task_ids.push(task_id.to_string());
+        permits::fence_new_lineage(&transaction, work_order_id)?;
+        work_order.permits.clear();
         if control::load_control(&transaction, work_order_id)?.cancelled {
             control::cancel_lineage(&transaction, &location, &work_order.task_ids)?;
         }
@@ -338,7 +451,10 @@ fn validate_new_task_candidate(
     Ok(())
 }
 
-fn load_task_membership(connection: &Connection, task_id: &str) -> Result<Option<String>> {
+pub(super) fn load_task_membership(
+    connection: &Connection,
+    task_id: &str,
+) -> Result<Option<String>> {
     connection
         .query_row(
             "SELECT work_order_id FROM planning_work_order_tasks WHERE task_id = ?1",
@@ -349,7 +465,7 @@ fn load_task_membership(connection: &Connection, task_id: &str) -> Result<Option
         .context("failed to read planning task membership")
 }
 
-fn load_work_order_record(
+pub(super) fn load_work_order_record(
     connection: &Connection,
     work_order_id: &str,
 ) -> Result<Option<PlanningWorkOrderRecord>> {
@@ -412,3 +528,22 @@ fn insert_task_membership(
 
 #[cfg(test)]
 mod tests;
+
+pub(super) fn load_work_order_control_in_transaction(
+    connection: &Connection,
+    work_order_id: &str,
+) -> Result<
+    crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl,
+> {
+    ensure_work_order_tables(connection)?;
+    control::load_control(connection, work_order_id)
+}
+
+pub(super) fn link_validation_source_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    key: &str,
+    task_id: &str,
+) -> Result<()> {
+    validation_links::link_in_transaction(transaction, key, task_id)?;
+    Ok(())
+}

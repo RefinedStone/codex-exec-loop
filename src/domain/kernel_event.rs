@@ -5,6 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::issue_automation::collection::IssueCollectionMode;
+use crate::domain::issue_automation::execution::{
+    IssueExecutionIntegration, IssueExecutionProgress,
+};
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
 pub use crate::domain::kernel_spec::ReasonCode;
 use crate::domain::kernel_spec::{
@@ -459,6 +462,22 @@ pub enum KernelEvent {
         delivery: bool,
         revision: u64,
     },
+    /// 저장된 실행 관측의 진전이다. worker 출력·질문·답변 본문은 기록하지 않는다.
+    IssueExecutionProgressed {
+        event_id: String,
+        issue: IssueEventReference,
+        work_order_id: String,
+        progress: IssueExecutionProgress,
+        revision: u64,
+    },
+    /// 신뢰할 수 있는 통합 증거가 장부에 확정되었다. 이후 검증 실패로 이 사실을 되돌리지 않는다.
+    IssueIntegrated {
+        event_id: String,
+        issue: IssueEventReference,
+        work_order_id: String,
+        integration: IssueExecutionIntegration,
+        revision: u64,
+    },
     /// 모드 설정 commit 이후의 감사 기록이다. 설정 복원은 이 기록이 아닌 장부에서 한다.
     IssueAutomationModeChanged {
         previous: Option<IssueAutomationModeRecord>,
@@ -783,6 +802,8 @@ impl KernelEvent {
             Self::IssueTriaged { .. } => KernelRecordKind::IssueTriaged,
             Self::IssueWorkSubmitted { .. } => KernelRecordKind::IssueWorkSubmitted,
             Self::IssueWorkPermitGranted { .. } => KernelRecordKind::IssueWorkPermitGranted,
+            Self::IssueExecutionProgressed { .. } => KernelRecordKind::IssueExecutionProgressed,
+            Self::IssueIntegrated { .. } => KernelRecordKind::IssueIntegrated,
             Self::IssueDecisionRequested { .. } => KernelRecordKind::IssueDecisionRequested,
             Self::IssueDecisionResolved { .. } => KernelRecordKind::IssueDecisionResolved,
             Self::IssueAutomationModeChanged { .. } => KernelRecordKind::IssueAutomationModeChanged,
@@ -811,6 +832,8 @@ impl KernelEvent {
             | Self::IssueTracked { .. }
             | Self::IssueWorkSubmitted { .. }
             | Self::IssueWorkPermitGranted { .. }
+            | Self::IssueExecutionProgressed { .. }
+            | Self::IssueIntegrated { .. }
             | Self::IssueHeld { .. }
             | Self::IssueReleased { .. }
             | Self::IssueWorkPermitRevoked { .. }
@@ -855,6 +878,8 @@ impl KernelEvent {
             | Self::IssueTracked { .. }
             | Self::IssueWorkSubmitted { .. }
             | Self::IssueWorkPermitGranted { .. }
+            | Self::IssueExecutionProgressed { .. }
+            | Self::IssueIntegrated { .. }
             | Self::IssueHeld { .. }
             | Self::IssueReleased { .. }
             | Self::IssueWorkPermitRevoked { .. }
@@ -909,6 +934,8 @@ impl KernelEvent {
             | Self::IssueTracked { .. }
             | Self::IssueWorkSubmitted { .. }
             | Self::IssueWorkPermitGranted { .. }
+            | Self::IssueExecutionProgressed { .. }
+            | Self::IssueIntegrated { .. }
             | Self::IssueHeld { .. }
             | Self::IssueReleased { .. }
             | Self::IssueWorkPermitRevoked { .. }
@@ -1245,7 +1272,9 @@ impl KernelEvent {
     pub fn issue_work_event_id(&self) -> Option<&str> {
         match self {
             Self::IssueWorkSubmitted { event_id, .. }
-            | Self::IssueWorkPermitGranted { event_id, .. } => Some(event_id),
+            | Self::IssueWorkPermitGranted { event_id, .. }
+            | Self::IssueExecutionProgressed { event_id, .. }
+            | Self::IssueIntegrated { event_id, .. } => Some(event_id),
             _ => None,
         }
     }
@@ -1313,6 +1342,65 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn execution_records_preserve_durable_identity_without_question_or_worker_payloads() {
+        let issue: IssueEventReference = (&IssueReference {
+            provider: IssueProvider::GitHub,
+            server_id: "github.com".into(),
+            repository_id: "R_stable".into(),
+            issue_id: "I_stable".into(),
+            project_scope: IssueProjectScope {
+                workspace_dir: "/work/project".into(),
+            },
+        })
+            .into();
+        let progress = IssueExecutionProgress::default();
+        let integration = IssueExecutionIntegration {
+            record_id: "integration-1".into(),
+            source_sha: "a".repeat(40),
+            integration_sha: "b".repeat(40),
+            pull_request_url: Some("https://github.com/example/project/pull/1".into()),
+        };
+        let events = [
+            KernelEvent::IssueExecutionProgressed {
+                event_id: "execution-progress-1".into(),
+                issue: issue.clone(),
+                work_order_id: "issue-work-1".into(),
+                progress,
+                revision: 6,
+            },
+            KernelEvent::IssueIntegrated {
+                event_id: "execution-integrated-1".into(),
+                issue,
+                work_order_id: "issue-work-1".into(),
+                integration,
+                revision: 7,
+            },
+        ];
+        for (event, expected_id) in events
+            .into_iter()
+            .zip(["execution-progress-1", "execution-integrated-1"])
+        {
+            assert_eq!(event.issue_work_event_id(), Some(expected_id));
+            assert_eq!(event.thread_id(), "");
+            assert_eq!(event.op_id(), None);
+            assert_eq!(event.operation_step(), None);
+            let wire = serde_json::to_value(&event).unwrap();
+            for field in [
+                "question",
+                "answer",
+                "note",
+                "output",
+                "thread_id",
+                "worktree_path",
+            ] {
+                assert!(wire.get(field).is_none());
+                assert!(wire["progress"].get(field).is_none());
+            }
+            assert_eq!(serde_json::from_value::<KernelEvent>(wire).unwrap(), event);
+        }
+    }
 
     fn queued(task_id: &str) -> QueuedThreadPrompt {
         QueuedThreadPrompt {
@@ -1905,6 +1993,43 @@ mod tests {
                 gate_revision: 1,
                 delivery: false,
                 revision: 9,
+            },
+            KernelEvent::IssueExecutionProgressed {
+                event_id: "execution-progress-1".into(),
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                work_order_id: "issue-work-1".into(),
+                progress: IssueExecutionProgress::default(),
+                revision: 10,
+            },
+            KernelEvent::IssueIntegrated {
+                event_id: "execution-integrated-1".into(),
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                work_order_id: "issue-work-1".into(),
+                integration: IssueExecutionIntegration {
+                    record_id: "integration-1".into(),
+                    source_sha: "a".repeat(40),
+                    integration_sha: "b".repeat(40),
+                    pull_request_url: Some("https://github.com/example/project/pull/1".into()),
+                },
+                revision: 11,
             },
             KernelEvent::issue_automation_mode_changed(
                 Some(IssueCollectionMode::Observe),

@@ -585,6 +585,16 @@ impl ParallelModeService {
             .cloned()
             .ok_or_else(|| format!("slot `{slot_id}` does not have an active lease"))?;
 
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(&context.repo_root, &lease.task_id)
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Err(
+                "awaiting-user or uncertain continuation workspace must be preserved".into(),
+            );
+        }
+
         // cleanup 요청도 agent 소유권을 확인한다. 다른 agent가 slot_id만 알고 cleanup을
         // 요청하면 아직 실행 중인 작업을 회수할 수 있기 때문이다.
         if lease.agent_id != agent_id {
@@ -941,7 +951,7 @@ impl ParallelModeService {
     }
 }
 
-fn new_slot_lease_generation() -> Result<String, String> {
+pub(super) fn new_slot_lease_generation() -> Result<String, String> {
     let mut generation = [0_u8; 32];
     rand::rngs::OsRng
         .try_fill_bytes(&mut generation)
@@ -955,7 +965,7 @@ fn new_slot_lease_generation() -> Result<String, String> {
 }
 
 // Without a birth identity the lease stays ownerless and startup recovery keeps the age rule.
-fn current_lease_owner_process(
+pub(super) fn current_lease_owner_process(
     runtime: &dyn ParallelModeRuntimePort,
 ) -> Option<ParallelModeSlotLeaseOwnerProcess> {
     let process_id = runtime.current_process_id();
