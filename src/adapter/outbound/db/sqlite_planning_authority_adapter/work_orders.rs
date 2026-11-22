@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthoritySnapshot,
 };
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkOrderError, PlanningWorkOrderLinkResult, PlanningWorkOrderRecord,
-    PlanningWorkOrderRegistration, PlanningWorkOrderRegistrationResult,
+    PlanningWorkLinkReference, PlanningWorkOrderError, PlanningWorkOrderLinkResult,
+    PlanningWorkOrderRecord, PlanningWorkOrderRegistration, PlanningWorkOrderRegistrationResult,
     PlanningWorkOrderRepositoryPort, PlanningWorkOrderValidationLink, validate_work_order_id,
     validate_work_order_identity, validate_work_order_task_id,
 };
@@ -207,6 +207,31 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         validation_links::keys(workspace_dir, work_order_id)
     }
 
+    fn replay_work_order(
+        &self,
+        workspace_dir: &str,
+        work_order_id: &str,
+        origin: &str,
+        link_reference: Option<&PlanningWorkLinkReference>,
+    ) -> Result<Option<PlanningWorkOrderRecord>> {
+        validate_work_order_identity(work_order_id, origin)?;
+        if let Some(reference) = link_reference {
+            reference.validate()?;
+        }
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        ensure_work_order_tables(&connection)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("failed to open work-order replay transaction")?;
+        let work_order =
+            replay_existing_work_order(&transaction, work_order_id, origin, link_reference)?;
+        transaction
+            .commit()
+            .context("failed to commit work-order replay")?;
+        Ok(work_order)
+    }
+
     fn load_work_order(
         &self,
         workspace_dir: &str,
@@ -260,12 +285,15 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
 
         // The durable identity wins even after task removal, receipt pruning, or authority reset.
         // No candidate task, guard, or stale revision can turn a replay into another creation.
-        if let Some(work_order) = load_work_order_record(&transaction, registration.work_order_id)?
-        {
-            work_order.ensure_origin(registration.origin)?;
-            if work_order.link_reference.as_ref() != registration.link_reference {
-                bail!("work order publication reference changed");
-            }
+        if let Some(work_order) = replay_existing_work_order(
+            &transaction,
+            registration.work_order_id,
+            registration.origin,
+            registration.link_reference,
+        )? {
+            transaction
+                .commit()
+                .context("failed to commit existing work-order replay")?;
             return Ok(PlanningWorkOrderRegistrationResult::Existing { work_order });
         }
 
@@ -435,6 +463,39 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
             planning_revision,
         })
     }
+}
+
+fn replay_existing_work_order(
+    transaction: &Transaction<'_>,
+    work_order_id: &str,
+    origin: &str,
+    link_reference: Option<&PlanningWorkLinkReference>,
+) -> Result<Option<PlanningWorkOrderRecord>> {
+    // Loading validates contiguous task lineage and every stored permit's identity/shape.
+    // Do not check a permit against the current basis: replay may precede its refresh.
+    let Some(mut work_order) = load_work_order_record(transaction, work_order_id)? else {
+        return Ok(None);
+    };
+    work_order.ensure_origin(origin)?;
+    if work_order.link_reference.as_ref() == link_reference {
+        return Ok(Some(work_order));
+    }
+    let Some(reference) = link_reference.filter(|reference| !reference.close_on_merge) else {
+        bail!("work order publication reference changed");
+    };
+    if work_order.link_reference.is_some() {
+        bail!("work order publication reference changed");
+    }
+    // IMMEDIATE serializes the missing-row observation and INSERT with all other writers.
+    // Recovery only records a non-closing reference; it cannot alter execution authority.
+    transaction
+        .execute(
+            "INSERT INTO planning_work_order_links (work_order_id, reference_json) VALUES (?1, ?2)",
+            params![work_order_id, serde_json::to_string(reference)?],
+        )
+        .context("failed to recover legacy work-order publication reference")?;
+    work_order.link_reference = Some(reference.clone());
+    Ok(Some(work_order))
 }
 
 fn validate_new_task_candidate(
