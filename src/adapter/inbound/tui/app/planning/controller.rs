@@ -1645,6 +1645,14 @@ mod tests {
         workspace: &TempPlanningWorkspace,
         planning: crate::application::service::planning::PlanningServices,
     ) -> NativeTuiApp {
+        let mut app = make_test_app_before_workspace_sync(planning);
+        app.sync_draft_shell_workspace(workspace.path_str());
+        app
+    }
+
+    fn make_test_app_before_workspace_sync(
+        planning: crate::application::service::planning::PlanningServices,
+    ) -> NativeTuiApp {
         let codex_port = Arc::new(FakeAppServerPort);
         let parallel_mode_control_plane_composition = ParallelModeControlPlaneComposition::new(
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
@@ -1653,14 +1661,12 @@ mod tests {
         );
         let parallel_mode_binding =
             NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
-        let mut app = NativeTuiApp::new(
+        NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
             parallel_mode_binding,
-        );
-        app.sync_draft_shell_workspace(workspace.path_str());
-        app
+        )
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2068,6 +2074,26 @@ mod tests {
         panic!("planning runtime refresh should complete");
     }
 
+    fn wait_for_planning_runtime_workspace(app: &mut NativeTuiApp, workspace: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            app.poll_client_runtime_events(16);
+            if app
+                .runtime
+                .client_runtime
+                .snapshot()
+                .planning_parallel
+                .planning_runtime_workspace_directory
+                .as_deref()
+                == Some(workspace)
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("initial planning runtime refresh should reach its workspace");
+    }
+
     fn wait_for_planning_workspace_operation(app: &mut NativeTuiApp) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
@@ -2096,7 +2122,15 @@ mod tests {
     ) {
         let workspace = TempPlanningWorkspace::new(workspace_name);
         let (port, stage_gate, load_gate) = FailingPlanningWorkspacePort::gated_stage();
-        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        let planning =
+            crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(port));
+        let mut app = make_test_app_before_workspace_sync(planning);
+        // Neither startup refresh owns an overlay Loading state. Settle each read
+        // before a later one-shot load gate can be consumed by the reopened refresh.
+        let initial_workspace = app.planning_workspace_directory();
+        wait_for_planning_runtime_workspace(&mut app, &initial_workspace);
+        app.sync_draft_shell_workspace(workspace.path_str());
+        wait_for_planning_runtime_workspace(&mut app, workspace.path_str());
         app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
         app.stage_simple_mode_planning_init_draft();
         stage_gate.wait_until_entered();
@@ -4689,6 +4723,7 @@ mod tests {
             PlanningRuntimeRefreshUiState::Loading { .. }
         ));
 
+        let reopened_refresh = app.planning.planning_runtime_refresh_ui_state.clone();
         stage_gate.release();
         wait_for_planning_workspace_operation(&mut app);
         assert_eq!(
@@ -4700,6 +4735,11 @@ mod tests {
             app.planning.planning_runtime_refresh_ui_state,
             PlanningRuntimeRefreshUiState::Loading { .. }
         ));
+
+        assert_eq!(
+            app.planning.planning_runtime_refresh_ui_state, reopened_refresh,
+            "the old stage completion must preserve the exact reopened refresh"
+        );
 
         load_gate.release();
         wait_for_planning_runtime_refresh(&mut app);
