@@ -549,7 +549,11 @@ mod tests {
                     .map(|name| {
                         (
                             name.to_string(),
-                            sample_value(&schema["properties"][name], spec),
+                            if name == "workspace_dir" {
+                                json!("/workspace")
+                            } else {
+                                sample_value(&schema["properties"][name], spec)
+                            },
                         )
                     })
                     .collect(),
@@ -565,6 +569,8 @@ mod tests {
             let mut words = vec![
                 entry["scope"].as_str().unwrap().to_string(),
                 entry["name"].as_str().unwrap().to_string(),
+                "--workspace".to_string(),
+                "/workspace".to_string(),
             ];
             for name in entry["input"]["required"]
                 .as_array()
