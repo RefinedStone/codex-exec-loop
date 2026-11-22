@@ -700,7 +700,7 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
 | IA4-2 · #2552 | PR [#2640](https://github.com/RefinedStone/codex-exec-loop/pull/2640) · prerelease 반영 | 상태 댓글·진행 라벨·전송 일지·읽기 재확인·게시 횟수. [reference](../reference/current-product.md#issue-automation-feedback) |
 | IA4-3 · #2553 | PR [#2641](https://github.com/RefinedStone/codex-exec-loop/pull/2641) · 리뷰 대기 | 통합·외부 상태 분리, 사람 닫기 승인, 단일 전송 일지, 작업 지시의 PR 참조 |
 | IA4-4 · #2554 | PR [#2642](https://github.com/RefinedStone/codex-exec-loop/pull/2642) · #2641 연계 · 리뷰 대기 | 실행·검증·게시 횟수, 서버 복구 사유, 정확한 대화·PR 연결, 읽기 전용 재확인, 최근 20개 기록 |
-| IA4-5 · #2555 | 자동 회귀 통과 · 실제 모델 확인 허가 대기 | 실제 SQLite/Git·서비스 재조립을 사용하는 결합 회귀. [검증 범위·증거](../validation/issue-automation-propose-flow.md) |
+| IA4-5 · #2555 | 자동 회귀 통과 · 실제 모델 확인 허가 확보·준비 중 | 실제 SQLite/Git·서비스 재조립을 사용하는 결합 회귀. [검증 범위·증거](../validation/issue-automation-propose-flow.md) |
 
 IA4-5의 회귀 harness는 실제 application service·SQLite·로컬 Git을 사용하고 source/provider 응답,
 worker 완료와 사람 확인 capability를 fixture로 제공한다. 등록·댓글 ACK 유실 뒤 같은 저장 경로의
