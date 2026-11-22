@@ -42,6 +42,8 @@ const commands = {
   submit_prompt: { type: "submit_prompt", thread_id: "thread-1", prompt: "Hello" },
   steer_turn: { type: "steer_turn", thread_id: "thread-1", expected_turn_id: "turn-1", prompt: "Stop here" },
   stop_all: { type: "stop_all" },
+  enable_parallel: { type: "enable_parallel" },
+  disable_parallel: { type: "disable_parallel" },
   decide_approval: { type: "decide_approval", approval_id: "approval-1", server_request_id: "1", decision: "decline" },
   set_auto_follow_max_turns: { type: "set_auto_follow_max_turns", value: 3 },
   pause_auto_follow: { type: "pause_auto_follow" },

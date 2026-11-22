@@ -85,6 +85,11 @@ use crate::domain::planning::PostTurnContinuationAction;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum KernelClientCommand {
     Core(AppCommand),
+    /// Explicit pool control; issue autonomy and Start decisions never emit this command.
+    Parallel {
+        workspace_directory: String,
+        enabled: bool,
+    },
     // 저장 명령은 작업의 필드를 모두 가져서 크다. 상자에 넣어 커널의 입력을 작게 둔다.
     Stored(Box<StoredCommand>),
     /// Gateway가 main 확인 증거를 검증한 저장 명령이다. 원문 증거는 커널에 전달하지 않는다.
@@ -1230,6 +1235,10 @@ impl NativeClientRuntime {
         }
         let command = match command {
             KernelClientCommand::Core(command) => command,
+            KernelClientCommand::Parallel {
+                workspace_directory,
+                enabled,
+            } => return self.dispatch_parallel_mode(workspace_directory, enabled, admission),
             KernelClientCommand::Stored(stored) => {
                 return self.dispatch_stored_command(
                     *stored,
@@ -1283,6 +1292,40 @@ impl NativeClientRuntime {
                     replayed: false,
                 })
             }
+            _ => None,
+        };
+        ClientCommandDispatch::Ran {
+            outcome,
+            operation,
+            stored: None,
+        }
+    }
+
+    /// Accept explicit pool control through the same readiness/stop path as the TUI.
+    /// The operation is accepted, not completed: clients observe the applied state and failures
+    /// through the parallel query/events after asynchronous entry finishes.
+    fn dispatch_parallel_mode(
+        &mut self,
+        workspace_directory: String,
+        enabled: bool,
+        admission: Option<CommandAdmission>,
+    ) -> ClientCommandDispatch {
+        let command = if enabled {
+            ParallelModeControlPlaneCommand::Enable {
+                workspace_directory,
+            }
+        } else {
+            ParallelModeControlPlaneCommand::Disable {
+                workspace_directory,
+            }
+        };
+        let outcome = self.dispatch_client_event(NativeClientEvent::ParallelCommand(command));
+        let operation = match admission {
+            Some(CommandAdmission::Recorded(op_id)) => Some(OperationReceipt {
+                op_id,
+                rejection: None,
+                replayed: false,
+            }),
             _ => None,
         };
         ClientCommandDispatch::Ran {

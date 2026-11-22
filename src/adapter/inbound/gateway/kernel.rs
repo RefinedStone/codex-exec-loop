@@ -30,7 +30,7 @@ use crate::adapter::inbound::kernel_protocol::{
     AttachRequest, AttachResponse, CommandRejection, CommandRequest, CommandResponse,
     CommandResult, ERROR_INVALID_PARAMS, ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE,
     ERROR_METHOD_NOT_FOUND, ERROR_NOT_ATTACHED, EventNotification, IssueAutomationPolicyState,
-    IssueAutomationState, IssueState, IssuesState, KernelCommandInput, KernelEvent,
+    IssueAutomationState, IssueState, IssuesState, KernelCommand, KernelCommandInput, KernelEvent,
     KernelProtocolError, KernelQuery, KernelQueryAnswer, METHOD_ATTACH, METHOD_COMMAND,
     METHOD_DESCRIBE, METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION, ParallelSource,
     ParallelState, PlanningState, QueryRequest, describe, reason_next,
@@ -162,7 +162,7 @@ struct AttachedKernel {
     kernel: String,
     extension_events: Option<tokio::task::JoinHandle<()>>,
     workspace: String,
-    /// 이슈 장부와 커서의 project scope다. 요청한 worktree와 다를 수 있다.
+    /// 커널의 대표 checkout이다. 이슈 장부·커서와 병렬 풀이 공유하며 요청한 worktree와 다를 수 있다.
     issue_workspace: String,
     /// 이 접속이 attach 때 밝힌 이름이다. 커널이 명령의 기록에 호출자로 적는다 (plan 18 K4-5).
     client_name: String,
@@ -174,6 +174,21 @@ struct AttachedKernel {
 }
 
 impl AttachedKernel {
+    fn command_input(
+        &self,
+        command: KernelCommand,
+    ) -> Result<KernelCommandInput, KernelProtocolError> {
+        // Pool control targets the kernel's primary checkout, including when this client attached
+        // from a nested folder or linked worktree. Conversation/planning commands keep their cwd.
+        let workspace = match &command {
+            KernelCommand::EnableParallel {} | KernelCommand::DisableParallel {} => {
+                &self.issue_workspace
+            }
+            _ => &self.workspace,
+        };
+        command.into_input(workspace)
+    }
+
     fn issue_query(
         &self,
         query: &KernelQuery,
@@ -473,8 +488,15 @@ impl KernelSession {
                 ..descriptor
             });
         let request_key = request.idempotency_key;
-        let command = match request.command.into_input(&attached.workspace)? {
+        let command = match attached.command_input(request.command)? {
             KernelCommandInput::Core(command) => KernelClientCommand::Core(command),
+            KernelCommandInput::Parallel {
+                workspace_directory,
+                enabled,
+            } => KernelClientCommand::Parallel {
+                workspace_directory,
+                enabled,
+            },
             KernelCommandInput::Stored(command) => match confirmation {
                 Some(confirmation) => KernelClientCommand::ConfirmedStored {
                     command: Box::new(command),
@@ -1138,10 +1160,95 @@ mod tests {
             );
             assert_eq!(
                 attached.workspace, requested,
-                "command and planning keep the requested workspace"
+                "conversation and planning keep the requested workspace"
             );
         }
     }
+    #[tokio::test]
+    async fn parallel_control_from_nested_and_linked_attachments_uses_the_primary_checkout() {
+        for requested in [
+            "/main/nested",
+            "/worktrees/feature",
+            "/worktrees/feature/nested",
+        ] {
+            let (runtime, turns) = recording_runtime_for_test();
+            // Set up an existing pool in the primary checkout. The stop itself goes through the
+            // normal Gateway command and runtime Disable path, without forcing the result.
+            runtime.force_parallel_mode_for_test("/main", true);
+            let host = KernelHost::start(runtime).expect("fake kernel host");
+            let client = host
+                .attach_with_lifetime(true)
+                .expect("fake attached client");
+            assert!(client.query().unwrap().parallel.enabled);
+            let attached = AttachedKernel {
+                workspace: requested.into(),
+                issue_workspace: "/main".into(),
+                client_name: "parallel-control-fixture".into(),
+                client_id: client.client_id().to_string(),
+                attachment_id: "a".repeat(32),
+                commands: client.commands(),
+                stop_events: Arc::new(AtomicBool::new(false)),
+                events: None,
+            };
+            for (command, expected) in [
+                (KernelCommand::EnableParallel {}, true),
+                (KernelCommand::DisableParallel {}, false),
+            ] {
+                assert_eq!(
+                    attached.command_input(command).unwrap(),
+                    KernelCommandInput::Parallel {
+                        workspace_directory: "/main".into(),
+                        enabled: expected,
+                    },
+                    "both pool commands must share the kernel's primary checkout: {requested}",
+                );
+            }
+            let KernelCommandInput::Core(crate::core::app::AppCommand::SubmitThreadPrompt(
+                submission,
+            )) = attached
+                .command_input(KernelCommand::SubmitPrompt {
+                    thread_id: "thread-fixture".into(),
+                    prompt: "stay in this worktree".into(),
+                })
+                .unwrap()
+            else {
+                panic!("a conversation prompt keeps its own command boundary");
+            };
+            assert_eq!(submission.workspace_directory, requested);
+            let (outbox, _messages) = mpsc::channel(1);
+            let mut session = KernelSession {
+                kernels: Arc::new(RepositoryKernelRegistry::default()),
+                outbox,
+                connection_id: "c".repeat(32),
+                confirmation: None,
+                delegations: Default::default(),
+                attached: Some(attached),
+            };
+            let response = session
+                .command(json!({
+                    "command": { "type": "disable_parallel" },
+                }))
+                .await
+                .expect("Gateway stop request");
+            assert_eq!(response["processed"], true);
+            assert!(response.get("rejection").is_none(), "{response}");
+            let state = session
+                .query(json!({
+                    "query": { "type": "parallel" },
+                }))
+                .await
+                .expect("query the applied pool state");
+            assert_eq!(
+                state["enabled"], false,
+                "an attachment from {requested} must stop the primary checkout's pool",
+            );
+            assert!(turns.lock().unwrap().is_empty());
+            session.detach().await;
+            drop(client);
+            drop(host);
+        }
+    }
+
     #[tokio::test]
     async fn policy_query_uses_the_host_workspace_without_starting_collection_or_turns() {
         use crate::composition::native_client_runtime::tests::recording_runtime_with_issue_queries_for_test;

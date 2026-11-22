@@ -279,6 +279,10 @@ export class DesktopSession {
     return this.kernel.refresh();
   }
 
+  setParallelEnabled(enabled: boolean): Promise<void> {
+    return this.kernel.setParallelEnabled(enabled);
+  }
+
   refreshIssues(): Promise<void> {
     return this.kernel.refreshIssues();
   }

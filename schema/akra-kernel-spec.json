@@ -20,6 +20,10 @@
         "summary": "The automatic follow-up settings."
       },
       {
+        "name": "parallel",
+        "summary": "Explicit execution control for the repository parallel pool."
+      },
+      {
         "name": "planning",
         "summary": "The planning queue and directions."
       },
@@ -461,6 +465,62 @@
         "properties": {
           "type": {
             "const": "stop_all",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "enable_parallel",
+      "scope": "parallel",
+      "state": "runtime",
+      "summary": "Request parallel execution for the attached repository. Acceptance does not mean readiness succeeded; read the parallel query and events. Existing readiness, work permits, and delivery approvals still apply.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "enable_parallel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "disable_parallel",
+      "scope": "parallel",
+      "state": "runtime",
+      "summary": "Request the existing parallel stop policy for the attached repository. Read the parallel query and events for the applied state. This does not revoke issue approvals or replace stop_all for running conversation turns.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "accepted",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "disable_parallel",
             "type": "string"
           }
         },
@@ -8966,6 +9026,32 @@
           "properties": {
             "type": {
               "const": "stop_all",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "enable_parallel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "disable_parallel",
               "type": "string"
             }
           },

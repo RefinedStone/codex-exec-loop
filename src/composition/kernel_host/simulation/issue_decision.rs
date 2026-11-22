@@ -963,6 +963,10 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
         );
     };
     assert!(execution.order.lock().unwrap().is_none());
+    assert!(
+        !sim.host.runtime.parallel_mode_enabled(),
+        "Propose must not enable the repository's unrelated queued work"
+    );
     let preview = services
         .decisions
         .prepare_confirmation(decision.request.id().as_str(), "start")
@@ -1030,6 +1034,10 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
         work.blocked_reason,
         Some(IssueWorkBlockReason::ExecutionDisabled)
     );
+    assert!(
+        !sim.host.runtime.parallel_mode_enabled(),
+        "Start approval grants work authority without enabling the whole pool"
+    );
     let first_order = execution.order.lock().unwrap().clone();
     drop(sim);
     let mut restarted = fixture.boot(&services, log.clone());
@@ -1056,6 +1064,10 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
         "reconnect preserves the configured work-order cap"
     );
     assert!(restarted.effects.take().is_empty());
+    assert!(
+        !restarted.host.runtime.parallel_mode_enabled(),
+        "reconnecting must not implicitly enable approved issue work"
+    );
     drop(restarted);
     let records = log.0.lock().unwrap();
     assert_eq!(

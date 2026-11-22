@@ -282,6 +282,8 @@ impl CommandRequest {
             | KernelCommand::SteerTurn { thread_id, .. } => thread_id.clone(),
             KernelCommand::LoadSessions {}
             | KernelCommand::StopAll {}
+            | KernelCommand::EnableParallel {}
+            | KernelCommand::DisableParallel {}
             | KernelCommand::DecideApproval { .. }
             | KernelCommand::SetAutoFollowMaxTurns { .. }
             | KernelCommand::PauseAutoFollow {}
@@ -604,6 +606,8 @@ impl CommandResult {
             | KernelCommandKind::SubmitPrompt
             | KernelCommandKind::SteerTurn
             | KernelCommandKind::StopAll
+            | KernelCommandKind::EnableParallel
+            | KernelCommandKind::DisableParallel
             | KernelCommandKind::DecideApproval
             | KernelCommandKind::SetAutoFollowMaxTurns
             | KernelCommandKind::PauseAutoFollow
@@ -790,6 +794,9 @@ pub enum KernelCommand {
         prompt: String,
     },
     StopAll {},
+    /// Explicit repository-pool control. Completion is accepted; parallel state follows asynchronously.
+    EnableParallel {},
+    DisableParallel {},
     DecideApproval {
         #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
         approval_id: String,
@@ -1071,6 +1078,10 @@ impl TaskFields {
 #[derive(Debug, Clone, PartialEq)]
 pub enum KernelCommandInput {
     Core(AppCommand),
+    Parallel {
+        workspace_directory: String,
+        enabled: bool,
+    },
     Stored(StoredCommand),
     SyncIssues,
     SubmitDelegation {
@@ -1120,6 +1131,8 @@ impl KernelCommand {
             Self::SubmitPrompt { .. } => KernelCommandKind::SubmitPrompt,
             Self::SteerTurn { .. } => KernelCommandKind::SteerTurn,
             Self::StopAll {} => KernelCommandKind::StopAll,
+            Self::EnableParallel {} => KernelCommandKind::EnableParallel,
+            Self::DisableParallel {} => KernelCommandKind::DisableParallel,
             Self::DecideApproval { .. } => KernelCommandKind::DecideApproval,
             Self::SetAutoFollowMaxTurns { .. } => KernelCommandKind::SetAutoFollowMaxTurns,
             Self::PauseAutoFollow {} => KernelCommandKind::PauseAutoFollow,
@@ -1178,6 +1191,8 @@ impl KernelCommand {
             | Self::SubmitPrompt { .. }
             | Self::SteerTurn { .. }
             | Self::StopAll {}
+            | Self::EnableParallel {}
+            | Self::DisableParallel {}
             | Self::DecideApproval { .. }
             | Self::SetAutoFollowMaxTurns { .. }
             | Self::PauseAutoFollow {}
@@ -1267,6 +1282,18 @@ impl KernelCommand {
         workspace_directory: &str,
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
+            Self::EnableParallel {} => {
+                return Ok(KernelCommandInput::Parallel {
+                    workspace_directory: workspace_directory.to_string(),
+                    enabled: true,
+                });
+            }
+            Self::DisableParallel {} => {
+                return Ok(KernelCommandInput::Parallel {
+                    workspace_directory: workspace_directory.to_string(),
+                    enabled: false,
+                });
+            }
             Self::HoldIssue { issue, command_id } => issue_intervention::into_stored(
                 issue,
                 command_id,
@@ -1484,7 +1511,9 @@ impl KernelCommand {
             Self::RefreshPlanning {} => AppCommand::RefreshPlanningRuntime {
                 workspace_directory: workspace_directory.to_string(),
             },
-            Self::CreateTask { .. }
+            Self::EnableParallel {}
+            | Self::DisableParallel {}
+            | Self::CreateTask { .. }
             | Self::UpdateTask { .. }
             | Self::DeleteTask { .. }
             | Self::CreateDirection { .. }
