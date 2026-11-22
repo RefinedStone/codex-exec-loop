@@ -731,6 +731,9 @@ fn events_and_description_have_stable_wire_shapes() {
             "akra/kernel/command_confirmed",
             "akra/kernel/query",
             "akra/kernel/event",
+            "akra/kernel/extensions/list",
+            "akra/kernel/extensions/call",
+            "akra/kernel/extensions/changed",
             "akra/kernel/detach"
         ])
     );
@@ -1649,7 +1652,10 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
         .filter(|method| method["kind"] == "notification")
         .map(|method| method["name"].as_str().expect("a method name"))
         .collect::<Vec<_>>();
-    assert_eq!(notifications, ["akra/kernel/event"]);
+    assert_eq!(
+        notifications,
+        ["akra/kernel/event", "akra/kernel/extensions/changed"]
+    );
 }
 
 #[test]

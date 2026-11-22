@@ -190,6 +190,20 @@ pub fn describe() -> KernelSpec {
                     Some(schemas.reference::<ConfirmedCommandRequest>()),
                     Some(command_output.clone()),
                 ),
+                KernelMethodKind::ExtensionList => (
+                    Some(schemas.reference::<super::extensions::ExtensionScope>()),
+                    Some(schemas.reference::<Vec<
+                        crate::application::port::inbound::repository_extension::ExtensionManifest,
+                    >>()),
+                ),
+                KernelMethodKind::ExtensionCall => (
+                    Some(schemas.reference::<super::extensions::ExtensionCall>()),
+                    Some(schemas.reference::<Value>()),
+                ),
+                KernelMethodKind::ExtensionChanged => (
+                    Some(schemas.reference::<super::extensions::ExtensionChanged>()),
+                    None,
+                ),
                 KernelMethodKind::Query => (
                     Some(schemas.reference::<QueryRequest>()),
                     Some(schemas.reference::<KernelQueryAnswer>()),
@@ -200,7 +214,9 @@ pub fn describe() -> KernelSpec {
             MethodEntry {
                 name: method.name(),
                 kind: match method {
-                    KernelMethodKind::Event => MethodDirection::Notification,
+                    KernelMethodKind::Event | KernelMethodKind::ExtensionChanged => {
+                        MethodDirection::Notification
+                    }
                     _ => MethodDirection::Request,
                 },
                 summary: method.summary(),

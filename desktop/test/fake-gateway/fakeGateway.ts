@@ -72,6 +72,7 @@ export interface FakeGateway {
   /** 서버를 유지한 채 접속만 끊어 재접속을 시험한다. */
   disconnectClients(): void;
   /** 붙어 있는 local 커널 연결에만 상태 이벤트를 보낸다. */
+  sendExtensionChange(kernel: string): void;
   sendKernelEvent(event: unknown): void;
   close(): Promise<void>;
 }
@@ -485,6 +486,11 @@ export async function startFakeGateway(
     answeredRequests,
     disconnectClients() {
       for (const client of sockets.clients) client.terminate();
+    },
+    sendExtensionChange(kernel) {
+      for (const socket of kernelClients) {
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/extensions/changed", params: { kernel } }));
+      }
     },
     sendKernelEvent(event) {
       for (const socket of kernelClients) {

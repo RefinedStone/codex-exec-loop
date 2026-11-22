@@ -137,6 +137,21 @@ pub(crate) fn resolve_native_from_path(program: &str, path: &OsStr, cwd: &Path) 
     Ok(executable)
 }
 
+/// Optional runtimes installed by the operator can use the same strict setting as Codex.
+pub(crate) fn resolve_blog_program(program: &str, cwd: &Path) -> Result<PathBuf> {
+    let path = std::env::var_os("PATH").context("PATH is unavailable")?;
+    let executable = resolve_native_from_path_with_policy(
+        program,
+        &path,
+        cwd,
+        configured_codex_executable_trust_policy()?,
+    )?;
+    if path_is_untrusted(&executable, &untrusted_roots(cwd)) {
+        bail!("blog runtime must be installed outside the repository")
+    }
+    Ok(executable)
+}
+
 fn resolve_native_from_path_with_policy(
     program: &str,
     path: &OsStr,

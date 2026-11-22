@@ -228,7 +228,8 @@ where
                     ClientTextRoute::AkraRequest { id, method } => {
                         let sensitive_confirmation = is_confirmation_method(&method);
                         // 초안과 결정 답의 note에는 가리기 전의 로컬 글이 있다. 녹화에 남기지 않는다.
-                        if !is_issue_draft_method(&method)
+                        if !crate::adapter::inbound::kernel_protocol::is_extension_request(&method)
+                            && !is_issue_draft_method(&method)
                             && !is_sensitive_issue_command(&method, text.as_str())
                             && !sensitive_confirmation
                             && !method.starts_with(super::delegation::PREFIX)

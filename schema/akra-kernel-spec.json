@@ -246,6 +246,37 @@
       }
     },
     {
+      "name": "akra/kernel/extensions/list",
+      "kind": "request",
+      "summary": "List the installed repository extensions and their active state on this attachment.",
+      "params": {
+        "$ref": "#/$defs/ExtensionScope"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/ExtensionManifest"
+        },
+        "type": "array"
+      }
+    },
+    {
+      "name": "akra/kernel/extensions/call",
+      "kind": "request",
+      "summary": "Call a versioned repository extension action in the attached kernel.",
+      "params": {
+        "$ref": "#/$defs/ExtensionCall"
+      },
+      "result": true
+    },
+    {
+      "name": "akra/kernel/extensions/changed",
+      "kind": "notification",
+      "summary": "An extension changed. Read the current state from the same repository kernel.",
+      "params": {
+        "$ref": "#/$defs/ExtensionChanged"
+      }
+    },
+    {
       "name": "akra/kernel/detach",
       "kind": "request",
       "summary": "Detach this connection. No event arrives after the answer."
@@ -5936,6 +5967,108 @@
         "coordinator"
       ],
       "type": "string"
+    },
+    "ExtensionCall": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "extension": {
+          "type": "string"
+        },
+        "input": true,
+        "kernel": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kernel",
+        "extension",
+        "version",
+        "action",
+        "input"
+      ],
+      "type": "object"
+    },
+    "ExtensionChanged": {
+      "properties": {
+        "extension": {
+          "type": "string"
+        },
+        "kernel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel",
+        "extension"
+      ],
+      "type": "object"
+    },
+    "ExtensionManifest": {
+      "properties": {
+        "actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "panel": {
+          "type": "string"
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "scope",
+        "enabled",
+        "panel",
+        "label",
+        "actions",
+        "permissions"
+      ],
+      "type": "object"
+    },
+    "ExtensionScope": {
+      "additionalProperties": false,
+      "properties": {
+        "kernel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel"
+      ],
+      "type": "object"
     },
     "Fallback": {
       "properties": {
