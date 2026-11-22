@@ -458,7 +458,7 @@ fn resume_task_after_ack(
         },
         Some(&snapshot.task_authority),
         Some(PlanningTaskAuthorityMutationAudit {
-            task_ids: &[request.question.task_id.clone()],
+            task_ids: std::slice::from_ref(&request.question.task_id),
             legacy_source_turn_id: None,
             provenance: &TaskMutationProvenance::default(),
         }),
