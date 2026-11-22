@@ -964,7 +964,7 @@ fn untracked_legacy_rows_resync_without_retracking() {
             let read = if unavailable {
                 unknown(legacy.reference())
             } else {
-                IssueSourceRead::Observed(observed(&fixture, "I_1", "fresh shared copy"))
+                IssueSourceRead::Observed(Box::new(observed(&fixture, "I_1", "fresh shared copy")))
             };
             let result = if batched {
                 adapter
