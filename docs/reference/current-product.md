@@ -307,8 +307,9 @@ implementation task; post-integration queue recovery is blocked. A previously ex
 issue may become `done` when trusted integration arrives, while cancellation and the held flag are
 preserved.
 
-Desktop execution tracking follows the detail contract below. The complete results-return
-validation (#2555) remains a separate IA4 slice. Provider closing follows the contract below.
+Desktop execution tracking and provider closing follow the contracts below. The combined
+[flow validation](#issue-automation-flow-validation) (#2555) has passed its automated regressions;
+live model validation has not been run.
 
 ## Issue Automation Feedback
 
@@ -419,6 +420,36 @@ record to report that older retained records exist. An unavailable event store i
 history is not reconstructed from projection revisions. This view adds no generic history paging.
 Execution, integration, closure, and feedback events schedule fresh queries, using the existing
 workspace, connection-generation, selection, and stale-response fences.
+
+## Issue Automation Flow Validation
+
+The IA4-5 ([#2555](https://github.com/RefinedStone/codex-exec-loop/issues/2555)) regression harness
+connects real collection, decision, coordinator, feedback, and execution services to on-disk SQLite,
+slot worktrees, and a local bare Git remote. Source/provider responses, worker completion, and the
+verified-human capability are supplied by fixtures. All seven coupled-flow scenarios passed in
+Linux; they do not establish a completed live workflow.
+
+The production private publication lease is Unix-only; its non-Unix implementation rejects the
+operation, so native Windows does not support this actual issue publication path. The coupled suite
+is gated with `#[cfg(unix)]`. The seven coupled-flow cases passed in an isolated WSL Ubuntu Linux
+clone, alongside the related SQLite and lifecycle regressions.
+
+The scenarios reconstruct services against the same durable paths after registration failures or
+lost acknowledgements. They check task identity across registration recovery, durable event receipts
+after 10,001 synthetic events trigger production retention, and comment readback without resending
+a lost create. They also cover current issue controls at slot and source-push boundaries. The run
+found and fixed a registration-ACK-loss bug: execution observation now records the first recovered
+`Submitted` fact in the same transaction as the task lineage, without backfilling existing lineage.
+Service reconstruction does not simulate an OS process kill, and synthetic events do not start
+model turns.
+
+The [validation record](../validation/issue-automation-propose-flow.md) describes the exact real/fake
+boundaries, test filters, and fields for observed results. Real model calls and test GitHub writes
+remain unperformed. Live validation is planned on Linux with Desktop, Gateway, and the confirmation
+helper sharing one user and `AKRA_HOME`, plus a GUI where the user can answer the real native
+confirmation. WSLg GUI and GitHub/model authentication have not been checked. Separate user
+permission and the product's native Start confirmation are required; the current
+implementation-plus-planning path has no global one-turn guarantee.
 
 ## Parallel Contract
 

@@ -1,0 +1,249 @@
+# 이슈 Propose 흐름의 결합 검증
+
+대상: [#2555](https://github.com/RefinedStone/codex-exec-loop/issues/2555), plan 28의 IA4-5.
+
+이 문서는 수집한 이슈가 실제 application service와 SQLite/Git 경계를 거쳐 작업·PR 전달·상태 댓글로 연결되는 회귀의 범위와, 별도 허가가 필요한 실제 모델 확인 계획을 구분한다. 아래 단언은 테스트 코드가 검사하는 계약이며, 자동 회귀의 실제 명령·환경·결과는 마지막 검증 기록에 남긴다. 실제 모델 확인은 별도다.
+
+**실제 모델 확인은 미실행이다. 이 검증 작업에서 실제 모델 호출은 0회이며, 시험용 GitHub 이슈·PR·댓글 쓰기도 수행하지 않았다.** 회귀의 URL·remote 응답·turn ID는 fixture 데이터다.
+
+## 실제 경계와 대체한 경계
+
+공통 조립은 [support.rs](../../src/application/service/parallel_mode/tests/issue_automation_flow/support.rs)에 있다.
+
+| 경계 | 회귀에서 사용하는 것 | 이 시험으로 확인하지 않는 것 |
+| --- | --- | --- |
+| 저장소와 remote | 임시 Git 저장소·slot worktree·로컬 bare remote, 실제 Git commit/push/ref 조회 | github.com으로의 Git push, 원격 인증·네트워크 |
+| 이슈 authority | 실제 `SqliteIssueAutomationStoreAdapter`와 파일 기반 SQLite | 메모리 FakeStore로 상태를 대신하지 않음 |
+| planning·task·permit | 실제 `SqlitePlanningAuthorityAdapter`, `AkraIssueWorkExecutionAdapter`, `ParallelModeService` | 가짜 task ID 반환으로 등록을 대신하지 않음 |
+| application 흐름 | 실제 collection·triage·decision·coordinator·intervention·feedback 서비스 | Gateway/Desktop 전체 실행 |
+| 정책 | fixture 전용 파일을 읽는 policy source와 실제 정책 해석 서비스 | 실제 사용자의 설정·자격 증명 |
+| 원격 이슈·댓글·PR | 상태와 호출 횟수를 보관하는 fake source/provider/GitHub adapter | 실제 GitHub API의 응답·권한·지연·장애 |
+| 사람 시작 승인 | 현재 결정에 `prepare_confirmation`을 호출한 뒤 테스트가 `VerifiedHumanConfirmation::from_verified` capability를 주입 | 실제 native 확인 창, helper 등록, proof 생성·Gateway 검증 |
+| worker 완료 | 테스트가 실제 slot에 파일과 commit을 만든 뒤 실제 완료 상태·queue API를 호출 | 구현 모델 턴, host의 전체 worker 종료 orchestration, 숨은 planning 모델 턴 |
+| 시간과 장애 | 고정 tick 시각과 호출 경계에 주입한 오류 | 실제 대기 시간, OS process kill, 전원 장애 |
+
+초기화는 실제 `commit_planning_authority_documents`를 사용해 active direction 1개, task 0개, 빈 queue와 accepted 빈 result-output 문서(`Some("# Result Output\n\n")`)를 하나의 SQLite transaction으로 저장한다. 실행 관찰에 필요한 full-document read가 가능하고 task가 비어 있는지도 단언한다. task·work-order는 미리 삽입하지 않으며 시작 승인 이후 실제 등록 경로가 만든다.
+
+서비스 재생성은 같은 workspace와 private runtime 경로를 유지한 채 기존 `FlowServices`를 drop하고, 새 coordinator·SQLite adapter·실제 execution adapter·publication journal adapter를 조립하는 방식이다. 초기화는 `FlowFixture::new`에서 한 번만 수행하며 서비스 재조립에서는 반복하지 않는다. 이미 저장한 task·work-order·ACK 상태를 그대로 읽고, 원격 서비스를 대신하는 fixture 상태와 로컬 bare remote도 유지한다.
+
+## 플랫폼과 실행 준비
+
+실제 publication journal이 사용하는 [PrivateRuntimeLease](../../src/adapter/outbound/filesystem/private_runtime_lease.rs)는 Unix 전용이다. Unix에서는 경로·소유자·권한·파일 신원을 검사하고 process-shared lock을 잡지만, `cfg(not(unix))` 구현은 `the issue persistence lease is unavailable on this platform`으로 거절한다. **현재 Windows native의 실제 issue publication 경로는 미지원**이다. Windows native에서 이 결합 회귀를 시도했을 때도 같은 경계에서 차단됐다.
+
+[parallel_mode tests 등록부](../../src/application/service/parallel_mode/tests.rs)의 결합 suite는 `#[cfg(unix)]`로 제한하며 Unix 환경에서 검증한다. 실제 publication lease를 fake로 바꾸어 Windows에서 통과시키지 않는다.
+
+다음 WSL Ubuntu 준비 상태는 확인했다. 이는 실행 호스트 준비 정보이며 결합 시험의 통과 기록은 아니다.
+
+| 항목 | 확인한 값 |
+| --- | --- |
+| 커널·아키텍처 | `6.18.58.1-microsoft-standard-WSL2` · `x86_64` |
+| libc | glibc `2.39` |
+| 사용자 | UID `1000`, home `/home/akra` |
+| Rust 도구 | cargo·rustc `1.95.0` |
+| Git·C 컴파일러 | Git `2.43.0`, GCC `13.3` |
+| Linux 실행 도구 | Node `24.14.1`, npm `11.11.0`, Codex `0.146.0`, gh `2.45.0` — 버전을 읽기 전용으로 확인 |
+| 소스 접근 | 기존 workspace 접근 가능 |
+| WSLg 연결 준비 | `DISPLAY` 환경 변수와 display socket의 존재를 읽기 전용으로 확인 |
+| GUI·인증 | 실제 Linux Desktop 창 표시·native 확인, GitHub·모델 인증은 아직 확인하지 않음 |
+
+결합 시험 7개는 이 Linux 환경 내부의 독립 clone에서 모두 통과했다. 관련 SQLite·수명 회귀를 포함한 31개 시험의 실행 SHA·명령·결과는 마지막 검증 기록에 남긴다.
+
+## 회귀 시나리오
+
+전체 필터는 `cargo test issue_automation_flow -- --nocapture`이다. 실제 실행 명령·환경·결과는 아래 기록란에 남긴다.
+
+| 파일·테스트 | 검사하는 연결 |
+| --- | --- |
+| [issue_automation_flow.rs](../../src/application/service/parallel_mode/tests/issue_automation_flow.rs) · `propose_flow_collects_approves_creates_pr_and_returns_one_status_comment` | 수집 → 시작 결정 → 실제 task 하나 → slot/전달 queue → 리뷰 대기 PR·통합 0회 → push된 exact SHA 승인 → 공식 queue 재개·동일 PR 통합 → 실행 상세·동일 댓글 소유권 |
+| 같은 파일 · `propose_flow_process_opt_in_never_replaces_start_or_pull_request_human_approval` | process opt-in만으로 task를 만들지 않음. 시작 승인 후 PR 단계는 진행하지만 별도 PR 승인 없이 통합하지 않음 |
+| [control_boundaries.rs](../../src/application/service/parallel_mode/tests/issue_automation_flow/control_boundaries.rs) · `issue_automation_flow_waiting_hold_stale_and_source_changes_fence_real_slot_admission` | 승인 후 대기 중 hold·필드 변경·이슈 closed·선택 라벨 제거·원격 읽기 실패가 실제 planning permit과 slot admission을 차단. 재조립 후에도 유지 |
+| 같은 파일 · `issue_automation_flow_takeover_at_source_push_preflight_fences_the_real_delivery` | source push 직전 takeover가 실제 전달을 차단하고, 재조립 후에도 원격 refs와 operator 소유 작업 결과를 보존 |
+| [registration_recovery.rs](../../src/application/service/parallel_mode/tests/issue_automation_flow/registration_recovery.rs) · `issue_automation_flow_registration_before_commit_recovers_one_task_after_event_retention` | 등록 호출 직전 실패 → 서비스 재조립 → 실제 task 하나 생성 → 이벤트 보관 정리·재전달 후에도 같은 task |
+| 같은 파일 · `issue_automation_flow_registration_ack_loss_keeps_one_task_after_event_retention` | 실제 등록 commit 뒤 ACK 유실 → 서비스 재조립 → 이미 저장된 task 하나 복구 → 이벤트 보관 정리 후 중복 없음 |
+| [feedback_recovery.rs](../../src/application/service/parallel_mode/tests/issue_automation_flow/feedback_recovery.rs) · `issue_automation_flow_feedback_reconciles_lost_comment_ack_after_sqlite_restart_without_resending` | 댓글 생성 효과 뒤 ACK 유실·첫 readback 실패 → 같은 SQLite 경로에서 서비스 재조립 → readback만으로 같은 intent/comment 확정 |
+
+정상 흐름은 PR 생성과 승인 후 통합을 다음 순서로 분리해 검사한다.
+
+1. fake PR 리뷰가 `REVIEW_REQUIRED`인 상태에서 실제 전달 queue를 처리해 source를 로컬 bare remote에 push하고 PR을 만든다.
+2. queue가 리뷰 부족으로 `Blocked`이고 통합 push는 0회이며 integration ref가 그대로인지 검사한다.
+3. 실제로 push된 branch HEAD를 읽어 worker source SHA와 정확히 같은지 확인한 뒤, 그 SHA에 대한 `APPROVED` 응답을 fake에 제공한다.
+4. 공개 queue API인 `process_delivery()`를 다시 호출해 정상 리뷰 차단 복구 경로로 재개한다. 테스트가 queue 상태·재시도 시각·permit·task 기록을 직접 바꾸지 않는다.
+5. 같은 queue item과 같은 PR 번호·URL로 로컬 bare remote에 통합됐는지 검사한다. 재개 과정의 PR ensure 호출은 동일 PR을 다시 확인한다.
+
+이 흐름은 실제 GitHub 사람 리뷰나 운영 브랜치 통합의 증거가 아니다. live 계획은 아래와 같이 PR까지만 진행하며 통합하지 않는다.
+
+상세 query 회귀는 이미 저장된 실행·feedback 결과를 읽을 때 source resync, provider write, feedback readback의 호출 횟수가 증가하지 않음을 함께 검사한다. 대기 중 차단 회귀의 unrelated task 검사는 permit이 workspace 전체를 막지 않는지 확인하는 범위다. unrelated task의 실제 전달까지 수행했다고 해석하지 않는다.
+
+### 등록 전 실패와 commit 뒤 ACK 유실
+
+[InterruptedSubmission](../../src/application/service/parallel_mode/tests/issue_automation_flow/registration_recovery/fault_execution.rs)은 실제 `IssueWorkExecutionPort`를 감싸는 얇은 wrapper다.
+
+- `BeforeCommit`: 첫 `submit`을 실제 adapter에 전달하기 전에 오류를 반환한다. planning task는 0개이며 issue 쪽에는 등록 의도가 남는다.
+- `AfterCommit`: 실제 adapter의 `submit`이 SQLite 등록을 마친 뒤 결과 대신 오류를 반환한다. planning에는 task 1개가 있지만 issue checkpoint는 ACK를 받지 못해 task ID를 아직 기록하지 못한다.
+- 나머지 operation은 실제 adapter에 위임한다. 가짜 task를 반환하거나 SQL로 기대 task를 주입하지 않는다.
+
+각 경우 서비스 재조립 후 authority의 task 목록, work-order의 task 목록, task에서 work-order로의 역방향 연결을 함께 검사한다. commit 뒤 ACK 유실에서는 복구 전후 task ID가 정확히 같아야 한다.
+
+
+### ACK 유실 복구에서 발견한 outbox 누락
+
+실제 등록 adapter가 task를 commit한 뒤 ACK가 유실되면, 다음 coordinator tick은 일반 등록 복구보다 실행 관찰을 먼저 수행한다. 기존 `execution::apply`는 관찰한 task 계보를 빈 checkpoint에 연결했지만 `Submitted` outbox fact는 만들지 않았다. 이후 등록 복구는 task가 이미 연결됐다고 보고 건너뛰므로 등록 사실이 영구적으로 누락됐다. 기존 단위 시험은 실제 실행 관찰을 조립하지 않아 이 순서를 거치지 않았다.
+
+수정은 [execution.rs](../../src/adapter/outbound/db/sqlite_issue_automation_store/execution.rs)에서 처음 빈 task 목록이 실제 관찰 계보로 채워질 때 공통 `events::append_fact`로 `Submitted`만 기록한다. checkpoint·execution progress·receipt·catalog·outbox를 같은 기존 SQLite transaction에 저장한다. 일반 `events::append` 전체를 호출하지 않아 불필요한 permit fact를 추가하지 않는다. 기존 계보와 보완 task 추가에는 등록 이벤트를 소급 생성하지 않는다.
+
+실제 DB 회귀는 [registration_recovery.rs](../../src/adapter/outbound/db/sqlite_issue_automation_store/execution/tests/registration_recovery.rs)에 있다.
+
+- 최초 복구, adapter 재생성, 같은 관찰 반복, ACK 이후 실행 진행·보완 계보 관찰에서 같은 `Submitted` 한 행을 유지한다.
+- 이미 task 계보가 있는 checkpoint에는 `Submitted`를 소급 생성하지 않는다.
+- catalog revision을 SQLite 최대 정수로 만들어 receipt·progress·checkpoint 쓰기 뒤 catalog 증가에서 실패시킨다. 새 adapter로 읽었을 때 checkpoint·progress·receipt·tracked 상태가 모두 롤백되고 정상 재시도에서 한 번만 기록되는지 검사한다. 이는 late transaction 실패 시험이며 outbox INSERT 자체의 실패 주입은 아니다.
+
+등록 결합 시험의 최종 ACK 뒤 단언은 원래 event ID뿐 아니라 모든 `WorkSubmitted`가 다시 나타나지 않을 것을 요구한다.
+
+### 10,001개 이벤트와 durable receipt
+
+등록 fact를 실제 `KernelEventLogPort::append_kernel_events`로 저장한 다음, 합성 `TurnStarted` 이벤트 **10,001개를 추가**한다. 이 이벤트들은 저장 부하를 위한 데이터이며 모델 실행을 뜻하지 않는다.
+
+실제 append transaction과 production retention DELETE를 사용해 최신 10,000개만 남는지, 원래 `issue_work_submitted` 이벤트는 보관 창에서 사라졌는지 검사한다. 직접 SQL DELETE로 보관 정리를 흉내 내지 않는다.
+
+이때 issue outbox ACK는 일부러 남겨 둔다. 서비스 재조립 후 다음을 검사한다.
+
+1. 보관 창에서 원래 이벤트가 사라져도 별도의 durable issue-work receipt가 남는다.
+2. 같은 outbox fact가 다시 전달되지만, 같은 event ID의 append는 새 sequence를 만들지 않는다.
+3. task는 여전히 하나이며 등록 당시 ID와 양방향 연결이 유지된다.
+4. outbox를 실제 acknowledge한 뒤 다시 조립하면 해당 fact를 더 이상 반환하지 않는다.
+
+이 범위는 호출 실패와 서비스 재생성에 대한 복구다. DB commit 도중 OS를 강제 종료하거나 WAL·파일시스템 손상을 주입한 crash 시험은 수행하지 않았다.
+
+### 댓글 ACK 유실과 실제 journal
+
+fake provider는 매 `CreateComment`마다 새 comment ID를 만든다. fake의 멱등 처리로 중복 전송을 숨기지 않는다. 첫 write에서는 원격 효과를 보관한 뒤 `Unconfirmed`를 반환하고, 첫 readback도 실패시킨다.
+
+테스트는 별도의 read-only SQLite connection으로 `issue_feedback_intents`를 직접 조회한다. 재조립 전에는 같은 intent가 `NeedsConfirmation`이고 receipt·comment owner가 없는지, publication attempts가 1인지 검사한다. 이 상태의 추가 sync가 intent를 바꾸거나 write를 재전송하지 않는지도 검사한다.
+
+기존 feedback·store·publication adapter의 `Arc`가 해제됐음을 확인한 뒤 같은 경로에 새 서비스를 조립한다. 이후 readback은 다음을 만족해야 한다.
+
+- 새 write 없이 같은 intent를 `Confirmed`로 변경한다.
+- 확정 receipt의 issue·actor·intent·comment ID·body hash가 원래 원격 효과와 일치한다.
+- `CreateComment`는 전체 1회, 재조립 후 추가 mutation은 0회다.
+- publication attempts는 1을 유지하고, 확정 outbox fact는 하나다.
+- 반복 reconcile은 이미 확정한 intent를 다시 읽거나 쓰지 않는다.
+
+댓글 intent와 receipt는 **실제 SQLite feedback journal**에 저장한다. 실제 파일 기반 `IssuePublishIntentJournalAdapter`는 collection·feedback이 공유하는 publication lease에 사용한다. 별도의 이슈 제목·본문 publication 기록은 이 댓글 시험에서 비어 있고 변경되지 않는지 확인한다. 댓글 receipt가 그 파일 journal에 저장된다고 주장하지 않는다.
+
+
+## 이슈 완료 기준과 증거 대응
+
+| #2555 완료 기준 | 자동 회귀의 증거 | 남은 범위 |
+| --- | --- | --- |
+| process opt-in만으로 통합하지 않음 | 정상 흐름의 `REVIEW_REQUIRED` 차단과 `propose_flow_process_opt_in_never_replaces_start_or_pull_request_human_approval` | 실제 native 승인·GitHub 리뷰는 live에서 별도 확인 |
+| 대기 중 hold·stale, push 직전 takeover로 해당 작업 차단; 다른 작업은 계속 | 새 control 경계 2개와 기존 `work_order_permit_wait_does_not_starve_an_unrelated_task`, `work_order_revoked_after_cherry_pick_preserves_its_result_and_allows_unrelated_integration` | 새 control 시험의 unrelated-ID 단언만으로 실제 다른 task 전달까지 판정하지 않음 |
+| 등록 전후 오류·ACK 유실·10,000개 초과 이벤트에서 task 하나 | 새 registration 결합 회귀 2개, 실제 DB 회귀 3개, 10,001개 합성 이벤트와 production retention | 호출 경계 오류·서비스 재생성 범위. OS process kill은 미실시 |
+| 이슈 closed·라벨 제거·원격 읽기 실패 뒤 낡은 자격으로 실행하지 않음 | 대기 상태 5개 변형의 실제 permit 및 slot admission 차단 | 실제 GitHub 장애·네트워크 지연은 미검증 |
+| 통합 후 검증 계약 부재로 구현을 다시 실행하지 않음 | 기존 `post_merge_contract_opens_human_recovery_and_never_reimplements`, `integrated_queue_recovery_is_blocked_even_with_zero_execution_cap`, `integrated_observation_recovery_requires_zero_execution_cap_and_preserves_attestation`, `trusted_integration_is_recorded_once_and_later_contract_recovery_stays_done` | live는 통합하지 않는 범위로 계획 |
+| 통합 상태와 외부 닫힘 분리 | 정상 흐름의 Done + 외부 Open, 기존 `external_closure` DB 회귀 4개; Desktop 표현은 [#2554 검증](desktop-issue-execution-tracking.md) | 실제 GitHub 닫힘 쓰기는 수행하지 않음 |
+| 댓글 생성 ACK 유실·readback 실패에서 중복 댓글 없음 | 새 feedback 회귀의 실제 SQLite intent·receipt·owner와 provider CreateComment 전체 1회 | 실제 GitHub 응답 유실은 미검증 |
+| 실제 확인 SHA·OS·명령·결과·skip 기록 | 아래 자동 회귀 기록과 명시적인 미실행 항목 | **실제 모델 확인은 사용자 허가 대기** |
+
+## 실제 모델 확인 계획: 미실행
+
+[AGENTS.md](../../AGENTS.md)의 검증 지침은 `turn/start`·`turn/steer` 전에 사용자 허가를 요구한다. #2555의 실제 모델 확인은 자동 회귀와 별도로, 대상 저장소·변경 범위·모델 실행 범위·외부 쓰기를 구체화해 사용자 허가를 받은 뒤 진행한다. 일반 개발·PR 작업 허가를 실제 모델 검증 허가로 바꾸어 해석하지 않는다.
+
+또한 제품의 시작 결정은 [정식 native 확인 경로](issue-human-confirmation.md)를 거쳐야 한다. 위 테스트 capability를 실제 실행에 주입하거나 proof를 직접 만들지 않는다. runtime의 Propose 상향 확인과 해당 이슈의 Start 확인은 각각의 실제 native 행동이다.
+
+### 모델 실행 수의 제한
+
+현재 정상 완료 경로는 다음 추가 모델 실행을 포함한다.
+
+- 구현 worker 1회
+- 공식 완료를 반영하는 planning worker 1회 이상
+
+[parallel_mode/orchestrator_loop.rs](../../src/application/service/parallel_mode/orchestrator_loop.rs)의 `run_parallel_dispatch_official_completion`은 [planning worker orchestration](../../src/application/service/planning/worker/orchestration.rs)을 거쳐 [AppServerPlanningWorkerAdapter](../../src/adapter/outbound/app_server/planning_worker.rs)를 호출한다. [app_server 구현](../../src/adapter/outbound/app_server/mod.rs)의 `run_hidden_planning_thread_stream`은 실제 모델 턴을 시작한다. 조사 시점의 planning 모델 상수는 `gpt-5.4`다.
+
+`budget.max_attempts = 1`은 구현 task의 실행 시도 제한이며 이 planning 턴까지 합산하는 전역 예산이 아니다. `:turns`는 단일 세션 auto-follow를 제어하고 parallel continuation은 별도다. 현재 설정·공개 명령으로 **총 모델 턴 1회, 또는 총 2회의 확실한 상한과 모든 자동 재시도 0회**를 보장한다고 말할 수 없다. 완료 시점에 수동 중단을 보내는 것도 다음 턴과 경쟁하므로 상한 장치가 아니다.
+
+따라서 “총 1회만 허용” 조건에서는 이 정상 경로를 PR까지 실행하지 않는다. 실행 범위를 다시 합의하거나 구현·planning 전체를 제한하는 장치를 마련한 뒤 계획을 확정해야 한다. 추가 모델 요청을 피하려면 [PR 리뷰 backend](../reference/pr-review-backend.md)도 `off`여야 한다. `observe`도 모델을 호출한다.
+
+### 허가 전에 확정할 대상과 쓰기 범위
+
+| 항목 | 제안 범위 |
+| --- | --- |
+| 저장소 | `RefinedStone/codex-exec-loop` |
+| 실행본 | 실제 검증을 통과한 확정 SHA·바이너리 경로를 기록 |
+| 실행 환경 | Linux에서 같은 사용자로 Desktop·Gateway·확인 helper 실행, 사람이 사용할 수 있는 GUI |
+| 작업공간 | Linux 내부의 독립 clone 1개, 위 프로세스가 공유하는 시험 전용 `AKRA_HOME` |
+| 시험 base | 제안 이름 `codex/issue-2555-live-base-20261122`, 시작 코드 SHA `3f437930f45d925372448cf6b4955411fbeb2b64`. 실제 생성은 허가 후 수행 |
+| 선택 대상 | 시험용 이슈 1건만 선택하는 라벨. 라벨이 없으면 생성 1회도 쓰기 범위에 포함 |
+| 이슈 | 검증 문서 파일 하나와 명시적인 수락 기준을 담은 시험 이슈 생성 1회 |
+| PR | 실제 task branch를 push하고 시험 base 대상으로 PR 생성 목표 1회 |
+| 상태 댓글 | 새 댓글 1개 및 같은 댓글의 상태 갱신. 전체 수정 횟수의 설정 상한은 없음 |
+| 통합과 닫힘 | 운영·시험 base로의 결과 통합 0회, PR merge 0회, 이슈 close 0회 |
+
+`parallel.integration_branch`는 시험 branch로 설정할 수 있다. [설정 계약](../reference/configuration.md)과 readiness는 해당 원격 branch의 사전 생성·fetch를 요구한다. 대상이 달라지면 frozen target 검사로 차단하며 운영 branch로 fallback하지 않는다.
+
+유효 정책은 `propose`, 시험 선택 라벨 하나, 확인된 stable actor ID, `budget.max_attempts = 1`, 사용자 허가 `feedback.comment = true`, `feedback.labels = false`, `feedback.transition = false`, `close.when = "never"`로 제한한다. PR mode는 `required`, autonomous delivery opt-in은 끈 상태로 둔다. 공개 저장소 실행에는 별도의 parent-process public-repository opt-in을 확인한다.
+
+live 최소 구성은 같은 Linux 사용자·`AKRA_HOME`·로컬 파일시스템과 IPC를 공유하는 Desktop, Gateway, confirmation helper와 작업공간이다. Desktop이 로컬 `akra-gateway desktop-confirmation-bridge`를 시작하고 Gateway가 자기 `AKRA_HOME/run`의 파일과 Unix socket을 검증한다. 사용자는 실제 GUI의 native 확인 창에서 Propose 상향과 Start를 확인해야 한다. Windows Desktop의 원격 host 조회 기능은 이 로컬 승인 경로를 제공하지 않는다.
+
+WSLg의 `DISPLAY`와 display socket 존재는 읽기 전용으로 확인했지만, 실제 Linux Desktop 창 표시·native 확인과 GitHub·모델 인증은 아직 확인하지 않았다. 현재 WSL 준비 정보만으로 live 실행 가능 상태라고 판정하지 않는다. Linux 실행본의 검증 SHA와 경로, 실제 worker profile·모델 접근 권한, repo-local GitHub identity와 필요한 쓰기 권한, 설정을 덮어쓰는 환경변수, native Desktop/Gateway 연결, active direction·빈 task authority, PR 생성으로 작동할 CI·외부 리뷰를 실행 전에 확인한다. 자격 증명 원문은 출력하지 않는다.
+
+### 예정된 관찰과 종료 기준
+
+아래는 실행 결과가 아닌 확인 계획이다. `$LiveWorkspace`는 허가받은 시험 clone 경로다.
+
+```powershell
+akra kernel query planning --workspace "$LiveWorkspace" --json
+akra kernel query issue_automation_policy --workspace "$LiveWorkspace" --json
+akra kernel query issue_automation --workspace "$LiveWorkspace" --json
+akra kernel query parallel --workspace "$LiveWorkspace" --json
+akra kernel query issues --workspace "$LiveWorkspace" --json
+```
+
+수집은 `akra kernel issue sync_issues`로, 실제 Start 승인은 Desktop native 확인으로 진행한다. 필요한 모델 허가와 준비 조건이 충족된 뒤에만 TUI `:parallel`로 실행한다. `:parallel on`은 지원 명령이 아니다. 상세 query에는 목록이 반환한 전체 `IssueEventReference`를 사용한다.
+
+성공 기준은 실제 task 하나, 지정 파일만의 변경, exact active validation lineage의 PR URL, 시험 base의 일치, 동일 status comment ID와 확정 journal이다. PR 사람 리뷰를 승인하지 않고 결과 통합을 수행하지 않으므로 integration 기록과 `Done`을 요구하지 않는다. 외부 이슈는 Open으로 남아야 한다.
+
+관찰 뒤 중단은 `akra kernel thread stop_all --workspace "$LiveWorkspace" --json`을 사용할 수 있다. 이 명령은 실행 종료 수단이며 모델 호출 수의 사전 상한이 아니다. 실제 호출 수·댓글 수정 수·게시 영수증·PR URL을 결과에 별도로 기록한다.
+
+## 검증 기록 — 자동 회귀 완료, 실제 모델 확인 미실행
+
+| 항목 | 기록 |
+| --- | --- |
+| 실행일 | 2026-11-22 (Asia/Seoul) |
+| 검증 코드 SHA | `3f437930f45d925372448cf6b4955411fbeb2b64` — 실행한 소스 14개 파일의 SHA-256 일치를 확인한 뒤 commit. 이 검증 문서는 후속 문서 commit에 포함 |
+| 선행 기준 SHA | `0eadc69069f0183a9ea1bd6025086514f04c28b0` — [PR #2642](https://github.com/RefinedStone/codex-exec-loop/pull/2642) |
+| Linux 환경 | 위 WSL Ubuntu 환경. Windows PATH를 상속하지 않는 Linux 전용 PATH와 독립 Linux clone·target 사용 |
+| Linux 실행 바이너리 | `/home/akra/.cache/akra-validation/codex-exec-loop-target/debug/deps/codex_exec_loop_native-dda04b32f448d3e9` |
+| Linux 결합·관련 회귀 | **31 passed, 0 failed, 0 ignored**, 시험 33.70초. 새 결합 7개·새 DB 3개 포함. 아래 명령의 겹치는 필터는 한 시험으로 실행 |
+| Windows DB 회귀 | `cargo test --locked --all-features --lib sqlite_issue_automation_store::execution::tests` — **15 passed, 0 failed** |
+| planner 결과 | `node scripts/agent-plan.mjs` → Full. `git diff --check`와 `powershell -NoProfile -File scripts/check_native_pr.ps1 -Mode Full` 모두 성공 |
+| Windows Full 세부 | native contracts, build·check·clippy, Desktop 검사 성공. Vitest **950 passed, 7 skipped**; 기존 skip 유지 |
+| UI E2E | 이 PR의 자체 UI 변경 없음. 선행 [#2554 검증](desktop-issue-execution-tracking.md)의 전체 25 spec 통과와 기존 Windows terminal skip 1개를 재사용; 이 항목을 이번 로컬 실행 결과로 합산하지 않음 |
+| 포맷·차이 검사 | `cargo fmt --all`, `git diff --check` 성공 |
+| Windows native 결합 suite | Unix-only publication lease 때문에 `#[cfg(unix)]`로 제외. Windows에서 이 7개가 통과했다고 보고하지 않음 |
+| 실제 모델 검증 사용자 허가 | 미확보·미실행 |
+| 실제 모델 호출 수 | 0회 |
+| 시험용 실제 GitHub 이슈·PR·댓글 쓰기 | 0회. 이 변경을 전달하는 개발 PR은 시험용 실행에 포함하지 않음 |
+| live base·이슈·PR·comment ID·journal 증거 | 없음 — live 미실행 |
+| OS process kill 시험 | 미실시 |
+
+Linux에서 실행한 결합·관련 회귀 명령:
+
+```bash
+cargo test --locked --all-features --lib -- \
+  issue_automation_flow \
+  sqlite_issue_automation_store::execution::tests \
+  work_order_permit_wait_does_not_starve_an_unrelated_task \
+  work_order_revoked_after_cherry_pick_preserves_its_result_and_allows_unrelated_integration \
+  trusted_integration_is_recorded_once_and_later_contract_recovery_stays_done \
+  integrated_queue_recovery_is_blocked_even_with_zero_execution_cap \
+  integrated_observation_recovery_requires_zero_execution_cap_and_preserves_attestation \
+  post_merge_contract_opens_human_recovery_and_never_reimplements \
+  external_closure \
+  --nocapture
+```
+
+실행 환경의 PATH는 `/home/akra/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`으로 제한했다. Windows PATH를 그대로 상속하면 Git의 trusted-executable 경로 검증이 Windows mount를 반복 조회해 지연됐으므로, Linux 실행 환경만 바로잡고 production 경로 검증은 바꾸지 않았다.
+
+원본 결과 로그는 실행 호스트의 `C:/dev/akra-queue/analysis/issue-2555-flow-fixed.log`와 `C:/dev/akra-queue/analysis/issue-2555-final-full-gate.log`에 남겼다. PR의 최종 commit에 대한 공식 CI 결과는 PR 본문에서 연결한다.
+
+자동 회귀 결과와 live 결과는 따로 기록한다. 자동 회귀 통과만으로 실제 native 승인, 모델 수행, GitHub 전달 또는 OS crash 복구까지 성공했다고 결론 내리지 않는다.

@@ -139,8 +139,8 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 ## 이슈 자동화 실행
 
 적용 범위는 IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551))의
-[PR #2638 구현 브랜치](https://github.com/RefinedStone/codex-exec-loop/pull/2638)입니다.
-미병합 구현과 부모 체인의 상태는 [plan 28](../../plan/28-akra-issue-automation.md#ia4-조각-상태)에 기록합니다.
+[PR #2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638)입니다.
+각 구현 PR과 부모 체인의 상태는 [plan 28](../../plan/28-akra-issue-automation.md#ia4-조각-상태)에 기록합니다.
 
 이슈 조정기는 중립 실행 port를 통해 기존 작업 지시의 task 계보, worker 세션, PR 검증 사실을 읽고
 큐 대기·실행 중·리뷰 중·통합 상태를 이슈 장부에 맞춥니다. 로컬 추적은 원격 이슈 수집과 별도로 돌며,
@@ -153,7 +153,8 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 `queue_recovery` 종료 영수증은 검증 횟수를 올립니다. `budget.max_attempts`는 보완 task를 포함한 구현 시도에 적용하며,
 영속 실행 admission에서 검사합니다. 같은 논리 task의 질문에 답해 재개하는 것은 구현 시도를 추가로
 차감하지 않습니다. 실행 한도에 도달한 뒤에도 보완이 필요하면 이슈는 `failed`가 되고 사람의 복구
-결정을 요구합니다. 게시 횟수의 처리는 피드백 후속 조각(#2552)의 범위입니다.
+결정을 요구합니다. 게시 횟수는 [외부 피드백(#2552)](../../reference/current-product.md#issue-automation-feedback)의
+영속 전송 일지에서 별도로 셉니다.
 
 | 종료 분류 | 실행 대응 |
 | --- | --- |
@@ -178,8 +179,10 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 관찰합니다. 새 구현 task를 만들지 않으며, 통합 후 큐 복구는 차단합니다. 한도 소진으로 `failed`였던
 이슈도 뒤늦게 신뢰된 통합이 확인되면 `done`으로 바뀔 수 있지만, 취소 상태와 보류 표시는 보존합니다.
 
-외부 피드백(#2552), 외부 이슈 닫힘 정책(#2553), Desktop 실행 추적 표시 확장(#2554),
-결과 반환까지의 전체 흐름 검증(#2555)은 IA4의 별도 조각입니다.
+현재 구현의 [외부 피드백(#2552)](../../reference/current-product.md#issue-automation-feedback),
+[통합과 외부 이슈 닫힘(#2553)](../../reference/current-product.md#issue-integration-and-external-closure),
+[Desktop 실행 추적(#2554)](#이슈-실행-추적-화면) 계약은 연결한 reference를 따릅니다.
+결과 반환까지의 [흐름 검증(#2555)](#이슈-자동화-흐름-검증)은 아래에 구분해 기록합니다.
 
 ## 이슈 실행 추적 화면
 
@@ -204,6 +207,33 @@ runtime 기록을 sequence로 합치고 중복을 없애며, 기록 시각이 �
 명시하고, 빠진 기록을 projection의 revision으로 만들어 내지 않는다. 범용 이력 페이지 기능은
 포함하지 않는다. 실행·통합·닫힘·피드백 이벤트는 현재 이슈를 다시 조회하며, 다른 작업 공간이나
 이전 연결·선택의 늦은 응답은 기존 경계에서 버린다.
+
+## 이슈 자동화 흐름 검증
+
+IA4-5 ([#2555](https://github.com/RefinedStone/codex-exec-loop/issues/2555))의 결합 회귀는 실제
+collection·decision·coordinator·feedback·execution 서비스, 파일 기반 SQLite, slot worktree와
+로컬 bare Git remote를 연결한다. source/provider 응답, worker 완료와 검증된 사람 확인 capability는
+fixture가 제공한다. Linux에서 결합 회귀 7개가 모두 통과했으며 실제 모델 확인은 미실행이다.
+
+실제 private publication lease는 Unix 전용이며 non-Unix 구현은 요청을 거절한다. 따라서
+Windows native의 실제 이슈 publication 경로는 현재 미지원이다. 결합 suite는 `#[cfg(unix)]`로
+제한한다. WSL Ubuntu의 Linux 내부 독립 clone에서 결합 시험 7개와 관련 SQLite·수명 회귀를
+통과했으며 명령·환경·결과는 검증 문서에 기록한다.
+
+등록 전 실패와 등록 commit 뒤 ACK 유실, 댓글 효과 뒤 ACK 유실·첫 readback 실패를 주입하고
+같은 영속 경로에 서비스를 새로 조립한다. task 신원 보존, 합성 이벤트 10,001개 추가 후 실제
+retention과 durable receipt, 댓글 재전송 없는 읽기 확정을 검사한다. 대기 중 이슈 변경·보류와
+source push 직전 takeover가 실제 실행·전달 경계에 도달하는지도 포함한다. 이 과정에서 등록 ACK가
+유실된 뒤 실행 관찰이 task 연결만 복구하고 `Submitted`를 누락하던 버그를 수정했다. 최초 복구의
+등록 fact와 계보를 같은 transaction에 저장하며 기존 계보에는 소급 생성하지 않는다.
+서비스 재조립은 OS process kill 시험이 아니며 합성 이벤트는 모델 턴을 시작하지 않는다.
+
+실제·가짜 경계, 테스트 필터와 실행 결과 기록란은 [검증 문서](../../validation/issue-automation-propose-flow.md)에
+둔다. 실제 모델 호출과 시험용 GitHub 쓰기는 수행하지 않았다. live는 Linux에서 Desktop·Gateway·
+확인 helper가 같은 사용자·`AKRA_HOME`을 공유하고, 사용자가 실제 native 확인 창에 응답할 수 있는
+GUI를 사용하는 구성으로 계획한다. WSLg GUI와 GitHub·모델 인증은 아직 확인하지 않았다.
+별도 사용자 허가와 제품의 native 시작 확인이 필요하며, 현재 구현 worker와 planning worker를
+포함하는 경로에는 모델 턴 총 1회를 보장하는 전역 제한이 없다.
 
 ## Parallel 계약
 
