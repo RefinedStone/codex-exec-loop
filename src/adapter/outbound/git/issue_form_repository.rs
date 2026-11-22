@@ -652,9 +652,14 @@ fn cas_ref(
         require_oid(expected)?;
     }
     let absent = "0".repeat(next.len());
+    // A competing writer can hold the lock before the ref value changes. Let Git
+    // wait for that transaction while retaining the same expected-value guard.
+    // This bounded lock wait does not retry a journal transition or remote write.
     let output = git_output(
         repository,
         &[
+            "-c",
+            "core.filesRefLockTimeout=5000",
             "update-ref",
             "--no-deref",
             reference,
