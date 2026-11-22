@@ -59,7 +59,7 @@ impl SqliteTelegramGlobalRunnerLeaseAdapter {
     fn store_path(&self) -> Result<PathBuf> {
         let store_path = match self.store_path_override.clone() {
             Some(path) => path,
-            None => stable_telegram_data_root()?
+            None => crate::stable_user_data_root::stable_user_data_root()?
                 .join(GLOBAL_DIRECTORY)
                 .join(TELEGRAM_DIRECTORY)
                 .join(RUNTIME_DIRECTORY)
@@ -110,58 +110,6 @@ impl SqliteTelegramGlobalRunnerLeaseAdapter {
             .context("failed to validate final global Telegram runner sidecars")?;
         Ok(connection)
     }
-}
-
-#[cfg(unix)]
-fn stable_telegram_data_root() -> Result<PathBuf> {
-    use std::ffi::CStr;
-    use std::os::unix::ffi::OsStringExt;
-
-    let uid = unsafe { libc::geteuid() };
-    let buffer_size = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
-    let buffer_size = if buffer_size <= 0 {
-        16 * 1024
-    } else {
-        usize::try_from(buffer_size)
-            .unwrap_or(16 * 1024)
-            .min(1024 * 1024)
-    };
-    let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
-    let mut result = std::ptr::null_mut();
-    let mut buffer = vec![0_u8; buffer_size];
-    let status = unsafe {
-        libc::getpwuid_r(
-            uid,
-            record.as_mut_ptr(),
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-            &mut result,
-        )
-    };
-    if status != 0 || result.is_null() {
-        bail!("failed to resolve the stable operating-system home for Telegram runtime data");
-    }
-    let record = unsafe { record.assume_init() };
-    if record.pw_dir.is_null() {
-        bail!("operating-system account has no home directory for Telegram runtime data");
-    }
-    let home = PathBuf::from(std::ffi::OsString::from_vec(
-        unsafe { CStr::from_ptr(record.pw_dir) }.to_bytes().to_vec(),
-    ));
-    if !home.is_absolute() {
-        bail!("operating-system account home must be absolute for Telegram runtime data");
-    }
-    Ok(home.join(".akra"))
-}
-
-#[cfg(windows)]
-fn stable_telegram_data_root() -> Result<PathBuf> {
-    Ok(crate::private_fs::windows_local_app_data_path()?.join("Akra"))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn stable_telegram_data_root() -> Result<PathBuf> {
-    bail!("stable Telegram runtime storage is unsupported on this platform")
 }
 
 impl TelegramGlobalRunnerLeasePort for SqliteTelegramGlobalRunnerLeaseAdapter {

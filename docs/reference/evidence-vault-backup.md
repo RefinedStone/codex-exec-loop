@@ -65,8 +65,10 @@ receives its records.
    scope. The remote issue (provider, server, repository, issue) is never changed. Records of
    projects without an approval are not written; the report lists those projects. An import with
    an empty approval list is a check of the recovery key and a list of the projects in the archive.
-4. The local device key is not replaced. A device without a key gets a new device key. The device
-   key of the exporting device is used in memory only and is not stored.
+4. The local device key is not replaced. A device without a key can obtain one through the
+   [coordinated initializer](./evidence-vault-key-initialization.md). An unresolved attempt stops
+   import with `Locked(KeyStoreUnavailable)` before the backup adapter runs. The exporting
+   device key is used in memory only and is not stored.
 5. A readable local `CurrentVersion` is never changed (`kept_local`), including in recovery mode.
    An unreadable binding returns `LocalRecoveryRequired` in `PreserveLocal` mode. Only explicit
    `RecoverUnreadable` approval replaces that issue's backup field records and installs its binding
@@ -114,4 +116,5 @@ restore is held and the user reconnects on that issue (see [architecture](./arch
   on Unix only.
 - Concurrent import, publish finalization, and service reconnect use the same per-issue binding
   lease. This does not make the entire multi-issue archive atomic or add a distributed transaction
-  with the provider. Native Desktop reconnect remains separate follow-up work.
+  with the provider. Native Desktop reconnect uses the same transaction behind its
+  [dedicated confirmation and session boundary](../validation/desktop-vault-native-reconnect.md).

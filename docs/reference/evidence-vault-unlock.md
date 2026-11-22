@@ -21,8 +21,11 @@ profiles hold viewing; see [Desktop restore window](#desktop-restore-window).
   | Other platforms, Linux without a Secret Service | Not supported |
 
 - The key is 32 random bytes from the OS random source. `EvidenceVaultUnlockService::sealing_key`
-  makes it the first time a record is sealed. The key is not written to the vault folder, the
-  repository, a Kernel event, or a Gateway response.
+  requests it through `get_or_create_key`. The OS adapter coordinates first creation across
+  processes with a private durable intent and verifies the stored key before returning it.
+  Unresolved attempts hold creation; retrying does not send another candidate. See
+  [key initialization](./evidence-vault-key-initialization.md). The key is not written to the
+  initialization database, vault folder, repository, a Kernel event, or a Gateway response.
 - Each record stores a key identifier: the first 64 bits of a SHA-256 fingerprint of the key. The
   identifier does not disclose the key.
 
@@ -49,7 +52,7 @@ The caller gets one of these reasons and shows the shared (masked) copy only.
 | `AuthenticationCancelled` | The user cancelled the confirmation, or the OS denied or the user cancelled the key store authentication. |
 | `SessionExpired` | The viewing session ended, or the session holds no grant for the issue. |
 | `KeyLost` | The key store works but holds no Vault key. |
-| `KeyStoreUnavailable` | The key store failed for another reason. A retry is possible. |
+| `KeyStoreUnavailable` | The key store failed, or a creation attempt remains unresolved. A later request can re-read the key; it does not automatically create another key. |
 
 The unlock service has no access to the record store. A cancel or a failure does not delete or
 change ciphertext records, and does not create or replace the key. A cancelled user confirmation
@@ -69,8 +72,9 @@ no second copy unless the user made a backup archive and kept its recovery key
   returns to the key store (for example from an OS-level keychain backup).
 - The shared copy on the provider is not affected. It stays readable, with the masked segments
   masked.
-- The next sealed record makes a new key with a new key identifier. Old records then fail with
-  `KeyMismatch`; they are not overwritten by this.
+- After a settled generation loses its key, the next sealed record can create a new generation
+  and key identifier. A pending initialization with no readable key holds instead. Old records
+  fail with `KeyMismatch` when a different key is used; they are not overwritten by this.
 - Records that are in a backup archive can be imported again with the recovery key of that
   archive. Records made after the export, and records without an archive, stay lost.
 

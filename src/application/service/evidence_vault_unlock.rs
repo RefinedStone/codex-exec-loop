@@ -12,7 +12,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rand::{RngCore, rngs::OsRng};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
@@ -24,11 +23,7 @@ use crate::application::port::outbound::vault_key_store_port::{
 };
 use crate::domain::issue_work::IssueReference;
 
-/// ChaCha20-Poly1305 의 키 길이이다.
-const VAULT_KEY_LEN: usize = 32;
 const KEY_ID_DOMAIN: &[u8] = b"akra-evidence-vault-key-id";
-/// 여러 서비스 인스턴스도 같은 프로세스의 OS 키 항목을 공유한다.
-static KEY_INITIALIZATION: Mutex<()> = Mutex::new(());
 /// 다른 서비스 인스턴스에 보관 요청을 넘겨도 세션 번호가 겹치지 않는다.
 static NEXT_VIEWING_SESSION: AtomicU64 = AtomicU64::new(1);
 
@@ -177,19 +172,10 @@ impl EvidenceVaultUnlockService {
     /// 새 레코드를 암호화할 키를 준다. 키 저장소에 키가 없으면 새 키를 만들어 저장한다. 평문을 돌려주지 않으므로
     /// 사용자 확인이 필요 없다. 키를 잃은 뒤에 만든 새 키는 이전 레코드를 열지 못한다 (키 식별자가 다르다).
     pub fn sealing_key(&self) -> Result<VaultRecordKey, VaultSharedCopyReason> {
-        // 조회, 최초 생성, 저장을 한 구간으로 묶는다. 키 저장 실패도 이 잠금을 놓은 뒤 재시도한다.
-        let _initialization = KEY_INITIALIZATION
-            .lock()
-            .map_err(|_| VaultSharedCopyReason::KeyStoreUnavailable)?;
-        if let Some(key) = self.key_store.load_key().map_err(shared_copy_reason)? {
-            return Ok(record_key(key));
-        }
-        // 서로 다른 프로세스의 키 생성은 OS 키 저장소의 원자적 get-or-create 지원이 필요하다.
-        let mut bytes = vec![0u8; VAULT_KEY_LEN];
-        OsRng.fill_bytes(&mut bytes);
-        let key = VaultKey::new(bytes);
-        self.key_store.store_key(&key).map_err(shared_copy_reason)?;
-        Ok(record_key(key))
+        self.key_store
+            .get_or_create_key()
+            .map(record_key)
+            .map_err(shared_copy_reason)
     }
 
     /// 보관하거나 복제한 복원 요청도 원래 열람 세션이 살아 있을 때만 유효하다.
@@ -376,8 +362,8 @@ mod tests {
                 }
                 Ok(Some(VaultKey::new(KEY.to_vec())))
             }
-            fn store_key(&self, _key: &VaultKey) -> Result<(), VaultKeyStoreError> {
-                panic!("access never stores a key");
+            fn get_or_create_key(&self) -> Result<VaultKey, VaultKeyStoreError> {
+                panic!("access never creates a key");
             }
         }
         let store = Arc::new(EndingStore {
@@ -413,6 +399,7 @@ mod tests {
             shared_copy_only(VaultSharedCopyReason::AuthenticationCancelled)
         );
         assert_eq!(store.load_count(), 0);
+        assert_eq!(store.initialization_count(), 0);
         assert_eq!(store.stored_key(), Some(VaultKey::new(KEY.to_vec())));
     }
 
@@ -475,7 +462,7 @@ mod tests {
         let first = service.sealing_key().expect("the key store works");
         let second = service.sealing_key().expect("the key store works");
 
-        assert_eq!(first.key.expose().len(), VAULT_KEY_LEN);
+        assert_eq!(first.key.expose().len(), 32);
         assert_eq!(first, second);
         assert_eq!(store.stored_key(), Some(first.key.clone()));
     }
@@ -493,10 +480,15 @@ mod tests {
             fn load_key(&self) -> Result<Option<VaultKey>, VaultKeyStoreError> {
                 Ok(self.key.lock().expect("key lock").clone())
             }
-            fn store_key(&self, key: &VaultKey) -> Result<(), VaultKeyStoreError> {
+            fn get_or_create_key(&self) -> Result<VaultKey, VaultKeyStoreError> {
+                let mut stored = self.key.lock().expect("key lock");
+                if let Some(key) = stored.as_ref() {
+                    return Ok(key.clone());
+                }
+                let key = VaultKey::new(KEY.to_vec());
                 self.stores.fetch_add(1, Ordering::SeqCst);
-                *self.key.lock().expect("key lock") = Some(key.clone());
-                Ok(())
+                *stored = Some(key.clone());
+                Ok(key)
             }
         }
         let store = Arc::new(CountingStore {
@@ -563,3 +555,6 @@ mod tests {
         assert!(!format!("{access:?}").contains("0123456789abcdef"));
     }
 }
+
+#[cfg(test)]
+mod process_initialization_tests;
