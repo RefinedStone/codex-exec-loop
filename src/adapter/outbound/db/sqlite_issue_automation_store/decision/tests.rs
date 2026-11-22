@@ -433,7 +433,7 @@ fn schema_v3_migration_preserves_existing_catalog_assessment_and_source() {
     adapter
         .with_connection(fixture.cwd(), |connection, _guard| {
             connection
-                .execute_batch("DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; PRAGMA user_version = 3;")?;
+                .execute_batch("DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; PRAGMA user_version = 3;")?;
             super::super::validate_schema_version(connection, 3)
         })
         .unwrap();
@@ -641,7 +641,7 @@ fn schema_v4_migration_preserves_existing_catalog_assessment_and_source() {
     adapter
         .with_connection(fixture.cwd(), |connection, _guard| {
             connection
-                .execute_batch("DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; PRAGMA user_version = 4;")?;
+                .execute_batch("DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; PRAGMA user_version = 4;")?;
             super::super::validate_schema_version(connection, 4)
         })
         .unwrap();
@@ -679,7 +679,7 @@ fn schema_v5_migration_preserves_existing_decision_and_observation_records() {
     assert!(decision.is_some());
     adapter.with_connection(fixture.cwd(), |connection, _guard| {
         connection.execute_batch(
-            "DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; PRAGMA user_version = 5;",
+            "DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; PRAGMA user_version = 5;",
         )?;
         super::super::validate_schema_version(connection, 5)
     }).unwrap();
@@ -712,3 +712,5 @@ fn schema_v5_migration_preserves_existing_decision_and_observation_records() {
         })
         .unwrap();
 }
+
+mod feedback_deferred;

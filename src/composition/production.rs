@@ -572,12 +572,15 @@ fn build_issue_drafts()
         Ok(PathBuf::from(location.runtime_dir))
     });
     // Creation and updates share the same ordering owner and restore-link mutex.
-    let publisher = Arc::new(IssueJournaledPublishService::new(
-        snapshot.clone(),
-        Arc::new(GithubIssueUpdateAdapter::new(akra_home.clone())),
-        Arc::new(journal),
-        vault.clone(),
-    ));
+    let publisher = Arc::new(
+        IssueJournaledPublishService::new(
+            snapshot.clone(),
+            Arc::new(GithubIssueUpdateAdapter::new(akra_home.clone())),
+            Arc::new(journal),
+            vault.clone(),
+        )
+        .with_feedback_store(super::issue_collection::build_feedback_store()),
+    );
     let creation_journal = IssueCreationJournalAdapter::new(|workspace_dir| {
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;

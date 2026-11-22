@@ -7,7 +7,9 @@ use super::super::issue_interaction::{
 };
 use super::super::{IssueDecisionRequestState, KernelProtocolError, KernelQuery};
 use super::{IssueListItem, IssueTriageObserveReportState};
-use crate::domain::issue_automation::collection::IssueCollectionDetail;
+use crate::domain::issue_automation::collection::{
+    IssueCollectionDetail, IssueFeedbackDetail, IssueFeedbackDetailReason,
+};
 use crate::domain::issue_automation::decision::IssueDecisionState;
 use crate::domain::issue_work::IssueReference;
 
@@ -43,6 +45,40 @@ pub struct IssueDetailState {
     pub conversation: IssueConversationState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<IssueTriageObserveReportState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<IssueFeedbackDetailState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueFeedbackDetailState {
+    pub revision: u64,
+    pub publication_attempts: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<IssueFeedbackDetailReasonState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueFeedbackDetailReasonState {
+    FeedbackUnconfirmed,
+}
+
+impl From<&IssueFeedbackDetail> for IssueFeedbackDetailState {
+    fn from(detail: &IssueFeedbackDetail) -> Self {
+        Self {
+            revision: detail.revision,
+            publication_attempts: detail.publication_attempts,
+            comment_id: detail.comment_id.clone(),
+            reason: detail.reason.map(|reason| match reason {
+                IssueFeedbackDetailReason::FeedbackUnconfirmed => {
+                    IssueFeedbackDetailReasonState::FeedbackUnconfirmed
+                }
+            }),
+        }
+    }
 }
 
 impl IssueState {
@@ -89,6 +125,7 @@ impl IssueState {
                     .map(|interaction| (&interaction.conversation).into())
                     .unwrap_or_default(),
                 report,
+                feedback: detail.feedback.as_ref().map(Into::into),
             })),
             None => Self::NotFound {
                 revision: detail.revision,

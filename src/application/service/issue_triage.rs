@@ -269,6 +269,7 @@ impl IssueTriageService {
             item,
             report: Some(report),
             interaction: None,
+            feedback: None,
         })
     }
 

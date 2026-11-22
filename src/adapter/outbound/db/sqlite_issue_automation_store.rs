@@ -43,6 +43,7 @@ mod decision;
 mod events;
 mod execution;
 mod execution_answers;
+mod feedback;
 mod intervention;
 mod private_store;
 mod triage;
@@ -53,7 +54,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -763,7 +764,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=7) => {
+            (APPLICATION_ID, version @ 1..=8) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -792,9 +793,13 @@ fn ensure_schema(
                     transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
                     transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
                 }
-                transaction.execute_batch(execution::SCHEMA)?;
-                transaction.execute_batch(execution::RECEIPT_SCHEMA)?;
-                execution_answers::create_schema(transaction)?;
+                if version < 8 {
+                    transaction.execute_batch(execution::SCHEMA)?;
+                    transaction.execute_batch(execution::RECEIPT_SCHEMA)?;
+                    execution_answers::create_schema(transaction)?;
+                }
+                feedback::create_schema(transaction)?;
+                feedback::seed_existing_grants(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -824,6 +829,7 @@ fn ensure_schema(
                 transaction.execute_batch(execution::SCHEMA)?;
                 transaction.execute_batch(execution::RECEIPT_SCHEMA)?;
                 execution_answers::create_schema(transaction)?;
+                feedback::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -888,6 +894,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
         expected.push((execution::RECEIPT_TABLE, execution::RECEIPT_SCHEMA));
         expected.push((execution_answers::TABLE, execution_answers::SCHEMA));
         expected.extend(execution_answers::INDEXES);
+    }
+    if version >= 9 {
+        expected.extend(feedback::schema_objects());
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {
