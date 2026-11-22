@@ -107,7 +107,7 @@ function overviewAnswer(type: string | undefined, maxTurns = 1): unknown {
   return { type: "parallel", enabled: false };
 }
 
-function harness({ autoPolicy = true, confirmMode, confirmations }: { autoPolicy?: boolean; confirmMode?: (request: ConfirmIssueAutomationModeRequest) => Promise<IssueConfirmationResponse>; confirmations?: IssueConfirmationBridge } = {}) {
+function harness({ autoPolicy = true, confirmMode, confirmations, observeView }: { autoPolicy?: boolean; confirmMode?: (request: ConfirmIssueAutomationModeRequest) => Promise<IssueConfirmationResponse>; confirmations?: IssueConfirmationBridge; observeView?: (view: KernelView) => void } = {}) {
   let automaticPolicyReplies = autoPolicy;
   const sent: Sent[] = [];
   const listeners = new Set<() => void>();
@@ -123,7 +123,7 @@ function harness({ autoPolicy = true, confirmMode, confirmations }: { autoPolicy
   let view = EMPTY_KERNEL_VIEW;
   const connection = new KernelConnection(client, {
     getKernel: () => view,
-    setKernel: (next: KernelView) => { view = next; changed(); },
+    setKernel: (next: KernelView) => { view = next; observeView?.(next); changed(); },
   }, confirmMode, confirmations);
   const when = (condition: () => boolean): Promise<void> => {
     if (condition()) return Promise.resolve();
@@ -1491,6 +1491,82 @@ describe("issue decisions and interventions", () => {
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
     expect(h.requests("turn/start")).toHaveLength(0);
     expect(h.requests("turn/steer")).toHaveLength(0);
+  });
+
+  it("refreshes the same notification target without clearing its selection", async () => {
+    const views: KernelView[] = [];
+    const h = harness({ observeView: (view) => views.push(view) });
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), issueDetail(issueReference()));
+    await selected;
+    const before = views.length;
+    const readCount = h.queries("issue").length;
+    const reopened = h.connection.selectIssueFromAttention({
+      workspace: "/repo", kernel: "repo", decisionId: "decision-next", issue: issueReference(),
+    });
+    expect(h.queries("issue")).toHaveLength(readCount + 1);
+    expect(views.slice(before).every((view) => view.issues.selectedIssue !== null)).toBe(true);
+    expect(h.view().issues).toMatchObject({ selectedIssue: issueReference(), detail: null, detailStale: true, detailLoading: true });
+    h.reply(h.query("issue"), issueDetail(issueReference(), 7, "fresh notification detail"));
+    await reopened;
+    expect(h.view().issues.detail).toEqual(issueDetail(issueReference(), 7, "fresh notification detail"));
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it.each(["provider", "server", "repository", "issue", "workspace"] as const)(
+    "clears the old notification selection when its %s coordinate changes",
+    async (coordinate) => {
+      const views: KernelView[] = [];
+      const h = harness({ observeView: (view) => views.push(view) });
+      await h.openIssues();
+      const selected = h.connection.selectIssue(issueReference());
+      h.reply(h.query("issue"), issueDetail(issueReference()));
+      await selected;
+      const oldRead = h.connection.refreshIssueDetail();
+      const oldRequest = h.query("issue");
+      const other: IssueEventReference = {
+        ...issueReference(),
+        ...(coordinate === "provider" ? { provider: "jira" as const } : {}),
+        ...(coordinate === "server" ? { server_id: "github.example" } : {}),
+        ...(coordinate === "repository" ? { repository_id: "R_other" } : {}),
+        ...(coordinate === "issue" ? { issue_id: "I_other" } : {}),
+        ...(coordinate === "workspace" ? { project_scope: { workspace_dir: "/other" } } : {}),
+      };
+      const before = views.length;
+      const opened = h.connection.selectIssueFromAttention({
+        workspace: "/repo", kernel: "repo", decisionId: "other-decision", issue: other,
+      });
+      const currentRequest = h.query("issue");
+      expect(views.slice(before).some((view) => view.issues.selectedIssue === null)).toBe(true);
+      expect(h.view().issues).toMatchObject({ selectedIssue: other, detail: null, detailLoading: true });
+      expect(currentRequest?.params.query?.issue).toEqual(other);
+      h.reply(oldRequest, issueDetail(issueReference(), 99, "old notification body"));
+      await oldRead;
+      expect(h.view().issues.detail).toBeNull();
+      h.reply(currentRequest, issueDetail(other));
+      await opened;
+      expect(h.view().issues.detail).toEqual(issueDetail(other));
+      expect(JSON.stringify(h.view().issues)).not.toContain("old notification body");
+      expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    },
+  );
+
+  it.each(["workspace", "kernel"] as const)("ignores notification navigation from another %s", async (field) => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), issueDetail(issueReference()));
+    await selected;
+    const reads = h.queries("issue").length;
+    await h.connection.selectIssueFromAttention({
+      workspace: field === "workspace" ? "/other" : "/repo",
+      kernel: field === "kernel" ? "other" : "repo",
+      decisionId: "foreign-decision", issue: issueReference(),
+    });
+    expect(h.queries("issue")).toHaveLength(reads);
+    expect(h.view().issues.selectedIssue).toEqual(issueReference());
+    expect(h.view().issues.detail).toEqual(issueDetail(issueReference()));
   });
 
   it("keeps only metadata for background decisions and ignores duplicate recorded/direct events", async () => {

@@ -233,6 +233,18 @@ try {
     });
   });
   page = await app.firstWindow();
+  // 숨긴 fixture는 실제 운영체제 알림을 만들지 않는다. 알림 이동은 아래에서 명시적으로 시험한다.
+  await page.evaluate(async () => {
+    window.issueNotifications = [];
+    class FixtureNotification {
+      static permission = "granted";
+      constructor(title, options) { this.title = title; this.options = options; window.issueNotifications.push(this); }
+      close() {}
+    }
+    Object.defineProperty(window, "Notification", { value: FixtureNotification, configurable: true });
+    await window.akra.settings.set({ notifications: { mode: "always", sound: false } });
+  });
+
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
@@ -349,11 +361,11 @@ try {
   // 카드가 재조회 중 잠시 사라진 순간이 아니라 이전 명령의 완료 표시를 기다린다.
   await until(async () => commandRequests("answer_issue_decision").length === 1 && await panel.evaluate((root) => {
     const detail = root.querySelector('[data-testid="issues-detail"]');
-    const autonomy = root.querySelector('[data-testid="issues-autonomy-level"]');
+    const holdAction = root.querySelector('[data-testid="issue-action-hold_issue"]');
     return detail?.getAttribute("aria-busy") === "false"
       && !root.querySelector('[data-testid="issues-detail-loading"]')
       && root.querySelector('[data-testid="issues-command-notice"]')?.textContent === "요청을 처리했습니다."
-      && autonomy !== null && !autonomy.matches(":disabled")
+      && holdAction !== null && !holdAction.matches(":disabled")
       && !root.querySelector('[data-testid="issue-decision-card"][data-state="open"]');
   }), "the first decision command and its detail refresh to finish");
   assert.equal(commandRequests("answer_issue_decision")[0].request.command.note, "공유 가능한 검증 메모입니다.");
@@ -375,6 +387,17 @@ try {
   }, selected);
   await until(() => staleDecisionReady(), "the new decision-stale snapshot to be ready");
   await staleCard.locator('input[value="approve"]').check();
+  const notificationDraft = "같은 이슈 알림에서도 보존할 공유 메모";
+  await staleCard.getByTestId("issue-decision-note").fill(notificationDraft);
+  const staleTag = "akra:issue-decision:issue-interventions-fixture:decision-stale";
+  await until(() => page.evaluate((tag) => window.issueNotifications.some((notice) => notice.options.tag === tag), staleTag), "the same-issue notification");
+  const beforeNotificationReads = requests.filter((entry) => entry.params.query?.type === "issue").length;
+  await page.evaluate((tag) => window.issueNotifications.find((notice) => notice.options.tag === tag).onclick(), staleTag);
+  await until(async () => requests.filter((entry) => entry.params.query?.type === "issue").length > beforeNotificationReads
+    && await staleDecisionReady(), "a fresh detail after opening the same-issue notification");
+  assert.equal(await staleCard.locator('input[value="approve"]').isChecked(), true, "opening the same issue must preserve its selected answer");
+  assert.equal(await staleCard.getByTestId("issue-decision-note").inputValue(), notificationDraft);
+
   await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = null; });
   const dialogCount = await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length);
   await until(() => staleDecisionReady(true), "decision-stale to retain its choice and enable its answer");
@@ -561,16 +584,7 @@ try {
 
   await page.getByTestId("issues-toggle").click();
   await panel.waitFor({ state: "detached" });
-  await page.evaluate(async () => {
-    window.issueNotifications = [];
-    class FixtureNotification {
-      static permission = "granted";
-      constructor(title, options) { this.title = title; this.options = options; window.issueNotifications.push(this); }
-      close() {}
-    }
-    Object.defineProperty(window, "Notification", { value: FixtureNotification, configurable: true });
-    await window.akra.settings.set({ notifications: { mode: "always", sound: false } });
-  });
+  await page.evaluate(() => { window.issueNotifications = []; });
   await app.evaluate(() => { globalThis.issueInterventionFixture.focused = true; });
   const checks = await app.evaluate(() => globalThis.issueInterventionFixture.focusChecks);
   revision++;
@@ -594,6 +608,12 @@ try {
   await panel.locator('[data-decision-id="background-decision"]').waitFor();
   await capture("notification");
   assert.equal(await page.evaluate(() => window.issueNotifications.length), 1);
+  await panel.getByTestId("issues-report-tab").click();
+  const beforeRepeatedNotificationReads = requests.filter((entry) => entry.params.query?.type === "issue").length;
+  await page.evaluate(() => window.issueNotifications[0].onclick());
+  await until(async () => requests.filter((entry) => entry.params.query?.type === "issue").length > beforeRepeatedNotificationReads
+    && await panel.locator('[data-decision-id="background-decision"]').isVisible(), "the same notification to reopen and refresh detail from the report");
+  assert.equal(await panel.getByTestId("issues-list-tab").getAttribute("aria-pressed"), "true");
   assert.equal(gateway.receivedMethods.includes("turn/start"), false);
   assert.equal(gateway.receivedMethods.includes("turn/steer"), false);
   assert.deepEqual(pageErrors, []);

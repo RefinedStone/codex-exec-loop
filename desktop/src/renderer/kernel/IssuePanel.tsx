@@ -1,9 +1,10 @@
 // 서버가 만든 목록·상세·관찰 보고·정책 표시값을 읽는 이슈 패널이다 (#2539, #2542).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { folderName } from "../sidebar/threadStatus";
 import { IssueDetail } from "./IssueDetail";
+import type { IssueDecisionAttention } from "./kernelConnection";
 import { IssueAutonomyControl } from "./IssueAutonomyControl";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueInterventionName } from "./issueInteractions";
 import { IssueObserveReport } from "./IssueObserveReport";
@@ -41,6 +42,7 @@ function successTime(value: number | null | undefined): string {
 }
 
 interface IssuePanelProps {
+  attentionTarget?: IssueDecisionAttention | null;
   onRefresh(): Promise<void>;
   onSelectIssue(issue: IssueEventReference): Promise<void>;
   onClearIssueSelection(): void;
@@ -74,8 +76,10 @@ function IssueRow({ item, onSelectIssue, onOpenUrl }: { item: IssueListItem; onS
   );
 }
 
-export function IssuePanel({ onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onAnswerDecision, onIntervene, onOpenConversation, onOpenUrl }: IssuePanelProps) {
+export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onAnswerDecision, onIntervene, onOpenConversation, onOpenUrl }: IssuePanelProps) {
   const [view, setView] = useState<"list" | "report" | "policy">("list");
+  // 알림은 상세 보기로 이동하지만 같은 저장소의 패널과 사용자 초안을 다시 만들지 않는다.
+  useEffect(() => { if (attentionTarget) setView("list"); }, [attentionTarget]);
   const kernel = useDesktopStore((state) => state.kernel);
   const issues = kernel.issues;
   const automation = issues.automation?.status === "ready" ? issues.automation : null;
