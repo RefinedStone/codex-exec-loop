@@ -189,7 +189,7 @@ export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, o
                 </ul>
               </section>
             ))}
-            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} busy={busy || !attached} onAnswer={onAnswerDecision} onIntervene={onIntervene} onOpenConversation={onOpenConversation} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
+            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} busy={busy || !attached} onAnswer={onAnswerDecision} onIntervene={onIntervene} onOpenConversation={onOpenConversation} onRefresh={onRefreshDetail} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
             {view === "report" && <IssueObserveReport report={page?.report} />}
             {view === "policy" && <IssuePolicy key={kernel.workspace} policy={issues.policy} loading={issues.policyLoading} error={issues.policyError} onOpenFile={onOpenPolicyFile} />}
           </div>

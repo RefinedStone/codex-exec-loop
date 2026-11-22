@@ -47,10 +47,12 @@ fn report() -> IssueTriageObserveReport {
 
 fn detail(item: Option<IssueCollectionItem>) -> IssueCollectionDetail {
     IssueCollectionDetail {
+        timeline: None,
         revision: 31,
         item,
         report: Some(report()),
         interaction: None,
+        execution: None,
         feedback: None,
     }
 }
@@ -428,3 +430,5 @@ fn legacy_feedback_detail_defaults_external_state_to_unknown() {
     assert_eq!(state.external_state, IssueExternalStateRecord::Unknown);
     assert!(state.integration.is_none());
 }
+
+mod execution;

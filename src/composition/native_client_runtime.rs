@@ -1,3 +1,5 @@
+mod issue_timeline;
+
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
@@ -1754,10 +1756,15 @@ impl NativeClientRuntime {
         &self,
         issue: &IssueReference,
     ) -> anyhow::Result<IssueCollectionDetail> {
-        self.issue_collection
+        let mut detail = self
+            .issue_collection
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
-            .issue(issue)
+            .issue(issue)?;
+        if detail.item.is_some() {
+            detail.timeline = Some(self.issue_timeline(issue));
+        }
+        Ok(detail)
     }
 
     fn replace_issue_projection(&mut self, projection: IssueCollectionProjection, now: Instant) {

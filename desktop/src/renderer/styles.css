@@ -2120,3 +2120,120 @@ button.issues-title:hover {
 .issues-cancel-confirmation p { margin: 0 0 var(--space-3); }
 .issues-decision-history { display: grid; gap: var(--space-3); }
 .issues-decision-history > h3 { margin: var(--space-2) 0 0; }
+
+.issues-execution {
+  min-width: 0;
+  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--bg-elevated);
+  overflow-wrap: anywhere;
+}
+
+.issues-execution-heading,
+.issues-execution-integration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.issues-execution-heading h3,
+.issues-execution-timeline h4 {
+  margin: 0;
+  font-size: var(--text-m);
+}
+
+.issues-execution-heading {
+  margin-bottom: var(--space-2);
+}
+
+.issues-execution-state {
+  margin: var(--space-3) 0;
+  font-size: var(--text-m);
+  font-weight: 600;
+}
+
+.issues-execution-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.issues-execution-counts > div {
+  min-width: 0;
+}
+
+.issues-execution-counts dt,
+.issues-execution-timeline time {
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+
+.issues-execution-counts dd {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-m);
+  font-weight: 600;
+}
+
+.issues-execution-link {
+  margin-left: 0;
+}
+
+.issues-execution-recovery {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border-left: 3px solid var(--line);
+  background: var(--bg);
+  font-size: var(--text-s);
+  line-height: 1.6;
+}
+
+.issues-execution-recovery p,
+.issues-execution-outcome p {
+  margin: 0 0 var(--space-2);
+}
+
+.issues-execution-outcome {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  font-size: var(--text-s);
+}
+
+.issues-execution-timeline {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.issues-execution-timeline ol {
+  margin: var(--space-3) 0;
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--line);
+  list-style: none;
+}
+
+.issues-execution-timeline li + li {
+  margin-top: var(--space-3);
+}
+
+.issues-execution-timeline li p {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-s);
+  line-height: 1.6;
+}
+
+.issues-detail-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.issues-detail-toolbar .issues-back {
+  margin-bottom: 0;
+}

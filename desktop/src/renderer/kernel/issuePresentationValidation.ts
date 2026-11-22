@@ -8,6 +8,8 @@ const named = (value: unknown, names: readonly string[]): boolean => text(value)
 const levels = ["off", "observe", "propose", "gated", "auto"];
 const actions = ["hold_issue", "release_issue", "steer_issue", "take_over_issue", "retriage_issue", "cancel_issue_work", "track_issue", "untrack_issue"];
 const states = ["open", "answered", "expired", "withdrawn", "superseded"];
+const executionTerminalClasses = ["rework_needed", "observe_again", "contract_recovery", "identity_conflict", "pull_request_closed", "queue_recovery"];
+const executionRecoveryReasons = ["attempts_exhausted", ...executionTerminalClasses];
 
 function sameCoordinates(left: unknown, right: ObjectValue): boolean {
   if (!record(left) || !record(left.project_scope) || !record(right.project_scope)) return false;
@@ -65,4 +67,51 @@ export function hasValidIssueAutonomy(value: ObjectValue): boolean {
     seen.add(choice.level as string);
     return true;
   }) && seen.size === 3;
+}
+
+/** 실행·게시·timeline은 서버가 정한 값의 모양만 확인하고 서로의 상태를 추론하지 않는다. */
+export function hasValidIssueExecutionTracking(value: ObjectValue): boolean {
+  const unsignedCount = (count: unknown) => revision(count) && (count as number) <= 0xffff_ffff;
+  const nullableText = (entry: unknown) => entry === null || text(entry);
+  const execution = value.execution;
+  if (execution !== undefined) {
+    if (!record(execution)) return false;
+    if (execution.status === "unavailable") {
+      if (!named(execution.reason, ["read_failed", "work_id_mismatch"])) return false;
+    } else {
+      if (execution.status !== "ready" || !text(execution.work_order_id) || !execution.work_order_id
+        || !revision(execution.revision) || !named(execution.state, ["queued", "running", "in_review", "done", "failed"])
+        || !text(execution.state_label) || !unsignedCount(execution.execution_attempts)
+        || !(execution.execution_attempt_limit === null || unsignedCount(execution.execution_attempt_limit))
+        || !unsignedCount(execution.verification_attempts) || !nullableText(execution.review_pull_request_url)
+        || !(execution.terminal_class === null || named(execution.terminal_class, executionTerminalClasses))) return false;
+      const recovery = execution.recovery;
+      if (recovery !== null && (!record(recovery) || !named(recovery.reason, executionRecoveryReasons)
+        || !text(recovery.summary) || !text(recovery.next_summary) || typeof recovery.requires_human !== "boolean")) return false;
+    }
+  }
+  const feedback = value.feedback;
+  if (feedback != null) {
+    if (!record(feedback) || !revision(feedback.revision) || !unsignedCount(feedback.publication_attempts)
+      || !optionalText(feedback.comment_id)
+      || (feedback.external_state !== undefined && !named(feedback.external_state, ["open", "closed", "unknown"]))
+      || (feedback.reason != null && feedback.reason !== "feedback_unconfirmed")) return false;
+    const integration = feedback.integration;
+    if (integration != null && (!record(integration) || !text(integration.record_id)
+      || !text(integration.source_sha) || !text(integration.integration_sha) || !optionalText(integration.pull_request_url))) return false;
+  }
+  const timeline = value.timeline;
+  if (timeline !== undefined) {
+    if (!record(timeline)) return false;
+    if (timeline.status === "unavailable") return true;
+    if (timeline.status !== "ready" || typeof timeline.has_older !== "boolean"
+      || !Array.isArray(timeline.entries) || timeline.entries.length > 20) return false;
+    let sequence = -1;
+    for (const entry of timeline.entries) {
+      if (!record(entry) || !revision(entry.sequence) || (entry.sequence as number) <= sequence
+        || !text(entry.recorded_at) || !text(entry.kind) || !text(entry.summary)) return false;
+      sequence = entry.sequence as number;
+    }
+  }
+  return true;
 }

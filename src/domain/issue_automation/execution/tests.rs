@@ -239,3 +239,59 @@ fn unavailable_policy_preserves_facts_without_inventing_budget_exhaustion() {
     let done = next.reconcile_with_budget(&integrated, 0, 0, None).unwrap();
     assert_eq!(done.state, IssueExecutionState::Done);
 }
+
+#[test]
+fn review_link_updates_are_observed_without_spending_another_attempt() {
+    let mut observed = observation(IssueExecutionPhase::InReview);
+    observed.review_pull_request_url = Some("https://github.com/actual/review/pull/42".into());
+    let first = IssueExecutionProgress::default()
+        .reconcile(&observed, 1, 0, 3)
+        .unwrap();
+    assert_eq!(
+        first.review_pull_request_url,
+        observed.review_pull_request_url
+    );
+    assert_eq!(first.reconcile(&observed, 0, 0, 3).unwrap(), first);
+    observed.review_pull_request_url = Some("https://github.com/actual/review/pull/43".into());
+    let successor = first.reconcile(&observed, 0, 0, 3).unwrap();
+    assert_eq!(successor.attempts, first.attempts);
+    assert_eq!(
+        successor.review_pull_request_url,
+        observed.review_pull_request_url
+    );
+    observed.review_pull_request_url = None;
+    let unavailable = successor.reconcile(&observed, 0, 0, 3).unwrap();
+    assert_eq!(
+        unavailable.review_pull_request_url, None,
+        "an unobserved current link is not filled from a previous PR"
+    );
+    assert_eq!(unavailable.attempts, first.attempts);
+}
+
+#[test]
+fn legacy_execution_json_without_review_link_remains_readable() {
+    let record: IssueExecutionRecord = serde_json::from_value(serde_json::json!({
+        "work_order_id": "legacy-work",
+        "progress": {
+            "state": "in_review",
+            "attempts": { "execution": 2, "verification": 1, "publication": 0 },
+            "terminal": null,
+            "integration": null,
+            "attempts_exhausted": false,
+            "revision": 7
+        },
+        "question": null
+    }))
+    .unwrap();
+    record.validate().unwrap();
+    assert_eq!(record.progress.review_pull_request_url, None);
+    assert_eq!(record.progress.attempts.execution, 2);
+    let mut value = serde_json::to_value(observation(IssueExecutionPhase::InReview)).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("review_pull_request_url");
+    let legacy: IssueWorkExecutionObservation = serde_json::from_value(value).unwrap();
+    legacy.validate().unwrap();
+    assert_eq!(legacy.review_pull_request_url, None);
+}
