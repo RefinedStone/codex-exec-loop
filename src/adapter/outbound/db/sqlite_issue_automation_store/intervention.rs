@@ -60,7 +60,7 @@ pub(super) fn has_pending(
     )?)
 }
 
-fn read(
+pub(super) fn read(
     connection: &Connection,
     workspace: &str,
     command_id: &str,
@@ -93,7 +93,7 @@ pub(super) fn get(
     })
 }
 
-fn begin_in_transaction(
+pub(super) fn begin_in_transaction(
     connection: &Connection,
     workspace: &str,
     request: &IssueInterventionRequest,

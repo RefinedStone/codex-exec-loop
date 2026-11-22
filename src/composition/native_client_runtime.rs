@@ -1307,6 +1307,7 @@ impl NativeClientRuntime {
         let is_issue_command = matches!(
             &command,
             StoredCommand::SetIssueAutomationMode { .. }
+                | StoredCommand::SetIssueAutonomy { .. }
                 | StoredCommand::AnswerIssueDecision { .. }
                 | StoredCommand::InterveneIssue { .. }
         );
@@ -1379,6 +1380,17 @@ impl NativeClientRuntime {
                 }
             }
             self.record_kernel_events(KernelEvent::issue_intervened(receipt));
+        }
+        if matches!(
+            &end,
+            StoredCommandEnd::Finished(StoredCommandOutcome::Done(
+                StoredCommandResult::IssueAutonomyChanged { changed: true, .. }
+            ))
+        ) {
+            self.published_issue_change = true;
+            if let Some(observer) = &mut self.issue_observer {
+                observer.request_sync(Instant::now());
+            }
         }
         let rejection = match &end {
             StoredCommandEnd::Finished(StoredCommandOutcome::Rejected(rejection)) => {
@@ -1711,6 +1723,7 @@ impl NativeClientRuntime {
         // 표시와 조회는 실제 장부를 읽는다. 진행 중인 worker의 스케줄러 epoch는 바꾸지 않는다.
         if let Some(service) = &self.issue_collection {
             view.projection = service.projection()?;
+            view.autonomy = service.autonomy_state();
         }
         if view.projection.state.config.mode == IssueCollectionMode::Off {
             view.collecting = false;

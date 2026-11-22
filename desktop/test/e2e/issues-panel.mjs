@@ -606,7 +606,7 @@ try {
   const detaches = countRequests("akra/kernel/detach");
   await page.getByTestId("issues-toggle").click();
   await panel.waitFor({ state: "detached", timeout: 10_000 });
-  check("closing the issue panel detaches its kernel subscription", await until(() => countRequests("akra/kernel/detach") > detaches));
+  check("closing the issue panel retains the metadata-only decision subscription", countRequests("akra/kernel/detach") === detaches);
   check("the issues tab sends no planning commands or planning queries", requests.every((request) => {
     if (request.method === "akra/kernel/command") return ["set_issue_automation_mode", "sync_issues"].includes(request.params.command?.type);
     if (request.method === "akra/kernel/command_confirmed") return request.params.request?.command?.type === "set_issue_automation_mode";

@@ -93,6 +93,8 @@ spec_names! {
             "Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         DeleteDirection => "delete_direction",
             "Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+        SetIssueAutonomy => "set_issue_autonomy",
+            "Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result.";
         SetIssueAutomationMode => "set_issue_automation_mode",
             "Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit.";
         AnswerIssueDecision => "answer_issue_decision",
@@ -388,6 +390,7 @@ impl KernelCommandKind {
             | Self::UpdateDirection
             | Self::DeleteDirection
             | Self::SetIssueAutomationMode
+            | Self::SetIssueAutonomy
             | Self::AnswerIssueDecision
             | Self::HoldIssue
             | Self::ReleaseIssue
@@ -469,7 +472,7 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::HumanConfirmationRequired],
             ),
-            Self::AnswerIssueDecision => (
+            Self::SetIssueAutonomy | Self::AnswerIssueDecision => (
                 CommandScope::Issue,
                 Write,
                 Keyed,
@@ -542,6 +545,7 @@ impl KernelCommandKind {
                 | Self::UpdateDirection
                 | Self::DeleteDirection
                 | Self::SetIssueAutomationMode
+                | Self::SetIssueAutonomy
                 | Self::AnswerIssueDecision
                 | Self::HoldIssue
                 | Self::ReleaseIssue

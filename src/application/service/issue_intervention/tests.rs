@@ -1069,3 +1069,35 @@ fn issue_intervention_rejected_guidance_after_takeover_does_not_block_cancellati
     assert!(fixture.steering.attempts.lock().unwrap().is_empty());
     assert_eq!(fixture.execution.automatic_calls.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn issue_intervention_reserves_internal_autonomy_command_ids() {
+    let fixture = Fixture::new();
+    for action in [
+        IssueInterventionAction::Retriage,
+        IssueInterventionAction::Hold,
+    ] {
+        let request = fixture.request("autonomy-reserved-fixture", action);
+        assert!(
+            fixture
+                .service()
+                .intervene(request.clone(), &context())
+                .is_err()
+        );
+        assert!(
+            fixture
+                .store
+                .get_issue_intervention(&fixture.workspace, &request.command_id)
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(fixture.execution.control_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        fixture
+            .store
+            .pending_issue_interventions(&fixture.workspace)
+            .unwrap()
+            .is_empty()
+    );
+}

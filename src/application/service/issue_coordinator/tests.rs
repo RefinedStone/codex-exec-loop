@@ -264,6 +264,7 @@ struct FakeExecutionState {
     revoked_work_orders: Vec<String>,
     fail_revoke_work_order: Option<String>,
     after_grant: Option<Box<dyn Fn() + Send + Sync>>,
+    after_revoke: Option<Box<dyn Fn() + Send + Sync>>,
     source_unavailable: bool,
     fail_before_register: bool,
     fail_after_register: bool,
@@ -384,6 +385,11 @@ impl IssueWorkExecutionPort for FakeExecution {
             bail!("simulated permit revocation failure");
         }
         state.revoked = true;
+        let hook = state.after_revoke.take();
+        drop(state);
+        if let Some(hook) = hook {
+            hook();
+        }
         Ok(())
     }
 }
@@ -1088,3 +1094,7 @@ fn intervention_remote_hold_label_revokes_work_without_restarting_it() {
 
 mod dispatch_source;
 mod policy_revalidation;
+
+mod autonomy;
+
+mod interactions;

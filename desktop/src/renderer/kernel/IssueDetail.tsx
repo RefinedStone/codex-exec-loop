@@ -1,6 +1,9 @@
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import { IssueTriageView } from "./IssueTriageView";
+import { IssueDecisionCards } from "./IssueDecisionCards";
+import { IssueInterventions } from "./IssueInterventions";
+import type { IssueInterventionName } from "./issueInteractions";
 import type { IssueDetailAnswer, IssueEventReference } from "./protocol";
 
 interface IssueDetailProps {
@@ -9,6 +12,10 @@ interface IssueDetailProps {
   loading: boolean;
   stale: boolean;
   error: string | null;
+  busy: boolean;
+  onAnswer(decisionId: string, option: string, note: string): Promise<void>;
+  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<void>;
+  onOpenConversation(): Promise<void>;
   onBack(): void;
   onOpenUrl(url: string): void;
 }
@@ -22,8 +29,9 @@ function sameIssue(left: IssueEventReference, right: IssueEventReference): boole
 }
 
 /** 현재 선택과 일치하는 최신 응답에서만 공유본을 읽는다. 저장된 판정의 stale 여부는 본문과 별개다. */
-export function IssueDetail({ selectedIssue, detail, loading, stale, error, onBack, onOpenUrl }: IssueDetailProps) {
-  const item = !stale && detail?.status === "ready" && sameIssue(selectedIssue, detail.item.issue) ? detail.item : null;
+export function IssueDetail({ selectedIssue, detail, loading, stale, error, busy, onAnswer, onIntervene, onOpenConversation, onBack, onOpenUrl }: IssueDetailProps) {
+  const current = !stale && detail?.status === "ready" && sameIssue(selectedIssue, detail.item.issue) ? detail : null;
+  const item = current?.item ?? null;
   const shared = item?.current.status === "observed" && item.current.content.kind === "shared" ? item.current.content.shared_copy : null;
   return (
     <article className="issues-detail" aria-label="이슈 상세" data-testid="issues-detail" aria-busy={loading}>
@@ -44,6 +52,10 @@ export function IssueDetail({ selectedIssue, detail, loading, stale, error, onBa
             <h2 data-testid="issues-detail-title">{item.presentation.title ?? "제목을 확인할 수 없습니다."}</h2>
             <p className="issues-detail-reason">{item.presentation.reason.summary}</p>
           </header>
+          {current && <>
+            <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} busy={busy} onAnswer={onAnswer} />
+            <IssueInterventions key={JSON.stringify(selectedIssue)} detail={current} busy={busy} onIntervene={onIntervene} onOpenConversation={onOpenConversation} />
+          </>}
           <div className="issues-detail-columns">
             <section className="issues-detail-section" aria-label="현재 공유본">
               <h3>현재 공유본</h3>

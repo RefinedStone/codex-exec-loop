@@ -2,6 +2,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::super::issue_interaction::{
+    IssueActionState, IssueControlState, IssueConversationState, IssueDecisionHistoryState,
+};
 use super::super::{IssueDecisionRequestState, KernelProtocolError, KernelQuery};
 use super::{IssueListItem, IssueTriageObserveReportState};
 use crate::domain::issue_automation::collection::IssueCollectionDetail;
@@ -31,6 +34,14 @@ pub struct IssueDetailState {
     #[serde(default)]
     pub open_decisions: Vec<IssueDecisionRequestState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<IssueControlState>,
+    #[serde(default)]
+    pub actions: Vec<IssueActionState>,
+    #[serde(default)]
+    pub decision_history: Vec<IssueDecisionHistoryState>,
+    #[serde(default)]
+    pub conversation: IssueConversationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<IssueTriageObserveReportState>,
 }
 
@@ -51,6 +62,32 @@ impl IssueState {
                     .filter(|stored| stored.request.state() == IssueDecisionState::Open)
                     .map(Into::into)
                     .collect(),
+                control: detail
+                    .interaction
+                    .as_ref()
+                    .and_then(|interaction| interaction.control.as_ref())
+                    .map(Into::into),
+                actions: detail
+                    .interaction
+                    .as_ref()
+                    .map(|interaction| interaction.actions.iter().map(Into::into).collect())
+                    .unwrap_or_default(),
+                decision_history: detail
+                    .interaction
+                    .as_ref()
+                    .map(|interaction| {
+                        interaction
+                            .decision_history
+                            .iter()
+                            .map(Into::into)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                conversation: detail
+                    .interaction
+                    .as_ref()
+                    .map(|interaction| (&interaction.conversation).into())
+                    .unwrap_or_default(),
                 report,
             })),
             None => Self::NotFound {
