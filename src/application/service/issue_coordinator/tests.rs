@@ -253,6 +253,7 @@ struct FakeExecutionState {
     revoked: bool,
     after_grant: Option<Box<dyn Fn() + Send + Sync>>,
     source_unavailable: bool,
+    fail_before_register: bool,
     fail_after_register: bool,
     fail_after_grant: bool,
 }
@@ -279,8 +280,21 @@ impl IssueWorkExecutionPort for FakeExecution {
             blocked_reason: None,
         })
     }
+    fn task_ids(&self, _: &str, _: &str) -> Result<Vec<String>> {
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .order
+            .as_ref()
+            .map(|_| vec!["task-1".into()])
+            .unwrap_or_default())
+    }
     fn submit(&self, _: &str, order: &IssueWorkOrder) -> Result<Vec<String>> {
         let mut state = self.state.lock().unwrap();
+        if std::mem::take(&mut state.fail_before_register) {
+            bail!("simulated crash before durable registration");
+        }
         if state.order.is_none() {
             state.order = Some(order.clone());
             state.registrations += 1;
@@ -859,5 +873,43 @@ fn grant_postcheck_revokes_on_changed_policy_or_unreadable_current_state() {
                 .iter()
                 .all(|event| !matches!(event.kind, IssueWorkEventKind::PermitGranted { .. }))
         );
+    }
+}
+
+#[test]
+fn interrupted_registration_recovers_existing_task_links_even_after_approval_changes() {
+    for registered in [false, true] {
+        let h = Harness::new();
+        h.tick(true).unwrap();
+        h.answer("start");
+        {
+            let mut execution = h.execution.state.lock().unwrap();
+            execution.fail_before_register = !registered;
+            execution.fail_after_register = registered;
+        }
+        assert!(h.tick(true).is_err());
+        assert!(h.work().unwrap().task_ids.is_empty());
+        *h.policy.text.lock().unwrap() =
+            AUTO_POLICY.replace("mode = \"propose\"", "mode = \"observe\"");
+        // 복구는 원격 source 조회에 기대지 않는다.
+        h.execution.state.lock().unwrap().source_unavailable = true;
+        h.tick(false).unwrap();
+        h.tick(false).unwrap();
+        let work = h.work().unwrap();
+        assert_eq!(work.task_ids.len(), usize::from(registered));
+        assert!(work.permit_source.is_none());
+        let state = h.execution.state.lock().unwrap();
+        assert_eq!(state.registrations, usize::from(registered));
+        assert!(state.grants.is_empty());
+        assert!(state.revoked);
+        let submitted = h
+            .fixture
+            .store()
+            .pending_issue_work_events(&h.fixture.workspace)
+            .unwrap()
+            .into_iter()
+            .filter(|event| matches!(event.kind, IssueWorkEventKind::Submitted { .. }))
+            .count();
+        assert_eq!(submitted, usize::from(registered));
     }
 }

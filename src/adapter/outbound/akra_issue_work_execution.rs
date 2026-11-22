@@ -81,6 +81,14 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
         })
     }
 
+    fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .repository
+            .load_work_order(workspace, work_order_id)?
+            .map(|order| order.task_ids)
+            .unwrap_or_default())
+    }
+
     fn submit(&self, workspace: &str, order: &IssueWorkOrder) -> Result<Vec<String>> {
         if workspace != order.scope || workspace != order.issue.project_scope.workspace_dir {
             bail!("the issue work belongs to another workspace");
