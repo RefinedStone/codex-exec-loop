@@ -223,3 +223,196 @@ describe("kernel connection", () => {
     expect(h.view()).toMatchObject({ phase: "attached", kernel: "second" });
   });
 });
+
+describe("explicit parallel execution control", () => {
+  it("only sends an explicit action, waits for state, and keeps newer events over a stale read", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+
+    const before = h.requests("akra/kernel/query").length;
+    const started = h.connection.setParallelEnabled(true);
+    const command = h.requests("akra/kernel/command").at(-1);
+    expect(command?.params).toMatchObject({ command: { type: "enable_parallel" }, idempotency_key: expect.any(String) });
+    expect(h.view().parallel?.enabled).toBe(false);
+    expect(h.view().parallelControl.pending).toBe("enable");
+    await h.connection.setParallelEnabled(false);
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+
+    h.reply(command, { processed: true, operation: { op_id: 41, state: "accepted", next: { query: "history", after: 41 } } });
+    await h.when(() => h.requests("akra/kernel/query").length === before + 1);
+    expect(h.view().parallel?.enabled).toBe(false);
+    expect(h.view().parallelControl.notice).toContain("접수");
+    h.connection.handleEvent({ event: { type: "parallel", enabled: true, status: "ready" } });
+    h.reply(h.query("parallel"), { type: "parallel", enabled: false, status: "old" });
+    await started;
+    expect(h.view().parallel).toMatchObject({ enabled: true, status: "ready" });
+    expect(h.view().parallelControl).toMatchObject({ pending: null, error: null, uncertain: false });
+  });
+
+  it("shows a readiness failure after acceptance without claiming that execution started", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    const before = h.requests("akra/kernel/query").length;
+    const started = h.connection.setParallelEnabled(true);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await h.when(() => h.requests("akra/kernel/query").length === before + 1);
+    h.reply(h.query("parallel"), { type: "parallel", enabled: false, status: "public repository requires parent opt-in" });
+    await started;
+    expect(h.view().parallel).toMatchObject({ enabled: false, status: "public repository requires parent opt-in" });
+    expect(h.view().parallelControl.notice).toContain("접수");
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+  });
+
+  it.each([
+    { processed: false, rejection: { reason: "kernel_unreachable", message: "runtime unavailable", next: [] } },
+    { processed: true, failure: "stop failed" },
+    { processed: false },
+  ])("does not infer disabled state from a failed command: %j", async (response) => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    h.connection.handleEvent({ event: { type: "parallel", enabled: true } });
+    const stopped = h.connection.setParallelEnabled(false);
+    h.reply(h.requests("akra/kernel/command").at(-1), response);
+    await stopped;
+    expect(h.view().parallel?.enabled).toBe(true);
+    expect(h.view().parallelControl).toMatchObject({ pending: null, uncertain: true });
+    expect(h.view().parallelControl.error).toContain("확인하지 못했습니다");
+    await h.connection.setParallelEnabled(false);
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+    h.connection.handleEvent({ event: { type: "parallel", enabled: false } });
+    expect(h.view().parallelControl.uncertain).toBe(false);
+    expect(h.view().parallelControl.error).toBeNull();
+    expect(h.view().parallel?.enabled).toBe(false);
+  });
+
+  it("marks a lost state read as uncertain and never automatically repeats the accepted action", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    const before = h.requests("akra/kernel/query").length;
+    const started = h.connection.setParallelEnabled(true);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await h.when(() => h.requests("akra/kernel/query").length === before + 1);
+    h.fail(h.query("parallel"), -32012, "state read interrupted");
+    await started;
+    expect(h.view().parallel?.enabled).toBe(false);
+    expect(h.view().parallelControl).toMatchObject({ pending: null, uncertain: true });
+    expect(h.view().parallelControl.error).toContain("state read interrupted");
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+  });
+
+  it("does not let an older overview clear uncertainty after a command is rejected out of order", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    const before = h.requests("akra/kernel/query").length;
+    const refreshing = h.connection.refresh();
+    const oldReads = h.requests("akra/kernel/query").slice(before);
+    expect(oldReads).toHaveLength(4);
+
+    const started = h.connection.setParallelEnabled(true);
+    // The Gateway rejects a full request queue immediately, before older queued reads finish.
+    h.fail(h.requests("akra/kernel/command").at(-1), -32012, "too many kernel requests are waiting");
+    await started;
+    expect(h.view().parallelControl.uncertain).toBe(true);
+    for (const request of oldReads) h.reply(request, defaultAnswer(request.params.query?.type ?? ""));
+    await h.when(() => h.requests("akra/kernel/command").length === 3);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await refreshing;
+
+    expect(h.view().parallel?.enabled).toBe(false);
+    expect(h.view().parallelControl).toMatchObject({ pending: null, uncertain: true });
+    expect(h.view().parallelControl.error).toContain("too many kernel requests are waiting");
+    await h.connection.setParallelEnabled(true);
+    expect(h.requests("akra/kernel/command")).toHaveLength(3);
+  });
+
+  it.each(["event", "resync"] as const)("ignores a late state-read failure after a newer %s confirms state", async (source) => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    const before = h.requests("akra/kernel/query").length;
+    const started = h.connection.setParallelEnabled(true);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await h.when(() => h.requests("akra/kernel/query").length === before + 1);
+    const commandRead = h.query("parallel");
+    if (source === "event") {
+      h.connection.handleEvent({ event: { type: "parallel", enabled: true, status: "ready" } });
+    } else {
+      h.connection.handleEvent({ event: { type: "resync" } });
+      for (const request of h.requests("akra/kernel/query").slice(before + 1)) {
+        h.reply(request, request.params.query?.type === "parallel"
+          ? { type: "parallel", enabled: true, status: "ready" } : defaultAnswer(request.params.query?.type ?? ""));
+      }
+      await h.when(() => h.view().parallel?.enabled === true);
+    }
+    h.fail(commandRead, -32012, "outdated state read failed");
+    await started;
+    expect(h.view().parallel).toMatchObject({ enabled: true, status: "ready" });
+    expect(h.view().parallelControl).toMatchObject({ pending: null, uncertain: false, error: null });
+  });
+
+  it("keeps state uncertain when resync supersedes the command read and then fails", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    const before = h.requests("akra/kernel/query").length;
+    const started = h.connection.setParallelEnabled(true);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await h.when(() => h.requests("akra/kernel/query").length === before + 1);
+    const commandRead = h.query("parallel");
+    h.connection.handleEvent({ event: { type: "resync" } });
+    const resyncReads = h.requests("akra/kernel/query").slice(before + 1);
+    expect(resyncReads).toHaveLength(4);
+    for (const request of resyncReads) {
+      if (request.params.query?.type === "parallel") h.fail(request, -32012, "resync state unavailable");
+      else h.reply(request, defaultAnswer(request.params.query?.type ?? ""));
+    }
+    await h.when(() => h.view().message?.includes("resync state unavailable") === true);
+    h.reply(commandRead, { type: "parallel", enabled: true });
+    await started;
+    expect(h.view().parallel?.enabled).toBe(false);
+    expect(h.view().parallelControl).toMatchObject({ pending: null, uncertain: true });
+    await h.connection.setParallelEnabled(true);
+    expect(h.requests("akra/kernel/command")).toHaveLength(2);
+    h.connection.handleEvent({ event: { type: "parallel", enabled: false, status: "entry blocked" } });
+    expect(h.view().parallelControl.uncertain).toBe(false);
+  });
+
+  it("discards a command reply after changing repositories and does not replay it", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    const started = h.connection.setParallelEnabled(true);
+    const command = h.requests("akra/kernel/command").at(-1);
+    const changed = h.connection.show("/other-repo");
+    h.reply(command, { processed: true });
+    await started;
+    expect(h.view().parallelControl).toMatchObject({ pending: null, notice: null, error: null });
+    await h.attachAndAnswer();
+    await changed;
+    expect(h.view().parallel?.enabled).toBe(false);
+    expect(h.requests("akra/kernel/command").filter((request) =>
+      (request.params.command as { type: string })?.type === "enable_parallel")).toHaveLength(1);
+  });
+});

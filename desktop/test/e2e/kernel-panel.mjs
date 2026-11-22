@@ -14,6 +14,13 @@ const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fake
 
 const THREAD_ID = "01a1abfb-8f0a-7581-a8e4-c2953347f470";
 const task = (rank, id, title, status) => ({ rank, task_id: id, direction_title: "Desktop", title, status, priority: 10 });
+let releaseParallelReply = null;
+let parallelCommandReceived = null;
+let rejectNextParallel = false;
+const waitForParallelCommand = () => new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error("the parallel command did not reach the fake kernel")), 10_000);
+  parallelCommandReceived = () => { clearTimeout(timeout); parallelCommandReceived = null; resolve(); };
+});
 const kernel = {
   kernel: "sample-repo-0123abcd",
   queries: {
@@ -59,6 +66,25 @@ const kernel = {
         merge_queue: [{ task_title: "Write the e2e", state: "pr_pending", branch: "akra/task-2", commit: "abc1234" }],
       },
     },
+  },
+  onRequest(method, params) {
+    const type = params.command?.type;
+    if (method !== "akra/kernel/command" || !["enable_parallel", "disable_parallel"].includes(type)) return undefined;
+    if (rejectNextParallel) {
+      rejectNextParallel = false;
+      return { result: { processed: false, rejection: { reason: "kernel_unreachable", message: "synthetic control failure", next: [] } } };
+    }
+    return {
+      result: { processed: true },
+      replyAfter: new Promise((resolve) => {
+        releaseParallelReply = (enabled, status) => {
+          kernel.queries.parallel = { type: "parallel", enabled, status };
+          releaseParallelReply = null;
+          resolve();
+        };
+        parallelCommandReceived?.();
+      }),
+    };
   },
   eventsAfterAttach: [
     {
@@ -132,6 +158,46 @@ try {
   check("the open failed card shows the stored log", ((await failedCard.locator(".step-output").innerText()) ?? "").startsWith("$ "));
   console.log("--- failed tool card text ---");
   console.log(await failedCard.innerText());
+
+  const parallelControl = page.getByTestId("kernel-parallel-control");
+  check("opening the panel never enables the pool", !requests.some(({ method, params }) =>
+    method === "akra/kernel/command" && ["enable_parallel", "disable_parallel"].includes(params.command?.type)));
+  const stopReceived = waitForParallelCommand();
+  await parallelControl.click();
+  await stopReceived;
+  await parallelControl.filter({ hasText: "중단 요청 중" }).waitFor();
+  check("pending stop retains the last confirmed state", (await page.getByTestId("kernel-parallel-mode").innerText()).includes("켜짐")
+    && (await page.getByTestId("kernel-parallel-mode").innerText()).includes("마지막 확인"));
+  await page.waitForFunction(() => document.querySelector('[data-testid="kernel-parallel-control"]')?.disabled === true);
+  if (!releaseParallelReply) throw new Error("the explicit stop command did not reach the fake kernel");
+  releaseParallelReply(false, "parallel mode disabled");
+  await parallelControl.filter({ hasText: "병렬 실행 시작" }).waitFor();
+  check("stop is confirmed by the kernel query", (await page.getByTestId("kernel-parallel-mode").innerText()).includes("꺼짐"));
+
+  rejectNextParallel = true;
+  await parallelControl.click();
+  await page.getByTestId("kernel-parallel-error").filter({ hasText: "synthetic control failure" }).waitFor();
+  check("failed start shows uncertainty without enabling the pool", await parallelControl.isDisabled()
+    && (await page.getByTestId("kernel-parallel-mode").innerText()).includes("확인 필요")
+    && (await page.getByTestId("kernel-parallel-mode").innerText()).includes("꺼짐"));
+  await page.getByTestId("kernel-panel").getByRole("button", { name: "새로 고침" }).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="kernel-parallel-control"]')?.disabled === false);
+  const startReceived = waitForParallelCommand();
+  await parallelControl.click();
+  await startReceived;
+  await parallelControl.filter({ hasText: "시작 요청 중" }).waitFor();
+  if (!releaseParallelReply) throw new Error("the explicit start command did not reach the fake kernel");
+  releaseParallelReply(false, "parallel readiness blocked: public repository requires parent opt-in");
+  await parallelControl.filter({ hasText: "병렬 실행 시작" }).waitFor();
+  await page.getByTestId("kernel-parallel-status").filter({ hasText: "public repository requires parent opt-in" }).waitFor();
+  check("accepted start does not hide a readiness failure", (await page.getByTestId("kernel-parallel-mode").innerText()).includes("꺼짐")
+    && (await page.getByTestId("kernel-parallel-notice").innerText()).includes("접수"));
+  kernel.queries.parallel = { type: "parallel", enabled: true, status: "parallel ready" };
+  gateway.sendKernelEvent(kernel.queries.parallel);
+  await parallelControl.filter({ hasText: "병렬 실행 중단" }).waitFor();
+  check("the applied parallel state follows kernel events", (await page.getByTestId("kernel-parallel-mode").innerText()).includes("켜짐"));
+  check("parallel commands never send model requests from the renderer", !requests.some(({ method }) =>
+    method === "turn/start" || method === "turn/steer"));
 
   console.log("--- kernel panel text ---");
   console.log(await page.getByTestId("kernel-panel").innerText());

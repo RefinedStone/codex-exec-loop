@@ -1,9 +1,9 @@
 // 커널 패널이다 (plan 18 K3-6). 열린 스레드의 저장소 커널이 하는 일(일이 남은 대화, 자동 후속, 병렬 작업,
-// planning 큐)을 보여 준다. 대화와 승인 답은 대화 화면이 Gateway 로 직접 한다. 이 패널은 보기만 한다.
+// planning 큐)을 보여 준다. 풀의 실행·중단은 명시적인 커널 명령으로 요청하고 적용 상태는 커널에서 읽는다.
 import { useState } from "react";
 
 import { useDesktopStore } from "../session/desktopStore";
-import type { KernelView } from "./kernelConnection";
+import type { KernelView, ParallelControlView } from "./kernelConnection";
 import type { ParallelAgent, ParallelState, PlanningState, PlanningTask, ThreadActivity } from "./protocol";
 import { WORKER_STATUS_LABEL, WORKER_STEP, workerStatus, type WorkerStatus } from "./workerStatus";
 import { folderName } from "../sidebar/threadStatus";
@@ -132,7 +132,13 @@ function WorkerRow({ agent, onOpenThread }: { agent: ParallelAgent; onOpenThread
   );
 }
 
-function ParallelSection({ parallel, onOpenThread }: { parallel: ParallelState | null; onOpenThread(threadId: string): void }) {
+function ParallelSection({ parallel, control, canControl, onSetEnabled, onOpenThread }: {
+  parallel: ParallelState | null;
+  control: ParallelControlView;
+  canControl: boolean;
+  onSetEnabled(enabled: boolean): Promise<void>;
+  onOpenThread(threadId: string): void;
+}) {
   if (!parallel) {
     return <p className="muted">읽는 중…</p>;
   }
@@ -140,10 +146,19 @@ function ParallelSection({ parallel, onOpenThread }: { parallel: ParallelState |
   return (
     <>
       <p data-testid="kernel-parallel-mode">
-        병렬 모드 {parallel.enabled ? "켜짐" : "꺼짐"}
+        {control.pending ? "병렬 상태 확인 중" : control.uncertain ? "병렬 상태 확인 필요" : "병렬 모드"} {parallel.enabled ? "켜짐" : "꺼짐"}
+        {(control.uncertain || control.pending) && " (마지막 확인)"}
         {supervisor ? ` · ${SUPERVISOR_STATE[supervisor.state]}` : ""}
       </p>
-      {parallel.status && <p className="muted">{parallel.status}</p>}
+      <button type="button" data-testid="kernel-parallel-control" disabled={!canControl || control.pending !== null || control.uncertain}
+        onClick={() => { void onSetEnabled(!parallel.enabled); }}>
+        {control.pending === "enable" ? "시작 요청 중…" : control.pending === "disable" ? "중단 요청 중…"
+          : parallel.enabled ? "병렬 실행 중단" : "병렬 실행 시작"}
+      </button>
+      <p className="muted">이 저장소의 준비된 작업을 실행합니다. 이슈별 승인과 전달 조건은 유지됩니다.</p>
+      {control.notice && <p className="muted" data-testid="kernel-parallel-notice">{control.notice}</p>}
+      {control.error && <p className="error" role="alert" data-testid="kernel-parallel-error">{control.error}</p>}
+      {parallel.status && <p className="muted" data-testid="kernel-parallel-status">{parallel.status}</p>}
       {supervisor && (
         <>
           {supervisor.notice && <p className="warning">{supervisor.notice}</p>}
@@ -187,10 +202,12 @@ function ParallelSection({ parallel, onOpenThread }: { parallel: ParallelState |
 function KernelBody({
   kernel,
   threadTitle,
+  onSetParallelEnabled,
   onOpenThread,
 }: {
   kernel: KernelView;
   threadTitle(threadId: string): string;
+  onSetParallelEnabled(enabled: boolean): Promise<void>;
   onOpenThread(threadId: string): void;
 }) {
   if (kernel.workspace === null) {
@@ -233,7 +250,8 @@ function KernelBody({
       </section>
       <section className="work-section">
         <h3>병렬 작업</h3>
-        <ParallelSection parallel={kernel.parallel} onOpenThread={onOpenThread} />
+        <ParallelSection parallel={kernel.parallel} control={kernel.parallelControl} canControl={kernel.phase === "attached"}
+          onSetEnabled={onSetParallelEnabled} onOpenThread={onOpenThread} />
       </section>
       <section className="work-section">
         <h3>planning 큐</h3>
@@ -243,7 +261,11 @@ function KernelBody({
   );
 }
 
-export function KernelPanel({ onRefresh, onOpenThread }: { onRefresh(): Promise<void>; onOpenThread(threadId: string): void }) {
+export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread }: {
+  onRefresh(): Promise<void>;
+  onSetParallelEnabled(enabled: boolean): Promise<void>;
+  onOpenThread(threadId: string): void;
+}) {
   const kernel = useDesktopStore((state) => state.kernel);
   const folders = useDesktopStore((state) => state.folders);
   const [refreshing, setRefreshing] = useState(false);
@@ -268,7 +290,7 @@ export function KernelPanel({ onRefresh, onOpenThread }: { onRefresh(): Promise<
           {refreshing ? "읽는 중…" : "새로 고침"}
         </button>
       </div>
-      <KernelBody kernel={kernel} threadTitle={threadTitle} onOpenThread={onOpenThread} />
+      <KernelBody kernel={kernel} threadTitle={threadTitle} onSetParallelEnabled={onSetParallelEnabled} onOpenThread={onOpenThread} />
     </aside>
   );
 }

@@ -29,6 +29,8 @@ fn sample_commands() -> Vec<KernelCommand> {
             prompt: "focus on tests".to_string(),
         },
         KernelCommand::StopAll {},
+        KernelCommand::EnableParallel {},
+        KernelCommand::DisableParallel {},
         KernelCommand::DecideApproval {
             approval_id: "approval-1".to_string(),
             server_request_id: "7".to_string(),
@@ -250,6 +252,33 @@ fn every_command_maps_to_its_own_execution_boundary() {
                 assert!(CommandResult::name_for(kind).is_some(), "{label}");
             }
             KernelCommandInput::SyncIssues => assert_eq!(kind, KernelCommandKind::SyncIssues),
+            KernelCommandInput::Parallel {
+                workspace_directory,
+                enabled,
+            } => {
+                assert_eq!(workspace_directory, "/workspace");
+                assert_eq!(
+                    kind,
+                    if enabled {
+                        KernelCommandKind::EnableParallel
+                    } else {
+                        KernelCommandKind::DisableParallel
+                    }
+                );
+                assert_eq!(
+                    kind.spec().state,
+                    crate::domain::kernel_spec::CommandState::Runtime
+                );
+                assert_eq!(
+                    kind.spec().completion,
+                    crate::domain::kernel_spec::CommandCompletion::Accepted
+                );
+                assert_eq!(
+                    kind.spec().scope,
+                    crate::domain::kernel_spec::CommandScope::Parallel
+                );
+                assert!(CommandResult::name_for(kind).is_none());
+            }
             KernelCommandInput::SubmitDelegation { .. } => {
                 assert_eq!(kind, KernelCommandKind::SubmitDelegation)
             }
@@ -316,6 +345,39 @@ fn every_command_maps_to_its_own_execution_boundary() {
             workspace_directory: "/workspace".to_string(),
         })
     );
+}
+
+#[test]
+fn parallel_control_uses_only_the_attached_workspace_and_cannot_carry_authority() {
+    for (kind, enabled) in [("enable_parallel", true), ("disable_parallel", false)] {
+        let command: KernelCommand = serde_json::from_value(json!({"type": kind})).unwrap();
+        let KernelCommandInput::Parallel {
+            workspace_directory,
+            enabled: requested,
+        } = command.into_input("/attached/repository").unwrap()
+        else {
+            panic!("parallel control must use its runtime boundary");
+        };
+        assert_eq!(workspace_directory, "/attached/repository");
+        assert_eq!(requested, enabled);
+        // The attached Gateway determines the repository. These commands cannot supply another
+        // workspace, a human approval, a delivery permit, or public-repository opt-in.
+        for field in [
+            "workspace",
+            "workspace_directory",
+            "confirmed",
+            "human_confirmation",
+            "delivery_permit",
+            "allow_public_repository",
+        ] {
+            let mut payload = json!({"type": kind});
+            payload[field] = json!("untrusted override");
+            assert!(
+                serde_json::from_value::<KernelCommand>(payload).is_err(),
+                "{kind} must reject {field}"
+            );
+        }
+    }
 }
 
 #[test]

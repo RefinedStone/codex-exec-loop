@@ -33,6 +33,8 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel thread submit_prompt --json` | write | Send a prompt to a thread. The kernel prepares it with planning context and submits a turn. Progress arrives as `prompt_submission` events. |
 | `akra kernel thread steer_turn --json` | write | Add a prompt to the turn that is running on a thread. |
 | `akra kernel thread stop_all --json` | write | Request a stop of every running turn. |
+| `akra kernel parallel enable_parallel --json` | write | Request parallel execution for the attached repository. Acceptance does not mean readiness succeeded; read the parallel query and events. Existing readiness, work permits, and delivery approvals still apply. |
+| `akra kernel parallel disable_parallel --json` | write | Request the existing parallel stop policy for the attached repository. Read the parallel query and events for the applied state. This does not revoke issue approvals or replace stop_all for running conversation turns. |
 | `akra kernel approval decide_approval --json` | write | Accept or decline a pending approval request. |
 | `akra kernel auto_follow set_auto_follow_max_turns --json` | write | Set how many automatic follow-up turns may run after a manual turn. |
 | `akra kernel auto_follow pause_auto_follow --json` | write | Pause automatic follow-up turns. |

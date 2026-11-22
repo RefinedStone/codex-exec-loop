@@ -1858,6 +1858,126 @@ mod tests {
     }
 
     #[test]
+    fn explicit_parallel_command_accepts_then_reports_readiness_failure_without_replaying() {
+        use crate::adapter::inbound::kernel_protocol::{
+            CommandRequest, KernelCommand, KernelCommandInput,
+        };
+        use crate::domain::kernel_event::OperationReceipt;
+
+        // Real readiness rejects this missing repository. No test hook forces the mode on/off.
+        let workspace = crate::test_utils::platform_safe_temp_dir()
+            .join(format!(
+                "akra-missing-parallel-{:016x}",
+                rand::random::<u64>()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        assert!(!std::path::Path::new(&workspace).exists());
+        let (mut runtime, turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(Arc::new(PagedLog(Vec::new())), &workspace);
+        let _ = runtime.dispatch_client_event(NativeClientEvent::ParallelViewChanged(
+            ParallelViewState {
+                workspace_directory: workspace.clone(),
+                supervisor_view_active: false,
+            },
+        ));
+        let (_inbox, inputs) = mpsc::channel();
+        let mut host = KernelHostLoop::new(runtime, inputs, KernelIdleClock::default());
+        let (sender, receiver) = mpsc::sync_channel(64);
+        host.clients.insert(
+            1,
+            ClientSink {
+                events: sender,
+                resync_pending: false,
+                transient: false,
+            },
+        );
+        let request = CommandRequest {
+            command: KernelCommand::EnableParallel {},
+            idempotency_key: Some("explicit-enable".into()),
+        };
+        let descriptor = request.descriptor().unwrap().unwrap();
+        let KernelCommandInput::Parallel {
+            workspace_directory,
+            enabled,
+        } = request.command.into_input(&workspace).unwrap()
+        else {
+            panic!("enable must be a parallel runtime command");
+        };
+        let KernelCommandOutcome::Handled {
+            operation: Some(receipt),
+            stored: None,
+            ..
+        } = host.handle_command(
+            KernelClientCommand::Parallel {
+                workspace_directory,
+                enabled,
+            },
+            Some(&descriptor),
+        )
+        else {
+            panic!("the host must acknowledge the accepted enable request");
+        };
+        assert_eq!(receipt.rejection, None);
+        assert!(!receipt.replayed);
+        // The accepted receipt is not readiness success. Existing asynchronous entry decides it.
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        while host.runtime.parallel_mode_enabled() {
+            host.run_cycle(Instant::now(), Duration::from_millis(5));
+            assert!(Instant::now() < deadline, "readiness did not finish");
+        }
+        assert!(!host.parallel.enabled);
+        assert!(
+            host.parallel
+                .status
+                .as_deref()
+                .is_some_and(|status| !status.is_empty())
+        );
+        assert!(
+            receiver.try_iter().any(|event| matches!(
+                event,
+                KernelHostEvent::Parallel(view) if !view.enabled && view.status.is_some()
+            )),
+            "clients must receive the failed state, not just acceptance"
+        );
+        assert_eq!(
+            host.handle_command(
+                KernelClientCommand::Parallel {
+                    workspace_directory: workspace.clone(),
+                    enabled: true,
+                },
+                Some(&descriptor),
+            ),
+            KernelCommandOutcome::Replayed(OperationReceipt {
+                replayed: true,
+                ..receipt
+            }),
+        );
+        assert!(
+            !host.runtime.parallel_mode_enabled(),
+            "replay must not retry entry"
+        );
+        let conflict = CommandRequest {
+            command: KernelCommand::DisableParallel {},
+            idempotency_key: Some("explicit-enable".into()),
+        }
+        .descriptor()
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            host.handle_command(
+                KernelClientCommand::Parallel {
+                    workspace_directory: workspace,
+                    enabled: false,
+                },
+                Some(&conflict),
+            ),
+            KernelCommandOutcome::KeyReused,
+        );
+        assert!(turns.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn parallel_control_plane_events_reach_clients_as_one_state() {
         // K3-6: clients get the whole parallel state, and only when it changes.
         let (mut host, receiver) = host_loop_with_client();
