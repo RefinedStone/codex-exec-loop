@@ -136,6 +136,7 @@ fn intervention_steer_unknown_receipt_is_not_resent_on_retry_or_kernel_restart()
         runtime.dispatch_client_command(command.clone(), Some(&descriptor)),
         ClientCommandDispatch::Replayed(_)
     ));
+    drop(runtime);
     let (mut reopened, restarted_turns) = recording_runtime_for_test();
     reopened.attach_kernel_event_log(log.clone(), "/workspace");
     reopened.attach_stored_commands(executor.clone(), "/workspace");
