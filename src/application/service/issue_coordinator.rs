@@ -29,7 +29,7 @@ use crate::domain::issue_automation::{IssueAutomationState, IssueTransition, Iss
 use crate::domain::issue_policy::IssueDisclosureTarget;
 use crate::domain::issue_work::IssueReference;
 use anyhow::{Result, anyhow, bail};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueCoordinatorFact {
@@ -112,6 +112,13 @@ fn work_event_reporter<'a>(
     }
 }
 
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+enum IssueCoordinatorGateEvent {
+    Contended,
+    Finished,
+}
+
 pub struct IssueCoordinatorService {
     workspace: String,
     store: Arc<dyn IssueAutomationStorePort>,
@@ -124,6 +131,8 @@ pub struct IssueCoordinatorService {
     publication_journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
     /// 한 host의 동시 tick/reconnect 호출을 직렬화한다. 실행기 상태는 소유하지 않는다.
     tick_gate: Mutex<()>,
+    #[cfg(test)]
+    tick_gate_events: Option<std::sync::mpsc::Sender<IssueCoordinatorGateEvent>>,
 }
 
 impl IssueCoordinatorService {
@@ -147,7 +156,25 @@ impl IssueCoordinatorService {
             feedback: None,
             publication_journal: None,
             tick_gate: Mutex::new(()),
+            #[cfg(test)]
+            tick_gate_events: None,
         }
+    }
+
+    /// 관찰 worker의 경합은 대기한다. tracking 중 도착한 수집 tick을 버리지 않는다.
+    fn lock_tick_gate(&self) -> Result<MutexGuard<'_, ()>> {
+        let guard = match self.tick_gate.try_lock() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::Poisoned(error)) => Err(error),
+            Err(TryLockError::WouldBlock) => {
+                #[cfg(test)]
+                if let Some(events) = &self.tick_gate_events {
+                    let _ = events.send(IssueCoordinatorGateEvent::Contended);
+                }
+                self.tick_gate.lock()
+            }
+        };
+        guard.map_err(|_| anyhow!("the issue coordinator tick gate is poisoned"))
     }
 
     pub fn tick(
@@ -157,9 +184,10 @@ impl IssueCoordinatorService {
         execution_enabled: bool,
         committed: &Reporter<'_>,
     ) -> Result<()> {
-        let Ok(_guard) = self.tick_gate.try_lock() else {
+        let _guard = self.lock_tick_gate()?;
+        if cancel.is_cancelled() {
             return Ok(());
-        };
+        }
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
         let feedback_error = self.reconcile_feedback(cancel).err();

@@ -15,9 +15,10 @@ impl IssueCoordinatorService {
         execution_enabled: bool,
         committed: &Reporter<'_>,
     ) -> Result<()> {
-        let Ok(_guard) = self.tick_gate.try_lock() else {
+        let _guard = self.lock_tick_gate()?;
+        if cancel.is_cancelled() {
             return Ok(());
-        };
+        }
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
         let feedback_error = self.reconcile_feedback(cancel).err();
