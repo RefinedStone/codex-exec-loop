@@ -278,13 +278,14 @@ pub(crate) fn recover_pending_controls(
     execution: &dyn IssueWorkExecutionPort,
 ) -> Result<()> {
     for pending in store.pending_issue_interventions(workspace)? {
-        if !matches!(
+        if matches!(
             pending.request.action,
             IssueInterventionAction::Steer { .. }
         ) {
-            if apply_control(workspace, store, execution, &pending.request, None).is_err() {
-                tracing::warn!(command_id = %pending.request.command_id, "issue control remains pending; unrelated issues may continue");
-            }
+            continue;
+        }
+        if apply_control(workspace, store, execution, &pending.request, None).is_err() {
+            tracing::warn!(command_id = %pending.request.command_id, "issue control remains pending; unrelated issues may continue");
         }
     }
     Ok(())
