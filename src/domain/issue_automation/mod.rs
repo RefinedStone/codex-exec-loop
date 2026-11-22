@@ -8,6 +8,7 @@ pub mod collection;
 pub mod coordinator;
 pub mod execution;
 pub mod execution_answer;
+pub mod feedback;
 pub mod interaction;
 // 판에 묶인 결정 요청과 답이다 (#2544).
 pub mod decision;

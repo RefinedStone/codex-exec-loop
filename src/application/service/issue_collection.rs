@@ -15,6 +15,7 @@ use crate::application::port::outbound::issue_automation_store_port::{
 use crate::application::port::outbound::issue_collection_origin_port::{
     IssueCollectionOrigin, IssueCollectionOriginPort,
 };
+use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::application::port::outbound::issue_source_port::{
     IssueDiscoveryRequest, IssueDiscoveryTarget, IssueResyncRequest, IssueSourcePort,
 };
@@ -109,6 +110,7 @@ pub struct IssueCollectionService {
     source: Arc<dyn IssueSourcePort>,
     origin: Arc<dyn IssueCollectionOriginPort>,
     policy: IssuePolicyService,
+    publication_journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
     triage: Option<Arc<super::issue_triage::IssueTriageService>>,
     coordinator: Option<Arc<super::issue_coordinator::IssueCoordinatorService>>,
     autonomy: Option<Arc<super::issue_autonomy::IssueAutonomyService>>,
@@ -129,11 +131,21 @@ impl IssueCollectionService {
             source,
             origin,
             policy,
+            publication_journal: None,
             triage: None,
             coordinator: None,
             autonomy: None,
             interactions: None,
         }
+    }
+
+    /// 원격 읽기부터 관찰 저장까지 피드백 쓰기와 같은 lease로 직렬화한다.
+    pub fn with_publication_journal(
+        mut self,
+        journal: Arc<dyn IssuePublishIntentJournalPort>,
+    ) -> Self {
+        self.publication_journal = Some(journal);
+        self
     }
 
     pub fn with_autonomy(
@@ -213,6 +225,9 @@ impl IssueCollectionService {
             .issue(reference)?;
         if let (Some(interactions), Some(item)) = (&self.interactions, &detail.item) {
             detail.interaction = Some(interactions.project(item)?);
+        }
+        if let (Some(coordinator), Some(_)) = (&self.coordinator, &detail.item) {
+            detail.feedback = coordinator.feedback_detail(reference)?;
         }
         Ok(detail)
     }
@@ -500,10 +515,22 @@ impl IssueCollectionService {
         if !self.may_read(&progress.projection.state, cancel)? {
             return self.discard(progress);
         }
+        // 이 lease는 SQL transaction이 아니다. 원격 읽기와 저장 사이의 자기 라벨 변경을 막는다.
+        let publication_lease = self
+            .publication_journal
+            .as_ref()
+            .map(|journal| journal.acquire_publication_lease(&self.workspace_dir))
+            .transpose()?;
+        if let Some(lease) = &publication_lease {
+            lease.verify_identity()?;
+        }
         let mut failure = None;
         match self.source.discover(request.clone()) {
             Ok(page) => {
                 let result = cancel.commit_if_active(|| {
+                    if let Some(lease) = &publication_lease {
+                        lease.verify_identity()?;
+                    }
                     let result = self
                         .store
                         .apply_discovery_page(
@@ -543,6 +570,9 @@ impl IssueCollectionService {
             if !self.may_read(&progress.projection.state, cancel)? {
                 return self.discard(progress);
             }
+            if let Some(lease) = &publication_lease {
+                lease.verify_identity()?;
+            }
             let read = self.source.resync(IssueResyncRequest {
                 issue: reference.clone(),
                 disclosure: disclosure.clone(),
@@ -554,6 +584,9 @@ impl IssueCollectionService {
             reads.push(read);
         }
         let result = cancel.commit_if_active(|| {
+            if let Some(lease) = &publication_lease {
+                lease.verify_identity()?;
+            }
             let result = self
                 .store
                 .apply_resync_batch(&self.workspace_dir, &batch, &reads)

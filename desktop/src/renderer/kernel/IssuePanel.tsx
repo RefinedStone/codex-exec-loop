@@ -18,6 +18,7 @@ const SOURCE_FAILURE_TEXT: Record<IssueSourceFailureState, string> = {
   malformed_response: "이슈 공급자의 응답을 확인할 수 없습니다.",
   identity_mismatch: "연결된 저장소의 신원을 확인할 수 없습니다.",
   metadata_incomplete: "이슈의 메타데이터를 모두 확인하지 못했습니다.",
+  feedback_unconfirmed: "이슈의 진행 표시가 반영됐는지 확인이 필요합니다.",
 };
 
 /** 닫힌 수집 오류 코드의 표시 문구다. 목록의 상태나 재시도 여부를 판단하지 않는다. */
