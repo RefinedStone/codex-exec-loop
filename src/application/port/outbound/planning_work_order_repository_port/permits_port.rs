@@ -79,6 +79,7 @@ impl PlanningWorkPermit {
 pub enum PlanningWorkPermitBlockReason {
     Missing,
     Stale,
+    ExecutionAttemptLimit,
 }
 
 impl PlanningWorkPermitBlockReason {
@@ -86,6 +87,7 @@ impl PlanningWorkPermitBlockReason {
         match self {
             Self::Missing => "permit_missing",
             Self::Stale => "permit_stale",
+            Self::ExecutionAttemptLimit => "execution_attempt_limit",
         }
     }
 }

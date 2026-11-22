@@ -41,6 +41,8 @@ mod collection;
 mod coordinator;
 mod decision;
 mod events;
+mod execution;
+mod execution_answers;
 mod intervention;
 mod private_store;
 mod triage;
@@ -51,7 +53,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -244,6 +246,62 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
         workspace: &str,
     ) -> Result<Vec<crate::domain::issue_automation::intervention::StoredIssueIntervention>> {
         intervention::pending(self, workspace)
+    }
+
+    fn claim_issue_execution_answer(
+        &self,
+        workspace: &str,
+        intent: &crate::domain::issue_automation::execution_answer::IssueExecutionAnswerIntent,
+    ) -> Result<crate::domain::issue_automation::execution_answer::IssueExecutionAnswerClaim> {
+        execution_answers::claim(self, workspace, intent)
+    }
+
+    fn pending_issue_execution_answers(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::execution_answer::IssueExecutionAnswerRecord>>
+    {
+        execution_answers::pending(self, workspace, work_order_id)
+    }
+
+    fn save_issue_execution_answer(
+        &self,
+        workspace: &str,
+        command_id: &str,
+        expected_revision: u64,
+        status: &crate::domain::issue_automation::execution_answer::IssueExecutionAnswerStatus,
+    ) -> Result<Option<crate::domain::issue_automation::execution_answer::IssueExecutionAnswerRecord>>
+    {
+        execution_answers::save(self, workspace, command_id, expected_revision, status)
+    }
+
+    fn get_issue_execution(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+    ) -> Result<Option<crate::domain::issue_automation::execution::IssueExecutionRecord>> {
+        execution::get(self, workspace, issue)
+    }
+
+    fn apply_issue_execution(
+        &self,
+        workspace: &str,
+        work: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+        expected_progress_revision: u64,
+        observation: &crate::domain::issue_automation::execution::IssueWorkExecutionObservation,
+        max_attempts: Option<u32>,
+    ) -> Result<
+        crate::application::port::outbound::issue_automation_store_port::IssueExecutionSaveResult,
+    > {
+        execution::apply(
+            self,
+            workspace,
+            work,
+            expected_progress_revision,
+            observation,
+            max_attempts,
+        )
     }
 
     fn get_issue_work(
@@ -705,7 +763,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=6) => {
+            (APPLICATION_ID, version @ 1..=7) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -729,9 +787,14 @@ fn ensure_schema(
                     transaction.execute_batch(intervention::COMMAND_SCHEMA)?;
                     transaction.execute_batch(intervention::TRACKING_SCHEMA)?;
                 }
-                transaction.execute_batch(autonomy::SCHEMA)?;
-                transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
-                transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
+                if version < 7 {
+                    transaction.execute_batch(autonomy::SCHEMA)?;
+                    transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
+                    transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
+                }
+                transaction.execute_batch(execution::SCHEMA)?;
+                transaction.execute_batch(execution::RECEIPT_SCHEMA)?;
+                execution_answers::create_schema(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -758,6 +821,9 @@ fn ensure_schema(
                 transaction.execute_batch(autonomy::SCHEMA)?;
                 transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
                 transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
+                transaction.execute_batch(execution::SCHEMA)?;
+                transaction.execute_batch(execution::RECEIPT_SCHEMA)?;
+                execution_answers::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -779,7 +845,7 @@ fn validate_schema(connection: &Connection) -> Result<()> {
 }
 
 fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> {
-    if !matches!(version, 1 | 2 | 3 | 4 | 5 | 6 | SCHEMA_VERSION) {
+    if !matches!(version, 1..=SCHEMA_VERSION) {
         bail!("the issue automation schema version is unsupported")
     }
     let mut statement = connection.prepare(
@@ -816,6 +882,12 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
         expected.push((autonomy::TABLE, autonomy::SCHEMA));
         expected.push((autonomy::COMMAND_TABLE, autonomy::COMMAND_SCHEMA));
         expected.push((autonomy::FENCE_TABLE, autonomy::FENCE_SCHEMA));
+    }
+    if version >= 8 {
+        expected.push((execution::TABLE, execution::SCHEMA));
+        expected.push((execution::RECEIPT_TABLE, execution::RECEIPT_SCHEMA));
+        expected.push((execution_answers::TABLE, execution_answers::SCHEMA));
+        expected.extend(execution_answers::INDEXES);
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

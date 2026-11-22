@@ -77,6 +77,14 @@ pub(super) fn process_distributor_queue_record(
     integration_target_oid: &str,
     autonomous_delivery_allowed: &Result<bool, String>,
 ) -> Result<Vec<String>, String> {
+    if planning_authority
+        .worker_task_requires_preservation(workspace_dir, &record.task_id)
+        .map_err(|_| "waiting worker state could not be checked".to_string())?
+    {
+        return Ok(vec![
+            "사용자 답변 또는 전달 확인을 기다리는 작업은 배포하지 않습니다.".into(),
+        ]);
+    }
     if !runtime.path_exists(Path::new(&record.worktree_path)) {
         // source worktree가 없으면 lease를 신뢰할 수 없어 delivery를 시작하지 않고 durable block으로 남긴다.
         return Ok(vec![block_distributor_queue_record(
@@ -1229,6 +1237,15 @@ fn distributor_cleanup_integrated_slot(
             record,
             "slot lease generation changed before locked distributor cleanup".to_string(),
         );
+    }
+    if planning_authority
+        .worker_task_requires_preservation(
+            &locked_resolution.context.repo_root,
+            &locked_resolution.lease.task_id,
+        )
+        .map_err(|_| "waiting worker state could not be checked".to_string())?
+    {
+        return Ok("사용자 답변 또는 전달 확인을 기다리는 작업 공간을 보존합니다.".into());
     }
     let cleanup_pending_lease =
         if locked_resolution.lease.state == ParallelModeSlotLeaseState::Running {

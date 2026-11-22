@@ -1,3 +1,4 @@
+mod remediation;
 use super::authoring::directions::PlanningDirectionsService;
 use super::authoring::directions::{DirectionsMaintenanceSummary, QueueIdleReviewContext};
 use super::authoring::init::{
@@ -95,6 +96,7 @@ pub struct PlanningQueueCancellationTransactionResult {
 #[derive(Clone)]
 pub struct PlanningQueueUseCases {
     task_mutation: PlanningTaskMutationService,
+    work_orders: Option<Arc<dyn crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderRepositoryPort>>,
     authority: Arc<dyn PlanningAuthorityPort>,
     runtime_facade: PlanningRuntimeFacadeService,
 }
@@ -107,6 +109,7 @@ impl PlanningQueueUseCases {
     ) -> Self {
         Self {
             task_mutation,
+            work_orders: None,
             authority,
             runtime_facade,
         }
