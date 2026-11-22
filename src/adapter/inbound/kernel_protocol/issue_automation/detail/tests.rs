@@ -185,6 +185,7 @@ fn issue_detail_distinguishes_not_found_from_unavailable_and_keeps_global_report
 fn issue_detail_unknown_has_no_content_fallback_and_uses_the_catalog_revision() {
     let issue = reference();
     let item = IssueCollectionItem {
+        start_budget_wait: None,
         work: None,
         open_decisions: Vec::new(),
         issue: issue.clone(),
@@ -223,6 +224,7 @@ fn issue_detail_exposes_server_actions_and_only_the_selected_safe_conversation_t
     use crate::domain::issue_work::IssueSharedCopy;
 
     let item = IssueCollectionItem {
+        start_budget_wait: None,
         issue: reference(),
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),
         tracked: None,
@@ -305,6 +307,7 @@ fn issue_detail_exposes_server_actions_and_only_the_selected_safe_conversation_t
 #[test]
 fn issue_detail_feedback_projects_only_persisted_metadata_and_keeps_legacy_compatible() {
     let item = IssueCollectionItem {
+        start_budget_wait: None,
         issue: reference(),
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),
         tracked: None,

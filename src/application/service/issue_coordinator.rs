@@ -1,4 +1,4 @@
-//! 저장된 승인만 소비하는 propose 조정기다. 모델 호출 없이 host tick에서 진행한다.
+//! 사람 승인 또는 명시적 Gated 정책 권한을 소비한다. 모델 호출 없이 host tick에서 진행한다.
 use super::issue_collection::{IssueCollectionCancellation, checked_resync_read};
 use super::issue_decision::IssueDecisionService;
 use super::issue_feedback::IssueFeedbackService;
@@ -7,11 +7,13 @@ use crate::domain::issue_automation::feedback::IssueFeedbackEvent;
 
 mod closure;
 mod feedback;
+mod start;
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
 use super::issue_triage::{IssueTriageService, IssueTriagedFact};
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationStorePort, IssueCollectionApplyResult, IssueDecisionFence,
-    IssueDecisionSaveResult, IssueTriageFence, IssueTriageSaveResult, IssueWorkSaveResult,
+    IssueDecisionSaveResult, IssueTriageFence, IssueTriageSaveResult, IssueWorkAdmissionResult,
+    IssueWorkSaveResult,
 };
 use crate::application::port::outbound::issue_source_port::{IssueResyncRequest, IssueSourcePort};
 use crate::application::port::outbound::issue_work_execution_port::{
@@ -29,6 +31,7 @@ use crate::domain::issue_automation::{IssueAutomationState, IssueTransition, Iss
 use crate::domain::issue_policy::IssueDisclosureTarget;
 use crate::domain::issue_work::IssueReference;
 use anyhow::{Result, anyhow, bail};
+use start::{StartAuthorization, StartContext};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -428,7 +431,8 @@ impl IssueCoordinatorService {
                 work.current_authorization_basis().authorization_epoch
                     == control.authorization_epoch
             })
-            .map(|work| work.current_authorization_decision_id().clone())
+            .and_then(|work| work.current_authorization_decision_id())
+            .cloned()
             .unwrap_or_else(|| start_decision_id(&item.issue, &basis));
         let current_decision = self.revoke_on_current_error(
             work.as_ref(),
@@ -447,7 +451,7 @@ impl IssueCoordinatorService {
         let execution = if work.as_ref().is_some_and(|work| {
             work.permit_source.is_some()
                 && *work.current_authorization_basis() == basis
-                && ready_for_propose(&assessment)
+                && ready_for_start(&assessment)
         }) {
             match self
                 .execution
@@ -488,8 +492,13 @@ impl IssueCoordinatorService {
             )
             && let Some(work) = &work
             && work.current_authorization_basis() == &basis
-            && ready_for_propose(&assessment)
-            && decision.is_some_and(|decision| human_start(&decision.request))
+            && ready_for_start(&assessment)
+            && match work.current_start_authority() {
+                IssueWorkStartAuthority::Policy => policy_start(&assessment),
+                IssueWorkStartAuthority::Human => {
+                    decision.is_some_and(|decision| human_start(&decision.request))
+                }
+            }
         {
             let floor = self.revoke_on_current_error(
                 Some(work),
@@ -564,13 +573,25 @@ impl IssueCoordinatorService {
                 }
             }
             IssueCoordinatorAction::SubmitWork => {
-                if let Some(decision) = decision {
+                let preserve_human = work.as_ref().is_some_and(|work| {
+                    work.current_start_authority() == IssueWorkStartAuthority::Human
+                        && work.current_authorization_basis() == &basis
+                });
+                let authorization = if policy_start(&assessment) && !preserve_human {
+                    Some(StartAuthorization::Policy(&basis))
+                } else {
+                    decision.map(|decision| StartAuthorization::Human(&decision.request))
+                };
+                if let Some(authorization) = authorization {
                     self.submit(
                         &item.issue,
-                        &decision.request,
+                        StartContext {
+                            authorization,
+                            now_unix_ms,
+                            execution_enabled,
+                        },
                         work,
                         cancel,
-                        execution_enabled,
                         committed,
                     )?;
                 }
@@ -613,6 +634,16 @@ impl IssueCoordinatorService {
                             Ok(())
                         })?;
                     }
+                } else if ready_for_start(&assessment)
+                    && assessment.reasons().contains(
+                        &crate::domain::issue_automation::triage::IssueTriageReasonCode::BudgetExhausted,
+                    )
+                {
+                    cancel.commit_if_active(|| {
+                        self.ready(&item.issue)?;
+                        self.current(&item.issue, committed)?;
+                        Ok(())
+                    })?;
                 } else if decision
                     .is_some_and(|stored| stored.request.state() == IssueDecisionState::Answered)
                 {
@@ -630,12 +661,17 @@ impl IssueCoordinatorService {
     fn submit(
         &self,
         issue: &IssueReference,
-        decision: &IssueDecisionRequest,
+        start: StartContext<'_>,
         existing: Option<IssueWorkCheckpoint>,
         cancel: &IssueCollectionCancellation,
-        execution_enabled: bool,
         committed: &Reporter<'_>,
     ) -> Result<()> {
+        let StartContext {
+            authorization,
+            now_unix_ms,
+            execution_enabled,
+        } = start;
+        let initial_admission = existing.is_none();
         if let Some(work) = existing.as_ref()
             && execution::submission_blocked(self, work)?
         {
@@ -660,9 +696,7 @@ impl IssueCoordinatorService {
         )?;
         if !control.allows_automation()
             || control.authorization_epoch != basis.authorization_epoch
-            || !ready_for_propose(&assessment)
-            || decision.definition().basis != basis
-            || !human_start(decision)
+            || !authorization.permits(&assessment, &basis)
             || item.tracked.as_ref().is_none_or(|tracked| {
                 tracked.flags.held || tracked.flags.stale || tracked.flags.unknown
             })
@@ -683,7 +717,7 @@ impl IssueCoordinatorService {
         }
         let mut work = match existing {
             Some(work) => work,
-            None => self.build_work(&item, decision)?,
+            None => self.build_work(&item, authorization)?,
         };
         let provider_link = self.revoke_on_current_error(
             Some(&work),
@@ -702,7 +736,10 @@ impl IssueCoordinatorService {
             )?;
             return Ok(());
         }
-        if work.current_authorization_basis() != &basis {
+        if work.current_authorization_basis() != &basis
+            || work.current_start_authority() != authorization.authority()
+            || work.current_authorization_decision_id() != authorization.decision_id()
+        {
             if work.order.field_hash
                 != *basis
                     .field_hash
@@ -712,7 +749,8 @@ impl IssueCoordinatorService {
                 bail!("changed issue fields require a new reviewed work instruction");
             }
             work.authorization = Some(IssueWorkAuthorization {
-                decision_id: decision.id().clone(),
+                start_authority: authorization.authority(),
+                decision_id: authorization.decision_id().cloned(),
                 basis: basis.clone(),
             });
         }
@@ -763,14 +801,35 @@ impl IssueCoordinatorService {
         };
         let mut grant_source = None;
         cancel.commit_if_active(|| {
-            // intent가 실행기 등록보다 먼저 durable해진다. 응답 유실 뒤 같은 ID로 재등록한다.
-            let IssueWorkSaveResult::Saved { record, .. } =
-                self.store
-                    .save_issue_work(&self.workspace, fence, &assessment, &work)?
-            else {
-                return Ok(());
-            };
-            work = *record;
+            // 첫 intent와 예산 영수증을 함께 저장한다. 응답 유실 뒤에는 기존 intent를 복구한다.
+            if initial_admission {
+                let budget = self.triage.start_budget_for_policy(&basis.policy_version)?;
+                match self.store.admit_issue_work(
+                    &self.workspace,
+                    fence,
+                    &assessment,
+                    &work,
+                    &budget,
+                    now_unix_ms,
+                )? {
+                    IssueWorkAdmissionResult::Saved { record, .. } => work = *record,
+                    IssueWorkAdmissionResult::BudgetExhausted { .. } => {
+                        self.ready(issue)?;
+                        // Ready changes the tracked fence, not the approval fingerprint.
+                        self.current(issue, committed)?;
+                        return Ok(());
+                    }
+                    IssueWorkAdmissionResult::Conflict => return Ok(()),
+                }
+            } else {
+                let IssueWorkSaveResult::Saved { record, .. } =
+                    self.store
+                        .save_issue_work(&self.workspace, fence, &assessment, &work)?
+                else {
+                    return Ok(());
+                };
+                work = *record;
+            }
             self.execution
                 .control(&self.workspace, &work.order.work_order_id)?
                 .require_epoch(basis.authorization_epoch)?;
@@ -808,7 +867,7 @@ impl IssueCoordinatorService {
             let (fence, current_item, current, current_basis) =
                 self.current_or_revoke(&work, committed)?;
             // 로컬 정책과 표시도 등록 후 다시 확인한다. 판이 바뀌면 task는 permit 없이 남는다.
-            if !matches_approval(&current_item, &current, &basis, &current_basis) {
+            if !matches_approval(&current_item, &current, authorization, &current_basis) {
                 self.execution
                     .revoke(&self.workspace, &work.order.work_order_id)?;
                 work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
@@ -848,7 +907,7 @@ impl IssueCoordinatorService {
         cancel.commit_if_active(|| {
             let (fence, current_item, current, current_basis) =
                 self.current_or_revoke(&work, committed)?;
-            if !matches_approval(&current_item, &current, &basis, &current_basis) {
+            if !matches_approval(&current_item, &current, authorization, &current_basis) {
                 self.execution
                     .revoke(&self.workspace, &work.order.work_order_id)?;
                 work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
@@ -869,7 +928,7 @@ impl IssueCoordinatorService {
             )?;
             let (fence, current_item, current, current_basis) =
                 self.current_or_revoke(&work, committed)?;
-            if !matches_approval(&current_item, &current, &basis, &current_basis) {
+            if !matches_approval(&current_item, &current, authorization, &current_basis) {
                 self.execution
                     .revoke(&self.workspace, &work.order.work_order_id)?;
                 work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
@@ -1101,15 +1160,16 @@ impl IssueCoordinatorService {
     fn build_work(
         &self,
         item: &IssueCollectionItem,
-        decision: &IssueDecisionRequest,
+        authorization: StartAuthorization<'_>,
     ) -> Result<IssueWorkCheckpoint> {
+        let basis = authorization.basis();
         let Some(IssueSourceRead::Observed(observation)) = &item.current else {
             bail!("the current issue is unknown")
         };
         let IssueSourceContent::Shared(snapshot) = &observation.content else {
             bail!("the current issue handoff is withheld")
         };
-        if decision.definition().basis.field_hash.as_ref() != Some(&snapshot.basis.field_hash) {
+        if basis.field_hash.as_ref() != Some(&snapshot.basis.field_hash) {
             bail!("the handoff is not the approved issue fields");
         }
         let acceptance = issue_acceptance_criteria(&snapshot.shared_copy.body)
@@ -1129,13 +1189,14 @@ impl IssueCoordinatorService {
                 link_reference: observation.web.as_ref().map(|web| web.url.clone()),
                 provider_link: self
                     .triage
-                    .provider_link_for_policy(&decision.definition().basis.policy_version)?,
+                    .provider_link_for_policy(&basis.policy_version)?,
                 profile: None,
                 priority: 80,
                 attempt: 1,
             },
-            decision_id: decision.id().clone(),
-            approved_basis: decision.definition().basis.clone(),
+            start_authority: authorization.authority(),
+            decision_id: authorization.decision_id().cloned(),
+            approved_basis: basis.clone(),
             task_ids: Vec::new(),
             permit_source: None,
             permit_revision: 0,
@@ -1217,11 +1278,10 @@ fn start_definition(
 fn matches_approval(
     item: &IssueCollectionItem,
     assessment: &IssueTriageAssessment,
-    basis: &IssueDecisionBasis,
+    authorization: StartAuthorization<'_>,
     current_basis: &IssueDecisionBasis,
 ) -> bool {
-    ready_for_propose(assessment)
-        && current_basis == basis
+    authorization.permits(assessment, current_basis)
         && item.tracked.as_ref().is_some_and(|tracked| {
             !tracked.flags.held && !tracked.flags.stale && !tracked.flags.unknown
         })

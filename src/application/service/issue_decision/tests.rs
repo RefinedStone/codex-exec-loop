@@ -25,18 +25,18 @@ use crate::domain::issue_policy::IssueDisclosurePolicy;
 use crate::domain::issue_work::{
     IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueProvider, IssueSharedCopy,
 };
-const AUTO_POLICY: &str = r#"
+const GATED_POLICY: &str = r#"
 [binding.github]
-mode = "auto"
+mode = "gated"
 [authority]
-autonomy_cap = "auto"
+autonomy_cap = "gated"
 [select]
 mode = "all_open"
 trusted_actors = [{provider="github",server_id="github.com",actor_id="U_author"}]
-[gates.auto.normal]
+[gates.gated.normal]
 start = "auto"
-delivery = "auto"
-merge = "auto"
+delivery = "human"
+merge = "human"
 "#;
 
 struct Fixture {
@@ -73,9 +73,39 @@ impl Fixture {
     }
 
     fn service(&self, policy: Arc<MutableAutomationPolicy>) -> IssueTriageService {
+        let store = self.store();
+        // This fixture represents a previously confirmed native Gated selection.
+        // Native proof validation has its own service/kernel regressions.
+        let document = policy.text.lock().unwrap().clone();
+        if let Ok(resolved) =
+            crate::application::service::issue_automation_policy::resolve_issue_automation_policy(
+                Some(&document),
+                None,
+            )
+            && resolved.policy.binding.github.mode
+                == crate::domain::issue_automation::IssueAutomationAutonomy::Gated
+            && store
+                .issue_autonomy_selection(&self.workspace)
+                .unwrap()
+                .requested_level
+                .is_none()
+        {
+            let intent = crate::domain::issue_automation::autonomy::IssueAutonomyIntent {
+                command_id: "fixture-confirmed-gated".into(),
+                level: crate::domain::issue_automation::autonomy::IssueAutonomyLevel::Gated,
+                expected_revision: 0,
+                policy_version: resolved.version,
+            };
+            store
+                .begin_issue_autonomy(&self.workspace, &intent)
+                .unwrap();
+            store
+                .finish_issue_autonomy(&self.workspace, &intent)
+                .unwrap();
+        }
         IssueTriageService::new(
             self.workspace.clone(),
-            self.store(),
+            store,
             IssueAutomationPolicyService::new(policy),
             IssuePolicyService::new(Arc::new(ValidationPolicy)),
         )
@@ -188,7 +218,7 @@ struct MutableAutomationPolicy {
 impl MutableAutomationPolicy {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            text: Mutex::new(AUTO_POLICY.to_string()),
+            text: Mutex::new(GATED_POLICY.to_string()),
             unavailable: AtomicBool::new(false),
         })
     }
@@ -367,7 +397,7 @@ fn automation_policy_changes_invalidate_a_pending_answer_without_retriage() {
     let source = MutableAutomationPolicy::new();
     let (service, initial) = setup(&fixture, source.clone());
     *source.text.lock().unwrap() =
-        AUTO_POLICY.replace("autonomy_cap = \"auto\"", "autonomy_cap = \"gated\"");
+        GATED_POLICY.replace("autonomy_cap = \"gated\"", "autonomy_cap = \"propose\"");
     let result = service
         .answer(
             initial.record.request.id().as_str(),
@@ -581,7 +611,7 @@ fn collection_off_does_not_block_an_existing_decision_answer() {
 
 fn human_policy() -> Arc<MutableAutomationPolicy> {
     let policy = MutableAutomationPolicy::new();
-    *policy.text.lock().unwrap() = AUTO_POLICY.replace("mode = \"auto\"", "mode = \"propose\"");
+    *policy.text.lock().unwrap() = GATED_POLICY.replace("mode = \"gated\"", "mode = \"propose\"");
     policy
 }
 

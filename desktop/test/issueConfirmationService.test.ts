@@ -242,21 +242,21 @@ describe("utility issue confirmation", () => {
 
 
 describe("utility issue autonomy confirmation", () => {
-  it("submits the exact autonomy command once after native approval", async () => {
+  it.each(["propose", "gated"] as const)("submits the exact %s autonomy command once after native approval", async (level) => {
     const h = harness();
-    const result = h.service.confirmAutonomy({ workspace: "/work/repo", level: "propose", commandId: "autonomy-1", key: "autonomy-key" });
+    const result = h.service.confirmAutonomy({ workspace: "/work/repo", level, commandId: "autonomy-1", key: "autonomy-key" });
     await h.untilDialog();
     expect(h.submitted()).toHaveLength(0);
     h.native.resolve(true);
     expect(await result).toEqual({ cancelled: false, response: { processed: true } });
     expect(h.submitted()).toHaveLength(1);
     expect(h.submitted()[0]?.[1]).toMatchObject({
-      request: { command: { type: "set_issue_autonomy", command_id: "autonomy-1", level: "propose" }, idempotency_key: "autonomy-key" },
+      request: { command: { type: "set_issue_autonomy", command_id: "autonomy-1", level }, idempotency_key: "autonomy-key" },
     });
   });
 
   it.each([
-    { level: "auto" }, { level: "gated" }, { commandId: "" }, { commandId: "bad id" }, { proof_id: "renderer-proof" },
+    { level: "auto" }, { level: "unknown" }, { commandId: "" }, { commandId: "bad id" }, { proof_id: "renderer-proof" },
   ])("rejects invalid autonomy input before opening a confirmation helper: %j", (extra) => {
     const h = harness();
     expect(() => h.service.confirmAutonomy({ workspace: "/work/repo", level: "propose", commandId: "autonomy-1", key: "key", ...extra })).toThrow();

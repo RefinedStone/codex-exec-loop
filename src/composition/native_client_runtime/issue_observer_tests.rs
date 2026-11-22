@@ -551,3 +551,70 @@ fn periodic_control_completions_and_local_ticks_preserve_remote_failure_backoff(
     }
     h.assert_tracking_calls(4);
 }
+
+#[test]
+fn confirmed_automatic_autonomy_keeps_idle_runtime_alive_without_enabling_parallel() {
+    use crate::domain::issue_automation::IssueAutomationAutonomy as Mode;
+    use crate::domain::issue_automation::autonomy::{
+        IssueAutonomyLevel, IssueAutonomyProjection, IssueAutonomyReady,
+    };
+    let (runtime, turns) = recording_runtime_for_test();
+    assert!(!runtime.has_remaining_work());
+    for mode in [
+        Mode::Off,
+        Mode::Observe,
+        Mode::Propose,
+        Mode::Gated,
+        Mode::Auto,
+    ] {
+        let projection = IssueAutonomyProjection::Ready(IssueAutonomyReady {
+            requested_level: Some(IssueAutonomyLevel::Gated),
+            effective_level: mode,
+            cap: mode,
+            revision: 1,
+            policy_version: "verified-runtime-policy".into(),
+            pending: false,
+            choices: Vec::new(),
+        });
+        runtime.remember_issue_autonomy(&projection);
+        for _ in 0..100 {
+            assert_eq!(
+                runtime.has_remaining_work(),
+                matches!(mode, Mode::Gated | Mode::Auto),
+            );
+        }
+        assert!(!runtime.parallel_mode_enabled());
+    }
+    assert!(turns.lock().unwrap().is_empty());
+}
+
+#[test]
+fn pending_or_unavailable_autonomy_releases_cached_idle_keepalive() {
+    use crate::domain::issue_automation::IssueAutomationAutonomy;
+    use crate::domain::issue_automation::autonomy::{
+        IssueAutonomyLevel, IssueAutonomyProjection, IssueAutonomyReady,
+    };
+    let (runtime, _) = recording_runtime_for_test();
+    let mut state = IssueAutonomyReady {
+        requested_level: Some(IssueAutonomyLevel::Gated),
+        effective_level: IssueAutomationAutonomy::Gated,
+        cap: IssueAutomationAutonomy::Gated,
+        revision: 1,
+        policy_version: "verified-runtime-policy".into(),
+        pending: false,
+        choices: Vec::new(),
+    };
+    runtime.remember_issue_autonomy(&IssueAutonomyProjection::Ready(state.clone()));
+    assert!(runtime.has_remaining_work());
+    state.pending = true;
+    runtime.remember_issue_autonomy(&IssueAutonomyProjection::Ready(state));
+    assert!(!runtime.has_remaining_work());
+    for unavailable in [
+        IssueAutonomyProjection::Unavailable,
+        IssueAutonomyProjection::PolicyBlocked,
+    ] {
+        runtime.issue_automation_keepalive.set(true);
+        runtime.remember_issue_autonomy(&unavailable);
+        assert!(!runtime.has_remaining_work());
+    }
+}

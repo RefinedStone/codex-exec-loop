@@ -10,6 +10,26 @@ use crate::domain::issue_automation::{
 };
 use crate::domain::issue_work::IssueProvider;
 
+/// Rebuilds the exact pre-v10 selection CHECK and removes only the v10 additions.
+/// Migration regressions then downgrade the remaining tables to their target version.
+pub(super) fn make_pre_admission_schema(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TABLE issue_start_budget_waits;
+         DROP TABLE issue_work_admissions;
+         ALTER TABLE issue_autonomy_selection RENAME TO issue_autonomy_selection_v10;",
+        )
+        .unwrap();
+    connection
+        .execute_batch(super::autonomy::LEGACY_SCHEMA)
+        .unwrap();
+    connection.execute_batch(
+        "INSERT INTO issue_autonomy_selection (workspace_dir,requested_level,revision,pending_command_id)
+         SELECT workspace_dir,requested_level,revision,pending_command_id FROM issue_autonomy_selection_v10;
+         DROP TABLE issue_autonomy_selection_v10;"
+    ).unwrap();
+}
+
 pub(super) struct Fixture {
     pub(super) root: PathBuf,
     pub(super) workspace: PathBuf,

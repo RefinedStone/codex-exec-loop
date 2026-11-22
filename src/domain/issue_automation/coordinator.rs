@@ -6,7 +6,7 @@ use super::decision::{
     IssueDecisionAnswerBy, IssueDecisionBasis, IssueDecisionId, IssueDecisionRequest,
     IssueDecisionState,
 };
-use super::policy::IssueAutomationGate;
+use super::policy::{IssueAutomationGate, IssueAutomationGateAction};
 use super::triage::{IssueTriageAssessment, IssueTriageEligibility, IssueTriageReadiness};
 use super::{IssueAutomationAutonomy, IssueAutomationFlags, IssueAutomationState};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference, IssueSharedCopy};
@@ -33,6 +33,40 @@ pub enum IssueWorkBlockReason {
     SourceUnavailable,
     SubmissionUnavailable,
     FeedbackUnconfirmed,
+}
+
+/// Missing authority fields in legacy checkpoints mean Human, never Policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueWorkStartAuthority {
+    #[default]
+    Human,
+    Policy,
+}
+
+impl IssueWorkStartAuthority {
+    pub fn validate(self, decision_id: Option<&IssueDecisionId>) -> Result<(), &'static str> {
+        match (self, decision_id) {
+            (Self::Human, Some(_)) | (Self::Policy, None) => Ok(()),
+            _ => Err("issue work start authority does not match its decision"),
+        }
+    }
+}
+
+/// Waiting consumes no reservation and cannot authorize execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct IssueStartBudgetWait {
+    pub exhausted: Vec<IssueStartBudgetLimit>,
+    pub utc_day: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueStartBudgetLimit {
+    Running,
+    StartedPerDay,
+    Attempts,
 }
 
 /// 실행기 중립 명령이다. 본문은 현재 AiHandoff 공유본이며 원본을 담지 않는다.
@@ -66,7 +100,9 @@ pub struct IssueWorkCheckpoint {
     #[serde(default)]
     pub permit_authorization_epoch: u64,
     pub order: IssueWorkOrder,
-    pub decision_id: IssueDecisionId,
+    #[serde(default)]
+    pub start_authority: IssueWorkStartAuthority,
+    pub decision_id: Option<IssueDecisionId>,
     pub approved_basis: IssueDecisionBasis,
     pub task_ids: Vec<String>,
     pub permit_source: Option<String>,
@@ -79,7 +115,9 @@ pub struct IssueWorkCheckpoint {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueWorkAuthorization {
-    pub decision_id: IssueDecisionId,
+    #[serde(default)]
+    pub start_authority: IssueWorkStartAuthority,
+    pub decision_id: Option<IssueDecisionId>,
     pub basis: IssueDecisionBasis,
 }
 
@@ -90,14 +128,21 @@ impl IssueWorkCheckpoint {
             .map(|auth| &auth.basis)
             .unwrap_or(&self.approved_basis)
     }
-    pub fn current_authorization_decision_id(&self) -> &IssueDecisionId {
+    pub fn current_authorization_decision_id(&self) -> Option<&IssueDecisionId> {
+        match &self.authorization {
+            Some(authorization) => authorization.decision_id.as_ref(),
+            None => self.decision_id.as_ref(),
+        }
+    }
+    pub fn current_start_authority(&self) -> IssueWorkStartAuthority {
         self.authorization
             .as_ref()
-            .map(|auth| &auth.decision_id)
-            .unwrap_or(&self.decision_id)
+            .map(|authorization| authorization.start_authority)
+            .unwrap_or(self.start_authority)
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
+        self.start_authority.validate(self.decision_id.as_ref())?;
         super::validate_reference(&self.order.issue).map_err(|_| "invalid work issue")?;
         self.approved_basis
             .validate()
@@ -124,6 +169,9 @@ impl IssueWorkCheckpoint {
             return Err("invalid issue work checkpoint");
         }
         if let Some(authorization) = &self.authorization {
+            authorization
+                .start_authority
+                .validate(authorization.decision_id.as_ref())?;
             authorization
                 .basis
                 .validate()
@@ -163,7 +211,7 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     let Some(assessment) = input.assessment else {
         return Triage;
     };
-    let eligible = ready_for_propose(assessment)
+    let eligible = ready_for_start(assessment)
         && !input.flags.held
         && !input.flags.stale
         && !input.flags.unknown;
@@ -179,11 +227,15 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     }) {
         let approved = eligible
             && current_basis.as_ref() == Some(work.current_authorization_basis())
-            && input.decision.is_some_and(|decision| {
-                human_start(decision)
-                    && decision.issue() == &work.order.issue
-                    && &decision.definition().basis == work.current_authorization_basis()
-            });
+            && match work.current_start_authority() {
+                IssueWorkStartAuthority::Policy => policy_start(assessment),
+                IssueWorkStartAuthority::Human => input.decision.is_some_and(|decision| {
+                    human_start(decision)
+                        && Some(decision.id()) == work.current_authorization_decision_id()
+                        && decision.issue() == &work.order.issue
+                        && &decision.definition().basis == work.current_authorization_basis()
+                }),
+            };
         if !approved {
             return CancelWork;
         }
@@ -197,6 +249,26 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
             return SubmitWork;
         }
         return None;
+    }
+    // A lower budget blocks new starts but must still retire an obsolete open approval.
+    if input.decision.is_some_and(|decision| {
+        decision.issue() == &assessment.basis().issue
+            && decision.state() == IssueDecisionState::Open
+            && current_basis
+                .as_ref()
+                .is_some_and(|basis| decision.definition().basis != *basis)
+    }) {
+        return ExpireDecision;
+    }
+    // A configured zero is already visible as a stable Ready/budget_exhausted assessment.
+    if assessment
+        .reasons()
+        .contains(&super::triage::IssueTriageReasonCode::BudgetExhausted)
+    {
+        return None;
+    }
+    if eligible && policy_start(assessment) {
+        return SubmitWork;
     }
     let Some(decision) = input.decision else {
         return if eligible { OpenDecision } else { None };
@@ -224,14 +296,31 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     None
 }
 
-pub fn ready_for_propose(assessment: &IssueTriageAssessment) -> bool {
-    assessment.effective_mode() == IssueAutomationAutonomy::Propose
-        && assessment.eligibility() == IssueTriageEligibility::Eligible
+/// The start actions implemented by propose/gated; timeout policies are a later slice.
+pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
+    matches!(
+        assessment.effective_mode(),
+        IssueAutomationAutonomy::Propose | IssueAutomationAutonomy::Gated
+    ) && assessment.eligibility() == IssueTriageEligibility::Eligible
         && assessment.readiness() == IssueTriageReadiness::Ready
-        && assessment
-            .gates()
-            .iter()
-            .any(|gate| gate.gate == IssueAutomationGate::Start && gate.enabled)
+        && assessment.gates().iter().any(|gate| {
+            gate.gate == IssueAutomationGate::Start
+                && gate.enabled
+                && matches!(
+                    gate.action,
+                    IssueAutomationGateAction::Human | IssueAutomationGateAction::Auto
+                )
+        })
+}
+
+pub fn policy_start(assessment: &IssueTriageAssessment) -> bool {
+    ready_for_start(assessment)
+        && assessment.effective_mode() == IssueAutomationAutonomy::Gated
+        && assessment.gates().iter().any(|gate| {
+            gate.gate == IssueAutomationGate::Start
+                && gate.enabled
+                && gate.action == IssueAutomationGateAction::Auto
+        })
 }
 
 pub fn human_start(decision: &IssueDecisionRequest) -> bool {

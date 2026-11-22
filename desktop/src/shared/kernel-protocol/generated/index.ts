@@ -172,7 +172,7 @@ export type IssueAutomationPolicySettingState = { readonly "key": string; readon
 
 export type IssueAutonomyChoiceState = { readonly "enabled": boolean; readonly "level": IssueAutonomyLevel; readonly "reason"?: (string | null); readonly "requires_confirmation": boolean; };
 
-export type IssueAutonomyLevel = ("off" | "observe" | "propose");
+export type IssueAutonomyLevel = ("off" | "observe" | "propose" | "gated");
 
 export type IssueAutonomyState = ({ readonly "status": "unavailable"; } | { readonly "status": "policy_blocked"; } | { readonly "cap": IssueAutomationAutonomy; readonly "choices": Array<IssueAutonomyChoiceState>; readonly "effective_level": IssueAutomationAutonomy; readonly "pending": boolean; readonly "policy_version": string; readonly "requested_level"?: (IssueAutonomyLevel | null); readonly "revision": number; readonly "status": "ready"; });
 

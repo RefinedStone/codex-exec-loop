@@ -109,5 +109,6 @@ try {
   for (const window of app.windows()) await window.close();
   await exited;
   await gateway.close();
-  await rm(root, { recursive: true, force: true });
+  // Windows may release directory handles shortly after the child has exited.
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
 }

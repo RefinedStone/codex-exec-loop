@@ -6,6 +6,7 @@ fn execution_detail() -> (IssueCollectionDetail, IssueExecutionRecord) {
     let issue = reference();
     let id = issue_work_order_id(&issue);
     let item = IssueCollectionItem {
+        start_budget_wait: None,
         issue,
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),
         tracked: None,

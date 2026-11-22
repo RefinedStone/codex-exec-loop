@@ -3,6 +3,7 @@ use crate::domain::issue_automation::autonomy::{IssueAutonomyIntent, IssueAutono
 use rusqlite::types::Value;
 
 fn make_version_eight(connection: &Connection) {
+    super::super::super::tests::make_pre_admission_schema(connection);
     connection
         .execute_batch(
             "DROP TABLE issue_feedback_outbox;
@@ -20,6 +21,8 @@ fn legacy_schema(connection: &Connection) -> Vec<(String, String)> {
         .prepare(
             "SELECT name,sql FROM sqlite_master
          WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'issue_feedback_%'
+         AND name NOT LIKE 'issue_work_admissions%' AND name <> 'issue_start_budget_waits'
+         AND name <> 'issue_autonomy_selection'
          ORDER BY name",
         )
         .unwrap()
@@ -33,7 +36,8 @@ fn legacy_rows(connection: &Connection) -> Vec<(String, Vec<Vec<Value>>)> {
     let tables = connection
         .prepare(
             "SELECT name FROM sqlite_master WHERE type='table'
-         AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'issue_feedback_%' ORDER BY name",
+         AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'issue_feedback_%'
+         AND name NOT LIKE 'issue_work_admissions%' AND name <> 'issue_start_budget_waits' ORDER BY name",
         )
         .unwrap()
         .query_map([], |row| row.get::<_, String>(0))
@@ -123,7 +127,10 @@ fn feedback_version_eight_migration_preserves_all_existing_rows_and_only_seeds_g
     let connection = Connection::open(fixture.database()).unwrap();
     assert_eq!(
         super::super::super::schema_identity(&connection).unwrap(),
-        (super::super::super::APPLICATION_ID, 9)
+        (
+            super::super::super::APPLICATION_ID,
+            super::super::super::SCHEMA_VERSION
+        )
     );
     super::super::super::validate_schema(&connection).unwrap();
     assert_eq!(legacy_schema(&connection), old_schema);
@@ -216,6 +223,9 @@ fn feedback_current_schema_does_not_silently_recreate_a_missing_remote_unique_in
     );
     assert_eq!(
         super::super::super::schema_identity(&connection).unwrap(),
-        (super::super::super::APPLICATION_ID, 9)
+        (
+            super::super::super::APPLICATION_ID,
+            super::super::super::SCHEMA_VERSION
+        )
     );
 }

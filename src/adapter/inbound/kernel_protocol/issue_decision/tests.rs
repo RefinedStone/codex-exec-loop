@@ -203,6 +203,7 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
         execution: None,
         feedback: None,
         item: Some(IssueCollectionItem {
+            start_budget_wait: None,
             issue: reference(),
             binding_id: IssueAutomationBindingId::new("binding").unwrap(),
             tracked: None,

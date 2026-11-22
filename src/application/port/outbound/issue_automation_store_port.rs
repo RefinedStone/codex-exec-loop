@@ -299,6 +299,21 @@ pub trait IssueAutomationStorePort: Send + Sync {
         workspace: &str,
         issue: &IssueReference,
     ) -> Result<Option<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>>;
+    /// Reserves the first work ID before any planning registration. The caller supplies the
+    /// current effective budget whose policy version is bound by the assessment.
+    /// Replays never consume another daily start, even after reconnect or a UTC day change.
+    fn admit_issue_work(
+        &self,
+        _workspace: &str,
+        _expected: IssueTriageFence,
+        _assessment: &IssueTriageAssessment,
+        _candidate: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+        _budget: &crate::domain::issue_automation::policy::IssueAutomationBudget,
+        _now_unix_ms: u64,
+    ) -> Result<IssueWorkAdmissionResult> {
+        anyhow::bail!("issue work admission is unavailable")
+    }
+    /// Updates an admitted checkpoint. Every new checkpoint must use admission.
     fn save_issue_work(
         &self,
         workspace: &str,
@@ -508,6 +523,21 @@ pub trait IssueAutomationStorePort: Send + Sync {
         current: &IssueTriageAssessment,
         request: &IssueDecisionRequest,
     ) -> Result<IssueDecisionSaveResult>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueWorkAdmissionResult {
+    Saved {
+        record: Box<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>,
+        catalog_revision: u64,
+        changed: bool,
+    },
+    BudgetExhausted {
+        wait: crate::domain::issue_automation::coordinator::IssueStartBudgetWait,
+        catalog_revision: u64,
+        changed: bool,
+    },
+    Conflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

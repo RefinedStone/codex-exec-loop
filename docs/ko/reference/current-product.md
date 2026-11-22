@@ -184,6 +184,37 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 [Desktop 실행 추적(#2554)](#이슈-실행-추적-화면) 계약은 연결한 reference를 따릅니다.
 결과 반환까지의 [흐름 검증(#2555)](#이슈-자동화-흐름-검증)은 아래에 구분해 기록합니다.
 
+### Gated 자동 시작과 예산
+
+IA5-1 ([#2556](https://github.com/RefinedStone/codex-exec-loop/issues/2556))은 명시적인 런타임
+Gated 선택을 추가합니다. 최초 선택은 자동 시작에 동의하는 네이티브 확인이 필요합니다.
+런타임 선택 없이 파일에만 `gated`나 `auto`를 적으면 유효 수준은 Propose 이하로 제한하며,
+원본 파일은 바꾸지 않습니다. 런타임 Gated에도 사용자·저장소 상한(공개 저장소에 설정된 Propose 상한 포함),
+작성자 신뢰, 보호 경로와 사람 필수 규칙을 적용합니다.
+
+시작 가능한 Ready 이슈의 유효 수준이 Gated이고 해당 위험 등급의 Start 관문이 `auto`일 때만
+자동으로 작업을 등록합니다. 사람 결정을 만들어 대신 승인하지 않고 정책 권한을 기록합니다.
+Start가 `human`이면 현재 사람 결정이 필요하며, Gated의 전달과 통합에도 사람 리뷰를 유지합니다.
+
+| 예산 | 적용 기준 |
+| --- | --- |
+| `max_running` (기본 2) | 작업 공간의 미종결 예약을 원자적으로 검사합니다. 큐 대기·실행 중·리뷰 중과 등록 전 시작 예약을 포함하며, 사람 시작과 정책 시작이 한도를 공유합니다. |
+| `max_started_per_day` (기본 5) | UTC 날짜별 최초 시작 접수를 작업마다 한 번 셉니다. 재접속·응답 유실 복구·재시작은 같은 작업을 다시 차감하지 않습니다. |
+| `max_attempts` (기본 3) | 이슈 작업의 구현 시도를 영속 실행 admission에서 제한하며, 보완 task도 포함합니다. |
+
+저장소 설정은 사용자 한도를 낮출 수만 있습니다. 생략한 값은 내장 기본값을 유지하고, 0은 새 시작을
+막습니다. 예산으로 접수가 막힌 미시작 이슈는 Ready와 `budget_exhausted` 이유를 유지합니다.
+예산 대기는 별도 투영이므로 다른 이슈의 예산 사용이 기존 승인 fingerprint를 바꾸지 않습니다.
+
+Gated 선택이나 이슈 Start는 전역 병렬 pool을 켜지 않습니다. pool이 꺼져 있어도 작업 등록은 가능하며,
+병렬 실행을 명시적으로 켜기 전까지 `ExecutionDisabled`로 대기합니다. 실행 한도는 배분 허가보다 먼저
+설치합니다.
+
+이미 실행 중인 커널은 확인된 유효 자율 수준이 Gated/Auto이면 클라이언트가 모두 떠나도 유지합니다.
+Observe/Propose의 수집만으로는 기존 idle 종료를 막지 않습니다. 커널 유지 판단은 실행 허가를 대신하지
+않으며, 접수와 배분은 현재 정책을 다시 검증합니다. 프로세스 재시작 뒤 커널을 무인으로 기동하는 기능은
+추가하지 않습니다. 다음 정상 연결 때 저장된 런타임 선택과 작업을 복구합니다.
+
 ## 이슈 실행 추적 화면
 
 IA4-4 ([#2554](https://github.com/RefinedStone/codex-exec-loop/issues/2554))는 기존 이슈 상세에
@@ -334,7 +365,8 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   (`desktop/src/main/gatewayConnection.ts`, `desktop/src/renderer/session/`).
 - 커널 프로토콜(`akra/kernel/*`, plan 18 K3 프로토콜 v0): 클라이언트가 작업 공간과 함께
   `akra/kernel/attach` 를 보내면 그 공간이 속한 저장소의 커널에 붙는다. Gateway 는 처음 붙을 때 커널을 만들고,
-  클라이언트가 모두 떠나도 남겨 둔다. 그래서 자동 후속과 병렬 배분이 계속 돈다. 한 저장소의 worktree 들은 커널
+  남은 일이나 확인된 Gated/Auto 자동화가 있으면 클라이언트가 모두 떠나도 유지한다. 그래서 자동 후속과 병렬
+  배분을 계속할 수 있다. 한 저장소의 worktree 들은 커널
   하나를 함께 쓰고, 커널은 대표 checkout 에서 일한다. Akra 병렬 slot worktree 에서 붙거나 대표 checkout 이 없는 저장소(bare 저장소)에 붙으면 실패한다. 다른
   프로세스(TUI)가 그 저장소의 커널을 돌리면 attach 는 `-32012` 로 실패한다. 붙은 뒤에는 `akra/kernel/command`,
   `akra/kernel/query` 를 보내고 `akra/kernel/event` 알림을 받는다. 붙기 전 요청은 `-32011` 로, 커널이 시간 안에
@@ -346,7 +378,8 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   `sequence` 로 `recorded` 이벤트로도 바로 온다. `resync` 뒤에는 마지막으로 본 sequence 뒤를 `history` 로 읽는다.
   클라이언트가 붙어 있는 동안 커널은 병렬 감독 스냅샷을 새로 고친다. 첫 붙기 때 pool 을 바꾸지 않는 감독 점검을
   한 번 한다(TUI 병렬 화면처럼 push 준비 점검을 한다).
-- 붙은 클라이언트도 남은 일(턴, 승인, 자동 후속, 평가, planning 작업, 켜진 병렬 모드, 도는 병렬 작업)도 없이
+- 붙은 클라이언트도 남은 일(턴, 승인, 자동 후속, 평가, planning 작업, 켜진 병렬 모드, 도는 병렬 작업,
+  확인된 유효 Gated/Auto 자동화)도 없이
   10분이 지난 커널은 내려간다. 그러면 TUI 가 그 저장소 잠금을 잡을 수 있다. 다음 붙기가 커널을 다시 시작한다.
   Gateway 가 끝날 때는 upstream app-server 보다 커널을 먼저 멈춘다.
 - 커널은 자기 `codex app-server proxy` 연결로 Gateway upstream app-server 를 함께 쓴다. 그래서 클라이언트는

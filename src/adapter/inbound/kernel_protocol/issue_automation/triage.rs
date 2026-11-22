@@ -6,7 +6,7 @@ use super::super::{NextStep, reason_next};
 use super::IssueHashState;
 use crate::domain::issue_automation::IssueAutomationAutonomy;
 use crate::domain::issue_automation::collection::{
-    IssueTriageObserveReport, IssueTriageProjection,
+    IssueCollectionItem, IssueTriageObserveReport, IssueTriageProjection,
 };
 use crate::domain::issue_automation::policy::{
     IssueAutomationGate, IssueAutomationGateAction, IssueAutomationRiskClass,
@@ -78,6 +78,40 @@ pub struct IssueTriageReasonState {
     /// 서버가 정한 다음 행동 설명이다. renderer가 reason code에서 추론하지 않는다.
     pub next_summary: String,
     pub next: Vec<NextStep>,
+}
+
+impl IssueTriageState {
+    /// Budget usage is a separate projection, never part of an approval fingerprint.
+    pub(super) fn from_item(item: &IssueCollectionItem) -> Option<Self> {
+        let projection = item.triage.as_ref()?;
+        let mut state = Self::from(projection);
+        if !projection.stale
+            && let Some(wait) = &item.start_budget_wait
+        {
+            use crate::domain::issue_automation::coordinator::IssueStartBudgetLimit;
+            let limits = wait
+                .exhausted
+                .iter()
+                .map(|limit| match limit {
+                    IssueStartBudgetLimit::Running => "동시 작업",
+                    IssueStartBudgetLimit::StartedPerDay => "UTC 일일 시작",
+                    IssueStartBudgetLimit::Attempts => "이슈별 시도",
+                })
+                .collect::<Vec<_>>()
+                .join("·");
+            state
+                .reasons
+                .retain(|reason| reason.code != ReasonCode::BudgetExhausted);
+            state.reasons.insert(0, IssueTriageReasonState {
+                code: ReasonCode::BudgetExhausted,
+                summary: format!("{limits} 한도에 도달해 작업 시작을 기다립니다."),
+                next_summary: "진행 중인 작업이 끝나거나 UTC 날짜가 바뀌면 현재 정책과 한도를 다시 확인합니다.".into(),
+                next: reason_next(ReasonCode::BudgetExhausted),
+            });
+            state.observation.disposition = IssueObservationDispositionState::Deferred;
+        }
+        Some(state)
+    }
 }
 
 impl From<&IssueTriageProjection> for IssueTriageState {

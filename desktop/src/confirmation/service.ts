@@ -150,7 +150,7 @@ function modeRequest(value: unknown): { workspace: string; command: CommandReque
 function autonomyRequest(value: unknown): { workspace: string; command: CommandRequest } {
   if (!isRecord(value) || !onlyFields(value, ["workspace", "level", "commandId", "key"]) || !workspace(value.workspace) ||
     !token(value.key, 128) || !token(value.commandId, 128) ||
-    (value.level !== "off" && value.level !== "observe" && value.level !== "propose")) throw failure();
+    (value.level !== "off" && value.level !== "observe" && value.level !== "propose" && value.level !== "gated")) throw failure();
   return {
     workspace: value.workspace,
     command: {

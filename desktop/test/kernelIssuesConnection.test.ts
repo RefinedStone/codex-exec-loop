@@ -1132,14 +1132,15 @@ describe("issue kernel connection", () => {
 });
 
 
-function autonomyState(level: IssueAutonomyLevel = "observe"): Extract<IssueAutonomyState, { status: "ready" }> {
+function autonomyState(level: IssueAutonomyLevel = "observe", cap: IssueAutonomyLevel = "propose"): Extract<IssueAutonomyState, { status: "ready" }> {
   return {
-    status: "ready" as const, requested_level: level, effective_level: level, cap: "propose" as const,
+    status: "ready" as const, requested_level: level, effective_level: level, cap,
     revision: 1, policy_version: "runtime-policy-1", pending: false,
-    choices: (["off", "observe", "propose"] as const).map((choice) => ({
-      level: choice, enabled: true,
-      requires_confirmation: ["off", "observe", "propose"].indexOf(choice) > ["off", "observe", "propose"].indexOf(level),
-      reason: null,
+    choices: (["off", "observe", "propose", "gated"] as const).map((choice) => ({
+      level: choice,
+      enabled: ["off", "observe", "propose", "gated"].indexOf(choice) <= ["off", "observe", "propose", "gated"].indexOf(cap),
+      requires_confirmation: ["off", "observe", "propose", "gated"].indexOf(choice) > ["off", "observe", "propose", "gated"].indexOf(level),
+      reason: ["off", "observe", "propose", "gated"].indexOf(choice) > ["off", "observe", "propose", "gated"].indexOf(cap) ? "현재 정책 상한입니다." : null,
     })),
   };
 }
@@ -1193,6 +1194,34 @@ function interventionResponse(request: Sent | undefined, delivery: "queued" | "s
 }
 
 describe("issue decisions and interventions", () => {
+  it("accepts legacy choices and routes Gated through native confirmation when the server enables it", async () => {
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueAutonomy"]>>(async () => ({ cancelled: true as const }));
+    const h = harness({ confirmations: { confirmIssueAutonomy: confirmation } });
+    const currentAutonomy = autonomyState();
+    const legacy = {
+      ...currentAutonomy, choices: currentAutonomy.choices.filter((choice) => choice.level !== "gated"),
+    };
+    await h.openIssues(issuePage(), { ...automation(), autonomy: legacy });
+    expect(h.view().issues.error).toBeNull();
+    await h.connection.setIssueAutonomy("gated");
+    expect(confirmation).not.toHaveBeenCalled();
+
+    h.connection.handleEvent({ event: { ...automation(), type: "issues", autonomy: autonomyState("observe", "gated") } });
+    await h.connection.setIssueAutonomy("gated");
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(confirmation.mock.calls[0]?.[0]).toMatchObject({ workspace: "/repo", level: "gated" });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("accepts a confirmed Gated projection without reissuing its command", async () => {
+    const h = harness();
+    const state = { ...automation(), autonomy: autonomyState("gated", "gated") };
+    await h.openIssues(issuePage(), state);
+    expect(h.view().issues.automation).toEqual(state);
+    expect(h.view().issues.error).toBeNull();
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
   it("accepts policy-inherited autonomy when the wire response omits requested_level", async () => {
     const h = harness();
     const { requested_level: _requested, ...inherited } = autonomyState();
@@ -1428,10 +1457,7 @@ describe("issue decisions and interventions", () => {
     const before = h.queries("issues").length;
     const changed = h.connection.setIssueAutonomy("propose");
     const fresh: Extract<IssueAutonomyState, { status: "ready" }> = {
-      ...autonomyState(), cap: "observe" as const, revision: 2, policy_version: "runtime-policy-2",
-      choices: autonomyState().choices.map((choice) => ({
-        ...choice, enabled: choice.level !== "propose", reason: choice.level === "propose" ? "현재 정책 상한입니다." : null,
-      })),
+      ...autonomyState("observe", "observe"), revision: 2, policy_version: "runtime-policy-2",
     };
     await completeInteractionRefresh(h, before, { ...automation(), autonomy: fresh });
     await changed;

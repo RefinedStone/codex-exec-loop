@@ -132,7 +132,9 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
             priority: 0,
             attempt: 1,
         },
-        decision_id: IssueDecisionId::new("feedback-start").unwrap(),
+        start_authority:
+            crate::domain::issue_automation::coordinator::IssueWorkStartAuthority::Human,
+        decision_id: Some(IssueDecisionId::new("feedback-start").unwrap()),
         approved_basis: IssueDecisionBasis {
             authorization_epoch: 0,
             policy_version: "a".repeat(64),
@@ -162,6 +164,7 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
             status: IssueCollectionStatus::default(),
         },
         item: IssueCollectionItem {
+            start_budget_wait: None,
             issue: issue.clone(),
             binding_id,
             tracked: Some(IssueTrackedSummary {

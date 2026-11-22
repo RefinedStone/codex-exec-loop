@@ -36,6 +36,7 @@ use crate::domain::issue_automation::decision::{
 use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 
+mod admission;
 mod autonomy;
 mod collection;
 mod coordinator;
@@ -54,7 +55,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -311,6 +312,27 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
         issue: &IssueReference,
     ) -> Result<Option<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>> {
         coordinator::get(self, workspace, issue)
+    }
+    fn admit_issue_work(
+        &self,
+        workspace: &str,
+        expected: IssueTriageFence,
+        assessment: &IssueTriageAssessment,
+        candidate: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+        budget: &crate::domain::issue_automation::policy::IssueAutomationBudget,
+        now_unix_ms: u64,
+    ) -> Result<
+        crate::application::port::outbound::issue_automation_store_port::IssueWorkAdmissionResult,
+    > {
+        admission::admit(
+            self,
+            workspace,
+            expected,
+            assessment,
+            candidate,
+            budget,
+            now_unix_ms,
+        )
     }
     fn save_issue_work(
         &self,
@@ -764,7 +786,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=8) => {
+            (APPLICATION_ID, version @ 1..=9) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -792,14 +814,19 @@ fn ensure_schema(
                     transaction.execute_batch(autonomy::SCHEMA)?;
                     transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
                     transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
+                } else {
+                    autonomy::migrate_selection(transaction)?;
                 }
                 if version < 8 {
                     transaction.execute_batch(execution::SCHEMA)?;
                     transaction.execute_batch(execution::RECEIPT_SCHEMA)?;
                     execution_answers::create_schema(transaction)?;
                 }
-                feedback::create_schema(transaction)?;
-                feedback::seed_existing_grants(transaction)?;
+                if version < 9 {
+                    feedback::create_schema(transaction)?;
+                    feedback::seed_existing_grants(transaction)?;
+                }
+                admission::create_schema(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -830,6 +857,7 @@ fn ensure_schema(
                 transaction.execute_batch(execution::RECEIPT_SCHEMA)?;
                 execution_answers::create_schema(transaction)?;
                 feedback::create_schema(transaction)?;
+                admission::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -885,7 +913,14 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
         expected.push((intervention::TRACKING_TABLE, intervention::TRACKING_SCHEMA));
     }
     if version >= 7 {
-        expected.push((autonomy::TABLE, autonomy::SCHEMA));
+        expected.push((
+            autonomy::TABLE,
+            if version < 10 {
+                autonomy::LEGACY_SCHEMA
+            } else {
+                autonomy::SCHEMA
+            },
+        ));
         expected.push((autonomy::COMMAND_TABLE, autonomy::COMMAND_SCHEMA));
         expected.push((autonomy::FENCE_TABLE, autonomy::FENCE_SCHEMA));
     }
@@ -897,6 +932,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 9 {
         expected.extend(feedback::schema_objects());
+    }
+    if version >= 10 {
+        expected.extend(admission::schema_objects());
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

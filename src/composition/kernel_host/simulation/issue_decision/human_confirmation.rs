@@ -183,7 +183,11 @@ fn kernel_simulation_human_confirmation_rejects_caller_and_wrong_scope_then_repl
     );
     assert!(live_decisions(&events).is_empty());
     assert_eq!(source.calls.load(Ordering::SeqCst), reads);
-    assert_no_work(&mut sim, &fixture);
+    assert_no_execution_effects(&mut sim, &fixture);
+    assert!(
+        !sim.host.runtime.has_remaining_work(),
+        "Propose human decisions do not keep an otherwise idle kernel alive"
+    );
     drop(sim);
     let records = serde_json::to_string(&*log.0.lock().unwrap()).unwrap();
     assert!(
@@ -244,7 +248,11 @@ fn kernel_simulation_human_confirmation_restart_retains_human_fact_and_ordinary_
         persisted.request.answer().unwrap().by,
         IssueDecisionAnswerBy::Human
     );
-    assert_no_work(&mut sim, &fixture);
+    assert_no_execution_effects(&mut sim, &fixture);
+    assert!(
+        !sim.host.runtime.has_remaining_work(),
+        "Propose human decisions do not keep an otherwise idle kernel alive"
+    );
     drop(sim);
     assert_eq!(
         log.0

@@ -12,6 +12,7 @@ pub enum IssueAutonomyLevel {
     Off,
     Observe,
     Propose,
+    Gated,
 }
 impl From<IssueAutonomyLevel> for IssueAutomationAutonomy {
     fn from(value: IssueAutonomyLevel) -> Self {
@@ -19,11 +20,12 @@ impl From<IssueAutonomyLevel> for IssueAutomationAutonomy {
             IssueAutonomyLevel::Off => Self::Off,
             IssueAutonomyLevel::Observe => Self::Observe,
             IssueAutonomyLevel::Propose => Self::Propose,
+            IssueAutonomyLevel::Gated => Self::Gated,
         }
     }
 }
 impl IssueAutonomyLevel {
-    pub const ALL: [Self; 3] = [Self::Off, Self::Observe, Self::Propose];
+    pub const ALL: [Self; 4] = [Self::Off, Self::Observe, Self::Propose, Self::Gated];
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

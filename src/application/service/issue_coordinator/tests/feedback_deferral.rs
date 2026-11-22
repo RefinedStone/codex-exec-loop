@@ -26,7 +26,7 @@ fn pending_feedback_label_defers_fresh_resync_without_replacing_the_start_approv
         IssueSourceRead::Observed(Box::new(h.fixture.observation("I_001")));
     h.tick(true).unwrap();
     let work = h.work().unwrap();
-    assert_eq!(work.decision_id, decision_id);
+    assert_eq!(work.decision_id, Some(decision_id));
     assert_eq!(h.execution.state.lock().unwrap().registrations, 1);
 }
 
