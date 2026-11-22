@@ -1054,9 +1054,11 @@ strategy in the production TUI.
   user-approved marker positions to the reviewed field hash and refuses when the copy changed after
   the review or the local binding changed. Only the identical whole approval is an idempotent retry.
   Unapproved markers stay as marker text. Records of earlier versions are not deleted.
-  The Desktop local native helper calls the read-only path through a dedicated application inbound
-  port after native user confirmation. It adds no general Gateway restore RPC and does not expose
-  reconnect. See [Desktop restore window](./evidence-vault-unlock.md#desktop-restore-window) for
+  The Desktop local native helper enters through a dedicated application inbound port. It owns
+  viewing and separate binding-write confirmations, the original review and grant, and a single
+  reconnect followed by a final restore. A commit gate and cancellation share the session state
+  boundary; terminal and uncertain writes are not automatically retried. No general Gateway restore
+  RPC is added. See [Desktop restore window](./evidence-vault-unlock.md#desktop-restore-window) for
   execution-profile, platform, and plaintext-surface limits.
 - Issue validation is the pure rule `domain/issue_validation::validate_issue`. Draft validation and
   the publish gate (`application/service/issue_validation`) both call it. Only that rule builds

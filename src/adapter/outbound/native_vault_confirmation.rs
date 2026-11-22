@@ -29,7 +29,7 @@ impl VaultNativeConfirmationPort for NativeVaultConfirmationAdapter {
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            let _ = request;
+            let _ = (request, request.purpose);
             Outcome::Unsupported
         }
     }
@@ -37,6 +37,7 @@ impl VaultNativeConfirmationPort for NativeVaultConfirmationAdapter {
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 mod platform {
     use super::*;
+    use crate::application::port::outbound::vault_native_confirmation_port::VaultNativeConfirmationPurpose as Purpose;
     use std::ffi::OsString;
     #[cfg(target_os = "macos")]
     use std::io::Write;
@@ -49,9 +50,11 @@ mod platform {
     #[cfg(any(target_os = "macos", test))]
     const APPLE_SCRIPT: &str = r#"on run argv
 set promptText to item 1 of argv
-set answer to display dialog promptText with title "Akra 원문 열람" buttons {"원문 열람", "취소"} default button "취소" cancel button "취소" with icon caution giving up after (item 2 of argv as integer)
+set dialogTitle to item 3 of argv
+set confirmLabel to item 4 of argv
+set answer to display dialog promptText with title dialogTitle buttons {confirmLabel, "취소"} default button "취소" cancel button "취소" with icon caution giving up after (item 2 of argv as integer)
 if gave up of answer then error number -128
-if button returned of answer is not "원문 열람" then error number -128
+if button returned of answer is not confirmLabel then error number -128
 end run
 "#;
     #[derive(Clone, Copy)]
@@ -61,11 +64,24 @@ end run
         #[cfg(any(target_os = "linux", test))]
         Linux,
     }
+    fn dialog_words(purpose: Purpose) -> (&'static str, &'static str) {
+        match purpose {
+            Purpose::ViewOriginal => ("Akra 원문 열람", "원문 열람"),
+            Purpose::RewriteBinding => ("Akra 복원 연결 저장", "연결 저장"),
+        }
+    }
+
     fn prompt(request: &VaultNativeConfirmationRequest) -> String {
-        format!(
-            "이 이슈의 가려진 원문을 로컬 열람 세션으로 전달할까요?\n\n{}\n프로젝트: {}\n\n최대 5분 동안 열람할 수 있습니다. 같은 OS 계정의 화면 캡처나 접근성 도구는 원문을 볼 수 있습니다.",
-            request.issue_url, request.workspace_dir
-        )
+        match request.purpose {
+            Purpose::ViewOriginal => format!(
+                "이 이슈의 가려진 원문을 로컬 열람 세션으로 전달할까요?\n\n{}\n프로젝트: {}\n\n최대 5분 동안 열람할 수 있습니다. 같은 OS 계정의 화면 캡처나 접근성 도구는 원문을 볼 수 있습니다.",
+                request.issue_url, request.workspace_dir
+            ),
+            Purpose::RewriteBinding => format!(
+                "선택한 표식을 이 이슈의 현재 게시본에 다시 연결할까요?\n\n{}\n프로젝트: {}\n\n이 장치의 복원 연결을 저장합니다. 원격 이슈의 제목과 본문은 바꾸지 않습니다. 저장이 시작된 뒤 창을 닫으면 저장은 완료됐을 수 있습니다.",
+                request.issue_url, request.workspace_dir
+            ),
+        }
     }
     fn command_for(
         platform: DialogPlatform,
@@ -75,6 +91,7 @@ end run
         environment: impl Fn(&str) -> Option<OsString>,
     ) -> Command {
         let mut command = Command::new(program);
+        let (title, confirm_label) = dialog_words(request.purpose);
         command
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
@@ -107,19 +124,21 @@ end run
                     .arg("-")
                     .arg(prompt(request))
                     .arg(seconds.to_string())
+                    .arg(title)
+                    .arg(confirm_label)
                     .stdin(Stdio::piped());
             }
             #[cfg(any(target_os = "linux", test))]
             DialogPlatform::Linux => {
                 command.args([
                     "--question",
-                    "--title=Akra 원문 열람",
                     "--default-cancel",
                     "--no-markup",
-                    "--ok-label=원문 열람",
                     "--cancel-label=취소",
                 ]);
                 command
+                    .arg(format!("--title={title}"))
+                    .arg(format!("--ok-label={confirm_label}"))
                     .arg(format!("--text={}", prompt(request)))
                     .arg(format!("--timeout={seconds}"))
                     .stdin(Stdio::null());
@@ -205,6 +224,7 @@ end run
             VaultNativeConfirmationRequest {
                 issue_url: "https://github.com/acme/project/issues/1".into(),
                 workspace_dir: "/work/project".into(),
+                purpose: Purpose::ViewOriginal,
             }
         }
         #[test]
@@ -263,6 +283,60 @@ end run
             assert!(args[1].contains(&target.workspace_dir));
             assert!(!APPLE_SCRIPT.contains(&target.workspace_dir));
             assert!(APPLE_SCRIPT.contains("default button \"취소\" cancel button \"취소\""));
+        }
+        #[test]
+        fn write_confirmation_has_a_distinct_action_for_the_same_target_on_both_platforms() {
+            let mut target = request();
+            target.purpose = Purpose::RewriteBinding;
+            let linux = command_for(
+                DialogPlatform::Linux,
+                Path::new("/usr/bin/zenity"),
+                &target,
+                120,
+                |_| None,
+            );
+            let linux_args = linux
+                .get_args()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            assert!(
+                linux_args
+                    .iter()
+                    .any(|value| value == "--title=Akra 복원 연결 저장")
+            );
+            assert!(
+                linux_args
+                    .iter()
+                    .any(|value| value == "--ok-label=연결 저장")
+            );
+            assert!(linux_args.iter().any(|value| value == "--default-cancel"));
+            assert!(linux_args.iter().any(|value| value == "--no-markup"));
+            let text = linux_args
+                .iter()
+                .find(|value| value.starts_with("--text="))
+                .unwrap();
+            assert!(text.contains(&target.issue_url));
+            assert!(text.contains(&target.workspace_dir));
+            assert!(text.contains("이 장치의 복원 연결을 저장"));
+            assert!(text.contains("저장은 완료됐을 수 있습니다"));
+
+            let mac = command_for(
+                DialogPlatform::Mac,
+                Path::new("/usr/bin/osascript"),
+                &target,
+                120,
+                |_| None,
+            );
+            let mac_args = mac
+                .get_args()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(mac_args[2], "120");
+            assert_eq!(mac_args[3], "Akra 복원 연결 저장");
+            assert_eq!(mac_args[4], "연결 저장");
+            assert!(mac_args[1].contains(&target.issue_url));
+            assert!(APPLE_SCRIPT.contains("default button \"취소\" cancel button \"취소\""));
+            assert!(APPLE_SCRIPT.contains("button returned of answer is not confirmLabel"));
         }
     }
 }

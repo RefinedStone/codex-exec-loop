@@ -20,6 +20,8 @@ interface Entry {
   openerId: number;
   targetKey: string;
   targetActive: boolean;
+  /** 재로드·crash 뒤에는 일반 창의 새 open 요청으로 창을 다시 만든다. */
+  rendererAvailable: boolean;
   /** 처음 `ready` 에만 확인을 시작한다. 화면을 다시 불러오면 잠근다. */
   started: boolean;
 }
@@ -64,6 +66,10 @@ export class VaultRestoreWindows {
     const openerId = opener.webContents.id;
     for (const entry of this.entries.values()) {
       if (entry.openerId === openerId && entry.targetKey === targetKey) {
+        if (!entry.rendererAvailable || entry.window.isDestroyed()) {
+          if (!entry.window.isDestroyed()) entry.window.close();
+          continue;
+        }
         // 현재 이슈 상세에서 새로 연 요청만 이전 프로젝트의 대상을 다시 활성화한다.
         entry.targetActive = true;
         if (entry.window.isMinimized()) entry.window.restore();
@@ -97,13 +103,32 @@ export class VaultRestoreWindows {
       source: this.deps.source,
       profileHold: () => entry.targetActive ? this.deps.profileHold() : "source_unavailable",
       emit: (state) => {
-        if (!contents.isDestroyed()) contents.send(VAULT_RESTORE_CHANNELS.state, state);
+        if (!contents.isDestroyed()) {
+          try { contents.send(VAULT_RESTORE_CHANNELS.state, state); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
+        }
       },
       sessionMs: VIEWING_SESSION_MS,
     });
-    entry = { window, session, openerId, targetKey, targetActive: true, started: false };
+    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false };
     this.entries.set(contentsId, entry);
     lockDownNavigation(contents);
+    const invalidateRenderer = () => {
+      entry.targetActive = false;
+      session.lock("renderer_changed");
+      entry.rendererAvailable = false;
+    };
+    contents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+      if (entry.started && isMainFrame && !isInPlace) invalidateRenderer();
+    });
+    contents.on("render-process-gone", invalidateRenderer);
+    contents.once("destroyed", () => {
+      invalidateRenderer();
+      this.entries.delete(contentsId);
+    });
+    window.on("close", () => {
+      entry.targetActive = false;
+      session.lock("window_closed");
+    });
     window.on("minimize", () => session.lock("window_hidden"));
     window.on("hide", () => session.lock("window_hidden"));
     window.once("closed", () => {
@@ -111,6 +136,10 @@ export class VaultRestoreWindows {
       this.entries.delete(contentsId);
     });
     // 이 창을 연 창이 닫히면 열람 권한의 근거가 없다. 함께 닫는다.
+    opener.once("close", () => {
+      entry.targetActive = false;
+      session.lock("window_closed");
+    });
     opener.once("closed", () => {
       if (!window.isDestroyed()) window.close();
     });
@@ -123,11 +152,11 @@ export class VaultRestoreWindows {
     for (const entry of this.entries.values()) entry.session.lock(cause);
   }
 
-  /** 그 창이 연 복원본을 다시 잠근다 (프로젝트 전환). */
+  /** 그 창의 프로젝트·화면 수명이 끝나면 대상을 비활성화하고 복원본을 즉시 잠근다. */
   lockOpenedBy(openerId: number, cause: VaultRelockCause): void {
     for (const entry of this.entries.values()) {
       if (entry.openerId === openerId) {
-        if (cause === "project_switch") entry.targetActive = false;
+        entry.targetActive = false;
         entry.session.lock(cause);
       }
     }

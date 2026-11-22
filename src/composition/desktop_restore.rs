@@ -1,4 +1,4 @@
-//! 일반 Gateway와 분리된 로컬 열람만 조립한다. 키나 디렉터리를 만들지 않는다.
+//! 일반 Gateway와 분리된 로컬 열람·표식 재연결을 조립한다. 키나 디렉터리를 만들지 않는다.
 use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
 use crate::adapter::outbound::filesystem::vault_restore_workspace::VaultRestoreWorkspaceAdapter;
 use crate::adapter::outbound::github::GithubIssueSnapshotAdapter;

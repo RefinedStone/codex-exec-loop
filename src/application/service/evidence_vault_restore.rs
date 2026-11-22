@@ -507,6 +507,17 @@ impl EvidenceVaultRestoreService {
         grant: &VaultUnlockGrant,
         approval: &VaultReconnectApproval,
     ) -> Result<(), VaultRestoreHold> {
+        self.reconnect_with_commit_gate(grant, approval, || Ok(()))
+    }
+
+    /// Native 세션은 마지막 권한 검사 뒤, 저장 시작 직전에 취소와 단회 진입을 선형화한다.
+    /// gate가 성공한 뒤에는 취소가 이미 시작한 저장을 되돌린다고 보장하지 않는다.
+    pub(crate) fn reconnect_with_commit_gate(
+        &self,
+        grant: &VaultUnlockGrant,
+        approval: &VaultReconnectApproval,
+        before_commit: impl FnOnce() -> Result<(), VaultRestoreHold>,
+    ) -> Result<(), VaultRestoreHold> {
         let key = self.key(grant)?;
         let issue = grant.issue();
         if issue != &approval.basis.issue {
@@ -554,6 +565,7 @@ impl EvidenceVaultRestoreService {
             body: field_bundle(VaultRecordField::Body),
         };
         self.key(grant)?;
+        before_commit()?;
         match binding
             .commit(VaultBindingCommitRequest {
                 expected: approval.basis.expected.clone(),
@@ -671,6 +683,7 @@ impl EvidenceVaultRestorePort for EvidenceVaultRestoreService {
 #[cfg(test)]
 mod tests {
     mod binding_transactions;
+    mod native_commit_gate;
 
     use std::collections::HashMap;
 

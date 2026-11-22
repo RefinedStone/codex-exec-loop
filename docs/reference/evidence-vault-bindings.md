@@ -2,7 +2,8 @@
 
 이 문서는 #2654의 저장 계약을 설명합니다. 게시 확정, 서비스 재연결, 백업 가져오기는
 `EvidenceVaultStorePort::begin_binding`을 통해 같은 이슈의 연결을 갱신합니다. Native helper와
-Desktop 전용 창의 재연결 연결은 별도 후속이며, 현재 native source의 `reconnect: false`는 유지합니다.
+Desktop 전용 창은 #2656의 [별도 승인·세션 경계](../validation/desktop-vault-native-reconnect.md)를
+거쳐 이 저장 계약을 사용합니다.
 
 ## 이슈별 저장 경계
 
