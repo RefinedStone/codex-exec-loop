@@ -85,13 +85,14 @@ that runs with the same OS user rights on the same device:
   allowed, or that runs as the same application identity, reads the key without the Akra
   confirmation. Windows Credential Manager and Linux Secret Service give the entry to any process
   in the unlocked user session.
-- The Akra user confirmation is an in-process rule. It is not an OS authentication (no password or
+- The Akra user confirmation is a local application rule. It is not an OS authentication (no password or
   biometric check is requested by Akra).
 - While a restored copy is on screen, a screen capture, screen recording, screen sharing, or an
   accessibility tool of the same user can read it. Akra does not block capture.
 - Restored plaintext and the key are in process memory while in use. A debugger or memory dump
-  with the same user rights can read them. The types zero their memory on drop, which reduces the
-  time window only.
+  with the same user rights can read them. Rust secret types zero their memory on drop, which reduces the
+  time window only. Desktop JavaScript strings rely on garbage collection; deterministic clearing
+  of every plaintext copy is not guaranteed.
 - An administrator or root user, and malware with user rights, are out of scope.
 
 ## Desktop restore window
@@ -105,15 +106,19 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
   It is not registered with the browser panel, so thread-owned browser automation and its capture
   cannot target it. DevTools, navigation, and new windows are off. Main accepts a restore request
   only from the main frame of a restore window. A general window can only ask to open the window
-  for a `github.com` issue address and to lock it.
+  for a `github.com` issue URL plus its full stable coordinates and workspace, and to lock it.
 - **Plaintext path.** Restored text goes from main to this window only, on the dedicated state
-  channel. It does not use the Gateway or the kernel protocol. Main does not keep the text after it
-  sends it. The screen writes the text with `textContent` (no Markdown, no HTML).
-- **Not connected yet.** The local restore source (`VaultRestoreSource`, the Desktop end of the
-  restore service) has no shipped implementation. The window shows "viewing held" with the reason
-  `source_unavailable`. A local-only channel from the Akra process to this window is proposed work.
-- **User confirmation.** Each unlock shows a system dialog from main on the restore window. The
-  renderer cannot answer it. After each lock a new confirmation is necessary.
+  channel. It does not use the Gateway or the kernel protocol. Main does not persist the text or put it in general-window state. The screen writes the text with `textContent` (no Markdown, no HTML).
+- **Local read-only source.** `vaultRestoreSource.ts` launches `akra-gateway desktop-restore-bridge`
+  over inherited stdin/stdout. The helper binds one prepare/restore session to the URL, stable
+  issue coordinates, and canonical primary checkout. It reads existing records on macOS/Linux;
+  Windows returns `platform_unsupported` before provider, key, or Vault access. The channel does
+  not create keys, write records, or restore a remote Gateway host's Vault.
+- **User confirmation.** The helper itself shows a native OS dialog with cancel as the default.
+  No request field can supply an approval result. macOS uses the trusted system `osascript`;
+  Linux requires a trusted system `zenity`. Missing native support holds viewing. Main checks the
+  execution profile and session generation before preparation, after confirmation, and before
+  displaying a restored response. After each lock a new confirmation is necessary.
 - **Execution profile.** Main holds viewing when it cannot enforce the boundary: the app runs with
   remote debugging or an inspector (automation, screen tests), the renderer comes from a dev
   server, windows are hidden for tests, or a turn runs in a window of this app (the default agent
@@ -123,12 +128,13 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
   the viewing session ends (5 minutes), the OS screen locks, the system suspends, the opener window
   changes its project folder or closes, or a turn starts. A lock closes the restore channel, drops
   late replies (generation check), and replaces the DOM.
-- **Reconnect review.** When the restore service reports a changed published copy, the window shows
-  the current shared copy and, for each marker, the earlier place and the current places. The user
-  selects a place for each marker; a marker without a selection stays a marker. Main accepts only
-  places that the review gave. The earlier shared copy is not stored, so the full earlier text is
-  not shown.
+- **Reconnect support.** The native source advertises `reconnect: false`. A changed published copy
+  holds viewing and shows no reconnect action. The existing service-level reconnect and review
+  contracts do not establish atomic cross-process reconnect; that remains separate work.
 - **Limits.** Content protection (`setContentProtection`) is requested, but Akra does not guarantee
   that capture is blocked (it has no effect on Linux). Selection and copy by the user are possible.
   The window has no print and no find function. The limits in
   [Protection limits](#protection-limits) apply.
+
+The [native restore validation record](../validation/desktop-vault-native-restore.md) separates
+synthetic protocol/UI tests from the unperformed real OS-dialog plus key-store round trip.

@@ -42,8 +42,13 @@ Windows 작업 호스트에서 실행한 결과와 CI에서 확인할 범위를 
 | Unix 실제 암호화 파일 → 전용 pipe 복원 및 파일 불변 회귀 | Windows에서 `cfg(unix)` 제외; Linux CI 확인 대상 |
 | Desktop 타입 검사 및 전용 source/session 회귀 | 타입 검사 통과, 54개 통과 |
 | Desktop 전체 Vitest | 958개 통과, 기존 7개 제외 |
-| 가짜 Gateway/합성 데이터 기반 원문 화면·이슈 진입점 | 전용 화면 20개 및 issue-interventions 통과; 전체 Electron E2E 실행 중 |
-| planner 지정 native gate 및 CI Gate | 실행 대기 |
+| 가짜 Gateway/합성 데이터 기반 원문 화면·이슈 진입점 | 전용 화면 20개 및 issue-interventions 통과 |
+| 전체 Electron E2E | 기본 25개 spec 중 24개 통과, Windows terminal 1개 제외 |
+| 실제 Windows helper 바이너리 smoke | prepare → platform_unsupported, 종료 코드 0, stderr 0바이트 |
+| planner 지정 Windows Full gate | 통합 기준 최종 실행 대상 |
+| CI Gate | 최종 PR head의 Checks에 결과 기록 |
+
+Windows Vitest 기본 제외는 실행 권한·LFS 필터·FIFO·symlink 관련 3개·실제 PTY의 7개입니다. 별도 수동 화면 시험인 `browserAutomation.mjs`와 `browserBridge.mjs`는 기본 E2E 실행 대상이 아닙니다.
 
 실제 사용자 키 저장소의 비밀, 실제 GitHub 이슈 원문, 실제 모델 턴을 검증 데이터로 사용하지 않습니다. 합성 화면 검증과 서비스/프로세스 시험은 실제 OS 확인 창·실제 키 저장소를 함께 사용한 수동 성공 검증과 구분합니다.
 
