@@ -540,7 +540,7 @@ export function App() {
     () =>
       useDesktopStore.subscribe((state, previous) => {
         for (const event of issueDecisionAttentionEvents(previous, state)) {
-          notifyIssueDecision(() => { setIssueAttentionTarget(event); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`);
+          notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`);
         }
         for (const event of attentionEvents(previous, state)) {
           const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";
@@ -732,7 +732,8 @@ export function App() {
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} onOpenThread={openThread} />}
               {panel === "issues" && (
                 <IssuePanel
-                  key={issueAttentionTarget?.decisionId ?? kernelWorkspace}
+                  key={kernelWorkspace}
+                  attentionTarget={issueAttentionTarget}
                   onRefresh={async () => session.current?.refreshIssues()}
                   onSelectIssue={async (issue) => session.current?.selectIssue(issue)}
                   onClearIssueSelection={() => session.current?.clearIssueSelection()}

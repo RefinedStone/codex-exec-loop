@@ -415,8 +415,9 @@ export class KernelConnection {
   /** 알림이 담은 전체 좌표를 같은 커널에서 다시 읽는다. 과거 카드의 텍스트는 재사용하지 않는다. */
   async selectIssueFromAttention(attention: IssueDecisionAttention): Promise<void> {
     if (!this.canRead("issues") || attention.workspace !== this.wanted || attention.kernel !== this.store.getKernel().kernel || !isIssueReference(attention.issue)) return;
-    this.clearIssueSelection();
     const issue = { ...attention.issue, project_scope: { ...attention.issue.project_scope } };
+    // 같은 이슈 알림은 초안의 수명을 유지하고 최신 서버 표시만 다시 읽는다.
+    if (!sameIssue(this.store.getKernel().issues.selectedIssue, issue)) this.clearIssueSelection();
     this.updateIssues({ selectedIssue: issue });
     await this.readIssueDetail(issue);
   }
