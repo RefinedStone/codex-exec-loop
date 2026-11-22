@@ -1801,6 +1801,9 @@ impl NativeClientRuntime {
                     KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
                 }
                 IssueObserverCommittedFact::Coordinated(fact) => match fact {
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::Triaged(fact) => KernelEvent::issue_triaged(
+                        &fact.issue, fact.binding_id.as_str(), fact.revision, fact.gate_revision, &fact.policy_version,
+                    ),
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::Decision { fact, revision } => {
                         if fact.state == crate::domain::issue_automation::decision::IssueDecisionState::Open {
                             KernelEvent::issue_decision_requested(&fact, revision)

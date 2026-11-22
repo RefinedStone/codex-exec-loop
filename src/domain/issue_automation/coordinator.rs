@@ -27,7 +27,7 @@ pub enum IssueCoordinatorAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueWorkBlockReason {
-    ParallelDisabled,
+    ExecutionDisabled,
     AwaitingSource,
     ApprovalChanged,
     SourceUnavailable,
@@ -131,7 +131,11 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     if let Some(work) = input.work {
         let approved = eligible
             && current_basis.as_ref() == Some(&work.approved_basis)
-            && input.decision.is_some_and(human_start);
+            && input.decision.is_some_and(|decision| {
+                human_start(decision)
+                    && decision.issue() == &work.order.issue
+                    && decision.definition().basis == work.approved_basis
+            });
         if !approved {
             return CancelWork;
         }
@@ -148,6 +152,9 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     let Some(decision) = input.decision else {
         return if eligible { OpenDecision } else { None };
     };
+    if decision.issue() != &assessment.basis().issue {
+        return None;
+    }
     if decision.definition().basis
         != current_basis.unwrap_or_else(|| decision.definition().basis.clone())
     {
