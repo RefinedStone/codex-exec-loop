@@ -132,3 +132,20 @@ native 재연결 UI 및 실제 OS 확인은 후속 범위로 유지합니다.
 Unix 빌드에서 Gateway 시험의 `fs::read` 참조에 import가 없어 E0433이 발생했습니다.
 해당 호출을 `std::fs::read`로 명확히 지정했습니다. 생산 동작 변경은 없으며, 수정 head의
 전체 CI와 리뷰를 별도로 확인합니다.
+
+## 두 번째 CI의 실제 파일 검증과 포트 구조 수정
+
+수정 head `355a35e50b497825cdcdef62196d7feaf67313a3`의
+[CI run 45068052996](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45068052996)에서
+Linux lib 시험은 **5,219 통과, 기존 14 제외**였습니다. 실제 binding 파일·독립 child process
+19개와 backup 파일 회귀 11개, Gateway의 재연결·재개방 흐름도 통과했습니다.
+architecture는 144개 중 143개가 통과했고, 별도로 분리한 binding 계약 파일이 outbound port
+모듈의 이름·Port trait 소유 규칙에 맞지 않아 한 개가 실패했습니다.
+
+분리된 binding 타입·transaction 계약을 기존 `evidence_vault_port.rs`에 합쳤습니다.
+공개 타입·동작·저장 형식은 유지하며 architecture 규칙이나 예외 목록은 변경하지 않습니다.
+해당 architecture 회귀와 planner gate를 실행하고, 최종 head의 전체 CI·리뷰를 다시 확인합니다.
+
+수정 후 Windows에서 `outbound_port_modules_follow_port_naming_contract` 단일 회귀가 통과했고,
+planner의 Rust gate도 exit 0으로 재통과했습니다. 이동한 계약 본문은 서식을 제외하고 동일하며
+기존 계약 시험 파일도 내용 변경 없이 이동했습니다.
