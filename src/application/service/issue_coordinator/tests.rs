@@ -1168,6 +1168,7 @@ fn intervention_remote_hold_label_revokes_work_without_restarting_it() {
 }
 
 mod dispatch_source;
+mod gate;
 mod policy_revalidation;
 
 mod autonomy;
