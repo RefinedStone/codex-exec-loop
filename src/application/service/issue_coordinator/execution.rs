@@ -18,6 +18,8 @@ impl IssueCoordinatorService {
         let Ok(_guard) = self.tick_gate.try_lock() else {
             return Ok(());
         };
+        let report_once = work_event_reporter(committed);
+        let committed: &Reporter<'_> = &report_once;
         self.report_pending(committed)?;
         super::super::issue_intervention::recover_pending_controls(
             &self.workspace,
@@ -107,8 +109,10 @@ fn track_one(
             "the current execution attempt policy is unavailable"
         ));
         if let Err(error) = fence_execution(service, work) {
-            first_error =
-                Some(error.context("the current execution attempt policy is unavailable"));
+            let context = format!(
+                "the current execution attempt policy is unavailable; execution could not be fenced: {error}"
+            );
+            first_error = Some(error.context(context));
         }
         fenced = true;
     }

@@ -259,7 +259,7 @@ fn persisted_transition_table_rejects_every_unlisted_edge() {
             "failed",
             State::Failed,
             None,
-            &["failed", "await_failed", "discovered", "cancelled"],
+            &["failed", "await_failed", "discovered", "done", "cancelled"],
         ),
         ("cancelled", State::Cancelled, None, &["cancelled"]),
         (

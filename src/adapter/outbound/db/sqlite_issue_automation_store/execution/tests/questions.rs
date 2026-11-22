@@ -267,18 +267,89 @@ fn failure_to_commit_execution_rolls_back_question_superseding() {
         false,
     );
     let before_catalog = catalog(&fixture);
-    let before_events = adapter.pending_issue_work_events(fixture.cwd()).unwrap();
+    let before_tracked = adapter
+        .get_issue(fixture.cwd(), &work.order.issue)
+        .unwrap()
+        .unwrap();
+    let mut next_progress = first.progress.clone();
+    next_progress.revision += 1;
+    let collision = IssueWorkEvent::new(
+        work.order.issue.clone(),
+        work.order.work_order_id.clone(),
+        IssueWorkEventKind::ExecutionProgressed {
+            progress: next_progress.clone(),
+        },
+        before_catalog + 1,
+    );
+    // Keep the exact schema intact. This key collides only at the outbox INSERT, after
+    // the transaction has superseded the question and written tracked state/progress/catalog.
     adapter
         .with_connection(fixture.cwd(), |connection, _| {
-            connection.execute_batch(
-                "CREATE TRIGGER reject_execution_fixture BEFORE UPDATE ON issue_execution_progress
-             BEGIN SELECT RAISE(ABORT, 'execution fixture failure'); END;",
+            connection.execute(
+                "INSERT INTO issue_work_events
+                 (workspace_dir,event_id,event,revision,acknowledged) VALUES (?1,?2,?3,?4,0)",
+                params![
+                    fixture.cwd(),
+                    collision.event_id,
+                    serde_json::to_string(&collision)?,
+                    sql_revision(collision.revision)?
+                ],
             )?;
             Ok(())
         })
         .unwrap();
+    let before_events = adapter.pending_issue_work_events(fixture.cwd()).unwrap();
     observation.question = None;
+    let error = adapter
+        .apply_issue_execution(
+            fixture.cwd(),
+            &work,
+            first.progress.revision,
+            &observation,
+            Some(3),
+        )
+        .expect_err("the execution outbox INSERT must hit the fixture primary key");
     assert!(
+        matches!(
+            error.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(code, Some(message)))
+                if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
+                    && message.contains("issue_work_events")
+        ),
+        "{error:#}"
+    );
+    assert_eq!(persisted(&fixture, &open), open);
+    assert_eq!(
+        adapter
+            .get_issue_execution(fixture.cwd(), &work.order.issue)
+            .unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(
+        adapter
+            .get_issue(fixture.cwd(), &work.order.issue)
+            .unwrap()
+            .unwrap()
+            .to_record(),
+        before_tracked.to_record()
+    );
+    assert_eq!(catalog(&fixture), before_catalog);
+    assert_eq!(
+        adapter.pending_issue_work_events(fixture.cwd()).unwrap(),
+        before_events
+    );
+
+    adapter
+        .with_connection(fixture.cwd(), |connection, _| {
+            let removed = connection.execute(
+                "DELETE FROM issue_work_events WHERE workspace_dir=?1 AND event_id=?2",
+                params![fixture.cwd(), collision.event_id],
+            )?;
+            assert_eq!(removed, 1);
+            Ok(())
+        })
+        .unwrap();
+    let retried = saved(
         adapter
             .apply_issue_execution(
                 fixture.cwd(),
@@ -287,18 +358,13 @@ fn failure_to_commit_execution_rolls_back_question_superseding() {
                 &observation,
                 Some(3),
             )
-            .is_err()
-    );
-    assert_eq!(persisted(&fixture, &open), open);
-    assert_eq!(
-        adapter
-            .get_issue_execution(fixture.cwd(), &work.order.issue)
             .unwrap(),
-        Some(first)
     );
-    assert_eq!(catalog(&fixture), before_catalog);
+    assert_eq!(retried.progress, next_progress);
+    assert!(retried.question.is_none());
     assert_eq!(
-        adapter.pending_issue_work_events(fixture.cwd()).unwrap(),
-        before_events
+        persisted(&fixture, &open).request.state(),
+        IssueDecisionState::Superseded
     );
+    assert_eq!(catalog(&fixture), before_catalog + 1);
 }
