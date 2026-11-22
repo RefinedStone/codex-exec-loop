@@ -1699,6 +1699,7 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
             "thread",
             "approval",
             "auto_follow",
+            "parallel",
             "planning",
             "issue",
             "delegation"
