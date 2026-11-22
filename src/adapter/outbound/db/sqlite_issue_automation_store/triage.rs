@@ -242,9 +242,15 @@ pub(super) fn save(
             let Some(collection) = read_control(transaction, workspace)? else {
                 return Ok(IssueTriageSaveResult::Conflict);
             };
+            if collection.epoch != expected.collection_epoch {
+                return Ok(IssueTriageSaveResult::Conflict);
+            }
             if collection.config.mode != IssueCollectionMode::Observe
-                || collection.epoch != expected.collection_epoch
+                && super::coordinator::read(transaction, workspace, reference)?
+                    .is_none_or(|work| work.task_ids.is_empty())
             {
+                // A paused collector still tracks an already registered execution.
+                // It cannot assess or admit a new issue through this exception.
                 return Ok(IssueTriageSaveResult::Conflict);
             }
             let Some(item) = queries::item(transaction, workspace, reference)? else {

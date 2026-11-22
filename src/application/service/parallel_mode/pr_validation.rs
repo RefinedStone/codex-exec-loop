@@ -190,9 +190,22 @@ impl PrValidationRemediationPort for PlanningQueuePrValidationRemediationPort<'_
         &self,
         request: &PrValidationRemediationRequest,
     ) -> anyhow::Result<PrValidationRecordKey> {
-        let admission = self.queue.admit_system_task_once(
+        let origin = self.queue.validation_remediation_origin(
             self.workspace_dir,
-            request.idempotency_key.as_str(),
+            request.validation_record_key.as_str(),
+        )?;
+        let idempotency_key = match origin {
+            Some(origin) => remediation_key_for_identity(
+                &PrValidationRecordKey::new(origin).map_err(anyhow::Error::msg)?,
+                &request.target_sha,
+                &request.finding_key,
+            ),
+            None => request.idempotency_key.clone(),
+        };
+        let admission = self.queue.admit_validation_remediation_once(
+            self.workspace_dir,
+            request.validation_record_key.as_str(),
+            idempotency_key.as_str(),
             PlanningTaskCreateInput {
                 direction_id: None,
                 direction_relation_note: Some(format!(
@@ -236,7 +249,10 @@ pub(super) fn register_distributor_pr_validation_with_ports(
     let pull_request_number = record.pull_request_number.ok_or_else(|| {
         "cannot register PR validation before a pull request is ensured".to_string()
     })?;
-    let key = PrValidationRecordKey::new(&record.queue_item_id)?;
+    let original_key = PrValidationRecordKey::new(&record.queue_item_id)?;
+    let key = planning_authority
+        .resolve_runtime_pr_validation_successor_key(workspace_dir, &original_key)
+        .map_err(|error| error.to_string())?;
     let registered = PrValidationRecord::register(
         key.clone(),
         PrValidationTarget::new(&target.github_repository, pull_request_number)?,
@@ -284,7 +300,10 @@ pub(super) fn attest_distributor_pr_validation_with_ports(
     pool_root: &std::path::Path,
     record: &PlanningAuthorityDistributorQueueRecord,
 ) -> Result<(), String> {
-    let key = PrValidationRecordKey::new(&record.queue_item_id)?;
+    let original_key = PrValidationRecordKey::new(&record.queue_item_id)?;
+    let mut key = planning_authority
+        .resolve_runtime_pr_validation_successor_key(workspace_dir, &original_key)
+        .map_err(|error| error.to_string())?;
     let mut current = super::pr_validation_store::recover_pr_validation_record_mirror(
         planning_authority,
         runtime,
@@ -364,7 +383,24 @@ pub(super) fn attest_distributor_pr_validation_with_ports(
                             .to_string(),
                     );
                 }
-                Err(error) => return Err(transition_error(error)),
+                Err(error) => {
+                    let resolved = planning_authority
+                        .resolve_runtime_pr_validation_successor_key(workspace_dir, &original_key)
+                        .map_err(|error| error.to_string())?;
+                    if resolved != key && attempt < MAX_ATTESTATION_CAS_ATTEMPTS {
+                        key = resolved;
+                        current = super::pr_validation_store::recover_pr_validation_record_mirror(
+                            planning_authority,
+                            runtime,
+                            workspace_dir,
+                            pool_root,
+                            &key,
+                        )?
+                        .ok_or_else(|| "validation recovery successor disappeared".to_owned())?;
+                        continue;
+                    }
+                    return Err(transition_error(error));
+                }
             };
         if next == current {
             return Ok(());
@@ -381,6 +417,9 @@ pub(super) fn attest_distributor_pr_validation_with_ports(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
+        key = planning_authority
+            .resolve_runtime_pr_validation_successor_key(workspace_dir, &original_key)
+            .map_err(|error| error.to_string())?;
         let latest = super::pr_validation_store::recover_pr_validation_record_mirror(
             planning_authority,
             runtime,
@@ -1002,14 +1041,22 @@ pub(crate) fn remediation_key(
     record_key: &PrValidationRecordKey,
     finding: &PrValidationFinding,
 ) -> PrValidationRemediationKey {
+    remediation_key_for_identity(record_key, finding.target_sha(), finding.key())
+}
+
+fn remediation_key_for_identity(
+    record_key: &PrValidationRecordKey,
+    target_sha: &PrValidationCommitSha,
+    finding_key: &PrValidationFindingKey,
+) -> PrValidationRemediationKey {
     let mut digest = Sha256::new();
     digest.update(record_key.as_str());
     digest.update([0]);
-    digest.update(finding.target_sha().as_str());
+    digest.update(target_sha.as_str());
     digest.update([0]);
-    digest.update(finding.key().source().as_str());
+    digest.update(finding_key.source().as_str());
     digest.update([0]);
-    digest.update(finding.key().provider_event_id());
+    digest.update(finding_key.provider_event_id());
     PrValidationRemediationKey::new(format!("pr-remediation-{:x}", digest.finalize()))
         .expect("SHA-256 remediation identity is non-empty")
 }

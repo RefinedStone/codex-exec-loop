@@ -2239,6 +2239,25 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             delivery: false,
             revision: 5,
         },
+        Record::IssueExecutionProgressed {
+            event_id: "execution-progress-1".into(),
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: "issue-work-1".into(),
+            progress: crate::domain::issue_automation::execution::IssueExecutionProgress::default(),
+            revision: 6,
+        },
+        Record::IssueIntegrated {
+            event_id: "execution-integrated-1".into(),
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: "issue-work-1".into(),
+            integration: crate::domain::issue_automation::execution::IssueExecutionIntegration {
+                record_id: "integration-1".into(),
+                source_sha: "a".repeat(40),
+                integration_sha: "b".repeat(40),
+                pull_request_url: Some("https://github.com/example/project/pull/1".into()),
+            },
+            revision: 7,
+        },
         Record::issue_automation_mode_changed(
             Some(crate::domain::issue_automation::collection::IssueCollectionMode::Observe),
             crate::domain::issue_automation::collection::IssueCollectionMode::Off,

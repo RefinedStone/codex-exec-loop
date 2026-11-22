@@ -1003,7 +1003,9 @@ impl NativeClientRuntime {
                 == Some(event.epoch_id)
             && let Some(observer) = &mut self.issue_observer
         {
-            observer.request_sync(Instant::now());
+            let now = Instant::now();
+            observer.request_sync(now);
+            observer.request_tracking(now);
         }
         NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
             client_presentation_events(
@@ -1811,7 +1813,9 @@ impl NativeClientRuntime {
             };
         self.published_issue_change = true;
         if let Some(observer) = &mut self.issue_observer {
-            observer.request_sync(Instant::now());
+            let now = Instant::now();
+            observer.request_sync(now);
+            observer.request_tracking(now);
         }
         self.record_kernel_events(vec![event]);
     }
@@ -1847,6 +1851,12 @@ impl NativeClientRuntime {
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::WorkPermitGranted {
                         event_id, issue, work_order_id, source_sha, gate_revision, delivery, revision } => KernelEvent::IssueWorkPermitGranted {
                             event_id, issue: (&issue).into(), work_order_id, source_sha, gate_revision, delivery, revision },
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::ExecutionProgressed {
+                        event_id, issue, work_order_id, progress, revision } => KernelEvent::IssueExecutionProgressed {
+                            event_id, issue: (&issue).into(), work_order_id, progress, revision },
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::Integrated {
+                        event_id, issue, work_order_id, integration, revision } => KernelEvent::IssueIntegrated {
+                            event_id, issue: (&issue).into(), work_order_id, integration, revision },
                 },
                 IssueObserverCommittedFact::Triaged(fact) => KernelEvent::issue_triaged(
                     &fact.issue,

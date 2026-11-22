@@ -1,6 +1,7 @@
 //! 이슈 자동화와 작업 실행기를 잇는 중립 경계다. 런타임 객체를 공유하지 않는다.
 use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
 use crate::domain::issue_automation::decision::IssueDecisionBasis;
+use crate::domain::issue_automation::execution::IssueExecutionQuestion;
 use crate::domain::issue_automation::work_control::{
     IssueWorkControl, IssueWorkControlAction, IssueWorkInstruction, IssueWorkInstructionAdmission,
 };
@@ -29,7 +30,109 @@ pub struct IssueWorkPermitRequest {
     pub delivery: bool,
 }
 
+/// 이미 공유 정책을 통과한 답변이다. worker 원문이나 외부 확인 증거를 받지 않는다.
+#[derive(Clone, PartialEq, Eq)]
+pub struct IssueWorkAnswerRequest {
+    pub authorization_epoch: u64,
+    pub work_order_id: String,
+    pub command_id: String,
+    pub question: IssueExecutionQuestion,
+    pub message: String,
+}
+
+impl std::fmt::Debug for IssueWorkAnswerRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssueWorkAnswerRequest")
+            .field("work_order_id", &self.work_order_id)
+            .field("command_id", &self.command_id)
+            .field("question_id", &self.question.question_id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueWorkAnswerReceipt {
+    pub command_id: String,
+    pub question_id: String,
+    pub delivery: IssueWorkAnswerDelivery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueWorkAnswerDelivery {
+    /// 아직 외부 action을 claim하지 않은 영속 대기열이다.
+    Queued,
+    /// 외부 action을 claim했다. 확인 ACK가 없으며 자동 재전송하지 않는다.
+    Unknown,
+    /// exact thread의 turn/start ACK와 새 lease generation을 영속화했다.
+    Accepted {
+        thread_id: String,
+        turn_id: String,
+        lease_generation: String,
+    },
+    /// 외부 action 전의 확정 거절이다. reason은 고정 사유 코드이며 RPC 원문을 담지 않는다.
+    RejectedBeforeStart { reason: String },
+}
+
+mod recovery;
+pub use recovery::{
+    IssueWorkRecoveryOutcome, IssueWorkRecoveryReceipt, IssueWorkRecoveryRequest,
+    issue_work_recovery_command_id,
+};
+
 pub trait IssueWorkExecutionPort: Send + Sync {
+    /// 기존 종료를 변경하지 않고 후속 검증과 영속 영수증을 한 번만 등록한다.
+    fn recover_execution(
+        &self,
+        _workspace: &str,
+        _request: &IssueWorkRecoveryRequest,
+    ) -> Result<IssueWorkRecoveryReceipt> {
+        anyhow::bail!("work validation recovery is unavailable")
+    }
+
+    /// 동일 command_id의 payload는 불변이다. 반환 손실 후에는 receipt 조회만 허용한다.
+    fn answer_question(
+        &self,
+        _workspace: &str,
+        _request: &IssueWorkAnswerRequest,
+    ) -> Result<IssueWorkAnswerReceipt> {
+        anyhow::bail!("work question continuation is unavailable")
+    }
+
+    /// Queued/Unknown을 포함한 기존 영수증만 조회한다. 실행이나 자동 재전송을 시작하지 않는다.
+    fn question_answer_receipt(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _command_id: &str,
+    ) -> Result<Option<IssueWorkAnswerReceipt>> {
+        Ok(None)
+    }
+
+    /// 실행 한도를 영속 실행 admission에 적용한다. 지원하지 않는 실행기는 진행하지 않는다.
+    fn execution_limit(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _max_attempts: u32,
+    ) -> Result<()> {
+        anyhow::bail!("work execution limits are unavailable")
+    }
+
+    fn permit_gate_revision(&self, _workspace: &str, _work_order_id: &str) -> Result<u64> {
+        Ok(0)
+    }
+
+    /// Read-only execution facts. None means this executor has no tracking projection.
+    fn observe_execution(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::execution::IssueWorkExecutionObservation>>
+    {
+        Ok(None)
+    }
+
     fn control(&self, _workspace: &str, _work_order_id: &str) -> Result<IssueWorkControl> {
         Ok(IssueWorkControl::default())
     }

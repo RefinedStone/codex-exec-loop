@@ -31,6 +31,8 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDocumentCommit, PlanningAuthorityDocumentSnapshot,
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningWorkerContinuationClaim, PlanningWorkerContinuationClaimOutcome,
+    PlanningWorkerContinuationReceipt, PlanningWorkerContinuationRequest,
     PrValidationAuthorityAdminCommandOutcome, PrValidationAuthorityAdminCommandRequest,
     PrValidationAuthorityPage, PrValidationAuthorityPageRequest,
     PrValidationAuthorityRecordSnapshot, PrValidationPollLeaseClaim,
@@ -65,6 +67,7 @@ mod draft_files;
 // filesystem workspace port가 git-backed workspace를 발견했을 때 호출하는 trait adapter이다.
 mod repo_scoped_workspace;
 // parallel/app-server runtime projection tables를 다루는 하위 모듈이다.
+mod continuation;
 mod runtime_projection;
 // Validated rollout evidence uses a separate lease and bounded history from the PR scheduler.
 mod pr_validation_rollout_evidence_store;
@@ -94,7 +97,7 @@ use crate::domain::planning::{
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 19;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 20;
 const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
@@ -1387,6 +1390,78 @@ impl ParallelModeRuntimeEventLogPort for SqlitePlanningAuthorityAdapter {
 }
 
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
+    fn enqueue_worker_continuation(
+        &self,
+        workspace: &str,
+        request: &PlanningWorkerContinuationRequest,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        continuation::enqueue(workspace, request)
+    }
+    fn worker_continuation_receipt(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        command_id: &str,
+    ) -> Result<Option<PlanningWorkerContinuationReceipt>> {
+        continuation::receipt(workspace, work_order_id, command_id)
+    }
+    fn queued_worker_continuations(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<PlanningWorkerContinuationRequest>> {
+        continuation::queued(workspace)
+    }
+    fn recheck_queued_worker_continuation(
+        &self,
+        workspace: &str,
+        command_id: &str,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        continuation::recheck_queued(workspace, command_id)
+    }
+
+    fn claim_worker_continuation(
+        &self,
+        workspace: &str,
+        command_id: &str,
+        new_generation: &str,
+        owner: Option<crate::domain::parallel_mode::ParallelModeSlotLeaseOwnerProcess>,
+    ) -> Result<PlanningWorkerContinuationClaimOutcome> {
+        continuation::claim(workspace, command_id, new_generation, owner)
+    }
+    fn validate_worker_continuation_start(
+        &self,
+        workspace: &str,
+        claim: &PlanningWorkerContinuationClaim,
+    ) -> Result<()> {
+        continuation::validate_before_start(workspace, claim)
+    }
+    fn acknowledge_worker_continuation(
+        &self,
+        workspace: &str,
+        claim: &PlanningWorkerContinuationClaim,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
+        continuation::acknowledge(workspace, claim, thread_id, turn_id)
+    }
+    fn preserve_worker_awaiting_user(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        continuation::preserve_waiting(workspace, expected)
+    }
+    fn worker_task_requires_preservation(&self, workspace: &str, task_id: &str) -> Result<bool> {
+        continuation::task_preserved(workspace, task_id)
+    }
+    fn worker_worktree_requires_preservation(
+        &self,
+        workspace: &str,
+        worktree_path: &str,
+    ) -> Result<bool> {
+        continuation::worktree_preserved(workspace, worktree_path)
+    }
+
     fn claim_work_order_launch(&self,workspace_dir:&str,expected:&ParallelModeSlotLeaseSnapshot)
     -> Result<Vec<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction>>{
         work_orders::claim_work_order_launch(workspace_dir, expected)
@@ -1422,6 +1497,9 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
         task_id: &str,
     ) -> Result<bool> {
+        if continuation::task_preserved(workspace_dir, task_id)? {
+            return Ok(false);
+        }
         crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControlRepositoryPort::work_order_cleanup_allowed_for_task(self,workspace_dir,task_id)
     }
 
@@ -1445,6 +1523,12 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         stage: PlanningWorkPermitStage,
         source_sha: Option<&str>,
     ) -> Result<PlanningWorkPermitDecision> {
+        if stage != PlanningWorkPermitStage::Dispatch
+            && continuation::task_preserved(workspace_dir, task_id)?
+        {
+            return Ok(PlanningWorkPermitDecision::Denied(
+                crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitBlockReason::Stale));
+        }
         PlanningWorkPermitRepositoryPort::check_work_order_permit_for_task(
             self,
             workspace_dir,
@@ -1888,6 +1972,14 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
             expected_expires_at,
             settlement,
         )
+    }
+
+    fn resolve_runtime_pr_validation_successor_key(
+        &self,
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<PrValidationRecordKey> {
+        work_orders::resolve_validation_successor_key(workspace_dir, record_key)
     }
 
     fn load_runtime_pr_validation_record(

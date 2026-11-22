@@ -157,6 +157,47 @@ pub(super) fn open_for_issue(
     Ok(requests)
 }
 
+/// 호출자는 질문 좌표 변경을 고정하는 실행 관측 transaction을 사용한다.
+/// catalog는 해당 실행 관측의 변경 및 outbox와 함께 한 번만 증가시킨다.
+pub(super) fn supersede_work_questions(
+    connection: &Connection,
+    workspace: &str,
+    issue: &IssueReference,
+    work_order_id: &str,
+) -> Result<bool> {
+    use crate::domain::issue_automation::decision::IssueDecisionKind;
+    let mut changed = false;
+    for existing in open_for_issue(connection, workspace, issue)? {
+        let definition = existing.request.definition();
+        if definition.kind != IssueDecisionKind::AgentQuestion
+            || definition.basis.work_order_id.as_deref() != Some(work_order_id)
+        {
+            continue;
+        }
+        let mut next = existing.request.to_record();
+        next.state = IssueDecisionState::Superseded;
+        let next = IssueDecisionRequest::hydrate(next)?;
+        next.validate_successor(&existing.request)?;
+        let revision = next_revision(existing.revision)?;
+        let affected = connection.execute(
+            "UPDATE issue_decision_requests SET state='superseded', request=?1, revision=?2
+             WHERE workspace_dir=?3 AND decision_id=?4 AND revision=?5 AND state='open'",
+            params![
+                encode(&next)?,
+                sql_revision(revision)?,
+                workspace,
+                next.id().as_str(),
+                sql_revision(existing.revision)?,
+            ],
+        )?;
+        if affected != 1 {
+            bail!("the worker question changed during its execution observation");
+        }
+        changed = true;
+    }
+    Ok(changed)
+}
+
 pub(super) fn ensure(
     adapter: &SqliteIssueAutomationStoreAdapter,
     workspace: &str,
@@ -195,6 +236,7 @@ pub(super) fn ensure(
             }
             if request.definition().basis
                 != current_basis(transaction, workspace, request, assessment)?
+                || !work_context_current(transaction, workspace, request)?
             {
                 return Ok(IssueDecisionSaveResult::Conflict);
             }
@@ -255,14 +297,29 @@ pub(super) fn save(
                 return Ok(IssueDecisionSaveResult::Conflict);
             };
             request.validate_successor(&existing.request)?;
-            let basis_matches = existing.request.definition().basis == current_basis(transaction, workspace, request, assessment)?;
-            if basis_matches && assessment.gates().iter().any(|gate|
+            let basis_matches = existing.request.definition().basis == current_basis(transaction, workspace, request, assessment)?
+                && work_context_current(transaction, workspace, request)?;
+            if basis_matches && (assessment.gates().iter().any(|gate|
                 gate.gate == existing.request.definition().gate
                     && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::Human)
+                || (request.definition().basis.work_order_id.is_some()
+                    && matches!(
+                        request.definition().kind,
+                        crate::domain::issue_automation::decision::IssueDecisionKind::AgentQuestion
+                            | crate::domain::issue_automation::decision::IssueDecisionKind::FailureRecovery
+                    )))
                 && request.answer().is_none_or(|answer|
-                    answer.by != crate::domain::issue_automation::decision::IssueDecisionAnswerBy::Human)
+                    answer.by != crate::domain::issue_automation::decision::IssueDecisionAnswerBy::Human
+                        || answer.confirmation.is_none())
             {
                 bail!("the current issue gate requires a verified human answer")
+            }
+            if basis_matches
+                && request.definition().basis.work_order_id.is_some()
+                && request.definition().kind == crate::domain::issue_automation::decision::IssueDecisionKind::AgentQuestion
+                && request.answer().is_some_and(|answer| answer.option == "reply" && answer.note.is_none())
+            {
+                bail!("the worker question requires a shared answer note");
             }
             let expected_state = if basis_matches {
                 IssueDecisionState::Answered
@@ -361,6 +418,47 @@ fn current_basis(
     basis.authorization_epoch =
         super::intervention::authorization_epoch(connection, workspace, request.issue())?;
     Ok(basis)
+}
+
+pub(super) fn work_context_current(
+    connection: &Connection,
+    workspace: &str,
+    request: &IssueDecisionRequest,
+) -> Result<bool> {
+    use crate::domain::issue_automation::decision::IssueDecisionKind;
+    let definition = request.definition();
+    let Some(work_order_id) = &definition.basis.work_order_id else {
+        return Ok(true);
+    };
+    let Some(work) = super::coordinator::read(connection, workspace, request.issue())? else {
+        return Ok(false);
+    };
+    if &work.order.work_order_id != work_order_id {
+        return Ok(false);
+    }
+    let Some(execution) = super::execution::read(connection, workspace, work_order_id)? else {
+        return Ok(false);
+    };
+    Ok(match definition.kind {
+        IssueDecisionKind::AgentQuestion => {
+            work.current_authorization_basis().authorization_epoch
+                == definition.basis.authorization_epoch
+                && definition.basis.field_hash.as_ref() == Some(&work.order.field_hash)
+                && execution.question.as_ref().is_some_and(|question| {
+                    definition.evidence == [format!("question:{}", question.question_id)]
+                })
+        }
+        IssueDecisionKind::FailureRecovery => {
+            execution
+                .progress
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| {
+                    definition.evidence == [format!("terminal:{}", terminal.record_id)]
+                })
+        }
+        _ => false,
+    })
 }
 
 fn encode(request: &IssueDecisionRequest) -> Result<String> {

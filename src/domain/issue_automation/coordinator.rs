@@ -152,7 +152,7 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     use IssueCoordinatorAction::*;
     if matches!(
         input.state,
-        IssueAutomationState::Done | IssueAutomationState::Cancelled
+        IssueAutomationState::Done | IssueAutomationState::Cancelled | IssueAutomationState::Failed
     ) {
         return None;
     }
@@ -289,6 +289,12 @@ pub struct IssueWorkEvent {
 pub enum IssueWorkEventKind {
     Submitted {
         task_ids: Vec<String>,
+    },
+    ExecutionProgressed {
+        progress: super::execution::IssueExecutionProgress,
+    },
+    Integrated {
+        integration: super::execution::IssueExecutionIntegration,
     },
     PermitGranted {
         source_sha: String,
