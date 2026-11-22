@@ -54,8 +54,8 @@ export function hasValidIssueAutonomy(value: ObjectValue): boolean {
   const autonomy = value.autonomy;
   if (autonomy == null) return true;
   if (!record(autonomy)) return false;
-  if (autonomy.status !== "ready") return named(autonomy.status, ["policy_blocked", "unavailable"]) && text(autonomy.reason);
-  if ((autonomy.requested_level !== null && !named(autonomy.requested_level, ["off", "observe", "propose"]))
+  if (autonomy.status !== "ready") return named(autonomy.status, ["policy_blocked", "unavailable"]);
+  if ((autonomy.requested_level != null && !named(autonomy.requested_level, ["off", "observe", "propose"]))
     || !named(autonomy.effective_level, levels) || !named(autonomy.cap, levels) || !revision(autonomy.revision)
     || !text(autonomy.policy_version) || typeof autonomy.pending !== "boolean" || !Array.isArray(autonomy.choices)) return false;
   const seen = new Set<string>();
