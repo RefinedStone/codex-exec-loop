@@ -709,7 +709,7 @@ async fn an_external_edit_and_a_copied_marker_hold_the_restore_until_the_user_re
         paths
             .into_iter()
             .map(|path| {
-                let body = fs::read(&path).unwrap();
+                let body = std::fs::read(&path).unwrap();
                 (path, body)
             })
             .collect::<Vec<_>>()

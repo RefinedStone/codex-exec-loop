@@ -124,3 +124,11 @@ unreadable 게시 보류, 이슈별 lease 분리와 child 대기 상한을 반�
 
 최종 리뷰·CI와 rebase merge는 이 로컬 기록 이후 연결 PR에서 확인합니다. 상위 #2414의
 native 재연결 UI 및 실제 OS 확인은 후속 범위로 유지합니다.
+
+## 첫 CI에서 수정한 컴파일 오류
+
+초기 head `d7eab4586015feeebcf89791f0083d2c61adac87`의 Codex 리뷰는 finding 없이 완료됐지만,
+[CI run 45067689346](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45067689346)의
+Unix 빌드에서 Gateway 시험의 `fs::read` 참조에 import가 없어 E0433이 발생했습니다.
+해당 호출을 `std::fs::read`로 명확히 지정했습니다. 생산 동작 변경은 없으며, 수정 head의
+전체 CI와 리뷰를 별도로 확인합니다.
