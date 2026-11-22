@@ -244,12 +244,15 @@ impl IssueSourcePort for FakeSource {
 
 #[derive(Default)]
 struct FakeExecutionState {
-    control: crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl,
-    control_commands:std::collections::BTreeMap<String,(
-        crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControlAction,
-        crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl,
-    )>,
-    saved_authorization_epoch:u64,
+    control: crate::domain::issue_automation::work_control::IssueWorkControl,
+    control_commands: std::collections::BTreeMap<
+        String,
+        (
+            crate::domain::issue_automation::work_control::IssueWorkControlAction,
+            crate::domain::issue_automation::work_control::IssueWorkControl,
+        ),
+    >,
+    saved_authorization_epoch: u64,
     order: Option<IssueWorkOrder>,
     grants: Vec<IssueWorkPermitRequest>,
     frozen: Option<String>,
@@ -270,13 +273,20 @@ struct FakeExecution {
     state: Mutex<FakeExecutionState>,
 }
 impl IssueWorkExecutionPort for FakeExecution {
-    fn control(&self,_:&str,_:&str)->Result<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl>{
+    fn control(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<crate::domain::issue_automation::work_control::IssueWorkControl> {
         Ok(self.state.lock().unwrap().control.clone())
     }
     fn apply_control(
-        &self,_:&str,_:&str,command_id:&str,
-        action:crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControlAction,
-    )->Result<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl>{
+        &self,
+        _: &str,
+        _: &str,
+        command_id: &str,
+        action: crate::domain::issue_automation::work_control::IssueWorkControlAction,
+    ) -> Result<crate::domain::issue_automation::work_control::IssueWorkControl> {
         let mut state = self.state.lock().unwrap();
         if let Some((previous, result)) = state.control_commands.get(command_id) {
             if *previous != action {

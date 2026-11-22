@@ -279,22 +279,15 @@ pub(crate) fn build_kernel_for_workspace(
         )?;
     // 진행 중이던 Hold/TakeOver의 planning fence가 모든 worker/delivery 생성보다 앞선다.
     production::recover_pending_issue_interventions(workspace_dir)?;
-    let mut runtime = production::build_headless_kernel_runtime(workspace_dir, app_server);
+    // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
+    // 저장 명령과 관찰자가 같은 서비스의 모드/읽기 epoch 경계를 공유한다.
+    let issues = build_issue_collection(workspace_dir);
+    let mut runtime =
+        production::build_headless_kernel_runtime(workspace_dir, app_server, issues.clone());
     // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     runtime.attach_repository_observer(production::repository_state_port());
-    // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
-    let issues = build_issue_collection(workspace_dir);
-    runtime.attach_issue_collection(issues.clone())?;
-    // 같은 서비스 인스턴스가 모드 저장과 진행 중인 읽기의 epoch 경계를 공유한다.
-    runtime.attach_stored_commands(
-        production::stored_command_port_with_issues(
-            workspace_dir,
-            issues,
-            runtime.issue_work_steering_port(),
-        ),
-        workspace_dir,
-    );
+    runtime.attach_issue_collection(issues)?;
     start_repository_kernel(lock, runtime, workspace_dir)
 }
 

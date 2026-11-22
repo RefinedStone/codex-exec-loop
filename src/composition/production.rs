@@ -840,7 +840,7 @@ fn native_tui_workspace_dir() -> String {
 }
 
 pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
-    build_native_application_for_workspace(&native_tui_workspace_dir(), None)
+    build_native_application_for_workspace(&native_tui_workspace_dir(), None).application
 }
 
 /// 커널의 판단 사건 기록이다 (plan 19 Q3-1). planning SQLite 의 `kernel_events` 표이다.
@@ -964,14 +964,30 @@ pub(crate) fn repository_state_port() -> Arc<dyn RepositoryStatePort> {
 pub(crate) fn build_headless_kernel_runtime(
     workspace_dir: &str,
     app_server: Option<GatewayUpstreamSocket>,
+    issues: Arc<crate::application::service::issue_collection::IssueCollectionService>,
 ) -> NativeClientRuntime {
-    build_native_application_for_workspace(workspace_dir, app_server).into_headless_client_runtime()
+    let assembly = build_native_application_for_workspace(workspace_dir, app_server);
+    let mut runtime = assembly.application.into_headless_client_runtime();
+    // 실행 중인 app-server의 제어 권한은 조립 안에서 저장 명령에 주입한다.
+    // 클라이언트 facade에는 별도 제어 접근자를 남기지 않는다.
+    runtime.attach_stored_commands(
+        stored_command_port_with_issues(workspace_dir, issues, assembly.issue_work_steering),
+        workspace_dir,
+    );
+    runtime
+}
+
+struct NativeApplicationAssembly {
+    application: NativeTuiApplicationComposition,
+    issue_work_steering: Arc<
+        dyn crate::application::port::outbound::issue_work_steering_port::IssueWorkSteeringPort,
+    >,
 }
 
 fn build_native_application_for_workspace(
     workspace_dir: &str,
     app_server: Option<GatewayUpstreamSocket>,
-) -> NativeTuiApplicationComposition {
+) -> NativeApplicationAssembly {
     let workspace_dir = workspace_dir.to_string();
     let capture_enabled = app_server_prompt_logging_enabled();
     let ports = build_shared_ports_with_app_server(capture_enabled, app_server);
@@ -1012,15 +1028,17 @@ fn build_native_application_for_workspace(
     let clipboard_image_probe_trigger = CompositionClipboardImageProbeTrigger::new_shared(
         Arc::new(PlatformClipboardImageAdapter::new()),
     );
-    NativeTuiApplicationComposition::from_services(
-        startup_service,
-        session_service,
-        conversation_service,
-        parallel_mode_control_plane,
-        ports.conversation_thread_turn_options_port,
-        clipboard_image_probe_trigger,
-    )
-    .with_issue_work_steering(issue_work_steering)
+    NativeApplicationAssembly {
+        application: NativeTuiApplicationComposition::from_services(
+            startup_service,
+            session_service,
+            conversation_service,
+            parallel_mode_control_plane,
+            ports.conversation_thread_turn_options_port,
+            clipboard_image_probe_trigger,
+        ),
+        issue_work_steering,
+    }
 }
 
 fn native_tui_prompt_log_maintenance_mode(
