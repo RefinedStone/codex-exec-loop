@@ -7,7 +7,7 @@ import { IssueInterventions } from "./IssueInterventions";
 import {
   EMPTY_ISSUE_DECISION_DRAFT, EMPTY_ISSUE_INTERVENTION_DRAFT,
   decisionDraftIdentity, interventionDraftIdentity, issueDraftIdentity,
-  type IssueDecisionDraft, type IssueInterventionName,
+  type IssueCommandOutcome, type IssueDecisionDraft, type IssueInterventionName,
 } from "./issueInteractions";
 import type { IssueDetailAnswer, IssueEventReference } from "./protocol";
 
@@ -19,7 +19,7 @@ interface IssueDetailProps {
   error: string | null;
   busy: boolean;
   onAnswer(decisionId: string, option: string, note: string): Promise<void>;
-  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<void>;
+  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
   onBack(): void;
   onOpenUrl(url: string): void;
@@ -96,9 +96,11 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
                 return { ...previous, decisions };
               });
             }} />
-            <IssueInterventions detail={current} busy={busy || loading} onIntervene={onIntervene} onOpenConversation={onOpenConversation} draft={drafts.intervention} onDraftChange={(draft) => {
+            <IssueInterventions detail={current} busy={busy || loading} onIntervene={onIntervene} onOpenConversation={onOpenConversation} draft={drafts.intervention} onDraftChange={(draft, submitted) => {
+              // 늦은 성공은 같은 기준의 새 입력이나 다시 연 확인 폼도 덮지 않는다.
               const expected = drafts.interventionBasis;
-              setDrafts((previous) => previous.interventionBasis === expected ? { ...previous, intervention: draft } : previous);
+              setDrafts((previous) => previous.interventionBasis === expected && (!submitted || previous.intervention === submitted)
+                ? { ...previous, intervention: draft } : previous);
             }} />
           </>}
           <div className="issues-detail-columns">

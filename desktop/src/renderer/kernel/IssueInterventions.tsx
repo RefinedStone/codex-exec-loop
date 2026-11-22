@@ -1,11 +1,11 @@
-import { ISSUE_ACTION_LABEL, issueTextBytes, type IssueInterventionDraft, type IssueInterventionName, type ReadyIssueDetail } from "./issueInteractions";
+import { ISSUE_ACTION_LABEL, issueTextBytes, type IssueCommandOutcome, type IssueInterventionDraft, type IssueInterventionName, type ReadyIssueDetail } from "./issueInteractions";
 
 export function IssueInterventions({ detail, busy, onIntervene, onOpenConversation, draft, onDraftChange }: {
   detail: ReadyIssueDetail;
   busy: boolean;
   draft: IssueInterventionDraft;
-  onDraftChange(draft: IssueInterventionDraft): void;
-  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<void>;
+  onDraftChange(draft: IssueInterventionDraft, submitted?: IssueInterventionDraft): void;
+  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
 }) {
   const { message, steering, cancelling } = draft;
@@ -16,10 +16,18 @@ export function IssueInterventions({ detail, busy, onIntervene, onOpenConversati
   const cancel = actions.find((action) => action.command === "cancel_issue_work");
   const conversation = detail.conversation;
   const tooLong = issueTextBytes(message) > 65_536;
+  const submit = async (action: IssueInterventionName, message?: string, confirm?: boolean) => {
+    // Connection은 실패를 표시하고 결과를 반환한다. 예상 밖의 reject도 초안과 폼을 보존한다.
+    let outcome: IssueCommandOutcome;
+    try { outcome = await onIntervene(action, message, confirm); } catch { return; }
+    if (outcome !== "succeeded") return;
+    if (action === "steer_issue") onDraftChange({ ...draft, steering: false, message: "" }, draft);
+    if (action === "cancel_issue_work") onDraftChange({ ...draft, cancelling: false }, draft);
+  };
   const act = (action: IssueInterventionName) => {
     if (action === "steer_issue") { onDraftChange({ ...draft, steering: !steering, cancelling: false }); return; }
     if (action === "cancel_issue_work") { onDraftChange({ ...draft, cancelling: true, steering: false }); return; }
-    void onIntervene(action);
+    void submit(action);
   };
   return (
     <section className="issues-interventions" aria-label="이슈 개입" data-testid="issue-interventions">
@@ -36,8 +44,7 @@ export function IssueInterventions({ detail, busy, onIntervene, onOpenConversati
         <form className="issues-steer" onSubmit={(event) => {
           event.preventDefault();
           if (!message.trim() || tooLong || busy) return;
-          void onIntervene("steer_issue", message);
-          onDraftChange({ ...draft, steering: false, message: "" });
+          void submit("steer_issue", message);
         }}>
           <label className="issues-input-label">작업자에게 보낼 추가 지시<textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={3} disabled={busy} maxLength={65_536} aria-invalid={tooLong} data-testid="issue-steer-message" /></label>
           {tooLong && <p className="issues-inline-notice error" role="alert">추가 지시는 65,536바이트 이내로 적어 주세요.</p>}
@@ -52,7 +59,7 @@ export function IssueInterventions({ detail, busy, onIntervene, onOpenConversati
           <p>이 이슈의 자동 작업을 취소하고 실행 허가를 회수합니다. 지금 취소할까요?</p>
           <div className="issues-form-actions">
             <button type="button" className="issues-action-button" disabled={busy} onClick={() => onDraftChange({ ...draft, cancelling: false })}>돌아가기</button>
-            <button type="button" className="issues-action-button destructive" disabled={busy} onClick={() => { onDraftChange({ ...draft, cancelling: false }); void onIntervene("cancel_issue_work", undefined, true); }} data-testid="issue-cancel-confirm">작업 취소 확인</button>
+            <button type="button" className="issues-action-button destructive" disabled={busy} onClick={() => void submit("cancel_issue_work", undefined, true)} data-testid="issue-cancel-confirm">작업 취소 확인</button>
           </div>
         </div>
       )}

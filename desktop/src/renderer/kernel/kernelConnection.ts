@@ -2,7 +2,7 @@
 // 개요와 이슈 목록은 서로 다른 조회 계약을 쓰며, 이슈를 읽는 동안 모델 턴을 만들지 않는다.
 import { JsonRpcError, type JsonRpcClient } from "../rpc/jsonRpcClient";
 import type { ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
-import type { IssueAutonomyLevel, IssueConversationTarget, IssueInterventionName } from "./issueInteractions";
+import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "./issueInteractions";
 import {
   type AttachResponse,
   type CommandResponse,
@@ -454,40 +454,40 @@ export class KernelConnection {
     }
   }
 
-  setIssueAutomationMode(mode: IssueAutomationModeRecord): Promise<void> {
-    return this.runIssueCommand({ type: "set_issue_automation_mode", mode }, "mode");
+  async setIssueAutomationMode(mode: IssueAutomationModeRecord): Promise<void> {
+    await this.runIssueCommand({ type: "set_issue_automation_mode", mode }, "mode");
   }
 
-  syncIssues(): Promise<void> {
-    return this.runIssueCommand({ type: "sync_issues" }, "sync");
+  async syncIssues(): Promise<void> {
+    await this.runIssueCommand({ type: "sync_issues" }, "sync");
   }
 
-  setIssueAutonomy(level: IssueAutonomyLevel): Promise<void> {
+  async setIssueAutonomy(level: IssueAutonomyLevel): Promise<void> {
     const automation = this.store.getKernel().issues.automation;
     const autonomy = automation?.status === "ready" ? automation.autonomy : null;
     if (autonomy?.status !== "ready" || autonomy.pending || !autonomy.choices.some((choice) => choice.level === level && choice.enabled)) return Promise.resolve();
-    return this.runIssueCommand({ type: "set_issue_autonomy", command_id: crypto.randomUUID(), level }, "autonomy");
+    await this.runIssueCommand({ type: "set_issue_autonomy", command_id: crypto.randomUUID(), level }, "autonomy");
   }
 
-  answerIssueDecision(decisionId: string, option: string, note = ""): Promise<void> {
+  async answerIssueDecision(decisionId: string, option: string, note = ""): Promise<void> {
     const issues = this.store.getKernel().issues;
     const detail = !issues.detailStale && issues.detail?.status === "ready" ? issues.detail : null;
     const decision = detail?.open_decisions?.find((request) => request.id === decisionId && request.state === "open");
     if (!detail || !sameIssue(issues.selectedIssue, detail.item.issue) || !decision || !decision.options.some((choice) => choice.id === option)) return Promise.resolve();
-    return this.runIssueCommand({ type: "answer_issue_decision", decision_id: decisionId, option, ...(note ? { note } : {}) }, "decision");
+    await this.runIssueCommand({ type: "answer_issue_decision", decision_id: decisionId, option, ...(note ? { note } : {}) }, "decision");
   }
 
-  interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<void> {
+  interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<IssueCommandOutcome> {
     const issues = this.store.getKernel().issues;
     const detail = !issues.detailStale && issues.detail?.status === "ready" ? issues.detail : null;
-    if (!detail || !sameIssue(issues.selectedIssue, detail.item.issue) || !detail.actions?.some((item) => item.command === action && item.enabled)) return Promise.resolve();
+    if (!detail || !sameIssue(issues.selectedIssue, detail.item.issue) || !detail.actions?.some((item) => item.command === action && item.enabled)) return Promise.resolve("unavailable");
     const common = { issue: detail.item.issue, command_id: crypto.randomUUID() };
     if (action === "steer_issue") {
-      if (!message?.trim()) return Promise.resolve();
+      if (!message?.trim()) return Promise.resolve("unavailable");
       return this.runIssueCommand({ type: action, ...common, message }, "intervention");
     }
     if (action === "cancel_issue_work") {
-      if (!confirm) return Promise.resolve();
+      if (!confirm) return Promise.resolve("cancelled");
       return this.runIssueCommand({ type: action, ...common, confirm }, "intervention");
     }
     return this.runIssueCommand({ type: action, ...common }, "intervention");
@@ -873,8 +873,9 @@ export class KernelConnection {
     }
   }
 
-  private async runIssueCommand(command: KernelCommand, pending: IssueCommandPending): Promise<void> {
-    if (!this.canRead("issues") || this.store.getKernel().issues.commandPending !== null) return;
+  private async runIssueCommand(command: KernelCommand, pending: IssueCommandPending): Promise<IssueCommandOutcome> {
+    if (!this.canRead("issues") || this.store.getKernel().issues.commandPending !== null) return "unavailable";
+    let failureOutcome: IssueCommandOutcome = "failed";
     const token = this.issueToken(++this.issueCommandRequest);
     this.uncertainIssueOutcome = null;
     this.issueCommandError = null;
@@ -901,7 +902,8 @@ export class KernelConnection {
         confirmation = await this.confirmIssueAutomationMode({ workspace: this.wanted, mode: command.mode, key: crypto.randomUUID() });
       }
       if (confirmation) {
-        if (!this.issueCurrent(token, this.issueCommandRequest) || confirmation.cancelled) return;
+        if (!this.issueCurrent(token, this.issueCommandRequest)) return "unavailable";
+        if (confirmation.cancelled) return "cancelled";
         if ("outcome" in confirmation) {
           // 일반 읽기만 시작한다. 확인 요청이나 새 key의 명령을 자동으로 다시 보내지 않는다.
           const refresh = this.refreshIssues();
@@ -909,32 +911,42 @@ export class KernelConnection {
           this.rememberUncertainIssueOutcome(this.issueCommandError);
           this.updateIssues({});
           await refresh;
-          return;
+          return "unknown";
         }
         response = confirmation.response;
       } else {
         response = await sendKernelCommand(this.client, command);
       }
-      if (!this.issueCurrent(token, this.issueCommandRequest)) return;
+      if (!this.issueCurrent(token, this.issueCommandRequest)) return "unavailable";
       if (response.rejection) {
+        failureOutcome = "rejected";
         throw new Error(response.rejection.reason === "issue_automation_off"
           ? "이슈 수집이 꺼져 있습니다. 관찰로 바꾼 뒤 다시 동기화하세요."
           : `커널이 요청을 거절했습니다: ${response.rejection.message}`);
       }
       if (response.failure) throw new Error(response.failure);
       if (!response.processed) throw new Error("커널이 요청을 처리하지 못했습니다. 상태를 다시 읽어 주세요.");
-      const notice = response.result?.type === "issue_intervened" && response.result.receipt.delivery
-        ? response.result.receipt.delivery === "unknown"
+      const receipt = response.result?.type === "issue_intervened" ? response.result.receipt : null;
+      const unknownIntervention = pending === "intervention" && (
+        !receipt || !("command_id" in command) || receipt.command_id !== command.command_id
+        || !("issue" in command) || !sameIssue(receipt.issue, command.issue) || receipt.action !== command.type
+        || receipt.delivery === "unknown"
+        || (command.type === "steer_issue" && receipt.delivery !== "queued" && receipt.delivery !== "sent")
+      );
+      const notice = unknownIntervention
+        ? command.type === "steer_issue"
           ? "추가 지시의 전달 결과를 확인하지 못했습니다. 같은 지시를 자동으로 다시 보내지 않습니다. 작업 상태를 확인해 주세요."
-          : response.result.receipt.delivery === "queued" ? "추가 지시를 저장했습니다. 작업자가 시작할 때 전달합니다." : "실행 중인 작업자에게 추가 지시를 전달했습니다."
-        : response.result?.type === "issue_decision_resolved" && response.result.outcome === "superseded"
-          ? "판정 기준이 바뀌어 이전 결정에 답하지 않았습니다. 현재 결정을 확인해 주세요."
-          : "요청을 처리했습니다.";
-      if (response.result?.type === "issue_intervened" && response.result.receipt.delivery === "unknown") {
-        this.rememberUncertainIssueOutcome(notice);
-      }
+          : "요청의 처리 결과를 확인하지 못했습니다. 같은 요청을 자동으로 다시 보내지 않습니다. 현재 상태를 확인해 주세요."
+        : receipt?.delivery === "queued" ? "추가 지시를 저장했습니다. 작업자가 시작할 때 전달합니다."
+          : receipt?.delivery === "sent" ? "실행 중인 작업자에게 추가 지시를 전달했습니다."
+            : response.result?.type === "issue_decision_resolved" && response.result.outcome === "superseded"
+              ? "판정 기준이 바뀌어 이전 결정에 답하지 않았습니다. 현재 결정을 확인해 주세요."
+              : "요청을 처리했습니다.";
+      if (unknownIntervention) this.rememberUncertainIssueOutcome(notice);
       await this.refreshIssues();
-      if (this.issueCurrent(token, this.issueCommandRequest)) this.updateIssues({ notice });
+      if (!this.issueCurrent(token, this.issueCommandRequest)) return "unavailable";
+      this.updateIssues({ notice });
+      return unknownIntervention ? "unknown" : "succeeded";
     } catch (error) {
       if (this.issueCurrent(token, this.issueCommandRequest)) {
         // 정책·결정·control이 확인 창 동안 바뀌었을 수 있다. 읽기만 다시 하고 명령은 재전송하지 않는다.
@@ -944,6 +956,7 @@ export class KernelConnection {
         this.updateIssues({});
         await refresh;
       }
+      return failureOutcome;
     } finally {
       if (this.issueCurrent(token, this.issueCommandRequest)) this.updateIssues({ commandPending: null });
     }

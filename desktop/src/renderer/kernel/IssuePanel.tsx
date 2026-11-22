@@ -5,7 +5,7 @@ import { useDesktopStore } from "../session/desktopStore";
 import { folderName } from "../sidebar/threadStatus";
 import { IssueDetail } from "./IssueDetail";
 import { IssueAutonomyControl } from "./IssueAutonomyControl";
-import type { IssueAutonomyLevel, IssueInterventionName } from "./issueInteractions";
+import type { IssueAutonomyLevel, IssueCommandOutcome, IssueInterventionName } from "./issueInteractions";
 import { IssueObserveReport } from "./IssueObserveReport";
 import { IssuePolicy, type IssuePolicyFileScope } from "./IssuePolicy";
 import type { IssueAutomationModeRecord, IssueCollectionFailureState, IssueEventReference, IssueListItem, IssueSourceFailureState } from "./protocol";
@@ -52,7 +52,7 @@ interface IssuePanelProps {
   onSync(): Promise<void>;
   onSetAutonomy(level: IssueAutonomyLevel): Promise<void>;
   onAnswerDecision(decisionId: string, option: string, note: string): Promise<void>;
-  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<void>;
+  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
   onOpenUrl(url: string): void;
 }
