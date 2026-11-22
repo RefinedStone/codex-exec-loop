@@ -120,6 +120,7 @@ pub(super) fn recover(
     {
         return Ok(blocked(&request, "planning_revision_changed"));
     }
+    validation_links::backfill_owned_queue_sources(&tx, request.work_order_id)?;
     let Some(source) = validation_links::read_source(&tx, request.original.key().as_str())? else {
         return Ok(blocked(&request, "validation_source_missing"));
     };
