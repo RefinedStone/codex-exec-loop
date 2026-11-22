@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod ref_contention;
+
 struct Fixture {
     root: PathBuf,
     repo: PathBuf,
