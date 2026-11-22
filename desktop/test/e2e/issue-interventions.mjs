@@ -190,7 +190,7 @@ try {
   assert.equal(commandRequests("set_issue_autonomy")[0].method, "akra/kernel/command_confirmed");
   cap = "observe"; level = "observe"; revision++;
   gateway.sendKernelEvent(state("issues"));
-  await until(async () => await select.inputValue() === "observe" && await select.locator('option[value="propose"]').isDisabled(), "the pushed lower autonomy cap");
+  await until(async () => await select.inputValue() === "observe" && await select.locator('option[value="propose"]').evaluate((option) => option.disabled), "the pushed lower autonomy cap");
   assert.match(await panel.getByTestId("issues-autonomy-reason").innerText(), /상한/);
   cap = "auto"; level = null; effectiveOverride = "auto"; revision++;
   gateway.sendKernelEvent(state("issues"));
