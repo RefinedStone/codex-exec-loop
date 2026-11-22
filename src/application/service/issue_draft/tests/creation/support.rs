@@ -220,6 +220,23 @@ pub(super) struct CreationVault {
 }
 
 impl EvidenceVaultStorePort for CreationVault {
+    fn begin_binding(
+        &self,
+        request: VaultRecordLoadRequest,
+    ) -> Result<
+        Box<
+            dyn crate::application::port::outbound::evidence_vault_port::VaultBindingTransaction
+                + '_,
+        >,
+        VaultStoreError,
+    > {
+        crate::test_utils::vault_binding::begin_test_binding(
+            self.records.lock().unwrap(),
+            request,
+            crate::test_utils::vault_binding::TestBindingHooks::default(),
+        )
+    }
+
     fn save_creation(&self, request: VaultCreationSaveRequest) -> Result<(), VaultStoreError> {
         self.stage_attempts.fetch_add(1, Ordering::SeqCst);
         self.staged

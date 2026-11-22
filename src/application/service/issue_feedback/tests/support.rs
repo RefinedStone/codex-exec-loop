@@ -237,6 +237,8 @@ pub(crate) fn pending_publication(mut owner: IssueReference) -> IssuePublishInte
         state: IssuePublishIntentState::NeedsConfirmation,
         observed_hash: None,
         restore_link_finalized: false,
+
+        restore_binding_attempt: None,
         write_response_mismatch: false,
         write_attempted: Some(true),
         sequence: 1,

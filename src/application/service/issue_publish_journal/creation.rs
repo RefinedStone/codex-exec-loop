@@ -2,7 +2,7 @@
 //! No remote mutation occurs here, and a late adoption cannot overtake an update.
 use super::*;
 use crate::application::port::outbound::evidence_vault_port::{
-    VaultCreationLoadRequest, VaultCreationRecordScope, VaultStoreError,
+    VaultCreationLoadRequest, VaultCreationRecordScope,
 };
 use crate::domain::issue_creation::{IssueCreationIntentRecord, IssueCreationIntentState};
 
@@ -54,23 +54,6 @@ impl IssueJournaledPublishService {
         }
         let key =
             key.ok_or_else(|| anyhow!("the vault must be unlocked before adopting a creation"))?;
-        match self.vault.load(VaultRecordLoadRequest {
-            scope: VaultRecordScope::current_version(created.issue.clone()),
-            key: key.clone(),
-        }) {
-            Err(VaultStoreError::RecordNotFound) => {}
-            Ok(_) => bail!("an existing restore version already owns this issue"),
-            Err(error) => return Err(error.into()),
-        }
-        let latest = self.snapshot.read(IssueSnapshotReadRequest {
-            issue: created.issue.clone(),
-        })?;
-        if latest.issue != created.issue
-            || latest.comparison_basis.field_hash != approved.approval.shared_copy_hash
-            || latest.raw_fields.field_hash() != approved.approval.shared_copy_hash
-        {
-            bail!("the created issue changed before its restore link was bound")
-        }
         for field in &creation.pending_vault_fields {
             let plaintext = self.vault.load_creation(VaultCreationLoadRequest {
                 scope: VaultCreationRecordScope {
@@ -94,6 +77,29 @@ impl IssueJournaledPublishService {
                 plaintext,
             })?;
         }
+        // Staging is not visible to restore. Only after it is complete do we take
+        // the binding lease and atomically reserve the absence observed below until
+        // the publication journal records ownership. Never take these leases in reverse.
+        let binding = self.vault.begin_binding(VaultRecordLoadRequest {
+            scope: VaultRecordScope::current_version(created.issue.clone()),
+            key: key.clone(),
+        })?;
+        match &binding.snapshot().state {
+            VaultBindingState::Missing => {}
+            VaultBindingState::Readable { .. } => {
+                bail!("an existing restore version already owns this issue")
+            }
+            VaultBindingState::Unreadable { error } => return Err(error.clone().into()),
+        }
+        let latest = self.snapshot.read(IssueSnapshotReadRequest {
+            issue: created.issue.clone(),
+        })?;
+        if latest.issue != created.issue
+            || latest.comparison_basis.field_hash != approved.approval.shared_copy_hash
+            || latest.raw_fields.field_hash() != approved.approval.shared_copy_hash
+        {
+            bail!("the created issue changed before its restore link was bound")
+        }
         let sequence = records
             .iter()
             .map(|r| r.sequence)
@@ -110,6 +116,9 @@ impl IssueJournaledPublishService {
             state: IssuePublishIntentState::Confirmed,
             observed_hash: creation.observed_hash.clone(),
             restore_link_finalized: false,
+            restore_binding_attempt: Some(IssuePublishRestoreBindingAttempt {
+                expected_ciphertext_sha256: binding.snapshot().token.ciphertext_sha256(),
+            }),
             write_response_mismatch: false,
             write_attempted: Some(true),
             sequence,

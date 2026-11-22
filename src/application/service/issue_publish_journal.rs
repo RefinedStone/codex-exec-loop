@@ -2,10 +2,13 @@ mod creation;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow, bail};
+use sha2::{Digest, Sha256};
 
 use crate::application::port::outbound::evidence_vault_port::{
-    EvidenceVaultStorePort, VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey,
-    VaultRecordLoadRequest, VaultRecordSaveRequest, VaultRecordScope,
+    EvidenceVaultStorePort, VaultBindingCommitPolicy, VaultBindingCommitRequest,
+    VaultBindingCommitResult, VaultBindingFields, VaultBindingState, VaultBindingToken,
+    VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordLoadRequest,
+    VaultRecordSaveRequest, VaultRecordScope,
 };
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::application::port::outbound::issue_snapshot_port::{
@@ -16,7 +19,8 @@ use crate::application::service::issue_publish::{
     IssueApprovedPublishRequest, IssuePublishRefusal, approval_refusal,
 };
 use crate::domain::issue_publish_intent::{
-    IssuePublishIntentRecord, IssuePublishIntentState, IssuePublishVaultField,
+    IssuePublishIntentRecord, IssuePublishIntentState, IssuePublishRestoreBindingAttempt,
+    IssuePublishVaultField,
 };
 use crate::domain::issue_work::{IssueComparisonBasis, IssueFieldHash, IssueReference};
 
@@ -154,12 +158,13 @@ impl IssueJournaledPublishService {
             state: IssuePublishIntentState::Recorded,
             observed_hash: None,
             restore_link_finalized: false,
+            restore_binding_attempt: None,
             write_response_mismatch: false,
             write_attempted: Some(false),
             sequence,
         };
         if !shared_copy_only && !restorable.is_empty() {
-            match self.save_pending_records(&record, restorable, vault_key) {
+            match self.save_pending_records(&record, restorable, vault_key.clone()) {
                 Some(fields) => record.pending_vault_fields = fields,
                 None => {
                     record.state = IssuePublishIntentState::Held;
@@ -168,7 +173,40 @@ impl IssueJournaledPublishService {
                 }
             }
         }
+        // Capture the binding before the remote mutation, while recording its
+        // publication intent. A later reconnect/import must not become the base
+        // of this publication's delayed finalize.
+        let binding = vault_key
+            .filter(|_| !shared_copy_only)
+            .map(|key| {
+                self.vault.begin_binding(VaultRecordLoadRequest {
+                    scope: VaultRecordScope::current_version(record.issue.clone()),
+                    key,
+                })
+            })
+            .transpose()?;
+        if let Some(binding) = &binding {
+            if !record.pending_vault_fields.is_empty()
+                && matches!(
+                    binding.snapshot().state,
+                    VaultBindingState::Unreadable { .. }
+                )
+            {
+                // ReplaceExpected cannot replace an unreadable binding. Hold the
+                // restorable publication before any remote call; a new explicit
+                // shared-copy-only request remains available to the user.
+                record.state = IssuePublishIntentState::Held;
+                lease.verify_identity()?;
+                self.journal.save(&workspace_dir, &record)?;
+                return Ok(IssueJournaledPublishOutcome::Held(record));
+            }
+            record.restore_binding_attempt = Some(IssuePublishRestoreBindingAttempt {
+                expected_ciphertext_sha256: binding.snapshot().token.ciphertext_sha256(),
+            });
+        }
+        lease.verify_identity()?;
         self.journal.save(&workspace_dir, &record)?;
+        drop(binding);
 
         let remote = match self.snapshot.read(IssueSnapshotReadRequest {
             issue: publish.issue.clone(),
@@ -293,32 +331,76 @@ impl IssueJournaledPublishService {
             // records with no sequence cannot establish which mapping is newest.
             bail!("a newer or unordered publish intent may own the restore link")
         }
+        // Pending records are invisible to restore. Load them before taking the binding
+        // lease; the transaction owns one immutable field set and one pointer commit.
+        let mut fields = VaultBindingFields::default();
         for field in &record.pending_vault_fields {
-            let scope = |binding| VaultRecordScope {
-                issue: record.issue.clone(),
-                field: vault_field(*field),
-                binding,
-            };
             let plaintext = self.vault.load(VaultRecordLoadRequest {
-                scope: scope(VaultRecordBinding::PublishIntent(record.intent_id.clone())),
+                scope: VaultRecordScope {
+                    issue: record.issue.clone(),
+                    field: vault_field(*field),
+                    binding: VaultRecordBinding::PublishIntent(record.intent_id.clone()),
+                },
                 key: key.clone(),
             })?;
-            lease.verify_identity()?;
-            self.vault.save(VaultRecordSaveRequest {
-                scope: scope(VaultRecordBinding::ConfirmedVersion(
-                    record.confirmed_version(),
-                )),
-                key: key.clone(),
-                plaintext,
-            })?;
+            match field {
+                IssuePublishVaultField::Title => fields.title = Some(plaintext),
+                IssuePublishVaultField::Body => fields.body = Some(plaintext),
+            }
         }
-        // 복원(`evidence_vault_restore`)은 이 레코드가 가리키는 판만 쓴다. 마지막에 저장한다.
-        lease.verify_identity()?;
-        self.vault.save(VaultRecordSaveRequest {
-            scope: VaultRecordScope::current_version(record.issue.clone()),
+        let scope = VaultRecordScope::current_version(record.issue.clone());
+        // Lock order is always publication lease, then binding lease.
+        let mut transaction = self.vault.begin_binding(VaultRecordLoadRequest {
+            scope: scope.clone(),
             key,
-            plaintext: VaultPlaintext::new(record.confirmed_version()),
         })?;
+        let expected = if let Some(attempt) = &record.restore_binding_attempt {
+            VaultBindingToken::observed(scope, attempt.expected_ciphertext_sha256)
+        } else {
+            match &transaction.snapshot().state {
+                VaultBindingState::Missing => {}
+                VaultBindingState::Readable { version }
+                    if version == &record.confirmed_version() =>
+                {
+                    let version = version.clone();
+                    if transaction.load_version_fields(&version)? != fields {
+                        bail!("the legacy restore binding does not match this publish")
+                    }
+                    // An old completed pointer is safe to acknowledge only when
+                    // both its exact intent version and its entire field set match.
+                    record.restore_link_finalized = true;
+                    lease.verify_identity()?;
+                    self.journal.save(workspace_dir, &record)?;
+                    return Ok(record);
+                }
+                _ => bail!("the legacy publish has no expectation for the current restore binding"),
+            }
+            let expected = transaction.snapshot().token.clone();
+            record.restore_binding_attempt = Some(IssuePublishRestoreBindingAttempt {
+                expected_ciphertext_sha256: expected.ciphertext_sha256(),
+            });
+            // Persist the first expectation before touching CurrentVersion. A lost
+            // completion acknowledgement must never adopt a later pointer as its base.
+            lease.verify_identity()?;
+            self.journal.save(workspace_dir, &record)?;
+            expected
+        };
+        lease.verify_identity()?;
+        match transaction.commit(VaultBindingCommitRequest {
+            expected,
+            operation_id: format!("publish:{}", record.intent_id),
+            base_version: record.confirmed_version(),
+            approval_digest: Sha256::digest(record.confirmed_version().as_bytes()).into(),
+            fields,
+            policy: VaultBindingCommitPolicy::ReplaceExpected,
+        })? {
+            VaultBindingCommitResult::Committed(_)
+            | VaultBindingCommitResult::AlreadyCommitted(_) => {}
+            VaultBindingCommitResult::Conflict => {
+                bail!("the restore binding changed after this publish was prepared")
+            }
+        }
+        lease.verify_identity()?;
         record.restore_link_finalized = true;
         self.journal.save(workspace_dir, &record)?;
         Ok(record)
@@ -385,18 +467,23 @@ fn vault_field(field: IssuePublishVaultField) -> VaultRecordField {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
-    use crate::application::port::outbound::evidence_vault_port::{VaultKey, VaultStoreError};
+    use crate::application::port::outbound::evidence_vault_port::{
+        VaultBindingTransaction, VaultKey, VaultStoreError,
+    };
     use crate::application::port::outbound::issue_snapshot_port::{
         IssueRawFields, IssueSnapshotResolveRequest, IssueSnapshotResponse,
     };
     use crate::application::port::outbound::issue_update_port::IssueUpdateResponse;
+    use crate::domain::issue_publish_intent::confirmed_version_matches_hash;
     use crate::domain::issue_validation::{IssueRequirements, validate_issue};
     use crate::domain::issue_work::{
         IssueProjectScope, IssueProvider, IssuePublishApproval, IssueSharedCopy,
         IssueWriteApproval, IssueWriteOperation,
     };
+    use crate::test_utils::vault_binding::{TestBindingHooks, begin_test_binding};
 
     const WORKSPACE: &str = "/work/project";
 
@@ -478,11 +565,15 @@ mod tests {
         /// 저장할 때마다 본 상태이다.
         saved_states: Mutex<Vec<IssuePublishIntentState>>,
         fail_save: bool,
+        fail_finalized_save_once: AtomicBool,
     }
 
     impl IssuePublishIntentJournalPort for FakeJournal {
         fn save(&self, _: &str, record: &IssuePublishIntentRecord) -> Result<()> {
-            if self.fail_save {
+            if self.fail_save
+                || (record.restore_link_finalized
+                    && self.fail_finalized_save_once.swap(false, Ordering::SeqCst))
+            {
                 bail!("the disk is full")
             }
             self.saved_states.lock().unwrap().push(record.state);
@@ -501,9 +592,36 @@ mod tests {
     struct FakeVault {
         records: Mutex<HashMap<VaultRecordScope, VaultPlaintext>>,
         fail_save: bool,
+        fail_after_pointer_once: AtomicBool,
+        binding_writes: AtomicUsize,
     }
 
     impl EvidenceVaultStorePort for FakeVault {
+        fn begin_binding(
+            &self,
+            request: VaultRecordLoadRequest,
+        ) -> Result<Box<dyn VaultBindingTransaction + '_>, VaultStoreError> {
+            begin_test_binding(
+                self.records.lock().unwrap(),
+                request,
+                TestBindingHooks {
+                    before_write: Some(Box::new(|_| {
+                        if self.fail_save {
+                            return Err(VaultStoreError::Storage("the disk is full".to_string()));
+                        }
+                        self.binding_writes.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })),
+                    after_pointer: Some(Box::new(|| {
+                        if self.fail_after_pointer_once.swap(false, Ordering::SeqCst) {
+                            return Err(VaultStoreError::WriteOutcomeUnknown);
+                        }
+                        Ok(())
+                    })),
+                },
+            )
+        }
+
         fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
             if self.fail_save {
                 return Err(VaultStoreError::Storage("the disk is full".to_string()));
@@ -571,6 +689,12 @@ mod tests {
 
         fn saved_states(&self) -> Vec<IssuePublishIntentState> {
             self.journal.saved_states.lock().unwrap().clone()
+        }
+
+        fn current_version(&self) -> String {
+            self.vault.records.lock().unwrap()[&VaultRecordScope::current_version(issue())]
+                .expose()
+                .to_string()
         }
 
         fn vault_bindings(&self) -> Vec<VaultRecordBinding> {
@@ -674,6 +798,7 @@ mod tests {
             state: IssuePublishIntentState::Sent,
             observed_hash: None,
             restore_link_finalized: false,
+            restore_binding_attempt: None,
             write_response_mismatch: false,
             write_attempted: Some(true),
             sequence: 0,
@@ -716,17 +841,16 @@ mod tests {
         let confirmed_scope = VaultRecordScope {
             issue: issue(),
             field: VaultRecordField::Body,
-            binding: VaultRecordBinding::ConfirmedVersion(record.confirmed_version()),
+            binding: VaultRecordBinding::ConfirmedVersion(fixture.current_version()),
         };
         assert_eq!(
             fixture.vault.records.lock().unwrap()[&confirmed_scope].expose(),
             "masked log line"
         );
-        assert_eq!(
-            fixture.vault.records.lock().unwrap()[&VaultRecordScope::current_version(issue())]
-                .expose(),
-            record.confirmed_version()
-        );
+        assert!(confirmed_version_matches_hash(
+            &fixture.current_version(),
+            &record.approved_hash
+        ));
     }
 
     #[test]
@@ -1014,15 +1138,16 @@ mod tests {
                 .is_err()
         );
         let records = fixture.vault.records.lock().unwrap();
-        assert_eq!(
-            records[&VaultRecordScope::current_version(issue())].expose(),
-            second.confirmed_version()
-        );
+        let current = records[&VaultRecordScope::current_version(issue())].expose();
+        assert!(confirmed_version_matches_hash(
+            current,
+            &second.approved_hash
+        ));
         assert_eq!(
             records[&VaultRecordScope {
                 issue: issue(),
                 field: VaultRecordField::Body,
-                binding: VaultRecordBinding::ConfirmedVersion(second.confirmed_version()),
+                binding: VaultRecordBinding::ConfirmedVersion(current.to_string()),
             }]
                 .expose(),
             "newer private text"
@@ -1110,11 +1235,10 @@ mod tests {
         service
             .finalize_restore_link(WORKSPACE, &first.intent_id, key())
             .unwrap();
-        assert_eq!(
-            fixture.vault.records.lock().unwrap()[&VaultRecordScope::current_version(issue())]
-                .expose(),
-            first.confirmed_version()
-        );
+        assert!(confirmed_version_matches_hash(
+            &fixture.current_version(),
+            &first.approved_hash
+        ));
     }
 
     #[test]
@@ -1211,11 +1335,233 @@ mod tests {
                 .finalize_restore_link(WORKSPACE, &unsent.intent_id, key())
                 .is_err()
         );
-        assert_eq!(
-            fixture.vault.records.lock().unwrap()[&VaultRecordScope::current_version(issue())]
-                .expose(),
-            first.confirmed_version()
-        );
+        assert!(confirmed_version_matches_hash(
+            &fixture.current_version(),
+            &first.approved_hash
+        ));
         assert_eq!(fixture.writes(), 1);
+    }
+    #[test]
+    fn finalize_retries_the_same_binding_after_the_completion_journal_write_fails() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let IssueJournaledPublishOutcome::Confirmed(record) = fixture
+            .service()
+            .publish(restorable_request(Some(key())))
+            .unwrap()
+        else {
+            panic!("confirmed publish");
+        };
+        assert_eq!(
+            record.restore_binding_attempt,
+            Some(IssuePublishRestoreBindingAttempt {
+                expected_ciphertext_sha256: None,
+            })
+        );
+        fixture
+            .journal
+            .fail_finalized_save_once
+            .store(true, Ordering::SeqCst);
+        assert!(
+            fixture
+                .service()
+                .finalize_restore_link(WORKSPACE, &record.intent_id, key())
+                .is_err()
+        );
+        let committed = fixture.vault.records.lock().unwrap().clone();
+        let writes = fixture.vault.binding_writes.load(Ordering::SeqCst);
+        assert_eq!(writes, 2);
+
+        let retried = fixture
+            .service()
+            .finalize_restore_link(WORKSPACE, &record.intent_id, key())
+            .unwrap();
+        assert!(retried.restore_link_finalized);
+        assert_eq!(
+            retried.restore_binding_attempt,
+            record.restore_binding_attempt
+        );
+        assert_eq!(*fixture.vault.records.lock().unwrap(), committed);
+        assert_eq!(fixture.vault.binding_writes.load(Ordering::SeqCst), writes);
+    }
+
+    #[test]
+    fn finalize_retries_a_lost_pointer_acknowledgement_without_a_new_generation() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let IssueJournaledPublishOutcome::Confirmed(record) = fixture
+            .service()
+            .publish(restorable_request(Some(key())))
+            .unwrap()
+        else {
+            panic!("confirmed publish");
+        };
+        fixture
+            .vault
+            .fail_after_pointer_once
+            .store(true, Ordering::SeqCst);
+        let error = fixture
+            .service()
+            .finalize_restore_link(WORKSPACE, &record.intent_id, key())
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<VaultStoreError>(),
+            Some(&VaultStoreError::WriteOutcomeUnknown)
+        );
+        let committed = fixture.vault.records.lock().unwrap().clone();
+        let writes = fixture.vault.binding_writes.load(Ordering::SeqCst);
+        fixture
+            .service()
+            .finalize_restore_link(WORKSPACE, &record.intent_id, key())
+            .unwrap();
+        assert_eq!(*fixture.vault.records.lock().unwrap(), committed);
+        assert_eq!(fixture.vault.binding_writes.load(Ordering::SeqCst), writes);
+    }
+
+    #[test]
+    fn late_finalize_cannot_overwrite_a_binding_committed_after_the_remote_publish() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let IssueJournaledPublishOutcome::Confirmed(record) = fixture
+            .service()
+            .publish(restorable_request(Some(key())))
+            .unwrap()
+        else {
+            panic!("confirmed publish");
+        };
+        let transaction = fixture
+            .vault
+            .begin_binding(VaultRecordLoadRequest {
+                scope: VaultRecordScope::current_version(issue()),
+                key: key(),
+            })
+            .unwrap();
+        let expected = transaction.snapshot().token.clone();
+        assert!(matches!(
+            transaction
+                .commit(VaultBindingCommitRequest {
+                    expected,
+                    operation_id: "a-later-user-reconnection".to_string(),
+                    base_version: record.confirmed_version(),
+                    approval_digest: [4; 32],
+                    fields: VaultBindingFields {
+                        title: None,
+                        body: Some(VaultPlaintext::new("the newer local original".to_string())),
+                    },
+                    policy: VaultBindingCommitPolicy::ReplaceExpected,
+                })
+                .unwrap(),
+            VaultBindingCommitResult::Committed(_)
+        ));
+        let newer = fixture.vault.records.lock().unwrap().clone();
+        let writes = fixture.vault.binding_writes.load(Ordering::SeqCst);
+        assert!(
+            fixture
+                .service()
+                .finalize_restore_link(WORKSPACE, &record.intent_id, key())
+                .is_err()
+        );
+        assert_eq!(*fixture.vault.records.lock().unwrap(), newer);
+        assert_eq!(fixture.vault.binding_writes.load(Ordering::SeqCst), writes);
+        assert!(!fixture.journal.records.lock().unwrap()[0].restore_link_finalized);
+    }
+
+    #[test]
+    fn failed_initial_journal_save_neither_publishes_nor_commits_the_staged_binding() {
+        let mut fixture = Fixture::new(WriteBehavior::Answer);
+        fixture.journal = Arc::new(FakeJournal {
+            fail_save: true,
+            ..FakeJournal::default()
+        });
+        assert!(
+            fixture
+                .service()
+                .publish(restorable_request(Some(key())))
+                .is_err()
+        );
+        assert_eq!((fixture.writes(), fixture.reads()), (0, 0));
+        assert!(
+            !fixture
+                .vault
+                .records
+                .lock()
+                .unwrap()
+                .contains_key(&VaultRecordScope::current_version(issue()))
+        );
+        assert_eq!(fixture.vault.binding_writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn legacy_finalize_preserves_an_unrelated_current_binding_and_only_acknowledges_exact_fields() {
+        for matching in [false, true] {
+            let fixture = Fixture::new(WriteBehavior::Answer);
+            let IssueJournaledPublishOutcome::Confirmed(mut record) = fixture
+                .service()
+                .publish(restorable_request(Some(key())))
+                .unwrap()
+            else {
+                panic!("confirmed publish");
+            };
+            record.restore_binding_attempt = None;
+            fixture.journal.save(WORKSPACE, &record).unwrap();
+            let version = if matching {
+                record.confirmed_version()
+            } else {
+                "another-local-binding".to_string()
+            };
+            let mut records = fixture.vault.records.lock().unwrap();
+            records.insert(
+                VaultRecordScope::current_version(issue()),
+                VaultPlaintext::new(version.clone()),
+            );
+            records.insert(
+                VaultRecordScope {
+                    issue: issue(),
+                    field: VaultRecordField::Body,
+                    binding: VaultRecordBinding::ConfirmedVersion(version),
+                },
+                VaultPlaintext::new("masked log line".to_string()),
+            );
+            let before = records.clone();
+            drop(records);
+            let result =
+                fixture
+                    .service()
+                    .finalize_restore_link(WORKSPACE, &record.intent_id, key());
+            assert_eq!(result.is_ok(), matching);
+            assert_eq!(*fixture.vault.records.lock().unwrap(), before);
+            assert_eq!(fixture.vault.binding_writes.load(Ordering::SeqCst), 0);
+        }
+    }
+    #[test]
+    fn an_unreadable_binding_holds_restorable_publish_until_shared_copy_only_is_explicit() {
+        let fixture = Fixture::new(WriteBehavior::Answer);
+        let current = VaultRecordScope::current_version(issue());
+        fixture
+            .vault
+            .records
+            .lock()
+            .unwrap()
+            .insert(current.clone(), VaultPlaintext::new(String::new()));
+        let outcome = fixture
+            .service()
+            .publish(restorable_request(Some(key())))
+            .unwrap();
+        let IssueJournaledPublishOutcome::Held(held) = outcome else {
+            panic!("an unreadable existing binding must hold restorable publication");
+        };
+        assert_eq!(held.state, IssuePublishIntentState::Held);
+        assert_eq!(held.write_attempted, Some(false));
+        assert_eq!((fixture.writes(), fixture.reads()), (0, 0));
+        assert_eq!(fixture.vault.records.lock().unwrap()[&current].expose(), "");
+        assert_eq!(fixture.vault.binding_writes.load(Ordering::SeqCst), 0);
+
+        let mut shared_only = restorable_request(Some(key()));
+        shared_only.shared_copy_only = true;
+        let shared = fixture.service().publish(shared_only).unwrap();
+        assert!(
+            matches!(shared, IssueJournaledPublishOutcome::Confirmed(record)
+            if record.pending_vault_fields.is_empty() && record.restore_binding_attempt.is_none())
+        );
+        assert_eq!((fixture.writes(), fixture.reads()), (1, 2));
+        assert_eq!(fixture.vault.records.lock().unwrap()[&current].expose(), "");
+        assert_eq!(fixture.vault.binding_writes.load(Ordering::SeqCst), 0);
     }
 }

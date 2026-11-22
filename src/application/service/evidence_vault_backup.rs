@@ -208,11 +208,12 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("system time")
                 .as_nanos();
-            let vault_root = std::env::temp_dir().join(format!(
+            let vault_root = crate::test_utils::platform_safe_temp_dir().join(format!(
                 "akra-evidence-vault-backup-{label}-{}-{unique}",
                 std::process::id()
             ));
-            fs::create_dir_all(&vault_root).expect("temp directory");
+            crate::private_directory::ensure_private_directory(&vault_root)
+                .expect("private temp directory");
             let key_store = Arc::new(FakeVaultKeyStoreAdapter::with_key(VaultKey::new(
                 key.to_vec(),
             )));
@@ -235,7 +236,7 @@ mod tests {
 
         fn save(&self, scope: VaultRecordScope, text: &str) {
             self.vault
-                .save(VaultRecordSaveRequest {
+                .seed_record_for_test(VaultRecordSaveRequest {
                     scope,
                     key: self.unlock.sealing_key().expect("device key"),
                     plaintext: VaultPlaintext::new(text.to_string()),
@@ -263,6 +264,18 @@ mod tests {
                     key: self.unlock.sealing_key().expect("device key"),
                 })
                 .map(|plaintext| plaintext.expose().to_string())
+        }
+
+        fn imported_version(&self, issue: &IssueReference, base: &str) -> String {
+            let version = self
+                .load(VaultRecordScope::current_version(issue.clone()))
+                .expect("the imported binding should be readable");
+            let suffix = version
+                .strip_prefix(&format!("{base}:binding:"))
+                .expect("the imported generation must retain its source version");
+            assert_eq!(suffix.len(), 64);
+            assert!(suffix.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            version
         }
 
         /// 레코드 파일의 이름과 내용이다. 이름 순서이다.
@@ -438,12 +451,13 @@ mod tests {
                 .expect("id")
         );
         // 로컬 장치 키와 로컬 프로젝트로 열린다. 로컬 장치 키는 그대로이다.
+        let imported_version = local.imported_version(&local_issue, VERSION);
         assert_eq!(
-            local.load(VaultRecordScope::current_version(local_issue.clone())),
-            Ok(VERSION.to_string())
-        );
-        assert_eq!(
-            local.load(confirmed(&local_issue, VaultRecordField::Body, VERSION)),
+            local.load(confirmed(
+                &local_issue,
+                VaultRecordField::Body,
+                &imported_version
+            )),
             Ok(BODY_SPANS.to_string())
         );
         assert_eq!(
@@ -643,16 +657,17 @@ mod tests {
         assert!(report.kept_local.is_empty());
         for id in ["I_1", "I_2"] {
             let issue = issue(SOURCE_PROJECT, id);
+            let imported_version = source.imported_version(&issue, VERSION);
             assert_eq!(
-                source.load(VaultRecordScope::current_version(issue.clone())),
-                Ok(VERSION.to_string())
-            );
-            assert_eq!(
-                source.load(confirmed(&issue, VaultRecordField::Title, VERSION)),
+                source.load(confirmed(
+                    &issue,
+                    VaultRecordField::Title,
+                    &imported_version
+                )),
                 Ok(TITLE_SPANS.to_string())
             );
             assert_eq!(
-                source.load(confirmed(&issue, VaultRecordField::Body, VERSION)),
+                source.load(confirmed(&issue, VaultRecordField::Body, &imported_version)),
                 Ok(BODY_SPANS.to_string())
             );
         }
@@ -671,6 +686,13 @@ mod tests {
             vault: Arc<FilesystemEvidenceVaultStoreAdapter>,
         }
         impl EvidenceVaultStorePort for ChangingStore {
+            fn begin_binding(
+        &self,
+        request: VaultRecordLoadRequest,
+            ) -> Result<Box<dyn crate::application::port::outbound::evidence_vault_port::VaultBindingTransaction + '_>, VaultStoreError>{
+                self.vault.begin_binding(request)
+            }
+
             fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
                 self.vault.save(request)
             }
@@ -680,11 +702,24 @@ mod tests {
             ) -> Result<VaultPlaintext, VaultStoreError> {
                 let original = self.vault.load(request.clone())?;
                 if request.scope.binding == VaultRecordBinding::CurrentVersion {
-                    self.vault.save(VaultRecordSaveRequest {
-                        scope: request.scope,
-                        key: request.key,
-                        plaintext: VaultPlaintext::new("1:changed-after-selection".to_string()),
-                    })?;
+                    use crate::application::port::outbound::evidence_vault_port::{
+                        VaultBindingCommitPolicy, VaultBindingCommitRequest,
+                        VaultBindingCommitResult,
+                    };
+                    let mut transaction = self.vault.begin_binding(request)?;
+                    let fields = transaction.load_version_fields(original.expose())?;
+                    let expected = transaction.snapshot().token.clone();
+                    assert!(matches!(
+                        transaction.commit(VaultBindingCommitRequest {
+                            expected,
+                            operation_id: "synthetic-export-race".to_string(),
+                            base_version: "1:changed-after-selection".to_string(),
+                            approval_digest: [29; 32],
+                            fields,
+                            policy: VaultBindingCommitPolicy::ReplaceExpected,
+                        })?,
+                        VaultBindingCommitResult::Committed(_),
+                    ));
                 }
                 Ok(original)
             }
@@ -718,7 +753,7 @@ mod tests {
         secure_fs::install_after_atomic_replace_error_hook("synthetic interruption");
         assert!(matches!(
             backup_error(local.import(&export.archive, &export.recovery_key)),
-            Err(VaultBackupError::Storage(_))
+            Err(VaultBackupError::Record(VaultStoreError::Storage(_)))
         ));
         assert_eq!(local.record_files().len(), 1);
         for issue_id in ["I_1", "I_2"] {
@@ -736,12 +771,13 @@ mod tests {
         assert!(report.kept_local.is_empty());
         assert_eq!(local.record_files().len(), 6);
         for issue_id in ["I_1", "I_2"] {
-            assert_eq!(local.load(current(issue_id)), Ok(VERSION.to_string()));
+            let local_issue = issue(LOCAL_PROJECT, issue_id);
+            let imported_version = local.imported_version(&local_issue, VERSION);
             assert_eq!(
                 local.load(confirmed(
-                    &issue(LOCAL_PROJECT, issue_id),
+                    &local_issue,
                     VaultRecordField::Title,
-                    VERSION
+                    &imported_version
                 )),
                 Ok(TITLE_SPANS.to_string())
             );

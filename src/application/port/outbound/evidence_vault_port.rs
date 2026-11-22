@@ -5,6 +5,13 @@ use zeroize::Zeroize;
 
 use crate::domain::issue_work::IssueReference;
 
+mod binding;
+pub use binding::{
+    VaultBindingCommitPolicy, VaultBindingCommitRequest, VaultBindingCommitResult,
+    VaultBindingFields, VaultBindingReceipt, VaultBindingSnapshot, VaultBindingState,
+    VaultBindingToken, VaultBindingTransaction,
+};
+
 /*
  * Evidence Vault 의 복원 계약이다 (#2415). 가린 구간의 평문을 돌려주는 유일한 진입점이고, 사용자 확인이 있어야
  * 부를 수 있다. Issue Core 의 일반 계약(`issue_core_port`)과 trait 가 다르므로 일반 도구는 복원을 부를 수 없다.
@@ -139,7 +146,7 @@ pub trait EvidenceVaultRestorePort: Send + Sync {
  */
 
 /// 저장 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 3;
+pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 4;
 
 /// 가린 구간이 있는 이슈의 필드이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -267,6 +274,13 @@ pub struct VaultCreationLoadRequest {
 }
 
 pub trait EvidenceVaultStorePort: Send + Sync {
+    /// canonical Body/CurrentVersion 범위에 고정된 프로세스 공유 트랜잭션을 시작한다.
+    /// 안전하지 않은 저장소나 경로는 오류이며 Unreadable snapshot으로 완화하지 않는다.
+    fn begin_binding(
+        &self,
+        request: VaultRecordLoadRequest,
+    ) -> std::result::Result<Box<dyn VaultBindingTransaction + '_>, VaultStoreError>;
+
     /// 구현이 따르는 계약의 판이다.
     fn contract_version(&self) -> u32 {
         EVIDENCE_VAULT_STORE_CONTRACT_VERSION
@@ -291,7 +305,8 @@ pub trait EvidenceVaultStorePort: Send + Sync {
         ))
     }
 
-    /// 평문을 암호화해 이 범위의 레코드로 저장한다. 같은 범위의 레코드는 바꾼다.
+    /// PublishIntent staging만 저장한다. CurrentVersion/ConfirmedVersion은 begin_binding으로만 쓴다.
+    /// staging 저장은 binding lease를 재취득하지 않아 transaction 안에서도 부를 수 있다.
     /// 교체 전 실패는 이전 레코드를 보존한다. 교체 후 실패는 `WriteOutcomeUnknown`이며 다시 읽어야 한다.
     fn save(&self, request: VaultRecordSaveRequest) -> std::result::Result<(), VaultStoreError>;
 

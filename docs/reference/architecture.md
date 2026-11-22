@@ -1027,6 +1027,10 @@ strategy in the production TUI.
   keeps the format version, key identifier, nonce, and ciphertext; the scope is authenticated as
   associated data. The caller supplies the key and the vault root; `build_issue_drafts` wires it to
   `$AKRA_HOME/evidence-vault` for the issue publish path.
+  Bound-record writes use `begin_binding`: a full-issue process-shared lease, immutable title/body
+  generations, and a CurrentVersion ciphertext CAS. Publish records its expected pointer before
+  the remote write; reconnect keeps the reviewed source version and full mapping; backup preserves
+  readable local bindings under the same lease. See [atomic binding contract](./evidence-vault-bindings.md).
 - The Vault key lives in the OS key store behind `VaultKeyStorePort` (`OsVaultKeyStoreAdapter`,
   `keyring` crate; `FakeVaultKeyStoreAdapter` for tests). `EvidenceVaultUnlockService` is the only
   constructor of `VaultUserConfirmation`: it gives grants bound to one issue and one viewing
@@ -1048,7 +1052,8 @@ strategy in the production TUI.
   issue), `PublishedCopyChanged`, `MarkerMoved`, `MarkerDuplicated`, `MarkerMissing`. A reconnect
   (`review_reconnect`, then `reconnect`) works only on an issue that has a binding; it commits the
   user-approved marker positions to the reviewed field hash and refuses when the copy changed after
-  the review. Unapproved markers stay as marker text. Records of earlier versions are not deleted.
+  the review or the local binding changed. Only the identical whole approval is an idempotent retry.
+  Unapproved markers stay as marker text. Records of earlier versions are not deleted.
   The Desktop local native helper calls the read-only path through a dedicated application inbound
   port after native user confirmation. It adds no general Gateway restore RPC and does not expose
   reconnect. See [Desktop restore window](./evidence-vault-unlock.md#desktop-restore-window) for

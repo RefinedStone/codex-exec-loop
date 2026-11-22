@@ -4,7 +4,7 @@
  * 연결은 세 값이다:
  * - `CurrentVersion` 레코드: 이 이슈(프로젝트, 서버, 저장소, 이슈)에서 지금 복원에 쓰는 판의 이름이다.
  * - `ConfirmedVersion(판)` 레코드: 필드마다 하나이다. 가림 구간의 묶음(표식, 바이트 위치, 평문)이다.
- * - 판의 이름: 게시본의 필드 해시이다 (`confirmed_version_name`).
+ * - 판의 이름: 게시본 해시와 저장 transaction의 불변 generation을 함께 식별한다.
  *
  * 최신 게시본의 해시가 `CurrentVersion` 과 다르거나, 표식이 저장한 위치에 없거나, 최신 조회가 실패하면 복원을
  * 보류한다 (`VaultRestoreHold`). 보류는 평문을 주지 않는다. 이 서비스는 게시본을 저장하지 않는다. 이전 조회의
@@ -16,14 +16,19 @@
  * 이 파일의 타입은 `Serialize` 를 구현하지 않는다. Kernel 이벤트와 Gateway 응답에 넣지 않는다.
  */
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 
 use crate::application::port::outbound::evidence_vault_port::{
-    EvidenceVaultRestorePort, EvidenceVaultStorePort, VaultPlaintext, VaultRecordBinding,
-    VaultRecordField, VaultRecordKey, VaultRecordLoadRequest, VaultRecordSaveRequest,
-    VaultRecordScope, VaultRestoreRequest, VaultRestoreResponse, VaultStoreError,
+    EvidenceVaultRestorePort, EvidenceVaultStorePort, VaultBindingCommitPolicy,
+    VaultBindingCommitRequest, VaultBindingCommitResult, VaultBindingFields, VaultBindingSnapshot,
+    VaultBindingState, VaultBindingToken, VaultBindingTransaction, VaultPlaintext,
+    VaultRecordField, VaultRecordKey, VaultRecordLoadRequest, VaultRecordScope,
+    VaultRestoreRequest, VaultRestoreResponse, VaultStoreError,
 };
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueRawFields, IssueSnapshotPort, IssueSnapshotReadRequest,
@@ -36,10 +41,7 @@ use crate::application::service::issue_publish_journal::IssueRestorableField;
 use crate::domain::issue_publish_intent::{
     IssuePublishVaultField, confirmed_version_matches_hash, confirmed_version_name,
 };
-use crate::domain::issue_work::{IssueFieldHash, IssueReference};
-
-/// 같은 프로세스의 여러 복원 서비스가 현재 판과 필드 레코드를 교차해서 쓰지 않는다.
-static RECONNECT_TRANSACTION: Mutex<()> = Mutex::new(());
+use crate::domain::issue_work::{IssueFieldHash, IssueProvider, IssueReference};
 
 const SPAN_BUNDLE_HEADER: &str = "akra.vault.spans.v1";
 /// 검토 화면에 보이는 표식 앞뒤 글의 최대 바이트 수이다.
@@ -72,7 +74,7 @@ pub enum VaultRestoreHold {
     MarkerDuplicated,
     /// 표식이 게시본에 없다.
     MarkerMissing,
-    /// 사용자가 검토한 뒤에 게시본이 다시 바뀌었다. 재연결을 확정하지 않았다.
+    /// 사용자가 검토한 뒤에 게시본이나 로컬 연결이 바뀌었다. 재연결을 확정하지 않았다.
     ChangedDuringReview,
     /// 승인한 연결이 저장한 표식이나 지금 게시본의 위치와 맞지 않는다. 재연결을 확정하지 않았다.
     MappingRejected,
@@ -94,9 +96,9 @@ impl fmt::Display for VaultRestoreHold {
             Self::MarkerMoved => formatter.write_str("a mask marker moved"),
             Self::MarkerDuplicated => formatter.write_str("a mask marker is duplicated"),
             Self::MarkerMissing => formatter.write_str("a mask marker is missing"),
-            Self::ChangedDuringReview => {
-                formatter.write_str("the published copy changed during the reconnect review")
-            }
+            Self::ChangedDuringReview => formatter.write_str(
+                "the published copy or local binding changed during the reconnect review",
+            ),
             Self::MappingRejected => {
                 formatter.write_str("the approved mapping does not match the published copy")
             }
@@ -135,6 +137,16 @@ pub struct VaultReconnectReview {
     pub reviewed_hash: IssueFieldHash,
     pub published: IssueRawFields,
     pub markers: Vec<VaultReconnectMarker>,
+    // 공개 검토 값을 수정해도 저장의 대상, 원본 판, CAS 기준을 바꿀 수 없다.
+    basis: VaultReconnectBasis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VaultReconnectBasis {
+    issue: IssueReference,
+    expected: VaultBindingToken,
+    source_version: String,
+    reviewed_hash: IssueFieldHash,
 }
 
 impl VaultReconnectReview {
@@ -169,9 +181,85 @@ pub struct VaultApprovedMapping {
 /// 사용자의 재연결 승인이다. 검토한 게시본의 해시와 승인한 연결 전체를 묶는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultReconnectApproval {
-    pub reviewed_hash: IssueFieldHash,
-    /// 승인하지 않은 표식은 새 판에 연결하지 않는다. 그 표식은 복원본에 표식으로 남는다.
-    pub mappings: Vec<VaultApprovedMapping>,
+    basis: VaultReconnectBasis,
+    // 승인하지 않은 표식은 새 판에 연결하지 않고 복원본에서도 표식으로 남긴다.
+    mappings: Vec<VaultApprovedMapping>,
+    operation_id: String,
+    approval_digest: [u8; 32],
+}
+
+impl VaultReconnectApproval {
+    /// 한 검토의 대상, 원본 연결, 게시본과 사용자가 고른 전체 mapping을 고정한다.
+    pub fn from_review(
+        review: &VaultReconnectReview,
+        mut mappings: Vec<VaultApprovedMapping>,
+    ) -> Result<Self, VaultRestoreHold> {
+        if review.issue != review.basis.issue
+            || review.reviewed_hash != review.basis.reviewed_hash
+            || review.published.field_hash() != review.basis.reviewed_hash
+        {
+            return Err(VaultRestoreHold::MappingRejected);
+        }
+        mappings.sort_by(|left, right| left.marker.cmp(&right.marker));
+        if mappings
+            .windows(2)
+            .any(|pair| pair[0].marker == pair[1].marker)
+            || mappings.iter().any(|mapping| {
+                !review.markers.iter().any(|marker| {
+                    marker.marker == mapping.marker && marker.candidates.contains(&mapping.place)
+                })
+            })
+        {
+            return Err(VaultRestoreHold::MappingRejected);
+        }
+        let (operation_id, approval_digest) = reconnect_identity(&review.basis, &mappings);
+        Ok(Self {
+            basis: review.basis.clone(),
+            mappings,
+            operation_id,
+            approval_digest,
+        })
+    }
+}
+
+fn reconnect_identity(
+    basis: &VaultReconnectBasis,
+    mappings: &[VaultApprovedMapping],
+) -> (String, [u8; 32]) {
+    fn append(digest: &mut Sha256, value: &str) {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(b"akra.vault.reconnect.approval.v1\n");
+    for value in [
+        match basis.issue.provider {
+            IssueProvider::GitHub => "github",
+            IssueProvider::Jira => "jira",
+        },
+        &basis.issue.server_id,
+        &basis.issue.repository_id,
+        &basis.issue.issue_id,
+        &basis.issue.project_scope.workspace_dir,
+        &basis.source_version,
+        &basis.reviewed_hash.sha256,
+    ] {
+        append(&mut digest, value);
+    }
+    digest.update(basis.reviewed_hash.version.to_be_bytes());
+    digest.update((mappings.len() as u64).to_be_bytes());
+    for mapping in mappings {
+        append(&mut digest, &mapping.marker);
+        digest.update([match mapping.place.field {
+            VaultRecordField::Title => 0,
+            VaultRecordField::Body => 1,
+        }]);
+        digest.update((mapping.place.position as u64).to_be_bytes());
+    }
+    // expected token은 저장 transaction이 별도로 동일 승인 식별에 포함한다.
+    let digest = digest.finalize();
+    (format!("reconnect:{digest:x}"), digest.into())
 }
 
 /// 가림 결과를 게시 요청의 필드별 묶음으로 만든다 (`IssueJournaledPublishRequest::restorable`).
@@ -382,9 +470,13 @@ impl EvidenceVaultRestoreService {
         let key = self.key(grant)?;
         let issue = grant.issue();
         let published = self.read_latest(issue)?;
-        let version = self.bound_version(issue, &key)?;
-        let markers = self
-            .bound_spans(issue, &version, &key)?
+        let mut binding = self.begin_binding(issue, &key)?;
+        let snapshot = binding.snapshot().clone();
+        let source_version = Self::bound_version(&snapshot)?;
+        let spans = Self::bound_spans(binding.as_mut(), &source_version)?;
+        self.key(grant)?;
+        let reviewed_hash = published.field_hash();
+        let markers = spans
             .into_iter()
             .map(|span| VaultReconnectMarker {
                 candidates: marker_places(&span.marker, &published),
@@ -397,13 +489,19 @@ impl EvidenceVaultRestoreService {
             .collect();
         Ok(VaultReconnectReview {
             issue: issue.clone(),
-            reviewed_hash: published.field_hash(),
+            reviewed_hash: reviewed_hash.clone(),
             published,
             markers,
+            basis: VaultReconnectBasis {
+                issue: issue.clone(),
+                expected: snapshot.token,
+                source_version,
+                reviewed_hash,
+            },
         })
     }
 
-    /// 사용자가 승인한 연결을 지금 게시본의 판에 확정한다. 게시본이 검토한 글과 다르면 확정하지 않는다.
+    /// 검토 당시 연결에서 사용자가 승인한 묶음만 원자적으로 확정한다.
     pub fn reconnect(
         &self,
         grant: &VaultUnlockGrant,
@@ -411,26 +509,21 @@ impl EvidenceVaultRestoreService {
     ) -> Result<(), VaultRestoreHold> {
         let key = self.key(grant)?;
         let issue = grant.issue();
+        if issue != &approval.basis.issue {
+            return Err(VaultRestoreHold::NotBound);
+        }
+        let mut binding = self.begin_binding(issue, &key)?;
+        self.key(grant)?;
+        // 저장 경계를 기다린 뒤 최신 게시본을 읽어 오래 기다린 조회를 재사용하지 않는다.
         let published = self.read_latest(issue)?;
-        if published.field_hash() != approval.reviewed_hash {
+        if published.field_hash() != approval.basis.reviewed_hash {
             return Err(VaultRestoreHold::ChangedDuringReview);
         }
-        let _transaction = RECONNECT_TRANSACTION.lock().map_err(|_| {
-            VaultRestoreHold::RecordUnavailable(VaultStoreError::Storage(
-                "the reconnect transaction lock is unavailable".to_string(),
-            ))
-        })?;
-        self.key(grant)?;
-        let bound_version = self.bound_version(issue, &key)?;
-        let new_version = confirmed_version_name(&approval.reviewed_hash);
-        if confirmed_version_matches_hash(&bound_version, &approval.reviewed_hash) {
-            // 이미 이 판에 연결했다 (예: 확정 뒤의 재시도). 살아 있는 레코드를 다시 쓰지 않는다.
-            return Ok(());
-        }
-        let bound_spans = self.bound_spans(issue, &bound_version, &key)?;
+        // 첫 commit이 일부 표식만 남겼더라도 같은 승인은 원래 불변 판에서 재구성한다.
+        let source_spans = Self::bound_spans(binding.as_mut(), &approval.basis.source_version)?;
         let mut approved: Vec<VaultRestorableSpan> = Vec::new();
         for mapping in &approval.mappings {
-            let span = bound_spans
+            let span = source_spans
                 .iter()
                 .find(|span| span.marker == mapping.marker)
                 .ok_or(VaultRestoreHold::MappingRejected)?;
@@ -445,33 +538,37 @@ impl EvidenceVaultRestoreService {
             });
         }
         for field in FIELDS {
-            // 승인한 자리에 표식이 있고 구간이 겹치지 않는지 본다.
             restored_field(field_text(&published, field), field, &approved)
                 .map_err(|_| VaultRestoreHold::MappingRejected)?;
         }
-        for field in FIELDS {
+        let field_bundle = |field| {
             let spans = approved
                 .iter()
                 .filter(|span| span.field == field)
                 .cloned()
                 .collect::<Vec<_>>();
-            self.save(
-                VaultRecordScope {
-                    issue: issue.clone(),
-                    field,
-                    binding: VaultRecordBinding::ConfirmedVersion(new_version.clone()),
-                },
-                &key,
-                seal_field_spans(&spans),
-            )?;
+            Some(seal_field_spans(&spans))
+        };
+        let fields = VaultBindingFields {
+            title: field_bundle(VaultRecordField::Title),
+            body: field_bundle(VaultRecordField::Body),
+        };
+        self.key(grant)?;
+        match binding
+            .commit(VaultBindingCommitRequest {
+                expected: approval.basis.expected.clone(),
+                operation_id: approval.operation_id.clone(),
+                base_version: confirmed_version_name(&approval.basis.reviewed_hash),
+                approval_digest: approval.approval_digest,
+                fields,
+                policy: VaultBindingCommitPolicy::ReplaceExpected,
+            })
+            .map_err(VaultRestoreHold::RecordUnavailable)?
+        {
+            VaultBindingCommitResult::Committed(_)
+            | VaultBindingCommitResult::AlreadyCommitted(_) => Ok(()),
+            VaultBindingCommitResult::Conflict => Err(VaultRestoreHold::ChangedDuringReview),
         }
-        // 이 저장이 연결을 새 판으로 바꾼다. 여기까지 오지 못하면 이전 연결이 남는다.
-        // shortcut: 이전 판의 레코드를 지우지 않는다, 저장 계약에 삭제가 생기면 지운다.
-        self.save(
-            VaultRecordScope::current_version(issue.clone()),
-            &key,
-            VaultPlaintext::new(new_version),
-        )
     }
 
     fn key(&self, grant: &VaultUnlockGrant) -> Result<VaultRecordKey, VaultRestoreHold> {
@@ -487,8 +584,9 @@ impl EvidenceVaultRestoreService {
         key: &VaultRecordKey,
     ) -> Result<VaultRestoreResponse, VaultRestoreHold> {
         let published = self.read_latest(issue)?;
-        let version = self.bound_version(issue, key)?;
-        let spans = self.bound_spans(issue, &version, key)?;
+        let mut binding = self.begin_binding(issue, key)?;
+        let version = Self::bound_version(binding.snapshot())?;
+        let spans = Self::bound_spans(binding.as_mut(), &version)?;
         if !confirmed_version_matches_hash(&version, &published.field_hash()) {
             return Err(changed_cause(&spans, &published));
         }
@@ -510,67 +608,49 @@ impl EvidenceVaultRestoreService {
             .ok_or(VaultRestoreHold::LatestReadFailed)
     }
 
-    fn bound_version(
+    fn begin_binding(
         &self,
         issue: &IssueReference,
         key: &VaultRecordKey,
-    ) -> Result<String, VaultRestoreHold> {
-        match self.load(VaultRecordScope::current_version(issue.clone()), key) {
-            Ok(version) => Ok(version.expose().to_string()),
-            Err(VaultStoreError::RecordNotFound) => Err(VaultRestoreHold::NotBound),
-            Err(error) => Err(VaultRestoreHold::RecordUnavailable(error)),
+    ) -> Result<Box<dyn VaultBindingTransaction + '_>, VaultRestoreHold> {
+        self.vault
+            .begin_binding(VaultRecordLoadRequest {
+                scope: VaultRecordScope::current_version(issue.clone()),
+                key: key.clone(),
+            })
+            .map_err(VaultRestoreHold::RecordUnavailable)
+    }
+
+    fn bound_version(snapshot: &VaultBindingSnapshot) -> Result<String, VaultRestoreHold> {
+        match &snapshot.state {
+            VaultBindingState::Readable { version } => Ok(version.clone()),
+            VaultBindingState::Missing => Err(VaultRestoreHold::NotBound),
+            VaultBindingState::Unreadable { error } => {
+                Err(VaultRestoreHold::RecordUnavailable(error.clone()))
+            }
         }
     }
 
-    /// 판에 묶은 두 필드의 가림 구간이다. 레코드가 없는 필드는 구간이 없다.
+    /// 같은 transaction이 고정한 이슈와 키로 판의 필드들을 읽는다.
     fn bound_spans(
-        &self,
-        issue: &IssueReference,
+        binding: &mut dyn VaultBindingTransaction,
         version: &str,
-        key: &VaultRecordKey,
     ) -> Result<Vec<VaultRestorableSpan>, VaultRestoreHold> {
+        let fields = binding
+            .load_version_fields(version)
+            .map_err(VaultRestoreHold::RecordUnavailable)?;
         let mut spans = Vec::new();
-        for field in FIELDS {
-            let scope = VaultRecordScope {
-                issue: issue.clone(),
-                field,
-                binding: VaultRecordBinding::ConfirmedVersion(version.to_string()),
-            };
-            match self.load(scope, key) {
-                Ok(bundle) => spans.extend(open_field_spans(field, &bundle).ok_or(
+        for (field, bundle) in [
+            (VaultRecordField::Title, fields.title),
+            (VaultRecordField::Body, fields.body),
+        ] {
+            if let Some(bundle) = bundle {
+                spans.extend(open_field_spans(field, &bundle).ok_or(
                     VaultRestoreHold::RecordUnavailable(VaultStoreError::CorruptRecord),
-                )?),
-                Err(VaultStoreError::RecordNotFound) => {}
-                Err(error) => return Err(VaultRestoreHold::RecordUnavailable(error)),
+                )?);
             }
         }
         Ok(spans)
-    }
-
-    fn load(
-        &self,
-        scope: VaultRecordScope,
-        key: &VaultRecordKey,
-    ) -> Result<VaultPlaintext, VaultStoreError> {
-        self.vault.load(VaultRecordLoadRequest {
-            scope,
-            key: key.clone(),
-        })
-    }
-
-    fn save(
-        &self,
-        scope: VaultRecordScope,
-        key: &VaultRecordKey,
-        plaintext: VaultPlaintext,
-    ) -> Result<(), VaultRestoreHold> {
-        self.vault
-            .save(VaultRecordSaveRequest {
-                scope,
-                key: key.clone(),
-                plaintext,
-            })
-            .map_err(VaultRestoreHold::RecordUnavailable)
     }
 }
 
@@ -590,13 +670,17 @@ impl EvidenceVaultRestorePort for EvidenceVaultRestoreService {
 
 #[cfg(test)]
 mod tests {
+    mod binding_transactions;
+
     use std::collections::HashMap;
 
     use serde::Serialize;
 
     use super::*;
     use crate::adapter::outbound::vault_key_store::FakeVaultKeyStoreAdapter;
-    use crate::application::port::outbound::evidence_vault_port::VaultKey;
+    use crate::application::port::outbound::evidence_vault_port::{
+        VaultKey, VaultRecordBinding, VaultRecordSaveRequest,
+    };
     use crate::application::port::outbound::issue_snapshot_port::{
         IssueSnapshotResolveRequest, IssueSnapshotResponse,
     };
@@ -659,10 +743,48 @@ mod tests {
         records: Mutex<HashMap<VaultRecordScope, VaultPlaintext>>,
         /// 이 수만큼 저장한 뒤의 저장은 실패한다.
         saves_left: Mutex<Option<usize>>,
+        writes: Mutex<usize>,
+        fail_after_pointer: Mutex<bool>,
         after_current_load: Mutex<Option<ReadHook>>,
     }
 
     impl EvidenceVaultStorePort for FakeVault {
+        fn begin_binding(
+            &self,
+            request: VaultRecordLoadRequest,
+        ) -> Result<Box<dyn VaultBindingTransaction + '_>, VaultStoreError> {
+            use crate::test_utils::vault_binding::{TestBindingHooks, begin_test_binding};
+            let transaction = begin_test_binding(
+                self.records.lock().unwrap(),
+                request,
+                TestBindingHooks {
+                    before_write: Some(Box::new(|_| {
+                        *self.writes.lock().unwrap() += 1;
+                        if let Some(left) = self.saves_left.lock().unwrap().as_mut() {
+                            if *left == 0 {
+                                return Err(VaultStoreError::Storage(
+                                    "the disk is full".to_string(),
+                                ));
+                            }
+                            *left -= 1;
+                        }
+                        Ok(())
+                    })),
+                    after_pointer: Some(Box::new(|| {
+                        if std::mem::take(&mut *self.fail_after_pointer.lock().unwrap()) {
+                            Err(VaultStoreError::WriteOutcomeUnknown)
+                        } else {
+                            Ok(())
+                        }
+                    })),
+                },
+            )?;
+            if let Some(hook) = self.after_current_load.lock().unwrap().take() {
+                hook();
+            }
+            Ok(transaction)
+        }
+
         fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
             if let Some(left) = self.saves_left.lock().unwrap().as_mut() {
                 if *left == 0 {
@@ -886,14 +1008,17 @@ mod tests {
                 fixture.service.review_reconnect(&grant),
                 Err(VaultRestoreHold::NotBound)
             );
-            let approval = VaultReconnectApproval {
-                reviewed_hash: IssueFieldHash::of_fields(MASKED_TITLE, MASKED_BODY),
-                mappings: vec![mapping(
+            let original_grant = fixture.grant(&issue());
+            let review = fixture.service.review_reconnect(&original_grant).unwrap();
+            let approval = VaultReconnectApproval::from_review(
+                &review,
+                vec![mapping(
                     VaultRecordField::Title,
                     MASKED_TITLE,
                     "[[akra-mask:1]]",
                 )],
-            };
+            )
+            .unwrap();
             assert_eq!(
                 fixture.service.reconnect(&grant, &approval),
                 Err(VaultRestoreHold::NotBound)
@@ -1058,18 +1183,21 @@ mod tests {
         fixture.publish(&issue(), MASKED_TITLE, &edited);
         let first_grant = fixture.grant(&issue());
         let second_grant = fixture.grant(&issue());
-        let first_approval = VaultReconnectApproval {
-            reviewed_hash: IssueFieldHash::of_fields(MASKED_TITLE, &edited),
-            mappings: vec![mapping(
+        let review = fixture.service.review_reconnect(&first_grant).unwrap();
+        let first_approval = VaultReconnectApproval::from_review(
+            &review,
+            vec![mapping(
                 VaultRecordField::Title,
                 MASKED_TITLE,
                 "[[akra-mask:1]]",
             )],
-        };
-        let second_approval = VaultReconnectApproval {
-            reviewed_hash: first_approval.reviewed_hash.clone(),
-            mappings: vec![mapping(VaultRecordField::Body, &edited, "[[akra-mask:2]]")],
-        };
+        )
+        .unwrap();
+        let second_approval = VaultReconnectApproval::from_review(
+            &review,
+            vec![mapping(VaultRecordField::Body, &edited, "[[akra-mask:2]]")],
+        )
+        .unwrap();
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         *fixture.vault.after_current_load.lock().unwrap() = Some(Box::new(move || {
@@ -1101,7 +1229,10 @@ mod tests {
         );
         release_tx.send(()).unwrap();
         first.join().unwrap().unwrap();
-        second.join().unwrap().unwrap();
+        assert_eq!(
+            second.join().unwrap(),
+            Err(VaultRestoreHold::ChangedDuringReview)
+        );
         assert!(
             waited_for_first,
             "a second reconnect committed while the first was paused"
@@ -1109,6 +1240,51 @@ mod tests {
         let restored = fixture.restore().unwrap();
         assert_eq!(restored.title.expose(), TITLE);
         assert_eq!(restored.body.expose(), edited);
+    }
+
+    #[test]
+    fn a_reconnect_rejects_different_mappings_from_the_same_review() {
+        let fixture = Fixture::published();
+        let grant = fixture.grant(&issue());
+        let edited_body = format!("changed: {MASKED_BODY}");
+        fixture.publish(&issue(), MASKED_TITLE, &edited_body);
+        let review = fixture.service.review_reconnect(&grant).unwrap();
+        let first_approval = VaultReconnectApproval::from_review(
+            &review,
+            vec![mapping(
+                VaultRecordField::Title,
+                MASKED_TITLE,
+                "[[akra-mask:1]]",
+            )],
+        )
+        .unwrap();
+        let conflicting_approval = VaultReconnectApproval::from_review(
+            &review,
+            vec![mapping(
+                VaultRecordField::Body,
+                &edited_body,
+                "[[akra-mask:2]]",
+            )],
+        )
+        .unwrap();
+
+        fixture.service.reconnect(&grant, &first_approval).unwrap();
+        let committed_records = fixture.vault.records.lock().unwrap().clone();
+        let committed_writes = *fixture.vault.writes.lock().unwrap();
+        let restored = fixture.restore().unwrap();
+        assert_eq!(restored.title.expose(), TITLE);
+        assert_eq!(restored.body.expose(), edited_body);
+
+        // 같은 승인 재시도는 성공해도 레코드를 다시 쓰지 않는다.
+        fixture.service.reconnect(&grant, &first_approval).unwrap();
+        assert_eq!(*fixture.vault.records.lock().unwrap(), committed_records);
+
+        // 같은 공유본 해시라도 다른 선택은 앞서 확정된 승인의 재시도가 아니다.
+        let conflict = fixture.service.reconnect(&grant, &conflicting_approval);
+        assert_eq!(*fixture.vault.records.lock().unwrap(), committed_records);
+        assert_eq!(fixture.restore().unwrap(), restored);
+        assert_eq!(conflict, Err(VaultRestoreHold::ChangedDuringReview));
+        assert_eq!(*fixture.vault.writes.lock().unwrap(), committed_writes);
     }
 
     #[test]
@@ -1141,22 +1317,23 @@ mod tests {
         assert!(!format!("{review:?}").contains("고친 글"));
 
         // 사용자는 제목의 표식과 본문의 첫 경로 표식만 승인했다.
-        let approval = VaultReconnectApproval {
-            reviewed_hash: review.reviewed_hash.clone(),
-            mappings: vec![
+        let approval = VaultReconnectApproval::from_review(
+            &review,
+            vec![
                 mapping(VaultRecordField::Title, MASKED_TITLE, "[[akra-mask:1]]"),
                 VaultApprovedMapping {
                     marker: "[[akra-mask:3]]".to_string(),
                     place: path_marker.candidates[0].clone(),
                 },
             ],
-        };
+        )
+        .unwrap();
         fixture.service.reconnect(&grant, &approval).unwrap();
 
-        assert_eq!(
-            fixture.bound_version(),
-            version_of(MASKED_TITLE, edited_body)
-        );
+        assert!(confirmed_version_matches_hash(
+            &fixture.bound_version(),
+            &review.reviewed_hash
+        ));
         let restored = fixture.restore().unwrap();
         assert_eq!(restored.title.expose(), TITLE);
         assert_eq!(
@@ -1176,10 +1353,7 @@ mod tests {
         fixture.publish(&issue(), MASKED_TITLE, &edited_body);
         let review = fixture.service.review_reconnect(&grant).unwrap();
         let bound_before = fixture.bound_version();
-        let approve = |mappings| VaultReconnectApproval {
-            reviewed_hash: review.reviewed_hash.clone(),
-            mappings,
-        };
+        let approve = |mappings| VaultReconnectApproval::from_review(&review, mappings);
         let title_mapping = || mapping(VaultRecordField::Title, MASKED_TITLE, "[[akra-mask:1]]");
 
         let rejected = [
@@ -1200,10 +1374,7 @@ mod tests {
             vec![title_mapping(), title_mapping()],
         ];
         for mappings in rejected {
-            assert_eq!(
-                fixture.service.reconnect(&grant, &approve(mappings)),
-                Err(VaultRestoreHold::MappingRejected)
-            );
+            assert_eq!(approve(mappings), Err(VaultRestoreHold::MappingRejected));
         }
 
         // 저장이 `CurrentVersion` 전에 멈췄다.
@@ -1211,7 +1382,7 @@ mod tests {
         assert!(matches!(
             fixture
                 .service
-                .reconnect(&grant, &approve(vec![title_mapping()])),
+                .reconnect(&grant, &approve(vec![title_mapping()]).unwrap()),
             Err(VaultRestoreHold::RecordUnavailable(_))
         ));
         *fixture.vault.saves_left.lock().unwrap() = None;
@@ -1226,7 +1397,7 @@ mod tests {
         assert_eq!(
             fixture
                 .service
-                .reconnect(&grant, &approve(vec![title_mapping()])),
+                .reconnect(&grant, &approve(vec![title_mapping()]).unwrap()),
             Err(VaultRestoreHold::ChangedDuringReview)
         );
         assert_eq!(fixture.bound_version(), bound_before);

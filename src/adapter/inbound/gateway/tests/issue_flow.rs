@@ -667,16 +667,19 @@ async fn an_external_edit_and_a_copied_marker_hold_the_restore_until_the_user_re
 
     // 검토한 뒤에 게시본이 다시 바뀌면 재연결을 확정하지 않는다.
     let stale = process.restore.review_reconnect(&grant).unwrap();
-    let approval = |review: &VaultReconnectReview| VaultReconnectApproval {
-        reviewed_hash: review.reviewed_hash.clone(),
-        mappings: review
-            .markers
-            .iter()
-            .map(|marker| VaultApprovedMapping {
-                marker: marker.marker.clone(),
-                place: marker.candidates[0].clone(),
-            })
-            .collect(),
+    let approval = |review: &VaultReconnectReview| {
+        VaultReconnectApproval::from_review(
+            review,
+            review
+                .markers
+                .iter()
+                .map(|marker| VaultApprovedMapping {
+                    marker: marker.marker.clone(),
+                    place: marker.candidates[0].clone(),
+                })
+                .collect(),
+        )
+        .unwrap()
     };
     world
         .github
@@ -696,10 +699,30 @@ async fn an_external_edit_and_a_copied_marker_hold_the_restore_until_the_user_re
     assert_eq!(review.markers.len(), 1);
     assert_eq!(review.markers[0].candidates.len(), 1);
     assert!(!format!("{review:?}").contains("Edited by someone else"));
-    process
-        .restore
-        .reconnect(&grant, &approval(&review))
-        .unwrap();
+    let approved = approval(&review);
+    process.restore.reconnect(&grant, &approved).unwrap();
+    let vault_root = world.root.join("vault");
+    let record_snapshot = || {
+        let mut paths = Vec::new();
+        collect_files(&vault_root, &mut paths);
+        paths.sort();
+        paths
+            .into_iter()
+            .map(|path| {
+                let body = fs::read(&path).unwrap();
+                (path, body)
+            })
+            .collect::<Vec<_>>()
+    };
+    let committed_records = record_snapshot();
+    process.restore.reconnect(&grant, &approved).unwrap();
+    assert_eq!(record_snapshot(), committed_records);
+    let conflicting = VaultReconnectApproval::from_review(&review, Vec::new()).unwrap();
+    assert_eq!(
+        process.restore.reconnect(&grant, &conflicting),
+        Err(VaultRestoreHold::ChangedDuringReview)
+    );
+    assert_eq!(record_snapshot(), committed_records);
     let restored = process.restore.restore_for_grant(&grant).unwrap();
     assert_eq!(
         restored.body.expose(),
@@ -717,9 +740,15 @@ async fn an_external_edit_and_a_copied_marker_hold_the_restore_until_the_user_re
         Err(VaultRestoreHold::NotBound)
     );
 
-    // 재시작 뒤에도 새 연결로 복원한다.
+    // 서비스를 같은 폴더 위에 다시 만들고 새 grant로 같은 승인을 확인한다.
     drop(process);
     let mut process = world.start().await;
+    let renewed_grant = process.unlocked(7);
+    process
+        .restore
+        .reconnect(&renewed_grant, &approved)
+        .unwrap();
+    assert_eq!(record_snapshot(), committed_records);
     assert_eq!(
         process.restore(7).unwrap().body.expose(),
         restored.body.expose()
