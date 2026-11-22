@@ -45,15 +45,35 @@ pub(super) fn append(
         });
     }
     for kind in kinds {
-        let event = IssueWorkEvent::new(
-            work.order.issue.clone(),
-            work.order.work_order_id.clone(),
-            kind,
-            revision,
-        );
-        connection.execute("INSERT INTO issue_work_events (workspace_dir,event_id,event,revision,acknowledged) VALUES (?1,?2,?3,?4,0)",
-            params![workspace, event.event_id, serde_json::to_string(&event)?, super::sql_revision(revision)?])?;
+        append_fact(connection, workspace, work, kind, revision)?;
     }
+    Ok(())
+}
+
+/// 호출자가 work/관찰 저장과 같은 트랜잭션 안에서 확정한 사실을 기록한다.
+pub(super) fn append_fact(
+    connection: &Connection,
+    workspace: &str,
+    work: &IssueWorkCheckpoint,
+    kind: IssueWorkEventKind,
+    revision: u64,
+) -> Result<()> {
+    let event = IssueWorkEvent::new(
+        work.order.issue.clone(),
+        work.order.work_order_id.clone(),
+        kind,
+        revision,
+    );
+    connection.execute(
+        "INSERT INTO issue_work_events
+         (workspace_dir,event_id,event,revision,acknowledged) VALUES (?1,?2,?3,?4,0)",
+        params![
+            workspace,
+            event.event_id,
+            serde_json::to_string(&event)?,
+            super::sql_revision(revision)?
+        ],
+    )?;
     Ok(())
 }
 

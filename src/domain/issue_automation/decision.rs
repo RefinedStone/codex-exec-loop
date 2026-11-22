@@ -114,10 +114,11 @@ pub enum IssueDecisionKind {
     IssueChanged,
     FailureRecovery,
     AgentQuestion,
+    CloseApproval,
 }
 
 impl IssueDecisionKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::StartApproval,
         Self::SpecConfirmation,
         Self::PlanApproval,
@@ -125,6 +126,7 @@ impl IssueDecisionKind {
         Self::IssueChanged,
         Self::FailureRecovery,
         Self::AgentQuestion,
+        Self::CloseApproval,
     ];
 }
 

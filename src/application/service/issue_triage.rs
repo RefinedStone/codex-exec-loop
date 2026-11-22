@@ -108,6 +108,34 @@ impl IssueTriageService {
             .map_err(|_| anyhow!("the current execution attempt policy is unavailable"))
     }
 
+    /// Freeze only the close policy represented by the already approved policy revision.
+    pub(crate) fn provider_link_for_policy(&self, expected_version: &str) -> Result<bool> {
+        let context = self
+            .context()
+            .ok_or_else(|| anyhow!("the current issue policy could not be assessed"))?;
+        if context.automation.version != expected_version {
+            return Err(anyhow!("the approved issue close policy changed"));
+        }
+        Ok(context.automation.policy.close.when
+            == crate::domain::issue_automation::policy::IssueAutomationCloseWhen::ProviderLink)
+    }
+
+    /// Close는 실행 전 triage의 disabled gate와 별개인 통합 후 사람 승인이다.
+    /// 현재 사용자 동의와 런타임 상한이 같은 정책 판에 남아 있어야 요청을 만든다.
+    pub(crate) fn integration_close_allowed(&self, expected_policy_version: &str) -> Result<bool> {
+        use crate::domain::issue_automation::IssueAutomationAutonomy;
+        use crate::domain::issue_automation::policy::IssueAutomationCloseWhen;
+        let (resolved, _) = super::issue_autonomy::resolve_runtime_policy(
+            &self.workspace_dir,
+            self.store.as_ref(),
+            &self.automation_policy,
+        )?;
+        Ok(resolved.version == expected_policy_version
+            && resolved.policy.binding.github.mode >= IssueAutomationAutonomy::Propose
+            && resolved.policy.feedback.transition
+            && resolved.policy.close.when == IssueAutomationCloseWhen::Integration)
+    }
+
     /// 결정 답을 적용하기 직전에 현재 관찰과 현재 정책으로 다시 판정한다.
     /// 저장된 gate revision만 믿지 않으며, 정책을 읽지 못하면 기존 판으로 대신하지 않는다.
     pub(crate) fn assess_current(

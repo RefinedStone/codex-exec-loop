@@ -110,7 +110,7 @@ A code validator is an executable that the user approved. `code_validators` sele
 
 ## Issue automation policy file
 
-Issue automation policy lives in a separate `issue-automation.toml`. It declares collection selection, autonomy limits, risk rules, gates, budgets, and external feedback permissions. Collection, deterministic triage, and the propose coordinator consume the merged policy; work still requires current decisions and stage-specific permits. The IA4-1 implementation also enforces `budget.max_attempts` at execution admission. External feedback writing remains the #2552 follow-up. See [plan 28](../plan/28-akra-issue-automation.md#ia4-조각-상태) for the implementation PR and its unmerged parent chain.
+Issue automation policy lives in a separate `issue-automation.toml`. It declares collection selection, autonomy limits, risk rules, gates, budgets, and external feedback permissions. Collection, deterministic triage, and the propose coordinator consume the merged policy; work still requires current decisions and stage-specific permits. The IA4-1 implementation also enforces `budget.max_attempts` at execution admission. GitHub status feedback and separately approved closing use the durable feedback journal. See [current behavior](current-product.md#issue-integration-and-external-closure) and [plan 28](../plan/28-akra-issue-automation.md#ia4-조각-상태).
 
 | 범위 | 경로 |
 | --- | --- |

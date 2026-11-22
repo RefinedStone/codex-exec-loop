@@ -223,7 +223,9 @@ impl IssueDecisionService {
             let is_work_recovery = stored.request.definition().basis.work_order_id.is_some()
                 && stored.request.definition().kind
                     == crate::domain::issue_automation::decision::IssueDecisionKind::FailureRecovery;
-            if is_worker_question || is_work_recovery {
+            let is_close_approval = stored.request.definition().kind
+                == crate::domain::issue_automation::decision::IssueDecisionKind::CloseApproval;
+            if is_worker_question || is_work_recovery || is_close_approval {
                 gate_action =
                     crate::domain::issue_automation::policy::IssueAutomationGateAction::Human;
             }
@@ -300,7 +302,9 @@ impl IssueDecisionService {
         if &work.order.work_order_id != id
             || !matches!(
                 definition.kind,
-                IssueDecisionKind::AgentQuestion | IssueDecisionKind::FailureRecovery
+                IssueDecisionKind::AgentQuestion
+                    | IssueDecisionKind::FailureRecovery
+                    | IssueDecisionKind::CloseApproval
             )
         {
             bail!("the decision does not belong to a supported work context");
@@ -341,6 +345,11 @@ impl IssueDecisionService {
                 record.progress.terminal.as_ref().is_some_and(|terminal| {
                     definition.evidence == [format!("terminal:{}", terminal.record_id)]
                 })
+            }
+            IssueDecisionKind::CloseApproval => {
+                crate::domain::issue_automation::closure::close_work_context_matches(
+                    definition, &work, &record,
+                )
             }
             _ => false,
         })

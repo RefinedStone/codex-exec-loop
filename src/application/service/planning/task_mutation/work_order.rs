@@ -9,9 +9,10 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityMutationAudit, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkOrderLinkResult, PlanningWorkOrderRecord, PlanningWorkOrderRegistration,
-    PlanningWorkOrderRegistrationResult, PlanningWorkOrderRepositoryPort, validate_work_order_id,
-    validate_work_order_identity, validate_work_order_task_id,
+    PlanningWorkLinkReference, PlanningWorkOrderLinkResult, PlanningWorkOrderRecord,
+    PlanningWorkOrderRegistration, PlanningWorkOrderRegistrationResult,
+    PlanningWorkOrderRepositoryPort, validate_work_order_id, validate_work_order_identity,
+    validate_work_order_task_id,
 };
 use crate::domain::planning::{OriginSessionKind, PriorityQueueService, TaskMutationProvenance};
 
@@ -26,6 +27,7 @@ pub struct PlanningWorkOrderRequest {
     pub workspace_directory: String,
     pub work_order_id: String,
     pub origin: String,
+    pub link_reference: Option<PlanningWorkLinkReference>,
     pub input: PlanningTaskCreateInput,
 }
 
@@ -73,6 +75,9 @@ impl PlanningWorkOrderService {
         generated_at: DateTime<Utc>,
     ) -> Result<PlanningWorkOrderAdmission> {
         validate_work_order_identity(&request.work_order_id, &request.origin)?;
+        if let Some(reference) = &request.link_reference {
+            reference.validate()?;
+        }
         let provenance = TaskMutationProvenance::new(OriginSessionKind::System);
         let mut revision_conflicts = 0;
         let mut collisions = 0;
@@ -132,6 +137,7 @@ impl PlanningWorkOrderService {
                 PlanningWorkOrderRegistration {
                     work_order_id: &request.work_order_id,
                     origin: &request.origin,
+                    link_reference: request.link_reference.as_ref(),
                     initial_task_id: &task_id,
                     observed_planning_revision: context.task_planning_revision,
                     task_authority: &candidate,
@@ -235,6 +241,9 @@ fn admission(
         bail!("work order repository returned a different work order identity");
     }
     work_order.ensure_origin(&request.origin)?;
+    if work_order.link_reference != request.link_reference {
+        bail!("work order publication reference changed");
+    }
     Ok(PlanningWorkOrderAdmission {
         task_id: work_order.initial_task_id()?.to_string(),
         work_order,

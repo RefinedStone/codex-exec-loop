@@ -323,6 +323,8 @@ fn issue_detail_feedback_projects_only_persisted_metadata_and_keeps_legacy_compa
         publication_attempts: 2,
         comment_id: Some("IC_confirmed".into()),
         reason: Some(IssueFeedbackDetailReason::FeedbackUnconfirmed),
+        integration: None,
+        external_state: IssueExternalState::Unknown,
     });
     let pending =
         serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
@@ -332,7 +334,8 @@ fn issue_detail_feedback_projects_only_persisted_metadata_and_keeps_legacy_compa
             "revision": 9,
             "publication_attempts": 2,
             "comment_id": "IC_confirmed",
-            "reason": "feedback_unconfirmed"
+            "reason": "feedback_unconfirmed",
+            "external_state": "unknown"
         })
     );
     assert_wire_matches_spec(&pending);
@@ -344,7 +347,7 @@ fn issue_detail_feedback_projects_only_persisted_metadata_and_keeps_legacy_compa
         serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
     assert_eq!(
         confirmed["feedback"],
-        json!({"revision": 10, "publication_attempts": 2, "comment_id": "IC_confirmed"})
+        json!({"revision": 10, "publication_attempts": 2, "comment_id": "IC_confirmed", "external_state": "unknown"})
     );
     assert_wire_matches_spec(&confirmed);
 
@@ -379,4 +382,49 @@ fn issue_feedback_detail_rejects_raw_provider_fields_and_open_ended_reasons() {
     let mut invalid = value;
     invalid["reason"] = json!("raw-provider-error-canary");
     assert!(serde_json::from_value::<IssueFeedbackDetailState>(invalid).is_err());
+}
+
+#[test]
+fn issue_detail_keeps_integration_independent_from_open_closed_and_unknown_provider_state() {
+    let integration = IssueExecutionIntegration {
+        record_id: "integration-confirmed".into(),
+        source_sha: "a".repeat(40),
+        integration_sha: "b".repeat(40),
+        pull_request_url: Some("https://github.com/owner/repo/pull/10".into()),
+    };
+    for (external_state, expected) in [
+        (IssueExternalState::Open, "open"),
+        (IssueExternalState::Closed, "closed"),
+        (IssueExternalState::Unknown, "unknown"),
+    ] {
+        let feedback = IssueFeedbackDetail {
+            revision: 0,
+            publication_attempts: 0,
+            comment_id: None,
+            reason: None,
+            integration: Some(integration.clone()),
+            external_state,
+        };
+        let state = IssueFeedbackDetailState::from(&feedback);
+        let wire = serde_json::to_value(&state).unwrap();
+        assert_eq!(wire["external_state"], expected);
+        assert_eq!(
+            wire["integration"]["integration_sha"],
+            integration.integration_sha
+        );
+        assert_eq!(wire["integration"]["record_id"], integration.record_id);
+        assert!(wire.get("comment_id").is_none());
+        assert_eq!(
+            serde_json::from_value::<IssueFeedbackDetailState>(wire).unwrap(),
+            state
+        );
+    }
+}
+
+#[test]
+fn legacy_feedback_detail_defaults_external_state_to_unknown() {
+    let legacy = json!({"revision": 1, "publication_attempts": 0});
+    let state = serde_json::from_value::<IssueFeedbackDetailState>(legacy).unwrap();
+    assert_eq!(state.external_state, IssueExternalStateRecord::Unknown);
+    assert!(state.integration.is_none());
 }

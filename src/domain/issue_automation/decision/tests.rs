@@ -404,7 +404,7 @@ fn notes_and_answer_metadata_are_bounded_without_leaking_values_in_errors() {
 
 #[test]
 fn kind_timeout_and_state_deserialization_use_closed_vocabularies() {
-    assert_eq!(IssueDecisionKind::ALL.len(), 7);
+    assert_eq!(IssueDecisionKind::ALL.len(), 8);
     assert!(serde_json::from_str::<IssueDecisionKind>("\"execute_shell\"").is_err());
     assert!(serde_json::from_str::<IssueDecisionTimeout>("\"execute\"").is_err());
     assert!(serde_json::from_str::<IssueDecisionState>("\"running\"").is_err());

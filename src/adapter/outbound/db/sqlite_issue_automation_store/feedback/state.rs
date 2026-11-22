@@ -86,6 +86,16 @@ fn validate_owned_receipts(connection: &Connection, state: &IssueFeedbackState) 
             bail!("the feedback label does not match its receipt");
         }
     }
+    if let Some(proof) = &state.close_proof {
+        let record = intents::read(connection, &proof.intent_id)?
+            .ok_or_else(|| anyhow!("the issue close has no confirmed intent"))?;
+        if record.state != IssueFeedbackIntentState::Confirmed
+            || record.receipt.as_ref() != Some(proof)
+            || !matches!(&proof.evidence, IssueFeedbackEvidence::Closed { .. })
+        {
+            bail!("the issue close does not match its receipt");
+        }
+    }
     Ok(())
 }
 
@@ -191,13 +201,34 @@ pub(super) fn snapshot_in_transaction(
         .map(|work| execution::read(connection, workspace, &work.order.work_order_id))
         .transpose()?
         .flatten();
+    let authorization_epoch = intervention::authorization_epoch(connection, workspace, issue)?;
+    let close_approval = match (&work, &execution, &item.triage) {
+        (Some(work), Some(execution), Some(triage)) if execution.progress.integration.is_some() => {
+            use crate::domain::issue_automation::{
+                closure::close_decision_id, decision::IssueDecisionBasis,
+                policy::IssueAutomationGate,
+            };
+            let mut basis = IssueDecisionBasis::from_assessment(
+                &triage.assessment,
+                IssueAutomationGate::Close,
+                Some(work.order.work_order_id.clone()),
+            )?;
+            basis.authorization_epoch = authorization_epoch;
+            match close_decision_id(work, execution, &basis) {
+                Ok(id) => super::super::decision::read(connection, workspace, &id)?,
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    };
     Ok(Some(IssueFeedbackSnapshot {
         collection,
         item,
         work,
         execution,
         autonomy: autonomy::read(connection, workspace)?,
-        authorization_epoch: intervention::authorization_epoch(connection, workspace, issue)?,
+        authorization_epoch,
+        close_approval,
         pending_intervention: intervention::has_pending(connection, workspace, issue)?,
         state,
         first_grant_entered: grant_entered(connection, issue)?,
@@ -324,6 +355,13 @@ pub(super) fn permits_new_write(
                 && owner.content_sha256 != *content_sha256
                 && current.state.desired.as_ref().is_some_and(|desired|
                     desired.comment_body_sha256 == *content_sha256)
+        }
+        IssueFeedbackOperation::CloseIssue { integration_record_id, integration_sha, decision_id, .. } => {
+            current.state.close_proof.is_none()
+                && observed.remote_state == crate::domain::issue_automation::source::IssueRemoteState::Open
+                && current.authorized_close().is_some_and(|approval| approval.request.id().as_str() == decision_id)
+                && current.execution.as_ref().and_then(|execution| execution.progress.integration.as_ref())
+                    .is_some_and(|integration| integration.record_id == *integration_record_id && integration.integration_sha == *integration_sha)
         }
         IssueFeedbackOperation::AddLabel { .. } => {
             !current.first_grant_entered && current.state.label_proof.is_none()

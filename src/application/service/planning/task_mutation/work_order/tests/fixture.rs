@@ -290,6 +290,7 @@ impl PlanningWorkOrderRepositoryPort for FixtureRepository {
                 planning_revision, ..
             } => {
                 let work_order = PlanningWorkOrderRecord {
+                    link_reference: registration.link_reference.cloned(),
                     work_order_id: registration.work_order_id.to_string(),
                     origin: registration.origin.to_string(),
                     task_ids: vec![registration.initial_task_id.to_string()],

@@ -168,6 +168,7 @@ fn register_document(
     SqlitePlanningAuthorityAdapter::new().register_work_order(
         workspace,
         PlanningWorkOrderRegistration {
+            link_reference: None,
             work_order_id: order_id,
             origin,
             initial_task_id: task_id,

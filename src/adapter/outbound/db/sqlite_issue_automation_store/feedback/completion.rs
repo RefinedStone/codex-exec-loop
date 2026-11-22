@@ -19,6 +19,20 @@ fn next_record(
 ) -> Result<IssueFeedbackIntentRecord> {
     let mut next = previous.clone();
     match completion {
+        IssueFeedbackCompletion::CloseAcknowledged => {
+            if !matches!(
+                &previous.intent.operation,
+                IssueFeedbackOperation::CloseIssue { .. }
+            ) || !matches!(
+                previous.state,
+                IssueFeedbackIntentState::Sent | IssueFeedbackIntentState::NeedsConfirmation
+            ) || previous.contradictory_response
+            {
+                bail!("only an uncontradicted sent close can acknowledge its response");
+            }
+            next.state = IssueFeedbackIntentState::NeedsConfirmation;
+            next.closure_acknowledged = true;
+        }
         IssueFeedbackCompletion::Confirmed(receipt) => {
             let receipt = receipt.as_ref();
             receipt
@@ -158,6 +172,12 @@ fn apply_receipt(
                 bail!("the feedback label ownership changed before confirmation");
             }
             state.label_removal_confirmed = true;
+        }
+        (IssueFeedbackOperation::CloseIssue { .. }, IssueFeedbackEvidence::Closed { .. }) => {
+            if state.close_proof.is_some() {
+                bail!("the issue already has a confirmed close intent");
+            }
+            state.close_proof = Some(receipt.clone());
         }
         _ => bail!("the feedback completion does not match its operation"),
     }

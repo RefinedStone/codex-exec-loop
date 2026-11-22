@@ -11,6 +11,7 @@ use crate::domain::issue_automation::feedback::{
 use crate::domain::issue_automation::source::IssueSourceLabel;
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider};
 
+mod closure;
 mod comments;
 mod labels;
 

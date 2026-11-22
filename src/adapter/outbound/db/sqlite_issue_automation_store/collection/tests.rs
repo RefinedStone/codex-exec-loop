@@ -1,3 +1,5 @@
+mod external_closure;
+
 use super::super::tests::{
     Fixture, binding_for, discovered, reference, save_changed, snapshot, transition_and_save,
 };

@@ -43,6 +43,7 @@ fn tasks(values: Vec<TaskDefinition>) -> TaskAuthorityDocument {
 
 fn order(ids: &[&str]) -> PlanningWorkOrderRecord {
     PlanningWorkOrderRecord {
+        link_reference: None,
         work_order_id: "issue-work-1".into(),
         origin: "issue_automation".into(),
         task_ids: ids.iter().map(|id| (*id).to_owned()).collect(),

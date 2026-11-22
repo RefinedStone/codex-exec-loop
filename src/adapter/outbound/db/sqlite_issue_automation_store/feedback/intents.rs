@@ -246,6 +246,7 @@ pub(super) fn record(
                     receipt: None,
                     acknowledged_comment_id: None,
                     contradictory_response: false,
+                    closure_acknowledged: false,
                 };
                 state::bump(tx, &mut current.state)?;
                 insert(tx, &record, expected)?;

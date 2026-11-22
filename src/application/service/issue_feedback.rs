@@ -28,6 +28,7 @@ use crate::domain::issue_work::IssueReference;
 use anyhow::{Result, anyhow, bail};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod closure;
 mod effects;
 mod labels;
 use labels::terminal_for_feedback;
@@ -88,6 +89,27 @@ impl IssueFeedbackService {
         now_unix_ms: u64,
         cancel: &IssueCollectionCancellation,
     ) -> Result<()> {
+        self.sync_issue_with_close_recheck(issue, now_unix_ms, cancel, None)
+    }
+
+    /// 호출자가 해당 승인을 포착한 뒤 공유본과 판정을 다시 확인한 경우에만 닫기를 허용한다.
+    pub(crate) fn sync_issue_after_close_recheck(
+        &self,
+        issue: &IssueReference,
+        now_unix_ms: u64,
+        cancel: &IssueCollectionCancellation,
+        decision_id: &crate::domain::issue_automation::decision::IssueDecisionId,
+    ) -> Result<()> {
+        self.sync_issue_with_close_recheck(issue, now_unix_ms, cancel, Some(decision_id))
+    }
+
+    fn sync_issue_with_close_recheck(
+        &self,
+        issue: &IssueReference,
+        now_unix_ms: u64,
+        cancel: &IssueCollectionCancellation,
+        close_decision_id: Option<&crate::domain::issue_automation::decision::IssueDecisionId>,
+    ) -> Result<()> {
         self.check_scope(issue)?;
         if cancel.is_cancelled() {
             return Ok(());
@@ -108,6 +130,17 @@ impl IssueFeedbackService {
                 &initial,
                 &initial_policy,
                 &initial_disclosure,
+                now_unix_ms,
+                cancel,
+                lease.as_ref(),
+            )?;
+        }
+        if let Some(decision_id) = close_decision_id
+            && let Some(current) = self.current(issue)?
+        {
+            self.close_integrated_issue(
+                &current,
+                decision_id,
                 now_unix_ms,
                 cancel,
                 lease.as_ref(),

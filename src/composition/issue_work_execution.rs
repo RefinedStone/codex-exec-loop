@@ -3,8 +3,9 @@ use crate::application::port::outbound::issue_work_execution_port::*;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkControl, PlanningWorkControlAction, PlanningWorkInstruction,
-    PlanningWorkInstructionAdmission, PlanningWorkOrderRepositoryPort, PlanningWorkPermit,
-    PlanningWorkPermitBasis, PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
+    PlanningWorkInstructionAdmission, PlanningWorkLinkReference, PlanningWorkOrderRepositoryPort,
+    PlanningWorkPermit, PlanningWorkPermitBasis, PlanningWorkPermitRepositoryPort,
+    PlanningWorkPermitStage,
 };
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
@@ -171,6 +172,21 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
         if order.branch_hint.is_some() || order.profile.is_some() {
             bail!("issue work branch/profile hints are not supported");
         }
+        let link_reference = order
+            .link_reference
+            .as_ref()
+            .map(|url| PlanningWorkLinkReference {
+                url: url.clone(),
+                close_on_merge: order.provider_link,
+            });
+        if order.provider_link && link_reference.is_none() {
+            bail!("close.when: provider_link requires an issue link");
+        }
+        if let Some(reference) = &link_reference {
+            self.parallel
+                .validate_work_link_reference(workspace, reference)
+                .map_err(anyhow::Error::msg)?;
+        }
         let description = format!(
             "{}
 
@@ -189,6 +205,7 @@ Work order: {}",
                 workspace_directory: workspace.into(),
                 work_order_id: order.work_order_id.clone(),
                 origin: "issue_automation".into(),
+                link_reference,
                 input: PlanningTaskCreateInput {
                     direction_id: None,
                     direction_relation_note: Some("사용자가 이슈 작업 시작을 승인했습니다.".into()),

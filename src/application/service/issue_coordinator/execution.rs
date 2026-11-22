@@ -77,12 +77,15 @@ pub(super) fn track(
                     execution_enabled,
                     committed,
                 )
-            })();
+            })()
+            .and_then(|()| super::closure::reconcile(service, &item.issue, cancel, committed));
             if let Err(error) = result {
                 failed_work_orders.insert(issue_work_order_id(&item.issue));
                 first_error.get_or_insert(error);
             }
-            if let Err(error) = service.sync_issue_feedback(&item.issue, now_unix_ms, cancel) {
+            if let Err(error) =
+                service.sync_issue_feedback(&item.issue, now_unix_ms, cancel, committed)
+            {
                 first_error.get_or_insert(error);
             }
             // 앞 작업의 조회/회수 실패가 다음 작업의 사실 반영과 제어를 막지 않는다.

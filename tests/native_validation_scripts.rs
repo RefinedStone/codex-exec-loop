@@ -4125,3 +4125,77 @@ notes: baseline only
     assert!(!stdout.contains("WARNING"));
     fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
 }
+
+#[test]
+fn gh_akra_default_branch_reads_frozen_repository_and_rejects_invalid_ref_names() {
+    let root = make_records_dir();
+    let repo = root.join("repo");
+    let bin = root.join("bin");
+    fs::create_dir(&repo).unwrap();
+    fs::create_dir(&bin).unwrap();
+    assert_success(
+        &run_git(&repo, &["init"]),
+        "initialize default branch fixture",
+    );
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        ),
+        "configure default branch fixture",
+    );
+    for command in ["cat", "git", "mktemp", "python3", "rm", "sed"] {
+        link_path_command(&bin, command);
+    }
+    write_executable_file(
+        &bin.join("curl"),
+        r#"#!/bin/sh
+set -eu
+config=$(cat)
+output_file=$(printf '%s\n' "$config" | sed -n 's/^output = "\(.*\)"$/\1/p')
+url=$(printf '%s\n' "$config" | sed -n 's/^url = "\(.*\)"$/\1/p')
+case "$url" in
+  'https://api.github.com/user') printf '{"login":"akra"}' > "$output_file" ;;
+  'https://api.github.com/repos/acme/widgets') printf '%s' "$AKRA_TEST_DEFAULT_BRANCH_JSON" > "$output_file" ;;
+  *) exit 71 ;;
+esac
+printf '200'
+"#,
+    );
+    for (payload, expected) in [
+        (r#"{"default_branch":"main"}"#, Some("main")),
+        (
+            r#"{"default_branch":"release/stable"}"#,
+            Some("release/stable"),
+        ),
+        (r#"{"default_branch":""}"#, None),
+        (r#"{"default_branch":"bad..branch"}"#, None),
+        (r#"{"default_branch":"main\\nother"}"#, None),
+        (r#"{"default_branch":null}"#, None),
+    ] {
+        let output = command_without_git_env("bash")
+            .arg(repo_root().join("scripts/gh-akra.sh"))
+            .args(["repo", "default-branch"])
+            .current_dir(&repo)
+            .env("PATH", &bin)
+            .env("AKRA_GITHUB_TOKEN", "default-branch-fixture-token")
+            .env("AKRA_GITHUB_LOGIN", "akra")
+            .env("AKRA_GITHUB_PUSH_REMOTE", "origin")
+            .env("AKRA_TEST_DEFAULT_BRANCH_JSON", payload)
+            .env_remove("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN")
+            .output()
+            .unwrap();
+        if let Some(expected) = expected {
+            assert_success(&output, "read provider default branch");
+            assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+        } else {
+            assert!(!output.status.success(), "{payload}");
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}

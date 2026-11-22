@@ -219,6 +219,7 @@ fn work_order_registration_rejects_an_audit_for_another_task() {
         .register_work_order(
             &workspace,
             PlanningWorkOrderRegistration {
+                link_reference: None,
                 work_order_id: "order-a",
                 origin: "synthetic-source",
                 initial_task_id: "initial-a",

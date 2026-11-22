@@ -19,6 +19,19 @@ pub struct IssueFeedbackLabelSnapshot {
     pub complete: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueFeedbackClosureEvent {
+    pub event_id: String,
+    pub actor_id: Option<String>,
+    pub closed: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueFeedbackClosureSnapshot {
+    pub issue: IssueReference,
+    pub closed: bool,
+    pub latest_event: Option<IssueFeedbackClosureEvent>,
+    pub complete: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueFeedbackWriteResult {
     Acknowledged {
         comment_id: Option<String>,
@@ -38,6 +51,9 @@ pub enum IssueFeedbackReadResult {
 pub trait IssueFeedbackPort: Send + Sync {
     fn actor_id(&self, issue: &IssueReference) -> Result<String>;
     fn read_label(&self, issue: &IssueReference, name: &str) -> Result<IssueFeedbackLabelSnapshot>;
+    fn read_closure(&self, _issue: &IssueReference) -> Result<IssueFeedbackClosureSnapshot> {
+        anyhow::bail!("issue close observation is unsupported")
+    }
     /// Sent CAS 성공자만 한 번 호출한다. 이 메서드 안에서는 mutation을 재시도하지 않는다.
     fn write(&self, intent: &IssueFeedbackIntent) -> Result<IssueFeedbackWriteResult>;
     /// 항상 읽기만 한다. create는 모든 댓글 페이지의 유일한 exact owner/intent/hash를 확인한다.

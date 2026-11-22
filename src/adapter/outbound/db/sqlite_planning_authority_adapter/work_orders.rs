@@ -31,6 +31,7 @@ pub(super) use permits::check_work_order_permit_in_transaction;
 pub(super) fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
     if table_exists(connection, "planning_work_orders")?
         && table_exists(connection, "planning_work_order_tasks")?
+        && table_exists(connection, "planning_work_order_links")?
         && table_exists(connection, "planning_work_order_permit_basis")?
         && table_exists(connection, "planning_work_order_permit_revocations")?
         && table_exists(connection, "planning_work_order_controls")?
@@ -50,6 +51,11 @@ pub(super) fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
                 work_order_id TEXT PRIMARY KEY NOT NULL,
                 origin TEXT NOT NULL,
                 permits_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_links (
+                work_order_id TEXT PRIMARY KEY NOT NULL,
+                reference_json TEXT NOT NULL,
+                FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
             );
             CREATE TABLE IF NOT EXISTS planning_work_order_tasks (
                 task_id TEXT PRIMARY KEY NOT NULL,
@@ -242,6 +248,9 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         registration: PlanningWorkOrderRegistration<'_>,
     ) -> Result<PlanningWorkOrderRegistrationResult> {
         validate_work_order_identity(registration.work_order_id, registration.origin)?;
+        if let Some(reference) = registration.link_reference {
+            reference.validate()?;
+        }
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         ensure_work_order_tables(&connection)?;
@@ -254,6 +263,9 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         if let Some(work_order) = load_work_order_record(&transaction, registration.work_order_id)?
         {
             work_order.ensure_origin(registration.origin)?;
+            if work_order.link_reference.as_ref() != registration.link_reference {
+                bail!("work order publication reference changed");
+            }
             return Ok(PlanningWorkOrderRegistrationResult::Existing { work_order });
         }
 
@@ -322,6 +334,12 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
                 params![registration.work_order_id, registration.origin],
             )
             .context("failed to register planning work order")?;
+        if let Some(reference) = registration.link_reference {
+            transaction.execute(
+                "INSERT INTO planning_work_order_links (work_order_id, reference_json) VALUES (?1, ?2)",
+                params![registration.work_order_id, serde_json::to_string(reference)?],
+            ).context("failed to store work-order publication reference")?;
+        }
         insert_task_membership(
             &transaction,
             registration.work_order_id,
@@ -331,6 +349,7 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         let work_order = PlanningWorkOrderRecord {
             work_order_id: registration.work_order_id.to_string(),
             origin: registration.origin.to_string(),
+            link_reference: registration.link_reference.cloned(),
             task_ids: vec![registration.initial_task_id.to_string()],
             permits: Vec::new(),
         };
@@ -499,9 +518,22 @@ pub(super) fn load_work_order_record(
         }
         task_ids.push(task_id);
     }
+    let link_json = connection
+        .query_row(
+            "SELECT reference_json FROM planning_work_order_links WHERE work_order_id=?1",
+            params![work_order_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to read work-order publication reference")?;
+    let link_reference = link_json
+        .map(|value| serde_json::from_str(&value))
+        .transpose()
+        .context("failed to decode work-order publication reference")?;
     let record = PlanningWorkOrderRecord {
         work_order_id: work_order_id.to_string(),
         origin,
+        link_reference,
         task_ids,
         permits: serde_json::from_str(&permits_json)
             .context("failed to decode planning work-order permits")?,

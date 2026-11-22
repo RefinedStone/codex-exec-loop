@@ -29,6 +29,7 @@ pub struct IssueFeedbackSnapshot {
     pub autonomy: IssueAutonomySelection,
     pub authorization_epoch: u64,
     pub pending_intervention: bool,
+    pub close_approval: Option<crate::domain::issue_automation::decision::StoredIssueDecision>,
     pub state: IssueFeedbackState,
     /// workspace 별칭과 관계없는 remote 4좌표의 영구 사실이다.
     pub first_grant_entered: bool,
@@ -36,6 +37,29 @@ pub struct IssueFeedbackSnapshot {
     pub publication_attempts: u64,
 }
 impl IssueFeedbackSnapshot {
+    pub fn authorized_close(
+        &self,
+    ) -> Option<&crate::domain::issue_automation::decision::StoredIssueDecision> {
+        use crate::domain::issue_automation::{
+            closure::close_approval_matches, decision::IssueDecisionBasis,
+            policy::IssueAutomationGate,
+        };
+        let approval = self.close_approval.as_ref()?;
+        let work = self.work.as_ref()?;
+        let execution = self.execution.as_ref()?;
+        let triage = self.item.triage.as_ref()?;
+        if triage.stale {
+            return None;
+        }
+        let mut basis = IssueDecisionBasis::from_assessment(
+            &triage.assessment,
+            IssueAutomationGate::Close,
+            Some(work.order.work_order_id.clone()),
+        )
+        .ok()?;
+        basis.authorization_epoch = self.authorization_epoch;
+        close_approval_matches(&approval.request, work, execution, &basis).then_some(approval)
+    }
     pub fn fence(&self) -> IssueFeedbackFence {
         IssueFeedbackFence {
             collection_epoch: self.collection.epoch,
@@ -69,6 +93,8 @@ pub enum IssueFeedbackClaimResult {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueFeedbackCompletion {
+    /// The closeIssue response matched both the issue and clientMutationId.
+    CloseAcknowledged,
     Confirmed(Box<IssueFeedbackReceipt>),
     NeedsConfirmation {
         contradictory: bool,

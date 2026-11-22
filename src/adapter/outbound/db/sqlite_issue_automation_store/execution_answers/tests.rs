@@ -149,6 +149,7 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
             scope: fixture.cwd().into(),
             branch_hint: None,
             link_reference: None,
+            provider_link: false,
             profile: None,
             priority: 0,
             attempt: 1,

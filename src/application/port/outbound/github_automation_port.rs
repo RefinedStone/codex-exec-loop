@@ -330,6 +330,16 @@ pub trait GithubAutomationPort: Send + Sync {
         anyhow::bail!("exact frozen-target repository visibility inspection is unavailable")
     }
 
+    /// Reads the provider default branch for the exact frozen delivery repository.
+    fn repository_default_branch_for_push_url(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+    ) -> Result<String> {
+        anyhow::bail!("exact frozen-target default branch inspection is unavailable")
+    }
+
     // agent/slot branch를 remote에 push한다. rebase recovery나 retry에서는
     // `force_with_lease`를 사용해 원격 변경을 무작정 덮어쓰지 않는 안전장치를 유지한다.
     fn push_branch(&self, repo_root: &str, branch_name: &str, force_with_lease: bool)

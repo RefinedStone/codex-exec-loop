@@ -116,6 +116,9 @@ pub struct PlanningAuthorityDistributorQueueRecord {
     pub task_id: String,
     // Cached title for queue and PR copy without reopening the task authority.
     pub task_title: String,
+    /// Frozen publication reference from the durable work-order lineage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_reference: Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
     // Immutable remote/repository/base target frozen before queue persistence.
     #[serde(default)]
     pub delivery_target: Option<PlanningAuthorityDistributorDeliveryTarget>,
@@ -632,6 +635,15 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 };
 
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    /// Publication metadata belongs to durable lineage, never mutable task descriptions.
+    fn work_order_link_reference_for_task(
+        &self,
+        _workspace_dir: &str,
+        _task_id: &str,
+    ) -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>>{
+        Ok(None)
+    }
+
     /// Queue once while preserving the exact waiting task/session/worktree identity.
     fn enqueue_worker_continuation(
         &self,
@@ -1853,6 +1865,7 @@ mod tests {
         source_commit_sha: &str,
     ) -> PlanningAuthorityDistributorQueueRecord {
         PlanningAuthorityDistributorQueueRecord {
+            link_reference: None,
             queue_item_id: "queue-1".to_string(),
             queue_order_key: 7,
             session_key: "session-1".to_string(),

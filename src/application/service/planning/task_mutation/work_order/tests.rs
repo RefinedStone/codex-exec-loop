@@ -17,6 +17,7 @@ fn service(repository: &Arc<FixtureRepository>) -> PlanningWorkOrderService {
 
 fn request(repository: &FixtureRepository, work_order_id: &str) -> PlanningWorkOrderRequest {
     PlanningWorkOrderRequest {
+        link_reference: None,
         workspace_directory: repository.workspace.clone(),
         work_order_id: work_order_id.to_string(),
         origin: "example_source".to_string(),
@@ -297,4 +298,43 @@ fn invalid_new_work_order_task_uses_existing_planning_validation_without_a_commi
     let script = repository.script.lock().unwrap();
     assert!(script.orders.is_empty());
     assert!(script.attempts.is_empty());
+}
+
+#[test]
+fn work_order_replay_preserves_its_publication_reference_and_rejects_scope_changes() {
+    let repository = FixtureRepository::new();
+    let mut original = request(&repository, "order:link-reference");
+    original.link_reference = Some(PlanningWorkLinkReference {
+        url: "https://github.com/acme/project/issues/7".into(),
+        close_on_merge: false,
+    });
+    let first = service(&repository)
+        .register_work_order(original.clone())
+        .unwrap();
+    assert_eq!(first.work_order.link_reference, original.link_reference);
+    let replay = service(&repository)
+        .register_work_order(original.clone())
+        .unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.work_order, first.work_order);
+
+    for edit in 0..3 {
+        let mut changed = original.clone();
+        match edit {
+            0 => changed.link_reference = None,
+            1 => changed.link_reference.as_mut().unwrap().close_on_merge = true,
+            _ => {
+                changed.link_reference.as_mut().unwrap().url =
+                    "https://github.com/acme/project/issues/8".into()
+            }
+        }
+        assert!(
+            service(&repository)
+                .register_work_order(changed)
+                .unwrap_err()
+                .to_string()
+                .contains("publication reference changed")
+        );
+    }
+    assert_eq!(repository.snapshot().task_authority.tasks.len(), 1);
 }

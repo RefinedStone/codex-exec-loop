@@ -48,6 +48,9 @@ pub struct IssueWorkOrder {
     pub scope: String,
     pub branch_hint: Option<String>,
     pub link_reference: Option<String>,
+    /// Frozen user close policy; legacy orders never emit a closing keyword.
+    #[serde(default)]
+    pub provider_link: bool,
     pub profile: Option<String>,
     pub priority: i32,
     pub attempt: u32,
@@ -296,6 +299,10 @@ pub enum IssueWorkEventKind {
     },
     Integrated {
         integration: super::execution::IssueExecutionIntegration,
+    },
+    /// 현재 provider 관찰의 Open→Closed 전이다. 닫은 사람이나 원인은 추정하지 않는다.
+    ExternalClosed {
+        observation_revision: u64,
     },
     PermitGranted {
         source_sha: String,

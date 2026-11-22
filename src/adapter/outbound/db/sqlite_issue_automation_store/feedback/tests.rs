@@ -24,6 +24,7 @@ use crate::domain::issue_validation::IssueRequirements;
 use rusqlite::{Connection, params};
 
 mod admission;
+mod closure;
 mod migration;
 mod receipts;
 
@@ -316,6 +317,7 @@ fn existing_work(fixture: &Fixture, issue: &IssueReference) -> IssueWorkCheckpoi
             scope: fixture.cwd().into(),
             branch_hint: None,
             link_reference: None,
+            provider_link: false,
             profile: None,
             priority: 0,
             attempt: 1,

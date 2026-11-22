@@ -253,6 +253,29 @@ pub struct IssueFeedbackDetail {
     pub publication_attempts: u64,
     pub comment_id: Option<String>,
     pub reason: Option<IssueFeedbackDetailReason>,
+    /// 통합 증거와 외부 상태는 독립적인 사실이다. 외부에서 다시 열려도 통합 증거는 유지한다.
+    pub integration: Option<super::execution::IssueExecutionIntegration>,
+    pub external_state: IssueExternalState,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum IssueExternalState {
+    Open,
+    Closed,
+    #[default]
+    Unknown,
+}
+
+impl IssueExternalState {
+    pub fn from_current(current: Option<&IssueSourceRead>) -> Self {
+        match current {
+            Some(IssueSourceRead::Observed(observation)) => match observation.remote_state {
+                super::source::IssueRemoteState::Open => Self::Open,
+                super::source::IssueRemoteState::Closed => Self::Closed,
+            },
+            Some(IssueSourceRead::Unknown { .. }) | None => Self::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

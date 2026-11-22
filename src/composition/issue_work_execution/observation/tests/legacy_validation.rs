@@ -85,6 +85,7 @@ impl LegacyValidationFixture {
             .register_work_order(
                 &workspace,
                 PlanningWorkOrderRegistration {
+                    link_reference: None,
                     work_order_id: WORK_ORDER_ID,
                     origin: "issue_automation",
                     initial_task_id: "initial",

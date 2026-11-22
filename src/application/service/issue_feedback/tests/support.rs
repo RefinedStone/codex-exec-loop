@@ -127,6 +127,7 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
             scope: "src".into(),
             branch_hint: None,
             link_reference: None,
+            provider_link: false,
             profile: None,
             priority: 0,
             attempt: 1,
@@ -179,6 +180,7 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
         autonomy: IssueAutonomySelection::default(),
         authorization_epoch: 0,
         pending_intervention: false,
+        close_approval: None,
         state: IssueFeedbackState::new(issue),
         first_grant_entered: false,
         publication_attempts: 0,
@@ -218,6 +220,7 @@ pub(crate) fn pending_record(issue: IssueReference) -> IssueFeedbackIntentRecord
         receipt: None,
         acknowledged_comment_id: None,
         contradictory_response: false,
+        closure_acknowledged: false,
     }
 }
 pub(crate) fn pending_publication(mut owner: IssueReference) -> IssuePublishIntentRecord {

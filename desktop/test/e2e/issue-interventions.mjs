@@ -346,16 +346,39 @@ try {
   assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), "공유 가능한 검증 메모입니다.");
   await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
   await currentCard().getByTestId("issue-decision-answer").click();
-  await until(async () => commandRequests("answer_issue_decision").length === 1 && (await panel.locator('[data-testid="issue-decision-card"][data-state="open"]').count()) === 0);
+  // 카드가 재조회 중 잠시 사라진 순간이 아니라 이전 명령의 완료 표시를 기다린다.
+  await until(async () => commandRequests("answer_issue_decision").length === 1 && await panel.evaluate((root) => {
+    const detail = root.querySelector('[data-testid="issues-detail"]');
+    const autonomy = root.querySelector('[data-testid="issues-autonomy-level"]');
+    return detail?.getAttribute("aria-busy") === "false"
+      && !root.querySelector('[data-testid="issues-detail-loading"]')
+      && root.querySelector('[data-testid="issues-command-notice"]')?.textContent === "요청을 처리했습니다."
+      && autonomy !== null && !autonomy.matches(":disabled")
+      && !root.querySelector('[data-testid="issue-decision-card"][data-state="open"]');
+  }), "the first decision command and its detail refresh to finish");
   assert.equal(commandRequests("answer_issue_decision")[0].request.command.note, "공유 가능한 검증 메모입니다.");
   assert.equal(await panel.locator('[data-state="answered"] input').first().isDisabled(), true);
   openDecisions = [requestDecision("decision-stale")]; revision++;
   gateway.sendKernelEvent({ type: "issue_decision", decision: fact(openDecisions[0]), revision });
-  await currentCard().waitFor();
-  await currentCard().locator('input[value="approve"]').check();
+  const staleCard = panel.locator('[data-testid="issue-decision-card"][data-decision-id="decision-stale"][data-state="open"]');
+  // 새 결정의 조회 상태와 입력 가능 여부를 같은 DOM snapshot에서 확인한다.
+  const staleDecisionReady = (selected = false) => panel.evaluate((root, selected) => {
+    const detail = root.querySelector('[data-testid="issues-detail"]');
+    const card = root.querySelector('[data-testid="issue-decision-card"][data-decision-id="decision-stale"][data-state="open"]');
+    const option = card?.querySelector('input[value="approve"]');
+    const answer = card?.querySelector('[data-testid="issue-decision-answer"]');
+    return detail?.getAttribute("aria-busy") === "false"
+      && !root.querySelector('[data-testid="issues-detail-loading"]')
+      && option !== undefined && option !== null && !option.matches(":disabled")
+      && answer !== undefined && answer !== null
+      && (!selected || (option.checked && !answer.matches(":disabled")));
+  }, selected);
+  await until(() => staleDecisionReady(), "the new decision-stale snapshot to be ready");
+  await staleCard.locator('input[value="approve"]').check();
   await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = null; });
   const dialogCount = await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length);
-  await currentCard().getByTestId("issue-decision-answer").click();
+  await until(() => staleDecisionReady(true), "decision-stale to retain its choice and enable its answer");
+  await staleCard.getByTestId("issue-decision-answer").click();
   await until(async () => (await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length)) > dialogCount);
   supersedeAnswer = true;
   await app.evaluate(() => globalThis.issueInterventionFixture.resolve(0));

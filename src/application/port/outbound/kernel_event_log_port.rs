@@ -17,6 +17,7 @@ pub trait KernelEventLogPort: Send + Sync {
                     "issue_work_permit_granted",
                     "issue_execution_progressed",
                     "issue_integrated",
+                    "issue_closed",
                     "issue_feedback_posted",
                 ],
             )?
@@ -111,6 +112,16 @@ mod tests {
                 },
                 revision: 2,
             },
+            KernelEvent::IssueClosed {
+                event_id: "closed-1".into(),
+                issue: (&issue).into(),
+                origin: crate::domain::kernel_event::IssueClosureRecordOrigin::ConfirmedFeedback,
+                intent_id: Some("close-intent-1".into()),
+                actor_id: Some("actor-1".into()),
+                closure_event_id: Some("closure-provider-1".into()),
+                observation_revision: None,
+                revision: 3,
+            },
         ]);
         assert!(
             log.has_issue_work_event("/work/project", "execution-1")
@@ -118,6 +129,10 @@ mod tests {
         );
         assert!(
             log.has_issue_work_event("/work/project", "integrated-1")
+                .unwrap()
+        );
+        assert!(
+            log.has_issue_work_event("/work/project", "closed-1")
                 .unwrap()
         );
         assert!(
