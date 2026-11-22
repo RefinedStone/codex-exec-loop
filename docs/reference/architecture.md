@@ -940,9 +940,11 @@ strategy in the production TUI.
 - Outbound adapters must not encode domain policy.
 - General Kernel events, the kernel protocol, Gateway code, and the Issue Core contract
   (`issue_core_port`: read shared copy, publish) must not reference the Evidence Vault restore
-  contract (`evidence_vault_port`). Restore plaintext and key types have no `Serialize`, so they
-  cannot enter a serialized event or response; restore needs a `VaultUserConfirmation` built on the
-  local confirmation path. `FakeIssueWorkAdapter` is the in-memory implementation; the real one is
+  contract (`evidence_vault_port`). Restore plaintext and key types have no `Serialize` and must
+  not enter general Kernel events or Gateway responses. Restore needs a `VaultUserConfirmation`
+  built on the local confirmation path. Only the dedicated Desktop restore transport encodes
+  authorized title/body text for its protected window; it never serializes a key.
+  `FakeIssueWorkAdapter` is the in-memory implementation; the real one is
   `EvidenceVaultRestoreService` below.
 - The same general surfaces must not reference the raw issue snapshot contract
   (`issue_snapshot_port`, implemented by `GithubIssueSnapshotAdapter` through `gh api graphql`).
@@ -1047,7 +1049,10 @@ strategy in the production TUI.
   (`review_reconnect`, then `reconnect`) works only on an issue that has a binding; it commits the
   user-approved marker positions to the reviewed field hash and refuses when the copy changed after
   the review. Unapproved markers stay as marker text. Records of earlier versions are not deleted.
-  Nothing wires this service yet.
+  The Desktop local native helper calls the read-only path through a dedicated application inbound
+  port after native user confirmation. It adds no general Gateway restore RPC and does not expose
+  reconnect. See [Desktop restore window](./evidence-vault-unlock.md#desktop-restore-window) for
+  execution-profile, platform, and plaintext-surface limits.
 - Issue validation is the pure rule `domain/issue_validation::validate_issue`. Draft validation and
   the publish gate (`application/service/issue_validation`) both call it. Only that rule builds
   `IssueValidationPassed` (private fields, no `Deserialize`); an external write must use the text

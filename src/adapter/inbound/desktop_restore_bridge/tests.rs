@@ -1,29 +1,44 @@
 use super::*;
+use crate::application::port::inbound::vault_restore_session_port::MAX_VIEWING_SESSION as SESSION_LIFETIME;
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultKey, VaultPlaintext, VaultRecordBinding, VaultRecordField,
     VaultRecordLoadRequest, VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
 };
 use crate::application::port::outbound::issue_snapshot_port::{
-    IssueRawFields, IssueSnapshotPort, IssueSnapshotReadRequest, IssueSnapshotResponse,
+    IssueRawFields, IssueSnapshotPort, IssueSnapshotReadRequest, IssueSnapshotResolveRequest,
+    IssueSnapshotResponse,
 };
 use crate::application::port::outbound::vault_key_store_port::{
     VaultKeyStoreError, VaultKeyStorePort,
 };
-use crate::application::port::outbound::vault_native_confirmation_port::VaultNativeConfirmationPort;
+use crate::application::port::outbound::vault_native_confirmation_port::{
+    VaultNativeConfirmationOutcome, VaultNativeConfirmationPort, VaultNativeConfirmationRequest,
+};
+use crate::application::port::outbound::vault_restore_workspace_port::{
+    VaultRestoreWorkspaceError, VaultRestoreWorkspacePort,
+};
+use crate::application::service::desktop_vault_restore::{
+    DesktopVaultRestoreDependencies, DesktopVaultRestoreService,
+};
 use crate::application::service::evidence_vault_restore::{
     EvidenceVaultRestoreService, restorable_fields,
 };
+use crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService;
 use crate::application::service::issue_masking::{
     IssueSensitiveSpan, IssueTextField, mask_issue_text,
 };
 use crate::domain::issue_policy::{IssueDisclosurePolicy, IssueSensitiveSpanAction};
 use crate::domain::issue_publish_intent::{IssuePublishVaultField, confirmed_version_name};
 use crate::domain::issue_work::{
-    IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueProvider,
+    IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueProvider, IssueReference,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::{Mutex, atomic::AtomicUsize};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::sync::Notify;
 
@@ -158,6 +173,12 @@ impl VaultNativeConfirmationPort for Confirmation {
         }
     }
 }
+struct Workspace(Option<String>);
+impl VaultRestoreWorkspacePort for Workspace {
+    fn canonical_workspace(&self, workspace: &str) -> Result<String, VaultRestoreWorkspaceError> {
+        Ok(self.0.clone().unwrap_or_else(|| workspace.to_owned()))
+    }
+}
 struct Fixture {
     keys: Arc<Keys>,
     records: Arc<Records>,
@@ -192,14 +213,14 @@ impl Fixture {
             }),
         }
     }
-    fn services(&self) -> DesktopRestoreServices {
+    fn services(&self) -> DesktopVaultRestoreDependencies {
         self.services_with_store(self.records.clone())
     }
     fn services_with_store(
         &self,
         store: Arc<dyn EvidenceVaultStorePort>,
-    ) -> DesktopRestoreServices {
-        DesktopRestoreServices {
+    ) -> DesktopVaultRestoreDependencies {
+        DesktopVaultRestoreDependencies {
             supported: true,
             snapshots: self.remote.clone(),
             unlock: self.unlock.clone(),
@@ -209,7 +230,7 @@ impl Fixture {
                 self.unlock.clone(),
             )),
             confirmation: self.confirmation.clone(),
-            workspace: Arc::new(|path| Ok(path.to_owned())),
+            workspace: Arc::new(Workspace(None)),
         }
     }
     fn assert_no_key_access(&self) {
@@ -292,8 +313,21 @@ fn prepare_request() -> Value {
 fn restore_request() -> Value {
     json!({"version":1,"id":"test-session","command":"restore"})
 }
+async fn run_test_io<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    input: R,
+    output: W,
+    dependencies: DesktopVaultRestoreDependencies,
+    duration: Duration,
+) -> io::Result<()> {
+    let mut frames = Frames::new(input);
+    let Some((id, request)) = first_request(&mut frames).await else {
+        return Ok(());
+    };
+    let port = Arc::new(DesktopVaultRestoreService::new(dependencies, duration));
+    session(frames, output, id, request, port).await
+}
 fn start(
-    services: DesktopRestoreServices,
+    services: DesktopVaultRestoreDependencies,
     duration: Duration,
 ) -> (
     BufReader<DuplexStream>,
@@ -416,7 +450,7 @@ async fn url_full_identity_and_canonical_workspace_must_match_before_prompt() {
             0 => request["issue_url"] = json!("https://github.com/acme/project/pull/1"),
             1 => request["issue"]["repository_id"] = json!("R_other"),
             2 => request["issue"]["issue_id"] = json!("I_other"),
-            _ => services.workspace = Arc::new(|_| Ok("/different/project".into())),
+            _ => services.workspace = Arc::new(Workspace(Some("/different/project".into()))),
         }
         let (mut client, task) = start(services, SESSION_LIFETIME);
         send(&mut client, &request).await;
@@ -648,5 +682,193 @@ async fn prepared_session_expiry_never_unlocks_without_a_timely_restore() {
     assert_eq!(response(&mut client).await["result"]["kind"], "prepared");
     no_more_output(&mut client).await;
     task.await.unwrap().unwrap();
+    fixture.assert_no_key_access();
+}
+
+fn session_request() -> VaultRestoreSessionRequest {
+    VaultRestoreSessionRequest {
+        issue_url: "https://github.com/acme/project/issues/1".into(),
+        issue: issue(),
+    }
+}
+fn session_port(fixture: &Fixture) -> Arc<dyn VaultRestoreSessionPort> {
+    Arc::new(DesktopVaultRestoreService::new(
+        fixture.services(),
+        SESSION_LIFETIME,
+    ))
+}
+
+#[test]
+fn direct_port_cannot_restore_before_native_prepare() {
+    let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
+    let port = session_port(&fixture);
+    assert!(matches!(
+        port.restore(),
+        Err(VaultRestoreSessionHold::Locked)
+    ));
+    fixture.assert_no_key_access();
+    assert_eq!(fixture.remote.resolves.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn direct_port_prepares_once_consumes_restore_once_and_remains_live_for_output() {
+    let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
+    let port = session_port(&fixture);
+    assert_eq!(port.prepare(session_request()), Ok(()));
+    let mut other_target = session_request();
+    other_target.issue_url = "https://github.com/other/project/issues/2".into();
+    other_target.issue.repository_id = "R_other".into();
+    other_target.issue.issue_id = "I_other".into();
+    assert_eq!(
+        port.prepare(other_target),
+        Err(VaultRestoreSessionHold::Locked)
+    );
+    assert_eq!(fixture.remote.resolves.load(Ordering::SeqCst), 1);
+    fixture.assert_no_key_access();
+    assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 1);
+    let result = port.restore().unwrap();
+    assert_eq!(result.title.expose(), TITLE);
+    assert_eq!(result.body.expose(), BODY);
+    assert!(port.is_live());
+    let loads = fixture.keys.loads.load(Ordering::SeqCst);
+    assert!(matches!(
+        port.restore(),
+        Err(VaultRestoreSessionHold::Locked)
+    ));
+    assert_eq!(
+        port.prepare(session_request()),
+        Err(VaultRestoreSessionHold::Locked)
+    );
+    assert_eq!(fixture.keys.loads.load(Ordering::SeqCst), loads);
+    assert_eq!(fixture.keys.stores.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn direct_port_cancel_after_prepare_rejects_every_later_entry() {
+    let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
+    let port = session_port(&fixture);
+    assert_eq!(port.prepare(session_request()), Ok(()));
+    port.cancel();
+    assert!(!port.is_live());
+    assert_eq!(
+        port.prepare(session_request()),
+        Err(VaultRestoreSessionHold::Locked)
+    );
+    assert!(matches!(
+        port.restore(),
+        Err(VaultRestoreSessionHold::Locked)
+    ));
+    fixture.assert_no_key_access();
+    assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn direct_port_validates_target_without_trusting_the_protocol_adapter() {
+    for case in 0..8 {
+        let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
+        let mut request = session_request();
+        match case {
+            0 => request.issue_url = "https://github.com/acme/project/issues/01".into(),
+            1 => request.issue.server_id = "untrusted.invalid".into(),
+            2 => request.issue.repository_id = "R_other".into(),
+            3 => request.issue.issue_id = "I_other".into(),
+            4 => request.issue.project_scope.workspace_dir = "relative/project".into(),
+            5 => request.issue.repository_id = "a".repeat(201),
+            6 => request.issue.issue_id = "I_bad\n".into(),
+            _ => {
+                request.issue_url = "https://github.com/acme/project/issues/1?approved=true".into()
+            }
+        }
+        let port = session_port(&fixture);
+        assert_eq!(
+            port.prepare(request),
+            Err(VaultRestoreSessionHold::NotBound)
+        );
+        assert!(matches!(
+            port.restore(),
+            Err(VaultRestoreSessionHold::Locked)
+        ));
+        fixture.assert_no_key_access();
+        assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn direct_port_caps_the_deadline_and_rejects_expired_requests() {
+    let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
+    let capped = DesktopVaultRestoreService::new(fixture.services(), Duration::from_secs(3600));
+    assert!(capped.deadline() <= Instant::now() + SESSION_LIFETIME);
+    let expired = DesktopVaultRestoreService::new(fixture.services(), Duration::ZERO);
+    assert_eq!(
+        expired.prepare(session_request()),
+        Err(VaultRestoreSessionHold::Locked)
+    );
+    assert!(matches!(
+        expired.restore(),
+        Err(VaultRestoreSessionHold::Locked)
+    ));
+    fixture.assert_no_key_access();
+    assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn direct_port_cancellation_does_not_wait_for_prompt_or_revive_late_approval() {
+    struct LateConfirmation(Arc<Gate>);
+    impl VaultNativeConfirmationPort for LateConfirmation {
+        fn confirm(
+            &self,
+            _: &VaultNativeConfirmationRequest,
+            _: &AtomicBool,
+            _: Instant,
+        ) -> VaultNativeConfirmationOutcome {
+            // 취소를 무시하는 느린 의존성도 서비스 상태를 되살릴 수 없어야 한다.
+            self.0.wait();
+            VaultNativeConfirmationOutcome::Confirmed
+        }
+    }
+    let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
+    let gate = Arc::new(Gate::default());
+    let mut dependencies = fixture.services();
+    dependencies.confirmation = Arc::new(LateConfirmation(gate.clone()));
+    let port: Arc<dyn VaultRestoreSessionPort> = Arc::new(DesktopVaultRestoreService::new(
+        dependencies,
+        SESSION_LIFETIME,
+    ));
+    let preparing_port = port.clone();
+    let preparing = tokio::task::spawn_blocking(move || preparing_port.prepare(session_request()));
+    tokio::time::timeout(Duration::from_secs(2), gate.started.notified())
+        .await
+        .unwrap();
+
+    let duplicate_port = port.clone();
+    let duplicate = tokio::task::spawn_blocking(move || duplicate_port.prepare(session_request()));
+    let duplicate_result = tokio::time::timeout(Duration::from_secs(2), duplicate).await;
+    if duplicate_result.is_err() {
+        gate.release();
+    }
+    assert_eq!(
+        duplicate_result.unwrap().unwrap(),
+        Err(VaultRestoreSessionHold::Locked)
+    );
+
+    let cancelling_port = port.clone();
+    let cancelling = tokio::task::spawn_blocking(move || cancelling_port.cancel());
+    let cancelled = tokio::time::timeout(Duration::from_secs(2), cancelling).await;
+    gate.release();
+    cancelled.unwrap().unwrap();
+    assert_eq!(
+        preparing.await.unwrap(),
+        Err(VaultRestoreSessionHold::Locked)
+    );
+    assert!(!port.is_live());
+    assert_eq!(
+        port.prepare(session_request()),
+        Err(VaultRestoreSessionHold::Locked)
+    );
+    assert!(matches!(
+        port.restore(),
+        Err(VaultRestoreSessionHold::Locked)
+    ));
     fixture.assert_no_key_access();
 }

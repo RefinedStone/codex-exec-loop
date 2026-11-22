@@ -3,9 +3,9 @@
 This page describes the shipped key handling of the Evidence Vault (#2422): where the key lives,
 how an issue is unlocked, what can be recovered after a key loss, and what the Vault does not
 protect against. Backup export and import with a user-held recovery key are in
-[evidence-vault-backup.md](./evidence-vault-backup.md). The Desktop restore window (#2427) is
-shipped as a held screen, see [Desktop restore window](#desktop-restore-window). Nothing wires the
-unlock service to a client yet.
+[evidence-vault-backup.md](./evidence-vault-backup.md). The Desktop restore window (#2427) connects
+existing records through a local native helper on macOS/Linux. Windows and unsupported execution
+profiles hold viewing; see [Desktop restore window](#desktop-restore-window).
 
 ## Key location: device-bound mode
 
@@ -88,7 +88,7 @@ that runs with the same OS user rights on the same device:
 - The Akra user confirmation is a local application rule. It is not an OS authentication (no password or
   biometric check is requested by Akra).
 - While a restored copy is on screen, a screen capture, screen recording, screen sharing, or an
-  accessibility tool of the same user can read it. Akra does not block capture.
+  accessibility tool of the same user can read it. Akra requests content protection but does not guarantee that capture is blocked.
 - Restored plaintext and the key are in process memory while in use. A debugger or memory dump
   with the same user rights can read them. Rust secret types zero their memory on drop, which reduces the
   time window only. Desktop JavaScript strings rely on garbage collection; deterministic clearing
@@ -102,7 +102,8 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
 `desktop/src/shared/vaultRestore.ts`.
 
 - **Separate surface.** The window has its own preload and its own IPC channels
-  (`akra-vault-restore:*`). It has no `window.akra`, no Gateway connection, and no conversation IPC.
+  (`akra-vault-restore:*`). It exposes only the dedicated `window.akra.vaultRestore` contract,
+  with no general AkraBridge, Gateway connection, or conversation IPC.
   It is not registered with the browser panel, so thread-owned browser automation and its capture
   cannot target it. DevTools, navigation, and new windows are off. Main accepts a restore request
   only from the main frame of a restore window. A general window can only ask to open the window
