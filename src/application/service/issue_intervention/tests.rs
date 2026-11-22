@@ -9,11 +9,11 @@ use crate::application::port::outbound::issue_source_port::{
 use crate::application::port::outbound::issue_work_execution_port::{
     IssueWorkExecutionSnapshot, IssueWorkPermitRequest,
 };
-use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl;
 use crate::application::service::issue_policy::{IssuePolicyService, issue_policy_version};
 use crate::domain::issue_automation::collection::IssueCollectionMode;
 use crate::domain::issue_automation::coordinator::IssueWorkOrder;
 use crate::domain::issue_automation::source::*;
+use crate::domain::issue_automation::work_control::IssueWorkControl;
 use crate::domain::issue_automation::{IssueAutomationSnapshot, TrackedIssue};
 use crate::domain::issue_policy::{IssueDisclosurePolicy, IssuePolicy};
 use crate::domain::issue_work::{
@@ -27,9 +27,9 @@ use std::time::Duration;
 
 #[derive(Default)]
 struct ExecutionState {
-    controls: BTreeMap<String, PlanningWorkControl>,
-    applied: BTreeMap<String, (String, PlanningWorkControlAction, PlanningWorkControl)>,
-    instructions: Vec<(String, PlanningWorkInstruction)>,
+    controls: BTreeMap<String, IssueWorkControl>,
+    applied: BTreeMap<String, (String, IssueWorkControlAction, IssueWorkControl)>,
+    instructions: Vec<(String, IssueWorkInstruction)>,
 }
 
 struct AdmissionGate {
@@ -50,7 +50,7 @@ struct FakeExecution {
 }
 
 impl IssueWorkExecutionPort for FakeExecution {
-    fn control(&self, _: &str, work: &str) -> Result<PlanningWorkControl> {
+    fn control(&self, _: &str, work: &str) -> Result<IssueWorkControl> {
         Ok(self
             .state
             .lock()
@@ -65,8 +65,8 @@ impl IssueWorkExecutionPort for FakeExecution {
         _: &str,
         work: &str,
         id: &str,
-        action: PlanningWorkControlAction,
-    ) -> Result<PlanningWorkControl> {
+        action: IssueWorkControlAction,
+    ) -> Result<IssueWorkControl> {
         self.control_calls.fetch_add(1, Ordering::SeqCst);
         if self.fail_control.swap(false, Ordering::SeqCst)
             || self.failed_control_work.lock().unwrap().as_deref() == Some(work)
@@ -97,8 +97,8 @@ impl IssueWorkExecutionPort for FakeExecution {
         &self,
         _: &str,
         work: &str,
-        instruction: &PlanningWorkInstruction,
-    ) -> Result<PlanningWorkInstructionAdmission> {
+        instruction: &IssueWorkInstruction,
+    ) -> Result<IssueWorkInstructionAdmission> {
         self.instruction_calls.fetch_add(1, Ordering::SeqCst);
         let gate = self.next_admission_gate.lock().unwrap().take();
         if let Some(gate) = gate {
@@ -108,7 +108,7 @@ impl IssueWorkExecutionPort for FakeExecution {
                 .expect("the concurrent admission test must release its first caller");
         }
         if self.active.load(Ordering::SeqCst) {
-            return Ok(PlanningWorkInstructionAdmission::Active);
+            return Ok(IssueWorkInstructionAdmission::Active);
         }
         let mut state = self.state.lock().unwrap();
         if state
@@ -116,12 +116,12 @@ impl IssueWorkExecutionPort for FakeExecution {
             .iter()
             .any(|(saved_work, saved)| saved_work == work && saved == instruction)
         {
-            return Ok(PlanningWorkInstructionAdmission::Queued { changed: false });
+            return Ok(IssueWorkInstructionAdmission::Queued { changed: false });
         }
         state
             .instructions
             .push((work.to_owned(), instruction.clone()));
-        Ok(PlanningWorkInstructionAdmission::Queued { changed: true })
+        Ok(IssueWorkInstructionAdmission::Queued { changed: true })
     }
     fn has_active_lease(&self, _: &str, _: &str) -> Result<bool> {
         Ok(self.active.load(Ordering::SeqCst))
@@ -263,7 +263,7 @@ impl Fixture {
         issue_work_order_id(&self.issue)
     }
 
-    fn control(&self) -> PlanningWorkControl {
+    fn control(&self) -> IssueWorkControl {
         self.execution
             .control(&self.workspace, &self.work())
             .unwrap()
@@ -470,7 +470,7 @@ fn issue_intervention_hold_release_fences_old_approval_without_changing_another_
             .execution
             .control(&fixture.workspace, &issue_work_order_id(&other))
             .unwrap(),
-        PlanningWorkControl::default()
+        IssueWorkControl::default()
     );
     let released = service
         .intervene(
@@ -636,7 +636,7 @@ fn issue_intervention_pending_control_recovers_once_and_never_replays_pending_st
             &fixture.workspace,
             &fixture.work(),
             &hold.command_id,
-            PlanningWorkControlAction::Hold,
+            IssueWorkControlAction::Hold,
         )
         .unwrap();
     let mut other = fixture.issue.clone();
@@ -899,7 +899,7 @@ fn issue_intervention_a_failed_pending_control_does_not_block_an_unrelated_issue
             .flags()
             .held
     );
-    assert_eq!(fixture.control(), PlanningWorkControl::default());
+    assert_eq!(fixture.control(), IssueWorkControl::default());
     assert!(fixture.stored(&pending).receipt.is_none());
     let remaining = fixture
         .store
@@ -972,7 +972,7 @@ fn issue_intervention_startup_recovery_fences_off_mode_before_runtime_or_returns
             IssueCollectionMode::Off
         );
         if planning_fails {
-            assert_eq!(fixture.control(), PlanningWorkControl::default());
+            assert_eq!(fixture.control(), IssueWorkControl::default());
             assert!(fixture.stored(&hold).receipt.is_none());
             assert!(
                 !fixture

@@ -10,6 +10,9 @@ use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
 use crate::application::service::planning::{PlanningWorkOrderRequest, PlanningWorkOrderService};
 use crate::domain::issue_automation::coordinator::IssueWorkOrder;
+use crate::domain::issue_automation::work_control::{
+    IssueWorkControl, IssueWorkControlAction, IssueWorkInstruction, IssueWorkInstructionAdmission,
+};
 use crate::domain::planning::PriorityQueueService;
 use anyhow::{Result, anyhow, bail};
 use std::sync::Arc;
@@ -38,28 +41,40 @@ impl AkraIssueWorkExecutionAdapter {
 }
 
 impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
-    fn control(&self, workspace: &str, work_order_id: &str) -> Result<PlanningWorkControl> {
+    fn control(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkControl> {
         self.repository
             .load_work_order_control(workspace, work_order_id)
+            .map(issue_control)
     }
     fn apply_control(
         &self,
         workspace: &str,
         work_order_id: &str,
         command_id: &str,
-        action: PlanningWorkControlAction,
-    ) -> Result<PlanningWorkControl> {
+        action: IssueWorkControlAction,
+    ) -> Result<IssueWorkControl> {
         self.repository
-            .apply_work_order_control(workspace, work_order_id, command_id, action)
+            .apply_work_order_control(
+                workspace,
+                work_order_id,
+                command_id,
+                planning_control_action(action),
+            )
+            .map(issue_control)
     }
     fn queue_instruction(
         &self,
         workspace: &str,
         work_order_id: &str,
-        instruction: &PlanningWorkInstruction,
-    ) -> Result<PlanningWorkInstructionAdmission> {
+        instruction: &IssueWorkInstruction,
+    ) -> Result<IssueWorkInstructionAdmission> {
+        let instruction = PlanningWorkInstruction {
+            command_id: instruction.command_id.clone(),
+            message: instruction.message.clone(),
+        };
         self.repository
-            .append_work_order_instruction(workspace, work_order_id, instruction)
+            .append_work_order_instruction(workspace, work_order_id, &instruction)
+            .map(issue_instruction_admission)
     }
     fn has_active_lease(&self, workspace: &str, work_order_id: &str) -> Result<bool> {
         let ids = self.task_ids(workspace, work_order_id)?;
@@ -228,5 +243,45 @@ Work order: {}",
             "issue_approval_changed",
         )?;
         Ok(())
+    }
+}
+
+fn issue_control(control: PlanningWorkControl) -> IssueWorkControl {
+    let PlanningWorkControl {
+        held,
+        taken_over,
+        cancelled,
+        tracked,
+        authorization_epoch,
+    } = control;
+    IssueWorkControl {
+        held,
+        taken_over,
+        cancelled,
+        tracked,
+        authorization_epoch,
+    }
+}
+
+fn planning_control_action(action: IssueWorkControlAction) -> PlanningWorkControlAction {
+    match action {
+        IssueWorkControlAction::Hold => PlanningWorkControlAction::Hold,
+        IssueWorkControlAction::Release => PlanningWorkControlAction::Release,
+        IssueWorkControlAction::TakeOver => PlanningWorkControlAction::TakeOver,
+        IssueWorkControlAction::Cancel => PlanningWorkControlAction::Cancel,
+        IssueWorkControlAction::Track => PlanningWorkControlAction::Track,
+        IssueWorkControlAction::Untrack => PlanningWorkControlAction::Untrack,
+        IssueWorkControlAction::Retriage => PlanningWorkControlAction::Retriage,
+    }
+}
+
+fn issue_instruction_admission(
+    admission: PlanningWorkInstructionAdmission,
+) -> IssueWorkInstructionAdmission {
+    match admission {
+        PlanningWorkInstructionAdmission::Queued { changed } => {
+            IssueWorkInstructionAdmission::Queued { changed }
+        }
+        PlanningWorkInstructionAdmission::Active => IssueWorkInstructionAdmission::Active,
     }
 }
