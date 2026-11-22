@@ -47,7 +47,16 @@ fn project(
                 Some(TaskStatus::Ready | TaskStatus::Proposed)
             )
     });
-    let dispatch_source = if frozen_source.is_none() && (pending_dispatch || basis.is_none()) {
+    // Leased도 배정 완료다. basis 부재가 현재 lease의 source를 교체하게 두지 않는다.
+    let current_task_has_lease = observed.is_some_and(|loaded| {
+        loaded.runtime.slot_leases.values().any(|lease| {
+            Some(lease.task_id.as_str()) == loaded.observation.active_task_id.as_deref()
+        })
+    });
+    let dispatch_source = if frozen_source.is_none()
+        && !current_task_has_lease
+        && (pending_dispatch || basis.is_none())
+    {
         Some(fetch_dispatch_source()?)
     } else {
         None
