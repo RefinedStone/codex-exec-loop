@@ -71,6 +71,10 @@ spec_names! {
             "Add a prompt to the turn that is running on a thread.";
         StopAll => "stop_all",
             "Request a stop of every running turn.";
+        EnableParallel => "enable_parallel",
+            "Request parallel execution for the attached repository. Acceptance does not mean readiness succeeded; read the parallel query and events. Existing readiness, work permits, and delivery approvals still apply.";
+        DisableParallel => "disable_parallel",
+            "Request the existing parallel stop policy for the attached repository. Read the parallel query and events for the applied state. This does not revoke issue approvals or replace stop_all for running conversation turns.";
         DecideApproval => "decide_approval",
             "Accept or decline a pending approval request.";
         SetAutoFollowMaxTurns => "set_auto_follow_max_turns",
@@ -139,6 +143,7 @@ spec_names! {
         Thread => "thread", "The turns of a thread.";
         Approval => "approval", "Pending approval requests.";
         AutoFollow => "auto_follow", "The automatic follow-up settings.";
+        Parallel => "parallel", "Explicit execution control for the repository parallel pool.";
         Planning => "planning", "The planning queue and directions.";
         Issue => "issue", "Issue collection settings and observations.";
         Delegation => "delegation", "Text-only ChatGPT delegations.";
@@ -371,6 +376,8 @@ impl KernelCommandKind {
             | Self::RefreshPlanning
             | Self::SetAutoFollowMaxTurns
             | Self::PauseAutoFollow
+            | Self::EnableParallel
+            | Self::DisableParallel
             | Self::SyncIssues
             | Self::SubmitDelegation
             | Self::CancelDelegation
@@ -440,6 +447,12 @@ impl KernelCommandKind {
             ),
             Self::StopAll => (
                 CommandScope::Thread,
+                Write,
+                Natural,
+                &[Reason::KernelUnreachable],
+            ),
+            Self::EnableParallel | Self::DisableParallel => (
+                CommandScope::Parallel,
                 Write,
                 Natural,
                 &[Reason::KernelUnreachable],
@@ -560,6 +573,8 @@ impl KernelCommandKind {
                 | Self::SubmitPrompt
                 | Self::SteerTurn
                 | Self::StopAll
+                | Self::EnableParallel
+                | Self::DisableParallel
                 | Self::DecideApproval
                 | Self::SetAutoFollowMaxTurns
                 | Self::PauseAutoFollow

@@ -729,7 +729,8 @@ export function App() {
                 </WorkingTreePanel>
               )}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
-              {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} onOpenThread={openThread} />}
+              {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
+                onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread} />}
               {panel === "issues" && (
                 <IssuePanel
                   key={kernelWorkspace}

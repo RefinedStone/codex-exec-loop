@@ -86,6 +86,15 @@ export const EMPTY_KERNEL_ISSUES: KernelIssuesView = {
   stale: false,
 };
 
+export interface ParallelControlView {
+  pending: "enable" | "disable" | null;
+  notice: string | null;
+  error: string | null;
+  uncertain: boolean;
+}
+
+const EMPTY_PARALLEL_CONTROL: ParallelControlView = { pending: null, notice: null, error: null, uncertain: false };
+
 export interface KernelView {
   phase: KernelPhase;
   workspace: string | null;
@@ -96,6 +105,7 @@ export interface KernelView {
   autoFollow: AutoFollowSettings | null;
   planning: PlanningState | null;
   parallel: ParallelState | null;
+  parallelControl: ParallelControlView;
   issues: KernelIssuesView;
   /** 현재 저장소 스트림에서 받은 결정 좌표만 보관한다. 질문과 답변 본문은 없다. */
   issueAttention: IssueDecisionAttention[];
@@ -110,6 +120,7 @@ export const EMPTY_KERNEL_VIEW: KernelView = {
   autoFollow: null,
   planning: null,
   parallel: null,
+  parallelControl: EMPTY_PARALLEL_CONTROL,
   issues: EMPTY_KERNEL_ISSUES,
   issueAttention: [],
 };
@@ -320,6 +331,7 @@ export class KernelConnection {
       this.overviewGeneration += 1;
       this.overviewRequest += 1;
       this.overviewRefreshRequest += 1;
+      this.updateParallelControl(EMPTY_PARALLEL_CONTROL);
     }
     if (issuesChanged || !sameWorkspace) this.invalidateIssues();
     if (!sameWorkspace) {
@@ -366,6 +378,50 @@ export class KernelConnection {
       return;
     }
     await this.readOverview(true);
+  }
+
+  /** 명시적인 사용자 동작만 풀을 제어한다. 접수 응답으로 enabled를 추정하지 않는다. */
+  async setParallelEnabled(enabled: boolean): Promise<void> {
+    const view = this.store.getKernel();
+    if (!this.canRead("overview") || view.parallel === null || view.parallelControl.pending !== null || view.parallelControl.uncertain) return;
+    const generation = this.generation;
+    const interest = this.overviewGeneration;
+    // 대기열 거절은 앞선 조회보다 먼저 도착할 수 있다. 실패 뒤에도 명령 전 상태가 확정값으로 되돌아오면 안 된다.
+    this.overviewRequest += 1;
+    let stateRequest: number | null = null;
+    let stateEvents = 0;
+    this.updateParallelControl({ pending: enabled ? "enable" : "disable", notice: null, error: null });
+    try {
+      const response = await sendKernelCommand(this.client, { type: enabled ? "enable_parallel" : "disable_parallel" });
+      if (!this.overviewScopeCurrent(generation, interest)) return;
+      if (response.rejection) throw new Error(response.rejection.message);
+      if (response.failure) throw new Error(response.failure);
+      if (!response.processed) throw new Error("커널이 요청을 접수하지 못했습니다.");
+      this.updateParallelControl({ notice: enabled
+        ? "시작 요청을 접수했습니다. 준비 검사 결과와 실행 상태를 확인하세요."
+        : "중단 요청을 접수했습니다. 현재 실행 상태를 확인하세요.", uncertain: true });
+      // 명령보다 오래된 overview 응답이 이 조회나 후속 이벤트를 덮지 못하게 한다.
+      stateRequest = ++this.overviewRequest;
+      stateEvents = this.eventCounts.get("parallel") ?? 0;
+      const state = await this.client.request<KernelViewAnswer>(KERNEL_METHOD.query, { query: { type: "parallel" } });
+      if (!this.overviewCurrent(generation, interest, stateRequest)) return;
+      if ((this.eventCounts.get("parallel") ?? 0) !== stateEvents) return;
+      if (state.type !== "parallel" || typeof state.enabled !== "boolean") throw new Error("커널의 병렬 상태 응답을 확인할 수 없습니다.");
+      this.applyOverview(state);
+    } catch (error) {
+      const latestStateRead = stateRequest === null || (stateRequest === this.overviewRequest
+        && (this.eventCounts.get("parallel") ?? 0) === stateEvents);
+      if (this.overviewScopeCurrent(generation, interest) && latestStateRead) {
+        this.updateParallelControl({ uncertain: true, error: "병렬 실행 요청의 처리 결과를 확인하지 못했습니다: " + failureMessage(error) + " 현재 상태를 다시 읽어 주세요." });
+      }
+    } finally {
+      if (this.overviewScopeCurrent(generation, interest)) this.updateParallelControl({ pending: null });
+    }
+  }
+
+  private updateParallelControl(change: Partial<ParallelControlView>): void {
+    const view = this.store.getKernel();
+    this.store.setKernel({ ...view, parallelControl: { ...view.parallelControl, ...change } });
   }
 
   /** 상태와 첫 페이지를 다시 읽는다. 새로고침은 이전 페이지 이동 요청을 대체한다. */
@@ -1004,7 +1060,7 @@ export class KernelConnection {
       }
       case "parallel": {
         const { type: _type, ...parallel } = event;
-        this.store.setKernel({ ...view, parallel });
+        this.store.setKernel({ ...view, parallel, parallelControl: { ...view.parallelControl, uncertain: false, error: null } });
         break;
       }
       default:
