@@ -123,15 +123,22 @@ fn a_ready_supplement_fetches_the_current_base_and_ignores_parent_delivery() {
 
 #[test]
 fn base_advance_before_initial_dispatch_is_rechecked_even_with_a_saved_basis() {
-    let loaded = observed(
-        &["initial"],
-        "initial",
-        IssueExecutionPhase::Queued,
-        TaskStatus::Ready,
-    );
-    let result = project(Some(&loaded), Some(&basis('a')), || Ok("b".repeat(40))).unwrap();
-    assert_eq!(result.dispatch_source, Some("b".repeat(40)));
-    assert_eq!(result.saved_source, Some("a".repeat(40)));
+    for status in [TaskStatus::Ready, TaskStatus::Proposed] {
+        let loaded = observed(&["initial"], "initial", IssueExecutionPhase::Queued, status);
+        let calls = Cell::new(0);
+        let result = project(Some(&loaded), Some(&basis('a')), || {
+            calls.set(calls.get() + 1);
+            Ok("b".repeat(40))
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(result.task_ids, ["initial"]);
+        assert_eq!(result.dispatch_source, Some("b".repeat(40)));
+        assert_eq!(result.saved_source, Some("a".repeat(40)));
+        assert_eq!(result.saved_gate_revision, 7);
+        assert_eq!(result.saved_authorization_epoch, 3);
+        assert!(result.frozen_source.is_none());
+    }
 }
 
 #[test]
@@ -266,19 +273,22 @@ fn a_current_generation_never_reuses_a_previous_generations_delivery_source() {
 
 #[test]
 fn a_frozen_single_task_source_is_preserved_after_its_lease_is_cleaned() {
-    let mut loaded = observed(
-        &["initial"],
-        "initial",
-        IssueExecutionPhase::InReview,
-        TaskStatus::Done,
-    );
-    loaded
-        .runtime
-        .distributor_queue_records
-        .push(delivery(&lease("initial", 'a'), 'b'));
-    let result = project(Some(&loaded), Some(&basis('a')), no_fetch).unwrap();
-    assert_eq!(result.frozen_source, Some("b".repeat(40)));
-    assert!(result.dispatch_source.is_none());
+    for status in [TaskStatus::Ready, TaskStatus::Done] {
+        let mut loaded = observed(
+            &["initial"],
+            "initial",
+            IssueExecutionPhase::InReview,
+            status,
+        );
+        loaded
+            .runtime
+            .distributor_queue_records
+            .push(delivery(&lease("initial", 'a'), 'b'));
+        let result = project(Some(&loaded), Some(&basis('a')), no_fetch).unwrap();
+        assert_eq!(result.frozen_source, Some("b".repeat(40)));
+        assert_eq!(result.saved_source, Some("a".repeat(40)));
+        assert!(result.dispatch_source.is_none());
+    }
 }
 
 #[test]
@@ -325,16 +335,23 @@ fn unregistered_work_fetches_a_dispatch_source_once() {
     assert_eq!(calls.get(), 1);
     assert!(result.task_ids.is_empty());
     assert_eq!(result.dispatch_source, Some("a".repeat(40)));
+    assert!(result.saved_source.is_none());
+    assert_eq!(result.saved_gate_revision, 0);
+    assert_eq!(result.saved_authorization_epoch, 0);
 }
 
 #[test]
 fn a_terminal_task_without_delivery_does_not_look_like_new_dispatch() {
-    let loaded = observed(
-        &["initial"],
-        "initial",
-        IssueExecutionPhase::Queued,
+    for status in [
+        TaskStatus::Blocked,
+        TaskStatus::InProgress,
+        TaskStatus::Done,
         TaskStatus::Cancelled,
-    );
-    let result = project(Some(&loaded), Some(&basis('a')), no_fetch).unwrap();
-    assert!(result.dispatch_source.is_none());
+        TaskStatus::AwaitingUser,
+    ] {
+        let loaded = observed(&["initial"], "initial", IssueExecutionPhase::Queued, status);
+        let result = project(Some(&loaded), Some(&basis('a')), no_fetch).unwrap();
+        assert!(result.dispatch_source.is_none());
+        assert_eq!(result.saved_source, Some("a".repeat(40)));
+    }
 }
