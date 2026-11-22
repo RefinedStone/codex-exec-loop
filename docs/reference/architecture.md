@@ -1032,7 +1032,11 @@ strategy in the production TUI.
   the remote write; reconnect keeps the reviewed source version and full mapping; backup preserves
   readable local bindings under the same lease. See [atomic binding contract](./evidence-vault-bindings.md).
 - The Vault key lives in the OS key store behind `VaultKeyStorePort` (`OsVaultKeyStoreAdapter`,
-  `keyring` crate; `FakeVaultKeyStoreAdapter` for tests). `EvidenceVaultUnlockService` is the only
+  `keyring` crate; `FakeVaultKeyStoreAdapter` for tests). `load_key` is read-only;
+  `get_or_create_key` coordinates first creation using a private SQLite intent at a stable OS
+  user path, a generation check, and a full fingerprint readback. Unresolved creation holds
+  without resending a candidate; see [key initialization](./evidence-vault-key-initialization.md).
+  `EvidenceVaultUnlockService` is the only
   constructor of `VaultUserConfirmation`: it gives grants bound to one issue and one viewing
   session. See [evidence-vault-unlock.md](./evidence-vault-unlock.md) for failure states, key-loss
   recovery, and protection limits.

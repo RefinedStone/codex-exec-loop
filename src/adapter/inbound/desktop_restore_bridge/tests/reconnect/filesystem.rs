@@ -33,7 +33,7 @@ async fn actual_encrypted_binding_is_unchanged_on_cancel_and_reconnects_through_
     let store = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(
         temporary.0.clone(),
     ));
-    seed(store.as_ref(), &fixture.unlock);
+    seed(store.as_ref());
     let before = ciphertexts(&temporary.0);
     *fixture.confirmation.write_outcome.lock().unwrap() =
         Some(VaultNativeConfirmationOutcome::Cancelled);

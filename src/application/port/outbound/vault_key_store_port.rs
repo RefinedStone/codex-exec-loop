@@ -33,9 +33,11 @@ impl fmt::Display for VaultKeyStoreError {
 impl std::error::Error for VaultKeyStoreError {}
 
 pub trait VaultKeyStorePort: Send + Sync {
-    /// 이 장치의 Vault 키를 읽는다. 저장소는 동작하지만 키가 없으면 `None` 이다.
+    /// 기존 Vault 키만 읽는다. 키가 없으면 `None`이며 파일·키·초기화 기록을 만들지 않는다.
     fn load_key(&self) -> Result<Option<VaultKey>, VaultKeyStoreError>;
 
-    /// 이 장치의 Vault 키를 저장한다. 이미 있는 키는 바꾼다.
-    fn store_key(&self, key: &VaultKey) -> Result<(), VaultKeyStoreError>;
+    /// 기존 32바이트 키를 재사용하거나 최초 키를 한 번 생성한다.
+    /// 같은 OS 항목의 참여 프로세스는 미확정 저장이 있으면 새 키를 보내지 않는다.
+    /// 저장 결과가 불확실하면 실패하며, 재시도는 같은 키의 readback으로만 회복한다.
+    fn get_or_create_key(&self) -> Result<VaultKey, VaultKeyStoreError>;
 }

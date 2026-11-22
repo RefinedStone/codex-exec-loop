@@ -174,32 +174,81 @@ pub(crate) fn windows_file_link_count(file: &File) -> Result<u32> {
 pub(crate) fn windows_local_app_data_path() -> Result<std::path::PathBuf> {
     use std::os::windows::ffi::OsStringExt;
 
-    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
+    use windows_sys::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
 
-    let mut raw_path = std::ptr::null_mut();
-    let status = unsafe {
-        SHGetKnownFolderPath(
-            &FOLDERID_LocalAppData,
-            0,
-            std::ptr::null_mut(),
-            &mut raw_path,
-        )
+    struct ComGuard(bool);
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                // SAFETY: this thread owes exactly one uninitialize for a successful call.
+                unsafe { windows_sys::Win32::System::Com::CoUninitialize() };
+            }
+        }
+    }
+    struct ComPath(*mut u16);
+    impl Drop for ComPath {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: SHGetKnownFolderPath returns CoTaskMem on success or failure.
+                unsafe { windows_sys::Win32::System::Com::CoTaskMemFree(self.0.cast()) };
+            }
+        }
+    }
+
+    // Known-folder APIs require COM on the calling thread. An existing STA remains owned
+    // by its caller; S_OK and S_FALSE both require balancing our own initialization.
+    // SAFETY: the reserved pointer is null and the apartment choice is valid.
+    let com_status = unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) };
+    let _com = if com_status >= 0 {
+        ComGuard(true)
+    } else if com_status == RPC_E_CHANGED_MODE {
+        ComGuard(false)
+    } else {
+        return Err(anyhow!(
+            "failed to initialize COM for Windows LocalAppData lookup (HRESULT {com_status:#x})"
+        ));
     };
-    if status < 0 || raw_path.is_null() {
+
+    let mut raw_token = std::ptr::null_mut();
+    // Keep every Akra known-folder lookup on an explicit OS account token. A NULL-token
+    // lookup can populate Shell's process-wide cache from a USERPROFILE override.
+    // SAFETY: the pseudo process handle is valid and the output points to live storage.
+    if unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_DUPLICATE,
+            &mut raw_token,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("failed to open current user token for Windows LocalAppData lookup");
+    }
+    let token = WindowsHandle(raw_token);
+    let mut raw_path = std::ptr::null_mut();
+    // Keep flags at zero: retrieve the current, possibly redirected folder without creating it.
+    // SAFETY: COM is initialized, token is owned, and all pointers remain valid for the call.
+    let status = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, token.0, &mut raw_path) };
+    let allocation = ComPath(raw_path);
+    if status < 0 || allocation.0.is_null() {
         return Err(anyhow!(
             "failed to resolve Windows LocalAppData known folder (HRESULT {status:#x})"
         ));
     }
     let mut length = 0usize;
-    while unsafe { *raw_path.add(length) } != 0 {
+    // SAFETY: a successful query supplies a NUL-terminated UTF-16 string held by allocation.
+    while unsafe { *allocation.0.add(length) } != 0 {
         length = length
             .checked_add(1)
             .context("Windows LocalAppData path length overflowed")?;
     }
+    // SAFETY: the preceding scan established the live allocation's string length.
     let path =
-        std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(raw_path, length) });
-    unsafe { CoTaskMemFree(raw_path.cast()) };
+        std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(allocation.0, length) });
     let path = std::path::PathBuf::from(path);
     if !path.is_absolute() {
         return Err(anyhow!(

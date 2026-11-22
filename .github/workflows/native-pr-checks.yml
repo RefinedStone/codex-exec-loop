@@ -260,6 +260,22 @@ jobs:
           cargo test --locked --all-features --lib --target "${{ matrix.target }}"
           trusted_executable::tests::native_ -- --nocapture
 
+      - name: Test native Vault key initialization and private storage
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for filter in \
+            'private_sqlite::tests::' \
+            'stable_user_data_root::tests::' \
+            'sqlite_issue_automation_store::private_store::tests::' \
+            'adapter::outbound::vault_key_store::' \
+            'application::service::evidence_vault_unlock::'
+          do
+            cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
+              "${filter}" -- --nocapture
+          done
+
   smoke_check:
     name: Rust Smoke Check
     needs: scope

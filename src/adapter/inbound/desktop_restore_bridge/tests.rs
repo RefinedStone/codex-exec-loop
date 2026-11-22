@@ -1,4 +1,5 @@
 use super::*;
+use crate::adapter::outbound::vault_key_store::FakeVaultKeyStoreAdapter;
 use crate::application::port::inbound::vault_restore_session_port::{
     MAX_VIEWING_SESSION as SESSION_LIFETIME, VaultRestoreSessionFailure, VaultRestoreSessionHold,
     VaultRestoreSessionPrepared,
@@ -82,7 +83,7 @@ impl VaultKeyStorePort for Keys {
         }
         Ok(Some(VaultKey::new(vec![7; 32])))
     }
-    fn store_key(&self, _: &VaultKey) -> Result<(), VaultKeyStoreError> {
+    fn get_or_create_key(&self) -> Result<VaultKey, VaultKeyStoreError> {
         self.stores.fetch_add(1, Ordering::SeqCst);
         panic!("read-only restore must never create a key");
     }
@@ -249,7 +250,7 @@ impl Fixture {
         let keys = Arc::new(Keys::default());
         let unlock = Arc::new(EvidenceVaultUnlockService::new(keys.clone()));
         let records = Arc::new(Records::default());
-        let fields = seed(records.as_ref(), &unlock);
+        let fields = seed(records.as_ref());
         let initial_loads = keys.loads.load(Ordering::SeqCst);
         Self {
             keys,
@@ -309,10 +310,7 @@ fn issue() -> IssueReference {
         },
     }
 }
-fn seed(
-    store: &dyn EvidenceVaultStorePort,
-    unlock: &EvidenceVaultUnlockService,
-) -> (String, String) {
+fn seed(store: &dyn EvidenceVaultStorePort) -> (String, String) {
     let sensitive = |field, text: &str, secret: &str| {
         let start = text.find(secret).unwrap();
         IssueSensitiveSpan {
@@ -340,7 +338,11 @@ fn seed(
         VaultBindingCommitPolicy, VaultBindingCommitRequest, VaultBindingCommitResult,
         VaultBindingFields,
     };
-    let key = unlock.sealing_key().unwrap(); // fixture 작성 전용. 운영 helper는 호출하지 않는다.
+    // 암호문 준비는 별도 fake로 수행한다. 실제 native 경로의 Keys는 초기화를 금지한다.
+    let seed_unlock = EvidenceVaultUnlockService::new(Arc::new(
+        FakeVaultKeyStoreAdapter::with_key(VaultKey::new(vec![7; 32])),
+    ));
+    let key = seed_unlock.sealing_key().unwrap();
     let mut fields = VaultBindingFields::default();
     for field in restorable_fields(&outcome.masked_spans) {
         match field.field {
@@ -718,7 +720,7 @@ async fn actual_encrypted_records_restore_through_the_private_pipe_without_file_
     let store = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(
         temporary.0.clone(),
     ));
-    seed(store.as_ref(), &fixture.unlock);
+    seed(store.as_ref());
     fn files(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
         let mut values = Vec::new();
         for entry in std::fs::read_dir(root).unwrap() {

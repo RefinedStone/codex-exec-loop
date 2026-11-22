@@ -489,6 +489,7 @@ mod tests {
 
         assert_eq!(result, Err(VaultBackupFailure::NotApproved));
         assert_eq!(local.key_store.load_count(), 0);
+        assert_eq!(local.key_store.initialization_count(), 0);
         assert!(local.record_files().is_empty());
     }
 
