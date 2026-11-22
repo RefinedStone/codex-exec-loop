@@ -1,5 +1,6 @@
 // 화면 시험 (#2427): 로컬 복원본 창을 열고, 자동화로 실행한 앱에서는 열람을 보류하는지, 그 창이 일반 표면과 나뉘어
-// 있는지 확인한다. 이 시험은 playwright 가 앱을 조종하므로 실행 프로필이 "자동화" 이다: 복원한 글은 나오지 않는다.
+// 있는지 확인한다. Playwright 프로필에서는 실제 native 복원이 차단된다. 별도로 main 시험 harness가 보낸
+// synthetic restored state로 전용 화면의 평문 표시/삭제만 확인하며, native 승인 성공으로 취급하지 않는다.
 // 실제 codex, 턴, 키 저장소, GitHub 는 쓰지 않는다 (가짜 Gateway). userData 는 임시 폴더를 쓴다.
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -19,6 +20,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.BASIC_RECORDING]);
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
 delete env.ELECTRON_RUN_AS_NODE;
 const ISSUE = "https://github.com/fixture-owner/fixture-repo/issues/7";
+const TARGET = { workspace: desktopDir, issueUrl: ISSUE, issue: { provider: "github", server_id: "github.com", repository_id: "R_fixture", issue_id: "I_fixture", project_scope: { workspace_dir: desktopDir } } };
 
 const failures = [];
 const check = (name, ok, detail = "") => {
@@ -31,12 +33,14 @@ try {
   const page = await app.firstWindow();
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
 
-  // 일반 창은 이슈 주소가 아닌 값으로 복원본 창을 열 수 없다.
-  const refused = await page.evaluate(() => window.akra.vaultRestore.open("https://example.test/not-an-issue").then(() => false, () => true));
-  check("a non-issue address is refused", refused);
+  // 주소만 보내거나 workspace·전체 좌표가 맞지 않으면 일반 창에서 열 수 없다.
+  for (const target of [ISSUE, { ...TARGET, issueUrl: "https://example.test/not-an-issue" }, { ...TARGET, workspace: desktopDir + "/other" }, { ...TARGET, approved: true }]) {
+    const refused = await page.evaluate((target) => window.akra.vaultRestore.open(target).then(() => false, () => true), target);
+    check("an incomplete, mismatched or untrusted target is refused", refused);
+  }
 
   const opened = app.waitForEvent("window");
-  await page.evaluate((url) => window.akra.vaultRestore.open(url), ISSUE);
+  await page.evaluate((target) => window.akra.vaultRestore.open(target), TARGET);
   const restore = await opened;
   await restore.locator('#root[data-phase="held"]').waitFor({ timeout: 10_000 });
   check("the restore window opens with its own page", restore.url().endsWith("vault-restore.html"), restore.url());
@@ -48,7 +52,7 @@ try {
   check("the general window has no restore bridge", await page.evaluate(() => typeof window.akra.vaultRestore.onState === "undefined" && typeof window.akraVaultRestore === "undefined"));
 
   // 같은 이슈를 다시 열면 창을 하나 더 만들지 않는다.
-  await page.evaluate((url) => window.akra.vaultRestore.open(url), ISSUE);
+  await page.evaluate((target) => window.akra.vaultRestore.open(target), TARGET);
   check("the same issue reuses its window", app.windows().length === 2, String(app.windows().length));
 
   // 다시 여는 요청도 실행 프로필을 다시 본다.
@@ -60,6 +64,43 @@ try {
   await page.evaluate(() => window.akra.vaultRestore.projectChanged());
   await restore.locator('#root[data-phase="locked"]').waitFor({ timeout: 5_000 });
   check("a project switch locks the restore window", (await restore.getByTestId("vault-restore-detail").textContent())?.includes("프로젝트") === true);
+
+  // 같은 주소여도 전체 좌표가 다르면 승인 대상과 창을 합치지 않는다.
+  const anotherOpened = app.waitForEvent("window");
+  await page.evaluate((target) => window.akra.vaultRestore.open(target), { ...TARGET, issue: { ...TARGET.issue, issue_id: "I_another" } });
+  const anotherRestore = await anotherOpened;
+  await anotherRestore.locator('#root[data-phase="held"]').waitFor({ timeout: 5_000 });
+  check("different full coordinates do not reuse a URL-only window", app.windows().length === 3);
+  await anotherRestore.close();
+
+  // 이전 프로젝트의 창에서 직접 unlock해도 새 helper를 시작할 수 없다.
+  await restore.getByTestId("vault-restore-unlock").click();
+  await restore.locator('#root[data-phase="held"]').waitFor({ timeout: 5_000 });
+  check("a switched-away target cannot unlock itself", (await restore.getByTestId("vault-restore-detail").textContent())?.includes("복원 경로") === true);
+  await page.evaluate((target) => window.akra.vaultRestore.open(target), TARGET);
+  await restore.getByTestId("vault-restore-unlock").click();
+  await restore.locator('#root[data-phase="held"]').waitFor({ timeout: 5_000 });
+  check("a fresh current-target open still obeys the automation hold", (await restore.getByTestId("vault-restore-detail").textContent())?.includes("자동화") === true);
+
+  // 화면만 검증하는 합성 fixture이다. 제품에 승인 우회·fake environment·helper 대체 경로는 없다.
+  const synthetic = { title: "synthetic local title <b>literal</b>", body: "synthetic-private-body <img src=x onerror=alert(1)> **literal**" };
+  const showSynthetic = async (state) => app.evaluate(({ BrowserWindow }, state) => {
+    const window = BrowserWindow.getAllWindows().find((owner) => owner.webContents.getURL().endsWith("vault-restore.html"));
+    window.webContents.send("akra-vault-restore:state", state);
+  }, state);
+  await showSynthetic({ phase: "restored", ...synthetic, expiresAt: Date.now() + 60_000 });
+  await restore.getByTestId("vault-restored-body").waitFor();
+  check("synthetic restored state appears only as literal text", await restore.getByTestId("vault-restored-title").textContent() === synthetic.title
+    && await restore.getByTestId("vault-restored-body").textContent() === synthetic.body
+    && await restore.locator("#root img, #root b").count() === 0);
+  check("the general window never receives synthetic plaintext", !(await page.locator("body").textContent()).includes("synthetic-private-body"));
+  await restore.getByTestId("vault-restore-lock").click();
+  await restore.locator('#root[data-phase="locked"]').waitFor();
+  check("locking removes synthetic plaintext from the dedicated DOM", !(await restore.locator("body").textContent()).includes("synthetic-private-body"));
+  await showSynthetic({ phase: "held", reason: "marker_moved" });
+  await restore.locator('#root[data-phase="held"]').waitFor();
+  check("unsupported reconnect is absent from the dedicated screen", await restore.getByTestId("vault-restore-review").count() === 0
+    && (await restore.getByTestId("vault-restore-detail").textContent()).includes("재연결을 지원하지 않습니다"));
 
   const protectedWindow = await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().filter((window) => window.webContents.getURL().endsWith("vault-restore.html")).map((window) => window.isContentProtected?.() ?? null),

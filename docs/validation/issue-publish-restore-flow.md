@@ -49,9 +49,11 @@ Gateway session and builds them again on the same folders. The GitHub double and
   journal (asserted in test 2), but the Gateway does not give that hash. The test
   `the_gateway_hand_off_refuses_an_issue_edited_after_its_approved_publish` is `#[ignore]`. The
   product must first decide whether an external edit blocks the hand-off of that issue.
-- **Desktop restore window has no restore source.** `VaultRestoreSource` has no shipped
-  implementation, and the window holds viewing under automation. Unlock, restore, and reconnect
-  are proven at the service level only. No screen test shows restored text.
+- **Desktop native follow-up.** The original validation above had no shipped
+  `VaultRestoreSource`. The [native restore follow-up](desktop-vault-native-restore.md) adds a
+  local, target-bound read-only helper and an issue-detail entry point. Its synthetic UI and
+  protocol checks do not prove a real OS confirmation plus key-store round trip. Windows and
+  cross-process reconnect remain unsupported; automated profiles still hold viewing.
 - **Process stop between two saves.** The tests do not stop the process between the Vault save,
   the journal save, and the remote write, and do not simulate a full disk. The restart tests start
   from the states that a completed `publish` call leaves.

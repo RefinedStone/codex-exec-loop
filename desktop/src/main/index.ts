@@ -10,7 +10,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemCons
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { mergeSettings, shouldKeepAwake, validateSettings } from "../shared/settings";
-import { isVaultRestoreIssueUrl, vaultRestoreProfileHold } from "../shared/vaultRestore";
+import { isVaultRestoreTarget, vaultRestoreProfileHold } from "../shared/vaultRestore";
 import { isZoomDirection, nextZoom, type ZoomDirection } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
@@ -43,6 +43,7 @@ import { LinearService, isLinearIssueUrl } from "./linearService";
 import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
 import { VaultRestoreWindows } from "./vaultRestoreWindow";
+import { createVaultRestoreSource } from "./vaultRestoreSource";
 import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
 
 // 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
@@ -784,13 +785,11 @@ ipcMain.on(IPC_CHANNELS.reportWorking, (event, working: unknown) => {
 });
 
 /**
- * 로컬 복원본 창이다 (#2427). 일반 창은 이슈 주소로 창을 열게 하고 다시 잠그게 할 뿐이다. 복원한 글은 그 창의 전용
- * 채널로만 간다. 열람은 그 창에서 main 이 띄운 확인을 거친 뒤에만 된다.
+ * 일반 창은 현재 workspace·이슈 좌표·URL로 전용 창만 연다. 복원한 글은 전용 채널로만 간다.
+ * native helper의 OS 확인 뒤에 프로필을 다시 검사한다. 일반 Gateway 메시지는 해석하지 않는다.
  */
 const vaultRestores = new VaultRestoreWindows({
-  // 로컬 복원 경로(Vault 복원 서비스, #2425)는 아직 이 앱에 연결되지 않았다. 열람은 보류 상태로 남는다.
-  // 일반 Gateway 로 평문을 받는 경로는 만들지 않는다.
-  source: () => null,
+  source: createVaultRestoreSource({ executable: () => resolveGatewayExecutable(repositoryRoot()) }),
   profileHold: () =>
     vaultRestoreProfileHold({
       automation:
@@ -806,13 +805,18 @@ const vaultRestores = new VaultRestoreWindows({
   loadPage: (window) => void window.loadFile(join(__dirname, "../renderer/vault-restore.html")),
   hidden: HIDDEN_WINDOWS,
 });
-ipcMain.handle(IPC_CHANNELS.vaultRestoreOpen, (event, issueUrl: unknown) => {
+ipcMain.handle(IPC_CHANNELS.vaultRestoreOpen, (event, target: unknown) => {
   const opener = BrowserWindow.fromWebContents(event.sender);
   if (!opener || !mainWindows.has(opener) || event.senderFrame !== event.sender.mainFrame) throw new Error("복원본 요청을 보낸 창을 확인할 수 없습니다.");
-  if (!isVaultRestoreIssueUrl(issueUrl)) throw new Error("GitHub 이슈 주소만 열 수 있습니다.");
-  vaultRestores.open(opener, issueUrl);
+  if (!isVaultRestoreTarget(target)) throw new Error("현재 프로젝트와 GitHub 이슈 좌표를 확인할 수 없습니다.");
+  vaultRestores.open(opener, target);
 });
-ipcMain.on(IPC_CHANNELS.vaultRestoreProjectChanged, (event) => vaultRestores.lockOpenedBy(event.sender.id, "project_switch"));
+ipcMain.on(IPC_CHANNELS.vaultRestoreProjectChanged, (event) => {
+  const opener = BrowserWindow.fromWebContents(event.sender);
+  if (opener && mainWindows.has(opener) && event.senderFrame === event.sender.mainFrame) {
+    vaultRestores.lockOpenedBy(event.sender.id, "project_switch");
+  }
+});
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);

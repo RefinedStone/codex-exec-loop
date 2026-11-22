@@ -9,6 +9,7 @@ pub(crate) mod clipboard_image_probe;
 pub(crate) mod core_effect_runner;
 pub(crate) mod core_effect_worker;
 pub(crate) mod core_turn_submission;
+pub(crate) mod desktop_restore;
 pub(crate) mod issue_collection;
 pub(crate) mod issue_confirmation;
 pub(crate) mod issue_observer;

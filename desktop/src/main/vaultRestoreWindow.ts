@@ -6,9 +6,9 @@
 // - DevTools, 다른 주소로의 이동, 새 창을 막는다. 세션은 디스크에 쓰지 않는 전용 partition 이다.
 // - 복원본 채널의 요청은 보낸 webContents 가 이 창의 main frame 일 때만 받는다.
 // 화면 캡처 제외(`setContentProtection`)는 OS 가 지원할 때만 동작한다. 캡처를 막는다고 보장하지 않는다.
-import { BrowserWindow, dialog, ipcMain, type IpcMainEvent, type WebContents } from "electron";
+import { BrowserWindow, ipcMain, type IpcMainEvent, type WebContents } from "electron";
 
-import { type VaultRelockCause, type VaultRestoreHold, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
+import { copyVaultRestoreTarget, type VaultRestoreTarget, type VaultRelockCause, type VaultRestoreHold, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
 import { VaultRestoreSession, type VaultRestoreSource } from "./vaultRestoreSession";
 
 /** 복원본을 연 뒤 다시 잠글 때까지의 시간이다. */
@@ -18,7 +18,8 @@ interface Entry {
   window: BrowserWindow;
   session: VaultRestoreSession;
   openerId: number;
-  issueUrl: string;
+  targetKey: string;
+  targetActive: boolean;
   /** 처음 `ready` 에만 확인을 시작한다. 화면을 다시 불러오면 잠근다. */
   started: boolean;
 }
@@ -57,10 +58,14 @@ export class VaultRestoreWindows {
   }
 
   /** `opener` 가 고른 이슈의 복원본 창을 연다. 같은 창이 같은 이슈를 이미 열었으면 그 창을 앞으로 가져온다. */
-  open(opener: BrowserWindow, issueUrl: string): void {
+  open(opener: BrowserWindow, requested: VaultRestoreTarget): void {
+    const target = copyVaultRestoreTarget(requested);
+    const targetKey = JSON.stringify(target);
     const openerId = opener.webContents.id;
     for (const entry of this.entries.values()) {
-      if (entry.openerId === openerId && entry.issueUrl === issueUrl) {
+      if (entry.openerId === openerId && entry.targetKey === targetKey) {
+        // 현재 이슈 상세에서 새로 연 요청만 이전 프로젝트의 대상을 다시 활성화한다.
+        entry.targetActive = true;
         if (entry.window.isMinimized()) entry.window.restore();
         return entry.window.focus();
       }
@@ -86,17 +91,18 @@ export class VaultRestoreWindows {
     window.setContentProtection(true);
     const contents = window.webContents;
     const contentsId = contents.id;
+    let entry: Entry;
     const session = new VaultRestoreSession({
-      issueUrl,
+      target,
       source: this.deps.source,
-      profileHold: this.deps.profileHold,
-      confirm: () => confirmViewing(window, issueUrl),
+      profileHold: () => entry.targetActive ? this.deps.profileHold() : "source_unavailable",
       emit: (state) => {
         if (!contents.isDestroyed()) contents.send(VAULT_RESTORE_CHANNELS.state, state);
       },
       sessionMs: VIEWING_SESSION_MS,
     });
-    this.entries.set(contentsId, { window, session, openerId, issueUrl, started: false });
+    entry = { window, session, openerId, targetKey, targetActive: true, started: false };
+    this.entries.set(contentsId, entry);
     lockDownNavigation(contents);
     window.on("minimize", () => session.lock("window_hidden"));
     window.on("hide", () => session.lock("window_hidden"));
@@ -120,7 +126,10 @@ export class VaultRestoreWindows {
   /** 그 창이 연 복원본을 다시 잠근다 (프로젝트 전환). */
   lockOpenedBy(openerId: number, cause: VaultRelockCause): void {
     for (const entry of this.entries.values()) {
-      if (entry.openerId === openerId) entry.session.lock(cause);
+      if (entry.openerId === openerId) {
+        if (cause === "project_switch") entry.targetActive = false;
+        entry.session.lock(cause);
+      }
     }
   }
 }
@@ -128,18 +137,4 @@ export class VaultRestoreWindows {
 function lockDownNavigation(contents: WebContents): void {
   contents.on("will-navigate", (event) => event.preventDefault());
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
-}
-
-/** 사용자 확인이다. 복원본 창에 붙은 시스템 대화상자이다. 기본 버튼은 취소이다. */
-async function confirmViewing(window: BrowserWindow, issueUrl: string): Promise<boolean> {
-  if (window.isDestroyed()) return false;
-  const answer = await dialog.showMessageBox(window, {
-    type: "question",
-    message: "이 이슈의 가린 구간을 이 창에서 엽니까?",
-    detail: `${issueUrl}\n\n복원한 글은 이 창에만 보입니다. 대화, 에이전트, GitHub 에는 보내지 않습니다. 같은 사용자 계정의 화면 캡처나 접근성 도구는 이 글을 읽을 수 있습니다.`,
-    buttons: ["복원본 열기", "취소"],
-    defaultId: 1,
-    cancelId: 1,
-  });
-  return answer.response === 0;
 }

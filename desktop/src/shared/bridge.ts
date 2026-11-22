@@ -4,7 +4,7 @@ import type { LinearBridge } from "./linear";
 import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings, AppSettingsPatch } from "./settings";
 import type { SkillsBridge } from "./skills";
-import type { VaultApprovedMapping, VaultRestoreViewState } from "./vaultRestore";
+import type { VaultApprovedMapping, VaultRestoreTarget, VaultRestoreViewState } from "./vaultRestore";
 import type { ZoomDirection } from "./zoom";
 import type { ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "./issueConfirmation";
 
@@ -558,7 +558,7 @@ export interface VaultRestoreBridge {
 /** 일반 창이 쓰는 함수이다. 창을 열고 닫게 할 뿐이다. 복원본의 상태와 글은 받지 못한다. */
 export interface VaultRestoreOpenerBridge {
   /** 이슈의 로컬 복원본 창을 연다. 열람은 그 창에서 사용자가 확인한 뒤에만 된다. */
-  open(issueUrl: string): Promise<void>;
+  open(target: VaultRestoreTarget): Promise<void>;
   /** 이 창의 프로젝트(열린 스레드의 폴더)가 바뀌었다. 이 창이 연 복원본을 다시 잠근다. */
   projectChanged(): void;
 }

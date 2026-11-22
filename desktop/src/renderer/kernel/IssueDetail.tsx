@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { isVaultRestoreTarget } from "../../shared/vaultRestore";
 import { Markdown } from "../conversation/Markdown";
 import { Icon } from "../design/icons";
 import { IssueTriageView } from "./IssueTriageView";
@@ -68,8 +69,20 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
     drafts = { basis: "", decisions: new Map<string, IssueDecisionDraft>(), interventionBasis: "", intervention: EMPTY_ISSUE_INTERVENTION_DRAFT };
     setDrafts(drafts);
   }
+  const [openingOriginal, setOpeningOriginal] = useState(false);
+  const [originalError, setOriginalError] = useState<string | null>(null);
   const item = current?.item ?? null;
   const shared = item?.current.status === "observed" && item.current.content.kind === "shared" ? item.current.content.shared_copy : null;
+  const candidate = item && shared && { workspace: item.issue.project_scope.workspace_dir, issueUrl: item.presentation.url, issue: item.issue };
+  const restoreTarget = isVaultRestoreTarget(candidate) ? candidate : null;
+  async function openOriginal(): Promise<void> {
+    if (!restoreTarget || openingOriginal || busy || loading) return;
+    setOpeningOriginal(true);
+    setOriginalError(null);
+    try { await window.akra.vaultRestore.open(restoreTarget); }
+    catch { setOriginalError("로컬 복원본 창을 열 수 없습니다. 현재 이슈를 다시 확인해 주세요."); }
+    finally { setOpeningOriginal(false); }
+  }
   return (
     <article className="issues-detail" aria-label="이슈 상세" data-testid="issues-detail" aria-busy={loading}>
       <div className="issues-detail-toolbar">
@@ -112,6 +125,8 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
           <div className="issues-detail-columns">
             <section className="issues-detail-section" aria-label="현재 공유본">
               <h3>현재 공유본</h3>
+              {restoreTarget && <button type="button" className="issues-back" disabled={busy || loading || openingOriginal} onClick={() => void openOriginal()} data-testid="issues-detail-original">원문 보기</button>}
+              {originalError && <p className="issues-inline-notice error" role="alert">{originalError}</p>}
               {shared ? (
                 <div className="issues-shared-copy" data-testid="issues-shared-copy">
                   {shared.body ? <Markdown text={shared.body} /> : <p className="muted">공유된 본문이 비어 있습니다.</p>}
