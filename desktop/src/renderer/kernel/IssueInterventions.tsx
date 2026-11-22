@@ -1,15 +1,15 @@
-import { useState } from "react";
-import { ISSUE_ACTION_LABEL, issueTextBytes, type IssueInterventionName, type ReadyIssueDetail } from "./issueInteractions";
+import { ISSUE_ACTION_LABEL, issueTextBytes, type IssueInterventionDraft, type IssueInterventionName, type ReadyIssueDetail } from "./issueInteractions";
 
-export function IssueInterventions({ detail, busy, onIntervene, onOpenConversation }: {
+export function IssueInterventions({ detail, busy, onIntervene, onOpenConversation, draft, onDraftChange }: {
   detail: ReadyIssueDetail;
   busy: boolean;
+  draft: IssueInterventionDraft;
+  onDraftChange(draft: IssueInterventionDraft): void;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<void>;
   onOpenConversation(): Promise<void>;
 }) {
-  const [message, setMessage] = useState("");
-  const [steering, setSteering] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
+  const { message, steering, cancelling } = draft;
+  const setMessage = (message: string) => onDraftChange({ ...draft, message });
   const actions = detail.actions ?? [];
   const control = detail.control;
   const steer = actions.find((action) => action.command === "steer_issue");
@@ -17,8 +17,8 @@ export function IssueInterventions({ detail, busy, onIntervene, onOpenConversati
   const conversation = detail.conversation;
   const tooLong = issueTextBytes(message) > 65_536;
   const act = (action: IssueInterventionName) => {
-    if (action === "steer_issue") { setSteering((value) => !value); setCancelling(false); return; }
-    if (action === "cancel_issue_work") { setCancelling(true); setSteering(false); return; }
+    if (action === "steer_issue") { onDraftChange({ ...draft, steering: !steering, cancelling: false }); return; }
+    if (action === "cancel_issue_work") { onDraftChange({ ...draft, cancelling: true, steering: false }); return; }
     void onIntervene(action);
   };
   return (
@@ -37,13 +37,12 @@ export function IssueInterventions({ detail, busy, onIntervene, onOpenConversati
           event.preventDefault();
           if (!message.trim() || tooLong || busy) return;
           void onIntervene("steer_issue", message);
-          setSteering(false);
-          setMessage("");
+          onDraftChange({ ...draft, steering: false, message: "" });
         }}>
           <label className="issues-input-label">작업자에게 보낼 추가 지시<textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={3} disabled={busy} maxLength={65_536} aria-invalid={tooLong} data-testid="issue-steer-message" /></label>
           {tooLong && <p className="issues-inline-notice error" role="alert">추가 지시는 65,536바이트 이내로 적어 주세요.</p>}
           <div className="issues-form-actions">
-            <button type="button" className="issues-action-button" disabled={busy} onClick={() => setSteering(false)}>닫기</button>
+            <button type="button" className="issues-action-button" disabled={busy} onClick={() => onDraftChange({ ...draft, steering: false })}>닫기</button>
             <button type="submit" className="issues-action-button primary" disabled={busy || !message.trim() || tooLong} data-testid="issue-steer-send">추가 지시 보내기</button>
           </div>
         </form>
@@ -52,8 +51,8 @@ export function IssueInterventions({ detail, busy, onIntervene, onOpenConversati
         <div className="issues-cancel-confirmation" role="group" aria-label="작업 취소 확인">
           <p>이 이슈의 자동 작업을 취소하고 실행 허가를 회수합니다. 지금 취소할까요?</p>
           <div className="issues-form-actions">
-            <button type="button" className="issues-action-button" disabled={busy} onClick={() => setCancelling(false)}>돌아가기</button>
-            <button type="button" className="issues-action-button destructive" disabled={busy} onClick={() => { setCancelling(false); void onIntervene("cancel_issue_work", undefined, true); }} data-testid="issue-cancel-confirm">작업 취소 확인</button>
+            <button type="button" className="issues-action-button" disabled={busy} onClick={() => onDraftChange({ ...draft, cancelling: false })}>돌아가기</button>
+            <button type="button" className="issues-action-button destructive" disabled={busy} onClick={() => { onDraftChange({ ...draft, cancelling: false }); void onIntervene("cancel_issue_work", undefined, true); }} data-testid="issue-cancel-confirm">작업 취소 확인</button>
           </div>
         </div>
       )}
