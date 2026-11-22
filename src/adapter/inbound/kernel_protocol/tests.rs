@@ -67,12 +67,12 @@ fn sample_commands() -> Vec<KernelCommand> {
             expected_planning_revision: 7,
             confirm: true,
         },
+        KernelCommand::SetIssueAutomationMode {
+            mode: IssueAutomationMode::Observe,
+        },
         KernelCommand::SetIssueAutonomy {
             command_id: "autonomy-1".to_owned(),
             level: IssueAutonomyLevel::Propose,
-        },
-        KernelCommand::SetIssueAutomationMode {
-            mode: IssueAutomationMode::Observe,
         },
         KernelCommand::AnswerIssueDecision {
             decision_id: "decision-1".to_owned(),
