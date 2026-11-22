@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "kind": "TECH_BLOG",
+  "style": "PROBLEM_SOLVING",
+  "mode": "PROJECT_RETROSPECTIVE",
+  "topic": "PR 리뷰를 Codex 수정 작업으로 넘길 때 개발자의 일은 어디서 달라졌나?",
+  "commit": "321b49f3d5d400d487d566d7ab5c54f450a1c43e",
+  "sources": [
+    {
+      "id": "review-builder",
+      "path": "desktop/src/main/githubService.ts",
+      "lines": [
+        131,
+        146
+      ]
+    },
+    {
+      "id": "handoff-check",
+      "path": "docs/plan/17-akra-desktop/roadmap/R4-work-panels.md",
+      "lines": [
+        43,
+        48
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "id": "transfer",
+      "text": "미해결 리뷰의 파일·줄·작성자·본문을 새 대화의 입력으로 구성한다.",
+      "sources": [
+        "review-builder",
+        "handoff-check"
+      ]
+    },
+    {
+      "id": "send",
+      "text": "기록에서 확인한 인계는 입력창을 채우는 지점까지다. 전송은 사용자가 결정한다.",
+      "sources": [
+        "handoff-check"
+      ]
+    }
+  ],
+  "figures": [
+    {
+      "id": "original",
+      "claims": [
+        "transfer"
+      ],
+      "question": "어느 리뷰의 어느 줄을 넘기는가?",
+      "path": "assets/review-source.png",
+      "caption": "인계 전, 미해결 리뷰의 원문과 위치",
+      "alt": "GitHub에서 선택한 미해결 리뷰의 파일과 줄",
+      "visibility": "pending",
+      "sha256": null
+    },
+    {
+      "id": "composer",
+      "claims": [
+        "transfer",
+        "send"
+      ],
+      "question": "같은 리뷰의 어떤 정보가 옮겨졌고, 무엇을 사람이 결정하는가?",
+      "path": "assets/review-composer.png",
+      "caption": "인계 직후, 전송 전 입력창에 담긴 같은 리뷰",
+      "alt": "동일한 리뷰를 담고 전송을 기다리는 Akra Desktop 입력창",
+      "visibility": "pending",
+      "sha256": null
+    }
+  ]
+}

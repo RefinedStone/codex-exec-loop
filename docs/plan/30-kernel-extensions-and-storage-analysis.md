@@ -2,6 +2,8 @@
 
 **설계 제안 · 2026-11-21 · Windows 첫 버전**
 
+저장소 범위의 두 번째 적용 사례는 [기술 블로그 확장과 근거 검수 워커](30-tech-blog-extension.md)에서 다룬다.
+
 구현은 [상위 이슈 #2596](https://github.com/RefinedStone/codex-exec-loop/issues/2596)에서 추적한다. 폴더 점유율 표는 [Desktop 이슈 #2620](https://github.com/RefinedStone/codex-exec-loop/issues/2620), 사용자와 AI의 공동 탐색은 [이슈 #2630](https://github.com/RefinedStone/codex-exec-loop/issues/2630)에서 추적한다.
 
 Akra 커널 계층에 확장을 등록한다. 커널이 확장의 활성 상태와 실행 권한을 소유한다. Desktop은 사용자가 확장을 켜고 끄고 결과를 볼 수 있는 클라이언트다. 첫 플러그인은 사용자가 고른 드라이브의 공간을 분석한다. 큰 폴더를 찾으면 그 안에서 공간이 한두 곳에 집중되는지 확인한다. 공간이 작은 항목에 흩어져 있으면 그 부모 폴더를 결과로 남긴다. 사용자는 같은 화면에서 그 판단의 근거와 실제 파일을 확인한다.
