@@ -117,6 +117,23 @@ pub(super) fn save(
                 || basis != candidate.approved_basis {
                 bail!("the issue work does not have a current human start approval");
             }
+            if !crate::domain::issue_automation::coordinator::ready_for_propose(assessment) {
+                bail!("the issue work requires propose readiness");
+            }
+            let item = super::collection::queries::item(tx, workspace, &candidate.order.issue)?
+                .ok_or_else(|| anyhow!("the issue work source is missing"))?;
+            let Some(crate::domain::issue_automation::source::IssueSourceRead::Observed(observation)) = item.current else {
+                bail!("the issue work source is unknown");
+            };
+            let crate::domain::issue_automation::source::IssueSourceContent::Shared(snapshot) = observation.content else {
+                bail!("the issue work handoff is withheld");
+            };
+            if snapshot.shared_copy != candidate.order.handoff
+                || snapshot.basis.field_hash != candidate.order.field_hash
+                || crate::domain::issue_automation::triage::issue_acceptance_criteria(&snapshot.shared_copy.body)
+                    .map_err(|reason| anyhow!(reason))? != candidate.order.acceptance {
+                bail!("the issue work does not contain the current approved shared handoff");
+            }
         }
         let mut record = candidate.clone();
         record.revision = next_revision(candidate.revision)?;
@@ -130,6 +147,7 @@ pub(super) fn save(
             params![workspace, enum_name(&record.order.issue.provider)?, record.order.issue.server_id,
                 record.order.issue.repository_id, record.order.issue.issue_id, record.order.work_order_id, encoded, sql_revision(record.revision)?])?;
         let catalog_revision = super::triage::bump_catalog(tx, workspace)?;
+        super::events::append(tx, workspace, existing.as_ref(), &record, catalog_revision)?;
         Ok(IssueWorkSaveResult::Saved { record: Box::new(record), catalog_revision, changed: true })
     }))
 }

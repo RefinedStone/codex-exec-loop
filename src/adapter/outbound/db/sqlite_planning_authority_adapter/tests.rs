@@ -9473,3 +9473,94 @@ fn sqlite_revision_bound_restore_rejects_missing_revision_without_body_only_fall
         "the explicitly requested body-only primitive remains available"
     );
 }
+
+#[test]
+fn issue_work_event_receipts_survive_ack_loss_and_event_retention() {
+    use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+    use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
+    use crate::domain::kernel_event::{KernelEvent, RETAINED_KERNEL_EVENTS};
+    let workspace = temp_workspace("issue-work-event-outbox");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let event = KernelEvent::IssueWorkSubmitted {
+        event_id: "stable-issue-work-event".into(),
+        issue: (&IssueReference {
+            provider: IssueProvider::GitHub,
+            server_id: "github.com".into(),
+            repository_id: "R_fixture".into(),
+            issue_id: "I_fixture".into(),
+            project_scope: IssueProjectScope {
+                workspace_dir: workspace.clone(),
+            },
+        })
+            .into(),
+        work_order_id: "issue-work-fixture".into(),
+        task_ids: vec!["task-1".into()],
+        revision: 4,
+    };
+    adapter
+        .append_kernel_events(&workspace, &numbered(1, std::slice::from_ref(&event)))
+        .unwrap();
+    adapter
+        .append_kernel_events(&workspace, &numbered(2, std::slice::from_ref(&event)))
+        .unwrap();
+    assert_eq!(
+        adapter
+            .load_kernel_events(&workspace, &["issue_work_submitted"])
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        adapter
+            .has_issue_work_event(&workspace, "stable-issue-work-event")
+            .unwrap()
+    );
+    adapter
+        .append_kernel_events(
+            &workspace,
+            &numbered(
+                RETAINED_KERNEL_EVENTS + 10,
+                &[KernelEvent::TurnStarted {
+                    thread_id: "thread-1".into(),
+                    turn_id: "turn-1".into(),
+                    op_id: None,
+                }],
+            ),
+        )
+        .unwrap();
+    assert!(
+        adapter
+            .load_kernel_events(&workspace, &["issue_work_submitted"])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        adapter
+            .has_issue_work_event(&workspace, "stable-issue-work-event")
+            .unwrap()
+    );
+    adapter
+        .append_kernel_events(
+            &workspace,
+            &numbered(RETAINED_KERNEL_EVENTS + 11, std::slice::from_ref(&event)),
+        )
+        .unwrap();
+    assert!(
+        adapter
+            .load_kernel_events(&workspace, &["issue_work_submitted"])
+            .unwrap()
+            .is_empty()
+    );
+    let mut tampered = event;
+    if let KernelEvent::IssueWorkSubmitted { task_ids, .. } = &mut tampered {
+        *task_ids = vec!["task-2".into()];
+    }
+    assert!(
+        adapter
+            .append_kernel_events(
+                &workspace,
+                &numbered(RETAINED_KERNEL_EVENTS + 12, &[tampered])
+            )
+            .is_err()
+    );
+}

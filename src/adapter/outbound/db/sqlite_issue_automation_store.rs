@@ -39,6 +39,7 @@ use crate::domain::issue_automation::triage::IssueTriageAssessment;
 mod collection;
 mod coordinator;
 mod decision;
+mod events;
 mod private_store;
 mod triage;
 
@@ -136,6 +137,16 @@ impl SqliteIssueAutomationStoreAdapter {
 }
 
 impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
+    fn pending_issue_work_events(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkEvent>> {
+        events::pending(self, workspace)
+    }
+    fn acknowledge_issue_work_event(&self, workspace: &str, event_id: &str) -> Result<()> {
+        events::acknowledge(self, workspace, event_id)
+    }
+
     fn get_issue_work(
         &self,
         workspace: &str,
@@ -612,6 +623,7 @@ fn ensure_schema(
                     transaction.execute_batch(decision::SCHEMA)?;
                 }
                 transaction.execute_batch(coordinator::SCHEMA)?;
+                transaction.execute_batch(events::SCHEMA)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -632,6 +644,7 @@ fn ensure_schema(
                 transaction.execute_batch(triage::ASSESSMENTS_SCHEMA)?;
                 transaction.execute_batch(decision::SCHEMA)?;
                 transaction.execute_batch(coordinator::SCHEMA)?;
+                transaction.execute_batch(events::SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -680,6 +693,7 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 5 {
         expected.push((coordinator::TABLE, coordinator::SCHEMA));
+        expected.push((events::TABLE, events::SCHEMA));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

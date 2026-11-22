@@ -18,7 +18,6 @@ use crate::domain::issue_automation::IssueAutomationSnapshot;
 use crate::domain::issue_automation::collection::{
     IssueCollectionMode, IssueCollectionPage, IssueCollectionQuery,
 };
-use crate::domain::issue_automation::decision::*;
 use crate::domain::issue_automation::policy::IssueAutomationGate;
 use crate::domain::issue_automation::source::*;
 use crate::domain::issue_policy::{IssueDisclosurePolicy, IssuePolicy};
@@ -252,6 +251,7 @@ struct FakeExecutionState {
     saved_revision: u64,
     registrations: usize,
     revoked: bool,
+    source_unavailable: bool,
     fail_after_register: bool,
     fail_after_grant: bool,
 }
@@ -268,6 +268,9 @@ impl IssueWorkExecutionPort for FakeExecution {
         crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionSnapshot,
     > {
         let state = self.state.lock().unwrap();
+        if state.source_unavailable {
+            bail!("configured source is unavailable");
+        }
         Ok(crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionSnapshot {
             task_ids: state.order.as_ref().map(|_| vec!["task-1".into()]).unwrap_or_default(),
             dispatch_source: Some("a".repeat(40)), frozen_source: state.frozen.clone(),
@@ -714,5 +717,93 @@ fn fresh_resync_does_not_consume_periodic_cursor_and_off_fences_reject() {
     h.coordinator()
         .tick(&IssueCollectionCancellation::new(), 1, true, &|_| {})
         .unwrap();
+    assert_eq!(h.execution.state.lock().unwrap().registrations, 0);
+}
+
+#[test]
+fn approved_work_queues_with_a_reason_when_dispatch_source_is_unavailable() {
+    let h = Harness::new();
+    h.tick(false).unwrap();
+    h.answer("start");
+    h.execution.state.lock().unwrap().source_unavailable = true;
+    h.tick(false).unwrap();
+    let work = h.work().unwrap();
+    assert_eq!(work.task_ids, ["task-1"]);
+    assert_eq!(
+        work.blocked_reason,
+        Some(IssueWorkBlockReason::SourceUnavailable)
+    );
+    assert!(work.permit_source.is_none());
+    assert!(h.execution.state.lock().unwrap().grants.is_empty());
+    h.execution.state.lock().unwrap().source_unavailable = false;
+    h.tick(false).unwrap();
+    assert_eq!(h.execution.state.lock().unwrap().registrations, 1);
+    assert!(h.work().unwrap().permit_source.is_some());
+}
+
+#[test]
+fn durable_outbox_replays_lost_callbacks_until_the_host_acknowledges() {
+    let h = Harness::new();
+    h.tick(false).unwrap();
+    h.answer("start");
+    h.tick(false).unwrap();
+    let store = h.fixture.store();
+    let pending = store
+        .pending_issue_work_events(&h.fixture.workspace)
+        .unwrap();
+    assert_eq!(pending.len(), 2);
+    assert!(matches!(
+        pending[0].kind,
+        IssueWorkEventKind::Submitted { .. }
+    ));
+    assert!(matches!(
+        pending[1].kind,
+        IssueWorkEventKind::PermitGranted { .. }
+    ));
+    // callback이 유실되고 process가 재시작되어도 같은 event identity를 반환한다.
+    let replay = h.tick(false).unwrap();
+    for event in &pending {
+        assert!(replay.iter().any(|fact| match fact {
+            IssueCoordinatorFact::WorkSubmitted { event_id, .. }
+            | IssueCoordinatorFact::WorkPermitGranted { event_id, .. } =>
+                event_id == &event.event_id,
+            _ => false,
+        }));
+        h.coordinator().acknowledge_event(&event.event_id).unwrap();
+    }
+    assert!(
+        store
+            .pending_issue_work_events(&h.fixture.workspace)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(h.tick(false).unwrap().is_empty());
+}
+
+#[test]
+fn removing_selection_label_after_approval_prevents_submission() {
+    let h = Harness::new();
+    *h.policy.text.lock().unwrap() = AUTO_POLICY.replace(
+        "mode = \"all_open\"",
+        "mode = \"labels_any\"
+labels_any = [\"akra:ready\"]",
+    );
+    let mut observation = h.fixture.observation("I_001");
+    let label = IssueSourceLabel {
+        id: "L_ready".into(),
+        name: "akra:ready".into(),
+    };
+    observation.labels = complete(vec![label.clone()]);
+    observation.label_actors = complete(vec![IssueLabelAttribution {
+        label,
+        event_id: "E_ready".into(),
+        actor: observation.author.clone(),
+        created_at: "2026-11-21T00:00:00Z".into(),
+    }]);
+    h.fixture.seed(vec![observation], &disclosure_version());
+    h.tick(false).unwrap();
+    h.answer("start");
+    // source는 최초 무라벨 관찰을 반환한다. 본문 해시는 같아도 선택 근거가 사라졌다.
+    h.tick(false).unwrap();
     assert_eq!(h.execution.state.lock().unwrap().registrations, 0);
 }

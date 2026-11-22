@@ -7,6 +7,17 @@ use crate::domain::kernel_event::{KernelEvent, KernelEventPage, RecordedKernelEv
  * 읽을 때는 기록 순서를 지킨다. 이 binary 가 모르는 사건(더 새 binary 가 쓴 것)은 건너뛴다.
  */
 pub trait KernelEventLogPort: Send + Sync {
+    /// outbox ack 전 crash를 복구할 때 쓰는 영속 dedupe 조회다.
+    fn has_issue_work_event(&self, workspace_dir: &str, event_id: &str) -> Result<bool> {
+        Ok(self
+            .load_kernel_events(
+                workspace_dir,
+                &["issue_work_submitted", "issue_work_permit_granted"],
+            )?
+            .iter()
+            .any(|event| event.issue_work_event_id() == Some(event_id)))
+    }
+
     /// 사건을 커널이 정한 sequence 와 시각 그대로 쓴다 (Q3-3b). 남김 종류가 아닌 오래된 사건은 최근
     /// `RETAINED_KERNEL_EVENTS` 개만 남긴다 (Q3-3). 마지막 `repository_changed` 는 한도와 관계없이 남긴다.
     fn append_kernel_events(
