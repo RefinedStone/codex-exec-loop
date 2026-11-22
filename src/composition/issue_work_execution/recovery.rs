@@ -74,10 +74,10 @@ pub(super) fn recover(
         if record.key() != &key {
             bail!("validation recovery record identity differs from its work-order link");
         }
-        if observation::validation_terminal(&record).as_ref() == Some(&request.terminal) {
-            if original.replace(record).is_some() {
-                bail!("validation recovery terminal identity is ambiguous");
-            }
+        if observation::validation_terminal(&record).as_ref() == Some(&request.terminal)
+            && original.replace(record).is_some()
+        {
+            bail!("validation recovery terminal identity is ambiguous");
         }
     }
     let Some(original) = original else {
