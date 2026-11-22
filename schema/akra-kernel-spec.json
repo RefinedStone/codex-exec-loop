@@ -3224,6 +3224,95 @@
       }
     },
     {
+      "name": "issue_work_submitted",
+      "summary": "A durable issue work order was registered. Only stable identity and task IDs are recorded.",
+      "payload": {
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_work_submitted",
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "work_order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "issue",
+          "work_order_id",
+          "task_ids",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_work_permit_granted",
+      "summary": "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.",
+      "payload": {
+        "properties": {
+          "delivery": {
+            "type": "boolean"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "gate_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_work_permit_granted",
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_sha": {
+            "type": "string"
+          },
+          "work_order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "issue",
+          "work_order_id",
+          "source_sha",
+          "gate_revision",
+          "delivery",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issue_triaged",
       "summary": "A deterministic issue assessment was committed to the local ledger. The record carries stable identity and policy/gate revisions, with no issue text or execution permit.",
       "payload": {
@@ -6107,6 +6196,16 @@
               "type": "null"
             }
           ]
+        },
+        "work": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueWorkSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -6823,6 +6922,49 @@
         "user_confirmation_required"
       ],
       "type": "string"
+    },
+    "IssueWorkBlockReason": {
+      "enum": [
+        "execution_disabled",
+        "awaiting_source",
+        "approval_changed",
+        "source_unavailable",
+        "submission_unavailable"
+      ],
+      "type": "string"
+    },
+    "IssueWorkSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueWorkBlockReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delivery_granted": {
+          "type": "boolean"
+        },
+        "task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "work_order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_order_id",
+        "task_ids",
+        "delivery_granted"
+      ],
+      "type": "object"
     },
     "IssueWorkflowState": {
       "enum": [
@@ -9099,6 +9241,87 @@
           "required": [
             "kind",
             "decision",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_work_submitted",
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "task_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "work_order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "issue",
+            "work_order_id",
+            "task_ids",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delivery": {
+              "type": "boolean"
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "gate_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_work_permit_granted",
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source_sha": {
+              "type": "string"
+            },
+            "work_order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "issue",
+            "work_order_id",
+            "source_sha",
+            "gate_revision",
+            "delivery",
             "revision"
           ],
           "type": "object"
