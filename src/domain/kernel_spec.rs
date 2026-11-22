@@ -86,9 +86,9 @@ spec_names! {
         RefreshPlanning => "refresh_planning",
             "Read the planning queue again. The result arrives as the `planning` event.";
         CreateTask => "create_task",
-            "Add a planning task as the operator. The answer carries the new task id and the new planning revision.";
+            "Add a planning task as the operator, optionally with acceptance criteria. Missing or null acceptance starts empty; acceptance_revision is host-owned and is not an input. The answer carries the new task id and the new planning revision.";
         UpdateTask => "update_task",
-            "Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+            "Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. Missing or null acceptance keeps the agreed criteria; an empty array clears them. acceptance_revision is host-owned and is not an input. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         DeleteTask => "delete_task",
             "Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         CreateDirection => "create_direction",

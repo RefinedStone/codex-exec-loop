@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::port::inbound::stored_command_port::StoredCommandRejection;
 use crate::domain::kernel_spec::ReasonCode;
-use crate::domain::planning::{PlanningMutationRefusal, PlanningResetRequest};
+use crate::domain::planning::{
+    PlanningMutationRefusal, PlanningResetRequest, TaskAcceptanceCriterion,
+};
 
 /*
  * PlanningAdminPort 계약은 의도적으로 data-heavy하다. inbound admin route/template과 planning application
@@ -338,6 +340,7 @@ pub struct PlanningAdminDirectionDeleteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanningAdminTaskMutationRequest {
     #[serde(default)]
     pub id: String,
@@ -346,6 +349,9 @@ pub struct PlanningAdminTaskMutationRequest {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    // 생략/null은 기준 유지, 빈 배열은 비우기다. 기준 revision은 입력으로 받지 않는다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance: Option<Vec<TaskAcceptanceCriterion>>,
     #[serde(default)]
     pub status: String,
     #[serde(default)]

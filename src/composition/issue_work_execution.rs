@@ -207,6 +207,7 @@ Work order: {}",
                 origin: "issue_automation".into(),
                 link_reference,
                 input: PlanningTaskCreateInput {
+                    acceptance: None,
                     direction_id: None,
                     direction_relation_note: Some("사용자가 이슈 작업 시작을 승인했습니다.".into()),
                     title: order.title.clone(),

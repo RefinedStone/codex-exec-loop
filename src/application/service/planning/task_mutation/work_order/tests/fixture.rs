@@ -111,6 +111,7 @@ impl FixtureRepository {
 
 pub(super) fn input() -> PlanningTaskCreateInput {
     PlanningTaskCreateInput {
+        acceptance: None,
         direction_id: None,
         direction_relation_note: Some("supports the active direction".to_string()),
         title: "Implement ordinary work".to_string(),

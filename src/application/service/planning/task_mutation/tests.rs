@@ -56,6 +56,8 @@ fn task(id: &str, status: TaskStatus) -> TaskDefinition {
     // baseline task는 의도적으로 user audit field와 stable timestamp를 가진다. update 테스트가
     // mutation이 건드릴 수 있는 field와 보존해야 하는 field를 정확히 구분할 수 있게 한다.
     TaskDefinition {
+        acceptance: Vec::new(),
+        acceptance_revision: 0,
         id: id.to_string(),
         direction_id: "general-workstream".to_string(),
         direction_relation_note: "supports direction".to_string(),
@@ -126,6 +128,7 @@ fn replayed_system_admission_returns_one_ordinary_task_identity() {
         crate::domain::planning::PriorityQueueService::new(),
     );
     let input = PlanningTaskCreateInput {
+        acceptance: None,
         direction_id: None,
         direction_relation_note: Some("remediates validation finding".to_string()),
         title: "Remediate failed PR validation".to_string(),
@@ -193,6 +196,7 @@ fn user_preview_and_worker_create_share_defaults_and_audit() {
             legacy_source_turn_id: Some("turn-user".to_string()),
             provenance: provenance(),
             input: PlanningTaskCreateInput {
+                acceptance: None,
                 direction_id: None,
                 direction_relation_note: None,
                 title: "Create from task command".to_string(),
@@ -221,6 +225,7 @@ fn user_preview_and_worker_create_share_defaults_and_audit() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
                 PlanningTaskCreateInput {
+                    acceptance: None,
                     direction_id: None,
                     direction_relation_note: None,
                     title: "Create from worker command".to_string(),
@@ -292,6 +297,7 @@ fn create_records_generic_thread_turn_provenance() {
             provenance: provenance.clone(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
                 PlanningTaskCreateInput {
+                    acceptance: None,
                     direction_id: None,
                     direction_relation_note: None,
                     title: "Persist generic provenance".to_string(),
@@ -345,6 +351,7 @@ fn update_preserves_unspecified_fields() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    acceptance: None,
                     expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
@@ -403,6 +410,7 @@ fn worker_update_preserves_existing_description_even_when_supplied() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    acceptance: None,
                     expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
@@ -461,6 +469,7 @@ fn user_update_can_replace_existing_description() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    acceptance: None,
                     expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
@@ -522,6 +531,7 @@ fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    acceptance: None,
                     expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
@@ -571,6 +581,7 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
     let commands = (0..17)
         .map(|index| {
             PlanningTaskMutationCommand::CreateTask(PlanningTaskCreateInput {
+                acceptance: None,
                 direction_id: None,
                 direction_relation_note: None,
                 title: format!("Generated follow-up {index}"),
@@ -629,6 +640,7 @@ fn invalid_priority_is_rejected_by_domain_validation() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
                 PlanningTaskCreateInput {
+                    acceptance: None,
                     direction_id: None,
                     direction_relation_note: None,
                     title: "Invalid priority".to_string(),
@@ -802,6 +814,7 @@ fn terminal_status_change_is_rejected() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    acceptance: None,
                     expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
@@ -983,3 +996,5 @@ fn queue_cancellation_rejects_stale_revision_and_stale_row() {
         before
     );
 }
+
+mod acceptance;

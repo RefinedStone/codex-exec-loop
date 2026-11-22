@@ -48,6 +48,8 @@ impl Fixture {
             }],
         };
         let task = TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-a".into(),
             direction_id: "direction-a".into(),
             direction_relation_note: "fixture".into(),

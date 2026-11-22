@@ -50,6 +50,8 @@ fn connection(workspace: &str) -> Connection {
 
 fn task(task_id: &str) -> TaskDefinition {
     TaskDefinition {
+        acceptance: Vec::new(),
+        acceptance_revision: 0,
         id: task_id.to_string(),
         direction_id: "direction-work-order".to_string(),
         direction_relation_note: "synthetic work-order test".to_string(),

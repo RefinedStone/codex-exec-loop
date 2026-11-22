@@ -2828,6 +2828,8 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
     let baseline_task_authority = TaskAuthorityDocument {
         version: 1,
         tasks: vec![TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-1".to_string(),
             direction_id: "direction-1".to_string(),
             direction_relation_note: "baseline relation".to_string(),
@@ -4182,6 +4184,8 @@ fn task_authority_snapshot_persists_queryable_provenance_columns() {
     let task_authority = TaskAuthorityDocument {
         version: 1,
         tasks: vec![TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-provenance-1".to_string(),
             direction_id: "direction-1".to_string(),
             direction_relation_note: "covers provenance storage".to_string(),
@@ -4256,6 +4260,8 @@ fn task_authority_row_write_errors_keep_operation_context() {
     let task_authority = TaskAuthorityDocument {
         version: 1,
         tasks: vec![TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-edge".to_string(),
             direction_id: "direction-1".to_string(),
             direction_relation_note: "covers row error contexts".to_string(),
@@ -8911,6 +8917,8 @@ fn task_authority_for_direction(task_id: &str, direction_id: &str) -> TaskAuthor
 
 fn authority_task(task_id: &str, direction_id: &str) -> TaskDefinition {
     TaskDefinition {
+        acceptance: Vec::new(),
+        acceptance_revision: 0,
         id: task_id.to_string(),
         direction_id: direction_id.to_string(),
         direction_relation_note: "test direction relation".to_string(),
@@ -9586,3 +9594,5 @@ fn issue_work_event_receipts_survive_ack_loss_and_event_retention() {
             .is_err()
     );
 }
+
+mod task_acceptance;

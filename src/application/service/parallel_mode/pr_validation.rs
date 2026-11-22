@@ -207,6 +207,7 @@ impl PrValidationRemediationPort for PlanningQueuePrValidationRemediationPort<'_
             request.validation_record_key.as_str(),
             idempotency_key.as_str(),
             PlanningTaskCreateInput {
+                acceptance: None,
                 direction_id: None,
                 direction_relation_note: Some(format!(
                     "Remediates validation record {} for {}#{}",

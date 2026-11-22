@@ -73,6 +73,7 @@ fn work_order_replay_survives_ordinary_task_provenance_edit_and_service_restart(
             provenance: provenance.clone(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    acceptance: None,
                     task_id: first.task_id.clone(),
                     direction_id: None,
                     direction_relation_note: None,

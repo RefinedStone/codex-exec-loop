@@ -152,6 +152,7 @@ fn sample_task_fields() -> TaskFields {
         direction_id: Some("direction-1".to_string()),
         title: "Fix the failing test".to_string(),
         description: Some("The test fails on macOS.".to_string()),
+        acceptance: None,
         status: Some(PlanningTaskStatus::Ready),
         base_priority: Some(3),
         dynamic_priority_delta: None,

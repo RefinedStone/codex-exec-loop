@@ -249,6 +249,10 @@ grant is cached.
 - Queue-idle behavior comes from accepted direction authority.
 - Admin/API intake creates one validated `ready` task and never interrupts an `in_progress` task.
 - `akra planning-tool` is the structured list/create/update boundary for automation callers.
+- Tasks can carry user-owned acceptance criteria and a host-managed acceptance revision. The existing
+  Kernel/admin mutation path applies planning revision CAS; worker task tools read criteria but cannot
+  edit them. Legacy task documents remain readable. See [the acceptance contract](task-acceptance.md).
+  Criteria storage does not execute validation or change the existing delivery gates.
 - Hidden planning workers inherit the active app-server execution profile. Their developer
   contract remains planning-only, and the host validates and applies their structured commands.
 

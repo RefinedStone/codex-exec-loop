@@ -19,7 +19,7 @@ use crate::application::service::planning::shared::authority_mutation_guard::wit
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningValidationReport,
+    DirectionCatalogDocument, PlanningValidationReport, TASK_AUTHORITY_FORMAT_VERSION,
     TaskAuthorityDocument,
 };
 use anyhow::{Result, anyhow, bail};
@@ -346,11 +346,8 @@ impl PlanningInitService {
                 "revision-bound planning promotion requires the atomic workspace authority; reload through the production planning store"
             );
         }
-        let revision_bound_baseline = source_planning_revision
-            .map(|_| self.load_authority_rewrite_baseline(workspace_dir))
-            .transpose()?;
-        if let (Some(source_planning_revision), Some(baseline)) =
-            (source_planning_revision, revision_bound_baseline.as_ref())
+        let baseline = self.load_authority_rewrite_baseline(workspace_dir)?;
+        if let Some(source_planning_revision) = source_planning_revision
             && baseline.observed_planning_revision != Some(source_planning_revision)
         {
             let current_planning_revision = baseline
@@ -364,9 +361,7 @@ impl PlanningInitService {
         let validation_result = self.validate_loaded_draft_result(
             workspace_dir,
             &loaded,
-            revision_bound_baseline
-                .as_ref()
-                .map(|baseline| &baseline.task_authority),
+            Some(&baseline.task_authority),
         )?;
         let validation_report = validation_result.report.clone();
         if !validation_report.is_valid() {
@@ -377,10 +372,6 @@ impl PlanningInitService {
                 committed_planning_revision: None,
             });
         }
-        let baseline = match revision_bound_baseline {
-            Some(baseline) => baseline,
-            None => self.load_authority_rewrite_baseline(workspace_dir)?,
-        };
         let observed_planning_revision = baseline.observed_planning_revision;
         if let Some(edited_active_paths) = edited_active_paths.as_ref() {
             self.ensure_hidden_editor_sources_unchanged(
@@ -765,9 +756,9 @@ impl PlanningInitService {
             preserved_task_authority.unwrap_or(&default_empty_task_authority()),
         )
         .expect("task authority should serialize");
-        // manual bootstrap draft는 task authority editing을 노출하지 않는다. 초기 authoring은 빈
-        // authority를, revision-bound maintenance는 같은 source revision의 task authority를 검증 입력으로
-        // 사용해 노출되지 않은 task/queue를 유지한다.
+        // manual bootstrap draft는 task authority editing을 노출하지 않는다. promotion은 현재 baseline의
+        // task authority를 검증 입력으로 사용해 노출되지 않은 task와 완료 기준을 유지한다. 저장하지 않는
+        // draft preview와 첫 authoring만 빈 authority를 사용한다.
         let mut result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions: &directions,
@@ -1012,7 +1003,7 @@ fn default_empty_task_authority() -> TaskAuthorityDocument {
     // 이 surface가 direction/result-output만 편집하더라도 validation에는 task-authority document가 필요하다. 빈
     // versioned authority가 그 검사에 대한 neutral document다.
     TaskAuthorityDocument {
-        version: PLANNING_FORMAT_VERSION,
+        version: TASK_AUTHORITY_FORMAT_VERSION,
         tasks: Vec::new(),
     }
 }
@@ -1050,8 +1041,8 @@ mod tests {
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{
-        OriginSessionKind, QueueIdlePolicy, TaskActor, TaskDefinition, TaskMutationProvenance,
-        TaskStatus,
+        OriginSessionKind, QueueIdlePolicy, TaskAcceptanceChannel, TaskAcceptanceCriterion,
+        TaskActor, TaskDefinition, TaskMutationProvenance, TaskStatus,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1460,50 +1451,7 @@ mod tests {
             .service
             .initialize_simple_workspace(fixture.workspace.path_str())
             .expect("simple initialization should succeed through SQLite");
-        let initial_revision = fixture.task_snapshot().planning_revision;
-        let task_authority = TaskAuthorityDocument {
-            version: PLANNING_FORMAT_VERSION,
-            tasks: vec![TaskDefinition {
-                id: "task-preserved".to_string(),
-                direction_id: "general-workstream".to_string(),
-                direction_relation_note: "keeps the general workstream moving".to_string(),
-                title: "Preserve this task".to_string(),
-                description: "This task must survive a narrow editor promotion.".to_string(),
-                status: TaskStatus::Ready,
-                base_priority: 10,
-                dynamic_priority_delta: 0,
-                priority_reason: String::new(),
-                depends_on: Vec::new(),
-                blocked_by: Vec::new(),
-                created_by: TaskActor::User,
-                last_updated_by: TaskActor::User,
-                source_turn_id: None,
-                provenance: TaskMutationProvenance::new(OriginSessionKind::System),
-                updated_at: "2026-07-21T00:00:00Z".to_string(),
-            }],
-        };
-        let queue_projection = PriorityQueueService::new()
-            .build_projection(&fixture.direction_snapshot(), &task_authority)
-            .expect("task queue should build");
-        let source_planning_revision = match fixture
-            .repository
-            .commit_task_authority_snapshot(
-                fixture.workspace.path_str(),
-                PlanningTaskAuthorityCommit {
-                    observed_planning_revision: Some(initial_revision),
-                    task_authority: &task_authority,
-                    queue_projection: &queue_projection,
-                },
-            )
-            .expect("task authority should commit")
-        {
-            PlanningTaskAuthorityCommitResult::Committed {
-                planning_revision, ..
-            } => planning_revision,
-            PlanningTaskAuthorityCommitResult::Conflict { .. } => {
-                panic!("task authority seed should not conflict")
-            }
-        };
+        let (task_authority, source_planning_revision) = fixture.seed_task_with_acceptance();
         let stage = fixture
             .service
             .stage_simple_mode_draft(fixture.workspace.path_str())
@@ -1591,6 +1539,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn git_workspace_staged_promotion_preserves_task_acceptance_without_source_revision() {
+        let fixture = InitFixture::new_sqlite("planning-init-staged-preserves-acceptance");
+        fixture
+            .service
+            .initialize_simple_workspace(fixture.workspace.path_str())
+            .expect("simple initialization should succeed through SQLite");
+        let (task_authority, source_planning_revision) = fixture.seed_task_with_acceptance();
+        let stage = fixture
+            .service
+            .stage_simple_mode_draft(fixture.workspace.path_str())
+            .expect("simple draft should stage through SQLite");
+
+        let promoted = fixture
+            .service
+            .promote_staged_draft(fixture.workspace.path_str(), &stage.draft_name)
+            .expect("staged promotion without a source revision should succeed");
+
+        assert!(promoted.validation_report.is_valid());
+        assert_eq!(promoted.promoted_file_count, 2);
+        let preserved = fixture.task_snapshot();
+        assert_eq!(preserved.task_authority, task_authority);
+        assert!(preserved.planning_revision > source_planning_revision);
+        assert_eq!(
+            promoted.committed_planning_revision,
+            Some(preserved.planning_revision)
+        );
+        assert_eq!(
+            preserved
+                .queue_projection
+                .next_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("task-preserved")
+        );
+    }
+
+    #[test]
+    fn git_workspace_editor_promotion_preserves_task_acceptance_without_source_revision() {
+        let fixture = InitFixture::new_sqlite("planning-init-editor-preserves-acceptance");
+        fixture
+            .service
+            .initialize_simple_workspace(fixture.workspace.path_str())
+            .expect("simple initialization should succeed through SQLite");
+        let (task_authority, source_planning_revision) = fixture.seed_task_with_acceptance();
+        let stage = fixture
+            .service
+            .stage_simple_mode_draft(fixture.workspace.path_str())
+            .expect("simple draft should stage through SQLite");
+        let session = fixture
+            .service
+            .load_manual_editor_session(fixture.workspace.path_str(), &stage.draft_name)
+            .expect("simple editor session should load");
+        assert_eq!(session.source_planning_revision, None);
+        let edited_body = "# Result Output\n\n- Preserve the user completion criteria.\n";
+        let edited_file = PlanningDraftEditorFile {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            staged_path: session.editable_files[0].staged_path.clone(),
+            body: edited_body.to_string(),
+        };
+
+        let promoted = fixture
+            .service
+            .promote_draft_editor_files(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                &[edited_file],
+            )
+            .expect("editor promotion without a source revision should succeed");
+
+        assert!(promoted.validation_report.is_valid());
+        assert_eq!(promoted.promoted_file_count, 2);
+        let preserved = fixture.task_snapshot();
+        assert_eq!(preserved.task_authority, task_authority);
+        assert!(preserved.planning_revision > source_planning_revision);
+        assert_eq!(
+            promoted.committed_planning_revision,
+            Some(preserved.planning_revision)
+        );
+        assert_eq!(
+            fixture
+                .workspace_port
+                .load_optional_planning_file(fixture.workspace.path_str(), RESULT_OUTPUT_FILE_PATH)
+                .expect("authority result output should load")
+                .as_deref(),
+            Some(edited_body)
+        );
+        assert_eq!(
+            preserved
+                .queue_projection
+                .next_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("task-preserved")
+        );
+    }
+
     struct InitFixture {
         workspace: TempPlanningWorkspace,
         repository: Arc<dyn PlanningTaskRepositoryPort>,
@@ -1648,6 +1693,61 @@ mod tests {
                 workspace_port,
                 service,
             }
+        }
+
+        fn seed_task_with_acceptance(&self) -> (TaskAuthorityDocument, i64) {
+            let initial_revision = self.task_snapshot().planning_revision;
+            let task_authority = TaskAuthorityDocument {
+                version: TASK_AUTHORITY_FORMAT_VERSION,
+                tasks: vec![TaskDefinition {
+                    id: "task-preserved".to_string(),
+                    direction_id: "general-workstream".to_string(),
+                    direction_relation_note: "keeps the general workstream moving".to_string(),
+                    title: "Preserve this task".to_string(),
+                    description: "This task must survive a narrow editor promotion.".to_string(),
+                    status: TaskStatus::Ready,
+                    base_priority: 10,
+                    dynamic_priority_delta: 0,
+                    priority_reason: String::new(),
+                    depends_on: Vec::new(),
+                    blocked_by: Vec::new(),
+                    acceptance: vec![TaskAcceptanceCriterion {
+                        id: "task-retained".to_string(),
+                        scenario: "The original task stays available after promotion.".to_string(),
+                        channel: TaskAcceptanceChannel::Data,
+                        essential: true,
+                    }],
+                    acceptance_revision: 7,
+                    created_by: TaskActor::User,
+                    last_updated_by: TaskActor::User,
+                    source_turn_id: None,
+                    provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+                    updated_at: "2026-07-21T00:00:00Z".to_string(),
+                }],
+            };
+            let queue_projection = PriorityQueueService::new()
+                .build_projection(&self.direction_snapshot(), &task_authority)
+                .expect("task queue should build");
+            let source_planning_revision = match self
+                .repository
+                .commit_task_authority_snapshot(
+                    self.workspace.path_str(),
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: Some(initial_revision),
+                        task_authority: &task_authority,
+                        queue_projection: &queue_projection,
+                    },
+                )
+                .expect("task authority should commit")
+            {
+                PlanningTaskAuthorityCommitResult::Committed {
+                    planning_revision, ..
+                } => planning_revision,
+                PlanningTaskAuthorityCommitResult::Conflict { .. } => {
+                    panic!("task authority seed should not conflict")
+                }
+            };
+            (task_authority, source_planning_revision)
         }
 
         fn write_result_output(&self, body: &str) {

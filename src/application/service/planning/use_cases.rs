@@ -3364,6 +3364,8 @@ mod tests {
         let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![TaskDefinition {
+                acceptance: Vec::new(),
+                acceptance_revision: 0,
                 id: queue_head.task_id.clone(),
                 direction_id: queue_head.direction_id.clone(),
                 direction_relation_note: "covers direction".to_string(),

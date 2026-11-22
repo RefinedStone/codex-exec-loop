@@ -8,9 +8,10 @@ use crate::domain::planning::PlanningMutationRefusal;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningActiveDirectionPolicy,
     PlanningTaskIdPolicy, PlanningTaskMutationPolicy, PlanningTaskReferencePolicy,
-    PriorityQueueProjection, PriorityQueueService, PriorityQueueTask, TaskActor,
-    TaskAuthorityDocument, TaskDefinition, TaskDescriptionUpdateDecision, TaskMutationProvenance,
-    TaskStatus,
+    PriorityQueueProjection, PriorityQueueService, PriorityQueueTask,
+    TASK_AUTHORITY_FORMAT_VERSION, TaskActor, TaskAuthorityDocument, TaskDefinition,
+    TaskDescriptionUpdateDecision, TaskMutationProvenance, TaskStatus,
+    task_authority_format_version_supported,
 };
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -19,6 +20,7 @@ const DEFAULT_TASK_PRIORITY: i32 = 80;
 const MAX_REVISION_CONFLICT_RETRIES: usize = 3;
 const MAX_COLLISION_SUFFIX_ATTEMPTS: u32 = 20;
 const MAX_TASK_MUTATION_COMMANDS: usize = 16;
+mod acceptance;
 mod commands;
 mod helpers;
 mod validation;
@@ -217,6 +219,7 @@ impl PlanningTaskMutationService {
         &self,
         preview: &PlanningTaskCreatePreview,
     ) -> Result<PlanningTaskCreateCommitResult> {
+        acceptance::validate_preview(preview)?;
         let mut observed_revision = preview.observed_planning_revision;
         let mut next_suffix = preview.collision_suffix;
         /*
@@ -307,6 +310,7 @@ impl PlanningTaskMutationService {
                 "planning task mutation accepts at most {MAX_TASK_MUTATION_COMMANDS} command(s) per worker response"
             );
         }
+        acceptance::validate_request(&request)?;
         if request.commands.is_empty() {
             // empty command batch도 caller가 최신 revision과 queue head를 관찰하게 하지만,
             // no-op commit은 만들지 않는다.
@@ -330,6 +334,7 @@ impl PlanningTaskMutationService {
             observed_revision = Some(context.task_planning_revision);
             // 재시도는 최신 상태에 명령을 다시 적용한다. 화면이 본 뒤 바뀌었으면 덮어쓰지 않고 멈춘다.
             ensure_expected_planning_revision(&request, context.task_planning_revision)?;
+            acceptance::validate_original_targets(&request, &context.task_authority)?;
             let mut candidate_task_authority = context.task_authority.clone();
             let application = self.apply_commands_to_authority(
                 &request,
@@ -393,6 +398,7 @@ impl PlanningTaskMutationService {
         idempotency_key: &str,
         input: PlanningTaskCreateInput,
     ) -> Result<PlanningIdempotentTaskAdmission> {
+        acceptance::create_fields(&input, PlanningTaskMutationSource::System)?;
         let idempotency_key = required_id(idempotency_key, "task admission idempotency key")?;
         let provenance =
             TaskMutationProvenance::new(crate::domain::planning::OriginSessionKind::System)
@@ -585,11 +591,10 @@ impl PlanningTaskMutationService {
                 PLANNING_FORMAT_VERSION
             );
         }
-        if task_snapshot.task_authority.version != PLANNING_FORMAT_VERSION {
+        if !task_authority_format_version_supported(task_snapshot.task_authority.version) {
             bail!(
-                "unsupported task authority version {}; expected {}",
-                task_snapshot.task_authority.version,
-                PLANNING_FORMAT_VERSION
+                "unsupported task authority version {}; expected 1 or 2",
+                task_snapshot.task_authority.version
             );
         }
         Ok(PlanningTaskMutationContext {
@@ -688,6 +693,8 @@ impl PlanningTaskMutationService {
         generated_at: DateTime<Utc>,
         collision_suffix: Option<u32>,
     ) -> Result<TaskDefinition> {
+        let (acceptance, acceptance_revision) =
+            acceptance::create_fields(input, audit_context.source)?;
         let title = required_text(&input.title, "task title")?.to_string();
         // description이 없으면 의도적으로 title을 fallback으로 쓴다. generated task가 compact queue
         // surface에서도 최소한 표시 가능한 설명을 갖게 하기 위해서다.
@@ -726,6 +733,8 @@ impl PlanningTaskMutationService {
                 .default_relation_note(input.direction_relation_note.as_deref(), direction),
             title,
             description,
+            acceptance,
+            acceptance_revision,
             status: input.status.unwrap_or(TaskStatus::Ready),
             base_priority: input.base_priority.unwrap_or(DEFAULT_TASK_PRIORITY),
             dynamic_priority_delta,
@@ -763,6 +772,7 @@ impl PlanningTaskMutationService {
             .find(|task| task.id.trim() == task_id)
             .ok_or_else(|| anyhow!("task `{task_id}` does not exist"))?;
         let previous_task = task.clone();
+        acceptance::apply_update(input, audit_context.source, task)?;
         let update_decision = self.task_mutation_policy.decide_task_update(
             &previous_task,
             audit_context.source.actor(),
@@ -850,12 +860,14 @@ impl PlanningTaskMutationService {
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         // compare-and-swap semantics는 repository port가 소유한다. 이 layer는 이미 검증된
         // task authority와 그에 대응하는 queue projection을 함께 넘긴다.
+        let mut current_task_authority = task_authority.clone();
+        current_task_authority.version = TASK_AUTHORITY_FORMAT_VERSION;
         self.planning_task_repository_port
             .commit_task_authority_mutation_snapshot(
                 workspace_directory,
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision,
-                    task_authority,
+                    task_authority: &current_task_authority,
                     queue_projection,
                 },
                 audit,

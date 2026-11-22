@@ -3,7 +3,7 @@ use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUE
 use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
-    QueueIdleConfig, QueueIdlePolicy, TaskAuthorityDocument,
+    QueueIdleConfig, QueueIdlePolicy, TASK_AUTHORITY_FORMAT_VERSION, TaskAuthorityDocument,
 };
 
 /*
@@ -103,7 +103,7 @@ impl PlanningBootstrapService {
             // task authority는 Simple mode에서도 빈 상태로 시작한다. queue-idle evaluator가 이후 completed turn에서
             // task를 도출할 수는 있지만, seed state가 이미 accepted work가 있는 것처럼 보이면 안 된다.
             task_authority: TaskAuthorityDocument {
-                version: PLANNING_FORMAT_VERSION,
+                version: TASK_AUTHORITY_FORMAT_VERSION,
                 tasks: Vec::new(),
             },
             result_output_path: RESULT_OUTPUT_FILE_PATH.to_string(),
@@ -192,7 +192,10 @@ mod tests {
         // path는 adapter-facing 파일 contract이고 version은 domain parser contract라 둘을 같은 테스트에서 묶는다.
         assert!(artifacts.result_output_path.ends_with("result-output.md"));
         assert_eq!(artifacts.directions.version, PLANNING_FORMAT_VERSION);
-        assert_eq!(artifacts.task_authority.version, PLANNING_FORMAT_VERSION);
+        assert_eq!(
+            artifacts.task_authority.version,
+            crate::domain::planning::TASK_AUTHORITY_FORMAT_VERSION
+        );
     }
 
     #[test]

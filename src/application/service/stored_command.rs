@@ -253,6 +253,7 @@ fn create_input(task: StoredTaskFields) -> PlanningTaskCreateInput {
         direction_relation_note: None,
         title: task.title,
         description: task.description,
+        acceptance: task.acceptance,
         status: task.status,
         base_priority: task.base_priority,
         dynamic_priority_delta: task.dynamic_priority_delta,
@@ -264,7 +265,7 @@ fn create_input(task: StoredTaskFields) -> PlanningTaskCreateInput {
 
 /*
  * 고치기는 작업의 필드 전체를 바꾼다 (admin 의 폼과 같은 뜻이다). 그래서 이유와 참조는 값이 없어도 "비운다"로
- * 보낸다. 방향, 설명, 상태, 우선순위는 값이 없으면 그대로 둔다. 서비스의 고치기 입력이 그 필드들에서 "없음"을
+ * 보낸다. 방향, 설명, 상태, 우선순위, 완료 기준은 값이 없으면 그대로 둔다. 서비스의 고치기 입력이 그 필드들에서 "없음"을
  * "그대로"로 읽기 때문이다.
  */
 fn update_input(
@@ -279,11 +280,50 @@ fn update_input(
         direction_relation_note: None,
         title: Some(task.title),
         description: task.description,
+        acceptance: task.acceptance,
         status: task.status,
         base_priority: task.base_priority,
         dynamic_priority_delta: task.dynamic_priority_delta,
         priority_reason: Some(task.priority_reason.unwrap_or_default()),
         depends_on: Some(task.depends_on),
         blocked_by: Some(task.blocked_by),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{create_input, update_input};
+    use crate::application::port::inbound::stored_command_port::StoredTaskFields;
+    use crate::domain::planning::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
+
+    #[test]
+    fn stored_task_acceptance_preserves_patch_presence_and_update_revision() {
+        for acceptance in [
+            None,
+            Some(Vec::new()),
+            Some(vec![TaskAcceptanceCriterion {
+                id: "observable-result".into(),
+                scenario: "The expected result is observable.".into(),
+                channel: TaskAcceptanceChannel::Command,
+                essential: true,
+            }]),
+        ] {
+            let fields = StoredTaskFields {
+                direction_id: None,
+                title: "Task".into(),
+                description: None,
+                acceptance: acceptance.clone(),
+                status: None,
+                base_priority: None,
+                dynamic_priority_delta: None,
+                priority_reason: None,
+                depends_on: Vec::new(),
+                blocked_by: Vec::new(),
+            };
+            assert_eq!(create_input(fields.clone()).acceptance, acceptance);
+            let update = update_input("task-1".into(), fields, 7);
+            assert_eq!(update.acceptance, acceptance);
+            assert_eq!(update.expected_planning_revision, Some(7));
+        }
     }
 }

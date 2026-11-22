@@ -435,6 +435,7 @@ impl PlanningAdminFacadeService {
                     direction_id: input.direction_id,
                     title: input.title,
                     description: input.description,
+                    acceptance: input.acceptance,
                     status: input.status,
                     base_priority: input.base_priority,
                     dynamic_priority_delta: input.dynamic_priority_delta,
@@ -452,6 +453,7 @@ impl PlanningAdminFacadeService {
                     direction_id: input.direction_id,
                     title: input.title.context("an admin task update has no title")?,
                     description: input.description,
+                    acceptance: input.acceptance,
                     status: input.status,
                     base_priority: input.base_priority,
                     dynamic_priority_delta: input.dynamic_priority_delta,
@@ -555,6 +557,7 @@ fn task_command_from_request(
                 direction_relation_note: None,
                 title: required_text(&request.title, "task title")?.to_string(),
                 description: optional_text(request.description),
+                acceptance: request.acceptance,
                 status: optional_task_status(&request.status)?,
                 base_priority: optional_i32(&request.base_priority, "base priority")?,
                 dynamic_priority_delta: optional_i32(
@@ -590,6 +593,7 @@ fn task_command_from_request(
             direction_relation_note: None,
             title: Some(required_text(&request.title, "task title")?.to_string()),
             description: optional_text(request.description),
+            acceptance: request.acceptance,
             status: optional_task_status(&request.status)?,
             base_priority: optional_i32(&request.base_priority, "base priority")?,
             dynamic_priority_delta: optional_i32(
@@ -697,6 +701,211 @@ mod tests {
         PLANNING_FORMAT_VERSION, QueueIdleConfig, QueueIdlePolicy, TaskActor,
         TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
     };
+
+    #[test]
+    fn admin_acceptance_preserves_omission_rejects_stale_clear_and_records_user_changes() {
+        let fixture = TestAdminFixture::new_repo_scoped("admin-acceptance-patch");
+        let criteria = vec![acceptance_criterion("The command succeeds.")];
+        let created = fixture
+            .facade
+            .upsert_task(acceptance_request(
+                "",
+                "Agreed task",
+                Some(criteria.clone()),
+            ))
+            .expect("operator criteria should be accepted");
+        let task_id = created
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.title == "Agreed task")
+            .expect("created task")
+            .id
+            .clone();
+        let original = acceptance_task(&fixture, &task_id);
+        assert_eq!(original.acceptance, criteria);
+        assert_eq!(original.acceptance_revision, 1);
+        assert_eq!(original.created_by, TaskActor::User);
+
+        let stale_clear = editing(
+            &fixture,
+            acceptance_request(&task_id, "Stale title", Some(Vec::new())),
+        );
+        fixture
+            .facade
+            .upsert_task(editing(
+                &fixture,
+                acceptance_request(&task_id, "Renamed task", None),
+            ))
+            .expect("legacy edit must preserve criteria");
+        let preserved = acceptance_task(&fixture, &task_id);
+        assert_eq!(preserved.acceptance, criteria);
+        assert_eq!(preserved.acceptance_revision, 1);
+        let revision = current_revision(&fixture);
+        let stale = fixture
+            .facade
+            .upsert_task(stale_clear)
+            .expect_err("stale clear must fail");
+        assert!(stale.to_string().contains("planning changed"));
+        assert_eq!(acceptance_task(&fixture, &task_id), preserved);
+        assert_eq!(current_revision(&fixture), revision);
+
+        fixture
+            .facade
+            .upsert_task(editing(
+                &fixture,
+                acceptance_request(&task_id, "Renamed task", Some(Vec::new())),
+            ))
+            .expect("fresh explicit clear must succeed");
+        let cleared = acceptance_task(&fixture, &task_id);
+        assert!(cleared.acceptance.is_empty());
+        assert_eq!(cleared.acceptance_revision, 2);
+        assert_eq!(cleared.last_updated_by, TaskActor::User);
+    }
+
+    #[test]
+    fn admin_acceptance_changes_cannot_bypass_active_task_ownership() {
+        let fixture = TestAdminFixture::new_repo_scoped("admin-acceptance-active");
+        let created = fixture
+            .facade
+            .upsert_task(acceptance_request(
+                "",
+                "Active acceptance",
+                Some(vec![acceptance_criterion("Original result.")]),
+            ))
+            .expect("task must be created before runtime ownership");
+        let task_id = created
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.title == "Active acceptance")
+            .expect("created task")
+            .id
+            .clone();
+        fixture
+            .authority_port
+            .upsert_runtime_slot_lease(
+                &fixture.workspace.path,
+                &slot_lease("slot-1", &task_id, ParallelModeSlotLeaseState::Running),
+            )
+            .expect("running lease");
+        let original = acceptance_task(&fixture, &task_id);
+        let revision = current_revision(&fixture);
+        let change = editing(
+            &fixture,
+            acceptance_request(
+                &task_id,
+                "Active acceptance",
+                Some(vec![acceptance_criterion("Changed result.")]),
+            ),
+        );
+        let failure = fixture
+            .facade
+            .upsert_task(change.clone())
+            .expect_err("active criteria edit must fail");
+        assert!(failure.to_string().contains("is running"));
+        assert_eq!(acceptance_task(&fixture, &task_id), original);
+        assert_eq!(current_revision(&fixture), revision);
+        fixture
+            .authority_port
+            .remove_runtime_slot_lease(&fixture.workspace.path, "slot-1")
+            .expect("release running lease");
+        fixture
+            .facade
+            .upsert_task(editing(&fixture, change))
+            .expect("criteria edit becomes available after runtime cleanup");
+        assert_eq!(acceptance_task(&fixture, &task_id).acceptance_revision, 2);
+    }
+
+    #[test]
+    fn admin_stored_commands_keep_nullable_acceptance_and_reject_host_revision() {
+        use crate::application::port::inbound::stored_command_port::StoredCommand;
+        use crate::application::service::planning::PlanningAdminFacadeService;
+        use serde_json::json;
+
+        for id in ["", "task-1"] {
+            for (value, expected) in [
+                (
+                    json!({"id": id, "title": "Task", "expected_planning_revision": "7"}),
+                    None,
+                ),
+                (
+                    json!({"id": id, "title": "Task", "expected_planning_revision": "7", "acceptance": null}),
+                    None,
+                ),
+                (
+                    json!({"id": id, "title": "Task", "expected_planning_revision": "7", "acceptance": []}),
+                    Some(Vec::new()),
+                ),
+                (
+                    json!({"id": id, "title": "Task", "expected_planning_revision": "7",
+                    "acceptance": [acceptance_criterion("Expected result.")]}),
+                    Some(vec![acceptance_criterion("Expected result.")]),
+                ),
+            ] {
+                let request: PlanningAdminTaskMutationRequest =
+                    serde_json::from_value(value).unwrap();
+                let command = PlanningAdminFacadeService::stored_task_command(request).unwrap();
+                match command {
+                    StoredCommand::CreateTask { task } => assert_eq!(task.acceptance, expected),
+                    StoredCommand::UpdateTask {
+                        task,
+                        expected_planning_revision,
+                        ..
+                    } => {
+                        assert_eq!(task.acceptance, expected);
+                        assert_eq!(expected_planning_revision, 7);
+                    }
+                    _ => panic!("expected a task mutation"),
+                }
+            }
+        }
+        let invalid_revision = json!({"title": "Task", "acceptance_revision": 42});
+        assert!(
+            serde_json::from_value::<PlanningAdminTaskMutationRequest>(invalid_revision).is_err()
+        );
+        let nested_revision = json!({"title": "Task", "acceptance": [{
+            "id": "a", "scenario": "Result", "channel": "command", "essential": true,
+            "acceptance_revision": 42
+        }]});
+        assert!(
+            serde_json::from_value::<PlanningAdminTaskMutationRequest>(nested_revision).is_err()
+        );
+        let missing_revision = acceptance_request("task-1", "Task", Some(Vec::new()));
+        assert!(PlanningAdminFacadeService::stored_task_command(missing_revision).is_err());
+    }
+
+    fn acceptance_criterion(scenario: &str) -> crate::domain::planning::TaskAcceptanceCriterion {
+        crate::domain::planning::TaskAcceptanceCriterion {
+            id: "observable-result".into(),
+            scenario: scenario.into(),
+            channel: crate::domain::planning::TaskAcceptanceChannel::Command,
+            essential: true,
+        }
+    }
+
+    fn acceptance_request(
+        id: &str,
+        title: &str,
+        acceptance: Option<Vec<crate::domain::planning::TaskAcceptanceCriterion>>,
+    ) -> PlanningAdminTaskMutationRequest {
+        let mut request: PlanningAdminTaskMutationRequest =
+            serde_json::from_value(serde_json::json!({"id": id, "title": title})).unwrap();
+        request.acceptance = acceptance;
+        request
+    }
+
+    fn acceptance_task(fixture: &TestAdminFixture, task_id: &str) -> TaskDefinition {
+        SqlitePlanningAuthorityAdapter::new()
+            .load_task_authority_snapshot(&fixture.workspace.path)
+            .unwrap()
+            .expect("task authority must exist")
+            .task_authority
+            .tasks
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .expect("task must remain in authority")
+    }
 
     #[test]
     fn direction_crud_reports_notice_and_refreshed_management_view() {
@@ -1355,6 +1564,7 @@ mod tests {
             direction_id: String::new(),
             title: "Ship admin task bridge".to_string(),
             description: String::new(),
+            acceptance: None,
             status: String::new(),
             base_priority: String::new(),
             dynamic_priority_delta: String::new(),
@@ -1384,6 +1594,7 @@ mod tests {
             direction_id: "general-workstream".to_string(),
             title: "Updated task".to_string(),
             description: "Updated description".to_string(),
+            acceptance: None,
             status: "blocked".to_string(),
             base_priority: "90".to_string(),
             dynamic_priority_delta: "-5".to_string(),
@@ -1526,6 +1737,7 @@ mod tests {
             direction_id: direction_id.to_string(),
             title: title.to_string(),
             description: description.to_string(),
+            acceptance: None,
             status: status.to_string(),
             base_priority: base_priority.to_string(),
             dynamic_priority_delta: dynamic_priority_delta.to_string(),
@@ -1631,6 +1843,8 @@ mod tests {
             direction_relation_note: "relates to the direction".to_string(),
             title: format!("Task {id}"),
             description: "Do the task".to_string(),
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             status: TaskStatus::Ready,
             base_priority: 10,
             dynamic_priority_delta: 0,
@@ -1716,7 +1930,28 @@ mod tests {
             let workspace = TempPlanningWorkspace::new(prefix);
             let workspace_port: Arc<dyn PlanningWorkspacePort> =
                 Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            Self::from_workspace(
+                workspace,
+                workspace_port,
+                Arc::new(SqlitePlanningAuthorityAdapter::new()),
+            )
+        }
+
+        fn new_repo_scoped(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new_git(prefix);
             let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+            // 운영 composition과 같은 저장소 경계를 사용해 Windows에서도 direct filesystem을 거치지 않는다.
+            let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+                FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone()),
+            );
+            Self::from_workspace(workspace, workspace_port, sqlite)
+        }
+
+        fn from_workspace(
+            workspace: TempPlanningWorkspace,
+            workspace_port: Arc<dyn PlanningWorkspacePort>,
+            sqlite: Arc<SqlitePlanningAuthorityAdapter>,
+        ) -> Self {
             let authority_port: Arc<dyn PlanningAuthorityPort> = sqlite.clone();
             let task_repository_port: Arc<dyn PlanningTaskRepositoryPort> = sqlite;
             let planning = PlanningServices::from_ports(
@@ -1756,6 +1991,20 @@ mod tests {
             Self {
                 path: path.display().to_string(),
             }
+        }
+
+        fn new_git(prefix: &str) -> Self {
+            let workspace = Self::new(prefix);
+            let output = crate::test_utils::git_command()
+                .args(["init", "-q", workspace.path.as_str()])
+                .output()
+                .expect("git fixture initialization should run");
+            assert!(
+                output.status.success(),
+                "git fixture initialization failed: {}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            workspace
         }
     }
 

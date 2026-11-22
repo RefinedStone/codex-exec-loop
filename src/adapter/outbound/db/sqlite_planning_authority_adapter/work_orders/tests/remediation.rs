@@ -145,6 +145,7 @@ fn historical_idle_remediation_is_promoted_once_without_a_duplicate_task() {
             &workspace,
             request.idempotency_key.as_str(),
             PlanningTaskCreateInput {
+                acceptance: None,
                 direction_id: None,
                 direction_relation_note: Some("legacy remediation".into()),
                 title: "Existing remediation".into(),

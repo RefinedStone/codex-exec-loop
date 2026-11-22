@@ -3668,6 +3668,7 @@ pub(crate) mod tests {
             KernelClientCommand::Stored(Box::new(StoredCommand::UpdateTask {
                 task_id: "task-1".to_string(),
                 task: StoredTaskFields {
+                    acceptance: None,
                     direction_id: None,
                     title: "Title".to_string(),
                     description: None,

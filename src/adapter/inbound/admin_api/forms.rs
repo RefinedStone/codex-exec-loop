@@ -120,6 +120,7 @@ pub(super) struct EntityDeleteForm {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct TaskMutationForm {
     pub(super) csrf_token: String,
     /*
@@ -226,4 +227,18 @@ pub(super) struct DraftPromoteApiResponse {
     pub(super) promoted_file_count: usize,
     pub(super) is_valid: bool,
     pub(super) session: PlanningAdminSessionView,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskMutationForm;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_task_form_accepts_existing_fields_and_rejects_host_revision() {
+        let mut form = json!({"csrf_token": "csrf", "title": "Task"});
+        assert!(serde_json::from_value::<TaskMutationForm>(form.clone()).is_ok());
+        form["acceptance_revision"] = json!(99);
+        assert!(serde_json::from_value::<TaskMutationForm>(form).is_err());
+    }
 }

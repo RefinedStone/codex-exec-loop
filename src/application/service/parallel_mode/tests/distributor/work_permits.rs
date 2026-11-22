@@ -186,6 +186,8 @@ fn register_delivery_work_order_with_link(
         .expect("fixture authority should exist");
     let provenance = TaskMutationProvenance::new(OriginSessionKind::System);
     let task = TaskDefinition {
+        acceptance: Vec::new(),
+        acceptance_revision: 0,
         id: TASK_ID.to_string(),
         direction_id: "direction-1".to_string(),
         direction_relation_note: "stage permit regression fixture".to_string(),

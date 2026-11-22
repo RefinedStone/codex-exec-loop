@@ -48,6 +48,9 @@ pub use next::{NextStep, reason_next};
 mod spec;
 pub use spec::{KernelSpec, describe};
 
+mod task_acceptance;
+pub use task_acceptance::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
+
 mod confirmation;
 mod issue_automation;
 mod issue_automation_policy;
@@ -1018,7 +1021,8 @@ impl PlanningDirectionState {
 
 /*
  * 작업의 필드이다 (plan 18 K4-9d). 만들기에서 없는 값은 기본값이다. 고치기는 제목을 바꾼다. 이유와
- * 참조는 없으면 비우고, 방향·설명·상태·우선순위는 없으면 그대로 둔다.
+ * 참조는 없으면 비우고, 방향·설명·상태·우선순위·완료 기준은 없으면 그대로 둔다.
+ * 완료 기준은 null도 그대로 두고 빈 배열은 비운다. 기준 revision은 호스트만 만든다.
  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1029,6 +1033,8 @@ pub struct TaskFields {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance: Option<Vec<TaskAcceptanceCriterion>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<PlanningTaskStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1049,6 +1055,9 @@ impl TaskFields {
             direction_id: task.direction_id,
             title: task.title,
             description: task.description,
+            acceptance: task
+                .acceptance
+                .map(|criteria| criteria.into_iter().map(Into::into).collect()),
             status: task.status.map(PlanningTaskStatus::from_core),
             base_priority: task.base_priority,
             dynamic_priority_delta: task.dynamic_priority_delta,
@@ -1063,6 +1072,9 @@ impl TaskFields {
             direction_id: self.direction_id,
             title: non_blank("task.title", self.title)?,
             description: self.description,
+            acceptance: self
+                .acceptance
+                .map(|criteria| criteria.into_iter().map(Into::into).collect()),
             status: self.status.map(PlanningTaskStatus::into_core),
             base_priority: self.base_priority,
             dynamic_priority_delta: self.dynamic_priority_delta,

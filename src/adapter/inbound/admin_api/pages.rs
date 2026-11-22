@@ -549,6 +549,7 @@ async fn upsert_task_for_surface(
         direction_id: form.direction_id,
         title: form.title,
         description: form.description,
+        acceptance: None,
         status: form.status,
         base_priority: form.base_priority,
         dynamic_priority_delta: form.dynamic_priority_delta,

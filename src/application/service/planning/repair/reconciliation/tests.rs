@@ -571,6 +571,8 @@ fn stale_candidate_guard_compares_rfc3339_timestamps_by_time() {
 // 작은 작업 fixture로 각 가드 테스트의 관심사를 id/status/update-time 차이에 묶어 둔다.
 fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
     TaskDefinition {
+        acceptance: Vec::new(),
+        acceptance_revision: 0,
         id: id.to_string(),
         direction_id: "direction-a".to_string(),
         direction_relation_note: "supports direction".to_string(),

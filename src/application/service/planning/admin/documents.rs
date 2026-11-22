@@ -1012,6 +1012,8 @@ mod tests {
         blocked_by: Vec<&str>,
     ) -> TaskDefinition {
         TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: id.to_string(),
             direction_id: direction_id.to_string(),
             direction_relation_note: "relates to the direction".to_string(),

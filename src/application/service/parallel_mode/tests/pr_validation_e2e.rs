@@ -728,6 +728,7 @@ pub mod tests {
                     &repo.workspace_dir(),
                     idempotency_key,
                     PlanningTaskCreateInput {
+                        acceptance: None,
                         direction_id: None,
                         direction_relation_note: Some(
                             "occupies an ordinary pool slot".to_string(),

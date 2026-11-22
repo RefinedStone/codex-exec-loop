@@ -707,7 +707,7 @@
       "name": "create_task",
       "scope": "planning",
       "state": "store",
-      "summary": "Add a planning task as the operator. The answer carries the new task id and the new planning revision.",
+      "summary": "Add a planning task as the operator, optionally with acceptance criteria. Missing or null acceptance starts empty; acceptance_revision is host-owned and is not an input. The answer carries the new task id and the new planning revision.",
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
@@ -760,7 +760,7 @@
       "name": "update_task",
       "scope": "planning",
       "state": "store",
-      "summary": "Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
+      "summary": "Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. Missing or null acceptance keeps the agreed criteria; an empty array clears them. acceptance_revision is host-owned and is not an input. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.",
       "effect": "write",
       "idempotency": "natural",
       "rejections": [
@@ -13108,9 +13108,55 @@
       ],
       "type": "object"
     },
+    "TaskAcceptanceChannel": {
+      "enum": [
+        "command",
+        "data",
+        "http",
+        "screen"
+      ],
+      "type": "string"
+    },
+    "TaskAcceptanceCriterion": {
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/TaskAcceptanceChannel"
+        },
+        "essential": {
+          "type": "boolean"
+        },
+        "id": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        },
+        "scenario": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "scenario",
+        "channel",
+        "essential"
+      ],
+      "type": "object"
+    },
     "TaskFields": {
       "additionalProperties": false,
       "properties": {
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/TaskAcceptanceCriterion"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "base_priority": {
           "format": "int32",
           "type": [

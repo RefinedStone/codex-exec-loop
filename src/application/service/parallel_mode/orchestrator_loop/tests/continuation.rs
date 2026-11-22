@@ -89,6 +89,8 @@ fn awaiting_user_terminal_preserves_thread_lease_and_blocks_official_completion_
     let tasks = TaskAuthorityDocument {
         version: 1,
         tasks: vec![TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-a".into(),
             direction_id: "direction-a".into(),
             direction_relation_note: "fixture".into(),
