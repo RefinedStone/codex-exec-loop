@@ -30,6 +30,7 @@ mod human_confirmation;
 mod issue_decision;
 #[cfg(unix)]
 mod issue_flow;
+mod issue_intervention;
 mod resource_versions;
 
 struct EchoUpstream {

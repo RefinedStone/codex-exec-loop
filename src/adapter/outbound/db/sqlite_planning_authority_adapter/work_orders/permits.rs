@@ -15,7 +15,7 @@ use super::{
     load_work_order_record,
 };
 
-fn load_basis(
+pub(super) fn load_basis(
     connection: &Connection,
     work_order_id: &str,
 ) -> Result<Option<PlanningWorkPermitBasis>> {
@@ -49,7 +49,7 @@ fn require_work_order(
     })
 }
 
-fn write_permits(
+pub(super) fn write_permits(
     transaction: &Transaction<'_>,
     work_order_id: &str,
     permits: &[PlanningWorkPermit],
@@ -117,6 +117,8 @@ impl PlanningWorkPermitRepositoryPort for SqlitePlanningAuthorityAdapter {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open work-order permit basis transaction")?;
         require_work_order(&transaction, work_order_id)?;
+        super::control::load_control(&transaction, work_order_id)?
+            .require_epoch(basis.authorization_epoch)?;
         if let Some(current) = load_basis(&transaction, work_order_id)? {
             if current == *basis {
                 return Ok(());
@@ -165,6 +167,8 @@ impl PlanningWorkPermitRepositoryPort for SqlitePlanningAuthorityAdapter {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open work-order permit grant transaction")?;
         let mut work_order = require_work_order(&transaction, &permit.work_order_id)?;
+        super::control::load_control(&transaction, &permit.work_order_id)?
+            .require_epoch(permit.basis.authorization_epoch)?;
         if load_basis(&transaction, &permit.work_order_id)?.as_ref() != Some(&permit.basis) {
             bail!("permit_stale: grant does not match current work-order evidence");
         }
@@ -318,6 +322,16 @@ pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter) fn check
     };
     let work_order = require_work_order(transaction, &work_order_id)?;
     let basis = load_basis(transaction, &work_order_id)?;
+    let control = super::control::load_control(transaction, &work_order_id)?;
+    if !control.allows_automation()
+        || basis
+            .as_ref()
+            .is_some_and(|basis| basis.authorization_epoch != control.authorization_epoch)
+    {
+        return Ok(PlanningWorkPermitDecision::Denied(
+            crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitBlockReason::Stale,
+        ));
+    }
     Ok(evaluate_work_order_permit(
         &work_order,
         basis.as_ref(),

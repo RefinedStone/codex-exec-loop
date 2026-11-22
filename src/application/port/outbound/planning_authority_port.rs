@@ -536,6 +536,47 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 };
 
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    fn claim_work_order_launch(&self, workspace_dir:&str, expected:&ParallelModeSlotLeaseSnapshot)
+    -> Result<Vec<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction>>{
+        let decision = self.check_work_order_permit_for_task(
+            workspace_dir,
+            &expected.task_id,
+            PlanningWorkPermitStage::Dispatch,
+            expected
+                .delivery_target
+                .as_ref()
+                .map(|target| target.integration_base_commit_sha.as_str()),
+        )?;
+        if decision == PlanningWorkPermitDecision::Legacy {
+            return Ok(Vec::new());
+        }
+        anyhow::bail!("atomic work-order launch claims are unavailable")
+    }
+
+    fn work_order_control_for_task(&self, _workspace_dir:&str, _task_id:&str)
+    -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl>>{
+        Ok(None)
+    }
+    fn work_order_instructions_for_task(&self, _workspace_dir:&str, _task_id:&str)
+    -> Result<Vec<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction>>{
+        Ok(Vec::new())
+    }
+
+    /// Legacy authority implementations have no controlled work orders.
+    /// The SQLite authority checks the durable work control before every cleanup boundary.
+    fn work_order_cleanup_allowed_for_task(
+        &self,
+        workspace_dir: &str,
+        task_id: &str,
+    ) -> Result<bool> {
+        Ok(self.check_work_order_permit_for_task(
+            workspace_dir,
+            task_id,
+            PlanningWorkPermitStage::Dispatch,
+            None,
+        )? == PlanningWorkPermitDecision::Legacy)
+    }
+
     /// Read the neutral planning ledger immediately before an external execution stage.
     /// Only tasks without durable work-order lineage retain the legacy delivery policy.
     fn check_work_order_permit_for_task(

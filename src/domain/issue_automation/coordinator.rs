@@ -56,6 +56,11 @@ pub struct IssueWorkOrder {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueWorkCheckpoint {
+    /// 첫 승인/작업 원문은 불변이다. 개입 뒤 승인은 별도로 이어 쓴다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<IssueWorkAuthorization>,
+    #[serde(default)]
+    pub permit_authorization_epoch: u64,
     pub order: IssueWorkOrder,
     pub decision_id: IssueDecisionId,
     pub approved_basis: IssueDecisionBasis,
@@ -67,7 +72,27 @@ pub struct IssueWorkCheckpoint {
     pub revision: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssueWorkAuthorization {
+    pub decision_id: IssueDecisionId,
+    pub basis: IssueDecisionBasis,
+}
+
 impl IssueWorkCheckpoint {
+    pub fn current_authorization_basis(&self) -> &IssueDecisionBasis {
+        self.authorization
+            .as_ref()
+            .map(|auth| &auth.basis)
+            .unwrap_or(&self.approved_basis)
+    }
+    pub fn current_authorization_decision_id(&self) -> &IssueDecisionId {
+        self.authorization
+            .as_ref()
+            .map(|auth| &auth.decision_id)
+            .unwrap_or(&self.decision_id)
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         super::validate_reference(&self.order.issue).map_err(|_| "invalid work issue")?;
         self.approved_basis
@@ -94,11 +119,24 @@ impl IssueWorkCheckpoint {
         {
             return Err("invalid issue work checkpoint");
         }
+        if let Some(authorization) = &self.authorization {
+            authorization
+                .basis
+                .validate()
+                .map_err(|_| "invalid renewed work approval")?;
+            if authorization.basis.authorization_epoch < self.approved_basis.authorization_epoch
+                || authorization.basis.field_hash.as_ref() != Some(&self.order.field_hash)
+                || authorization.basis.work_order_id.is_some()
+            {
+                return Err("renewed work approval does not match the immutable work");
+            }
+        }
         Ok(())
     }
 }
 
 pub struct IssueCoordinatorInput<'a> {
+    pub authorization_epoch: u64,
     pub state: IssueAutomationState,
     pub flags: IssueAutomationFlags,
     pub assessment: Option<&'a IssueTriageAssessment>,
@@ -127,20 +165,27 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
         && !input.flags.unknown;
     let current_basis =
         IssueDecisionBasis::from_assessment(assessment, IssueAutomationGate::Start, Option::None)
-            .ok();
-    if let Some(work) = input.work {
+            .ok()
+            .map(|mut basis| {
+                basis.authorization_epoch = input.authorization_epoch;
+                basis
+            });
+    if let Some(work) = input.work.filter(|work| {
+        work.current_authorization_basis().authorization_epoch == input.authorization_epoch
+    }) {
         let approved = eligible
-            && current_basis.as_ref() == Some(&work.approved_basis)
+            && current_basis.as_ref() == Some(work.current_authorization_basis())
             && input.decision.is_some_and(|decision| {
                 human_start(decision)
                     && decision.issue() == &work.order.issue
-                    && decision.definition().basis == work.approved_basis
+                    && &decision.definition().basis == work.current_authorization_basis()
             });
         if !approved {
             return CancelWork;
         }
         if work.task_ids.is_empty()
             || work.permit_source.is_none()
+            || work.permit_authorization_epoch != input.authorization_epoch
             || input.frozen_source.is_some_and(|source| {
                 !work.delivery_granted || work.permit_source.as_deref() != Some(source)
             })

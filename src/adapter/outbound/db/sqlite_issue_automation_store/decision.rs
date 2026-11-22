@@ -193,7 +193,9 @@ pub(super) fn ensure(
             {
                 return Ok(IssueDecisionSaveResult::Conflict);
             }
-            if request.definition().basis != current_basis(request, assessment)? {
+            if request.definition().basis
+                != current_basis(transaction, workspace, request, assessment)?
+            {
                 return Ok(IssueDecisionSaveResult::Conflict);
             }
             let encoded = encode(request)?;
@@ -253,7 +255,7 @@ pub(super) fn save(
                 return Ok(IssueDecisionSaveResult::Conflict);
             };
             request.validate_successor(&existing.request)?;
-            let basis_matches = existing.request.definition().basis == current_basis(request, assessment)?;
+            let basis_matches = existing.request.definition().basis == current_basis(transaction, workspace, request, assessment)?;
             if basis_matches && assessment.gates().iter().any(|gate|
                 gate.gate == existing.request.definition().gate
                     && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::Human)
@@ -336,18 +338,22 @@ pub(super) fn current_item(
 }
 
 fn current_basis(
+    connection: &Connection,
+    workspace: &str,
     request: &IssueDecisionRequest,
     assessment: &IssueTriageAssessment,
 ) -> Result<IssueDecisionBasis> {
     if request.issue() != &assessment.basis().issue {
         bail!("the current assessment belongs to a different decision subject")
     }
-    IssueDecisionBasis::from_assessment(
+    let mut basis = IssueDecisionBasis::from_assessment(
         assessment,
         request.definition().gate,
         request.definition().basis.work_order_id.clone(),
-    )
-    .map_err(Into::into)
+    )?;
+    basis.authorization_epoch =
+        super::intervention::authorization_epoch(connection, workspace, request.issue())?;
+    Ok(basis)
 }
 
 fn encode(request: &IssueDecisionRequest) -> Result<String> {

@@ -433,6 +433,22 @@ pub enum KernelEvent {
         task_ids: Vec<String>,
         revision: u64,
     },
+    /// 보류 또는 해제와 작업 허가 fencing의 확정 사실이다. 개입 원문은 포함하지 않는다.
+    IssueHeld {
+        issue: IssueEventReference,
+        work_order_id: Option<String>,
+        authorization_epoch: u64,
+    },
+    IssueReleased {
+        issue: IssueEventReference,
+        work_order_id: Option<String>,
+        authorization_epoch: u64,
+    },
+    IssueWorkPermitRevoked {
+        issue: IssueEventReference,
+        work_order_id: Option<String>,
+        authorization_epoch: u64,
+    },
     /// 승인 판과 고정 source에 묶인 단계 허가의 확정 사실이다.
     IssueWorkPermitGranted {
         event_id: String,
@@ -658,6 +674,48 @@ impl PendingApproval {
 }
 
 impl KernelEvent {
+    pub fn issue_intervened(
+        receipt: &crate::domain::issue_automation::intervention::IssueInterventionReceipt,
+    ) -> Vec<Self> {
+        if !receipt.changed {
+            return Vec::new();
+        }
+        let mut events = Vec::new();
+        let issue = IssueEventReference::from(&receipt.issue);
+        let work_order_id = receipt.work_order_id.clone();
+        let authorization_epoch = receipt.authorization_epoch;
+        match receipt.action.as_str() {
+            "hold_issue" => events.push(Self::IssueHeld {
+                issue: issue.clone(),
+                work_order_id: work_order_id.clone(),
+                authorization_epoch,
+            }),
+            "release_issue" => events.push(Self::IssueReleased {
+                issue: issue.clone(),
+                work_order_id: work_order_id.clone(),
+                authorization_epoch,
+            }),
+            _ => {}
+        }
+        if matches!(
+            receipt.action.as_str(),
+            "hold_issue"
+                | "release_issue"
+                | "take_over_issue"
+                | "retriage_issue"
+                | "cancel_issue_work"
+                | "track_issue"
+                | "untrack_issue"
+        ) {
+            events.push(Self::IssueWorkPermitRevoked {
+                issue,
+                work_order_id,
+                authorization_epoch,
+            });
+        }
+        events
+    }
+
     pub fn issue_tracked(issue: &IssueReference, binding_id: &str, revision: u64) -> Self {
         Self::IssueTracked {
             issue: issue.into(),
@@ -718,6 +776,9 @@ impl KernelEvent {
     /// 이 사건의 종류이다. 종류의 이름과 설명은 `KernelRecordKind` 가 가진다 (plan 18 K4-1).
     pub fn record_kind(&self) -> KernelRecordKind {
         match self {
+            Self::IssueHeld { .. } => KernelRecordKind::IssueHeld,
+            Self::IssueReleased { .. } => KernelRecordKind::IssueReleased,
+            Self::IssueWorkPermitRevoked { .. } => KernelRecordKind::IssueWorkPermitRevoked,
             Self::IssueTracked { .. } => KernelRecordKind::IssueTracked,
             Self::IssueTriaged { .. } => KernelRecordKind::IssueTriaged,
             Self::IssueWorkSubmitted { .. } => KernelRecordKind::IssueWorkSubmitted,
@@ -750,6 +811,9 @@ impl KernelEvent {
             | Self::IssueTracked { .. }
             | Self::IssueWorkSubmitted { .. }
             | Self::IssueWorkPermitGranted { .. }
+            | Self::IssueHeld { .. }
+            | Self::IssueReleased { .. }
+            | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionResolved { .. }
@@ -791,6 +855,9 @@ impl KernelEvent {
             | Self::IssueTracked { .. }
             | Self::IssueWorkSubmitted { .. }
             | Self::IssueWorkPermitGranted { .. }
+            | Self::IssueHeld { .. }
+            | Self::IssueReleased { .. }
+            | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionResolved { .. }
@@ -842,6 +909,9 @@ impl KernelEvent {
             | Self::IssueTracked { .. }
             | Self::IssueWorkSubmitted { .. }
             | Self::IssueWorkPermitGranted { .. }
+            | Self::IssueHeld { .. }
+            | Self::IssueReleased { .. }
+            | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionResolved { .. }
@@ -1663,6 +1733,7 @@ mod tests {
             gate: crate::domain::issue_automation::policy::IssueAutomationGate::Start,
             kind: IssueDecisionKind::AgentQuestion,
             basis: IssueDecisionBasis {
+                authorization_epoch: 0,
                 policy_version: "a".repeat(64),
                 field_hash: None,
                 work_order_id: None,
@@ -1774,6 +1845,48 @@ mod tests {
                 work_order_id: "issue-work-1".into(),
                 task_ids: vec!["task-1".into()],
                 revision: 8,
+            },
+            KernelEvent::IssueHeld {
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                work_order_id: Some("issue-work-1".into()),
+                authorization_epoch: 2,
+            },
+            KernelEvent::IssueReleased {
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                work_order_id: Some("issue-work-1".into()),
+                authorization_epoch: 2,
+            },
+            KernelEvent::IssueWorkPermitRevoked {
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                work_order_id: Some("issue-work-1".into()),
+                authorization_epoch: 2,
             },
             KernelEvent::IssueWorkPermitGranted {
                 event_id: "work-permit-1".into(),

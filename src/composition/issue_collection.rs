@@ -191,3 +191,49 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
         .with_triage(triage),
     )
 }
+
+/// 개입 명령은 같은 영속 장부와 실제 kernel worker steering 경계를 사용한다.
+pub(crate) fn build_interventions(
+    workspace_dir: &str,
+    steering: Arc<
+        dyn crate::application::port::outbound::issue_work_steering_port::IssueWorkSteeringPort,
+    >,
+) -> Arc<crate::application::service::issue_intervention::IssueInterventionService> {
+    let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    }));
+    let validation_source = Arc::new(FilesystemIssuePolicySourceAdapter::new());
+    let triage = Arc::new(IssueTriageService::new(
+        workspace_dir.to_owned(),
+        store.clone(),
+        IssueAutomationPolicyService::new(Arc::new(
+            FilesystemIssueAutomationPolicySourceAdapter::new(),
+        )),
+        IssuePolicyService::new(validation_source.clone()),
+    ));
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let parallel=crate::application::service::parallel_mode::ParallelModeService::new(
+        authority.clone(),
+        Arc::new(crate::adapter::outbound::github::automation::GithubAutomationAdapter::new()),
+        Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
+    );
+    let execution = Arc::new(
+        crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
+            authority.clone(),
+            authority,
+            parallel,
+        ),
+    );
+    Arc::new(
+        crate::application::service::issue_intervention::IssueInterventionService::new(
+            workspace_dir.to_owned(),
+            store,
+            execution,
+            steering,
+        )
+        .with_triage(triage)
+        .with_policy(IssuePolicyService::new(validation_source)),
+    )
+}

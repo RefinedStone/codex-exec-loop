@@ -5,6 +5,9 @@ use anyhow::Result;
 
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
 use crate::domain::issue_automation::decision::{IssueDecisionFact, IssueDecisionOutcome};
+use crate::domain::issue_automation::intervention::{
+    IssueInterventionAction, IssueInterventionReceipt, IssueInterventionRequest,
+};
 
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
 use crate::domain::planning::{DirectionState, PlanningMutationRefusal, TaskStatus};
@@ -74,6 +77,9 @@ pub struct StoredDirectionFields {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
+    InterveneIssue {
+        request: IssueInterventionRequest,
+    },
     AnswerIssueDecision {
         decision_id: String,
         option: String,
@@ -113,6 +119,16 @@ impl StoredCommand {
     /// 이 저장 명령의 스펙 항목이다.
     pub const fn kind(&self) -> KernelCommandKind {
         match self {
+            Self::InterveneIssue { request } => match &request.action {
+                IssueInterventionAction::Hold => KernelCommandKind::HoldIssue,
+                IssueInterventionAction::Release => KernelCommandKind::ReleaseIssue,
+                IssueInterventionAction::Steer { .. } => KernelCommandKind::SteerIssue,
+                IssueInterventionAction::TakeOver => KernelCommandKind::TakeOverIssue,
+                IssueInterventionAction::Retriage => KernelCommandKind::RetriageIssue,
+                IssueInterventionAction::Cancel { .. } => KernelCommandKind::CancelIssueWork,
+                IssueInterventionAction::Track => KernelCommandKind::TrackIssue,
+                IssueInterventionAction::Untrack => KernelCommandKind::UntrackIssue,
+            },
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
@@ -128,6 +144,9 @@ impl StoredCommand {
 /// 성공한 저장 명령의 결과이다. 명령의 답에 실린다. 기록에는 싣지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommandResult {
+    IssueIntervened {
+        receipt: Box<IssueInterventionReceipt>,
+    },
     IssueDecisionResolved {
         fact: Box<IssueDecisionFact>,
         outcome: IssueDecisionOutcome,

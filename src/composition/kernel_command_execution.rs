@@ -224,13 +224,15 @@ impl KernelCommandPort for CommandOnlyKernel {
         input: Value,
         idempotency_key: Option<String>,
     ) -> Result<Value> {
+        let sensitive_error = match input.get("type").and_then(Value::as_str) {
+            Some("answer_issue_decision") => Some("invalid issue decision answer parameters"),
+            Some("steer_issue") => Some("invalid issue steer parameters"),
+            _ => None,
+        };
         let request = CommandRequest {
-            command: serde_json::from_value(input).map_err(|error| {
-                if kind == KernelCommandKind::AnswerIssueDecision {
-                    anyhow::anyhow!("invalid issue decision answer parameters")
-                } else {
-                    error.into()
-                }
+            command: serde_json::from_value(input).map_err(|error| match sensitive_error {
+                Some(message) => anyhow::anyhow!(message),
+                None => error.into(),
             })?,
             idempotency_key,
         };
@@ -285,13 +287,16 @@ impl KernelCommandPort for CommandOnlyKernel {
         // K6 까지의 예외이다: TUI 가 커널을 쥐 저장소에서는 직접 실행한다. 기록에 남지 않는다.
         let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
         if lock.is_none() {
-            // 결정 답은 영수증과 함께 실행해야 한다. 기존 TUI 직접 실행 예외를 적용하지 않는다.
+            // 결정 답과 개입은 영수증과 함께 실행한다. 기존 TUI 직접 실행 예외를 적용하지 않는다.
             if matches!(
                 &work,
-                CommandOnlyWork::Stored(StoredCommand::AnswerIssueDecision { .. })
+                CommandOnlyWork::Stored(
+                    StoredCommand::AnswerIssueDecision { .. }
+                        | StoredCommand::InterveneIssue { .. }
+                )
             ) {
                 return unreachable_answer(
-                    "The repository kernel owns this workspace. Send the decision answer through that kernel.",
+                    "The repository kernel owns this workspace. Send this issue command through that kernel.",
                 );
             }
             return work_answer(self.run(work), is_reset, None);
@@ -398,6 +403,14 @@ impl KernelCommandPort for CommandOnlyKernel {
                 sequence,
                 KernelEvent::issue_decision_resolved(fact, *catalog_revision),
             ));
+        }
+        if let WorkEnd::Done(Some(StoredCommandResult::IssueIntervened { receipt })) = &end {
+            for event in KernelEvent::issue_intervened(receipt) {
+                let sequence = completed_sequence
+                    .checked_add(completed.len() as i64)
+                    .context("kernel event sequence exhausted")?;
+                completed.push(record(sequence, event));
+            }
         }
         log.append_kernel_events(&self.workspace, &completed)?;
         work_answer(end, is_reset, Some(op_id))
@@ -693,6 +706,7 @@ mod g2_tests;
 #[cfg(test)]
 mod tests {
     mod issue_decision;
+    mod issue_intervention;
     mod issue_queries;
     use super::*;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;

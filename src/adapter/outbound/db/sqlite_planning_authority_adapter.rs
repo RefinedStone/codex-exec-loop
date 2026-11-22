@@ -1100,6 +1100,7 @@ impl SqlitePlanningAuthorityAdapter {
         previous: Option<&TaskAuthorityDocument>,
         audit: Option<PlanningTaskAuthorityMutationAudit<'_>>,
     ) -> Result<i64> {
+        work_orders::validate_cancelled_lineage(transaction, commit.task_authority)?;
         upsert_authority_metadata(transaction, location, "last_task_authority_commit_at")?;
         replace_task_authority_tables(transaction, commit.task_authority, commit.queue_projection)?;
         let planning_revision = bump_planning_revision(transaction)?;
@@ -1386,6 +1387,44 @@ impl ParallelModeRuntimeEventLogPort for SqlitePlanningAuthorityAdapter {
 }
 
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
+    fn claim_work_order_launch(&self,workspace_dir:&str,expected:&ParallelModeSlotLeaseSnapshot)
+    -> Result<Vec<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction>>{
+        work_orders::claim_work_order_launch(workspace_dir, expected)
+    }
+
+    fn work_order_control_for_task(&self, workspace_dir:&str, task_id:&str)
+    -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControl>>{
+        use crate::application::port::outbound::planning_work_order_repository_port::{
+            PlanningWorkControlRepositoryPort, PlanningWorkOrderRepositoryPort,
+        };
+        PlanningWorkOrderRepositoryPort::load_work_order_for_task(self, workspace_dir, task_id)?
+            .map(|order| self.load_work_order_control(workspace_dir, &order.work_order_id))
+            .transpose()
+    }
+    fn work_order_instructions_for_task(&self, workspace_dir:&str, task_id:&str)
+    -> Result<Vec<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction>>{
+        use crate::application::port::outbound::planning_work_order_repository_port::{
+            PlanningWorkControlRepositoryPort, PlanningWorkOrderRepositoryPort,
+        };
+        let Some(order) = PlanningWorkOrderRepositoryPort::load_work_order_for_task(
+            self,
+            workspace_dir,
+            task_id,
+        )?
+        else {
+            return Ok(Vec::new());
+        };
+        self.load_work_order_instructions(workspace_dir, &order.work_order_id)
+    }
+
+    fn work_order_cleanup_allowed_for_task(
+        &self,
+        workspace_dir: &str,
+        task_id: &str,
+    ) -> Result<bool> {
+        crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControlRepositoryPort::work_order_cleanup_allowed_for_task(self,workspace_dir,task_id)
+    }
+
     fn compare_and_swap_runtime_distributor_queue_record(
         &self,
         workspace_dir: &str,

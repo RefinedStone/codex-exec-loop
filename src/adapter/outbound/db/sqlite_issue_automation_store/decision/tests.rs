@@ -432,7 +432,7 @@ fn schema_v3_migration_preserves_existing_catalog_assessment_and_source() {
     adapter
         .with_connection(fixture.cwd(), |connection, _guard| {
             connection
-                .execute_batch("DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; PRAGMA user_version = 3;")?;
+                .execute_batch("DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; PRAGMA user_version = 3;")?;
             super::super::validate_schema_version(connection, 3)
         })
         .unwrap();
@@ -640,7 +640,7 @@ fn schema_v4_migration_preserves_existing_catalog_assessment_and_source() {
     adapter
         .with_connection(fixture.cwd(), |connection, _guard| {
             connection
-                .execute_batch("DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; PRAGMA user_version = 4;")?;
+                .execute_batch("DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; PRAGMA user_version = 4;")?;
             super::super::validate_schema_version(connection, 4)
         })
         .unwrap();
@@ -655,6 +655,57 @@ fn schema_v4_migration_preserves_existing_catalog_assessment_and_source() {
             assert_eq!(
                 super::super::schema_identity(connection)?,
                 (super::super::APPLICATION_ID, super::super::SCHEMA_VERSION)
+            );
+            super::super::validate_schema(connection)
+        })
+        .unwrap();
+}
+
+#[test]
+fn schema_v5_migration_preserves_existing_decision_and_observation_records() {
+    let fixture = Fixture::new("intervention-migration-v5");
+    let (fence, assessment, request) = prepared(&fixture);
+    let adapter = fixture.adapter();
+    commit(
+        adapter
+            .ensure_issue_decision(fixture.cwd(), fence, &assessment, &request)
+            .unwrap(),
+    );
+    let before = adapter.read_triage_batch(fixture.cwd(), None, 100).unwrap();
+    let decision = adapter
+        .get_issue_decision(fixture.cwd(), request.id())
+        .unwrap();
+    assert!(decision.is_some());
+    adapter.with_connection(fixture.cwd(), |connection, _guard| {
+        connection.execute_batch(
+            "DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; PRAGMA user_version = 5;",
+        )?;
+        super::super::validate_schema_version(connection, 5)
+    }).unwrap();
+    let reopened = fixture.adapter();
+    assert_eq!(
+        reopened
+            .read_triage_batch(fixture.cwd(), None, 100)
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        reopened
+            .get_issue_decision(fixture.cwd(), request.id())
+            .unwrap(),
+        decision
+    );
+    assert!(
+        reopened
+            .pending_issue_interventions(fixture.cwd())
+            .unwrap()
+            .is_empty()
+    );
+    reopened
+        .with_connection(fixture.cwd(), |connection, _guard| {
+            assert_eq!(
+                super::super::schema_identity(connection)?,
+                (super::super::APPLICATION_ID, super::super::SCHEMA_VERSION),
             );
             super::super::validate_schema(connection)
         })
