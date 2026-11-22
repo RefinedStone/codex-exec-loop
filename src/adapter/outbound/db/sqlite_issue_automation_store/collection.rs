@@ -599,3 +599,41 @@ pub(super) fn validate_new_workflow_binding(
     }
     Ok(())
 }
+
+/// Fresh approval resync shares the normal observation transaction, without consuming its cursor.
+pub(super) fn apply_one(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+    expected: IssueCollectionFence,
+    issue: &crate::domain::issue_work::IssueReference,
+    read: &IssueSourceRead,
+) -> Result<IssueCollectionApplyResult> {
+    expected.validate()?;
+    validate_reference_scope(workspace, issue)?;
+    adapter.with_connection(workspace, |connection, guard| {
+        transaction(connection, guard, |tx| {
+            let current = require_control(tx, workspace)?;
+            if !accepts(&current, expected) {
+                return discarded(tx, workspace, current);
+            }
+            if observations::reference(read) != issue {
+                bail!("the fresh issue result has another identity");
+            }
+            let binding = queries::binding_for_reference(tx, workspace, issue)?;
+            let mut next = current.clone();
+            next.revision = next_revision(current.revision)?;
+            let inserted = observations::apply(tx, workspace, &binding, read, next.revision)?;
+            save_control(tx, workspace, current.fence(), &next)?;
+            applied(
+                tx,
+                workspace,
+                next,
+                if inserted {
+                    vec![issue.clone()]
+                } else {
+                    Vec::new()
+                },
+            )
+        })
+    })
+}

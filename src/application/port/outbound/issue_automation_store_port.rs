@@ -144,6 +144,27 @@ pub enum IssueDecisionSaveResult {
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
 /// 같은 안정 ID의 재삽입은 기존 내용을 보존한다. 갱신은 revision CAS로만 한다.
 pub trait IssueAutomationStorePort: Send + Sync {
+    fn get_issue_work(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+    ) -> Result<Option<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>>;
+    fn save_issue_work(
+        &self,
+        workspace: &str,
+        expected: IssueTriageFence,
+        assessment: &IssueTriageAssessment,
+        candidate: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+    ) -> Result<IssueWorkSaveResult>;
+    /// 한 건의 강제 재조회다. 정기 배치의 커서는 이동하지 않는다.
+    fn apply_issue_resync(
+        &self,
+        workspace: &str,
+        expected: IssueCollectionFence,
+        issue: &IssueReference,
+        read: &IssueSourceRead,
+    ) -> Result<IssueCollectionApplyResult>;
+
     /// 기존 ID의 좌표는 바꾸지 않는다. 같은 좌표이면 기존 자율 수준과 revision을 그대로 반환한다.
     fn insert_binding(
         &self,
@@ -337,4 +358,14 @@ pub trait IssueAutomationStorePort: Send + Sync {
         current: &IssueTriageAssessment,
         request: &IssueDecisionRequest,
     ) -> Result<IssueDecisionSaveResult>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueWorkSaveResult {
+    Saved {
+        record: Box<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>,
+        catalog_revision: u64,
+        changed: bool,
+    },
+    Conflict,
 }

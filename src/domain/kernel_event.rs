@@ -425,6 +425,22 @@ pub enum KernelEvent {
         revision: u64,
         reason: Option<ReasonCode>,
     },
+    /// 영속 work-order 연결이 확정된 사실이다. handoff 본문은 포함하지 않는다.
+    IssueWorkSubmitted {
+        issue: IssueEventReference,
+        work_order_id: String,
+        task_ids: Vec<String>,
+        revision: u64,
+    },
+    /// 승인 판과 고정 source에 묶인 단계 허가의 확정 사실이다.
+    IssueWorkPermitGranted {
+        issue: IssueEventReference,
+        work_order_id: String,
+        source_sha: String,
+        gate_revision: u64,
+        delivery: bool,
+        revision: u64,
+    },
     /// 모드 설정 commit 이후의 감사 기록이다. 설정 복원은 이 기록이 아닌 장부에서 한다.
     IssueAutomationModeChanged {
         previous: Option<IssueAutomationModeRecord>,
@@ -702,6 +718,8 @@ impl KernelEvent {
         match self {
             Self::IssueTracked { .. } => KernelRecordKind::IssueTracked,
             Self::IssueTriaged { .. } => KernelRecordKind::IssueTriaged,
+            Self::IssueWorkSubmitted { .. } => KernelRecordKind::IssueWorkSubmitted,
+            Self::IssueWorkPermitGranted { .. } => KernelRecordKind::IssueWorkPermitGranted,
             Self::IssueDecisionRequested { .. } => KernelRecordKind::IssueDecisionRequested,
             Self::IssueDecisionResolved { .. } => KernelRecordKind::IssueDecisionResolved,
             Self::IssueAutomationModeChanged { .. } => KernelRecordKind::IssueAutomationModeChanged,
@@ -728,6 +746,8 @@ impl KernelEvent {
             Self::RepositoryChanged { .. }
             | Self::AutoFollowConfigured { .. }
             | Self::IssueTracked { .. }
+            | Self::IssueWorkSubmitted { .. }
+            | Self::IssueWorkPermitGranted { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionResolved { .. }
@@ -767,6 +787,8 @@ impl KernelEvent {
             | Self::ApprovalResolved { .. }
             | Self::RepositoryChanged { .. }
             | Self::IssueTracked { .. }
+            | Self::IssueWorkSubmitted { .. }
+            | Self::IssueWorkPermitGranted { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionResolved { .. }
@@ -816,6 +838,8 @@ impl KernelEvent {
             | Self::ApprovalResolved { .. }
             | Self::RepositoryChanged { .. }
             | Self::IssueTracked { .. }
+            | Self::IssueWorkSubmitted { .. }
+            | Self::IssueWorkPermitGranted { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionResolved { .. }
@@ -1705,6 +1729,38 @@ mod tests {
                 "origin-binding",
                 7,
             ),
+            KernelEvent::IssueWorkSubmitted {
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                work_order_id: "issue-work-1".into(),
+                task_ids: vec!["task-1".into()],
+                revision: 8,
+            },
+            KernelEvent::IssueWorkPermitGranted {
+                issue: (&IssueReference {
+                    provider: IssueProvider::GitHub,
+                    server_id: "github.com".into(),
+                    repository_id: "R_stable".into(),
+                    issue_id: "I_stable".into(),
+                    project_scope: IssueProjectScope {
+                        workspace_dir: "/work/project".into(),
+                    },
+                })
+                    .into(),
+                work_order_id: "issue-work-1".into(),
+                source_sha: "a".repeat(40),
+                gate_revision: 1,
+                delivery: false,
+                revision: 9,
+            },
             KernelEvent::issue_triaged(
                 &IssueReference {
                     provider: IssueProvider::GitHub,

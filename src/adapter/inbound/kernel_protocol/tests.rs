@@ -2161,6 +2161,20 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             "binding-1",
             3,
         ),
+        Record::IssueWorkSubmitted {
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: "issue-work-1".into(),
+            task_ids: vec!["task-1".into()],
+            revision: 4,
+        },
+        Record::IssueWorkPermitGranted {
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: "issue-work-1".into(),
+            source_sha: "a".repeat(40),
+            gate_revision: 1,
+            delivery: false,
+            revision: 5,
+        },
         Record::issue_triaged(
             &sample_issue_reference(),
             "binding-1",

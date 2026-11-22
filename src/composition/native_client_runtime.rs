@@ -996,6 +996,9 @@ impl NativeClientRuntime {
         &mut self,
         completion: ParallelModeControlPlaneBackgroundEvent,
     ) -> NativeClientDispatchOutcome {
+        if let Some(observer) = &mut self.issue_observer {
+            observer.request_sync(Instant::now());
+        }
         NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
             client_presentation_events(
                 self.parallel_control_plane
@@ -1744,6 +1747,7 @@ impl NativeClientRuntime {
     }
 
     fn poll_issue_observer(&mut self, now: Instant) {
+        let execution_enabled = self.parallel_mode_enabled();
         let Some(observer) = &mut self.issue_observer else {
             return;
         };
@@ -1752,6 +1756,7 @@ impl NativeClientRuntime {
             .unwrap_or_default()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
+        observer.set_execution_enabled(execution_enabled, now);
         let cycle = observer.poll(now, at_unix_ms);
         self.published_issue_change |= cycle.changed;
         self.record_issue_committed(cycle.committed);
@@ -1771,6 +1776,9 @@ impl NativeClientRuntime {
                 KernelEvent::issue_decision_resolved(fact, revision)
             };
         self.published_issue_change = true;
+        if let Some(observer) = &mut self.issue_observer {
+            observer.request_sync(Instant::now());
+        }
         self.record_kernel_events(vec![event]);
     }
 
@@ -1790,6 +1798,19 @@ impl NativeClientRuntime {
                 IssueObserverCommittedFact::Tracked(fact) => {
                     KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
                 }
+                IssueObserverCommittedFact::Coordinated(fact) => match fact {
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::Decision { fact, revision } => {
+                        if fact.state == crate::domain::issue_automation::decision::IssueDecisionState::Open {
+                            KernelEvent::issue_decision_requested(&fact, revision)
+                        } else { KernelEvent::issue_decision_resolved(&fact, revision) }
+                    }
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::WorkSubmitted {
+                        issue, work_order_id, task_ids, revision } => KernelEvent::IssueWorkSubmitted {
+                            issue: (&issue).into(), work_order_id, task_ids, revision },
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::WorkPermitGranted {
+                        issue, work_order_id, source_sha, gate_revision, delivery, revision } => KernelEvent::IssueWorkPermitGranted {
+                            issue: (&issue).into(), work_order_id, source_sha, gate_revision, delivery, revision },
+                },
                 IssueObserverCommittedFact::Triaged(fact) => KernelEvent::issue_triaged(
                     &fact.issue,
                     fact.binding_id.as_str(),

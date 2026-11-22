@@ -110,6 +110,9 @@ pub(in super::super) fn item(
         tracked_revision,
         triage,
         open_decisions: super::super::decision::open_for_issue(connection, workspace, reference)?,
+        work: super::super::coordinator::read(connection, workspace, reference)?
+            .as_ref()
+            .map(Into::into),
     }))
 }
 

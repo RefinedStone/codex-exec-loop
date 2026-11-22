@@ -205,6 +205,7 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
             observation_revision: None,
             tracked_revision: None,
             triage: None,
+            work: None,
             open_decisions: vec![
                 StoredIssueDecision {
                     request: open,
