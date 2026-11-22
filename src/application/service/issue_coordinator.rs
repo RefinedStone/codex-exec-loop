@@ -96,10 +96,11 @@ impl IssueCoordinatorService {
             return Ok(());
         };
         self.report_pending(committed)?;
+        let mut first_error = None;
         let mut after = None;
-        loop {
+        'batches: loop {
             if cancel.is_cancelled() {
-                return Ok(());
+                break;
             }
             let batch = self
                 .store
@@ -109,22 +110,26 @@ impl IssueCoordinatorService {
                 .as_ref()
                 .is_some_and(|state| state.config.mode == IssueCollectionMode::Observe)
             {
-                return Ok(());
+                break;
             }
             for item in batch.items {
                 if cancel.is_cancelled() {
-                    return Ok(());
+                    break 'batches;
                 }
                 let result =
                     self.reconcile(item, cancel, now_unix_ms, execution_enabled, committed);
                 self.report_pending(committed)?;
-                result?;
+                if let Err(error) = result {
+                    // One unreadable approval must not leave later work's permits valid.
+                    first_error.get_or_insert(error);
+                }
             }
             after = batch.next_after;
             if after.is_none() {
-                return Ok(());
+                break;
             }
         }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub fn acknowledge_event(&self, event_id: &str) -> Result<()> {
@@ -187,7 +192,8 @@ impl IssueCoordinatorService {
                 .task_ids(&self.workspace, &candidate.order.work_order_id)?;
             if !task_ids.is_empty() {
                 candidate.task_ids = task_ids;
-                let (fence, current_item, assessment) = self.current(&item.issue, committed)?;
+                let (fence, current_item, assessment) =
+                    self.current_or_revoke(candidate, committed)?;
                 let saved = cancel.commit_if_active(|| {
                     self.store
                         .save_issue_work(&self.workspace, fence, &assessment, candidate)
@@ -202,16 +208,21 @@ impl IssueCoordinatorService {
         let Some(tracked) = item.tracked.as_ref() else {
             return Ok(());
         };
-        let assessment = self.triage.assess_current(&item)?;
-        let basis =
-            IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None)?;
+        let assessment =
+            self.revoke_on_current_error(work.as_ref(), self.triage.assess_current(&item))?;
+        let basis = self.revoke_on_current_error(
+            work.as_ref(),
+            IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None)
+                .map_err(anyhow::Error::from),
+        )?;
         let decision_id = work
             .as_ref()
             .map(|work| work.decision_id.clone())
             .unwrap_or_else(|| start_decision_id(&item.issue, &basis));
-        let current_decision = self
-            .store
-            .get_issue_decision(&self.workspace, &decision_id)?;
+        let current_decision = self.revoke_on_current_error(
+            work.as_ref(),
+            self.store.get_issue_decision(&self.workspace, &decision_id),
+        )?;
         let decision = current_decision.as_ref().or_else(|| {
             item.open_decisions.iter().find(|decision| {
                 decision.request.definition().kind == IssueDecisionKind::StartApproval
@@ -268,7 +279,10 @@ impl IssueCoordinatorService {
             }
             IssueCoordinatorAction::ExpireDecision => {
                 if let Some(stored) = decision {
-                    let (fence, current, assessment) = self.current(&item.issue, committed)?;
+                    let (fence, current, assessment) = self.revoke_on_current_error(
+                        work.as_ref(),
+                        self.current(&item.issue, committed),
+                    )?;
                     let _ = current;
                     let resolution = stored.request.answer_agent(
                         &basis,
@@ -338,7 +352,7 @@ impl IssueCoordinatorService {
                     };
                     if work.blocked_reason != reason {
                         work.blocked_reason = reason;
-                        let (fence, _, assessment) = self.current(&item.issue, committed)?;
+                        let (fence, _, assessment) = self.current_or_revoke(&work, committed)?;
                         cancel.commit_if_active(|| {
                             self.store.save_issue_work(
                                 &self.workspace,
@@ -377,12 +391,16 @@ impl IssueCoordinatorService {
             .execution
             .snapshot(&self.workspace, &issue_work_order_id(issue));
         // 승인 직후에도 반드시 원격을 다시 읽는다. 취소 중에는 원격을 취소할 수 없어도 저장/제출은 하지 않는다.
-        if !self.fresh_resync(issue, cancel)? {
+        if !self.revoke_on_current_error(existing.as_ref(), self.fresh_resync(issue, cancel))? {
             return Ok(());
         }
-        let (fence, item, assessment) = self.current(issue, committed)?;
-        let basis =
-            IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None)?;
+        let (fence, item, assessment) =
+            self.revoke_on_current_error(existing.as_ref(), self.current(issue, committed))?;
+        let basis = self.revoke_on_current_error(
+            existing.as_ref(),
+            IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None)
+                .map_err(anyhow::Error::from),
+        )?;
         if !ready_for_propose(&assessment)
             || decision.definition().basis != basis
             || !human_start(decision)
@@ -456,7 +474,7 @@ impl IssueCoordinatorService {
                 Ok(task_ids) => task_ids,
                 Err(_) => {
                     work.blocked_reason = Some(IssueWorkBlockReason::SubmissionUnavailable);
-                    let (fence, _, assessment) = self.current(issue, committed)?;
+                    let (fence, _, assessment) = self.current_or_revoke(&work, committed)?;
                     self.store
                         .save_issue_work(&self.workspace, fence, &assessment, &work)?;
                     bail!("the issue work submission was interrupted");
@@ -553,11 +571,28 @@ impl IssueCoordinatorService {
         work: &IssueWorkCheckpoint,
         committed: &Reporter<'_>,
     ) -> Result<(IssueTriageFence, IssueCollectionItem, IssueTriageAssessment)> {
-        match self.current(&work.order.issue, committed) {
+        self.revoke_on_current_error(Some(work), self.current(&work.order.issue, committed))
+    }
+
+    /// Failed current-policy or approval reads cannot leave an old capability usable.
+    /// Execution responses are intentionally excluded: their durable results can be replayed.
+    fn revoke_on_current_error<T>(
+        &self,
+        work: Option<&IssueWorkCheckpoint>,
+        result: Result<T>,
+    ) -> Result<T> {
+        match result {
             Ok(current) => Ok(current),
             Err(error) => {
-                self.execution
-                    .revoke(&self.workspace, &work.order.work_order_id)?;
+                if let Some(work) = work
+                    && let Err(revoke_error) = self
+                        .execution
+                        .revoke(&self.workspace, &work.order.work_order_id)
+                {
+                    return Err(error.context(format!(
+                        "existing issue work permits could not be revoked: {revoke_error}"
+                    )));
+                }
                 Err(error)
             }
         }
@@ -572,7 +607,7 @@ impl IssueCoordinatorService {
     ) -> Result<()> {
         let mut candidate = work.clone();
         candidate.blocked_reason = Some(reason);
-        let (fence, _, assessment) = self.current(&work.order.issue, committed)?;
+        let (fence, _, assessment) = self.current_or_revoke(work, committed)?;
         cancel.commit_if_active(|| {
             self.store
                 .save_issue_work(&self.workspace, fence, &assessment, &candidate)?;

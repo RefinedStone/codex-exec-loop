@@ -251,6 +251,8 @@ struct FakeExecutionState {
     saved_revision: u64,
     registrations: usize,
     revoked: bool,
+    revoked_work_orders: Vec<String>,
+    fail_revoke_work_order: Option<String>,
     after_grant: Option<Box<dyn Fn() + Send + Sync>>,
     source_unavailable: bool,
     fail_before_register: bool,
@@ -333,8 +335,13 @@ impl IssueWorkExecutionPort for FakeExecution {
         }
         Ok(())
     }
-    fn revoke(&self, _: &str, _: &str) -> Result<()> {
-        self.state.lock().unwrap().revoked = true;
+    fn revoke(&self, _: &str, work_order_id: &str) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.revoked_work_orders.push(work_order_id.to_string());
+        if state.fail_revoke_work_order.as_deref() == Some(work_order_id) {
+            bail!("simulated permit revocation failure");
+        }
+        state.revoked = true;
         Ok(())
     }
 }
@@ -913,3 +920,5 @@ fn interrupted_registration_recovers_existing_task_links_even_after_approval_cha
         assert_eq!(submitted, usize::from(registered));
     }
 }
+
+mod policy_revalidation;
