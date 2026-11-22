@@ -4149,7 +4149,8 @@ fn gh_akra_default_branch_reads_frozen_repository_and_rejects_invalid_ref_names(
         ),
         "configure default branch fixture",
     );
-    for command in ["cat", "git", "mktemp", "python3", "rm", "sed"] {
+    // Command also resolves the entry-point shell through this isolated PATH.
+    for command in ["bash", "cat", "git", "mktemp", "python3", "rm", "sed"] {
         link_path_command(&bin, command);
     }
     write_executable_file(
