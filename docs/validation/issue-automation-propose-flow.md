@@ -2,9 +2,9 @@
 
 대상: [#2555](https://github.com/RefinedStone/codex-exec-loop/issues/2555), plan 28의 IA4-5.
 
-이 문서는 수집한 이슈가 실제 application service와 SQLite/Git 경계를 거쳐 작업·PR 전달·상태 댓글로 연결되는 회귀의 범위와, 별도 허가가 필요한 실제 모델 확인 계획을 구분한다. 아래 단언은 테스트 코드가 검사하는 계약이며, 자동 회귀의 실제 명령·환경·결과는 마지막 검증 기록에 남긴다. 실제 모델 확인은 별도다.
+이 문서는 수집한 이슈가 실제 application service와 SQLite/Git 경계를 거쳐 작업·PR 전달·상태 댓글로 연결되는 회귀의 범위와, 2026-11-22 사용자 허가를 확보한 실제 모델 확인 계획을 구분한다. 아래 단언은 테스트 코드가 검사하는 계약이며, 자동 회귀의 실제 명령·환경·결과는 마지막 검증 기록에 남긴다. 실제 모델 확인은 별도다.
 
-**실제 모델 확인은 미실행이다. 이 검증 작업에서 실제 모델 호출은 0회이며, 시험용 GitHub 이슈·PR·댓글 쓰기도 수행하지 않았다.** 회귀의 URL·remote 응답·turn ID는 fixture 데이터다.
+**실제 모델 확인과 native Start는 미실행이며, 실제 모델 호출·시험 PR·상태 댓글은 각각 0회다. live 준비로 시험 이슈 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644), 시험 base branch와 선택 라벨은 생성했다.** 자동 회귀의 URL·remote 응답·turn ID는 fixture 데이터다.
 
 ## 실제 경계와 대체한 경계
 
@@ -44,9 +44,9 @@
 | Linux 실행 도구 | Node `24.14.1`, npm `11.11.0`, Codex `0.146.0`, gh `2.45.0` — 버전을 읽기 전용으로 확인 |
 | 소스 접근 | 기존 workspace 접근 가능 |
 | WSLg 연결 준비 | `DISPLAY` 환경 변수와 display socket의 존재를 읽기 전용으로 확인 |
-| GUI·인증 | 실제 Linux Desktop 창 표시·native 확인, GitHub·모델 인증은 아직 확인하지 않음 |
+| GUI·인증 | Linux Desktop의 WSLg 창 표시, GitHub `RefinedStone`·Codex ChatGPT 로그인 확인. native Start와 실제 모델 호출은 미실행 |
 
-결합 시험 7개는 이 Linux 환경 내부의 독립 clone에서 모두 통과했다. 관련 SQLite·수명 회귀를 포함한 31개 시험의 실행 SHA·명령·결과는 마지막 검증 기록에 남긴다.
+초기 검증 코드 `3f437930`의 결합 시험 7개는 이 Linux 환경 내부의 독립 clone에서 모두 통과했다. 관련 SQLite·수명 회귀를 포함한 당시 31개 시험과, 후속 최종 소스 `ad5f7509`의 43개 관련 시험 결과를 아래 소스별 검증 기록에 구분한다.
 
 ## 회귀 시나리오
 
@@ -179,17 +179,17 @@ Gateway의 저장소 kernel은 이슈 observer를 구성하지만 병렬 풀은 
 
 `budget.max_attempts = 1`은 구현 task의 실행 시도 제한이며 이 planning 턴까지 합산하는 전역 예산이 아니다. `:turns`는 단일 세션 auto-follow를 제어하고 parallel continuation은 별도다. 현재 설정·공개 명령으로 **총 모델 턴 1회, 또는 총 2회의 확실한 상한과 모든 자동 재시도 0회**를 보장한다고 말할 수 없다. 완료 시점에 수동 중단을 보내는 것도 다음 턴과 경쟁하므로 상한 장치가 아니다.
 
-따라서 “총 1회만 허용” 조건에서는 이 정상 경로를 PR까지 실행하지 않는다. 실행 범위를 다시 합의하거나 구현·planning 전체를 제한하는 장치를 마련한 뒤 계획을 확정해야 한다. 추가 모델 요청을 피하려면 [PR 리뷰 backend](../reference/pr-review-backend.md)도 `off`여야 한다. `observe`도 모델을 호출한다.
+이미 승인된 live 계획에 따라 구현·planning 경로를 확인하고, 실제 모델 호출 수를 결과에 별도로 기록한다. 추가 리뷰 모델 요청을 피하기 위해 [PR 리뷰 backend](../reference/pr-review-backend.md)는 `off`로 설정했다. `observe`도 모델을 호출한다.
 
 ### 승인된 대상과 쓰기 범위
 
-| 항목 | 제안 범위 |
+| 항목 | 승인 범위 |
 | --- | --- |
 | 저장소 | `RefinedStone/codex-exec-loop` |
-| 실행본 | 실제 검증을 통과한 확정 SHA·바이너리 경로를 기록 |
+| 실행본 | `ad5f7509f318c2272c7e6becd9f310342c7769c7`의 Linux `akra`·`akra-gateway`. 고정 바이너리 경로·hash manifest·검증 범위는 아래 최종 소스 기록 참조 |
 | 실행 환경 | Linux에서 같은 사용자로 Desktop·Gateway·확인 helper 실행, 사람이 사용할 수 있는 GUI |
 | 작업공간 | Linux 내부의 독립 clone 1개, 위 프로세스가 공유하는 시험 전용 `AKRA_HOME` |
-| 시험 base | `codex/issue-2555-live-base-20261122`를 `3f437930f45d925372448cf6b4955411fbeb2b64`에서 생성했다. 실제 실행 전 아래 Gateway 제어 수정을 검증한 SHA로 fast-forward하고 그 SHA를 기록한다 |
+| 시험 base | `codex/issue-2555-live-base-20261122`를 `3f437930f45d925372448cf6b4955411fbeb2b64`에서 생성한 뒤 `ad5f7509f318c2272c7e6becd9f310342c7769c7`로 fast-forward했다. Linux 시험 clone도 같은 SHA다 |
 | 선택 대상 | 시험용 이슈 1건만 선택하는 `akra-ia4-5-live-20261122` 라벨을 생성하고 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644)에만 붙였다 |
 | 이슈 | [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644) 생성 완료. `docs/validation/issue-2555-live-smoke-20261122.md` 한 파일만 추가하는 기준 |
 | PR | 실제 task branch를 push하고 시험 base 대상으로 PR 생성 목표 1회 |
@@ -202,7 +202,7 @@ Gateway의 저장소 kernel은 이슈 observer를 구성하지만 병렬 풀은 
 
 live 최소 구성은 같은 Linux 사용자·`AKRA_HOME`·로컬 파일시스템과 IPC를 공유하는 Desktop, Gateway, confirmation helper와 작업공간이다. Desktop이 로컬 `akra-gateway desktop-confirmation-bridge`를 시작하고 Gateway가 자기 `AKRA_HOME/run`의 파일과 Unix socket을 검증한다. 사용자는 실제 GUI의 native 확인 창에서 Propose 상향과 Start를 확인해야 한다. Windows Desktop의 원격 host 조회 기능은 이 로컬 승인 경로를 제공하지 않는다.
 
-WSLg의 `DISPLAY`와 display socket, Linux의 GitHub 계정 `RefinedStone` 및 Codex ChatGPT 로그인 상태를 확인했다. 실제 Linux Desktop 창 표시·native 확인과 실제 모델 접근은 아직 확인하지 않았다. 현재 WSL 준비 정보만으로 live 실행 가능 상태라고 판정하지 않는다. Linux 실행본의 검증 SHA와 경로, 실제 worker profile·모델 접근 권한, repo-local GitHub identity와 필요한 쓰기 권한, 설정을 덮어쓰는 환경변수, native Desktop/Gateway 연결, active direction·빈 task authority, PR 생성으로 작동할 CI·외부 리뷰를 실행 전에 확인한다. 자격 증명 원문은 출력하지 않는다.
+WSLg의 `DISPLAY`와 display socket, Linux의 GitHub 계정 `RefinedStone` 및 Codex ChatGPT 로그인 상태를 확인했다. 최종 소스의 Linux Desktop 창 표시, 한글 font 보완과 trace 재시작, 시험용 0-turn thread의 UI 표시도 확인했다. 이 준비 확인은 native 승인이나 실제 모델 접근 성공을 뜻하지 않는다. native Desktop/Gateway 연결과 Propose·Start 확인, 실제 worker profile·모델 접근 권한, 설정을 덮어쓰는 환경변수, active direction·빈 task authority 및 PR 생성으로 작동할 CI·외부 리뷰를 실행 전에 점검한다. 자격 증명 원문은 출력하지 않는다.
 
 ### 예정된 관찰과 종료 기준
 
@@ -222,7 +222,9 @@ akra kernel query issues --workspace "$LiveWorkspace" --json
 
 관찰 뒤 `akra kernel parallel disable_parallel --workspace "$LiveWorkspace" --json`로 병렬 풀을 중지하고, `akra kernel thread stop_all --workspace "$LiveWorkspace" --json`로 남은 실행을 중단한다. 이 명령은 실행 종료 수단이며 모델 호출 수의 사전 상한이 아니다. 실제 호출 수·댓글 수정 수·게시 영수증·PR URL을 결과에 별도로 기록한다.
 
-## 검증 기록 — 자동 회귀 완료, 실제 모델 확인 미실행
+## 검증 기록 — 소스별 자동 회귀와 live 준비 상태
+
+### 초기 결합 회귀 — `3f437930`
 
 | 항목 | 기록 |
 | --- | --- |
@@ -235,13 +237,9 @@ akra kernel query issues --workspace "$LiveWorkspace" --json
 | Windows DB 회귀 | `cargo test --locked --all-features --lib sqlite_issue_automation_store::execution::tests` — **15 passed, 0 failed** |
 | planner 결과 | `node scripts/agent-plan.mjs` → Full. `git diff --check`와 `powershell -NoProfile -File scripts/check_native_pr.ps1 -Mode Full` 모두 성공 |
 | Windows Full 세부 | native contracts, build·check·clippy, Desktop 검사 성공. Vitest **950 passed, 7 skipped**; 기존 skip 유지 |
-| UI E2E — 기존 검증 SHA | `3f437930`에는 자체 UI 변경이 없었다. 선행 [#2554 검증](desktop-issue-execution-tracking.md)의 전체 25 spec 통과와 기존 Windows terminal skip 1개를 재사용했다. 후속 Gateway 제어 UI는 아래 별도 기록으로 검증한다 |
+| UI E2E — 기존 검증 SHA | `3f437930`에는 자체 UI 변경이 없었다. 선행 [#2554 검증](desktop-issue-execution-tracking.md)의 전체 25 spec 통과와 기존 Windows terminal skip 1개를 재사용했다. 후속 Gateway 제어 UI는 위 별도 기록으로 검증한다 |
 | 포맷·차이 검사 | `cargo fmt --all`, `git diff --check` 성공 |
 | Windows native 결합 suite | Unix-only publication lease 때문에 `#[cfg(unix)]`로 제외. Windows에서 이 7개가 통과했다고 보고하지 않음 |
-| 실제 모델 검증 사용자 허가 | 2026-11-22 사용자 허가 확보. 실제 실행 준비 중이며 모델 턴은 아직 0회 |
-| 실제 모델 호출 수 | 0회 |
-| 시험용 실제 GitHub 이슈·PR·댓글 쓰기 | 시험 이슈 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644) 생성 1회. 시험 PR·상태 댓글은 아직 0회. 개발 PR은 시험용 실행에 포함하지 않음 |
-| live base·이슈·PR·comment ID·journal 증거 | base branch·선택 라벨·이슈 #2644를 생성했다. PR·댓글·journal은 아직 없음 — 모델 실행 미실시 |
 | OS process kill 시험 | 미실시 |
 
 Linux에서 실행한 결합·관련 회귀 명령:
@@ -266,6 +264,24 @@ cargo test --locked --all-features --lib -- \
 
 자동 회귀 결과와 live 결과는 따로 기록한다. 자동 회귀 통과만으로 실제 native 승인, 모델 수행, GitHub 전달 또는 OS crash 복구까지 성공했다고 결론 내리지 않는다.
 
+### 후속 최종 소스 검증 — `ad5f7509`
+
+이 기록은 위 초기 `3f437930` 결합 회귀와 `896781dc` Gateway 제어 검증 이후의 실행 소스를 대상으로 한다. 관련 회귀, 전체 CI 실패와 후속 수정의 로컬 검증 결과를 구분한다.
+
+| 항목 | 기록 |
+| --- | --- |
+| 최종 Linux 검증 소스 | `ad5f7509f318c2272c7e6becd9f310342c7769c7` |
+| Linux 바이너리·관련 회귀 | `akra`·`akra-gateway` build 성공. 관련 시험 **43 passed, 0 failed, 0 ignored** |
+| Linux Desktop | check·build 통과. 같은 소스의 Desktop이 WSLg에서 창을 표시함 |
+| 고정 실행 바이너리 | `/home/akra/.cache/akra-validation/issue-2555-live-binaries-20261122/ad5f7509f318/akra`, 같은 디렉터리의 `akra-gateway` |
+| 바이너리 hash manifest | `C:/dev/akra-queue/analysis/issue-2555-live-session.json`의 `validated_source_sha`, `akra_binary`, `gateway_binary`, `binary_sha256` 참조 |
+| 시험 base·clone | 둘 다 `ad5f7509f318c2272c7e6becd9f310342c7769c7`로 고정 |
+| Linux 전체 CI | [run 45022050145](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45022050145): **5064 passed, 1 failed, 14 ignored**. `the_spec_entry_of_a_command_carries_its_meaning_and_its_input`의 예상 command family 목록에서 `parallel`이 빠진 실패 |
+| 후속 기대값 수정·로컬 검증 | 예상 목록에 `parallel` 한 줄을 추가했다. 관련 명세 시험 **2개 통과**, planner가 지정한 **Windows Full 재실행 통과(exit 0)** |
+| 후속 CI | 기대값 수정 commit 뒤 새 CI 실행 예정. 위 CI 실패를 통과로 바꾸어 기록하지 않음 |
+
+최종 Linux build·관련 시험·Desktop 결과는 `C:/dev/akra-queue/analysis/issue-2555-final-linux.log`, 전체 CI 실패는 `issue-2555-ci-45022050145-rust.log`, 기대값 수정 후 로컬 Full 결과는 `issue-2555-ci-spec-fix-full.log`에 남겼다. 이 고정 실행본의 증거는 `ad5f7509`까지이며 후속 commit의 Linux 검증을 대신하지 않는다.
+
 ### 2026-11-22 실제 시험 준비 결과
 
 - 시험 이슈 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644), 시험 base branch와 단일 선택 라벨을 생성했다.
@@ -273,7 +289,7 @@ cargo test --locked --all-features --lib -- \
 - 기존 검증 코드 `3f437930`의 준비용 CLI로 기본 direction을 시험 문서 범위로 갱신했다. planning revision은 4이며 active/proposed/skipped task가 모두 비어 있다. 준비 작업은 모델을 호출하지 않았다.
 - Linux에서 repo-local `RefinedStone` identity의 `scripts/gh-akra.sh auth write-status`와 시험 base로의 `git push --dry-run`을 통과했다.
 - `feature_bindings`의 PR review는 `off`이고, 정책 query는 `ready`를 반환했다. Propose 상한·선택 라벨·trusted actor·1/1/1 예산·댓글만 허용·close never가 사용자 파일에서 해석됐음을 확인했다.
-- 실제 worker 실행 전에 후속 Gateway 제어 commit을 포함한 확정 코드로 실행 바이너리와 Desktop을 갱신하고, 시험 base도 같은 코드로 fast-forward한다. 준비용 CLI를 실제 모델 실행본으로 사용하지 않는다.
+- 후속 Gateway 제어를 포함한 `ad5f7509`로 Linux 실행 바이너리와 Desktop을 갱신했다. 시험 base와 clone도 같은 SHA로 맞췄으며, 준비용 `3f437930` CLI와 실제 실행용 고정 바이너리를 구분했다.
 - 이 시점의 실제 모델 턴·시험 PR·상태 댓글은 0회다. native Start 확인과 실제 모델 전달 흐름은 아직 미실행이다.
 
 후속 로컬 원본 로그: `C:/dev/akra-queue/analysis/issue-2555-parallel-control-rust-r2.log`, `issue-2555-parallel-control-desktop-r2.log`, `issue-2555-parallel-control-full-r4.log`. 원본 로그 경로는 실행 호스트 기준이며 공식 CI 링크는 PR 본문에 남긴다.
