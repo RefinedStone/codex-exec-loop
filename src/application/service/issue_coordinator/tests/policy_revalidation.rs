@@ -26,7 +26,10 @@ fn current_policy_failures_revoke_dispatch_and_delivery_permits() {
         {
             let state = h.execution.state.lock().unwrap();
             assert!(state.revoked);
-            assert_eq!(state.revoked_work_orders, [before.order.work_order_id.clone()]);
+            assert_eq!(
+                state.revoked_work_orders.as_slice(),
+                std::slice::from_ref(&before.order.work_order_id)
+            );
             assert_eq!(state.grants.len(), grants_before);
             assert_eq!(state.registrations, 1);
         }
@@ -48,8 +51,14 @@ fn current_policy_failures_revoke_dispatch_and_delivery_permits() {
             let recovered = h.work().unwrap();
             assert!(recovered.delivery_granted);
             assert!(recovered.permit_revision > before.permit_revision);
-            assert_eq!(recovered.permit_source.as_deref(), Some("b".repeat(40).as_str()));
-            assert_eq!(h.execution.state.lock().unwrap().grants.len(), grants_before + 1);
+            assert_eq!(
+                recovered.permit_source.as_deref(),
+                Some("b".repeat(40).as_str())
+            );
+            assert_eq!(
+                h.execution.state.lock().unwrap().grants.len(),
+                grants_before + 1
+            );
             assert_eq!(h.execution.state.lock().unwrap().registrations, 1);
             assert_eq!(h.source.calls.load(Ordering::SeqCst), reads_before + 1);
         }
@@ -104,7 +113,9 @@ fn current_policy_failure_checks_later_pages_even_when_an_earlier_revoke_fails()
         }
         h.policy.unavailable.store(true, Ordering::Release);
 
-        let error = h.tick(true).expect_err("the policy failure must remain visible");
+        let error = h
+            .tick(true)
+            .expect_err("the policy failure must remain visible");
 
         let state = h.execution.state.lock().unwrap();
         assert_eq!(
@@ -116,7 +127,11 @@ fn current_policy_failure_checks_later_pages_even_when_an_earlier_revoke_fails()
         assert_eq!(state.registrations, 1);
         assert!(state.revoked, "the later work's revocation must succeed");
         if fail_first_revoke {
-            assert!(error.to_string().contains("simulated permit revocation failure"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("simulated permit revocation failure")
+            );
         }
     }
 }
@@ -202,7 +217,14 @@ fn lost_delivery_grant_response_remains_recoverable_with_valid_current_approval(
     }
 
     assert!(h.tick(true).is_err());
-    assert!(h.execution.state.lock().unwrap().revoked_work_orders.is_empty());
+    assert!(
+        h.execution
+            .state
+            .lock()
+            .unwrap()
+            .revoked_work_orders
+            .is_empty()
+    );
     h.tick(true).unwrap();
 
     let work = h.work().unwrap();
