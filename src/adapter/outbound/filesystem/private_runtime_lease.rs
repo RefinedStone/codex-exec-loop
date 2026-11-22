@@ -16,7 +16,7 @@ mod implementation {
 
     pub(crate) struct PrivateRuntimeLease {
         runtime: PathBuf,
-        lock_name: &'static str,
+        lock_name: String,
         root: File,
         lock: File,
     }
@@ -24,20 +24,21 @@ mod implementation {
     impl PrivateRuntimeLease {
         pub(crate) fn acquire(
             runtime: PathBuf,
-            lock_name: &'static str,
+            lock_name: impl Into<String>,
             timeout: Duration,
         ) -> Result<Self> {
-            if Path::new(lock_name).components().count() != 1
+            let lock_name = lock_name.into();
+            if Path::new(&lock_name).components().count() != 1
                 || !matches!(
-                    Path::new(lock_name).components().next(),
+                    Path::new(&lock_name).components().next(),
                     Some(Component::Normal(_))
                 )
             {
                 bail!("the issue persistence lease name is invalid")
             }
             let root = open_private_runtime(&runtime)?;
-            let name =
-                CString::new(lock_name).context("the issue persistence lease name is invalid")?;
+            let name = CString::new(lock_name.as_str())
+                .context("the issue persistence lease name is invalid")?;
             // SAFETY: the parent descriptor and name remain valid. NONBLOCK prevents FIFO
             // waits and NOFOLLOW plus descriptor checks reject symbolic and hard-link aliases.
             let raw = unsafe {
@@ -58,7 +59,7 @@ mod implementation {
             }
             // SAFETY: successful openat transferred one new owned descriptor.
             let lock = unsafe { File::from_raw_fd(raw) };
-            validate_lock(&root, &lock, lock_name)?;
+            validate_lock(&root, &lock, &lock_name)?;
             root.sync_all()
                 .context("the issue persistence lease could not be persisted")?;
             let started = Instant::now();
@@ -94,7 +95,7 @@ mod implementation {
             if !same_object(&current.metadata()?, &self.root.metadata()?) {
                 bail!("the issue persistence runtime directory changed")
             }
-            validate_lock(&self.root, &self.lock, self.lock_name)
+            validate_lock(&self.root, &self.lock, &self.lock_name)
         }
     }
 
@@ -156,7 +157,7 @@ mod implementation {
 
     // libc device/inode widths differ between Unix targets. MetadataExt normalizes to u64.
     #[allow(clippy::unnecessary_cast)]
-    fn validate_lock(root: &File, lock: &File, lock_name: &'static str) -> Result<()> {
+    fn validate_lock(root: &File, lock: &File, lock_name: &str) -> Result<()> {
         let metadata = lock.metadata()?;
         // SAFETY: geteuid has no preconditions.
         let current_user = unsafe { libc::geteuid() };
@@ -205,7 +206,7 @@ mod implementation {
     pub(crate) struct PrivateRuntimeLease;
 
     impl PrivateRuntimeLease {
-        pub(crate) fn acquire(_: PathBuf, _: &'static str, _: Duration) -> Result<Self> {
+        pub(crate) fn acquire(_: PathBuf, _: impl Into<String>, _: Duration) -> Result<Self> {
             bail!("the issue persistence lease is unavailable on this platform")
         }
 

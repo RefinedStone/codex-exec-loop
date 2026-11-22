@@ -16,7 +16,7 @@ use crate::domain::issue_work::{IssueProjectScope, IssueReference};
  */
 
 /// 백업 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 2;
+pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 3;
 
 /// 복구 키의 길이이다 (256 bit).
 pub const VAULT_RECOVERY_KEY_LEN: usize = 32;
@@ -148,9 +148,9 @@ pub enum VaultBackupError {
     UnsupportedFormat,
     /// 복구 키로 장치 키를 풀지 못했다: 복구 키가 다르거나, 머리말이나 레코드 목록이 바뀌었다.
     RecoveryKeyRejected,
-    /// 내보낼 로컬 레코드가 검증에 실패했다.
+    /// 로컬 레코드 검증 또는 이슈별 binding commit이 실패했다. 교체 후 실패는 WriteOutcomeUnknown이다.
     Record(VaultStoreError),
-    /// 저장소를 읽거나 쓰지 못했다. 가져오기는 다시 시도할 수 있다.
+    /// 저장소를 읽거나 쓰지 못했다. 앞서 끝난 이슈의 연결은 유지하며 다시 시도할 수 있다.
     Storage(String),
 }
 

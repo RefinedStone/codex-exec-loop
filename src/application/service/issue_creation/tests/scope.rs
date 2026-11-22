@@ -42,6 +42,8 @@ fn later_linked_publish(sequence: u64) -> IssuePublishIntentRecord {
         state: IssuePublishIntentState::Confirmed,
         observed_hash: Some(hash),
         restore_link_finalized: true,
+
+        restore_binding_attempt: None,
         write_response_mismatch: false,
         write_attempted: Some(true),
         sequence,

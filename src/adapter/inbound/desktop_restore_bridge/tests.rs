@@ -1,8 +1,8 @@
 use super::*;
 use crate::application::port::inbound::vault_restore_session_port::MAX_VIEWING_SESSION as SESSION_LIFETIME;
 use crate::application::port::outbound::evidence_vault_port::{
-    EvidenceVaultStorePort, VaultKey, VaultPlaintext, VaultRecordBinding, VaultRecordField,
-    VaultRecordLoadRequest, VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
+    EvidenceVaultStorePort, VaultKey, VaultPlaintext, VaultRecordLoadRequest,
+    VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
 };
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueRawFields, IssueSnapshotPort, IssueSnapshotReadRequest, IssueSnapshotResolveRequest,
@@ -89,6 +89,32 @@ struct Records {
     corrupt: AtomicBool,
 }
 impl EvidenceVaultStorePort for Records {
+    fn begin_binding(
+        &self,
+        request: VaultRecordLoadRequest,
+    ) -> Result<
+        Box<
+            dyn crate::application::port::outbound::evidence_vault_port::VaultBindingTransaction
+                + '_,
+        >,
+        VaultStoreError,
+    > {
+        if self.corrupt.load(Ordering::SeqCst) {
+            return Err(VaultStoreError::IntegrityFailure);
+        }
+        crate::test_utils::vault_binding::begin_test_binding(
+            self.values.lock().unwrap(),
+            request,
+            crate::test_utils::vault_binding::TestBindingHooks {
+                before_write: Some(Box::new(|_| {
+                    self.writes.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })),
+                after_pointer: None,
+            },
+        )
+    }
+
     fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
         self.writes.fetch_add(1, Ordering::SeqCst);
         self.values
@@ -276,30 +302,38 @@ fn seed(
         &outcome.shared_copy.title,
         &outcome.shared_copy.body,
     ));
+    use crate::application::port::outbound::evidence_vault_port::{
+        VaultBindingCommitPolicy, VaultBindingCommitRequest, VaultBindingCommitResult,
+        VaultBindingFields,
+    };
     let key = unlock.sealing_key().unwrap(); // fixture 작성 전용. 운영 helper는 호출하지 않는다.
+    let mut fields = VaultBindingFields::default();
     for field in restorable_fields(&outcome.masked_spans) {
-        store
-            .save(VaultRecordSaveRequest {
-                scope: VaultRecordScope {
-                    issue: issue(),
-                    field: match field.field {
-                        IssuePublishVaultField::Title => VaultRecordField::Title,
-                        IssuePublishVaultField::Body => VaultRecordField::Body,
-                    },
-                    binding: VaultRecordBinding::ConfirmedVersion(version.clone()),
-                },
-                key: key.clone(),
-                plaintext: field.plaintext,
-            })
-            .unwrap();
+        match field.field {
+            IssuePublishVaultField::Title => fields.title = Some(field.plaintext),
+            IssuePublishVaultField::Body => fields.body = Some(field.plaintext),
+        }
     }
-    store
-        .save(VaultRecordSaveRequest {
+    let binding = store
+        .begin_binding(VaultRecordLoadRequest {
             scope: VaultRecordScope::current_version(issue()),
             key,
-            plaintext: VaultPlaintext::new(version),
         })
         .unwrap();
+    let expected = binding.snapshot().token.clone();
+    assert!(matches!(
+        binding
+            .commit(VaultBindingCommitRequest {
+                expected,
+                operation_id: "native-restore-synthetic-fixture".to_string(),
+                base_version: version,
+                approval_digest: [11; 32],
+                fields,
+                policy: VaultBindingCommitPolicy::InstallIfMissing,
+            })
+            .unwrap(),
+        VaultBindingCommitResult::Committed(_),
+    ));
     (outcome.shared_copy.title, outcome.shared_copy.body)
 }
 fn prepare_request() -> Value {

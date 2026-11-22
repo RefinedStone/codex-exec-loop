@@ -129,7 +129,15 @@ fn competing_publishers_cannot_let_late_creation_adoption_replace_a_newer_origin
     assert_eq!(creation.state, IssueCreationIntentState::Confirmed);
     assert_eq!(fixture.creates(), 1);
     assert_eq!(fixture.remote.updates.load(Ordering::SeqCst), 1);
-    assert_eq!(fixture.current(), Some(updated.confirmed_version()));
+    let current_version = fixture
+        .current()
+        .expect("the newer published binding is current");
+    assert!(
+        crate::domain::issue_publish_intent::confirmed_version_matches_hash(
+            &current_version,
+            &updated.approved_hash,
+        )
+    );
     let records = fixture.publish_journal.records.lock().unwrap();
     let adoption = records
         .iter()
@@ -148,7 +156,7 @@ fn competing_publishers_cannot_let_late_creation_adoption_replace_a_newer_origin
             .get(&VaultRecordScope {
                 issue: issue(),
                 field: VaultRecordField::Body,
-                binding: VaultRecordBinding::ConfirmedVersion(updated.confirmed_version()),
+                binding: VaultRecordBinding::ConfirmedVersion(current_version),
             })
             .unwrap()
             .plaintext

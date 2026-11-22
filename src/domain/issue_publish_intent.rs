@@ -51,6 +51,14 @@ pub enum IssuePublishVaultField {
     Body,
 }
 
+/// 연결 교체를 처음 시작할 때 관측한 암호문 지문이다. 평문과 키는 담지 않는다.
+/// 바깥 Option은 미시작, 안의 None은 연결이 없었던 관측을 뜻한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuePublishRestoreBindingAttempt {
+    pub expected_ciphertext_sha256: Option<[u8; 32]>,
+}
+
 /// 게시 의도 하나의 기록이다. 일지에서 같은 `intent_id` 의 뒤 기록이 앞 기록을 대신한다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +77,9 @@ pub struct IssuePublishIntentRecord {
     pub observed_hash: Option<IssueFieldHash>,
     /// Vault 레코드를 확인된 판에 묶었으면 `true` 이다.
     pub restore_link_finalized: bool,
+    /// 최초 연결 교체의 기대값이다. 일지 완료 저장이 실패해도 같은 작업으로만 재시도한다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_binding_attempt: Option<IssuePublishRestoreBindingAttempt>,
     /// 명시적으로 모순된 쓰기 답을 받으면 재조회만으로 확인하지 않는다.
     #[serde(default)]
     pub write_response_mismatch: bool,
@@ -118,8 +129,17 @@ pub fn confirmed_version_name(hash: &IssueFieldHash) -> String {
     format!("{}:{}", hash.version, hash.sha256)
 }
 
-/// 새 게시 의도별 판과 이전 해시 전용 판 모두 최신 공유본의 해시에 묶어 확인한다.
+/// 기존 해시/게시 의도 판과 원자 저장 generation을 같은 공유본 해시에 묶어 확인한다.
 pub fn confirmed_version_matches_hash(version: &str, hash: &IssueFieldHash) -> bool {
+    let version = match version.split_once(":binding:") {
+        Some((base, suffix)) => {
+            if suffix.len() != 64 || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return false;
+            }
+            base
+        }
+        None => version,
+    };
     let legacy = confirmed_version_name(hash);
     version == legacy
         || version
@@ -152,6 +172,7 @@ mod tests {
             state,
             observed_hash: None,
             restore_link_finalized: false,
+            restore_binding_attempt: None,
             write_response_mismatch: false,
             write_attempted: None,
             sequence: 0,
@@ -230,6 +251,30 @@ mod tests {
     }
 
     #[test]
+    fn binding_attempt_preserves_missing_and_existing_expectations_in_the_journal() {
+        let mut record = record(IssuePublishIntentState::Confirmed);
+        let legacy = serde_json::to_string(&record).unwrap();
+        assert!(!legacy.contains("restoreBindingAttempt"));
+        assert_eq!(
+            serde_json::from_str::<IssuePublishIntentRecord>(&legacy)
+                .unwrap()
+                .restore_binding_attempt,
+            None
+        );
+        for expected in [None, Some([7; 32])] {
+            record.restore_binding_attempt = Some(IssuePublishRestoreBindingAttempt {
+                expected_ciphertext_sha256: expected,
+            });
+            let stored = serde_json::to_string(&record).unwrap();
+            let restored: IssuePublishIntentRecord = serde_json::from_str(&stored).unwrap();
+            assert_eq!(
+                restored.restore_binding_attempt,
+                record.restore_binding_attempt
+            );
+        }
+    }
+
+    #[test]
     fn equal_shared_copies_have_distinct_restore_versions_per_intent() {
         let first = record(IssuePublishIntentState::Confirmed);
         let second = IssuePublishIntentRecord {
@@ -255,6 +300,44 @@ mod tests {
                 confirmed_version_name(&first.approved_hash)
             ),
             &first.approved_hash
+        ));
+    }
+    #[test]
+    fn binding_generation_suffix_preserves_legacy_hash_binding_strictly() {
+        let record = record(IssuePublishIntentState::Confirmed);
+        let legacy = confirmed_version_name(&record.approved_hash);
+        let intent = record.confirmed_version();
+        for base in [&legacy, &intent] {
+            assert!(confirmed_version_matches_hash(base, &record.approved_hash));
+            assert!(confirmed_version_matches_hash(
+                &format!("{base}:binding:{}", "b".repeat(64)),
+                &record.approved_hash,
+            ));
+            for suffix in [
+                String::new(),
+                "b".repeat(63),
+                "b".repeat(65),
+                "g".repeat(64),
+                format!("{}:binding:{}", "b".repeat(64), "c".repeat(64)),
+            ] {
+                assert!(!confirmed_version_matches_hash(
+                    &format!("{base}:binding:{suffix}"),
+                    &record.approved_hash,
+                ));
+            }
+        }
+        assert!(!confirmed_version_matches_hash(
+            &format!(
+                "{legacy}:other:{}:binding:{}",
+                "b".repeat(64),
+                "c".repeat(64)
+            ),
+            &record.approved_hash,
+        ));
+        let other = IssueFieldHash::of_fields("different", "published");
+        assert!(!confirmed_version_matches_hash(
+            &format!("{intent}:binding:{}", "b".repeat(64)),
+            &other,
         ));
     }
 }

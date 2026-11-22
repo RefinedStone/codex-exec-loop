@@ -138,6 +138,8 @@ mod tests {
             state,
             observed_hash: None,
             restore_link_finalized: false,
+
+            restore_binding_attempt: None,
             write_response_mismatch: false,
             write_attempted: None,
             sequence: 0,

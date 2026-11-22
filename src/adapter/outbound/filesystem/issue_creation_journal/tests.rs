@@ -158,6 +158,13 @@ mod workspace_identity {
     }
 
     impl EvidenceVaultStorePort for RepositoryOnly {
+        fn begin_binding(
+        &self,
+        _request: VaultRecordLoadRequest,
+        ) -> std::result::Result<Box<dyn crate::application::port::outbound::evidence_vault_port::VaultBindingTransaction + '_>, VaultStoreError>{
+            unreachable!("this test does not use Vault binding transactions")
+        }
+
         fn save(&self, _: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
             panic!("opening a draft must not write the Vault")
         }

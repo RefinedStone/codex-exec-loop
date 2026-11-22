@@ -52,9 +52,11 @@ Gateway session and builds them again on the same folders. The GitHub double and
 - **Desktop native follow-up.** The original validation above had no shipped
   `VaultRestoreSource`. The [native restore follow-up](desktop-vault-native-restore.md) adds a
   local, target-bound read-only helper and an issue-detail entry point. Its synthetic UI and
-  protocol checks do not prove a real OS confirmation plus key-store round trip. Windows and
-  cross-process reconnect remain unsupported; automated profiles still hold viewing.
-- **Process stop between two saves.** The tests do not stop the process between the Vault save,
+  protocol checks do not prove a real OS confirmation plus key-store round trip. Windows Vault
+  storage and native UI reconnect remain unsupported; automated profiles still hold viewing.
+  The service/storage concurrency follow-up is recorded separately in
+  [binding transaction validation](vault-binding-transactions.md).
+- **Original process-stop coverage.** The original tests below do not stop the process between the Vault save,
   the journal save, and the remote write, and do not simulate a full disk. The restart tests start
   from the states that a completed `publish` call leaves.
 - **UI and lock races.** Issue A to B to A, two windows, and an OS lock during a key read are not

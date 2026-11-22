@@ -71,10 +71,11 @@ receives its records.
    An unreadable binding returns `LocalRecoveryRequired` in `PreserveLocal` mode. Only explicit
    `RecoverUnreadable` approval replaces that issue's backup field records and installs its binding
    last; the report lists the issue in `recovered`. This recovers a device whose OS key was lost.
-   An issue without a binding replaces partial field records from an interrupted import.
-   A repeated import with a readable binding writes nothing.
-6. The `CurrentVersion` records are written last. An issue is bound only after its other records
-   are in place.
+   An issue without a binding validates and reuses an identical partial generation from an
+   interrupted import. A repeated import with a readable binding writes nothing.
+6. Each issue uses the shared binding transaction. The readable-local check, immutable generation
+   validation, and CurrentVersion CAS run under the same cross-process lease. An issue is bound
+   only after both selected field records are in place. See [binding contract](./evidence-vault-bindings.md).
 
 Import does not make plaintext available by itself. `EvidenceVaultRestoreService` reads the latest
 published copy before each restore; when the published copy differs from the imported version, the
@@ -82,13 +83,17 @@ restore is held and the user reconnects on that issue (see [architecture](./arch
 
 ## Interrupted import
 
-- Each record file is replaced atomically. An import that stops before the `CurrentVersion`
-  records leaves unreferenced record files and no binding; no issue is restorable from a partial
-  set.
+- An import that stops before its CurrentVersion CAS leaves its previous reachable binding
+  unchanged. Identical unreferenced generation files can be reused on a retry. A missing binding
+  remains missing until the complete selected field set is ready.
 - An import that stops between two `CurrentVersion` writes leaves some issues bound and the others
   not bound. The import is atomic for each issue, not for the whole archive.
-- The same import can be run again. It preserves readable bindings and rewrites all selected
-  fields of incomplete or explicitly approved unreadable bindings before installing CurrentVersion.
+- The same import can be run again. It preserves every readable local binding, including one
+  installed by a competing publisher or reconnect. Incomplete or explicitly approved unreadable
+  bindings use an immutable generation and a CAS against the observed pointer.
+- Failure after the pointer replacement is reported as
+  `Record(VaultStoreError::WriteOutcomeUnknown)`. Reload before retrying; do not assume rollback.
+  A retry which sees a readable pointer preserves it and reports `kept_local`.
 - Restored plaintext and the unwrapped device key exist in process memory only during the import.
   They are not written to a temporary file or a log.
 
@@ -107,5 +112,6 @@ restore is held and the user reconnects on that issue (see [architecture](./arch
 - Platform: the vault record files use `secure_fs`, which is implemented for Unix only (macOS and
   Linux). The backup code builds on Windows, but the file operations fail there and the tests run
   on Unix only.
-- The checks before each write and the write are not one locked step. Two processes that import
-  into the same vault at the same time are not supported.
+- Concurrent import, publish finalization, and service reconnect use the same per-issue binding
+  lease. This does not make the entire multi-issue archive atomic or add a distributed transaction
+  with the provider. Native Desktop reconnect remains separate follow-up work.

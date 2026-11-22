@@ -411,6 +411,26 @@ impl SealedRecord {
     }
 }
 
+impl crate::test_utils::vault_binding::TestBindingRecord for SealedRecord {
+    fn open(&self, key: &VaultRecordKey) -> Result<VaultPlaintext, VaultStoreError> {
+        SealedRecord::open(self, key)
+    }
+
+    fn seal(request: VaultRecordSaveRequest) -> Self {
+        Self {
+            key: request.key,
+            plaintext: request.plaintext,
+        }
+    }
+
+    fn fingerprint(&self) -> [u8; 32] {
+        crate::test_utils::vault_binding::TestBindingRecord::fingerprint(&(
+            self.key.clone(),
+            self.plaintext.clone(),
+        ))
+    }
+}
+
 #[derive(Default)]
 pub(super) struct FakeVault {
     pub(super) creation: Mutex<HashMap<VaultCreationRecordScope, SealedRecord>>,
@@ -422,6 +442,37 @@ pub(super) struct FakeVault {
 }
 
 impl EvidenceVaultStorePort for FakeVault {
+    fn begin_binding(
+        &self,
+        request: VaultRecordLoadRequest,
+    ) -> Result<
+        Box<
+            dyn crate::application::port::outbound::evidence_vault_port::VaultBindingTransaction
+                + '_,
+        >,
+        VaultStoreError,
+    > {
+        crate::test_utils::vault_binding::begin_test_binding(
+            self.records.lock().unwrap(),
+            request,
+            crate::test_utils::vault_binding::TestBindingHooks {
+                before_write: Some(Box::new(|request| {
+                    let hook = self.before_save.lock().unwrap().clone();
+                    if let Some(hook) = hook {
+                        hook(request);
+                    }
+                    if self.fail_regular.load(Ordering::SeqCst) {
+                        return Err(VaultStoreError::Storage(
+                            "adopted vault storage is unavailable".to_string(),
+                        ));
+                    }
+                    Ok(())
+                })),
+                after_pointer: None,
+            },
+        )
+    }
+
     fn save_creation(&self, request: VaultCreationSaveRequest) -> Result<(), VaultStoreError> {
         self.creation_attempts.fetch_add(1, Ordering::SeqCst);
         if self.fail_creation.load(Ordering::SeqCst) {

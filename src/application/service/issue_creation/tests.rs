@@ -123,7 +123,13 @@ fn creation_stages_and_records_before_post_then_adopts_the_real_issue_identity()
     );
     let published = fixture.publish_journal.records.lock().unwrap()[0].clone();
     assert_eq!(published.intent_id, result.adoption_intent_id());
-    assert_eq!(fixture.current(), Some(published.confirmed_version()));
+    let current_version = fixture.current().expect("the adopted binding is current");
+    assert!(
+        crate::domain::issue_publish_intent::confirmed_version_matches_hash(
+            &current_version,
+            &published.approved_hash,
+        )
+    );
     let records = fixture.vault.records.lock().unwrap();
     assert!(records.keys().all(|scope| scope.issue == issue()));
     assert_eq!(
@@ -131,7 +137,7 @@ fn creation_stages_and_records_before_post_then_adopts_the_real_issue_identity()
             .get(&VaultRecordScope {
                 issue: issue(),
                 field: VaultRecordField::Body,
-                binding: VaultRecordBinding::ConfirmedVersion(published.confirmed_version()),
+                binding: VaultRecordBinding::ConfirmedVersion(current_version),
             })
             .unwrap()
             .plaintext
@@ -633,6 +639,8 @@ fn late_adoption_cannot_overwrite_another_publish_or_current_restore_mapping() {
             state: IssuePublishIntentState::Confirmed,
             observed_hash: Some(hash),
             restore_link_finalized: true,
+
+            restore_binding_attempt: None,
             write_response_mismatch: false,
             write_attempted: Some(true),
             sequence: 99,
@@ -735,6 +743,15 @@ fn recorded_recovery_uses_the_frozen_original_even_if_a_new_draft_masks_to_the_s
     assert_eq!(fixture.staged(), staged);
     assert_eq!(fixture.vault.creation_attempts.load(Ordering::SeqCst), 1);
     let adopted = fixture.publish_journal.records.lock().unwrap()[0].clone();
+    let current_version = fixture
+        .current()
+        .expect("the original staged spans remain current");
+    assert!(
+        crate::domain::issue_publish_intent::confirmed_version_matches_hash(
+            &current_version,
+            &adopted.approved_hash,
+        )
+    );
     assert_eq!(
         fixture
             .vault
@@ -744,7 +761,7 @@ fn recorded_recovery_uses_the_frozen_original_even_if_a_new_draft_masks_to_the_s
             .get(&VaultRecordScope {
                 issue: issue(),
                 field: VaultRecordField::Body,
-                binding: VaultRecordBinding::ConfirmedVersion(adopted.confirmed_version()),
+                binding: VaultRecordBinding::ConfirmedVersion(current_version),
             })
             .unwrap()
             .plaintext

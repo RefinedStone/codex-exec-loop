@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::Mutex;
 
 pub(crate) mod pr_review_loopback;
+pub(crate) mod vault_binding;
 
 /*
  * 시험의 git 명령이다. 시험을 돌린 셸의 `GIT_*` 를 물려받지 않는다. git hook 이나 일부 에이전트 환경은 `GIT_DIR`

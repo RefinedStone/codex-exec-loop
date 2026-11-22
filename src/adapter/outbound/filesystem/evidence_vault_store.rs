@@ -18,10 +18,13 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use super::secure_fs;
+
+mod binding;
 use crate::application::port::outbound::evidence_vault_port::{
-    EvidenceVaultStorePort, VaultCreationLoadRequest, VaultCreationRecordScope,
-    VaultCreationSaveRequest, VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey,
-    VaultRecordLoadRequest, VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
+    EvidenceVaultStorePort, VaultBindingTransaction, VaultCreationLoadRequest,
+    VaultCreationRecordScope, VaultCreationSaveRequest, VaultPlaintext, VaultRecordBinding,
+    VaultRecordField, VaultRecordKey, VaultRecordLoadRequest, VaultRecordSaveRequest,
+    VaultRecordScope, VaultStoreError,
 };
 use crate::domain::issue_work::IssueProvider;
 
@@ -52,9 +55,38 @@ impl FilesystemEvidenceVaultStoreAdapter {
     pub fn new(vault_root: PathBuf) -> Self {
         Self { vault_root }
     }
+
+    /// 기존 v1 레코드의 읽기 호환 시험에만 쓰는 seed 경로이다. 생산 저장 계약을 우회하지 않는다.
+    #[cfg(all(test, unix))]
+    pub(crate) fn seed_record_for_test(
+        &self,
+        request: VaultRecordSaveRequest,
+    ) -> Result<(), VaultStoreError> {
+        self.save_record(request)
+    }
+
+    fn save_record(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
+        let scope = scope_bytes(&request.scope);
+        let body = seal_record(&request.key, &scope, &request.plaintext)?;
+        secure_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body)
+            .map_err(|error| {
+                if secure_fs::atomic_replacement_completed(&error) {
+                    VaultStoreError::WriteOutcomeUnknown
+                } else {
+                    storage_error(error)
+                }
+            })
+    }
 }
 
 impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
+    fn begin_binding(
+        &self,
+        request: VaultRecordLoadRequest,
+    ) -> Result<Box<dyn VaultBindingTransaction + '_>, VaultStoreError> {
+        binding::begin(self, request)
+    }
+
     fn save_creation(&self, request: VaultCreationSaveRequest) -> Result<(), VaultStoreError> {
         let scope = creation_scope_bytes(&request.scope);
         let body = seal_record(&request.key, &scope, &request.plaintext)?;
@@ -80,16 +112,12 @@ impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
     }
 
     fn save(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
-        let scope = scope_bytes(&request.scope);
-        let body = seal_record(&request.key, &scope, &request.plaintext)?;
-        secure_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body)
-            .map_err(|error| {
-                if secure_fs::atomic_replacement_completed(&error) {
-                    VaultStoreError::WriteOutcomeUnknown
-                } else {
-                    storage_error(error)
-                }
-            })
+        if !matches!(request.scope.binding, VaultRecordBinding::PublishIntent(_)) {
+            return Err(VaultStoreError::Storage(
+                "bound vault records require a binding transaction".to_string(),
+            ));
+        }
+        self.save_record(request)
     }
 
     fn load(&self, request: VaultRecordLoadRequest) -> Result<VaultPlaintext, VaultStoreError> {

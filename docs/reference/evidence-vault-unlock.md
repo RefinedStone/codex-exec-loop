@@ -131,7 +131,8 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
   late replies (generation check), and replaces the DOM.
 - **Reconnect support.** The native source advertises `reconnect: false`. A changed published copy
   holds viewing and shows no reconnect action. The existing service-level reconnect and review
-  contracts do not establish atomic cross-process reconnect; that remains separate work.
+  contracts use the [atomic binding store](./evidence-vault-bindings.md). Wiring that storage
+  operation into the native helper and the dedicated window remains separate work.
 - **Limits.** Content protection (`setContentProtection`) is requested, but Akra does not guarantee
   that capture is blocked (it has no effect on Linux). Selection and copy by the user are possible.
   The window has no print and no find function. The limits in

@@ -8,9 +8,9 @@
  *
  * 가져오기는 먼저 모든 레코드를 원본 키와 원본 범위로 검증하고, 승인한 프로젝트의 레코드를 로컬 장치 키와 로컬
  * 범위로 다시 암호화한다. 읽을 수 있는 기존 연결은 보존하고, 읽지 못하는 연결은 명시적 승인으로만 복구한다. 이슈의 `CurrentVersion`
- * 레코드는 마지막에 쓴다. 그 전에 멈추면 그 이슈는 연결이 없는 상태로 남고, 다시 부르면 끝난다.
+ * 레코드는 이슈별 잠금 안에서 불변 필드 세트를 저장한 뒤 한 번 교체한다. 중간 실패 뒤 재시도는 읽을 수 있는 로컬 연결을 보존한다.
  */
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use base64::Engine;
@@ -23,17 +23,20 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use super::evidence_vault_store::{
-    open_record, push_part, record_relative_path, scope_bytes, seal_record,
+    FilesystemEvidenceVaultStoreAdapter, open_record, push_part, record_relative_path, scope_bytes,
 };
 use super::secure_fs;
 use crate::application::port::outbound::evidence_vault_backup_port::{
     EvidenceVaultBackupPort, VaultBackupError, VaultBackupExportRequest, VaultBackupImportReport,
-    VaultBackupImportRequest, VaultBackupRecoveryMode, VaultRecoveryKey,
+    VaultBackupImportRequest, VaultBackupProjectApproval, VaultBackupRecoveryMode,
+    VaultRecoveryKey,
 };
 use crate::application::port::outbound::evidence_vault_port::{
-    VaultKey, VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordScope,
+    EvidenceVaultStorePort, VaultBindingCommitPolicy, VaultBindingCommitRequest,
+    VaultBindingCommitResult, VaultBindingFields, VaultBindingState, VaultKey, VaultPlaintext,
+    VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordLoadRequest, VaultRecordScope,
 };
-use crate::domain::issue_work::IssueReference;
+use crate::domain::issue_work::{IssueProjectScope, IssueReference};
 
 /// 보관 파일의 형식의 판이다. 필드, 알고리즘, KDF, 연관 데이터의 구성이 바뀌면 올린다.
 const ARCHIVE_FORMAT_VERSION: u32 = 1;
@@ -130,12 +133,25 @@ impl StoredBackupRecord {
     }
 }
 
-/// 다시 암호화한 레코드 한 건이다. 아직 쓰지 않았다.
-struct StagedRecord {
+/// Fully authenticated archive data for one issue. Only its current field set can
+/// become visible; unrelated historical records are not installed.
+struct StagedBinding {
     issue: IssueReference,
-    is_current_version: bool,
-    relative_path: PathBuf,
-    body: Vec<u8>,
+    base_version: String,
+    fields: VaultBindingFields,
+}
+
+struct StagedIssueRecords {
+    issue: IssueReference,
+    current_version: Option<String>,
+    records: Vec<(VaultRecordField, VaultRecordBinding, VaultPlaintext)>,
+}
+
+#[derive(Default)]
+struct ImportOutcomes {
+    imported: Vec<IssueReference>,
+    kept_local: Vec<IssueReference>,
+    recovered: Vec<IssueReference>,
 }
 
 pub struct FilesystemEvidenceVaultBackupAdapter {
@@ -152,38 +168,70 @@ impl FilesystemEvidenceVaultBackupAdapter {
 impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
     fn export(&self, request: VaultBackupExportRequest) -> Result<String, VaultBackupError> {
         let mut records = Vec::new();
+        let mut exported_scopes = HashSet::new();
+        let store = FilesystemEvidenceVaultStoreAdapter::new(self.vault_root.clone());
+        let mut issues = Vec::new();
         for scope in &request.scopes {
-            let scope_bytes = scope_bytes(scope);
-            let Some(record) = secure_fs::read_optional_file(
-                &self.vault_root,
-                &record_relative_path(&scope_bytes),
-            )
-            .map_err(storage_error)?
-            else {
-                if scope.binding == VaultRecordBinding::CurrentVersion {
-                    return Err(VaultBackupError::BindingChanged);
-                }
-                continue;
-            };
-            // 최초 선택한 판과 실제 담는 연결이 같아야 한다. 연결 파일은 이 한 번 읽은 내용을 담는다.
-            let plaintext = open_record(&record, &request.key, &scope_bytes)
-                .map_err(VaultBackupError::Record)?;
-            if scope.binding == VaultRecordBinding::CurrentVersion
-                && [VaultRecordField::Title, VaultRecordField::Body]
-                    .iter()
-                    .any(|field| {
-                        !request.scopes.contains(&VaultRecordScope {
-                            issue: scope.issue.clone(),
-                            field: *field,
-                            binding: VaultRecordBinding::ConfirmedVersion(
-                                plaintext.expose().to_string(),
-                            ),
-                        })
-                    })
-            {
-                return Err(VaultBackupError::BindingChanged);
+            if !issues.contains(&scope.issue) {
+                issues.push(scope.issue.clone());
             }
-            records.push(StoredBackupRecord::new(scope, record));
+        }
+        // Keep one issue's binding lease through every ciphertext read. Other
+        // issues are independent and never require nested binding leases.
+        for issue in issues {
+            let mut transaction = store
+                .begin_binding(VaultRecordLoadRequest {
+                    scope: VaultRecordScope::current_version(issue.clone()),
+                    key: request.key.clone(),
+                })
+                .map_err(VaultBackupError::Record)?;
+            let snapshot = transaction.snapshot().clone();
+            for scope in request.scopes.iter().filter(|scope| scope.issue == issue) {
+                if !exported_scopes.insert(scope.clone()) {
+                    continue;
+                }
+                let scope_bytes = scope_bytes(scope);
+                let Some(record) = secure_fs::read_optional_file(
+                    &self.vault_root,
+                    &record_relative_path(&scope_bytes),
+                )
+                .map_err(storage_error)?
+                else {
+                    if scope.binding == VaultRecordBinding::CurrentVersion {
+                        return Err(VaultBackupError::BindingChanged);
+                    }
+                    continue;
+                };
+                let plaintext = open_record(&record, &request.key, &scope_bytes)
+                    .map_err(VaultBackupError::Record)?;
+                if scope.binding == VaultRecordBinding::CurrentVersion {
+                    let digest: [u8; 32] = Sha256::digest(record.as_bytes()).into();
+                    if scope.field != VaultRecordField::Body
+                        || snapshot.token.ciphertext_sha256() != Some(digest)
+                        || [VaultRecordField::Title, VaultRecordField::Body]
+                            .iter()
+                            .any(|field| {
+                                !request.scopes.contains(&VaultRecordScope {
+                                    issue: scope.issue.clone(),
+                                    field: *field,
+                                    binding: VaultRecordBinding::ConfirmedVersion(
+                                        plaintext.expose().to_string(),
+                                    ),
+                                })
+                            })
+                    {
+                        return Err(VaultBackupError::BindingChanged);
+                    }
+                }
+                records.push(StoredBackupRecord::new(scope, record));
+            }
+            if let VaultBindingState::Readable { version } = &snapshot.state {
+                // Revalidate lease identity and all version records before releasing
+                // the guard. The archive still contains the original ciphertext.
+                transaction
+                    .load_version_fields(version)
+                    .map_err(VaultBackupError::Record)?;
+            }
         }
         if records.is_empty() {
             return Err(VaultBackupError::NothingToExport);
@@ -241,81 +289,167 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
         let archive = parse_archive(&request.archive)?;
         let source_key = unwrap_source_key(&archive, &request.recovery_key)?;
 
-        // 쓰기 전에 보관 파일 전체를 검증하고 다시 암호화한다. 평문은 메모리에만 있고 바로 지운다.
-        let mut staged = Vec::new();
-        let mut unapproved_projects = Vec::new();
-        for record in &archive.records {
-            let source_scope = record.scope();
-            let plaintext = open_record(&record.record, &source_key, &scope_bytes(&source_scope))
-                .map_err(|_| VaultBackupError::CorruptArchive)?;
-            let source_project = &source_scope.issue.project_scope;
-            let Some(approval) = request
-                .projects
-                .iter()
-                .find(|approval| approval.source == *source_project)
-            else {
-                if !unapproved_projects.contains(source_project) {
-                    unapproved_projects.push(source_project.clone());
-                }
-                continue;
-            };
-            // 프로젝트만 사용자가 고른 로컬 프로젝트로 바꾼다. 원격 이슈의 ID 는 그대로이다.
-            let mut local_scope = source_scope;
-            local_scope.issue.project_scope = approval.local.clone();
-            let local_scope_bytes = scope_bytes(&local_scope);
-            staged.push(StagedRecord {
-                is_current_version: local_scope.binding == VaultRecordBinding::CurrentVersion,
-                relative_path: record_relative_path(&local_scope_bytes),
-                body: seal_record(&request.local_key, &local_scope_bytes, &plaintext)
-                    .map_err(|error| VaultBackupError::Storage(error.to_string()))?,
-                issue: local_scope.issue,
-            });
-        }
-
-        // 읽을 수 있는 로컬 연결은 항상 보존한다. 키 분실 등의 복구는 명시적으로 선택한 경우만 허용한다.
-        // shortcut: 다중 프로세스의 확인과 쓰기를 한 트랜잭션으로 묶는 저장 계약은 별도이다.
-        let mut kept_local = Vec::new();
-        let mut recovered = Vec::new();
-        for record in staged.iter().filter(|record| record.is_current_version) {
-            let Some(current) =
-                secure_fs::read_optional_file(&self.vault_root, &record.relative_path)
-                    .map_err(storage_error)?
-            else {
-                continue;
-            };
-            let scope = scope_bytes(&VaultRecordScope::current_version(record.issue.clone()));
-            match open_record(&current, &request.local_key, &scope) {
-                Ok(_) => kept_local.push(record.issue.clone()),
-                Err(_) if request.recovery_mode == VaultBackupRecoveryMode::RecoverUnreadable => {
-                    recovered.push(record.issue.clone());
-                }
-                Err(_) => return Err(VaultBackupError::LocalRecoveryRequired),
-            }
-        }
-        let kept: HashSet<&IssueReference> = kept_local.iter().collect();
-
-        // 연결(`CurrentVersion`)을 마지막에 쓴다. 그 전에 멈추면 그 이슈는 연결이 없는 상태로 남는다.
-        staged.sort_by_key(|record| record.is_current_version);
-        let mut imported = Vec::new();
-        for record in &staged {
-            if kept.contains(&record.issue) {
-                continue;
-            }
-            secure_fs::write_file_atomic(&self.vault_root, &record.relative_path, &record.body)
-                .map_err(storage_error)?;
-            if record.is_current_version {
-                imported.push(record.issue.clone());
-            }
-        }
+        // Authenticate the entire archive before the first local write. Version
+        // records and their pointer are then committed once per approved issue.
+        let (staged, unapproved_projects) = stage_import(&archive, &source_key, &request.projects)?;
+        let approval_digest = Sha256::digest(wrap_associated_data(&archive)).into();
+        let store = FilesystemEvidenceVaultStoreAdapter::new(self.vault_root.clone());
+        let outcomes = commit_import_bindings(
+            &store,
+            &request.local_key,
+            &archive.backup_id,
+            approval_digest,
+            request.recovery_mode,
+            staged,
+        )?;
 
         Ok(VaultBackupImportReport {
             backup_id: archive.backup_id,
-            imported,
-            kept_local,
-            recovered,
+            imported: outcomes.imported,
+            kept_local: outcomes.kept_local,
+            recovered: outcomes.recovered,
             unapproved_projects,
         })
     }
+}
+
+fn stage_import(
+    archive: &StoredVaultBackup,
+    source_key: &VaultRecordKey,
+    projects: &[VaultBackupProjectApproval],
+) -> Result<(Vec<StagedBinding>, Vec<IssueProjectScope>), VaultBackupError> {
+    let mut issues = Vec::<StagedIssueRecords>::new();
+    let mut issue_indexes = HashMap::new();
+    let mut scopes = HashSet::new();
+    let mut unapproved_projects = Vec::new();
+    for record in &archive.records {
+        let source_scope = record.scope();
+        let plaintext = open_record(&record.record, source_key, &scope_bytes(&source_scope))
+            .map_err(|_| VaultBackupError::CorruptArchive)?;
+        let source_project = &source_scope.issue.project_scope;
+        let approvals: Vec<_> = projects
+            .iter()
+            .filter(|approval| approval.source == *source_project)
+            .collect();
+        let Some(approval) = approvals.first() else {
+            if !unapproved_projects.contains(source_project) {
+                unapproved_projects.push(source_project.clone());
+            }
+            continue;
+        };
+        if approvals.iter().any(|other| other.local != approval.local) {
+            return Err(VaultBackupError::CorruptArchive);
+        }
+        let mut scope = source_scope;
+        scope.issue.project_scope = approval.local.clone();
+        if !scopes.insert(scope.clone()) {
+            // Colliding source-to-local mappings and duplicate records must never
+            // pick an arbitrary pointer or field by archive order.
+            return Err(VaultBackupError::CorruptArchive);
+        }
+        let next_index = issues.len();
+        let index = *issue_indexes
+            .entry(scope.issue.clone())
+            .or_insert(next_index);
+        if index == next_index {
+            issues.push(StagedIssueRecords {
+                issue: scope.issue.clone(),
+                current_version: None,
+                records: Vec::new(),
+            });
+        }
+        let issue = &mut issues[index];
+        if scope.binding == VaultRecordBinding::CurrentVersion {
+            if scope.field != VaultRecordField::Body
+                || issue.current_version.is_some()
+                || plaintext.expose().is_empty()
+            {
+                return Err(VaultBackupError::CorruptArchive);
+            }
+            issue.current_version = Some(plaintext.expose().to_string());
+        } else {
+            issue.records.push((scope.field, scope.binding, plaintext));
+        }
+    }
+
+    let mut staged = Vec::with_capacity(issues.len());
+    for issue in issues {
+        let version = issue
+            .current_version
+            .ok_or(VaultBackupError::CorruptArchive)?;
+        let mut fields = VaultBindingFields::default();
+        for (field, binding, plaintext) in issue.records {
+            if binding != VaultRecordBinding::ConfirmedVersion(version.clone()) {
+                continue;
+            }
+            match field {
+                VaultRecordField::Title => fields.title = Some(plaintext),
+                VaultRecordField::Body => fields.body = Some(plaintext),
+            }
+        }
+        staged.push(StagedBinding {
+            issue: issue.issue,
+            base_version: version,
+            fields,
+        });
+    }
+    Ok((staged, unapproved_projects))
+}
+
+fn commit_import_bindings(
+    store: &dyn EvidenceVaultStorePort,
+    local_key: &VaultRecordKey,
+    backup_id: &str,
+    approval_digest: [u8; 32],
+    recovery_mode: VaultBackupRecoveryMode,
+    staged: Vec<StagedBinding>,
+) -> Result<ImportOutcomes, VaultBackupError> {
+    let mut outcomes = ImportOutcomes::default();
+    for binding in staged {
+        let transaction = store
+            .begin_binding(VaultRecordLoadRequest {
+                scope: VaultRecordScope::current_version(binding.issue.clone()),
+                key: local_key.clone(),
+            })
+            .map_err(VaultBackupError::Record)?;
+        let policy = match &transaction.snapshot().state {
+            VaultBindingState::Readable { .. } => {
+                outcomes.kept_local.push(binding.issue);
+                continue;
+            }
+            VaultBindingState::Missing => VaultBindingCommitPolicy::InstallIfMissing,
+            VaultBindingState::Unreadable { .. }
+                if recovery_mode == VaultBackupRecoveryMode::RecoverUnreadable =>
+            {
+                VaultBindingCommitPolicy::RecoverUnreadable
+            }
+            VaultBindingState::Unreadable { .. } => {
+                return Err(VaultBackupError::LocalRecoveryRequired);
+            }
+        };
+        let expected = transaction.snapshot().token.clone();
+        match transaction
+            .commit(VaultBindingCommitRequest {
+                expected,
+                operation_id: format!("backup:{backup_id}"),
+                base_version: binding.base_version,
+                approval_digest,
+                fields: binding.fields,
+                policy,
+            })
+            .map_err(VaultBackupError::Record)?
+        {
+            VaultBindingCommitResult::Committed(_)
+            | VaultBindingCommitResult::AlreadyCommitted(_) => {
+                if policy == VaultBindingCommitPolicy::RecoverUnreadable {
+                    outcomes.recovered.push(binding.issue.clone());
+                }
+                outcomes.imported.push(binding.issue);
+            }
+            VaultBindingCommitResult::Conflict => return Err(VaultBackupError::BindingChanged),
+        }
+    }
+    Ok(outcomes)
 }
 
 fn storage_error(error: impl std::fmt::Display) -> VaultBackupError {
@@ -419,3 +553,6 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
         .map(|index| u8::from_str_radix(&text[index..index + 2], 16).ok())
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
