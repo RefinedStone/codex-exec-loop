@@ -2619,9 +2619,9 @@ printf '%s\n' 'trusted-helper-executed'
             .collect::<String>();
         assert_eq!(
             digest,
-            "9c0b296ae6a47dca03a3d52539c681ab841cd80e2d1253f74f194ae6251e04fd"
+            "f9b071735c64d12feaf6200dc2195a6a8eef152d13ad2f8c953e036d9f0faddc"
         );
-        assert_eq!(EMBEDDED_GITHUB_HELPER.len(), 40_182);
+        assert_eq!(EMBEDDED_GITHUB_HELPER.len(), 40_967);
     }
 
     #[test]
