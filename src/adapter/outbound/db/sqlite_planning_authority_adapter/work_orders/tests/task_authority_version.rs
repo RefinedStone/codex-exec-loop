@@ -67,7 +67,10 @@ fn work_order_task_authority_version_legacy_service_registration_promotes_v1() {
     assert_eq!(after.task_authority.tasks[1].id, admission.task_id);
     assert!(after.task_authority.tasks[1].acceptance.is_empty());
     assert_eq!(after.task_authority.tasks[1].acceptance_revision, 0);
-    assert_eq!(admission.work_order.task_ids, [admission.task_id.clone()]);
+    assert_eq!(
+        admission.work_order.task_ids.as_slice(),
+        std::slice::from_ref(&admission.task_id)
+    );
 
     let rows = authority_rows(&workspace);
     let replay = service.register_work_order(request).unwrap();

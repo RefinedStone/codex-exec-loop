@@ -181,7 +181,7 @@ fn work_answer(end: WorkEnd, is_reset: bool, op_id: Option<i64>) -> Result<Value
 /// 명령 전용 조립이 실행하는 일이다. 저장된 planning 데이터만 바꾼다.
 enum CommandOnlyWork {
     Reset { target: ResetTarget, confirm: bool },
-    Stored(StoredCommand),
+    Stored(Box<StoredCommand>),
 }
 
 /// 그 일의 끝이다. 초기화는 결과 값이 없다.
@@ -206,7 +206,7 @@ impl CommandOnlyKernel {
                     human_confirmation: None,
                 };
                 match super::production::stored_command_port(&self.workspace)
-                    .execute_with_context(command, &context)
+                    .execute_with_context(*command, &context)
                 {
                     Ok(StoredCommandOutcome::Done(result)) => WorkEnd::Done(Some(result)),
                     Ok(StoredCommandOutcome::Rejected(rejection)) => WorkEnd::Rejected(rejection),
@@ -252,7 +252,7 @@ impl KernelCommandPort for CommandOnlyKernel {
         }
         // 이 조립은 저장된 데이터만 바꾸는 명령을 실행한다. 도는 커널이 필요한 명령은 여기에 오지 않는다.
         let work = match (input, request.command) {
-            (KernelCommandInput::Stored(command), _) => CommandOnlyWork::Stored(command),
+            (KernelCommandInput::Stored(command), _) => CommandOnlyWork::Stored(Box::new(command)),
             (_, KernelCommand::ResetPlanning { target, confirm }) => {
                 CommandOnlyWork::Reset { target, confirm }
             }
@@ -288,14 +288,14 @@ impl KernelCommandPort for CommandOnlyKernel {
         let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
         if lock.is_none() {
             // 결정 답과 개입은 영수증과 함께 실행한다. 기존 TUI 직접 실행 예외를 적용하지 않는다.
-            if matches!(
-                &work,
-                CommandOnlyWork::Stored(
+            if let CommandOnlyWork::Stored(command) = &work
+                && matches!(
+                    command.as_ref(),
                     StoredCommand::AnswerIssueDecision { .. }
                         | StoredCommand::InterveneIssue { .. }
                         | StoredCommand::SetIssueAutonomy { .. }
                 )
-            ) {
+            {
                 return unreachable_answer(
                     "The repository kernel owns this workspace. Send this issue command through that kernel.",
                 );
