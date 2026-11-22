@@ -4,6 +4,8 @@ import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { folderName } from "../sidebar/threadStatus";
 import { IssueDetail } from "./IssueDetail";
+import { IssueAutonomyControl } from "./IssueAutonomyControl";
+import type { IssueAutonomyLevel, IssueInterventionName } from "./issueInteractions";
 import { IssueObserveReport } from "./IssueObserveReport";
 import { IssuePolicy, type IssuePolicyFileScope } from "./IssuePolicy";
 import type { IssueAutomationModeRecord, IssueCollectionFailureState, IssueEventReference, IssueListItem, IssueSourceFailureState } from "./protocol";
@@ -48,6 +50,10 @@ interface IssuePanelProps {
   onPreviousPage(): Promise<void>;
   onSetMode(mode: IssueAutomationModeRecord): Promise<void>;
   onSync(): Promise<void>;
+  onSetAutonomy(level: IssueAutonomyLevel): Promise<void>;
+  onAnswerDecision(decisionId: string, option: string, note: string): Promise<void>;
+  onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<void>;
+  onOpenConversation(): Promise<void>;
   onOpenUrl(url: string): void;
 }
 
@@ -67,7 +73,7 @@ function IssueRow({ item, onSelectIssue, onOpenUrl }: { item: IssueListItem; onS
   );
 }
 
-export function IssuePanel({ onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onOpenUrl }: IssuePanelProps) {
+export function IssuePanel({ onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onAnswerDecision, onIntervene, onOpenConversation, onOpenUrl }: IssuePanelProps) {
   const [view, setView] = useState<"list" | "report" | "policy">("list");
   const kernel = useDesktopStore((state) => state.kernel);
   const issues = kernel.issues;
@@ -138,6 +144,7 @@ export function IssuePanel({ onRefresh, onSelectIssue, onClearIssueSelection, on
                 </button>
               </div>
 
+              <IssueAutonomyControl autonomy={automation?.autonomy} connected={attached} busy={busy} onChange={onSetAutonomy} />
               <div className="issues-collection-status" aria-live="polite">
                 <span>{issues.commandPending === "mode" ? "모드를 저장하는 중…" : automation ? (automation.collecting ? "이슈를 수집하고 있습니다." : automation.mode === "off" ? "자동 수집이 꺼져 있습니다." : "다음 수집을 기다리고 있습니다.") : "수집 상태를 확인하고 있습니다."}</span>
                 <span className="issues-last-success"><Icon name="clock" size={12} />마지막 성공 <span data-testid="issues-last-success">{successTime(automation?.last_success_at_ms)}</span></span>
@@ -154,6 +161,7 @@ export function IssuePanel({ onRefresh, onSelectIssue, onClearIssueSelection, on
             )}
             {attached && kernel.message && <p className="issues-notice warning">{kernel.message}</p>}
             {issues.error && <p className="issues-notice error" role="alert" data-testid="issues-error">{issues.error}</p>}
+            {issues.notice && <p className="issues-notice" role="status" data-testid="issues-command-notice">{issues.notice}</p>}
             {automation?.last_failure && <p className="issues-notice error" role="alert" data-testid="issues-error">수집 오류: {collectionFailureText(automation.last_failure)}</p>}
             {issues.automation?.status === "unavailable" && <p className="issues-notice error" role="alert" data-testid="issues-error">수집 설정을 읽을 수 없습니다. 새로 고침으로 다시 확인하세요.</p>}
             {issues.page?.status === "unavailable" && <p className="issues-notice error" role="alert" data-testid="issues-error">이슈 목록을 읽을 수 없습니다. 새로 고침으로 다시 확인하세요.</p>}
@@ -176,7 +184,7 @@ export function IssuePanel({ onRefresh, onSelectIssue, onClearIssueSelection, on
                 </ul>
               </section>
             ))}
-            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
+            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} busy={busy || !attached} onAnswer={onAnswerDecision} onIntervene={onIntervene} onOpenConversation={onOpenConversation} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
             {view === "report" && <IssueObserveReport report={page?.report} />}
             {view === "policy" && <IssuePolicy key={kernel.workspace} policy={issues.policy} loading={issues.policyLoading} error={issues.policyError} onOpenFile={onOpenPolicyFile} />}
           </div>

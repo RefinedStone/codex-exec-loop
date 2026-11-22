@@ -35,6 +35,11 @@ export class IssueConfirmationService {
     return this.enqueue(request.workspace, request.command);
   }
 
+  confirmAutonomy(input: unknown): Promise<IssueConfirmationResponse> {
+    const request = autonomyRequest(input);
+    return this.enqueue(request.workspace, request.command);
+  }
+
   invalidate(): void {
     this.generation++;
     this.active?.abort();
@@ -140,6 +145,19 @@ function modeRequest(value: unknown): { workspace: string; command: CommandReque
   if (!isRecord(value) || !onlyFields(value, ["workspace", "mode", "key"]) || !workspace(value.workspace) ||
     !token(value.key, 128) || (value.mode !== "off" && value.mode !== "observe")) throw failure();
   return { workspace: value.workspace, command: { command: { type: "set_issue_automation_mode", mode: value.mode }, idempotency_key: value.key } };
+}
+
+function autonomyRequest(value: unknown): { workspace: string; command: CommandRequest } {
+  if (!isRecord(value) || !onlyFields(value, ["workspace", "level", "commandId", "key"]) || !workspace(value.workspace) ||
+    !token(value.key, 128) || !token(value.commandId, 128) ||
+    (value.level !== "off" && value.level !== "observe" && value.level !== "propose")) throw failure();
+  return {
+    workspace: value.workspace,
+    command: {
+      command: { type: "set_issue_autonomy", command_id: value.commandId, level: value.level },
+      idempotency_key: value.key,
+    },
+  };
 }
 
 function workspace(value: unknown): value is string {

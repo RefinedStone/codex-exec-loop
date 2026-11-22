@@ -42,6 +42,7 @@ export const KERNEL_COMMAND_EFFECT = {
   "create_direction": "write",
   "update_direction": "write",
   "delete_direction": "destructive",
+  "set_issue_autonomy": "write",
   "set_issue_automation_mode": "write",
   "answer_issue_decision": "write",
   "hold_issue": "write",
@@ -52,15 +53,8 @@ export const KERNEL_COMMAND_EFFECT = {
   "cancel_issue_work": "destructive",
   "track_issue": "write",
   "untrack_issue": "write",
-  "sync_issues": "read",
-  "submit_delegation": "write",
-  "cancel_delegation": "write",
-  "checkpoint_delegation": "write",
-  "report_delegation_result": "write",
-  "retry_delegation": "write"
+  "sync_issues": "read"
 } as const satisfies Record<KernelCommand["type"], string>;
-
-export type AccountMatch = ("unknown" | "match" | "mismatch");
 
 export type ApprovalDecision = ("accept" | "decline");
 
@@ -74,19 +68,7 @@ export type AttachRequest = { readonly "client_name": string; readonly "transien
 
 export type AttachResponse = { readonly "client_id": string; readonly "kernel": string; readonly "protocol_version": number; };
 
-export type Attempt = { readonly "backend": string; readonly "backend_kind": string; readonly "delivery": Delivery; readonly "id": string; readonly "model"?: (string | null); readonly "observations": Array<Evidence>; readonly "phase": Phase; readonly "reason"?: (EndReason | null); readonly "recovery"?: (Recovery | null); readonly "resumes"?: (number | null); readonly "retry_at"?: (number | null); };
-
 export type AutoFollowSettings = { readonly "max_turns": number; readonly "paused": boolean; };
-
-export type BackendState = ("ready" | "unavailable");
-
-export type ChatBackendStatus = { readonly "account_match"?: AccountMatch; readonly "circuit"?: (Circuit | null); readonly "reason"?: (string | null); readonly "state": BackendState; readonly "tunnel"?: (TunnelStatus | null); };
-
-export type ChatSession = ({ readonly "mode": "new"; } | { readonly "chat_url": string; readonly "mode": "continue"; });
-
-export type Circuit = ("open" | "closed");
-
-export type CodexBackendStatus = { readonly "circuit"?: (Circuit | null); readonly "local_reads": boolean; readonly "reason"?: (string | null); readonly "state": BackendState; readonly "verified_text_only": boolean; };
 
 export type CommandCompletion = ("accepted" | "records" | "unreported");
 
@@ -96,7 +78,7 @@ export type CommandRequest = { readonly "command": KernelCommand; readonly "idem
 
 export type CommandResponse = { readonly "failure"?: (string | null); readonly "operation"?: (Operation | null); readonly "processed": boolean; readonly "rejection"?: (CommandRejection | null); readonly "result"?: (CommandResult | null); };
 
-export type CommandResult = ({ readonly "delegation": Delegation; readonly "type": "delegation_submitted"; } | { readonly "delegation": Delegation; readonly "type": "delegation_cancelled"; } | { readonly "delegation": Delegation; readonly "type": "delegation_checkpointed"; } | { readonly "delegation": Delegation; readonly "type": "delegation_result_reported"; } | { readonly "delegation": Delegation; readonly "type": "delegation_retried"; } | { readonly "receipt": IssueInterventionReceiptState; readonly "type": "issue_intervened"; } | { readonly "catalog_revision": number; readonly "changed": boolean; readonly "decision": IssueDecisionFactRecord; readonly "outcome": IssueDecisionOutcome; readonly "reason"?: (ReasonCode | null); readonly "type": "issue_decision_resolved"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_created"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_updated"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_deleted"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_created"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_updated"; } | { readonly "default_retained": boolean; readonly "direction_id": string; readonly "planning_revision": number; readonly "removed_task_count": number; readonly "type": "direction_deleted"; } | { readonly "changed": boolean; readonly "epoch": number; readonly "mode": IssueAutomationModeRecord; readonly "previous"?: (IssueAutomationModeRecord | null); readonly "revision": number; readonly "type": "issue_automation_mode_changed"; });
+export type CommandResult = ({ readonly "receipt": IssueInterventionReceiptState; readonly "type": "issue_intervened"; } | { readonly "catalog_revision": number; readonly "changed": boolean; readonly "decision": IssueDecisionFactRecord; readonly "outcome": IssueDecisionOutcome; readonly "reason"?: (ReasonCode | null); readonly "type": "issue_decision_resolved"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_created"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_updated"; } | { readonly "planning_revision": number; readonly "task_id": string; readonly "type": "task_deleted"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_created"; } | { readonly "direction_id": string; readonly "planning_revision": number; readonly "type": "direction_updated"; } | { readonly "default_retained": boolean; readonly "direction_id": string; readonly "planning_revision": number; readonly "removed_task_count": number; readonly "type": "direction_deleted"; } | { readonly "autonomy": IssueAutonomyState; readonly "changed": boolean; readonly "command_id": string; readonly "type": "issue_autonomy_changed"; } | { readonly "changed": boolean; readonly "epoch": number; readonly "mode": IssueAutomationModeRecord; readonly "previous"?: (IssueAutomationModeRecord | null); readonly "revision": number; readonly "type": "issue_automation_mode_changed"; });
 
 export type ConfirmationPrepareRequest = { readonly "request": CommandRequest; };
 
@@ -108,27 +90,19 @@ export type ConfirmationRegisterResponse = { readonly "binding": IssueConfirmati
 
 export type ConfirmedCommandRequest = { readonly "confirmation": HumanConfirmationSubmission; readonly "request": CommandRequest; };
 
-export type Delegation = { readonly "attempts"?: Array<Attempt>; readonly "caller": string; readonly "can_cancel"?: boolean; readonly "can_retry"?: boolean; readonly "conversation_url"?: (string | null); readonly "created_at": number; readonly "current_backend"?: (string | null); readonly "deadline"?: (number | null); readonly "delivery": Delivery; readonly "fallbacks"?: Array<Fallback>; readonly "id": string; readonly "last_progress_at"?: (number | null); readonly "outcome_unknown": boolean; readonly "phase": Phase; readonly "policy_revision"?: (string | null); readonly "reason"?: (string | null); readonly "session"?: ChatSession; readonly "state": State; readonly "updated_at": number; };
-
-export type Delivery = ("not_sent" | "sending" | "accepted" | "observed" | "uncertain");
-
 export type DirectionFields = { readonly "detail_doc_path"?: (string | null); readonly "scope_hints"?: Array<string>; readonly "state"?: (PlanningDirectionState | null); readonly "success_criteria": Array<string>; readonly "summary"?: (string | null); readonly "title": string; };
-
-export type EndReason = ("unavailable" | "quota" | "transient" | "interrupted" | "needs_human" | "rejected" | "result_invalid" | "unknown");
 
 export type EventNotification = { readonly "event": KernelEvent; };
 
-export type Evidence = { readonly "at": number; readonly "delivery": Delivery; readonly "phase": Phase; readonly "source": EvidenceSource; };
-
-export type EvidenceSource = ("browser" | "stream" | "callback" | "coordinator");
-
-export type Fallback = { readonly "at": number; readonly "from": string; readonly "reason": EndReason; readonly "to": string; };
-
-export type Finding = { readonly "body": string; readonly "line": number; readonly "path": string; readonly "severity": Severity; };
-
 export type HumanConfirmationSubmission = { readonly "intent": IssueConfirmationIntent; readonly "proof_id": string; readonly "registration_id": string; };
 
+export type IssueActionCommand = ("hold_issue" | "release_issue" | "steer_issue" | "take_over_issue" | "retriage_issue" | "cancel_issue_work" | "track_issue" | "untrack_issue");
+
+export type IssueActionState = { readonly "command": IssueActionCommand; readonly "enabled": boolean; readonly "reason"?: (string | null); };
+
 export type IssueActorState = { readonly "id": string; readonly "login": string; };
+
+export type IssueAutomationAutonomy = ("off" | "observe" | "propose" | "gated" | "auto");
 
 export type IssueAutomationModeRecord = ("off" | "observe");
 
@@ -150,6 +124,12 @@ export type IssueAutomationPolicyResolutionState = ("default" | "override" | "mi
 
 export type IssueAutomationPolicySettingState = { readonly "key": string; readonly "label": string; readonly "origins": Array<IssueAutomationPolicyOriginState>; readonly "resolution": IssueAutomationPolicyResolutionState; readonly "resolution_summary": string; readonly "value": string; };
 
+export type IssueAutonomyChoiceState = { readonly "enabled": boolean; readonly "level": IssueAutonomyLevel; readonly "reason"?: (string | null); readonly "requires_confirmation": boolean; };
+
+export type IssueAutonomyLevel = ("off" | "observe" | "propose");
+
+export type IssueAutonomyState = ({ readonly "status": "unavailable"; } | { readonly "status": "policy_blocked"; } | { readonly "cap": IssueAutomationAutonomy; readonly "choices": Array<IssueAutonomyChoiceState>; readonly "effective_level": IssueAutomationAutonomy; readonly "pending": boolean; readonly "policy_version": string; readonly "requested_level"?: (IssueAutonomyLevel | null); readonly "revision": number; readonly "status": "ready"; });
+
 export type IssueBasisState = { readonly "field_hash": IssueHashState; readonly "provider_updated_at": string; };
 
 export type IssueBindingState = { readonly "id": string; readonly "project_scope": IssueEventProjectScope; readonly "provider": IssueEventProvider; readonly "repository_id": string; readonly "server_id": string; };
@@ -166,9 +146,13 @@ export type IssueConfirmationDisplay = { readonly "confirm_label": string; reado
 
 export type IssueConfirmationIntent = { readonly "binding": IssueConfirmationBinding; readonly "fingerprint": string; readonly "key": string; readonly "target": IssueConfirmationTarget; };
 
-export type IssueConfirmationTarget = ({ readonly "basis": IssueDecisionBasis; readonly "decision_id": IssueDecisionId; readonly "decision_revision": number; readonly "kind": "decision"; readonly "option": string; readonly "workspace": string; } | { readonly "epoch"?: (number | null); readonly "from"?: (IssueCollectionMode | null); readonly "kind": "mode"; readonly "revision"?: (number | null); readonly "to": IssueCollectionMode; readonly "workspace": string; });
+export type IssueConfirmationTarget = ({ readonly "basis": IssueDecisionBasis; readonly "decision_id": IssueDecisionId; readonly "decision_revision": number; readonly "kind": "decision"; readonly "option": string; readonly "workspace": string; } | { readonly "cap": IssueAutomationAutonomy; readonly "command_id": string; readonly "from": IssueAutomationAutonomy; readonly "kind": "autonomy"; readonly "policy_version": string; readonly "revision": number; readonly "to": IssueAutonomyLevel; readonly "workspace": string; } | { readonly "epoch"?: (number | null); readonly "from"?: (IssueCollectionMode | null); readonly "kind": "mode"; readonly "revision"?: (number | null); readonly "to": IssueCollectionMode; readonly "workspace": string; });
 
 export type IssueContentState = ({ readonly "basis": IssueBasisState; readonly "kind": "shared"; readonly "policy_version": string; readonly "shared_copy": IssueSharedCopyState; } | { readonly "basis": IssueBasisState; readonly "kind": "withheld"; readonly "policy_version": string; readonly "reason": IssueWithheldReasonState; });
+
+export type IssueControlState = { readonly "authorization_epoch": number; readonly "cancelled": boolean; readonly "held": boolean; readonly "taken_over": boolean; readonly "tracked": boolean; };
+
+export type IssueConversationState = ({ readonly "kind": "thread"; readonly "thread_id": string; } | { readonly "kind": "draft"; readonly "shared_copy": IssueSharedCopyState; } | { readonly "kind": "unavailable"; readonly "reason": string; });
 
 export type IssueDecisionAnswerBy = ("human" | "agent" | "default" | "arbiter");
 
@@ -182,6 +166,8 @@ export type IssueDecisionFieldHashRecord = { readonly "sha256": string; readonly
 
 export type IssueDecisionGateRecord = ("start" | "spec" | "plan" | "delivery" | "merge" | "close");
 
+export type IssueDecisionHistoryState = { readonly "decision": IssueDecisionFactRecord; readonly "request"?: (IssueDecisionRequestState | null); readonly "resolution_reason"?: (IssueDecisionResolutionReasonState | null); };
+
 export type IssueDecisionId = string;
 
 export type IssueDecisionKind = ("start_approval" | "spec_confirmation" | "plan_approval" | "risk_exception" | "issue_changed" | "failure_recovery" | "agent_question");
@@ -191,6 +177,10 @@ export type IssueDecisionOptionState = { readonly "effect": string; readonly "id
 export type IssueDecisionOutcome = ("answered" | "superseded" | "already_resolved");
 
 export type IssueDecisionRequestState = { readonly "basis": IssueDecisionBasisRecord; readonly "due_at"?: (string | null); readonly "gate": IssueDecisionGateRecord; readonly "id": string; readonly "kind": IssueDecisionKind; readonly "on_timeout": IssueDecisionTimeout; readonly "options": Array<IssueDecisionOptionState>; readonly "question": string; readonly "recommended"?: (string | null); readonly "revision": number; readonly "state": IssueDecisionState; readonly "subject": IssueDecisionSubjectRecord; };
+
+export type IssueDecisionResolutionCode = ("answered" | "expired" | "withdrawn" | "basis_changed");
+
+export type IssueDecisionResolutionReasonState = { readonly "code": IssueDecisionResolutionCode; readonly "summary": string; };
 
 export type IssueDecisionState = ("open" | "answered" | "expired" | "withdrawn" | "superseded");
 
@@ -288,21 +278,19 @@ export type IssueWorkSummary = { readonly "blocked_reason"?: (IssueWorkBlockReas
 
 export type IssueWorkflowState = ("discovered" | "ineligible" | "needs_info" | "awaiting_decision" | "ready" | "queued" | "running" | "in_review" | "done" | "failed" | "cancelled");
 
-export type KernelCommand = ({ readonly "type": "load_sessions"; } | { readonly "name": string; readonly "thread_id": string; readonly "type": "rename_session"; } | { readonly "prompt": string; readonly "thread_id": string; readonly "type": "submit_prompt"; } | { readonly "expected_turn_id": string; readonly "prompt": string; readonly "thread_id": string; readonly "type": "steer_turn"; } | { readonly "type": "stop_all"; } | { readonly "approval_id": string; readonly "decision": ApprovalDecision; readonly "server_request_id": string; readonly "type": "decide_approval"; } | { readonly "type": "set_auto_follow_max_turns"; readonly "value": number; } | { readonly "type": "pause_auto_follow"; } | { readonly "confirm"?: boolean; readonly "target": ResetTarget; readonly "type": "reset_planning"; } | { readonly "type": "refresh_planning"; } | { readonly "task": TaskFields; readonly "type": "create_task"; } | { readonly "expected_planning_revision": number; readonly "task": TaskFields; readonly "task_id": string; readonly "type": "update_task"; } | { readonly "confirm"?: boolean; readonly "expected_planning_revision": number; readonly "task_id": string; readonly "type": "delete_task"; } | { readonly "direction": DirectionFields; readonly "type": "create_direction"; } | { readonly "direction": DirectionFields; readonly "direction_id": string; readonly "expected_planning_revision": number; readonly "type": "update_direction"; } | { readonly "confirm"?: boolean; readonly "direction_id": string; readonly "expected_planning_revision": number; readonly "type": "delete_direction"; } | { readonly "mode": IssueAutomationModeRecord; readonly "type": "set_issue_automation_mode"; } | { readonly "decision_id": string; readonly "note"?: (string | null); readonly "option": string; readonly "type": "answer_issue_decision"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "hold_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "release_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "message": string; readonly "type": "steer_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "take_over_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "retriage_issue"; } | { readonly "command_id": string; readonly "confirm"?: boolean; readonly "issue": IssueEventReference; readonly "type": "cancel_issue_work"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "track_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "untrack_issue"; } | { readonly "type": "sync_issues"; } | { readonly "idempotency_key": string; readonly "instruction": string; readonly "session"?: ChatSession; readonly "type": "submit_delegation"; } | { readonly "id": string; readonly "type": "cancel_delegation"; } | { readonly "id": string; readonly "message": string; readonly "token": string; readonly "type": "checkpoint_delegation"; } | { readonly "id": string; readonly "result": string; readonly "token": string; readonly "type": "report_delegation_result"; } | { readonly "id": string; readonly "type": "retry_delegation"; });
+export type KernelCommand = ({ readonly "type": "load_sessions"; } | { readonly "name": string; readonly "thread_id": string; readonly "type": "rename_session"; } | { readonly "prompt": string; readonly "thread_id": string; readonly "type": "submit_prompt"; } | { readonly "expected_turn_id": string; readonly "prompt": string; readonly "thread_id": string; readonly "type": "steer_turn"; } | { readonly "type": "stop_all"; } | { readonly "approval_id": string; readonly "decision": ApprovalDecision; readonly "server_request_id": string; readonly "type": "decide_approval"; } | { readonly "type": "set_auto_follow_max_turns"; readonly "value": number; } | { readonly "type": "pause_auto_follow"; } | { readonly "confirm"?: boolean; readonly "target": ResetTarget; readonly "type": "reset_planning"; } | { readonly "type": "refresh_planning"; } | { readonly "task": TaskFields; readonly "type": "create_task"; } | { readonly "expected_planning_revision": number; readonly "task": TaskFields; readonly "task_id": string; readonly "type": "update_task"; } | { readonly "confirm"?: boolean; readonly "expected_planning_revision": number; readonly "task_id": string; readonly "type": "delete_task"; } | { readonly "direction": DirectionFields; readonly "type": "create_direction"; } | { readonly "direction": DirectionFields; readonly "direction_id": string; readonly "expected_planning_revision": number; readonly "type": "update_direction"; } | { readonly "confirm"?: boolean; readonly "direction_id": string; readonly "expected_planning_revision": number; readonly "type": "delete_direction"; } | { readonly "mode": IssueAutomationModeRecord; readonly "type": "set_issue_automation_mode"; } | { readonly "command_id": string; readonly "level": IssueAutonomyLevel; readonly "type": "set_issue_autonomy"; } | { readonly "decision_id": string; readonly "note"?: (string | null); readonly "option": string; readonly "type": "answer_issue_decision"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "hold_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "release_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "message": string; readonly "type": "steer_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "take_over_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "retriage_issue"; } | { readonly "command_id": string; readonly "confirm"?: boolean; readonly "issue": IssueEventReference; readonly "type": "cancel_issue_work"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "track_issue"; } | { readonly "command_id": string; readonly "issue": IssueEventReference; readonly "type": "untrack_issue"; } | { readonly "type": "sync_issues"; });
 
-export type KernelEvent = (SessionsState & { readonly "type": "sessions"; } | AutoFollowSettings & { readonly "type": "auto_follow"; } | { readonly "threads": Array<ThreadActivity>; readonly "type": "thread_activity"; } | PromptSubmissionState & { readonly "type": "prompt_submission"; } | PlanningState & { readonly "type": "planning"; } | ParallelState & { readonly "type": "parallel"; } | { readonly "type": "resync"; } | RecordedKernelEvent & { readonly "type": "recorded"; } | ({ readonly "status": "unavailable"; } | { readonly "binding"?: (IssueBindingState | null); readonly "binding_id"?: (string | null); readonly "collecting"?: (boolean | null); readonly "consecutive_failures": number; readonly "epoch": number; readonly "last_attempt_at_ms"?: (number | null); readonly "last_failure"?: (IssueCollectionFailureState | null); readonly "last_success_at_ms"?: (number | null); readonly "mode": IssueAutomationModeRecord; readonly "next_poll_after_ms"?: (number | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issues"; } | { readonly "decision": IssueDecisionFactRecord; readonly "reason"?: (ReasonCode | null); readonly "revision": number; readonly "type": "issue_decision"; });
+export type KernelEvent = (SessionsState & { readonly "type": "sessions"; } | AutoFollowSettings & { readonly "type": "auto_follow"; } | { readonly "threads": Array<ThreadActivity>; readonly "type": "thread_activity"; } | PromptSubmissionState & { readonly "type": "prompt_submission"; } | PlanningState & { readonly "type": "planning"; } | ParallelState & { readonly "type": "parallel"; } | { readonly "type": "resync"; } | RecordedKernelEvent & { readonly "type": "recorded"; } | ({ readonly "status": "unavailable"; } | { readonly "autonomy"?: IssueAutonomyState; readonly "binding"?: (IssueBindingState | null); readonly "binding_id"?: (string | null); readonly "collecting"?: (boolean | null); readonly "consecutive_failures": number; readonly "epoch": number; readonly "last_attempt_at_ms"?: (number | null); readonly "last_failure"?: (IssueCollectionFailureState | null); readonly "last_success_at_ms"?: (number | null); readonly "mode": IssueAutomationModeRecord; readonly "next_poll_after_ms"?: (number | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issues"; } | { readonly "decision": IssueDecisionFactRecord; readonly "reason"?: (ReasonCode | null); readonly "revision": number; readonly "type": "issue_decision"; });
 
 export type KernelEventPage = { readonly "next_after": number; readonly "recorder"?: (KernelRecorderHealth | null); readonly "records": Array<RecordedKernelEvent>; };
 
-export type KernelQuery = ({ readonly "type": "delegations"; } | { readonly "id": string; readonly "type": "delegation"; } | { readonly "id": string; readonly "type": "delegation_result"; } | { readonly "type": "delegation_backends"; } | { readonly "type": "delegation_my_turn"; } | { readonly "type": "feature_bindings"; } | { readonly "number": number; readonly "type": "pr_review_result"; } | { readonly "type": "sessions"; } | { readonly "type": "auto_follow"; } | { readonly "type": "thread_activity"; } | { readonly "type": "planning"; } | { readonly "type": "parallel"; } | { readonly "after"?: (number | null); readonly "limit"?: (number | null); readonly "type": "history"; } | { readonly "op_id": number; readonly "type": "operation"; } | { readonly "type": "issue_automation"; } | { readonly "type": "issue_automation_policy"; } | { readonly "after"?: (string | null); readonly "limit"?: (number | null); readonly "type": "issues"; } | { readonly "issue": IssueEventReference; readonly "type": "issue"; });
+export type KernelQuery = ({ readonly "type": "sessions"; } | { readonly "type": "auto_follow"; } | { readonly "type": "thread_activity"; } | { readonly "type": "planning"; } | { readonly "type": "parallel"; } | { readonly "after"?: (number | null); readonly "limit"?: (number | null); readonly "type": "history"; } | { readonly "op_id": number; readonly "type": "operation"; } | { readonly "type": "issue_automation"; } | { readonly "type": "issue_automation_policy"; } | { readonly "after"?: (string | null); readonly "limit"?: (number | null); readonly "type": "issues"; } | { readonly "issue": IssueEventReference; readonly "type": "issue"; });
 
-export type KernelQueryAnswer = ({ readonly "delegations": Array<Delegation>; readonly "type": "delegations"; } | { readonly "delegation"?: (Delegation | null); readonly "type": "delegation"; } | { readonly "text"?: (string | null); readonly "type": "delegation_result"; } | { readonly "chatgpt_chat": ChatBackendStatus; readonly "codex_thread"?: CodexBackendStatus; readonly "type": "delegation_backends"; } | { readonly "items": Array<MyTurn>; readonly "type": "delegation_my_turn"; } | { readonly "pr_review": ReviewMode; readonly "repository"?: (string | null); readonly "type": "feature_bindings"; } | { readonly "number": number; readonly "review"?: (StoredPrReview | null); readonly "type": "pr_review_result"; } | SessionsState & { readonly "type": "sessions"; } | AutoFollowSettings & { readonly "type": "auto_follow"; } | { readonly "threads": Array<ThreadActivity>; readonly "type": "thread_activity"; } | PlanningState & { readonly "type": "planning"; } | ParallelState & { readonly "type": "parallel"; } | KernelEventPage & { readonly "type": "history"; } | OperationStatus & { readonly "type": "operation"; } | ({ readonly "status": "unavailable"; } | { readonly "binding"?: (IssueBindingState | null); readonly "binding_id"?: (string | null); readonly "collecting"?: (boolean | null); readonly "consecutive_failures": number; readonly "epoch": number; readonly "last_attempt_at_ms"?: (number | null); readonly "last_failure"?: (IssueCollectionFailureState | null); readonly "last_success_at_ms"?: (number | null); readonly "mode": IssueAutomationModeRecord; readonly "next_poll_after_ms"?: (number | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issue_automation"; } | ({ readonly "status": "unavailable"; } | { readonly "files": Array<IssueAutomationPolicyFileState>; readonly "settings": Array<IssueAutomationPolicySettingState>; readonly "status": "ready"; readonly "version": string; readonly "workspace": string; } | { readonly "blocked": IssueAutomationPolicyProblemState; readonly "files": Array<IssueAutomationPolicyFileState>; readonly "status": "policy_blocked"; readonly "workspace": string; }) & { readonly "type": "issue_automation_policy"; } | ({ readonly "status": "unavailable"; } | { readonly "groups": Array<IssueListGroup>; readonly "items": Array<IssueListItem>; readonly "next_after"?: (string | null); readonly "report"?: (IssueTriageObserveReportState | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issues"; } | ({ readonly "status": "unavailable"; } | { readonly "report"?: (IssueTriageObserveReportState | null); readonly "revision": number; readonly "status": "not_found"; } | { readonly "item": IssueListItem; readonly "open_decisions"?: Array<IssueDecisionRequestState>; readonly "report"?: (IssueTriageObserveReportState | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issue"; });
+export type KernelQueryAnswer = (SessionsState & { readonly "type": "sessions"; } | AutoFollowSettings & { readonly "type": "auto_follow"; } | { readonly "threads": Array<ThreadActivity>; readonly "type": "thread_activity"; } | PlanningState & { readonly "type": "planning"; } | ParallelState & { readonly "type": "parallel"; } | KernelEventPage & { readonly "type": "history"; } | OperationStatus & { readonly "type": "operation"; } | ({ readonly "status": "unavailable"; } | { readonly "autonomy"?: IssueAutonomyState; readonly "binding"?: (IssueBindingState | null); readonly "binding_id"?: (string | null); readonly "collecting"?: (boolean | null); readonly "consecutive_failures": number; readonly "epoch": number; readonly "last_attempt_at_ms"?: (number | null); readonly "last_failure"?: (IssueCollectionFailureState | null); readonly "last_success_at_ms"?: (number | null); readonly "mode": IssueAutomationModeRecord; readonly "next_poll_after_ms"?: (number | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issue_automation"; } | ({ readonly "status": "unavailable"; } | { readonly "files": Array<IssueAutomationPolicyFileState>; readonly "settings": Array<IssueAutomationPolicySettingState>; readonly "status": "ready"; readonly "version": string; readonly "workspace": string; } | { readonly "blocked": IssueAutomationPolicyProblemState; readonly "files": Array<IssueAutomationPolicyFileState>; readonly "status": "policy_blocked"; readonly "workspace": string; }) & { readonly "type": "issue_automation_policy"; } | ({ readonly "status": "unavailable"; } | { readonly "groups": Array<IssueListGroup>; readonly "items": Array<IssueListItem>; readonly "next_after"?: (string | null); readonly "report"?: (IssueTriageObserveReportState | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issues"; } | ({ readonly "status": "unavailable"; } | { readonly "report"?: (IssueTriageObserveReportState | null); readonly "revision": number; readonly "status": "not_found"; } | { readonly "actions"?: Array<IssueActionState>; readonly "control"?: (IssueControlState | null); readonly "conversation"?: IssueConversationState; readonly "decision_history"?: Array<IssueDecisionHistoryState>; readonly "item": IssueListItem; readonly "open_decisions"?: Array<IssueDecisionRequestState>; readonly "report"?: (IssueTriageObserveReportState | null); readonly "revision": number; readonly "status": "ready"; }) & { readonly "type": "issue"; });
 
 export type KernelRecord = ({ readonly "continuation_paused": boolean; readonly "kind": "auto_follow_configured"; readonly "max_auto_turns": number; } | QueuedThreadPrompt & { readonly "kind": "thread_prompt_queued"; } | { readonly "kind": "thread_prompt_settled"; readonly "op_id"?: (number | null); readonly "settlement": ThreadPromptSettlement; readonly "task_id": string; readonly "thread_id": string; readonly "workspace_directory": string; } | { readonly "kind": "thread_prompt_rejected"; readonly "reason": ReasonCode; readonly "thread_id": string; } | { readonly "kind": "turn_submitted"; readonly "op_id"?: (number | null); readonly "origin": TurnOrigin; readonly "submission": number; readonly "thread_id": string; } | { readonly "kind": "turn_started"; readonly "op_id"?: (number | null); readonly "thread_id": string; readonly "turn_id": string; } | { readonly "kind": "turn_ended"; readonly "op_id"?: (number | null); readonly "outcome"?: (TurnEndOutcome | null); readonly "thread_id": string; readonly "turn_id": string; } | { readonly "completed_turn_id": string; readonly "kind": "post_turn_routed"; readonly "route": PostTurnRoute; readonly "thread_id": string; } | PendingApproval & { readonly "kind": "approval_requested"; } | { readonly "approval_id": string; readonly "kind": "approval_resolved"; readonly "resolution": ApprovalResolution; readonly "thread_id": string; } | { readonly "caller"?: (string | null); readonly "command": string; readonly "completion"?: (CommandCompletion | null); readonly "fingerprint": string; readonly "idempotency_key"?: (string | null); readonly "kind": "command_received"; readonly "op_id": number; readonly "thread_id": string; } | { readonly "kind": "command_rejected"; readonly "op_id": number; readonly "reason": ReasonCode; readonly "thread_id": string; } | { readonly "detail"?: (string | null); readonly "kind": "command_completed"; readonly "op_id": number; readonly "reason"?: (ReasonCode | null); readonly "result": OperationEnd; readonly "thread_id": string; } | { readonly "branch"?: (string | null); readonly "head": string; readonly "kind": "repository_changed"; readonly "previous_branch"?: (string | null); readonly "previous_head"?: (string | null); } | { readonly "binding_id": string; readonly "by": IssueChangeOrigin; readonly "issue": IssueEventReference; readonly "kind": "issue_tracked"; readonly "revision": number; } | { readonly "binding_id": string; readonly "by": IssueChangeOrigin; readonly "gate_revision": number; readonly "issue": IssueEventReference; readonly "kind": "issue_triaged"; readonly "policy_version": string; readonly "revision": number; } | { readonly "decision": IssueDecisionFactRecord; readonly "kind": "issue_decision_requested"; readonly "revision": number; } | { readonly "decision": IssueDecisionFactRecord; readonly "kind": "issue_decision_resolved"; readonly "reason"?: (ReasonCode | null); readonly "revision": number; } | { readonly "event_id": string; readonly "issue": IssueEventReference; readonly "kind": "issue_work_submitted"; readonly "revision": number; readonly "task_ids": Array<string>; readonly "work_order_id": string; } | { readonly "authorization_epoch": number; readonly "issue": IssueEventReference; readonly "kind": "issue_held"; readonly "work_order_id"?: (string | null); } | { readonly "authorization_epoch": number; readonly "issue": IssueEventReference; readonly "kind": "issue_released"; readonly "work_order_id"?: (string | null); } | { readonly "authorization_epoch": number; readonly "issue": IssueEventReference; readonly "kind": "issue_work_permit_revoked"; readonly "work_order_id"?: (string | null); } | { readonly "delivery": boolean; readonly "event_id": string; readonly "gate_revision": number; readonly "issue": IssueEventReference; readonly "kind": "issue_work_permit_granted"; readonly "revision": number; readonly "source_sha": string; readonly "work_order_id": string; } | { readonly "by": IssueChangeOrigin; readonly "caller"?: (string | null); readonly "epoch": number; readonly "kind": "issue_automation_mode_changed"; readonly "mode": IssueAutomationModeRecord; readonly "previous"?: (IssueAutomationModeRecord | null); readonly "revision": number; });
 
 export type KernelRecorderHealth = { readonly "degraded": boolean; readonly "dropped_events": number; readonly "failed_events": number; readonly "pending_bytes": number; readonly "saturated": boolean; };
-
-export type MyTurn = { readonly "id": string; readonly "reason": string; };
 
 export type NextStep = ({ readonly "event": string; readonly "step": "wait_for"; } | { readonly "milliseconds": number; readonly "step": "wait"; } | { readonly "name": string; readonly "step": "query"; } | { readonly "name": string; readonly "step": "command"; } | { readonly "name": string; readonly "step": "method"; } | { readonly "step": "resend"; } | { readonly "step": "ask_user"; } | { readonly "step": "stop"; });
 
@@ -342,8 +330,6 @@ export type ParallelSupervisorState = ("prepare" | "supervise" | "recover");
 
 export type PendingApproval = { readonly "approval_id": string; readonly "request_kind": ApprovalRequestKind; readonly "summary": string; readonly "thread_id": string; readonly "turn_id"?: (string | null); };
 
-export type Phase = ("working" | "complete" | "stopped" | "failed" | "disconnected" | "blocked" | "unreachable" | "unknown");
-
 export type PlanningDirectionState = ("active" | "paused" | "done");
 
 export type PlanningState = { readonly "active_tasks": Array<PlanningTask>; readonly "auto_follow_pause_reason"?: (string | null); readonly "failure_reason"?: (string | null); readonly "next_task"?: (PlanningTask | null); readonly "proposed_tasks": Array<PlanningTask>; readonly "queue_summary"?: (string | null); readonly "revision"?: (number | null); readonly "skipped_tasks": Array<SkippedPlanningTask>; readonly "status": PlanningStatus; };
@@ -368,15 +354,7 @@ export type ReasonCode = ("kernel_unreachable" | "steer_in_flight" | "no_matchin
 
 export type RecordedKernelEvent = { readonly "event": KernelRecord; readonly "recorded_at": string; readonly "sequence": number; };
 
-export type Recovery = ("none" | "in_progress" | "exhausted");
-
 export type ResetTarget = ("queue" | "directions" | "all");
-
-export type ReviewMode = ("off" | "observe" | "on");
-
-export type ReviewRecord = ({ readonly "status": "cancelled"; } | { readonly "status": "diff_too_large"; } | { readonly "status": "source_unavailable"; } | { readonly "status": "backend_failed"; } | { readonly "status": "result_invalid"; } | { readonly "backend": string; readonly "result": ReviewResult; readonly "status": "reviewed"; });
-
-export type ReviewResult = { readonly "findings": Array<Finding>; readonly "summary": string; };
 
 export type SessionEntry = { readonly "thread_id": string; readonly "title": string; readonly "updated_at_epoch": number; readonly "workspace": string; };
 
@@ -384,27 +362,13 @@ export type SessionsState = { readonly "message"?: (string | null); readonly "se
 
 export type SessionsStatus = ("idle" | "loading" | "ready" | "unavailable" | "failed");
 
-export type Severity = ("low" | "medium" | "high" | "critical");
-
 export type SkippedPlanningTask = { readonly "reason": string; readonly "status": PlanningTaskStatus; readonly "task_id": string; readonly "title": string; };
-
-export type State = ("queued" | "dispatching" | "running" | "interrupted" | "awaiting_human" | "succeeded" | "failed" | "cancelled" | "expired");
-
-export type StoredPrReview = { readonly "head": string; readonly "result"?: (ReviewRecord | null); };
 
 export type TaskFields = { readonly "base_priority"?: (number | null); readonly "blocked_by"?: Array<string>; readonly "depends_on"?: Array<string>; readonly "description"?: (string | null); readonly "direction_id"?: (string | null); readonly "dynamic_priority_delta"?: (number | null); readonly "priority_reason"?: (string | null); readonly "status"?: (PlanningTaskStatus | null); readonly "title": string; };
 
 export type ThreadActivity = { readonly "active_turn_id"?: (string | null); readonly "approval"?: (ApprovalRequest | null); readonly "auto_follow_active": boolean; readonly "running": boolean; readonly "thread_id": string; };
 
 export type ThreadPromptSettlement = ("submitted" | "parallel_slots" | "task_finished" | "rejected_again");
-
-export type TunnelConnection = ("connected" | "offline" | "unknown");
-
-export type TunnelInstall = ("ready" | "missing" | "invalid");
-
-export type TunnelReadiness = ("unknown" | "ready" | "login_required" | "challenge" | "unreachable");
-
-export type TunnelStatus = { readonly "connection"?: (TunnelConnection | null); readonly "host": boolean; readonly "install"?: (TunnelInstall | null); readonly "manual"?: (boolean | null); readonly "readiness"?: (TunnelReadiness | null); };
 
 export type TurnEndOutcome = (("completed" | "interrupted" | "failed") | "unknown" | "lost");
 

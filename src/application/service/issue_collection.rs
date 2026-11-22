@@ -111,6 +111,8 @@ pub struct IssueCollectionService {
     policy: IssuePolicyService,
     triage: Option<Arc<super::issue_triage::IssueTriageService>>,
     coordinator: Option<Arc<super::issue_coordinator::IssueCoordinatorService>>,
+    autonomy: Option<Arc<super::issue_autonomy::IssueAutonomyService>>,
+    interactions: Option<Arc<super::issue_interactions::IssueInteractionsService>>,
 }
 
 impl IssueCollectionService {
@@ -129,7 +131,43 @@ impl IssueCollectionService {
             policy,
             triage: None,
             coordinator: None,
+            autonomy: None,
+            interactions: None,
         }
+    }
+
+    pub fn with_autonomy(
+        mut self,
+        autonomy: Arc<super::issue_autonomy::IssueAutonomyService>,
+    ) -> Self {
+        self.autonomy = Some(autonomy);
+        self
+    }
+
+    pub fn autonomy_service(&self) -> Option<Arc<super::issue_autonomy::IssueAutonomyService>> {
+        self.autonomy.clone()
+    }
+
+    pub fn autonomy_state(
+        &self,
+    ) -> crate::domain::issue_automation::autonomy::IssueAutonomyProjection {
+        if let Some(autonomy) = &self.autonomy {
+            return autonomy.state();
+        }
+        self.triage
+            .as_ref()
+            .map(|triage| triage.autonomy_projection())
+            .unwrap_or(
+                crate::domain::issue_automation::autonomy::IssueAutonomyProjection::Unavailable,
+            )
+    }
+
+    pub fn with_interactions(
+        mut self,
+        interactions: Arc<super::issue_interactions::IssueInteractionsService>,
+    ) -> Self {
+        self.interactions = Some(interactions);
+        self
     }
 
     pub fn with_coordinator(
@@ -168,10 +206,15 @@ impl IssueCollectionService {
         &self,
         reference: &IssueReference,
     ) -> Result<crate::domain::issue_automation::collection::IssueCollectionDetail> {
-        self.triage
+        let mut detail = self
+            .triage
             .as_ref()
             .ok_or_else(|| anyhow!("the issue triage service is unavailable"))?
-            .issue(reference)
+            .issue(reference)?;
+        if let (Some(interactions), Some(item)) = (&self.interactions, &detail.item) {
+            detail.interaction = Some(interactions.project(item)?);
+        }
+        Ok(detail)
     }
 
     pub fn report(

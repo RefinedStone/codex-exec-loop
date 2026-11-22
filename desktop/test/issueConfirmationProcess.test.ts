@@ -186,3 +186,17 @@ describe("native confirmation and private utility process", () => {
     }
   });
 });
+
+
+it("routes autonomy to its own utility confirmation kind and honours native cancellation", async () => {
+  const h = harness();
+  const request = { workspace: "/work/repo", level: "propose", commandId: "autonomy-1", key: "autonomy-key" };
+  const response = h.service.confirmAutonomy(request);
+  await h.prompt();
+  expect(h.child.sent[0]).toMatchObject({ type: "begin", kind: "autonomy", input: request });
+  h.native.resolve(false);
+  await vi.waitFor(() => expect(h.child.sent).toContainEqual({ type: "answer", approved: false }));
+  h.child.event({ type: "result", response: { cancelled: true } });
+  expect(await response).toEqual({ cancelled: true });
+  expect(h.child.sent.some((message) => message.type === "submit")).toBe(false);
+});

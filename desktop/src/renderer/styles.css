@@ -1931,3 +1931,192 @@ button.issues-title:hover {
     column-gap: var(--space-5);
   }
 }
+
+/* 결정 카드와 개입: 이슈 탭 안에서만 질문을 표시한다 (#2550). */
+.issues-autonomy {
+  flex: none;
+  padding: 0 var(--space-4) var(--space-3);
+}
+.issues-autonomy-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: var(--space-2) 0 0;
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+.issues-autonomy-summary strong { color: var(--text); }
+.issues-autonomy-help,
+.issues-action-reason {
+  margin: var(--space-1) 0 0;
+  color: var(--text-2);
+  font-size: var(--text-s);
+  line-height: 1.5;
+}
+.issues-autonomy-unavailable {
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
+  font-size: var(--text-s);
+}
+.issues-decisions { display: grid; gap: var(--space-3); }
+.issues-decision-card {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--bg-elevated);
+}
+.issues-decision-card[data-state="open"] { border-color: var(--accent); }
+.issues-decision-heading,
+.issues-intervention-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.issues-decision-heading > strong { font-size: var(--text-s); }
+.issues-decision-question {
+  margin: var(--space-3) 0;
+  color: var(--text);
+  font-size: var(--text-m);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+.issues-decision-options {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  border: 0;
+}
+.issues-decision-options > legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.issues-decision-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+.issues-decision-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.issues-decision-option:has(input:disabled) { cursor: default; }
+.issues-decision-option input { flex: none; margin: 3px 0 0; accent-color: var(--accent); }
+.issues-decision-option > span { min-width: 0; }
+.issues-decision-option-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-s);
+  font-weight: 600;
+}
+.issues-recommended {
+  padding: 1px 5px;
+  border-radius: var(--radius-s);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.issues-decision-effect {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--text-2);
+  font-size: var(--text-s);
+  line-height: 1.5;
+}
+.issues-input-label {
+  display: block;
+  margin: var(--space-3) 0;
+  color: var(--text-2);
+  font-size: var(--text-s);
+}
+.issues-input-label textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  max-height: 220px;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+.issues-input-label textarea:focus-visible,
+.issues-action-button:focus-visible,
+.issues-decision-option:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.issues-input-label textarea[aria-invalid="true"] { border-color: var(--bad); }
+.issues-decision-footer,
+.issues-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.issues-decision-footer > span {
+  flex: 1;
+  min-width: 140px;
+  color: var(--text-2);
+  font-size: var(--text-s);
+  line-height: 1.5;
+}
+.issues-action-button {
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--text-s);
+  line-height: 1.4;
+}
+.issues-action-button:hover:not(:disabled) { background: var(--bg-hover); }
+.issues-action-button.primary { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
+.issues-action-button.destructive { color: var(--bad); }
+.issues-interventions {
+  margin: var(--space-4) 0 var(--space-5);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.issues-intervention-heading h3,
+.issues-decision-history > h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-s);
+  font-weight: 600;
+}
+.issues-control-state { margin-bottom: var(--space-3); color: var(--text-2); font-size: var(--text-s); }
+.issues-action-list { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.issues-steer,
+.issues-cancel-confirmation {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  font-size: var(--text-s);
+  line-height: 1.6;
+}
+.issues-cancel-confirmation p { margin: 0 0 var(--space-3); }
+.issues-decision-history { display: grid; gap: var(--space-3); }
+.issues-decision-history > h3 { margin: var(--space-2) 0 0; }
