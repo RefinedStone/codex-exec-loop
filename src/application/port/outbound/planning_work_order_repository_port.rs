@@ -1,3 +1,8 @@
+mod control_port;
+pub use control_port::{
+    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkControlRepositoryPort,
+    PlanningWorkInstruction, PlanningWorkInstructionAdmission, PlanningWorkOrderLaunchError,
+};
 use std::collections::BTreeSet;
 use std::fmt;
 

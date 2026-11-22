@@ -26,10 +26,6 @@
       {
         "name": "issue",
         "summary": "Issue collection settings and observations."
-      },
-      {
-        "name": "delegation",
-        "summary": "Text-only ChatGPT delegations."
       }
     ],
     "state": [
@@ -1152,6 +1148,441 @@
       }
     },
     {
+      "name": "hold_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Hold one issue work order and revoke its unused work permits. Running turns are preserved. Reuse command_id to recover the same intervention receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "hold_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "release_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Release one issue hold. Previously revoked permits stay revoked until fresh approval and gate checks. Reuse command_id to recover the same intervention receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "release_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "steer_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Queue guidance before execution, or steer the linked running thread once. An unknown delivery is not retried automatically. Reuse command_id to recover the same intervention receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "message": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "steer_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id",
+          "message"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "take_over_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Take over one issue work order. Automatic continuation, delivery, and cleanup are disabled while its branch, worktree, and thread are preserved.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "take_over_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "retriage_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Invalidate one issue assessment and revoke its existing work permits so that the current issue can be assessed again.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "retriage_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "cancel_issue_work",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Cancel one issue work order and its task lineage. Requires confirm: true and revokes all unused work permits.",
+      "effect": "destructive",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "cancel_issue_work",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "track_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Track a stable issue reference in the attached workspace. Tracking does not grant work permits.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "track_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "untrack_issue",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Untrack one issue and stop its automatic work. Existing branches, worktrees, and threads are preserved.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "untrack_issue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "command_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "sync_issues",
       "scope": "issue",
       "state": "runtime",
@@ -1179,562 +1610,9 @@
       "output": {
         "$ref": "#/$defs/CommandResponse"
       }
-    },
-    {
-      "name": "submit_delegation",
-      "scope": "delegation",
-      "state": "runtime",
-      "summary": "Accept one text-only ChatGPT delegation using a durable request key.",
-      "effect": "write",
-      "idempotency": "natural",
-      "rejections": [
-        "kernel_unreachable"
-      ],
-      "completion": "accepted",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "idempotency_key": {
-            "type": "string"
-          },
-          "instruction": {
-            "type": "string"
-          },
-          "session": {
-            "$ref": "#/$defs/ChatSession",
-            "default": {
-              "mode": "new"
-            }
-          },
-          "type": {
-            "const": "submit_delegation",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "instruction",
-          "idempotency_key"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "$ref": "#/$defs/CommandResponse"
-      },
-      "result": {
-        "properties": {
-          "delegation": {
-            "$ref": "#/$defs/Delegation"
-          },
-          "type": {
-            "const": "delegation_submitted",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "delegation"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "cancel_delegation",
-      "scope": "delegation",
-      "state": "runtime",
-      "summary": "Cancel one text-only ChatGPT delegation by ID.",
-      "effect": "write",
-      "idempotency": "natural",
-      "rejections": [
-        "kernel_unreachable"
-      ],
-      "completion": "accepted",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "const": "cancel_delegation",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "id"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "$ref": "#/$defs/CommandResponse"
-      },
-      "result": {
-        "properties": {
-          "delegation": {
-            "$ref": "#/$defs/Delegation"
-          },
-          "type": {
-            "const": "delegation_cancelled",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "delegation"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "checkpoint_delegation",
-      "scope": "delegation",
-      "state": "runtime",
-      "summary": "Record progress through the trusted delegation callback channel.",
-      "effect": "write",
-      "idempotency": "natural",
-      "rejections": [
-        "kernel_unreachable"
-      ],
-      "completion": "accepted",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "token": {
-            "type": "string"
-          },
-          "type": {
-            "const": "checkpoint_delegation",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "id",
-          "token",
-          "message"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "$ref": "#/$defs/CommandResponse"
-      },
-      "result": {
-        "properties": {
-          "delegation": {
-            "$ref": "#/$defs/Delegation"
-          },
-          "type": {
-            "const": "delegation_checkpointed",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "delegation"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "report_delegation_result",
-      "scope": "delegation",
-      "state": "runtime",
-      "summary": "Finish a delegation through the trusted delegation callback channel.",
-      "effect": "write",
-      "idempotency": "natural",
-      "rejections": [
-        "kernel_unreachable"
-      ],
-      "completion": "accepted",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "result": {
-            "type": "string"
-          },
-          "token": {
-            "type": "string"
-          },
-          "type": {
-            "const": "report_delegation_result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "id",
-          "token",
-          "result"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "$ref": "#/$defs/CommandResponse"
-      },
-      "result": {
-        "properties": {
-          "delegation": {
-            "$ref": "#/$defs/Delegation"
-          },
-          "type": {
-            "const": "delegation_result_reported",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "delegation"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "retry_delegation",
-      "scope": "delegation",
-      "state": "runtime",
-      "summary": "Create a new job for a safely retryable delegation. Reuse the request idempotency key for the same retry.",
-      "effect": "write",
-      "idempotency": "keyed",
-      "rejections": [
-        "kernel_unreachable"
-      ],
-      "completion": "accepted",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "const": "retry_delegation",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "id"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "$ref": "#/$defs/CommandResponse"
-      },
-      "result": {
-        "properties": {
-          "delegation": {
-            "$ref": "#/$defs/Delegation"
-          },
-          "type": {
-            "const": "delegation_retried",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "delegation"
-        ],
-        "type": "object"
-      }
     }
   ],
   "queries": [
-    {
-      "name": "delegations",
-      "summary": "List the 100 most recent text-only delegations.",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "type": {
-            "const": "delegations",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "properties": {
-          "delegations": {
-            "items": {
-              "$ref": "#/$defs/Delegation"
-            },
-            "type": "array"
-          },
-          "type": {
-            "const": "delegations",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "delegations"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "delegation",
-      "summary": "Read one text-only delegation by ID.",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "const": "delegation",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "id"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "properties": {
-          "delegation": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/Delegation"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "type": {
-            "const": "delegation",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "delegation_result",
-      "summary": "Read the stored text result for a delegation.",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "const": "delegation_result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "id"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "properties": {
-          "text": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "type": {
-            "const": "delegation_result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "delegation_backends",
-      "summary": "Check the live Desktop chat backend.",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "type": {
-            "const": "delegation_backends",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "properties": {
-          "chatgpt_chat": {
-            "$ref": "#/$defs/ChatBackendStatus"
-          },
-          "codex_thread": {
-            "$ref": "#/$defs/CodexBackendStatus",
-            "default": {
-              "local_reads": true,
-              "reason": "gateway_unavailable",
-              "state": "unavailable",
-              "verified_text_only": false
-            }
-          },
-          "type": {
-            "const": "delegation_backends",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "chatgpt_chat"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "delegation_my_turn",
-      "summary": "List delegations that require human attention.",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "type": {
-            "const": "delegation_my_turn",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/$defs/MyTurn"
-            },
-            "type": "array"
-          },
-          "type": {
-            "const": "delegation_my_turn",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "items"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "feature_bindings",
-      "summary": "Read the attached repository's stored PR review mode.",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "type": {
-            "const": "feature_bindings",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "properties": {
-          "pr_review": {
-            "$ref": "#/$defs/ReviewMode"
-          },
-          "repository": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "type": {
-            "const": "feature_bindings",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "pr_review"
-        ],
-        "type": "object"
-      }
-    },
-    {
-      "name": "pr_review_result",
-      "summary": "Read the latest stored review for a pull request in the attached repository.",
-      "input": {
-        "additionalProperties": false,
-        "properties": {
-          "number": {
-            "format": "uint64",
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "type": {
-            "const": "pr_review_result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "number"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "properties": {
-          "number": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "review": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/StoredPrReview"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "type": {
-            "const": "pr_review_result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "number"
-        ],
-        "type": "object"
-      }
-    },
     {
       "name": "sessions",
       "summary": "The session list of the workspace and its load state.",
@@ -3371,6 +3249,102 @@
       }
     },
     {
+      "name": "issue_held",
+      "summary": "An issue hold was committed. New work is blocked while running turns and local work are preserved.",
+      "payload": {
+        "properties": {
+          "authorization_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_held",
+            "type": "string"
+          },
+          "work_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "authorization_epoch"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_released",
+      "summary": "An issue hold was released. Previously revoked work permits are not restored.",
+      "payload": {
+        "properties": {
+          "authorization_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_released",
+            "type": "string"
+          },
+          "work_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "authorization_epoch"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_work_permit_revoked",
+      "summary": "An issue intervention advanced the authorization epoch and fenced previously granted work permits.",
+      "payload": {
+        "properties": {
+          "authorization_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "kind": {
+            "const": "issue_work_permit_revoked",
+            "type": "string"
+          },
+          "work_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "issue",
+          "authorization_epoch"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issue_work_permit_granted",
       "summary": "Work permits were bound to approved issue evidence and a frozen source SHA. Integration still requires human review.",
       "payload": {
@@ -4099,14 +4073,6 @@
     }
   ],
   "$defs": {
-    "AccountMatch": {
-      "enum": [
-        "unknown",
-        "match",
-        "mismatch"
-      ],
-      "type": "string"
-    },
     "ApprovalDecision": {
       "enum": [
         "accept",
@@ -4212,81 +4178,6 @@
       ],
       "type": "object"
     },
-    "Attempt": {
-      "properties": {
-        "backend": {
-          "type": "string"
-        },
-        "backend_kind": {
-          "type": "string"
-        },
-        "delivery": {
-          "$ref": "#/$defs/Delivery"
-        },
-        "id": {
-          "type": "string"
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "observations": {
-          "items": {
-            "$ref": "#/$defs/Evidence"
-          },
-          "type": "array"
-        },
-        "phase": {
-          "$ref": "#/$defs/Phase"
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EndReason"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "recovery": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Recovery"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resumes": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "retry_at": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "backend",
-        "backend_kind",
-        "delivery",
-        "phase",
-        "observations"
-      ],
-      "type": "object"
-    },
     "AutoFollowSettings": {
       "properties": {
         "max_turns": {
@@ -4301,130 +4192,6 @@
       "required": [
         "max_turns",
         "paused"
-      ],
-      "type": "object"
-    },
-    "BackendState": {
-      "enum": [
-        "ready",
-        "unavailable"
-      ],
-      "type": "string"
-    },
-    "ChatBackendStatus": {
-      "properties": {
-        "account_match": {
-          "$ref": "#/$defs/AccountMatch",
-          "default": "unknown"
-        },
-        "circuit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Circuit"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "state": {
-          "$ref": "#/$defs/BackendState"
-        },
-        "tunnel": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TunnelStatus"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "state"
-      ],
-      "type": "object"
-    },
-    "ChatSession": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "new",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "chat_url": {
-              "type": "string"
-            },
-            "mode": {
-              "const": "continue",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "chat_url"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Circuit": {
-      "enum": [
-        "open",
-        "closed"
-      ],
-      "type": "string"
-    },
-    "CodexBackendStatus": {
-      "properties": {
-        "circuit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Circuit"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "local_reads": {
-          "type": "boolean"
-        },
-        "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "state": {
-          "$ref": "#/$defs/BackendState"
-        },
-        "verified_text_only": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "state",
-        "local_reads",
-        "verified_text_only"
       ],
       "type": "object"
     },
@@ -4529,81 +4296,17 @@
       "oneOf": [
         {
           "properties": {
-            "delegation": {
-              "$ref": "#/$defs/Delegation"
+            "receipt": {
+              "$ref": "#/$defs/IssueInterventionReceiptState"
             },
             "type": {
-              "const": "delegation_submitted",
+              "const": "issue_intervened",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "delegation"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delegation": {
-              "$ref": "#/$defs/Delegation"
-            },
-            "type": {
-              "const": "delegation_cancelled",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "delegation"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delegation": {
-              "$ref": "#/$defs/Delegation"
-            },
-            "type": {
-              "const": "delegation_checkpointed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "delegation"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delegation": {
-              "$ref": "#/$defs/Delegation"
-            },
-            "type": {
-              "const": "delegation_result_reported",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "delegation"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delegation": {
-              "$ref": "#/$defs/Delegation"
-            },
-            "type": {
-              "const": "delegation_retried",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "delegation"
+            "receipt"
           ],
           "type": "object"
         },
@@ -4899,121 +4602,6 @@
       ],
       "type": "object"
     },
-    "Delegation": {
-      "properties": {
-        "attempts": {
-          "items": {
-            "$ref": "#/$defs/Attempt"
-          },
-          "type": "array"
-        },
-        "caller": {
-          "type": "string"
-        },
-        "can_cancel": {
-          "default": false,
-          "type": "boolean"
-        },
-        "can_retry": {
-          "default": false,
-          "type": "boolean"
-        },
-        "conversation_url": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "created_at": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "current_backend": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "deadline": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "delivery": {
-          "$ref": "#/$defs/Delivery"
-        },
-        "fallbacks": {
-          "items": {
-            "$ref": "#/$defs/Fallback"
-          },
-          "type": "array"
-        },
-        "id": {
-          "type": "string"
-        },
-        "last_progress_at": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "outcome_unknown": {
-          "type": "boolean"
-        },
-        "phase": {
-          "$ref": "#/$defs/Phase"
-        },
-        "policy_revision": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "session": {
-          "$ref": "#/$defs/ChatSession",
-          "default": {
-            "mode": "new"
-          }
-        },
-        "state": {
-          "$ref": "#/$defs/State"
-        },
-        "updated_at": {
-          "format": "int64",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "caller",
-        "state",
-        "delivery",
-        "phase",
-        "outcome_unknown",
-        "created_at",
-        "updated_at"
-      ],
-      "type": "object"
-    },
-    "Delivery": {
-      "enum": [
-        "not_sent",
-        "sending",
-        "accepted",
-        "observed",
-        "uncertain"
-      ],
-      "type": "string"
-    },
     "DirectionFields": {
       "additionalProperties": false,
       "properties": {
@@ -5063,19 +4651,6 @@
       ],
       "type": "object"
     },
-    "EndReason": {
-      "enum": [
-        "unavailable",
-        "quota",
-        "transient",
-        "interrupted",
-        "needs_human",
-        "rejected",
-        "result_invalid",
-        "unknown"
-      ],
-      "type": "string"
-    },
     "EventNotification": {
       "properties": {
         "event": {
@@ -5084,89 +4659,6 @@
       },
       "required": [
         "event"
-      ],
-      "type": "object"
-    },
-    "Evidence": {
-      "properties": {
-        "at": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "delivery": {
-          "$ref": "#/$defs/Delivery"
-        },
-        "phase": {
-          "$ref": "#/$defs/Phase"
-        },
-        "source": {
-          "$ref": "#/$defs/EvidenceSource"
-        }
-      },
-      "required": [
-        "source",
-        "at",
-        "delivery",
-        "phase"
-      ],
-      "type": "object"
-    },
-    "EvidenceSource": {
-      "enum": [
-        "browser",
-        "stream",
-        "callback",
-        "coordinator"
-      ],
-      "type": "string"
-    },
-    "Fallback": {
-      "properties": {
-        "at": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "from": {
-          "type": "string"
-        },
-        "reason": {
-          "$ref": "#/$defs/EndReason"
-        },
-        "to": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "from",
-        "reason",
-        "to",
-        "at"
-      ],
-      "type": "object"
-    },
-    "Finding": {
-      "additionalProperties": false,
-      "properties": {
-        "body": {
-          "type": "string"
-        },
-        "line": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "path": {
-          "type": "string"
-        },
-        "severity": {
-          "$ref": "#/$defs/Severity"
-        }
-      },
-      "required": [
-        "path",
-        "line",
-        "severity",
-        "body"
       ],
       "type": "object"
     },
@@ -5708,6 +5200,11 @@
     "IssueDecisionBasis": {
       "additionalProperties": false,
       "properties": {
+        "authorizationEpoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "fieldHash": {
           "anyOf": [
             {
@@ -5742,6 +5239,12 @@
     "IssueDecisionBasisRecord": {
       "additionalProperties": false,
       "properties": {
+        "authorization_epoch": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "field_hash": {
           "anyOf": [
             {
@@ -6076,6 +5579,62 @@
       "required": [
         "version",
         "sha256"
+      ],
+      "type": "object"
+    },
+    "IssueInterventionReceiptState": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "authorization_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueSteerDeliveryState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handoff": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueSharedCopyState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issue": {
+          "$ref": "#/$defs/IssueEventReference"
+        },
+        "work_order_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "issue",
+        "command_id",
+        "action",
+        "authorization_epoch",
+        "changed"
       ],
       "type": "object"
     },
@@ -6516,6 +6075,14 @@
         "malformed_response",
         "identity_mismatch",
         "metadata_incomplete"
+      ],
+      "type": "string"
+    },
+    "IssueSteerDeliveryState": {
+      "enum": [
+        "queued",
+        "sent",
+        "unknown"
       ],
       "type": "string"
     },
@@ -7386,81 +6953,78 @@
         {
           "additionalProperties": false,
           "properties": {
-            "type": {
-              "const": "sync_issues",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "idempotency_key": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
-            "instruction": {
-              "type": "string"
-            },
-            "session": {
-              "$ref": "#/$defs/ChatSession",
-              "default": {
-                "mode": "new"
-              }
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
             },
             "type": {
-              "const": "submit_delegation",
+              "const": "hold_issue",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "instruction",
-            "idempotency_key"
+            "issue",
+            "command_id"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
-            "id": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
             "type": {
-              "const": "cancel_delegation",
+              "const": "release_issue",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "id"
+            "issue",
+            "command_id"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
-            "id": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
             },
             "message": {
-              "type": "string"
-            },
-            "token": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {
-              "const": "checkpoint_delegation",
+              "const": "steer_issue",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "id",
-            "token",
+            "issue",
+            "command_id",
             "message"
           ],
           "type": "object"
@@ -7468,42 +7032,137 @@
         {
           "additionalProperties": false,
           "properties": {
-            "id": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
-            "result": {
-              "type": "string"
-            },
-            "token": {
-              "type": "string"
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
             },
             "type": {
-              "const": "report_delegation_result",
+              "const": "take_over_issue",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "id",
-            "token",
-            "result"
+            "issue",
+            "command_id"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
-            "id": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
             "type": {
-              "const": "retry_delegation",
+              "const": "retriage_issue",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "id"
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "confirm": {
+              "default": false,
+              "type": "boolean"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "cancel_issue_work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "track_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "untrack_issue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "sync_issues",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         }
@@ -7806,112 +7465,6 @@
           "additionalProperties": false,
           "properties": {
             "type": {
-              "const": "delegations",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "type": {
-              "const": "delegation",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "type": {
-              "const": "delegation_result",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "delegation_backends",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "delegation_my_turn",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "feature_bindings",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "number": {
-              "format": "uint64",
-              "maximum": 9007199254740991,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "type": {
-              "const": "pr_review_result",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "number"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
               "const": "sessions",
               "type": "string"
             }
@@ -8098,159 +7651,6 @@
     },
     "KernelQueryAnswer": {
       "oneOf": [
-        {
-          "properties": {
-            "delegations": {
-              "items": {
-                "$ref": "#/$defs/Delegation"
-              },
-              "type": "array"
-            },
-            "type": {
-              "const": "delegations",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "delegations"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delegation": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Delegation"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": {
-              "const": "delegation",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "text": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "const": "delegation_result",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "chatgpt_chat": {
-              "$ref": "#/$defs/ChatBackendStatus"
-            },
-            "codex_thread": {
-              "$ref": "#/$defs/CodexBackendStatus",
-              "default": {
-                "local_reads": true,
-                "reason": "gateway_unavailable",
-                "state": "unavailable",
-                "verified_text_only": false
-              }
-            },
-            "type": {
-              "const": "delegation_backends",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "chatgpt_chat"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "items": {
-              "items": {
-                "$ref": "#/$defs/MyTurn"
-              },
-              "type": "array"
-            },
-            "type": {
-              "const": "delegation_my_turn",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "items"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pr_review": {
-              "$ref": "#/$defs/ReviewMode"
-            },
-            "repository": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "const": "feature_bindings",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "pr_review"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "number": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "review": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/StoredPrReview"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": {
-              "const": "pr_review_result",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "number"
-          ],
-          "type": "object"
-        },
         {
           "$ref": "#/$defs/SessionsState",
           "properties": {
@@ -9284,6 +8684,90 @@
         },
         {
           "properties": {
+            "authorization_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_held",
+              "type": "string"
+            },
+            "work_order_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "authorization_epoch"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "authorization_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_released",
+              "type": "string"
+            },
+            "work_order_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "authorization_epoch"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "authorization_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "kind": {
+              "const": "issue_work_permit_revoked",
+              "type": "string"
+            },
+            "work_order_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "issue",
+            "authorization_epoch"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "delivery": {
               "type": "boolean"
             },
@@ -9406,21 +8890,6 @@
         "pending_bytes",
         "failed_events",
         "dropped_events"
-      ],
-      "type": "object"
-    },
-    "MyTurn": {
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "reason"
       ],
       "type": "object"
     },
@@ -9976,19 +9445,6 @@
       ],
       "type": "object"
     },
-    "Phase": {
-      "enum": [
-        "working",
-        "complete",
-        "stopped",
-        "failed",
-        "disconnected",
-        "blocked",
-        "unreachable",
-        "unknown"
-      ],
-      "type": "string"
-    },
     "PlanningDirectionState": {
       "enum": [
         "active",
@@ -10328,14 +9784,6 @@
       ],
       "type": "object"
     },
-    "Recovery": {
-      "enum": [
-        "none",
-        "in_progress",
-        "exhausted"
-      ],
-      "type": "string"
-    },
     "ResetTarget": {
       "enum": [
         "queue",
@@ -10343,117 +9791,6 @@
         "all"
       ],
       "type": "string"
-    },
-    "ReviewMode": {
-      "enum": [
-        "off",
-        "observe",
-        "on"
-      ],
-      "type": "string"
-    },
-    "ReviewRecord": {
-      "oneOf": [
-        {
-          "properties": {
-            "status": {
-              "const": "cancelled",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "status": {
-              "const": "diff_too_large",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "status": {
-              "const": "source_unavailable",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "status": {
-              "const": "backend_failed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "status": {
-              "const": "result_invalid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "backend": {
-              "type": "string"
-            },
-            "result": {
-              "$ref": "#/$defs/ReviewResult"
-            },
-            "status": {
-              "const": "reviewed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status",
-            "backend",
-            "result"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "ReviewResult": {
-      "additionalProperties": false,
-      "properties": {
-        "findings": {
-          "items": {
-            "$ref": "#/$defs/Finding"
-          },
-          "type": "array"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "summary",
-        "findings"
-      ],
-      "type": "object"
     },
     "SessionEntry": {
       "properties": {
@@ -10513,15 +9850,6 @@
       ],
       "type": "string"
     },
-    "Severity": {
-      "enum": [
-        "low",
-        "medium",
-        "high",
-        "critical"
-      ],
-      "type": "string"
-    },
     "SkippedPlanningTask": {
       "properties": {
         "reason": {
@@ -10542,41 +9870,6 @@
         "title",
         "status",
         "reason"
-      ],
-      "type": "object"
-    },
-    "State": {
-      "enum": [
-        "queued",
-        "dispatching",
-        "running",
-        "interrupted",
-        "awaiting_human",
-        "succeeded",
-        "failed",
-        "cancelled",
-        "expired"
-      ],
-      "type": "string"
-    },
-    "StoredPrReview": {
-      "properties": {
-        "head": {
-          "type": "string"
-        },
-        "result": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReviewRecord"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "head"
       ],
       "type": "object"
     },
@@ -10702,79 +9995,6 @@
           "type": "string"
         }
       ]
-    },
-    "TunnelConnection": {
-      "enum": [
-        "connected",
-        "offline",
-        "unknown"
-      ],
-      "type": "string"
-    },
-    "TunnelInstall": {
-      "enum": [
-        "ready",
-        "missing",
-        "invalid"
-      ],
-      "type": "string"
-    },
-    "TunnelReadiness": {
-      "enum": [
-        "unknown",
-        "ready",
-        "login_required",
-        "challenge",
-        "unreachable"
-      ],
-      "type": "string"
-    },
-    "TunnelStatus": {
-      "properties": {
-        "connection": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TunnelConnection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "host": {
-          "type": "boolean"
-        },
-        "install": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TunnelInstall"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "manual": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "readiness": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TunnelReadiness"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "host"
-      ],
-      "type": "object"
     },
     "TurnEndOutcome": {
       "oneOf": [

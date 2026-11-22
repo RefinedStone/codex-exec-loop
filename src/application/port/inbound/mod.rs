@@ -33,3 +33,5 @@ pub mod stored_command_port;
 pub mod work_context_port;
 // 명시적인 이슈 폼 설치 요청은 서비스 구현이 아닌 이 경계로 들어간다.
 pub mod issue_form_install_port;
+
+pub mod issue_intervention_port;

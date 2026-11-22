@@ -22,6 +22,7 @@ fn issue() -> IssueReference {
 
 fn basis() -> IssueDecisionBasis {
     IssueDecisionBasis {
+        authorization_epoch: 0,
         policy_version: "a".repeat(64),
         field_hash: Some(IssueFieldHash::of_fields("shared title", "shared body")),
         work_order_id: None,

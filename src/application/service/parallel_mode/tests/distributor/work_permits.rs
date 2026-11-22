@@ -23,6 +23,7 @@ impl WorkPermitDeliveryFixture {
         let repo = TempGitRepo::new(prefix);
         register_delivery_work_order(&repo);
         let initial_basis = PlanningWorkPermitBasis {
+            authorization_epoch: 0,
             policy_version: "delivery-policy-v1".to_string(),
             field_hash: "delivery-fields-v1".to_string(),
             gate_revision: 1,
@@ -885,6 +886,7 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
     let repo = TempGitRepo::new("work-permit-dispatch-capacity");
     register_delivery_work_order(&repo);
     let basis = PlanningWorkPermitBasis {
+        authorization_epoch: 0,
         policy_version: "delivery-policy-v1".to_string(),
         field_hash: "delivery-fields-v1".to_string(),
         gate_revision: 1,
@@ -952,5 +954,6 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
     );
 }
 
+mod control_cleanup;
 mod rearm_conflict;
 mod shared_integration;

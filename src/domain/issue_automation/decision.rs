@@ -131,10 +131,17 @@ impl IssueDecisionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueDecisionBasis {
+    /// 개입 뒤에는 같은 원문/정책이어도 새 사람 승인을 요구한다.
+    #[serde(default, skip_serializing_if = "initial_authorization_epoch")]
+    pub authorization_epoch: u64,
     pub policy_version: String,
     pub field_hash: Option<IssueFieldHash>,
     pub work_order_id: Option<String>,
     pub gate_revision: u64,
+}
+
+fn initial_authorization_epoch(value: &u64) -> bool {
+    *value == 0
 }
 
 impl IssueDecisionBasis {
@@ -152,6 +159,7 @@ impl IssueDecisionBasis {
             .find(|entry| entry.gate == gate)
             .ok_or(IssueDecisionError::InvalidBasis)?;
         let basis = Self {
+            authorization_epoch: 0,
             policy_version: assessment.basis().automation_policy_version.clone(),
             field_hash: assessment.basis().field_hash.clone(),
             work_order_id,

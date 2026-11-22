@@ -74,7 +74,11 @@ pub(in super::super) fn item(
     reference: &IssueReference,
 ) -> Result<Option<IssueCollectionItem>> {
     validate_reference_scope(workspace, reference)?;
-    let tracked = read_issue(connection, workspace, reference)?;
+    let tracked = if super::super::intervention::is_tracked(connection, workspace, reference)? {
+        read_issue(connection, workspace, reference)?
+    } else {
+        None
+    };
     let observation = observations::read(connection, workspace, reference)?;
     if tracked.is_none() && observation.is_none() {
         return Ok(None);
@@ -182,7 +186,11 @@ pub(super) fn binding_for_reference(
     workspace: &str,
     reference: &IssueReference,
 ) -> Result<IssueAutomationBinding> {
-    let tracked = read_issue(connection, workspace, reference)?;
+    let tracked = if super::super::intervention::is_tracked(connection, workspace, reference)? {
+        read_issue(connection, workspace, reference)?
+    } else {
+        None
+    };
     let observation = observations::read(connection, workspace, reference)?;
     if let (Some(tracked), Some(observation)) = (&tracked, &observation)
         && *tracked.binding_id() != observation.binding_id
