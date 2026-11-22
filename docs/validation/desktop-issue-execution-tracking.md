@@ -3,12 +3,13 @@
 ## 기준과 실행 환경
 
 - 제품 코드 기준: `618aa7421eb7783ad7092d1a043d46c52d1dd364`
-- 선행 #2553 기준: `67af6ec2257ae4926fad8f42b00481d5ddf8074f`
+- 화면 검증 시 선행 #2553 기준: `67af6ec2257ae4926fad8f42b00481d5ddf8074f`
+- 게시 전 선행 PR의 포트 DTO 배치 정리(`4a1824bbd3823e4beb6639a1341cb76854ac1212`) 위로 재배치했다. 실행 추적과 Desktop 코드는 변경하지 않았다.
 - 실행일: 2026-11-22 (Asia/Seoul)
 - Windows 11 Pro x64, OS 10.0.26200
 - Node.js v24.13.0, Rust/Cargo 1.95.0, Git 2.53.0.windows.1
 
-이 문서와 화면 증거는 위 제품 코드에 대한 기록이다. 숨김 Electron과 가짜 Gateway를 사용했으며 실제 모델 턴, GitHub 게시, 이슈 닫기를 실행하지 않았다. 전체 Desktop E2E와 게시 head의 CI 결과는 이 변경의 PR에서 추적한다.
+이 문서와 화면 증거는 위 제품 코드에 대한 기록이다. 숨김 Electron과 가짜 Gateway를 사용했으며 실제 모델 턴, GitHub 게시, 이슈 닫기를 실행하지 않았다. 전체 Desktop E2E도 통과했다(25개 spec, Windows terminal 기존 제외 1개). 게시 head의 CI 결과는 이 변경의 PR에서 추적한다.
 
 ## 조회 계약과 화면
 
@@ -39,6 +40,7 @@
 | Rust coordinator·collection·triage를 포함한 확장 회귀 | 최종 restack 전 같은 변경에서 154개 통과 |
 | Desktop 연결·실행 표시·알림 회귀 | 최종 restack 후 130개 통과 |
 | `cd desktop && node --experimental-strip-types --disable-warning=ExperimentalWarning test/e2e/issue-execution.mjs` | 6개 시나리오 통과 |
+| `npm --prefix desktop run e2e` | 전체 통과. 25개 spec 실행, Windows terminal 기존 제외 1개 |
 | `cargo fmt --all`, `git diff --check` | 제품 코드 commit 전 통과 |
 
 전용 Electron E2E는 다음을 검증했다.
