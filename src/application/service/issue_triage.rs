@@ -108,6 +108,20 @@ impl IssueTriageService {
             .map_err(|_| anyhow!("the current execution attempt policy is unavailable"))
     }
 
+    /// Admission consumes only the budget from the policy revision just assessed.
+    pub(crate) fn start_budget_for_policy(
+        &self,
+        expected_version: &str,
+    ) -> Result<crate::domain::issue_automation::policy::IssueAutomationBudget> {
+        let context = self
+            .context()
+            .ok_or_else(|| anyhow!("the current issue start budget could not be assessed"))?;
+        if context.automation.version != expected_version {
+            return Err(anyhow!("the approved issue start policy changed"));
+        }
+        Ok(context.automation.policy.budget.clone())
+    }
+
     /// Freeze only the close policy represented by the already approved policy revision.
     pub(crate) fn provider_link_for_policy(&self, expected_version: &str) -> Result<bool> {
         let context = self
@@ -419,6 +433,13 @@ fn count(report: &mut IssueTriageObserveReport, item: &IssueCollectionItem) -> R
             | IssueAutomationState::Failed => return increment(&mut report.deferred),
             _ => {}
         }
+    }
+    if item.start_budget_wait.is_some()
+        || triage.assessment.reasons().contains(
+            &crate::domain::issue_automation::triage::IssueTriageReasonCode::BudgetExhausted,
+        )
+    {
+        return increment(&mut report.deferred);
     }
     match triage.assessment.observation().disposition {
         IssueObservationDisposition::AutomaticStart => increment(&mut report.automatic_start),

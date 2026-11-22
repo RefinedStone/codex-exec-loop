@@ -135,6 +135,7 @@ fn item(id: &str, mode: IssueAutomationAutonomy) -> IssueCollectionItem {
     let current = observed(&issue);
     let triage = projection(&issue, Some(&current), mode);
     IssueCollectionItem {
+        start_budget_wait: None,
         work: None,
         open_decisions: Vec::new(),
         issue,
@@ -544,4 +545,61 @@ fn server_groups_use_current_start_gate_without_promoting_hypothetical_observe_a
         assert_eq!(wire.groups[0].item_indices, vec![0]);
         assert_eq!(wire.report.as_ref().unwrap().automatic_start, 10);
     }
+}
+
+#[test]
+fn admission_budget_wait_is_presented_without_rewriting_the_stored_assessment() {
+    use crate::domain::issue_automation::coordinator::{
+        IssueStartBudgetLimit, IssueStartBudgetWait,
+    };
+    let mut subject = item("I_budget_wait", IssueAutomationAutonomy::Propose);
+    subject.tracked.as_mut().unwrap().state = IssueAutomationState::Ready;
+    let assessment = subject.triage.as_ref().unwrap().assessment.clone();
+    subject.start_budget_wait = Some(IssueStartBudgetWait {
+        exhausted: vec![
+            IssueStartBudgetLimit::Running,
+            IssueStartBudgetLimit::StartedPerDay,
+        ],
+        utc_day: 20_000,
+    });
+    let page = IssueCollectionPage {
+        revision: 41,
+        items: vec![subject],
+        next_after: None,
+        report: None,
+    };
+    let IssuesState::Ready(wire) = IssuesState::from_domain(&page) else {
+        panic!("ready issues");
+    };
+    assert_eq!(
+        wire.items[0].presentation.status.code,
+        IssueListStatusCode::Ready
+    );
+    assert!(
+        wire.items[0]
+            .presentation
+            .reason
+            .summary
+            .contains("예산 한도")
+    );
+    assert_eq!(wire.groups[0].id, IssueListGroupId::Upcoming);
+    let triage = wire.items[0].triage.as_ref().unwrap();
+    assert_eq!(triage.reasons[0].code, ReasonCode::BudgetExhausted);
+    assert!(triage.reasons[0].summary.contains("동시 작업"));
+    assert!(triage.reasons[0].summary.contains("UTC 일일 시작"));
+    assert_eq!(
+        triage.observation.disposition,
+        IssueObservationDispositionState::Deferred
+    );
+    assert_eq!(
+        page.items[0].triage.as_ref().unwrap().assessment,
+        assessment
+    );
+    assert!(
+        !assessment
+            .reasons()
+            .contains(&IssueTriageReasonCode::BudgetExhausted)
+    );
+    let json = serde_json::to_value(KernelQueryAnswer::Issues(IssuesState::Ready(wire))).unwrap();
+    assert_issues_schema(&json);
 }

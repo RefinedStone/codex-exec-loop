@@ -9,7 +9,7 @@ use crate::domain::issue_automation::autonomy::{
 };
 use crate::domain::issue_automation::work_control::IssueWorkControl;
 
-fn autonomy(h: &Harness) -> IssueAutonomyService {
+pub(super) fn autonomy(h: &Harness) -> IssueAutonomyService {
     IssueAutonomyService::new(
         h.fixture.workspace.clone(),
         h.fixture.store(),
@@ -18,7 +18,7 @@ fn autonomy(h: &Harness) -> IssueAutonomyService {
     )
 }
 
-fn confirm(
+pub(super) fn confirm(
     service: &IssueAutonomyService,
     id: &str,
     level: IssueAutonomyLevel,
@@ -57,7 +57,7 @@ fn runtime_override_has_a_distinct_hash_and_preserves_file_policy_caps_and_gates
         assert_ne!(current.version, original_hash);
         assert_eq!(
             current.policy.binding.github.mode,
-            IssueAutomationAutonomy::from(level)
+            IssueAutomationAutonomy::from(level).min(file.policy.authority.autonomy_cap)
         );
         let mut restored = current.policy;
         restored.binding.github.mode = file.policy.binding.github.mode;
@@ -321,7 +321,7 @@ fn pending_and_committed_selection_fence_all_previous_assessment_write_paths() {
     let work = h.work().unwrap();
     let (fence, _, assessment) = h.coordinator().current(&work.order.issue, &|_| {}).unwrap();
     let mut definition = store
-        .get_issue_decision(workspace, &work.decision_id)
+        .get_issue_decision(workspace, work.decision_id.as_ref().unwrap())
         .unwrap()
         .unwrap()
         .request

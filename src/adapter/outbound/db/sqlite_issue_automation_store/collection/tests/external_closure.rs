@@ -57,7 +57,9 @@ fn work(fixture: &Fixture, submitted: bool) -> IssueWorkCheckpoint {
             priority: 0,
             attempt: 1,
         },
-        decision_id: IssueDecisionId::new("fixture-close-start").unwrap(),
+        start_authority:
+            crate::domain::issue_automation::coordinator::IssueWorkStartAuthority::Human,
+        decision_id: Some(IssueDecisionId::new("fixture-close-start").unwrap()),
         approved_basis: IssueDecisionBasis {
             authorization_epoch: 0,
             policy_version: "a".repeat(64),

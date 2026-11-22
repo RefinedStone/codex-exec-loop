@@ -7,11 +7,15 @@ use crate::application::port::outbound::issue_automation_store_port::{
     IssueTriageFence, IssueWorkSaveResult,
 };
 use crate::domain::issue_automation::collection::IssueCollectionMode;
-use crate::domain::issue_automation::coordinator::{IssueWorkCheckpoint, human_start};
+use crate::domain::issue_automation::coordinator::{
+    IssueWorkCheckpoint, IssueWorkStartAuthority, human_start, policy_start, ready_for_start,
+};
+use crate::domain::issue_automation::decision::{IssueDecisionBasis, IssueDecisionId};
+use crate::domain::issue_automation::policy::IssueAutomationGate;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 use crate::domain::issue_work::IssueReference;
 use anyhow::{Result, anyhow, bail};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 
 pub(super) const TABLE: &str = "issue_work_checkpoints";
 pub(super) const SCHEMA: &str = r#"
@@ -83,112 +87,215 @@ pub(super) fn save(
 ) -> Result<IssueWorkSaveResult> {
     candidate.validate().map_err(|reason| anyhow!(reason))?;
     validate_reference_scope(workspace, &candidate.order.issue)?;
-    adapter.with_connection(workspace, |connection, guard| transaction(connection, guard, |tx| {
-        let Some(control) = super::collection::read_control(tx, workspace)? else { return Ok(IssueWorkSaveResult::Conflict) };
-        if control.config.mode != IssueCollectionMode::Observe
-            || assessment.basis().issue != candidate.order.issue
-            || super::decision::current_item(tx, workspace, fence, assessment)?.is_none() {
-            return Ok(IssueWorkSaveResult::Conflict);
-        }
-        if super::intervention::has_pending(tx, workspace, &candidate.order.issue)?
-            || !super::intervention::is_tracked(tx, workspace, &candidate.order.issue)? {
-            return Ok(IssueWorkSaveResult::Conflict);
-        }
-        let existing = read(tx, workspace, &candidate.order.issue)?;
-        if let Some(current) = &existing {
-            if current.order != candidate.order || current.decision_id != candidate.decision_id
-                || current.approved_basis != candidate.approved_basis {
-                bail!("a registered issue work identity cannot change");
+    adapter.with_connection(workspace, |connection, guard| {
+        transaction(connection, guard, |tx| {
+            if !validate_current(tx, workspace, fence, assessment, candidate)? {
+                return Ok(IssueWorkSaveResult::Conflict);
             }
+            let Some(current) = read(tx, workspace, &candidate.order.issue)? else {
+                bail!("a new issue work checkpoint requires budget admission");
+            };
+            validate_identity(&current, candidate)?;
             if current.authorization != candidate.authorization {
-                let Some(authorization)=&candidate.authorization else { bail!("work authorization cannot be removed"); };
-                if authorization.basis.authorization_epoch <= current.current_authorization_basis().authorization_epoch {
+                let Some(authorization) = &candidate.authorization else {
+                    bail!("work authorization cannot be removed");
+                };
+                if authorization.basis.authorization_epoch
+                    <= current.current_authorization_basis().authorization_epoch
+                {
                     bail!("renewed work authorization requires a newer intervention epoch");
                 }
-                validate_authorization(tx,workspace,assessment,&candidate.order.issue,&authorization.decision_id,&authorization.basis)?;
+                validate_authorization(
+                    tx,
+                    workspace,
+                    assessment,
+                    &candidate.order.issue,
+                    authorization.start_authority,
+                    authorization.decision_id.as_ref(),
+                    &authorization.basis,
+                )?;
+                validate_handoff(tx, workspace, candidate)?;
             }
-            if current.revision != candidate.revision { return Ok(IssueWorkSaveResult::Conflict); }
-            if current == candidate {
-                return Ok(IssueWorkSaveResult::Saved { record: Box::new(current.clone()),
-                    catalog_revision: super::triage::catalog_revision(tx, workspace)?, changed: false });
+            if current.revision != candidate.revision {
+                return Ok(IssueWorkSaveResult::Conflict);
+            }
+            if current == *candidate {
+                return Ok(IssueWorkSaveResult::Saved {
+                    record: Box::new(current),
+                    catalog_revision: super::triage::catalog_revision(tx, workspace)?,
+                    changed: false,
+                });
             }
             if (!current.task_ids.is_empty() && current.task_ids != candidate.task_ids)
-                || candidate.permit_revision < current.permit_revision {
+                || candidate.permit_revision < current.permit_revision
+            {
                 bail!("an issue work checkpoint cannot move backwards");
             }
-        } else {
-            if candidate.revision != 0 { return Ok(IssueWorkSaveResult::Conflict); }
-            let Some(decision) = super::decision::read(tx, workspace, &candidate.decision_id)? else {
-                bail!("the issue work approval was not found");
-            };
-            let mut basis = crate::domain::issue_automation::decision::IssueDecisionBasis::from_assessment(
-                assessment, crate::domain::issue_automation::policy::IssueAutomationGate::Start, None)?;
-            basis.authorization_epoch=super::intervention::authorization_epoch(tx,workspace,&candidate.order.issue)?;
-            if !human_start(&decision.request) || decision.request.issue() != &candidate.order.issue
-                || decision.request.definition().basis != candidate.approved_basis
-                || basis != candidate.approved_basis {
-                bail!("the issue work does not have a current human start approval");
-            }
-            if !crate::domain::issue_automation::coordinator::ready_for_propose(assessment) {
-                bail!("the issue work requires propose readiness");
-            }
-            let item = super::collection::queries::item(tx, workspace, &candidate.order.issue)?
-                .ok_or_else(|| anyhow!("the issue work source is missing"))?;
-            let Some(crate::domain::issue_automation::source::IssueSourceRead::Observed(observation)) = item.current else {
-                bail!("the issue work source is unknown");
-            };
-            let crate::domain::issue_automation::source::IssueSourceContent::Shared(snapshot) = observation.content else {
-                bail!("the issue work handoff is withheld");
-            };
-            if snapshot.shared_copy != candidate.order.handoff
-                || snapshot.basis.field_hash != candidate.order.field_hash
-                || crate::domain::issue_automation::triage::issue_acceptance_criteria(&snapshot.shared_copy.body)
-                    .map_err(|reason| anyhow!(reason))? != candidate.order.acceptance {
-                bail!("the issue work does not contain the current approved shared handoff");
-            }
-        }
-        let mut record = candidate.clone();
-        record.revision = next_revision(candidate.revision)?;
-        let encoded = serde_json::to_string(&record)?;
-        if encoded.len() > 512 * 1024 { bail!("the issue work checkpoint exceeds its bound"); }
-        tx.execute("INSERT INTO issue_work_checkpoints
-            (workspace_dir, provider, server_id, repository_id, issue_id, work_order_id, checkpoint, revision)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-            ON CONFLICT(workspace_dir, provider, server_id, repository_id, issue_id)
-            DO UPDATE SET checkpoint=excluded.checkpoint, revision=excluded.revision",
-            params![workspace, enum_name(&record.order.issue.provider)?, record.order.issue.server_id,
-                record.order.issue.repository_id, record.order.issue.issue_id, record.order.work_order_id, encoded, sql_revision(record.revision)?])?;
-        let catalog_revision = super::triage::bump_catalog(tx, workspace)?;
-        super::events::append(tx, workspace, existing.as_ref(), &record, catalog_revision)?;
-        Ok(IssueWorkSaveResult::Saved { record: Box::new(record), catalog_revision, changed: true })
-    }))
+            persist(tx, workspace, Some(&current), candidate)
+        })
+    })
 }
 
-fn validate_authorization(
+pub(super) fn validate_current(
+    tx: &Connection,
+    workspace: &str,
+    fence: IssueTriageFence,
+    assessment: &IssueTriageAssessment,
+    candidate: &IssueWorkCheckpoint,
+) -> Result<bool> {
+    let Some(control) = super::collection::read_control(tx, workspace)? else {
+        return Ok(false);
+    };
+    if control.config.mode != IssueCollectionMode::Observe
+        || assessment.basis().issue != candidate.order.issue
+    {
+        return Ok(false);
+    }
+    let Some(item) = super::decision::current_item(tx, workspace, fence, assessment)? else {
+        return Ok(false);
+    };
+    // Automatic starts have no human decision whose insertion could supply this fence.
+    // Require the exact durable assessment for both authority origins.
+    Ok(item
+        .triage
+        .as_ref()
+        .is_some_and(|triage| triage.assessment == *assessment)
+        && !super::intervention::has_pending(tx, workspace, &candidate.order.issue)?
+        && super::intervention::is_tracked(tx, workspace, &candidate.order.issue)?)
+}
+
+pub(super) fn validate_identity(
+    current: &IssueWorkCheckpoint,
+    candidate: &IssueWorkCheckpoint,
+) -> Result<()> {
+    if current.order != candidate.order
+        || current.start_authority != candidate.start_authority
+        || current.decision_id != candidate.decision_id
+        || current.approved_basis != candidate.approved_basis
+    {
+        bail!("a registered issue work identity cannot change");
+    }
+    Ok(())
+}
+
+pub(super) fn validate_authorization(
     tx: &Connection,
     workspace: &str,
     assessment: &IssueTriageAssessment,
     issue: &IssueReference,
-    decision_id: &crate::domain::issue_automation::decision::IssueDecisionId,
-    approved: &crate::domain::issue_automation::decision::IssueDecisionBasis,
+    authority: IssueWorkStartAuthority,
+    decision_id: Option<&IssueDecisionId>,
+    approved: &IssueDecisionBasis,
 ) -> Result<()> {
-    let decision = super::decision::read(tx, workspace, decision_id)?
-        .ok_or_else(|| anyhow!("renewed work approval is missing"))?;
-    let mut basis = crate::domain::issue_automation::decision::IssueDecisionBasis::from_assessment(
-        assessment,
-        crate::domain::issue_automation::policy::IssueAutomationGate::Start,
-        None,
-    )?;
+    authority
+        .validate(decision_id)
+        .map_err(|reason| anyhow!(reason))?;
+    let mut basis =
+        IssueDecisionBasis::from_assessment(assessment, IssueAutomationGate::Start, None)?;
     basis.authorization_epoch = super::intervention::authorization_epoch(tx, workspace, issue)?;
-    if !human_start(&decision.request)
-        || decision.request.issue() != issue
-        || decision.request.definition().basis != *approved
-        || basis != *approved
-        || !crate::domain::issue_automation::coordinator::ready_for_propose(assessment)
+    if basis != *approved || !ready_for_start(assessment) {
+        bail!("the issue work requires a current start authorization");
+    }
+    let tracked = super::read_issue(tx, workspace, issue)?
+        .ok_or_else(|| anyhow!("the issue work is not tracked"))?;
+    if tracked.flags().held
+        || tracked.flags().stale
+        || tracked.flags().unknown
+        || matches!(
+            tracked.state(),
+            crate::domain::issue_automation::IssueAutomationState::Done
+                | crate::domain::issue_automation::IssueAutomationState::Failed
+                | crate::domain::issue_automation::IssueAutomationState::Cancelled
+        )
     {
-        bail!("renewed work authorization requires a current human approval");
+        bail!("the issue work is not eligible for start authorization");
+    }
+    match authority {
+        IssueWorkStartAuthority::Human => {
+            let decision = super::decision::read(
+                tx,
+                workspace,
+                decision_id.expect("validated human authority"),
+            )?
+            .ok_or_else(|| anyhow!("the issue work approval was not found"))?;
+            if !human_start(&decision.request)
+                || decision.request.issue() != issue
+                || decision.request.definition().basis != *approved
+            {
+                bail!("the issue work does not have a current human start approval");
+            }
+        }
+        IssueWorkStartAuthority::Policy => {
+            let selection = super::autonomy::read(tx, workspace)?;
+            if !policy_start(assessment)
+                || selection.requested_level
+                    != Some(crate::domain::issue_automation::autonomy::IssueAutonomyLevel::Gated)
+                || selection.pending.is_some()
+                || selection.revision != assessment.basis().runtime_selection_revision
+            {
+                bail!("the issue work requires an explicit current gated selection");
+            }
+        }
     }
     Ok(())
+}
+
+pub(super) fn validate_handoff(
+    tx: &Connection,
+    workspace: &str,
+    candidate: &IssueWorkCheckpoint,
+) -> Result<()> {
+    let item = super::collection::queries::item(tx, workspace, &candidate.order.issue)?
+        .ok_or_else(|| anyhow!("the issue work source is missing"))?;
+    let Some(crate::domain::issue_automation::source::IssueSourceRead::Observed(observation)) =
+        item.current
+    else {
+        bail!("the issue work source is unknown");
+    };
+    let crate::domain::issue_automation::source::IssueSourceContent::Shared(snapshot) =
+        observation.content
+    else {
+        bail!("the issue work handoff is withheld");
+    };
+    if snapshot.shared_copy != candidate.order.handoff
+        || snapshot.basis.field_hash != candidate.order.field_hash
+        || crate::domain::issue_automation::triage::issue_acceptance_criteria(
+            &snapshot.shared_copy.body,
+        )
+        .map_err(|reason| anyhow!(reason))?
+            != candidate.order.acceptance
+    {
+        bail!("the issue work does not contain the current authorized shared handoff");
+    }
+    Ok(())
+}
+
+pub(super) fn persist(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    existing: Option<&IssueWorkCheckpoint>,
+    candidate: &IssueWorkCheckpoint,
+) -> Result<IssueWorkSaveResult> {
+    let mut record = candidate.clone();
+    record.revision = next_revision(candidate.revision)?;
+    let encoded = serde_json::to_string(&record)?;
+    if encoded.len() > 512 * 1024 {
+        bail!("the issue work checkpoint exceeds its bound");
+    }
+    tx.execute("INSERT INTO issue_work_checkpoints
+        (workspace_dir, provider, server_id, repository_id, issue_id, work_order_id, checkpoint, revision)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+        ON CONFLICT(workspace_dir, provider, server_id, repository_id, issue_id)
+        DO UPDATE SET checkpoint=excluded.checkpoint, revision=excluded.revision",
+        params![workspace, enum_name(&record.order.issue.provider)?, record.order.issue.server_id,
+            record.order.issue.repository_id, record.order.issue.issue_id, record.order.work_order_id, encoded, sql_revision(record.revision)?])?;
+    let catalog_revision = super::triage::bump_catalog(tx, workspace)?;
+    super::events::append(tx, workspace, existing, &record, catalog_revision)?;
+    Ok(IssueWorkSaveResult::Saved {
+        record: Box::new(record),
+        catalog_revision,
+        changed: true,
+    })
 }
 
 pub(super) fn list(

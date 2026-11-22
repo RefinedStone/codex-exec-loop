@@ -209,6 +209,9 @@ fn group_id(item: &IssueCollectionItem) -> IssueListGroupId {
     if assessment.effective_mode() <= IssueAutomationAutonomy::Observe {
         return IssueListGroupId::Collection;
     }
+    if item.start_budget_wait.is_some() {
+        return IssueListGroupId::Upcoming;
+    }
     // 관찰 보고의 가정 수준은 실제 시작 관문이나 목록의 진행 약속이 아니다.
     match assessment
         .gates()
@@ -351,6 +354,12 @@ fn reason(item: &IssueCollectionItem) -> (IssueListReasonCode, &'static str) {
         return (
             IssueListReasonCode::RemoteClosed,
             "원격 이슈가 닫혀 있습니다.",
+        );
+    }
+    if item.start_budget_wait.is_some() {
+        return (
+            IssueListReasonCode::Triage,
+            "사용자 예산 한도에 도달해 작업 시작을 기다립니다.",
         );
     }
     if let Some(triage) = &item.triage

@@ -31,10 +31,18 @@ CREATE TABLE issue_autonomy_work_fences (
 
 pub(super) const TABLE: &str = "issue_autonomy_selection";
 pub(super) const COMMAND_TABLE: &str = "issue_autonomy_commands";
-pub(super) const SCHEMA: &str = r#"
+pub(super) const LEGACY_SCHEMA: &str = r#"
 CREATE TABLE issue_autonomy_selection (
     workspace_dir TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
     requested_level TEXT CHECK (requested_level IS NULL OR requested_level IN ('off','observe','propose')),
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    pending_command_id TEXT
+) STRICT, WITHOUT ROWID
+"#;
+pub(super) const SCHEMA: &str = r#"
+CREATE TABLE issue_autonomy_selection (
+    workspace_dir TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+    requested_level TEXT CHECK (requested_level IS NULL OR requested_level IN ('off','observe','propose','gated')),
     revision INTEGER NOT NULL CHECK (revision >= 0),
     pending_command_id TEXT
 ) STRICT, WITHOUT ROWID
@@ -48,6 +56,19 @@ CREATE TABLE issue_autonomy_commands (
     PRIMARY KEY (workspace_dir, command_id)
 ) STRICT, WITHOUT ROWID
 "#;
+
+pub(super) fn migrate_selection(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "ALTER TABLE issue_autonomy_selection RENAME TO issue_autonomy_selection_legacy",
+    )?;
+    connection.execute_batch(SCHEMA)?;
+    connection.execute_batch(
+        "INSERT INTO issue_autonomy_selection (workspace_dir,requested_level,revision,pending_command_id)
+         SELECT workspace_dir,requested_level,revision,pending_command_id FROM issue_autonomy_selection_legacy;
+         DROP TABLE issue_autonomy_selection_legacy"
+    )?;
+    Ok(())
+}
 
 pub(super) fn command(
     connection: &Connection,

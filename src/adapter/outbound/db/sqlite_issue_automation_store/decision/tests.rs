@@ -432,6 +432,7 @@ fn schema_v3_migration_preserves_existing_catalog_assessment_and_source() {
     let before = adapter.read_triage_batch(fixture.cwd(), None, 100).unwrap();
     adapter
         .with_connection(fixture.cwd(), |connection, _guard| {
+            super::super::tests::make_pre_admission_schema(connection);
             connection
                 .execute_batch("DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; PRAGMA user_version = 3;")?;
             super::super::validate_schema_version(connection, 3)
@@ -640,6 +641,7 @@ fn schema_v4_migration_preserves_existing_catalog_assessment_and_source() {
     let before = adapter.read_triage_batch(fixture.cwd(), None, 100).unwrap();
     adapter
         .with_connection(fixture.cwd(), |connection, _guard| {
+            super::super::tests::make_pre_admission_schema(connection);
             connection
                 .execute_batch("DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; DROP TABLE issue_work_events; DROP TABLE issue_work_checkpoints; PRAGMA user_version = 4;")?;
             super::super::validate_schema_version(connection, 4)
@@ -678,6 +680,7 @@ fn schema_v5_migration_preserves_existing_decision_and_observation_records() {
         .unwrap();
     assert!(decision.is_some());
     adapter.with_connection(fixture.cwd(), |connection, _guard| {
+        super::super::tests::make_pre_admission_schema(connection);
         connection.execute_batch(
             "DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers; DROP TABLE issue_execution_receipts; DROP TABLE issue_execution_progress; DROP TABLE issue_autonomy_work_fences; DROP TABLE issue_autonomy_commands; DROP TABLE issue_autonomy_selection; DROP TABLE issue_intervention_commands; DROP TABLE issue_intervention_tracking; PRAGMA user_version = 5;",
         )?;

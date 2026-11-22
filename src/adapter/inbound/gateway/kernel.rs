@@ -1084,6 +1084,7 @@ mod tests {
         IssuesState::from_domain(&IssueCollectionPage {
             revision: 3,
             items: vec![IssueCollectionItem {
+                start_budget_wait: None,
                 work: None,
                 open_decisions: Vec::new(),
                 issue: reference.clone(),

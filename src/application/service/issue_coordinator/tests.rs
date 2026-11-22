@@ -482,9 +482,13 @@ struct Harness {
 }
 impl Harness {
     fn new() -> Self {
+        Self::with_observation(|_| {})
+    }
+    fn with_observation(edit: impl FnOnce(&mut IssueSourceObservation)) -> Self {
         let fixture = Fixture::new();
         let policy = MutableAutomationPolicy::new();
-        let observation = fixture.observation("I_001");
+        let mut observation = fixture.observation("I_001");
+        edit(&mut observation);
         fixture.seed(vec![observation.clone()], &disclosure_version());
         let triage = Arc::new(fixture.service(policy.clone()));
         run(&triage);
@@ -836,7 +840,11 @@ fn reducer_table_covers_observe_propose_auto_flags_and_decisions() {
             );
         }
     }
-    for mode in ["observe", "auto"] {
+    // An unconfirmed Auto file is capped at Propose and still asks a human to start.
+    for (mode, expected) in [
+        ("observe", IssueCoordinatorAction::None),
+        ("auto", IssueCoordinatorAction::OpenDecision),
+    ] {
         *h.policy.text.lock().unwrap() = AUTO_POLICY.replace("propose", mode);
         run(&h.triage);
         let item = page(&h.triage).items.pop().unwrap();
@@ -851,7 +859,7 @@ fn reducer_table_covers_observe_propose_auto_flags_and_decisions() {
                 frozen_source: None,
                 now_unix_ms: 123
             }),
-            IssueCoordinatorAction::None
+            expected
         );
     }
 }
@@ -1182,3 +1190,5 @@ mod feedback_deferral;
 mod closure;
 
 mod execution_detail;
+
+mod gated;

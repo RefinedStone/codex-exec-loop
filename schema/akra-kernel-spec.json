@@ -6544,7 +6544,8 @@
       "enum": [
         "off",
         "observe",
-        "propose"
+        "propose",
+        "gated"
       ],
       "type": "string"
     },

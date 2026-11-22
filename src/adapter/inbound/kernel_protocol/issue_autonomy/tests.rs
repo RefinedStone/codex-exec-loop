@@ -44,6 +44,12 @@ fn ready() -> IssueAutonomyProjection {
                 requires_confirmation: true,
                 reason: Some("파일 정책 상한을 넘는 수준은 선택할 수 없습니다.".into()),
             },
+            IssueAutonomyChoice {
+                level: IssueAutonomyLevel::Gated,
+                enabled: false,
+                requires_confirmation: true,
+                reason: Some("파일 정책 상한을 넘는 수준은 선택할 수 없습니다.".into()),
+            },
         ],
     })
 }
@@ -122,7 +128,7 @@ fn autonomy_commands_reject_forged_confirmation_unsupported_levels_and_invalid_i
             "{field}"
         );
     }
-    for level in ["gated", "auto"] {
+    for level in ["auto", "unknown"] {
         let mut invalid = wire.clone();
         invalid["level"] = json!(level);
         assert!(serde_json::from_value::<KernelCommand>(invalid).is_err());
@@ -201,7 +207,10 @@ fn autonomy_result_preserves_server_choice_reasons_and_unavailable_states() {
     assert_eq!(state["cap"], "observe");
     assert_eq!(state["revision"], 0);
     assert_eq!(state["pending"], false);
-    assert_eq!(state["choices"].as_array().unwrap().len(), 3);
+    assert_eq!(state["choices"].as_array().unwrap().len(), 4);
+    assert_eq!(state["choices"][3]["level"], "gated");
+    assert_eq!(state["choices"][3]["enabled"], false);
+    assert_eq!(state["choices"][3]["requires_confirmation"], true);
     assert_eq!(state["choices"][2]["enabled"], false);
     assert_eq!(state["choices"][2]["requires_confirmation"], true);
     assert!(state["choices"][2]["reason"].is_string());

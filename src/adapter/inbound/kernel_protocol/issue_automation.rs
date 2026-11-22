@@ -231,7 +231,7 @@ impl From<&IssueCollectionItem> for IssueListItem {
             issue: (&item.issue).into(),
             binding_id: item.binding_id.as_str().to_string(),
             presentation: IssueListPresentation::from_domain(item),
-            triage: item.triage.as_ref().map(Into::into),
+            triage: IssueTriageState::from_item(item),
             work: item.work.clone(),
             tracked: item.tracked.as_ref().map(|tracked| IssueTrackedState {
                 state: tracked.state.into(),

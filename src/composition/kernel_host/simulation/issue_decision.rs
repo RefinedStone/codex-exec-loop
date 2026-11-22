@@ -56,16 +56,16 @@ const READY_BODY: &str = "## 완료 기준\n- [ ] 답은 한 번만 적용된다
 const SECRET: &str = "ghp_SYNTHETIC_DECISION_SECRET_00000000";
 const POLICY: &str = r#"
 [binding.github]
-mode = "auto"
+mode = "gated"
 [authority]
-autonomy_cap = "auto"
+autonomy_cap = "gated"
 [select]
 mode = "all_open"
 [[select.trusted_actors]]
 provider = "github"
 server_id = "github.com"
 actor_id = "U_decision"
-[gates.auto.normal]
+[gates.gated.normal]
 start = "auto"
 "#;
 
@@ -104,6 +104,34 @@ impl Fixture {
         let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(move |_| {
             Ok(runtime.clone())
         }));
+        let resolved =
+            crate::application::service::issue_automation_policy::resolve_issue_automation_policy(
+                Some(policy),
+                None,
+            )
+            .unwrap();
+        if resolved.policy.binding.github.mode
+            == crate::domain::issue_automation::IssueAutomationAutonomy::Gated
+            && store
+                .issue_autonomy_selection(&self.workspace)
+                .unwrap()
+                .requested_level
+                .is_none()
+        {
+            // Durable fixture receipt for an earlier verified native selection.
+            let intent = crate::domain::issue_automation::autonomy::IssueAutonomyIntent {
+                command_id: "fixture-confirmed-gated".into(),
+                level: crate::domain::issue_automation::autonomy::IssueAutonomyLevel::Gated,
+                expected_revision: 0,
+                policy_version: resolved.version,
+            };
+            store
+                .begin_issue_autonomy(&self.workspace, &intent)
+                .unwrap();
+            store
+                .finish_issue_autonomy(&self.workspace, &intent)
+                .unwrap();
+        }
         let triage = Arc::new(IssueTriageService::new(
             self.workspace.clone(),
             store.clone(),
@@ -477,13 +505,12 @@ fn done(
     (fact, *outcome, *changed, *catalog_revision, *receipt)
 }
 
-fn assert_no_work(sim: &mut SimKernel, fixture: &Fixture) {
+fn assert_no_execution_effects(sim: &mut SimKernel, fixture: &Fixture) {
     assert!(
         sim.effects.take().is_empty(),
         "decisions produce no model, planning or execution effect"
     );
     assert!(sim.host.held_stored_answers.is_empty());
-    assert!(!sim.host.runtime.has_remaining_work());
     assert!(
         NoopPlanningTaskRepositoryPort
             .load_task_authority_snapshot(&fixture.workspace)
@@ -594,7 +621,11 @@ fn kernel_simulation_issue_decision_answers_once_replays_and_publishes_matching_
             .as_str()
             .contains(SECRET)
     );
-    assert_no_work(&mut sim, &fixture);
+    assert_no_execution_effects(&mut sim, &fixture);
+    assert!(
+        sim.host.runtime.has_remaining_work(),
+        "the explicit Gated selection keeps the kernel alive without execution effects"
+    );
     drop(sim);
     let records = log.0.lock().unwrap();
     assert_eq!(
@@ -650,7 +681,11 @@ fn kernel_simulation_issue_decision_restart_preserves_open_request_first_answer_
         .get_issue_decision(&fixture.workspace, initial.record.request.id())
         .unwrap()
         .unwrap();
-    assert_no_work(&mut sim, &fixture);
+    assert_no_execution_effects(&mut sim, &fixture);
+    assert!(
+        sim.host.runtime.has_remaining_work(),
+        "the explicit Gated selection keeps the kernel alive without execution effects"
+    );
     drop(sim);
     drop(reopened);
 
@@ -682,7 +717,11 @@ fn kernel_simulation_issue_decision_restart_preserves_open_request_first_answer_
             .open_decisions
             .is_empty()
     );
-    assert_no_work(&mut sim, &fixture);
+    assert_no_execution_effects(&mut sim, &fixture);
+    assert!(
+        sim.host.runtime.has_remaining_work(),
+        "the explicit Gated selection keeps the kernel alive without execution effects"
+    );
     drop(sim);
     let records = log.0.lock().unwrap();
     assert_eq!(
@@ -760,7 +799,11 @@ fn kernel_simulation_issue_decision_supersedes_body_changes_before_retriage() {
         .unwrap();
     assert_eq!(stored.request.state(), IssueDecisionState::Superseded);
     assert!(stored.request.answer().is_none());
-    assert_no_work(&mut sim, &fixture);
+    assert_no_execution_effects(&mut sim, &fixture);
+    assert!(
+        sim.host.runtime.has_remaining_work(),
+        "the explicit Gated selection keeps the kernel alive without execution effects"
+    );
     drop(sim);
     let records = log.0.lock().unwrap();
     assert!(records.iter().any(|record| matches!(
@@ -823,7 +866,11 @@ fn kernel_simulation_issue_decision_answers_after_planning_failure_without_refre
     assert_eq!(outcome, IssueDecisionOutcome::Answered);
     assert!(changed);
     assert_eq!(live_decisions(&events).len(), 1);
-    assert_no_work(&mut sim, &fixture);
+    assert_no_execution_effects(&mut sim, &fixture);
+    assert!(
+        sim.host.runtime.has_remaining_work(),
+        "the explicit Gated selection keeps the kernel alive without execution effects"
+    );
 }
 
 mod human_confirmation;

@@ -110,7 +110,7 @@ A code validator is an executable that the user approved. `code_validators` sele
 
 ## Issue automation policy file
 
-Issue automation policy lives in a separate `issue-automation.toml`. It declares collection selection, autonomy limits, risk rules, gates, budgets, and external feedback permissions. Collection, deterministic triage, and the propose coordinator consume the merged policy; work still requires current decisions and stage-specific permits. The IA4-1 implementation also enforces `budget.max_attempts` at execution admission. GitHub status feedback and separately approved closing use the durable feedback journal. See [current behavior](current-product.md#issue-integration-and-external-closure) and [plan 28](../plan/28-akra-issue-automation.md#ia4-조각-상태).
+Issue automation policy lives in a separate `issue-automation.toml`. It declares collection selection, autonomy limits, risk rules, gates, budgets, and external feedback permissions. Collection, deterministic triage, and the issue coordinator consume the merged policy. Starts require current human or explicitly confirmed Gated policy authority and stage-specific permits. Admission enforces concurrent and UTC daily budgets; execution admission also enforces `budget.max_attempts`. GitHub status feedback and separately approved closing use the durable feedback journal. See [Gated behavior](current-product.md#gated-start-and-budgets), [integration and closing](current-product.md#issue-integration-and-external-closure), and [plan 28](../plan/28-akra-issue-automation.md#ia4-조각-상태).
 
 | 범위 | 경로 |
 | --- | --- |
@@ -132,7 +132,11 @@ Issue automation policy lives in a separate `issue-automation.toml`. It declares
 | `protection.paths` | 내장·사용자·저장소 경로 패턴의 합집합. `[]`으로 이전 보호를 지울 수 없습니다. |
 | `human_required.rules/additional` | 내장·사용자·저장소 규칙의 합집합. 저장소는 사람 승인이 필요한 조건을 더할 수만 있습니다. |
 
-기본 요청 수준은 `observe`, 기본 자율 상한은 `propose`이고 외부 이슈 쓰기 허가는 모두 꺼져 있습니다. 사용자 파일의 상한과 허가는 후속 실행기가 지켜야 하는 정책 값이며, 그 자체로 한 작업의 실행·통합 승인이 되지는 않습니다.
+기본 요청 수준은 `observe`, 기본 자율 상한은 `propose`이고 외부 이슈 쓰기 허가는 모두 꺼져 있습니다. 사용자 파일의 상한과 허가는 실제 접수·실행에서 강제하며, 파일만으로 자동 시작에 동의한 것으로 보지 않습니다.
+
+런타임 Gated를 처음 선택할 때는 자동 시작에 동의하는 네이티브 확인이 필요합니다. 선택 없이 파일에만 `gated`나 `auto`를 적으면 유효 수준은 Propose 이하이며 원본 파일은 바꾸지 않습니다. 명시적인 Gated 선택 뒤에도 사용자·저장소 상한(공개 저장소에 설정된 Propose 상한 포함), 작성자 신뢰와 사람 필수 규칙이 우선합니다. 현재 런타임 선택은 Off/Observe/Propose/Gated이며 Auto는 선택 항목으로 제공하지 않습니다.
+
+유효 수준이 Gated이고 해당 위험 등급의 `gates.gated.<risk>.start = "auto"`를 만족한 Ready 이슈만 자동으로 등록합니다. 전달·통합에는 사람 리뷰가 필요합니다. Gated 선택은 전역 병렬 pool을 켜지 않으므로, 별도 병렬 실행을 켜기 전에는 등록한 작업이 `ExecutionDisabled`로 대기합니다.
 
 ### 키·기본값·범위
 
@@ -161,6 +165,20 @@ Issue automation policy lives in a separate `issue-automation.toml`. It declares
 `repository`의 owner는 영숫자로 시작·끝나는 1~39자 ASCII 영숫자·하이픈, name은 1~100자 ASCII 영숫자·밑줄·하이픈·점이며 `.`과 `..`는 허용하지 않습니다. 라벨·server ID·actor ID는 비어 있거나 앞뒤 공백·제어문자가 있으면 거절합니다. 내부 공백과 대소문자는 보존합니다. 신뢰 여부는 삼중항 전체의 정확한 일치로 정하며, GitHub의 `actor_id`에는 검증한 GraphQL Node ID를 넣습니다. `login` 키나 로그인 문자열 목록은 허용하지 않습니다. 예시의 Node ID는 실제 계정이 아닌 설명용 값입니다. Jira 식별자 형식을 담을 수 있다는 것은 Jira 수집·쓰기 어댑터가 구현됐다는 뜻이 아닙니다.
 
 분류 규칙에는 `labels_any` 또는 `paths_any`의 조건이 최소 하나 있어야 하며, 두 조건과 각 목록의 항목은 OR입니다. 규칙 배열의 순서는 유지합니다. 시간은 정수와 `s / m / h / d`를 붙여 적습니다. 공백·부호·소수·선행 0은 거절하며, 0은 `remind_before`에서 `0s / 0m / 0h / 0d`로만 적을 수 있습니다. 유효 정책은 초 단위로 정규화하므로 `24h`와 `1d`는 같은 값입니다. JSON Schema는 각 부분 파일의 문법과 단위별 상한을 검사하고, 서비스는 병합 후 서로 다른 단위의 `remind_before < start` 관계를 검사합니다.
+
+### 예산의 실행 기준
+
+세 예산은 사람 시작과 정책 자동 시작에 모두 적용합니다. 필드 생략은 내장 기본값을 유지하며, 0은 새 시작을 막습니다.
+
+| 키 | 계산과 강제 시점 |
+| --- | --- |
+| `budget.max_running` | 작업 공간 전체의 미종결 작업 예약 수를 최초 접수와 같은 트랜잭션에서 검사합니다. 큐 대기·실행 중·리뷰 중과 아직 task를 등록하지 않은 시작 예약도 포함합니다. |
+| `budget.max_started_per_day` | UTC 날짜별 최초 접수를 작업마다 한 번 셉니다. 재접속·응답 유실 복구·재시작·날짜 변경 뒤 같은 작업의 복구는 다시 차감하지 않습니다. |
+| `budget.max_attempts` | 이슈 작업의 구현 시도에 적용하며 보완 task도 포함합니다. 실행 한도를 먼저 설치한 뒤 배분을 허가합니다. 같은 논리 task의 질문에 답해 재개하는 것은 새 시도가 아닙니다. |
+
+예산이 부족하면 미시작 이슈는 Ready에 남고 `budget_exhausted` 이유를 표시합니다. 예산 대기는 승인 fingerprint와 별도로 보관하므로 다른 작업의 예산 사용 때문에 기존 승인이 무효화되지 않습니다. 이미 시작한 작업이 시도 한도에 도달한 뒤에도 보완이 필요하면 `failed`로 전환하고 사람의 복구 결정을 요구합니다.
+
+확인된 유효 수준이 Gated/Auto인 실행 중 커널은 클라이언트가 없어도 유지합니다. Observe/Propose는 기존 idle 종료를 유지합니다. 커널 유지 상태는 실행 허가가 아니며 접수·배분 때 현재 정책을 다시 검사합니다. 프로세스 재시작 뒤 저장된 선택만으로 커널을 무인 기동하지 않고, 다음 정상 연결 때 선택과 작업을 복구합니다.
 
 ### 관문과 사람 필수 규칙
 

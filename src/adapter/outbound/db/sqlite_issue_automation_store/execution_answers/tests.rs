@@ -154,7 +154,11 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
             priority: 0,
             attempt: 1,
         },
-        decision_id: IssueDecisionId::new(format!("answer-fixture-start-{issue_id}")).unwrap(),
+        start_authority:
+            crate::domain::issue_automation::coordinator::IssueWorkStartAuthority::Human,
+        decision_id: Some(
+            IssueDecisionId::new(format!("answer-fixture-start-{issue_id}")).unwrap(),
+        ),
         approved_basis: IssueDecisionBasis::from_assessment(
             &assessment,
             IssueAutomationGate::Start,
@@ -778,6 +782,7 @@ fn version_six_and_seven_migrations_preserve_rows_and_create_exact_answer_schema
         let fixture = Fixture::new("answer-migration");
         let (_, tracked) = fixture.insert();
         let connection = Connection::open(fixture.database()).unwrap();
+        super::super::tests::make_pre_admission_schema(&connection);
         connection
             .execute_batch(
                 "DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers;
@@ -1046,6 +1051,7 @@ fn version_seven_migration_preserves_completed_and_pending_owned_autonomy_fences
         };
         let connection = Connection::open(fixture.database()).unwrap();
         let before = persisted_owner_and_receipts(&connection);
+        super::super::tests::make_pre_admission_schema(&connection);
         connection
             .execute_batch(
                 "DROP TABLE issue_feedback_outbox; DROP TABLE issue_feedback_intents; DROP TABLE issue_feedback_state; DROP TABLE issue_feedback_grant_entries; DROP TABLE issue_execution_answers;

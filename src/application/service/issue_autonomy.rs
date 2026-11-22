@@ -17,7 +17,7 @@ use anyhow::{Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
-/// None/zero preserves the exact legacy file hash. Runtime selection gets a separate hash.
+/// Off/Observe/Propose inheritance preserves the legacy file hash. Automatic starts require a runtime choice.
 pub(crate) fn effective_policy(
     mut file: ResolvedIssueAutomationPolicy,
     selection: &IssueAutonomySelection,
@@ -32,6 +32,12 @@ pub(crate) fn effective_policy(
             selection.revision,
         ))
         .expect("the runtime policy tuple is serializable");
+        file.version = format!("{:x}", Sha256::digest(encoded));
+    } else if file.policy.binding.github.mode > IssueAutomationAutonomy::Propose {
+        // A file can raise the ceiling, but cannot silently grant the first automatic start.
+        file.policy.binding.github.mode = IssueAutomationAutonomy::Propose;
+        let encoded = serde_json::to_vec(&("issue-runtime-unconfirmed-autonomy-v1", &file.version))
+            .expect("the unconfirmed runtime policy is serializable");
         file.version = format!("{:x}", Sha256::digest(encoded));
     }
     file
@@ -87,7 +93,9 @@ pub(crate) fn projection(
                 IssueAutonomyChoice {
                     level,
                     enabled: reason.is_none(),
-                    requires_confirmation: requested > mode,
+                    requires_confirmation: requested > mode
+                        || (level == IssueAutonomyLevel::Gated
+                            && selection.requested_level != Some(IssueAutonomyLevel::Gated)),
                     reason,
                 }
             })
@@ -149,13 +157,18 @@ impl IssueAutonomyService {
         validate_command_id(command_id).map_err(|reason| anyhow!(reason))?;
         let current = self.current()?;
         self.validate_choice(level, &current)?;
+        let start_consent = if level == IssueAutonomyLevel::Gated {
+            "\nGated를 켜면 정책에서 자동 시작을 허용한 이슈를 매번 묻지 않고 등록합니다. 사용자 파일의 동시 작업·일일 시작·이슈별 시도 한도를 적용하며, 전달과 통합에는 사람 리뷰가 필요합니다. 실행은 별도로 켠 병렬 실행 설정을 따릅니다."
+        } else {
+            ""
+        };
         Ok(IssueConfirmationPreview {
             target: self.target(command_id, level, &current),
             display: IssueConfirmationDisplay {
                 message: "이슈 자동화의 자율 수준을 변경할까요?".into(),
                 detail: format!(
-                    "현재: {:?}\n변경 후: {:?}\n사용자 정책 상한: {:?}\n진행 중인 작업의 기존 허가는 회수되고 새 승인이 필요합니다.",
-                    current.effective_level, level, current.cap
+                    "현재: {:?}\n변경 후: {:?}\n사용자 정책 상한: {:?}\n진행 중인 작업의 기존 허가를 회수하고 현재 정책으로 다시 판정합니다.{}",
+                    current.effective_level, level, current.cap, start_consent
                 ),
                 confirm_label: "수준 변경".into(),
             },
@@ -207,7 +220,10 @@ impl IssueAutonomyService {
         if let Some(confirmation) = confirmation {
             confirmation.require_target(&self.target(&command_id, level, &current))?;
         }
-        if IssueAutomationAutonomy::from(level) > current.effective_level {
+        if IssueAutomationAutonomy::from(level) > current.effective_level
+            || (level == IssueAutonomyLevel::Gated
+                && current.requested_level != Some(IssueAutonomyLevel::Gated))
+        {
             confirmation.ok_or(IssueConfirmationError::Required)?;
         }
         let intent = IssueAutonomyIntent {

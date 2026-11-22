@@ -98,6 +98,8 @@ pub(in super::super) fn item(
             triage
         },
     );
+    let start_budget_wait =
+        super::super::admission::projection(connection, workspace, reference, triage.as_ref())?;
     Ok(Some(IssueCollectionItem {
         issue: reference.clone(),
         binding_id,
@@ -114,6 +116,7 @@ pub(in super::super) fn item(
         observation_revision,
         tracked_revision,
         triage,
+        start_budget_wait,
         open_decisions: super::super::decision::open_for_issue(connection, workspace, reference)?,
         work: super::super::coordinator::read(connection, workspace, reference)?
             .as_ref()

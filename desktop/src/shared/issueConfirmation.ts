@@ -18,7 +18,7 @@ export interface ConfirmIssueAutomationModeRequest {
 /** 자율 수준은 원격 수집 모드와 별도인 저장소 설정이다. */
 export interface ConfirmIssueAutonomyRequest {
   workspace: string;
-  level: "off" | "observe" | "propose";
+  level: "off" | "observe" | "propose" | "gated";
   commandId: string;
   key: string;
 }

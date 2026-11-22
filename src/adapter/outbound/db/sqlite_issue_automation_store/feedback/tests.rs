@@ -322,7 +322,11 @@ fn existing_work(fixture: &Fixture, issue: &IssueReference) -> IssueWorkCheckpoi
             priority: 0,
             attempt: 1,
         },
-        decision_id: IssueDecisionId::new(format!("feedback-start-{}", issue.issue_id)).unwrap(),
+        start_authority:
+            crate::domain::issue_automation::coordinator::IssueWorkStartAuthority::Human,
+        decision_id: Some(
+            IssueDecisionId::new(format!("feedback-start-{}", issue.issue_id)).unwrap(),
+        ),
         approved_basis,
         task_ids: vec![format!("task-{}", issue.issue_id)],
         permit_source: None,

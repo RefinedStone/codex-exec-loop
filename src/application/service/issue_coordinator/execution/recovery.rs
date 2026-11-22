@@ -61,12 +61,26 @@ pub(super) fn reconcile(
     }
     let (item, assessment) = current_assessment(service, &work.order.issue, committed)?;
     let basis = service.approval_basis(&assessment)?;
-    if !matches_approval(
-        &item,
-        &assessment,
-        work.current_authorization_basis(),
-        &basis,
-    ) || basis.authorization_epoch != control.authorization_epoch
+    let decision = match work.current_authorization_decision_id() {
+        Some(id) => service.revoke_on_current_error(
+            Some(work),
+            service.store.get_issue_decision(&service.workspace, id),
+        )?,
+        None => None,
+    };
+    let authorization = match work.current_start_authority() {
+        IssueWorkStartAuthority::Policy => Some(StartAuthorization::Policy(
+            work.current_authorization_basis(),
+        )),
+        IssueWorkStartAuthority::Human => decision
+            .as_ref()
+            .map(|stored| StartAuthorization::Human(&stored.request)),
+    };
+    if work.current_authorization_basis() != &basis
+        || !authorization.is_some_and(|authorization| {
+            matches_approval(&item, &assessment, authorization, &basis)
+        })
+        || basis.authorization_epoch != control.authorization_epoch
         || service
             .store
             .pending_issue_interventions(&service.workspace)?

@@ -570,7 +570,10 @@ fn collection_off_triage_requires_a_registered_task_and_the_current_epoch() {
 
 #[test]
 fn work_failure_recovery_requires_a_human_at_both_service_and_store_boundaries() {
-    let (h, _) = started();
+    let h = Harness::new();
+    *h.policy.text.lock().unwrap() = super::gated::gated_policy();
+    super::gated::enable_gated(&h);
+    h.tick(true).unwrap();
     let work = h.work().unwrap();
     h.execution.state.lock().unwrap().observation = Some(IssueWorkExecutionObservation {
         phase: IssueExecutionPhase::Terminal,
@@ -587,7 +590,6 @@ fn work_failure_recovery_requires_a_human_at_both_service_and_store_boundaries()
     h.coordinator()
         .track_execution(&IssueCollectionCancellation::new(), 123, false, &|_| {})
         .unwrap();
-    *h.policy.text.lock().unwrap() = AUTO_POLICY.replace("propose", "auto");
     run(&h.triage);
     let store = h.fixture.store();
     let batch = store

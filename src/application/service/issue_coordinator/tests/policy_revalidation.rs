@@ -178,7 +178,30 @@ pub(super) fn seed_approved_work_checkpoint(
         .unwrap()
         .unwrap();
     let (fence, item, assessment) = coordinator.current(issue, &|_| {}).unwrap();
-    let mut work = coordinator.build_work(&item, &decision.request).unwrap();
+    let candidate = coordinator
+        .build_work(&item, StartAuthorization::Human(&decision.request))
+        .unwrap();
+    let budget = h
+        .triage
+        .start_budget_for_policy(&candidate.approved_basis.policy_version)
+        .unwrap();
+    let IssueWorkAdmissionResult::Saved { record, .. } = h
+        .fixture
+        .store()
+        .admit_issue_work(
+            &h.fixture.workspace,
+            fence,
+            &assessment,
+            &candidate,
+            &budget,
+            123,
+        )
+        .unwrap()
+    else {
+        panic!("the restored approved work intent should be admitted");
+    };
+    let mut work = *record;
+    let (fence, _, assessment) = coordinator.current(issue, &|_| {}).unwrap();
     work.task_ids = vec!["task-restored-last-page".into()];
     work.permit_source = Some("a".repeat(40));
     work.permit_revision = work.current_authorization_basis().gate_revision.max(1);

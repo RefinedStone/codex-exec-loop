@@ -73,10 +73,11 @@ repository, or the running Gateway is an older version than the CLI (it refuses 
 request; restart the Gateway). In all three cases a stored command runs under the repository lock. The existing TUI-owned reset compatibility path remains until K6 and does not create
 kernel audit records.
 
-A kernel that only this CLI started stops when the command ends. The session list is not kept
-between invocations, so `load_sessions` helps only while another client (Akra Desktop) keeps the
-kernel up. The automatic follow-up settings are kept: the kernel records them
-(`auto_follow_configured`) and the next Gateway kernel restores the last record.
+An idle kernel that only this CLI started stops when the command ends. A kernel with remaining
+work or confirmed Gated/Auto automation stays up. The session list is not persisted between
+kernel instances, so `load_sessions` helps while that kernel remains running. The automatic follow-up
+settings are kept: the kernel records them (`auto_follow_configured`) and the next Gateway kernel
+restores the last record.
 
 Stored commands change stored planning data only, so they run without a running kernel. Today
 they are `reset_planning`, the task commands (`create_task`, `update_task`, `delete_task`), and
@@ -310,6 +311,40 @@ preserved.
 Desktop execution tracking and provider closing follow the contracts below. The combined
 [flow validation](#issue-automation-flow-validation) (#2555) has passed its automated regressions;
 live model validation has not been run.
+
+### Gated Start and Budgets
+
+IA5-1 ([#2556](https://github.com/RefinedStone/codex-exec-loop/issues/2556)) adds an explicit
+runtime Gated choice. Its first selection requires native confirmation of automatic starts.
+A file-only `gated` or `auto` request without that runtime choice is limited to Propose or lower;
+the file itself is unchanged. Runtime Gated remains subject to user and repository caps (including
+an existing Propose cap on a public repository), actor trust, protected paths, and human-required rules.
+
+An eligible Ready issue is admitted automatically only when its effective level is Gated and its risk
+class's Start gate is `auto`. This records policy authority, without fabricating a human decision.
+A `human` Start gate still needs the current human decision; Gated delivery and integration also
+retain human review.
+
+| Budget | Enforcement |
+| --- | --- |
+| `max_running` (default 2) | Atomic admission counts all nonterminal work reservations in the workspace, including queued, running, in-review, and admitted work not yet submitted. Human and policy starts share the limit. |
+| `max_started_per_day` (default 5) | Counts first work admissions within each UTC day. Reconnection, acknowledgement recovery, and restart do not charge that work again. |
+| `max_attempts` (default 3) | Limits implementation attempts per issue work, including supplemental tasks, at execution admission. |
+
+Repository settings can only lower the user limits. Omitted limits retain their built-in defaults;
+zero prevents a new start. An unstarted issue blocked by a budget stays Ready with
+`budget_exhausted`. Budget waiting is a separate projection, so another issue's budget use does not
+change an existing approval's fingerprint.
+
+Gated selection and issue Start do not enable the global parallel pool. Work may be registered
+while it is off and remains `ExecutionDisabled` until parallel execution is explicitly enabled.
+Execution limits are installed before dispatch permission is granted.
+
+An already running kernel stays resident after its clients leave while its confirmed, validated
+effective autonomy is Gated/Auto. Observe/Propose collection alone keeps the existing idle-unload
+behavior. This lifecycle decision grants no execution permission; admission and dispatch still
+validate current policy. Gated adds no unattended kernel startup after a process restart:
+the next normal attachment restores the persisted selection and work.
 
 ## Issue Automation Feedback
 
@@ -732,8 +767,9 @@ the desktop app itself is not shipped yet.
   (`desktop/src/main/skill*.ts`, `desktop/src/renderer/skills/`, `desktop/src/shared/skills.ts`).
 - Kernel protocol (`akra/kernel/*`, plan 18 K3, protocol version 1 since the kernel spec of K4-1): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
-  kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep
-  running. Worktrees of one repository share one kernel, which works in the primary checkout. An
+  kernel on first attach and keeps it after clients leave while work or confirmed Gated/Auto
+  automation remains, so auto-follow and parallel dispatch can continue. Worktrees of one repository
+  share one kernel, which works in the primary checkout. An
   attach from an Akra parallel slot worktree, or to a repository without a primary checkout (a bare
   repository), fails. If another process (a TUI) runs the kernel of that
   repository, attach fails with `-32012`. After attach the client sends `akra/kernel/command` and
@@ -824,8 +860,8 @@ the desktop app itself is not shipped yet.
   worktrees of the repository, other branches, and uncommitted file changes are not observed. The TUI
   runtime does not observe.
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
-  planning work, parallel mode on, or running parallel work) for 10 minutes is unloaded, and its
-  repository lock is free for a TUI. The next attach starts it again. Gateway shutdown stops the
+  planning work, parallel mode on, running parallel work, or confirmed effective Gated/Auto
+  automation) for 10 minutes is unloaded, and its repository lock is free for a TUI. The next attach starts it again. Gateway shutdown stops the
   kernels before the upstream app-server.
 - The kernel uses the Gateway upstream app-server through its own `codex app-server proxy`
   connection, so a client can `thread/resume` a thread that the kernel runs and receive its turn

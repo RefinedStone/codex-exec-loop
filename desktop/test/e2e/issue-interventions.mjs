@@ -46,7 +46,7 @@ const rank = (value) => ["off", "observe", "propose", "gated", "auto"].indexOf(v
 const autonomy = () => ({
   status: "ready", requested_level: level, effective_level: effectiveOverride ?? level, cap,
   revision, policy_version: "runtime-policy-" + revision, pending: false,
-  choices: ["off", "observe", "propose"].map((choice) => ({
+  choices: ["off", "observe", "propose", "gated"].map((choice) => ({
     level: choice, enabled: rank(choice) <= rank(cap), requires_confirmation: rank(choice) > rank(effectiveOverride ?? level),
     reason: rank(choice) > rank(cap) ? "서버 정책의 자율 수준 상한을 넘습니다." : null,
   })),
@@ -263,10 +263,28 @@ try {
   await until(async () => level === "propose" && await select.isEnabled());
   assert.equal(commandRequests("set_issue_autonomy").length, 1);
   assert.equal(commandRequests("set_issue_autonomy")[0].method, "akra/kernel/command_confirmed");
+  cap = "gated"; revision++;
+  gateway.sendKernelEvent(state("issues"));
+  await until(async () => !(await select.locator('option[value="gated"]').evaluate((option) => option.disabled)), "the enabled Gated choice");
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 1; });
+  const beforeGatedDialogs = await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length);
+  await select.selectOption("gated");
+  await until(async () => (await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length)) > beforeGatedDialogs && await select.isEnabled());
+  assert.equal(level, "propose");
+  assert.equal(commandRequests("set_issue_autonomy").length, 1);
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
+  await select.selectOption("gated");
+  await until(async () => level === "gated" && await select.inputValue() === "gated" && await select.isEnabled());
+  assert.equal(commandRequests("set_issue_autonomy").length, 2);
+  assert.equal(commandRequests("set_issue_autonomy")[1].method, "akra/kernel/command_confirmed");
   cap = "observe"; level = "observe"; revision++;
   gateway.sendKernelEvent(state("issues"));
   await until(async () => await select.inputValue() === "observe" && await select.locator('option[value="propose"]').evaluate((option) => option.disabled), "the pushed lower autonomy cap");
-  assert.match(await panel.getByTestId("issues-autonomy-reason").innerText(), /상한/);
+  assert.equal(await select.locator('option[value="gated"]').evaluate((option) => option.disabled), true);
+  assert.deepEqual(await panel.getByTestId("issues-autonomy-reason").allTextContents(), [
+    "제안: 서버 정책의 자율 수준 상한을 넘습니다.",
+    "단계별 승인: 서버 정책의 자율 수준 상한을 넘습니다.",
+  ]);
   cap = "auto"; level = null; effectiveOverride = "auto"; revision++;
   gateway.sendKernelEvent(state("issues"));
   await until(async () => await select.inputValue() === "auto", "the policy-owned Auto level");

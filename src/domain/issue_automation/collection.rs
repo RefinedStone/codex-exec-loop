@@ -184,6 +184,8 @@ pub struct IssueCollectionItem {
     /// 같은 catalog snapshot에서 읽은 열린 결정 요청이다.
     pub open_decisions: Vec<super::decision::StoredIssueDecision>,
     pub work: Option<super::coordinator::IssueWorkSummary>,
+    /// Admission waiting is a display projection, never part of an approval fingerprint.
+    pub start_budget_wait: Option<super::coordinator::IssueStartBudgetWait>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

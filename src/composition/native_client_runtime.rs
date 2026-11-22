@@ -1,5 +1,6 @@
 mod issue_timeline;
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
@@ -176,6 +177,8 @@ pub(crate) struct NativeClientRuntime {
     repository_state: Option<RepositoryState>,
     issue_collection: Option<Arc<IssueCollectionService>>,
     issue_observer: Option<IssueObserver>,
+    // Only controls idle lifetime. Execution always revalidates live policy and durable authority.
+    issue_automation_keepalive: Cell<bool>,
     published_issue_change: bool,
     // 클라이언트에 아직 보내지 않은 기록이다 (plan 19 Q3-3b). 커널 호스트가 꺼내 `recorded` 이벤트로 보낸다.
     published_kernel_records: Vec<RecordedKernelEvent>,
@@ -658,6 +661,7 @@ impl NativeClientRuntime {
             repository_state: None,
             issue_collection: None,
             issue_observer: None,
+            issue_automation_keepalive: Cell::new(false),
             published_issue_change: false,
             published_kernel_records: Vec::new(),
             recent_kernel_records: std::collections::VecDeque::new(),
@@ -1439,6 +1443,9 @@ impl NativeClientRuntime {
                 observer.request_sync(Instant::now());
             }
         }
+        if is_issue_command {
+            self.refresh_issue_autonomy_keepalive();
+        }
         let rejection = match &end {
             StoredCommandEnd::Finished(StoredCommandOutcome::Rejected(rejection)) => {
                 // 스펙의 표가 이 명령의 거절 이유를 모두 적어야 한다 (plan 18 K4-1).
@@ -1749,6 +1756,7 @@ impl NativeClientRuntime {
     ) -> anyhow::Result<()> {
         self.issue_observer = Some(IssueObserver::new(service.clone(), self.host_waker())?);
         self.issue_collection = Some(service);
+        self.refresh_issue_autonomy_keepalive();
         self.drain_issue_work_outbox();
         Ok(())
     }
@@ -1769,8 +1777,10 @@ impl NativeClientRuntime {
             .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?;
         // 표시와 조회는 실제 장부를 읽는다. 진행 중인 worker의 스케줄러 epoch는 바꾸지 않는다.
         if let Some(service) = &self.issue_collection {
+            self.issue_automation_keepalive.set(false);
             view.projection = service.projection()?;
             view.autonomy = service.autonomy_state();
+            self.remember_issue_autonomy(&view.autonomy);
         }
         if view.projection.state.config.mode == IssueCollectionMode::Off {
             view.collecting = false;
@@ -1845,6 +1855,9 @@ impl NativeClientRuntime {
         observer.set_execution_enabled(execution_enabled, now);
         let cycle = observer.poll(now, at_unix_ms);
         self.published_issue_change |= cycle.changed;
+        if cycle.changed {
+            self.refresh_issue_autonomy_keepalive();
+        }
         self.record_issue_committed(cycle.committed);
     }
 
@@ -2021,9 +2034,36 @@ impl NativeClientRuntime {
 
     /// 커널에 남은 일이 있다 (plan 18 K3-5). core 의 턴·승인·자동 후속·평가·planning 작업, 또는 병렬 제어부의
     /// 일(켜진 병렬 모드, 열린 epoch, 진행 중인 제어 효과, 배분된 작업 스레드)이다. 커널을 내려도 되는지 볼 때 쓴다.
-    /// 이슈 Observe와 그 진행 중 읽기는 포함하지 않는다. 내릴 때 취소하고 다음 커널에서 저장 경계부터 재개한다.
+    /// 확인된 Gated/Auto는 클라이언트가 없어도 진행한다. Observe/Propose의 읽기는 idle 종료를 막지 않는다.
     pub(crate) fn has_remaining_work(&self) -> bool {
-        self.core.runtime.has_remaining_work() || self.parallel_control_plane.has_remaining_work()
+        self.core.runtime.has_remaining_work()
+            || self.parallel_control_plane.has_remaining_work()
+            || self.issue_automation_keepalive.get()
+    }
+
+    /// Called only when attachment, issue commands or observer state changes, never by idle checks.
+    fn refresh_issue_autonomy_keepalive(&self) {
+        self.issue_automation_keepalive.set(false);
+        if let Some(service) = &self.issue_collection {
+            self.remember_issue_autonomy(&service.autonomy_state());
+        }
+    }
+
+    fn remember_issue_autonomy(
+        &self,
+        autonomy: &crate::domain::issue_automation::autonomy::IssueAutonomyProjection,
+    ) {
+        use crate::domain::issue_automation::IssueAutomationAutonomy;
+        use crate::domain::issue_automation::autonomy::IssueAutonomyProjection;
+        self.issue_automation_keepalive.set(matches!(
+            autonomy,
+            IssueAutonomyProjection::Ready(state)
+                if !state.pending
+                    && matches!(
+                        state.effective_level,
+                        IssueAutomationAutonomy::Gated | IssueAutomationAutonomy::Auto
+                    )
+        ));
     }
 
     /// 런타임을 다른 스레드로 옮긴 뒤에도 병렬 epoch 를 확인한다.

@@ -25,6 +25,7 @@ fn item(id: &str, state: Option<IssueAutomationState>) -> IssueCollectionItem {
         },
     };
     IssueCollectionItem {
+        start_budget_wait: None,
         work: None,
         open_decisions: Vec::new(),
         observation_revision: None,
