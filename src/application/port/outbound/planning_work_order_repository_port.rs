@@ -1,15 +1,3 @@
-mod validation_recovery_port;
-pub use validation_recovery_port::{
-    PlanningValidationRecoveryKind, PlanningValidationRecoveryOutcome,
-    PlanningValidationRecoveryReceipt, PlanningValidationRecoveryRequest,
-};
-
-mod admission_port;
-pub(crate) use admission_port::validate_admission_key;
-pub use admission_port::{
-    PlanningWorkOrderAdmissionSnapshot, PlanningWorkOrderSupplementalAdmission,
-    PlanningWorkOrderSupplementalAdmissionResult,
-};
 mod control_port;
 pub use control_port::{
     PlanningWorkControl, PlanningWorkControlAction, PlanningWorkControlRepositoryPort,
@@ -21,6 +9,7 @@ use std::fmt;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::parallel_mode::PrValidationRecord;
 use crate::domain::planning::{PriorityQueueProjection, TaskAuthorityDocument};
 
 use super::planning_task_repository_port::{
@@ -125,6 +114,49 @@ pub enum PlanningWorkOrderRegistrationResult {
     },
 }
 
+/// One planning snapshot fences lineage, grants, evidence and intervention ownership together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningWorkOrderAdmissionSnapshot {
+    pub work_order: PlanningWorkOrderRecord,
+    pub control: PlanningWorkControl,
+    pub permit_basis: Option<PlanningWorkPermitBasis>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlanningWorkOrderSupplementalAdmission<'a> {
+    pub admission_key: &'a str,
+    pub expected: &'a PlanningWorkOrderAdmissionSnapshot,
+    pub observed_planning_revision: i64,
+    pub task_id: &'a str,
+    pub task_authority: &'a TaskAuthorityDocument,
+    pub queue_projection: &'a PriorityQueueProjection,
+    pub audit: PlanningTaskAuthorityMutationAudit<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningWorkOrderSupplementalAdmissionResult {
+    Admitted {
+        snapshot: PlanningWorkOrderAdmissionSnapshot,
+        task_id: String,
+        planning_revision: i64,
+        created: bool,
+    },
+    Existing {
+        snapshot: PlanningWorkOrderAdmissionSnapshot,
+        task_id: String,
+    },
+    RevisionConflict {
+        observed_planning_revision: i64,
+        current_planning_revision: i64,
+    },
+    WorkOrderConflict {
+        current: PlanningWorkOrderAdmissionSnapshot,
+    },
+    TaskIdConflict {
+        task_id: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningWorkOrderLinkResult {
     pub work_order: PlanningWorkOrderRecord,
@@ -146,6 +178,45 @@ pub struct PlanningWorkOrderValidationLink {
     pub validation_record_key: String,
     pub work_order_id: String,
     pub source_task_id: String,
+}
+
+/// 기존 검증 종료를 변경하지 않고 후속 기록과 영수증을 함께 등록하는 종류다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningValidationRecoveryKind {
+    ObserveAgain,
+    QueueRecovery,
+}
+
+/// observed_*는 새 등록의 CAS 입력이며 완료 영수증의 불변 payload에는 포함하지 않는다.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanningValidationRecoveryRequest<'a> {
+    pub command_id: &'a str,
+    pub work_order_id: &'a str,
+    pub terminal_record_id: &'a str,
+    pub kind: PlanningValidationRecoveryKind,
+    pub authorization_epoch: u64,
+    pub gate_revision: u64,
+    pub policy_version: &'a str,
+    pub original: &'a PrValidationRecord,
+    pub observed_work_order: &'a PlanningWorkOrderRecord,
+    pub observed_planning_revision: i64,
+    pub is_current_terminal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningValidationRecoveryReceipt {
+    pub command_id: String,
+    pub terminal_record_id: String,
+    pub outcome: PlanningValidationRecoveryOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanningValidationRecoveryOutcome {
+    Registered { validation_record_key: String },
+    Blocked { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +363,10 @@ pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
         work_order_id: &str,
         task_id: &str,
     ) -> Result<PlanningWorkOrderLinkResult>;
+}
+
+pub(crate) fn validate_admission_key(value: &str) -> Result<()> {
+    validate_opaque_key(value, "work order task admission key", 1024)
 }
 
 pub(crate) fn validate_work_order_identity(work_order_id: &str, origin: &str) -> Result<()> {
