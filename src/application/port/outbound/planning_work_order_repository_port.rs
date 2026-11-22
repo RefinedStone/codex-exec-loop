@@ -1,6 +1,3 @@
-mod link_reference;
-pub use link_reference::PlanningWorkLinkReference;
-
 mod control_port;
 pub use control_port::{
     PlanningWorkControl, PlanningWorkControlAction, PlanningWorkControlRepositoryPort,
@@ -29,6 +26,78 @@ pub use permits_port::{
 pub const MAX_WORK_ORDER_ID_BYTES: usize = 512;
 pub const MAX_WORK_ORDER_ORIGIN_BYTES: usize = 128;
 pub const MAX_WORK_ORDER_TASK_ID_BYTES: usize = 512;
+
+/// Immutable, publication-safe work-order reference carried into the delivery queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningWorkLinkReference {
+    pub url: String,
+    #[serde(default)]
+    pub close_on_merge: bool,
+}
+
+impl PlanningWorkLinkReference {
+    pub fn validate(&self) -> Result<()> {
+        if self.url.len() > 4096
+            || self
+                .url
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control())
+            || self.url.contains(['<', '>', '(', ')', '[', ']'])
+        {
+            bail!("invalid publication link reference");
+        }
+        let Some((host, path)) = self
+            .url
+            .strip_prefix("https://")
+            .and_then(|rest| rest.split_once('/'))
+        else {
+            bail!("invalid publication link reference");
+        };
+        if !host.contains('.')
+            || host.split('.').any(|part| {
+                part.is_empty()
+                    || part.starts_with('-')
+                    || part.ends_with('-')
+                    || !part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+            || path.is_empty()
+            || !path
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_./~".contains(&byte))
+            || path.split('/').any(|part| matches!(part, "." | ".."))
+        {
+            bail!("invalid publication link reference");
+        }
+        if self.close_on_merge {
+            let Some(path) = self.url.strip_prefix("https://github.com/") else {
+                bail!("provider_link requires a canonical GitHub issue URL");
+            };
+            let parts: Vec<_> = path.split('/').collect();
+            let segment = |value: &str| {
+                !value.is_empty()
+                    && !matches!(value, "." | "..")
+                    && value
+                        .bytes()
+                        .all(|ch| ch.is_ascii_alphanumeric() || b"-_.".contains(&ch))
+            };
+            if parts.len() != 4
+                || !segment(parts[0])
+                || !segment(parts[1])
+                || parts[2] != "issues"
+                || parts[3]
+                    .parse::<u64>()
+                    .ok()
+                    .is_none_or(|number| number == 0 || number.to_string() != parts[3])
+            {
+                bail!("provider_link requires a canonical GitHub issue URL");
+            }
+        }
+        Ok(())
+    }
+}
 
 /// Durable planning lineage. This identity does not depend on mutable task provenance or receipts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

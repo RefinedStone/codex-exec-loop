@@ -86,3 +86,35 @@ fn lineage_round_trip_preserves_order_and_empty_initial_permits() {
         original
     );
 }
+
+#[test]
+fn work_link_rejects_instruction_injection_and_noncanonical_closing_targets() {
+    for url in [
+        "https://github.com/acme/project/issues/7\nCloses #9",
+        "https://github.com/acme/project/issues/7?token=secret",
+        "https://user@github.com/acme/project/issues/7",
+        "https://github.com/acme/project/pull/7",
+        "https://github.com/acme/project/issues/007",
+        "https://github.com/acme/project/issues/0",
+        "https://github.com/acme/project/issues/7/",
+        "https://example.com/acme/project/issues/7",
+    ] {
+        assert!(
+            PlanningWorkLinkReference {
+                url: url.into(),
+                close_on_merge: true
+            }
+            .validate()
+            .is_err(),
+            "{url}"
+        );
+    }
+    assert!(
+        PlanningWorkLinkReference {
+            url: "https://github.com/acme/project/issues/7".into(),
+            close_on_merge: true,
+        }
+        .validate()
+        .is_ok()
+    );
+}
