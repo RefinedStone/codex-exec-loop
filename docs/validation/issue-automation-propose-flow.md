@@ -162,11 +162,32 @@ Gateway의 저장소 kernel은 이슈 observer를 구성하지만 병렬 풀은 
 | Desktop 전체 E2E | `npm run e2e` 성공. 25개 spec 중 24개 실행 통과, 기존 Windows terminal spec 1개 skip. 시작·중지, pending, 오류, readiness 거부, 후속 상태 이벤트를 실제 Electron에서 확인 |
 | 실제 모델 턴 | 0회 |
 
+## 실제 수집과 실행 추적의 경합에서 발견한 Start 질문 누락
+
+2026-11-22에 Linux 시험 workspace에서 #2644가 `Eligible / Ready / Propose`이고 Start 관문이 Human인데도 질문이 생성되지 않았다. 실제 SQLite의 tracked·policy·runtime selection·authorization epoch는 현재 판과 일치했고 작업·결정은 없었다.
+
+검증 소스 `ad5f7509f318c2272c7e6becd9f310342c7769c7`에 동작을 바꾸지 않는 메타데이터 계측만 추가한 진단 Gateway로 다음 순서를 재현했다. 실행 파일 SHA-256은 `19175a3c7d6ee5b3e516e6a5b96dc9e743b9cfa0bd3caa82c238724b98c5e863`이다. 진단용 이벤트는 static 이름과 숫자·boolean만 기록하며 원문·credential·proof는 기록하지 않았다. 진단 코드는 제품 실행본에 포함하지 않는다.
+
+| 시각(UTC) | 관측 |
+| --- | --- |
+| 13:39:38.587 | 독립 상태 추적 worker가 coordinator gate 취득 |
+| 13:39:38.696 | 이슈 74건 추적 시작, 다음 페이지 없음 |
+| 13:39:44.692 | 수집 완료. 폐기·취소 없음, coordinator 존재 |
+| 13:39:45.817 | 분류 완료 |
+| 13:39:45.818 | full tick 진입 직후 `WouldBlock`; 실제 질문 판단 없이 정상 결과 반환 |
+| 13:39:53.480 | 추적 worker 종료. gate 보유 구간에 포함된 실행 시간 14,893ms |
+
+full tick의 gate 취득·시험 이슈 action 계산·질문 저장 이벤트는 0건이었다. 이 실행에서 publication lease 대기가 원인이라고 판단할 증거는 없었다. 직접 확인한 원인은 **추적이 공유 gate를 가진 동안 수집 후 tick이 `try_lock()` 경합을 성공으로 반환하며 생략되는 것**이다.
+
+두 경로는 각각 observer의 OS worker에서 호출된다. 수집은 publication lease를 놓고 tick을 호출하며 gate 재진입도 없다. 수정은 두 worker가 gate를 기다려 순서대로 처리하도록 하고, 취득 직후 취소를 다시 검사해 취소된 worker가 복구 쓰기를 하지 않도록 한다. poisoned gate도 정상 완료로 숨기지 않는다.
+
+[실제 재현 메타데이터](issue-2555-live-gate-starvation.json)에 해당 순서와 실행 상태를 보관했다. 수정과 회귀의 결과는 아래 `b7de0bcd` 검증 기록에서 확인한다. 위 진단은 실제 native Start나 모델 → PR → 상태 댓글의 성공 증거가 아니다. 진단 종료 시 planning revision 4, task 0개, pool 비활성, 열린 결정·결정 이력·실제 모델 턴은 모두 0이었고 진단 Gateway와 observer를 정상 종료했다.
+
 ## 실제 모델 확인 계획: 허가 확보, 준비 중
 
 [AGENTS.md](../../AGENTS.md)의 검증 지침은 `turn/start`·`turn/steer` 전에 사용자 허가를 요구한다. #2555의 실제 모델 확인은 자동 회귀와 별도로, 대상 저장소·변경 범위·모델 실행 범위·외부 쓰기를 구체화했으며, 2026-11-22 사용자가 해당 계획을 승인했다. 일반 개발·PR 작업 허가를 실제 모델 검증 허가로 바꾸어 해석하지 않는다.
 
-또한 제품의 시작 결정은 [정식 native 확인 경로](issue-human-confirmation.md)를 거쳐야 한다. 위 테스트 capability를 실제 실행에 주입하거나 proof를 직접 만들지 않는다. runtime의 Propose 상향 확인과 해당 이슈의 Start 확인은 각각의 실제 native 행동이다.
+또한 제품의 시작 결정은 [정식 native 확인 경로](issue-human-confirmation.md)를 거쳐야 한다. 위 테스트 capability를 실제 실행에 주입하거나 proof를 직접 만들지 않는다. runtime 수준을 올릴 때와 해당 이슈의 Start를 승인할 때 제품이 요구하는 native 확인을 거친다. 현재 파일 정책은 이미 Propose이므로 이번 준비에는 수준 상향이 필요하지 않다.
 
 ### 모델 실행 수의 제한
 
@@ -186,10 +207,10 @@ Gateway의 저장소 kernel은 이슈 observer를 구성하지만 병렬 풀은 
 | 항목 | 승인 범위 |
 | --- | --- |
 | 저장소 | `RefinedStone/codex-exec-loop` |
-| 실행본 | `ad5f7509f318c2272c7e6becd9f310342c7769c7`의 Linux `akra`·`akra-gateway`. 고정 바이너리 경로·hash manifest·검증 범위는 아래 최종 소스 기록 참조 |
+| 실행본 | `b7de0bcdc2411f90ee33768fa23f988eba598374`의 Linux `akra`·`akra-gateway`. 고정 바이너리·hash·검증 범위는 아래 경합 수정 기록 참조. Desktop 코드는 `ad5f7509` 대비 변경 없음 |
 | 실행 환경 | Linux에서 같은 사용자로 Desktop·Gateway·확인 helper 실행, 사람이 사용할 수 있는 GUI |
 | 작업공간 | Linux 내부의 독립 clone 1개, 위 프로세스가 공유하는 시험 전용 `AKRA_HOME` |
-| 시험 base | `codex/issue-2555-live-base-20261122`를 `3f437930f45d925372448cf6b4955411fbeb2b64`에서 생성한 뒤 `ad5f7509f318c2272c7e6becd9f310342c7769c7`로 fast-forward했다. Linux 시험 clone도 같은 SHA다 |
+| 시험 base | `codex/issue-2555-live-base-20261122`를 `3f437930`에서 생성하고 `ad5f7509`를 거쳐 `b7de0bcdc2411f90ee33768fa23f988eba598374`로 fast-forward했다. Linux 시험 clone도 같은 SHA다 |
 | 선택 대상 | 시험용 이슈 1건만 선택하는 `akra-ia4-5-live-20261122` 라벨을 생성하고 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644)에만 붙였다 |
 | 이슈 | [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644) 생성 완료. `docs/validation/issue-2555-live-smoke-20261122.md` 한 파일만 추가하는 기준 |
 | PR | 실제 task branch를 push하고 시험 base 대상으로 PR 생성 목표 1회 |
@@ -200,7 +221,7 @@ Gateway의 저장소 kernel은 이슈 observer를 구성하지만 병렬 풀은 
 
 유효 정책은 `propose`, 시험 선택 라벨 하나, 확인된 stable actor ID, `budget.max_attempts = 1`, 사용자 허가 `feedback.comment = true`, `feedback.labels = false`, `feedback.transition = false`, `close.when = "never"`로 제한한다. PR mode는 `required`, autonomous delivery opt-in은 끈 상태로 둔다. 공개 저장소 실행에는 별도의 parent-process public-repository opt-in을 확인한다.
 
-live 최소 구성은 같은 Linux 사용자·`AKRA_HOME`·로컬 파일시스템과 IPC를 공유하는 Desktop, Gateway, confirmation helper와 작업공간이다. Desktop이 로컬 `akra-gateway desktop-confirmation-bridge`를 시작하고 Gateway가 자기 `AKRA_HOME/run`의 파일과 Unix socket을 검증한다. 사용자는 실제 GUI의 native 확인 창에서 Propose 상향과 Start를 확인해야 한다. Windows Desktop의 원격 host 조회 기능은 이 로컬 승인 경로를 제공하지 않는다.
+live 최소 구성은 같은 Linux 사용자·`AKRA_HOME`·로컬 파일시스템과 IPC를 공유하는 Desktop, Gateway, confirmation helper와 작업공간이다. Desktop이 로컬 `akra-gateway desktop-confirmation-bridge`를 시작하고 Gateway가 자기 `AKRA_HOME/run`의 파일과 Unix socket을 검증한다. 해당 이슈의 Start에는 사용자가 실제 GUI의 native 확인 창에서 응답해야 한다. Windows Desktop의 원격 host 조회 기능은 이 로컬 승인 경로를 제공하지 않는다.
 
 WSLg의 `DISPLAY`와 display socket, Linux의 GitHub 계정 `RefinedStone` 및 Codex ChatGPT 로그인 상태를 확인했다. 최종 소스의 Linux Desktop 창 표시, 한글 font 보완과 trace 재시작, 시험용 0-turn thread의 UI 표시도 확인했다. 이 준비 확인은 native 승인이나 실제 모델 접근 성공을 뜻하지 않는다. native Desktop/Gateway 연결과 Propose·Start 확인, 실제 worker profile·모델 접근 권한, 설정을 덮어쓰는 환경변수, active direction·빈 task authority 및 PR 생성으로 작동할 CI·외부 리뷰를 실행 전에 점검한다. 자격 증명 원문은 출력하지 않는다.
 
@@ -264,7 +285,7 @@ cargo test --locked --all-features --lib -- \
 
 자동 회귀 결과와 live 결과는 따로 기록한다. 자동 회귀 통과만으로 실제 native 승인, 모델 수행, GitHub 전달 또는 OS crash 복구까지 성공했다고 결론 내리지 않는다.
 
-### 후속 최종 소스 검증 — `ad5f7509`
+### 제어 기능 소스 검증 — `ad5f7509`
 
 이 기록은 위 초기 `3f437930` 결합 회귀와 `896781dc` Gateway 제어 검증 이후의 실행 소스를 대상으로 한다. 관련 회귀, 전체 CI 실패와 후속 수정의 로컬 검증 결과를 구분한다.
 
@@ -278,7 +299,7 @@ cargo test --locked --all-features --lib -- \
 | 시험 base·clone | 둘 다 `ad5f7509f318c2272c7e6becd9f310342c7769c7`로 고정 |
 | Linux 전체 CI | [run 45022050145](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45022050145): **5064 passed, 1 failed, 14 ignored**. `the_spec_entry_of_a_command_carries_its_meaning_and_its_input`의 예상 command family 목록에서 `parallel`이 빠진 실패 |
 | 후속 기대값 수정·로컬 검증 | 예상 목록에 `parallel` 한 줄을 추가했다. 관련 명세 시험 **2개 통과**, planner가 지정한 **Windows Full 재실행 통과(exit 0)** |
-| 후속 CI | 기대값 수정 commit 뒤 새 CI 실행 예정. 위 CI 실패를 통과로 바꾸어 기록하지 않음 |
+| 후속 CI | `8d743a30dc1d0323456c18348ab70f012c942928`의 [run 45024197035](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45024197035) 통과(attempt 2). 첫 시도의 기존 app-server 종료·응답 관찰 경합 시험 1건 실패 뒤, 코드·시험을 바꾸지 않은 같은 head의 1회 재실행이 통과. 이후 경합 수정의 CI와 구분 |
 
 최종 Linux build·관련 시험·Desktop 결과는 `C:/dev/akra-queue/analysis/issue-2555-final-linux.log`, 전체 CI 실패는 `issue-2555-ci-45022050145-rust.log`, 기대값 수정 후 로컬 Full 결과는 `issue-2555-ci-spec-fix-full.log`에 남겼다. 이 고정 실행본의 증거는 `ad5f7509`까지이며 후속 commit의 Linux 검증을 대신하지 않는다.
 
@@ -293,3 +314,24 @@ cargo test --locked --all-features --lib -- \
 - 이 시점의 실제 모델 턴·시험 PR·상태 댓글은 0회다. native Start 확인과 실제 모델 전달 흐름은 아직 미실행이다.
 
 후속 로컬 원본 로그: `C:/dev/akra-queue/analysis/issue-2555-parallel-control-rust-r2.log`, `issue-2555-parallel-control-desktop-r2.log`, `issue-2555-parallel-control-full-r4.log`. 원본 로그 경로는 실행 호스트 기준이며 공식 CI 링크는 PR 본문에 남긴다.
+
+### 경합 수정과 실제 시작 질문 복구 — `b7de0bcd`
+
+| 항목 | 기록 |
+| --- | --- |
+| 검증 코드 SHA | `b7de0bcdc2411f90ee33768fa23f988eba598374` — 검증한 Rust 4개 파일만 변경한 commit |
+| Windows 관련 회귀 | `issue_coordinator::tests issue_observer_tests::`: **107 passed, 0 failed, 0 ignored**. 새 gate 회귀 4개 포함 |
+| Windows Full | planner가 지정한 Full 통과. native contracts·build/check/clippy·Desktop check, Vitest **963 passed / 7 existing skipped** |
+| Linux 관련 회귀 | **139 passed, 0 failed, 0 ignored**, 테스트 73.17초. coordinator·observer·실제 SQLite/Git flow·실행 DB·병렬 제어·대표 checkout 범위 |
+| 정식 Linux 실행 파일 | 정확한 commit의 clean checkout에서 `cargo build --locked --bin akra --bin akra-gateway` 성공. 검증한 4파일의 정규화 SHA와 commit Git blob·checkout SHA 일치 |
+| 동결 경로 | `/home/akra/.cache/akra-validation/issue-2555-gate-binaries-20261122/b7de0bcdc241`. 디렉터리 0700, 실행 파일 0500 |
+| Desktop | `ad5f7509` 대비 코드 변경 0. 기존 check/build 및 전체 E2E 증거 유지. 같은 Desktop에 수정 Gateway를 연결 |
+| 시험 base·clone | `b7de0bcdc2411f90ee33768fa23f988eba598374`로 fast-forward, clean 상태. GitHub identity·쓰기 자격·push dry-run과 Codex ChatGPT 로그인 확인 |
+| 실제 공개 query | planning revision 4, active/proposed/skipped task 각각 0, pool false. #2644의 열린 Start 질문 **1개**, 결정 이력 0개 |
+| 실제 모델·전달 | 조회 시점의 native Start 응답·모델 턴·시험 PR·상태 댓글은 모두 **0회**. 실제 모델 전달 흐름은 미완료 |
+
+추가 회귀는 `collector_tick_waits_for_tracking_and_opens_one_start_decision`, `cancelled_tick_wait_does_not_recover_pending_controls`, `cancelled_tracking_wait_does_not_recover_pending_controls`, `poisoned_gate_is_an_error_for_tick_and_tracking`이다. 실제 gate 경합을 채널로 관찰한 뒤 holder를 해제하며, 질문 1개 유지와 대기 중 취소의 저장·보고·source·execution 효과 0을 검사한다. timeout은 양의 handshake가 누락된 경우의 교착 감지에만 사용한다.
+
+Linux의 첫 실행에는 Windows PATH 54개가 상속돼 파일 검증이 오래 걸렸다. 138개 통과·1개 미완료 상태에서 시험 프로세스만 정상 종료하고 환경 중단으로 보관했다. 소스는 바꾸지 않고 Linux 전용 PATH로 재실행해 139개가 모두 통과했다. 최종 빌드도 같은 Linux 전용 PATH를 사용했다.
+
+최종 로그는 `C:/dev/akra-queue/analysis/issue-2555-gate-serialization-rust.log`, `issue-2555-gate-serialization-full.log`, `issue-2555-gate-serialization-linux-r2.log`에 있다. [재현·복구 메타데이터](issue-2555-live-gate-starvation.json)에 두 실행 파일 SHA-256과 수정 전후의 관측을 기록했다. 임시 진단 Gateway는 종료했고 실제 창에는 정식 동결 실행본을 연결했다. 이 query 확인을 실제 사람 승인이나 모델 → PR → 댓글 성공으로 확대하지 않는다.
