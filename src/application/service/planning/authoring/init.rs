@@ -1551,6 +1551,21 @@ mod tests {
             .service
             .stage_simple_mode_draft(fixture.workspace.path_str())
             .expect("simple draft should stage through SQLite");
+        let edited_body =
+            "# Result Output\n\n- Preserve completion criteria during staged promotion.\n";
+        fixture
+            .workspace_port
+            .replace_planning_draft_file(
+                fixture.workspace.path_str(),
+                &stage.draft_name,
+                RESULT_OUTPUT_FILE_PATH,
+                edited_body,
+            )
+            .expect("staged result output should change without updating active authority");
+        assert_eq!(
+            fixture.task_snapshot().planning_revision,
+            source_planning_revision
+        );
 
         let promoted = fixture
             .service
@@ -1559,6 +1574,14 @@ mod tests {
 
         assert!(promoted.validation_report.is_valid());
         assert_eq!(promoted.promoted_file_count, 2);
+        assert_eq!(
+            fixture
+                .workspace_port
+                .load_optional_planning_file(fixture.workspace.path_str(), RESULT_OUTPUT_FILE_PATH)
+                .expect("promoted result output should load")
+                .as_deref(),
+            Some(edited_body)
+        );
         let preserved = fixture.task_snapshot();
         assert_eq!(preserved.task_authority, task_authority);
         assert!(preserved.planning_revision > source_planning_revision);
