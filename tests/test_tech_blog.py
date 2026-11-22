@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -130,6 +131,98 @@ class BlogWorkflowTest(unittest.TestCase):
         with (self.root / "draft.md").open("a", encoding="utf-8") as stream:
             stream.write("\nnew fact")
         self.assertEqual("review_outdated", check()[1]["findings"][0]["code"])
+
+    def test_review_waits_before_starting_a_model(self):
+        with patch.object(worker, "run_reviewer", side_effect=AssertionError("unexpected model call")):
+            state, status = self.review_cli()
+            self.assertEqual((1, "needs_evidence"), (status, state["state"]))
+            self.add_captures()
+            state, status = self.review_cli()
+            self.assertEqual((1, "awaiting_draft"), (status, state["state"]))
+
+    def review_cli(self):
+        args = ["tech_blog.py", "review", "--repo", str(self.repo), "--case", str(self.root),
+                "--model", "test-model"]
+        with patch("sys.argv", args):
+            return worker.main()
+
+    def review_checks(self):
+        return [
+            {"id": name, "reason": "fixture observation", "decision": "pass", "sources": sources}
+            for name, sources in [
+                ("draft", []), ("claim/transfer", ["review-builder"]),
+                ("claim/send", ["handoff-check"]), ("figure/original", []), ("figure/composer", []),
+            ]
+        ]
+
+    def test_review_sends_verified_bytes_and_returns_reusable_result(self):
+        self.add_captures()
+        self.write_draft()
+        real_run = subprocess.run
+        workspaces = []
+
+        def simulate(command, **kwargs):
+            if command[0] != "fixture-codex":
+                return real_run(command, **kwargs)
+            work = kwargs["cwd"]
+            workspaces.append(work)
+            self.assertEqual("exec", command[1])
+            self.assertIn("--ephemeral", command)
+            self.assertIn("--ignore-user-config", command)
+            self.assertEqual("read-only", command[command.index("--sandbox") + 1])
+            self.assertEqual(["--", "-"], command[-2:])
+            self.assertTrue((work / command[command.index("--output-schema") + 1]).is_file())
+            payload = json.loads(kwargs["input"].split(b"\n", 1)[1])
+            self.assertEqual("before\nafter", payload["packet"]["sources"][0]["text"])
+            names = [command[i + 1] for i, arg in enumerate(command) if arg == "--image"]
+            self.assertEqual(len(self.brief["figures"]), len(names))
+            self.assertEqual(names, [entry["attachment"] for entry in payload["attachments"]])
+            for figure, attachment in zip(self.brief["figures"], payload["attachments"]):
+                self.assertEqual(figure["id"], attachment["id"])
+                self.assertEqual((self.root / figure["path"]).read_bytes(),
+                                 (work / attachment["attachment"]).read_bytes())
+            # Extra response fields cannot override the worker's revision or model.
+            answer = {"checks": self.review_checks(), "input_sha256": "wrong", "model": "wrong"}
+            (work / command[command.index("--output-last-message") + 1]).write_text(json.dumps(answer), "utf-8")
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(worker.shutil, "which", return_value="fixture-codex"), \
+                patch.object(worker.subprocess, "run", side_effect=simulate):
+            result, code = self.review_cli()
+        self.assertEqual((0, "reviewed", "test-model"), (code, result["state"], result["model"]))
+        self.assertEqual(1, len(workspaces))
+        self.assertFalse(workspaces[0].exists())
+        # Windows PowerShell can redirect stdout as UTF-16.
+        self.review.write_text(json.dumps(result), "utf-16")
+        check_code, checked = self.run_cli("check", "--review", str(self.review))
+        self.assertEqual((0, "reviewed"), (check_code, checked["state"]))
+
+    def test_draft_change_during_review_invalidates_result(self):
+        self.add_captures()
+        self.write_draft()
+
+        def edit_draft(*_):
+            with (self.root / "draft.md").open("a", encoding="utf-8") as out:
+                out.write("\nchanged before result")
+            return self.review_checks()
+
+        with patch.object(worker, "run_reviewer", side_effect=edit_draft):
+            result, code = self.review_cli()
+        self.assertEqual((1, "awaiting_review"), (code, result["state"]))
+        self.assertEqual([{"code": "review_outdated"}], result["findings"])
+        self.assertNotIn("checks", result)
+
+    def test_reviewer_errors_and_incomplete_response_do_not_pass(self):
+        self.add_captures()
+        self.write_draft()
+        with patch.object(worker.shutil, "which", return_value=None), self.assertRaises(worker.ReviewerError):
+            self.review_cli()
+        with patch.object(worker, "run_reviewer", return_value=[{"id": "draft"}]):
+            result, code = self.review_cli()
+        self.assertEqual((1, "awaiting_review"), (code, result["state"]))
+        self.assertEqual([{"code": "review_incomplete"}], result["findings"])
+        with patch.object(worker, "run_reviewer", return_value=42), self.assertRaises(worker.ReviewerError):
+            self.review_cli()
 
 
 if __name__ == "__main__":
