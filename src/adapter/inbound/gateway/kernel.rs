@@ -1181,6 +1181,8 @@ mod tests {
                 .expect("fake attached client");
             assert!(client.query().unwrap().parallel.enabled);
             let attached = AttachedKernel {
+                kernel: "test".into(),
+                extension_events: None,
                 workspace: requested.into(),
                 issue_workspace: "/main".into(),
                 client_name: "parallel-control-fixture".into(),
