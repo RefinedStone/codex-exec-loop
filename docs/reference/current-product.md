@@ -255,6 +255,61 @@ Authority lives below `${AKRA_HOME:-~/.akra}/projects/<project>/runtime/planning
 both Git and non-Git workspaces. Git repositories use a private incarnation marker in the canonical
 Git common directory so linked worktrees share one authority and independent clones do not.
 
+## Issue Automation Execution
+
+Implementation scope: IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551)),
+on the [#2638 PR branch](https://github.com/RefinedStone/codex-exec-loop/pull/2638).
+The unmerged implementation and its parent chain are tracked in
+[plan 28](../plan/28-akra-issue-automation.md#ia4-조각-상태).
+
+The issue coordinator reads the existing work order's task lineage, worker sessions, and PR
+validation facts through a neutral execution port. It projects queued, running, in-review, and
+integrated work into the issue ledger. Local tracking runs separately from remote issue collection,
+including while collection is off. Tracking an existing fact grants no new execution or delivery
+permission; those actions retain current policy, source, gate, and control checks.
+Accepted progress produces `issue_execution_progressed`; the first trusted integration produces
+`issue_integrated`.
+
+Execution, verification, and publication counts are separate. Stable execution and terminal receipt
+identities prevent repeated observations and restarts from counting the same fact twice. Execution
+counts advance for new execution receipts; only new `observe_again` or `queue_recovery` terminal
+receipts advance verification counts.
+`budget.max_attempts` applies to implementation attempts, including supplemental tasks, at durable
+execution admission. An answer that resumes the same logical task consumes no additional
+implementation attempt. When rework is still needed at the execution limit, the issue becomes
+`failed` and requires human recovery. Publication accounting belongs to the feedback follow-up
+(#2552).
+
+| Terminal classification | Execution response |
+| --- | --- |
+| `rework_needed` | Existing PR validation admits the supplemental task and work-order lineage atomically, within the work's execution limit. |
+| `observe_again` | A durable recovery receipt registers a fresh validation successor for another observation. |
+| `queue_recovery` | Recover the existing remediation queue using its original idempotency key and task correlation. |
+| `contract_recovery`, `identity_conflict`, `pull_request_closed` | Open a human recovery decision; no automatic implementation retry. |
+
+Recovery binds the original terminal record and observation revision. A repeated request reuses its
+receipt and successor, preserving the original terminal and existing PR-validation FSM. A new
+observation attempt has a distinct identity. Verification recovery does not consume an
+implementation attempt.
+
+An `awaiting_user` task opens one decision for the exact pending question. Its worktree and session
+remain available for continuation. Replying requires a verified human confirmation and nonblank
+shared answer text. The persisted continuation claim checks the question's task, session, thread,
+worktree, lease generation, and current authorization before sending to that same thread. It never
+falls back to a new thread. An uncertain send remains `unknown` and is not automatically resent.
+Opening “my conversation” selects the confirmed current thread or a shared-copy draft; takeover
+and sending a turn remain explicit actions. An ambiguous conversation identity remains unavailable.
+
+Trusted integration is an immutable work fact. It fixes execution progress at `done`, separately
+from the provider issue's open/closed state. Later `observe_again` recovery preserves that state and
+the original integration identity while observing post-merge validation. It creates no new
+implementation task; post-integration queue recovery is blocked. A previously exhausted `failed`
+issue may become `done` when trusted integration arrives, while cancellation and the held flag are
+preserved.
+
+External feedback (#2552), provider closing policy (#2553), expanded Desktop execution tracking
+(#2554), and the complete results-return validation (#2555) remain separate IA4 slices.
+
 ## Parallel Contract
 
 - Bare `:parallel`/`:pa` is enable-or-refresh; `:parallel on` is not implemented.
