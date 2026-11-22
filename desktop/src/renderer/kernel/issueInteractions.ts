@@ -1,4 +1,4 @@
-import type { IssueAutomationAnswer, IssueDetailAnswer, KernelCommand } from "./protocol";
+import type { IssueAutomationAnswer, IssueDecisionRequestState, IssueDetailAnswer, IssueEventReference, KernelCommand } from "./protocol";
 
 export type ReadyIssueDetail = Extract<IssueDetailAnswer, { status: "ready" }>;
 export type IssueAutonomyLevel = Extract<KernelCommand, { type: "set_issue_autonomy" }>["level"];
@@ -30,4 +30,46 @@ export const ISSUE_DECISION_KIND_LABEL: Record<string, string> = {
 
 export function issueTextBytes(value: string): number {
   return new TextEncoder().encode(value).length;
+}
+
+export interface IssueDecisionDraft {
+  readonly option: string;
+  readonly note: string;
+}
+
+export interface IssueInterventionDraft {
+  readonly message: string;
+  readonly steering: boolean;
+  readonly cancelling: boolean;
+}
+
+export const EMPTY_ISSUE_DECISION_DRAFT: IssueDecisionDraft = { option: "", note: "" };
+export const EMPTY_ISSUE_INTERVENTION_DRAFT: IssueInterventionDraft = { message: "", steering: false, cancelling: false };
+
+export function issueDraftIdentity(issue: IssueEventReference): string {
+  return JSON.stringify([issue.provider, issue.server_id, issue.repository_id, issue.issue_id, issue.project_scope.workspace_dir]);
+}
+
+export function decisionDraftIdentity(request: IssueDecisionRequestState): string {
+  const basis = request.basis;
+  return JSON.stringify([
+    issueDraftIdentity(request.subject.issue), request.id, request.revision, request.kind, request.gate, request.state,
+    basis.policy_version, basis.gate_revision, basis.authorization_epoch ?? 0, basis.work_order_id ?? null,
+    basis.field_hash?.version ?? null, basis.field_hash?.sha256 ?? null,
+  ]);
+}
+
+/** 목록 전체 판이나 관찰 시각 대신 실제 작업 대상과 공개·허가 기준으로 사용자 지시 초안을 묶는다. */
+export function interventionDraftIdentity(detail: ReadyIssueDetail): string {
+  const observation = detail.item.current;
+  const content = observation.status === "observed" ? observation.content : null;
+  const control = detail.control;
+  return JSON.stringify([
+    issueDraftIdentity(detail.item.issue), detail.item.work?.work_order_id ?? null, [...(detail.item.work?.task_ids ?? [])].sort(),
+    control?.authorization_epoch ?? null, control?.tracked ?? null, control?.held ?? null, control?.taken_over ?? null, control?.cancelled ?? null,
+    observation.status, observation.status === "observed" ? observation.remote_state : null,
+    content?.kind ?? null, content?.policy_version ?? null, content?.basis.field_hash.version ?? null, content?.basis.field_hash.sha256 ?? null,
+    detail.item.triage?.policy_version ?? null, detail.conversation?.kind ?? null,
+    detail.conversation?.kind === "thread" ? detail.conversation.thread_id : null,
+  ]);
 }

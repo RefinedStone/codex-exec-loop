@@ -24,6 +24,7 @@ let control = { tracked: true, held: false, taken_over: false, cancelled: false,
 let nextDelivery = "queued";
 let conversation = { kind: "draft", shared_copy: { title: "공유 작업 · 검색 응답 개선", body: "공유된 요구 사항을 검토하고 이어서 작업합니다." } };
 let supersedeAnswer = false;
+let heldDetailReply = null;
 const title = "검색 응답을 빠르게 하고 결과를 보존하기";
 const question = "공유된 계획을 기준으로 이 작업을 시작할까요?";
 const requestDecision = (id = "decision-start") => ({
@@ -86,7 +87,14 @@ const kernel = {
       if (params.query?.type === "issue_automation") return { result: state() };
       if (params.query?.type === "issues") return { result: { type: "issues", status: "ready", revision, items: [item()],
         groups: [{ id: "needs-decision", label: "결정이 필요한 이슈", item_indices: [0] }], next_after: null } };
-      if (params.query?.type === "issue") return { result: detail() };
+      if (params.query?.type === "issue") {
+        const reply = { result: detail() };
+        if (!heldDetailReply) return reply;
+        const held = heldDetailReply;
+        heldDetailReply = null;
+        held.requested = true;
+        return { ...reply, replyAfter: held.replyAfter };
+      }
       if (params.query?.type === "issue_automation_policy") return { result: { type: "issue_automation_policy", status: "ready", workspace, version: "file-policy", files: [],
         settings: [{ key: "select.labels_any", label: "선택 레이블", value: "akra:ready", resolution: "derived", resolution_summary: "워크플로에서 가져온 값입니다.", origins: [{ scope: "builtin", label: "기본 정책" }] }] } };
     }
@@ -144,6 +152,14 @@ const until = async (condition, description = "expected state") => {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("issue intervention fixture did not reach " + description);
+};
+const holdNextDetailReply = () => {
+  assert.equal(heldDetailReply, null);
+  let release;
+  const replyAfter = new Promise((resolve) => { release = resolve; });
+  const held = { replyAfter, release, requested: false };
+  heldDetailReply = held;
+  return held;
 };
 const capture = async (suffix) => {
   if (!process.env.AKRA_QA_ISSUE_INTERVENTIONS_SCREENSHOT) return;
@@ -230,6 +246,66 @@ try {
   await capture("compact");
   await page.getByTestId("issues-maximize").click();
   await capture("expanded");
+  const draftNote = "백그라운드 조회에도 보존할 공유 메모";
+  const draftMessage = "아직 보내지 않은 작업자 지시";
+  await currentCard().locator('input[value="approve"]').check();
+  await currentCard().getByTestId("issue-decision-note").fill(draftNote);
+  await panel.getByTestId("issue-action-steer_issue").click();
+  await panel.getByTestId("issue-steer-message").fill(draftMessage);
+  const draftCommandCounts = () => ["answer_issue_decision", "steer_issue", "cancel_issue_work"].map((name) => commandRequests(name).length);
+  const beforeDraftCommands = draftCommandCounts();
+  const beforeDraftDialogs = await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length);
+  const refreshDrafts = async (description) => {
+    const held = holdNextDetailReply();
+    revision++;
+    gateway.sendKernelEvent(state("issues"));
+    try {
+      await until(() => held.requested, description + " detail request");
+      await panel.getByTestId("issues-detail-loading").waitFor();
+      assert.equal(await currentCard().count(), 0, "stale server decisions stay hidden while the reply is held");
+      assert.equal(await panel.getByTestId("issues-shared-copy").count(), 0);
+      assert.equal(await panel.getByTestId("issue-steer-message").count(), 0);
+      assert.equal(await panel.getByTestId("issue-cancel-confirm").count(), 0);
+      assert.deepEqual(draftCommandCounts(), beforeDraftCommands);
+    } finally {
+      held.release();
+    }
+    await currentCard().waitFor();
+    await until(async () => (await panel.getByTestId("issues-detail-loading").count()) === 0, description + " detail response");
+  };
+  await refreshDrafts("same basis");
+  assert.equal(await currentCard().locator('input[value="approve"]').isChecked(), true);
+  assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), draftNote);
+  assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), draftMessage);
+  assert.equal(await panel.getByTestId("issue-steer-send").isEnabled(), true);
+  await panel.getByTestId("issue-action-cancel_issue_work").click();
+  await panel.getByTestId("issue-cancel-confirm").waitFor();
+  await refreshDrafts("same basis cancel form");
+  assert.equal(await panel.getByTestId("issue-cancel-confirm").isVisible(), true);
+  assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), draftNote);
+
+  const originalDecisionId = openDecisions[0].id;
+  const originalDecisionRevision = openDecisions[0].revision;
+  control = { ...control, authorization_epoch: control.authorization_epoch + 1 };
+  openDecisions = openDecisions.map((request) => ({
+    ...request, basis: { ...request.basis, gate_revision: request.basis.gate_revision + 1, authorization_epoch: control.authorization_epoch },
+  }));
+  await refreshDrafts("changed basis");
+  assert.equal(openDecisions[0].id, originalDecisionId);
+  assert.equal(openDecisions[0].revision, originalDecisionRevision, "basis identity must not rely on the decision revision alone");
+  assert.equal(await currentCard().locator('input[value="approve"]').isChecked(), false);
+  assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), "");
+  assert.equal(await currentCard().getByTestId("issue-decision-answer").isDisabled(), true);
+  assert.equal(await panel.getByTestId("issue-cancel-confirm").count(), 0);
+  assert.equal(await panel.getByTestId("issue-steer-message").count(), 0);
+  await panel.getByTestId("issue-action-steer_issue").click();
+  assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), "");
+  assert.equal(await panel.getByTestId("issue-steer-send").isDisabled(), true);
+  await panel.getByTestId("issue-action-steer_issue").click();
+  assert.deepEqual(draftCommandCounts(), beforeDraftCommands);
+  assert.equal(await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length), beforeDraftDialogs);
+  console.log("PASS same-basis refresh preserves decision and intervention drafts; changed basis cannot submit old forms");
+
   await currentCard().locator('input[value="approve"]').check();
   await currentCard().getByTestId("issue-decision-note").fill("공유 가능한 검증 메모입니다.");
   await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 1; });
