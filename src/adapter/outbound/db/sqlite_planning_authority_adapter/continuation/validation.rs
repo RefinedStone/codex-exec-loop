@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::{StoredContinuation, load_task_authority_snapshot_from_connection, work_orders};
 use crate::application::port::outbound::planning_authority_port::{
@@ -69,7 +69,7 @@ pub(super) fn load_lease(
 }
 
 pub(super) fn validate_question(
-    connection: &Connection,
+    connection: &Transaction<'_>,
     request: &PlanningWorkerContinuationRequest,
     expected_epoch: Option<u64>,
 ) -> Result<std::result::Result<CurrentQuestion, Rejection>> {
@@ -169,7 +169,7 @@ pub(super) fn validate_question(
 }
 
 pub(super) fn validate_start(
-    connection: &Connection,
+    connection: &Transaction<'_>,
     row: &StoredContinuation,
     claim: &PlanningWorkerContinuationClaim,
 ) -> Result<()> {
