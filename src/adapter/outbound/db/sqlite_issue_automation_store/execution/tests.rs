@@ -7,6 +7,10 @@ use crate::domain::issue_automation::{IssueAutomationFlag, IssueTriageResult};
 use std::sync::{Arc, Barrier};
 
 fn seed(fixture: &Fixture) -> IssueWorkCheckpoint {
+    seed_with_tasks(fixture, vec!["task-1".into()])
+}
+
+fn seed_with_tasks(fixture: &Fixture, task_ids: Vec<String>) -> IssueWorkCheckpoint {
     let adapter = fixture.adapter();
     adapter.ensure_collection(fixture.cwd()).unwrap();
     let (_, tracked) = fixture.insert();
@@ -46,7 +50,7 @@ fn seed(fixture: &Fixture) -> IssueWorkCheckpoint {
             work_order_id: None,
             gate_revision: 1,
         },
-        task_ids: vec!["task-1".into()],
+        task_ids,
         permit_source: None,
         permit_revision: 0,
         delivery_granted: false,
@@ -711,3 +715,5 @@ fn stored_review_link_survives_adapter_reopen_without_duplicate_receipts() {
         events
     );
 }
+
+mod registration_recovery;

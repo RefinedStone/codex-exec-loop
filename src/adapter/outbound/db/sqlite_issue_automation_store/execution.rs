@@ -231,6 +231,19 @@ pub(super) fn apply(
                 }
             }
             let revision = super::triage::bump_catalog(tx, workspace)?;
+            // Registration may commit before its ACK reaches the issue checkpoint.
+            // Recover the first submission fact atomically with the observed lineage.
+            if work.task_ids.is_empty() && !observation.task_ids.is_empty() {
+                super::events::append_fact(
+                    tx,
+                    workspace,
+                    &work,
+                    IssueWorkEventKind::Submitted {
+                        task_ids: observation.task_ids.clone(),
+                    },
+                    revision,
+                )?;
+            }
             append_fact(
                 tx,
                 workspace,

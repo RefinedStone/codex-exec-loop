@@ -2292,6 +2292,11 @@ fn test_parallel_runtime() -> GitParallelModeRuntimeAdapter {
 // 공유한다. 이 파일은 공통 contract와 helper가 바뀔 때 전체 parallel_mode 테스트
 // 표면이 함께 흔들리도록 묶어 두는 entry point다.
 mod distributor;
+// This suite keeps the real Git, SQLite and publication persistence boundaries.
+// The actual private persistence lease is Unix-only, so verify the coupled flow
+// on platforms that support that lease instead of replacing it with a fake.
+#[cfg(unix)]
+mod issue_automation_flow;
 mod orchestrator_loop;
 mod pool;
 mod pr_validation_e2e;
