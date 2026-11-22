@@ -31,6 +31,7 @@ mod issue_decision;
 #[cfg(unix)]
 mod issue_flow;
 mod issue_intervention;
+mod repository_extensions;
 mod resource_versions;
 
 struct EchoUpstream {
