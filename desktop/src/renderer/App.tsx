@@ -698,7 +698,7 @@ export function App() {
                   onSync={async () => session.current?.syncIssues()}
                   onSetAutonomy={async (level) => session.current?.setIssueAutonomy(level)}
                   onAnswerDecision={async (decisionId, option, note) => session.current?.answerIssueDecision(decisionId, option, note)}
-                  onIntervene={async (action, message, confirm) => session.current?.interveneIssue(action, message, confirm)}
+                  onIntervene={async (action, message, confirm) => session.current?.interveneIssue(action, message, confirm) ?? "unavailable"}
                   onOpenConversation={openIssueConversation}
                   onOpenUrl={(url) => window.akra.github.openExternal(url)}
                 />
