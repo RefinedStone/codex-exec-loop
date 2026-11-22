@@ -149,6 +149,10 @@ pub(crate) fn resolve_blog_program(program: &str, cwd: &Path) -> Result<PathBuf>
     if path_is_untrusted(&executable, &untrusted_roots(cwd)) {
         bail!("blog runtime must be installed outside the repository")
     }
+    // Git for Windows cannot read its config when its mingw64 executable uses
+    // an extended path. Change only the spelling after canonical trust checks.
+    #[cfg(windows)]
+    let executable = PathBuf::from(windows_process_argument_path(&executable)?);
     Ok(executable)
 }
 

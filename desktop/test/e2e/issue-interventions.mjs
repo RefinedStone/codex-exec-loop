@@ -604,8 +604,20 @@ try {
   assert.equal(notice.options.body, "이슈에 새 결정 요청이 있습니다. 이슈 탭에서 확인해 주세요.");
   assert.ok(!JSON.stringify(notice).includes(question) && !JSON.stringify(notice).includes(title));
   assert.equal(requests.filter((entry) => entry.method === "akra/kernel/query").length, beforeBackgroundReads);
+  const otherWorkspace = "/work/other-app";
+  await app.evaluate(({ ipcMain }, cwd) => {
+    ipcMain.removeHandler("akra:choose-folder");
+    ipcMain.handle("akra:choose-folder", () => cwd);
+  }, otherWorkspace);
+  await page.getByTestId("new-folder-thread").click();
+  await page.getByTestId("home").locator(".home-pickers button").first().click();
+  await page.getByRole("option", { name: "폴더 고르기…", exact: true }).click();
+  await until(() => requests.filter(entry => entry.method === "akra/kernel/attach").at(-1)?.params.workspace === otherWorkspace,
+    "the home folder attaches its own repository");
   await page.evaluate(() => window.issueNotifications[0].onclick());
   await panel.locator('[data-decision-id="background-decision"]').waitFor();
+  assert.equal(requests.filter(entry => entry.method === "akra/kernel/attach").at(-1)?.params.workspace, workspace,
+    "an explicit issue notification takes priority over the selected home folder");
   await capture("notification");
   assert.equal(await page.evaluate(() => window.issueNotifications.length), 1);
   await panel.getByTestId("issues-report-tab").click();
