@@ -859,6 +859,16 @@ impl ParallelModeDistributorService {
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
             return Ok(None);
         }
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Ok(None);
+        }
         let session_key = lease_session_key(&resolution.lease);
         let detail = resolution
             .context
@@ -1052,6 +1062,16 @@ impl ParallelModeDistributorService {
             return Ok(DistributorEnqueueCommitAttempt::Complete(None));
         };
         pool_mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Ok(DistributorEnqueueCommitAttempt::Complete(None));
+        }
         if resolution.context.repo_root != preflight.repo_root
             || resolution.context.pool_root != preflight.pool_root
             || !resolution.lease.same_generation_as(&preflight.lease)

@@ -312,6 +312,10 @@ struct AccountRecord {
 #[serde(rename_all = "camelCase")]
 pub(super) struct ThreadListParams {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model_providers: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) archived: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) cwd: Option<String>,

@@ -32,6 +32,20 @@ pub enum IssueCoordinatorFact {
         fact: IssueDecisionFact,
         revision: u64,
     },
+    ExecutionProgressed {
+        event_id: String,
+        issue: IssueReference,
+        work_order_id: String,
+        progress: crate::domain::issue_automation::execution::IssueExecutionProgress,
+        revision: u64,
+    },
+    Integrated {
+        event_id: String,
+        issue: IssueReference,
+        work_order_id: String,
+        integration: crate::domain::issue_automation::execution::IssueExecutionIntegration,
+        revision: u64,
+    },
     WorkSubmitted {
         event_id: String,
         issue: IssueReference,
@@ -101,7 +115,16 @@ impl IssueCoordinatorService {
             self.store.as_ref(),
             self.execution.as_ref(),
         )?;
-        let mut first_error = None;
+        let mut execution_failures = std::collections::BTreeSet::new();
+        let mut first_error = execution::track(
+            self,
+            cancel,
+            now_unix_ms,
+            execution_enabled,
+            committed,
+            &mut execution_failures,
+        )
+        .err();
         let mut after = None;
         'batches: loop {
             if cancel.is_cancelled() {
@@ -120,6 +143,10 @@ impl IssueCoordinatorService {
             for item in batch.items {
                 if cancel.is_cancelled() {
                     break 'batches;
+                }
+                if execution_failures.contains(&issue_work_order_id(&item.issue)) {
+                    // 실행 사실을 읽거나 고정하지 못한 작업에는 이 tick에서 새 허가를 내지 않는다.
+                    continue;
                 }
                 let result =
                     self.reconcile(item, cancel, now_unix_ms, execution_enabled, committed);
@@ -153,6 +180,24 @@ impl IssueCoordinatorService {
             .pending_issue_work_events(&self.workspace)?
             .into_iter()
             .map(|event| match event.kind {
+                IssueWorkEventKind::ExecutionProgressed { progress } => {
+                    IssueCoordinatorFact::ExecutionProgressed {
+                        event_id: event.event_id,
+                        issue: event.issue,
+                        work_order_id: event.work_order_id,
+                        progress,
+                        revision: event.revision,
+                    }
+                }
+                IssueWorkEventKind::Integrated { integration } => {
+                    IssueCoordinatorFact::Integrated {
+                        event_id: event.event_id,
+                        issue: event.issue,
+                        work_order_id: event.work_order_id,
+                        integration,
+                        revision: event.revision,
+                    }
+                }
                 IssueWorkEventKind::Submitted { task_ids } => IssueCoordinatorFact::WorkSubmitted {
                     event_id: event.event_id,
                     issue: event.issue,
@@ -325,20 +370,29 @@ impl IssueCoordinatorService {
         if action == IssueCoordinatorAction::None
             && !matches!(
                 tracked.state,
-                IssueAutomationState::Done | IssueAutomationState::Cancelled
+                IssueAutomationState::Done
+                    | IssueAutomationState::Cancelled
+                    | IssueAutomationState::Failed
             )
             && let Some(work) = &work
             && work.current_authorization_basis() == &basis
             && ready_for_propose(&assessment)
             && decision.is_some_and(|decision| human_start(&decision.request))
-            && execution.frozen_source.is_none()
-            && execution
-                .dispatch_source
-                .as_ref()
-                .is_some_and(|source| work.permit_source.as_ref() != Some(source))
         {
-            // 배정 전 base가 바뀌면 같은 작업을 기존의 원격 재조회/승인 검사 경로로 보낸다.
-            action = IssueCoordinatorAction::SubmitWork;
+            let floor = self.revoke_on_current_error(
+                Some(work),
+                self.execution
+                    .permit_gate_revision(&self.workspace, &work.order.work_order_id),
+            )?;
+            if floor > work.permit_revision
+                || execution
+                    .dispatch_source
+                    .as_ref()
+                    .is_some_and(|source| work.permit_source.as_ref() != Some(source))
+            {
+                // New lineage or a changed pre-dispatch base needs the normal fresh approval check.
+                action = IssueCoordinatorAction::SubmitWork;
+            }
         }
         match action {
             IssueCoordinatorAction::OpenDecision => {
@@ -469,6 +523,11 @@ impl IssueCoordinatorService {
         execution_enabled: bool,
         committed: &Reporter<'_>,
     ) -> Result<()> {
+        if let Some(work) = existing.as_ref()
+            && execution::submission_blocked(self, work)?
+        {
+            return Ok(());
+        }
         // 느린 integration target fetch를 먼저 마친다. 제출 직전의 마지막 원격 읽기는 이슈다.
         let execution = self
             .execution
@@ -550,7 +609,14 @@ impl IssueCoordinatorService {
             .map(|snapshot| snapshot.saved_gate_revision)
             .unwrap_or(0)
             .max(work.permit_revision)
-            .max(basis.gate_revision);
+            .max(basis.gate_revision)
+            .max(
+                self.revoke_on_current_error(
+                    Some(&work),
+                    self.execution
+                        .permit_gate_revision(&self.workspace, &work.order.work_order_id),
+                )?,
+            );
         let gate_revision = if prior_source
             .zip(source.as_deref())
             .is_some_and(|(old, source)| old != source)
@@ -591,6 +657,16 @@ impl IssueCoordinatorService {
                 }
             };
             work.task_ids = task_ids;
+            let max_attempts =
+                self.revoke_on_current_error(Some(&work), self.triage.execution_attempt_limit())?;
+            self.revoke_on_current_error(
+                Some(&work),
+                self.execution.execution_limit(
+                    &self.workspace,
+                    &work.order.work_order_id,
+                    max_attempts,
+                ),
+            )?;
             work.blocked_reason = if source.is_none() {
                 Some(IssueWorkBlockReason::SourceUnavailable)
             } else if execution_enabled {
@@ -977,6 +1053,8 @@ fn matches_approval(
             !tracked.flags.held && !tracked.flags.stale && !tracked.flags.unknown
         })
 }
+
+mod execution;
 
 #[cfg(test)]
 mod tests;

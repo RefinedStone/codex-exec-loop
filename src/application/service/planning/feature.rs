@@ -47,6 +47,14 @@ pub struct PlanningFeature {
 // 이 impl은 PlanningFeature를 만드는 public entrypoint를 모은다. adapter 쪽은 포트만 준비해 넘기고, 내부 서비스
 // 조립 방식은 composition 계층에 캡슐화된다.
 impl PlanningFeature {
+    pub fn with_work_order_repository(
+        mut self,
+        repository: Arc<dyn crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderRepositoryPort>,
+    ) -> Self {
+        self.queue = self.queue.with_work_order_repository(repository);
+        self
+    }
+
     // from_ports는 완전한 production 구성 경로다. 네 outbound boundary를 모두 받아 PlanningFeaturePorts로 묶은 뒤
     // composition builder에 넘겨 workspace/runtime/worker/task_tool use case를 한 번에 생성한다.
     pub fn from_ports(

@@ -332,10 +332,63 @@ pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter) fn check
             crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitBlockReason::Stale,
         ));
     }
+    if stage == PlanningWorkPermitStage::Dispatch
+        && !super::execution::task_attempt_allowed(transaction, &work_order_id, task_id)?
+    {
+        return Ok(PlanningWorkPermitDecision::Denied(
+            crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitBlockReason::ExecutionAttemptLimit,
+        ));
+    }
     Ok(evaluate_work_order_permit(
         &work_order,
         basis.as_ref(),
         stage,
         source_sha,
     ))
+}
+
+/// A new member cannot inherit any old grant. The evidence generation advances while
+/// the operator's authorization epoch and control flags remain unchanged.
+pub(super) fn fence_new_lineage(transaction: &Transaction<'_>, work_order_id: &str) -> Result<()> {
+    let work_order = require_work_order(transaction, work_order_id)?;
+    let mut basis = load_basis(transaction, work_order_id)?;
+    let mut revoked_through = basis.as_ref().map(|value| value.gate_revision).unwrap_or(0);
+    for permit in &work_order.permits {
+        revoked_through = revoked_through.max(permit.basis.gate_revision);
+    }
+    for stage in PlanningWorkPermitStage::ALL {
+        revoked_through =
+            revoked_through.max(last_revoked_gate(transaction, work_order_id, stage)?.unwrap_or(0));
+    }
+    if let Some(current) = basis.as_mut() {
+        current.gate_revision = revoked_through
+            .checked_add(1)
+            .context("work-order permit gate revision exhausted")?;
+        transaction.execute(
+            "UPDATE planning_work_order_permit_basis SET basis_json=?2 WHERE work_order_id=?1",
+            params![work_order_id, serde_json::to_string(current)?],
+        )?;
+    }
+    for stage in PlanningWorkPermitStage::ALL {
+        transaction.execute(
+            "INSERT INTO planning_work_order_permit_revocations(work_order_id,stage,gate_revision)
+             VALUES (?1,?2,?3) ON CONFLICT(work_order_id,stage) DO UPDATE SET gate_revision=excluded.gate_revision",
+            params![work_order_id,stage.label(),revoked_through.to_string()],
+        )?;
+    }
+    write_permits(transaction, work_order_id, &[])?;
+    runtime_projection::append_runtime_event(
+        transaction,
+        "work_order_lineage_fenced",
+        "work_order",
+        work_order_id,
+        "new work-order lineage requires current execution evidence",
+        &serde_json::json!({
+            "work_order_id":work_order_id,
+            "revoked_through":revoked_through,
+            "gate_revision":basis.as_ref().map(|value|value.gate_revision),
+        })
+        .to_string(),
+    )?;
+    Ok(())
 }

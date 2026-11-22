@@ -3,7 +3,7 @@ use crate::application::port::conversation_stream::{
     ConversationStreamEvent, conversation_stream_channel,
 };
 use crate::application::port::outbound::parallel_agent_worker_port::{
-    ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+    ParallelAgentWorkerPort, ParallelAgentWorkerResumeRequest, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWorkerCommitDisposition;
 use crate::application::service::parallel_mode::turn::{
@@ -29,6 +29,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
+
+mod continuation;
 
 use super::ParallelModeService;
 use super::pool::load_pool_runtime_context_with_runtime;
@@ -125,6 +127,20 @@ impl ParallelModeService {
                 supervisor_snapshot,
                 outcome,
             };
+        }
+
+        if readiness_snapshot.allows_parallel_mode() {
+            continuation::dispatch_queued(
+                self,
+                continuation::ContinuationDispatchContext {
+                    workspace: &workspace_directory,
+                    epoch_id: request.epoch_id,
+                    planning: &request.planning,
+                    worker_port: &request.worker_port,
+                    turn_service: &request.turn_service,
+                    event_sender: &request.event_sender,
+                },
+            );
         }
 
         let (supervisor_snapshot, outcome) = if readiness_snapshot.allows_parallel_mode() {
@@ -519,6 +535,7 @@ fn dispatch_parallel_queue_pool(
                     })
                 });
                 let worker_request = ParallelDispatchWorkerRequest {
+                    continuation: None,
                     planning_workspace_directory: workspace_directory.to_string(),
                     worktree_directory: lease.worktree_path.clone(),
                     automation_epoch_id: epoch_id,
@@ -665,6 +682,7 @@ struct ParallelDispatchWorkerRequest {
     handoff_task: PlanningTaskHandoff,
     // launch 시점 lease identity와 frozen delivery target을 completion 전에 다시 검증한다.
     expected_lease: ParallelModeSlotLeaseSnapshot,
+    continuation: Option<Box<crate::application::port::outbound::planning_authority_port::PlanningWorkerContinuationClaim>>,
 }
 
 // 스트림 이벤트는 순서대로 오지만, 최종 판단에는 "시작 전 실패", "실패 이벤트",
@@ -677,6 +695,7 @@ struct ParallelDispatchWorkerStreamState {
      * 있는 unstarted-slot 실패로 처리해야 하기 때문이다.
      */
     saw_turn_started: bool,
+    continuation_acknowledged: bool,
     saw_failed_before_turn_started: bool,
     saw_failed_event: bool,
     prepared_thread_id: Option<String>,
@@ -860,6 +879,12 @@ fn run_parallel_dispatch_worker(
         &request.planning_workspace_directory,
         request.automation_epoch_id,
     ) {
+        if request.continuation.is_some() {
+            return ParallelDispatchWorkerRunResult::launch_failed(vec![
+                "답변 전달 전에 자동 실행이 중단됐습니다. 전달 불명 기록과 작업 공간을 보존합니다."
+                    .into(),
+            ]);
+        }
         // lease 세대로 막는다. 늦은 작업 스레드가 새 epoch 가 다시 빌린 slot 을 돌려주면 안 된다.
         let _ = turn_service.finalize_stream_completion_for_lease(
             &request.expected_lease,
@@ -873,29 +898,39 @@ fn run_parallel_dispatch_worker(
             request.handoff_task.task_title
         )]);
     }
-    request.prompt = match turn_service.work_order_launch_prompt(
-        &request.planning_workspace_directory,
-        &request.expected_lease,
-        &request.prompt,
-    ) {
-        Ok(prompt) => prompt,
-        Err(failure) => {
-            let mut notices = vec![failure.detail];
-            // 중복 실행자는 먼저 claim한 worker의 미시작 lease도 건드리지 않는다.
-            if !failure.preserve_lease
-                && let Some(notice) =
-                    turn_service.release_unstarted_work_order_after_control(&request.expected_lease)
-            {
-                notices.push(notice);
-            }
-            return ParallelDispatchWorkerRunResult::launch_failed(notices);
+    if let Some(claim) = request.continuation.as_deref() {
+        if let Err(notice) = turn_service
+            .validate_worker_continuation_start(&request.planning_workspace_directory, claim)
+        {
+            return ParallelDispatchWorkerRunResult::launch_failed(vec![notice]);
         }
-    };
+    } else {
+        request.prompt = match turn_service.work_order_launch_prompt(
+            &request.planning_workspace_directory,
+            &request.expected_lease,
+            &request.prompt,
+        ) {
+            Ok(prompt) => prompt,
+            Err(failure) => {
+                let mut notices = vec![failure.detail];
+                // 중복 실행자는 먼저 claim한 worker의 미시작 lease도 건드리지 않는다.
+                if !failure.preserve_lease
+                    && let Some(notice) = turn_service
+                        .release_unstarted_work_order_after_control(&request.expected_lease)
+                {
+                    notices.push(notice);
+                }
+                return ParallelDispatchWorkerRunResult::launch_failed(notices);
+            }
+        };
+    }
     let (event_tx, event_rx) = conversation_stream_channel();
     let service_request = request.clone();
     event_log::emit_lazy("parallel_worker_stream_starting", || {
         parallel_worker_stream_starting_trace_payload(&request)
     });
+    let stream_worker_port = worker_port.clone();
+    let launch_turn_service = turn_service.clone();
     let service_thread = thread::spawn(move || {
         /*
          * ParallelAgentWorkerPort owns app-server execution. This outer worker keeps
@@ -903,15 +938,42 @@ fn run_parallel_dispatch_worker(
          * is still running, then joins to capture transport-level errors.
          */
         catch_redacted_worker_unwind(|| {
-            worker_port.run_isolated_new_thread_stream(
-                ParallelAgentWorkerStreamRequest {
-                    cwd: &service_request.worktree_directory,
-                    prompt: &service_request.prompt,
-                    developer_instructions: &service_request.developer_instructions,
-                    service_name: &service_request.service_name,
-                },
-                event_tx,
-            )
+            if let Some(claim) = service_request.continuation.as_deref() {
+                let start_authorization = || {
+                    if !launch_turn_service.automation_epoch_is_active(
+                        &service_request.planning_workspace_directory,
+                        service_request.automation_epoch_id,
+                    ) {
+                        anyhow::bail!("parallel automation closed before answer turn/start");
+                    }
+                    launch_turn_service
+                        .validate_worker_continuation_start(
+                            &service_request.planning_workspace_directory,
+                            claim,
+                        )
+                        .map_err(anyhow::Error::msg)
+                };
+                stream_worker_port.run_isolated_resumed_thread_stream(
+                    ParallelAgentWorkerResumeRequest {
+                        cwd: &service_request.worktree_directory,
+                        thread_id: &claim.request.question.thread_id,
+                        prompt: &service_request.prompt,
+                        service_name: &service_request.service_name,
+                    },
+                    event_tx,
+                    &start_authorization,
+                )
+            } else {
+                stream_worker_port.run_isolated_new_thread_stream(
+                    ParallelAgentWorkerStreamRequest {
+                        cwd: &service_request.worktree_directory,
+                        prompt: &service_request.prompt,
+                        developer_instructions: &service_request.developer_instructions,
+                        service_name: &service_request.service_name,
+                    },
+                    event_tx,
+                )
+            }
         })
     });
 
@@ -1067,6 +1129,31 @@ fn run_parallel_dispatch_worker(
         ));
     }
 
+    if request.continuation.is_some() && !stream_state.continuation_acknowledged {
+        notices.push(
+            "답변 전달 ACK를 확정하지 못했습니다. 같은 답변을 자동 재전송하지 않습니다.".into(),
+        );
+        return ParallelDispatchWorkerRunResult::stream_failed(notices);
+    }
+    if !stream_state.saw_failed_event {
+        match turn_service.preserve_worker_awaiting_user(
+            &request.planning_workspace_directory,
+            &request.expected_lease,
+        ) {
+            Ok(true) => {
+                notices.push(
+                    "사용자 답변을 기다리며 같은 작업 스레드와 작업 공간을 보존합니다.".into(),
+                );
+                return ParallelDispatchWorkerRunResult::completed(notices);
+            }
+            Ok(false) => {}
+            Err(notice) => {
+                notices.push(notice);
+                return ParallelDispatchWorkerRunResult::stream_failed(notices);
+            }
+        }
+    }
+
     let completion = turn_service.finalize_stream_completion_for_lease(
         &request.expected_lease,
         stream_state.saw_turn_started,
@@ -1124,6 +1211,12 @@ fn run_parallel_dispatch_worker(
     );
     notices.extend(official_completion.notices);
     if official_completion.official_completion_refresh_succeeded {
+        if let Err(_error) = worker_port.archive_completed_isolated_thread(
+            &request.worktree_directory,
+            &turn_completed.receipt.thread_id,
+        ) {
+            notices.push("완료 스레드의 보관 처리를 확인하지 못했습니다.".into());
+        }
         ParallelDispatchWorkerRunResult::completed(notices)
     } else {
         ParallelDispatchWorkerRunResult::stream_failed(notices)
@@ -1202,8 +1295,12 @@ fn sync_parallel_dispatch_worker_event(
     stream_state: &mut ParallelDispatchWorkerStreamState,
 ) -> Vec<String> {
     let mut notices = Vec::new();
-    if let ConversationStreamEvent::ThreadPrepared { cwd, .. } = event
-        && cwd != &request.expected_lease.worktree_path
+    if let ConversationStreamEvent::ThreadPrepared { cwd, thread_id, .. } = event
+        && (cwd != &request.expected_lease.worktree_path
+            || request
+                .continuation
+                .as_deref()
+                .is_some_and(|claim| thread_id != &claim.request.question.thread_id))
     {
         stream_state.saw_failed_event = true;
         stream_state.saw_failed_before_turn_started = true;
@@ -1232,6 +1329,40 @@ fn sync_parallel_dispatch_worker_event(
             "parallel worker runtime envelope projection was rejected ({rejection}) / task: {}",
             request.handoff_task.task_title
         ));
+    }
+
+    if let Some(claim) = request.continuation.as_deref() {
+        if let ConversationStreamEvent::TurnStarted { turn_id, .. } = event {
+            if stream_state.saw_failed_event
+                || stream_state.prepared_thread_id.as_deref()
+                    != Some(claim.request.question.thread_id.as_str())
+            {
+                stream_state.saw_failed_event = true;
+                stream_state.saw_failed_before_turn_started = true;
+                return notices;
+            }
+            match turn_service.acknowledge_worker_continuation(
+                &request.planning_workspace_directory,
+                claim,
+                &claim.request.question.thread_id,
+                turn_id,
+            ) {
+                Ok(()) => stream_state.continuation_acknowledged = true,
+                Err(notice) => {
+                    stream_state.saw_failed_event = true;
+                    stream_state.saw_failed_before_turn_started = true;
+                    notices.push(notice);
+                    return notices;
+                }
+            }
+        }
+        if !stream_state.continuation_acknowledged {
+            if let ConversationStreamEvent::ThreadPrepared { thread_id, .. } = event {
+                stream_state.prepared_thread_id = Some(thread_id.clone());
+            }
+            // Unknown owns the persisted session label until the ACK transaction succeeds.
+            return notices;
+        }
     }
 
     let outcome = turn_service.sync_stream_event_for_lease(&request.expected_lease, event);
@@ -1345,6 +1476,18 @@ fn run_parallel_dispatch_official_completion(
             "parallel official completion paused after mode was disabled / task: {}",
             request.handoff_task.task_title
         )]);
+    }
+    match turn_service.preserve_worker_awaiting_user(
+        &request.planning_workspace_directory,
+        &request.expected_lease,
+    ) {
+        Ok(false) => {}
+        Ok(true) => {
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![
+                "사용자 답변 또는 전달 확인을 기다리는 작업은 공식 완료하지 않습니다.".into(),
+            ]);
+        }
+        Err(notice) => return ParallelDispatchOfficialCompletionOutcome::failed(vec![notice]),
     }
     event_log::emit_lazy("parallel_official_completion_started", || {
         parallel_official_completion_started_trace_payload(
@@ -1550,6 +1693,19 @@ fn run_parallel_dispatch_official_completion(
             request.handoff_task.task_title
         ));
         return ParallelDispatchOfficialCompletionOutcome::failed(notices);
+    }
+
+    match turn_service.preserve_worker_awaiting_user(
+        &request.planning_workspace_directory,
+        &request.expected_lease,
+    ) {
+        Ok(false) => {}
+        Ok(true) => {
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![
+                "갱신 중 사용자 답변 대기가 확인되어 작업 공간을 보존했습니다.".into(),
+            ]);
+        }
+        Err(notice) => return ParallelDispatchOfficialCompletionOutcome::failed(vec![notice]),
     }
 
     let outcome = match worker_outcome {
@@ -1766,6 +1922,8 @@ fn parallel_worker_agent_message_completed_trace_payload(
 
 #[cfg(test)]
 mod tests {
+    mod continuation;
+
     use super::{
         ParallelDispatchOfficialCompletionOutcome, ParallelDispatchTurnCompleted,
         ParallelDispatchWorkerRequest, ParallelDispatchWorkerRunResult,
@@ -3322,6 +3480,7 @@ mod tests {
 
     fn worker_request_with_secret_bodies() -> ParallelDispatchWorkerRequest {
         ParallelDispatchWorkerRequest {
+            continuation: None,
             planning_workspace_directory: "/tmp/workspace".to_string(),
             worktree_directory: "/tmp/workspace/.akra-pool/slot-1".to_string(),
             automation_epoch_id: 7,

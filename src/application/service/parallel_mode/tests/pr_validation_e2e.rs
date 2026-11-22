@@ -308,9 +308,10 @@ pub mod tests {
         PlanningServices::from_ports(
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
             authority.clone(),
-            authority,
+            authority.clone(),
             Arc::new(NoopPlanningWorkerPort),
         )
+        .with_work_order_repository(authority)
     }
 
     fn bootstrap(authority: &SqlitePlanningAuthorityAdapter, workspace: &str) {
@@ -354,6 +355,10 @@ pub mod tests {
                 },
             )
             .unwrap();
+        // The fixture imports a pre-existing ordinary PR without an issue work order.
+        crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderRepositoryPort::link_work_order_validation_record(
+            authority, workspace, "akra-unit-42", "legacy-validation-source",
+        ).unwrap();
     }
 
     struct RejectUnexpectedRemediation;
