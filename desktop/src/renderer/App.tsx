@@ -494,10 +494,11 @@ export function App() {
   const [issueAttentionTarget, setIssueAttentionTarget] = useState<IssueDecisionAttention | null>(null);
   const selectedExtension = panelForExtension(panel);
   const extensionWorkspace = view === "thread" ? openCwd : view === "home" ? homeCwd : null;
-  const kernelWorkspace = selectedExtension || overlay === "settings" || (view === "home" && homeCwd)
-    ? extensionWorkspace : panel === "delegation" && delegationEnabled ? delegationWorkspace
-    : panel === "review" && reviewPr ? tree.cwd
-      : panel === "issues" && issueAttentionTarget ? issueAttentionTarget.workspace : openCwd;
+  const defaultWorkspace = view === "home" && homeCwd ? homeCwd : openCwd;
+  const kernelWorkspace = selectedExtension || overlay === "settings" ? extensionWorkspace
+    : panel === "issues" && issueAttentionTarget ? issueAttentionTarget.workspace
+    : panel === "delegation" && delegationEnabled ? delegationWorkspace
+    : panel === "review" && reviewPr ? tree.cwd : defaultWorkspace;
   const kernelInterest: KernelInterest = panel === "delegation" || panel === "review" ? "delegation"
     : panel === "issues" ? "issues" : panel === "kernel" ? "overview" : "issue_attention";
   const kernelPhase = useDesktopStore((state) => state.kernel.phase);
