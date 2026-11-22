@@ -1,7 +1,7 @@
 // 실제 Electron IPC·utility confirmation을 가짜 Gateway에만 연결한다. 모델 턴은 시작하지 않는다.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -149,8 +149,27 @@ const capture = async (suffix) => {
   if (!process.env.AKRA_QA_ISSUE_INTERVENTIONS_SCREENSHOT) return;
   const path = process.env.AKRA_QA_ISSUE_INTERVENTIONS_SCREENSHOT.replace(/\.png$/i, "") + "-" + suffix + ".png";
   await mkdir(dirname(path), { recursive: true });
-  const data = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));
-  await writeFile(path, Buffer.from(data, "base64"));
+  const window = await app.browserWindow(page);
+  const original = await window.evaluate((owner) => ({ visible: owner.isVisible(), minimized: owner.isMinimized() }));
+  // 가상 화면임을 명시한 검증에서만 창을 잠시 표시해 최신 프레임을 캡처한다.
+  const isolatedDisplay = process.env.AKRA_QA_ISOLATED_DISPLAY;
+  const reveal = !original.visible && isolatedDisplay !== undefined;
+  if (reveal) {
+    assert.equal(process.platform, "linux");
+    assert.equal(process.env.DISPLAY, isolatedDisplay);
+    assert.match(isolatedDisplay, /^:[1-9][0-9]*(?:[.][0-9]+)?$/);
+  }
+  try {
+    if (reveal) await window.evaluate((owner) => owner.showInactive());
+    await page.screenshot({ path, animations: "disabled", timeout: 15_000 });
+  } finally {
+    if (reveal) await window.evaluate((owner, state) => {
+      if (owner.isDestroyed()) return;
+      if (state.minimized) owner.minimize();
+      owner.hide();
+    }, original);
+    await window.dispose();
+  }
 };
 try {
   app = await electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env, cwd: fixture.cwd });
