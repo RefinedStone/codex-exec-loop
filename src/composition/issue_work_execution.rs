@@ -66,8 +66,10 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
     }
 
     fn permit_gate_revision(&self, workspace: &str, work_order_id: &str) -> Result<u64> {
-        self.repository
-            .work_order_permit_gate_revision(workspace, work_order_id)
+        let basis = self
+            .repository
+            .load_work_order_permit_basis(workspace, work_order_id)?;
+        Ok(basis.map_or(0, |basis| basis.gate_revision))
     }
 
     fn answer_question(
