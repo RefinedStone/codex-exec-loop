@@ -68,7 +68,6 @@ impl PlanningWorkOrderService {
                 .task_mutation
                 .load_context(&request.workspace_directory)?;
             let mut candidate = context.task_authority.clone();
-            candidate.version = TASK_AUTHORITY_FORMAT_VERSION;
             let historical: Vec<_> = candidate
                 .tasks
                 .iter()
@@ -108,6 +107,7 @@ impl PlanningWorkOrderService {
                     continue;
                 }
                 let id = task.id.clone();
+                candidate.version = TASK_AUTHORITY_FORMAT_VERSION;
                 candidate.tasks.push(task);
                 id
             };

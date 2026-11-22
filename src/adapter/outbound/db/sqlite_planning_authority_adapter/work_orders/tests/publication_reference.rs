@@ -185,6 +185,7 @@ fn service_replay(
             direction_relation_note: None,
             title: String::new(),
             description: None,
+            acceptance: None,
             status: None,
             base_priority: None,
             dynamic_priority_delta: None,

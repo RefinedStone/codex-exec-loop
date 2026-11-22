@@ -25,6 +25,7 @@ use super::{SqlitePlanningAuthorityAdapter, ensure_work_order_tables};
 mod lineage;
 mod permits;
 mod publication_reference;
+mod task_authority_version;
 mod transactions;
 mod validation_recovery;
 

@@ -11,6 +11,8 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
     validate_work_order_identity, validate_work_order_task_id,
 };
 
+use crate::domain::planning::task_authority_format_version_supported;
+
 use super::{
     SqlitePlanningAuthorityAdapter, bump_planning_revision,
     load_task_authority_snapshot_from_connection, open_authority_connection, read_metadata_i64,
@@ -504,7 +506,15 @@ fn validate_new_task_candidate(
 ) -> Result<()> {
     let next = registration.task_authority;
     let previous = &existing.task_authority;
-    if next.version != previous.version || next.tasks.len() != previous.tasks.len() + 1 {
+    if !task_authority_format_version_supported(previous.version)
+        || !task_authority_format_version_supported(next.version)
+        || next.version < previous.version
+    {
+        bail!(
+            "work-order registration requires a supported task authority version without downgrade"
+        );
+    }
+    if next.tasks.len() != previous.tasks.len() + 1 {
         bail!("work-order registration must add exactly one task");
     }
     if next
