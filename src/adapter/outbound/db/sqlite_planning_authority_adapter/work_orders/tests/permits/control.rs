@@ -186,6 +186,95 @@ fn work_control_takeover_preserves_lease_and_disables_cleanup_after_restart() {
 }
 
 #[test]
+fn work_control_untrack_preserves_cleanup_ownership_without_takeover_after_restart() {
+    let (workspace, adapter) = fixture("control-untrack-cleanup");
+    grant_all(&adapter, &workspace, 1);
+    let lease = lease("controlled-task", "slot-1");
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&workspace, &lease).unwrap();
+    let untracked = adapter
+        .apply_work_order_control(
+            &workspace,
+            "order-1",
+            "untrack",
+            PlanningWorkControlAction::Untrack,
+        )
+        .unwrap();
+    assert!(!untracked.tracked);
+    assert!(!untracked.taken_over);
+
+    let restarted = SqlitePlanningAuthorityAdapter::new();
+    assert_eq!(
+        restarted
+            .load_work_order_control(&workspace, "order-1")
+            .unwrap(),
+        untracked
+    );
+    assert!(
+        !PlanningWorkControlRepositoryPort::work_order_cleanup_allowed_for_task(
+            &restarted,
+            &workspace,
+            "controlled-task",
+        )
+        .unwrap()
+    );
+    assert!(
+        PlanningWorkControlRepositoryPort::work_order_cleanup_allowed_for_task(
+            &restarted,
+            &workspace,
+            "ordinary-task",
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        restarted
+            .load_runtime_projections(&workspace)
+            .unwrap()
+            .slot_leases
+            .get("slot-1"),
+        Some(&lease)
+    );
+
+    let tracked = restarted
+        .apply_work_order_control(
+            &workspace,
+            "order-1",
+            "track",
+            PlanningWorkControlAction::Track,
+        )
+        .unwrap();
+    assert!(tracked.tracked);
+    assert!(!tracked.taken_over);
+    assert_eq!(
+        tracked.authorization_epoch,
+        untracked.authorization_epoch + 1
+    );
+    assert!(
+        PlanningWorkControlRepositoryPort::work_order_cleanup_allowed_for_task(
+            &restarted,
+            &workspace,
+            "controlled-task",
+        )
+        .unwrap()
+    );
+    assert!(stored(&workspace, "order-1").permits.is_empty());
+    for stage in PlanningWorkPermitStage::ALL {
+        assert!(
+            check(&restarted, &workspace, stage, Some(&basis(1).source_sha))
+                .blocked_reason()
+                .is_some()
+        );
+    }
+    assert_eq!(
+        restarted
+            .load_runtime_projections(&workspace)
+            .unwrap()
+            .slot_leases
+            .get("slot-1"),
+        Some(&lease)
+    );
+}
+
+#[test]
 fn work_control_cancel_covers_current_and_late_supplemental_lineage_only() {
     let workspace = workspace("control-cancel-lineage");
     let mut running = task("supplement");
