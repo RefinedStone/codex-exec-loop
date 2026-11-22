@@ -52,6 +52,7 @@ pub(crate) mod parallel_mode;
 pub(crate) mod planning;
 // recent_sessions는 최근 세션 목록을 화면과 저장소 사이에서 안정적인 값으로 고정한다.
 pub(crate) mod recent_sessions;
+pub(crate) mod repository_extension;
 // review_center는 review thread, pending inbox, history가 공유하는 저장·조회 projection을 둔다.
 pub(crate) mod review_center;
 // session_browser는 세션 탐색 UI가 필요한 필터링/선택 상태를 domain 값으로 둔다.

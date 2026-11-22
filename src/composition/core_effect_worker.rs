@@ -131,7 +131,7 @@ where
     try_spawn_guarded_job(work, settle).expect("failed to spawn a redacted worker")
 }
 
-fn try_spawn_guarded_job<Output, Work, Settle>(
+pub(super) fn try_spawn_guarded_job<Output, Work, Settle>(
     work: Work,
     settle: Settle,
 ) -> std::io::Result<JoinHandle<()>>

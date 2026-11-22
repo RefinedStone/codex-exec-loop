@@ -35,4 +35,3 @@ pub mod work_context_port;
 pub mod issue_form_install_port;
 
 pub mod issue_intervention_port;
-pub(crate) mod repository_extension;

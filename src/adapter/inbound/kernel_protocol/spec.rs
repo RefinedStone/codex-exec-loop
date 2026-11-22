@@ -193,7 +193,7 @@ pub fn describe() -> KernelSpec {
                 KernelMethodKind::ExtensionList => (
                     Some(schemas.reference::<super::extensions::ExtensionScope>()),
                     Some(schemas.reference::<Vec<
-                        crate::application::port::inbound::repository_extension::ExtensionManifest,
+                        crate::domain::repository_extension::ExtensionManifest,
                     >>()),
                 ),
                 KernelMethodKind::ExtensionCall => (
