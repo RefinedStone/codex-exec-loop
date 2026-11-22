@@ -186,7 +186,12 @@ impl PlanningWorkOrderService {
         request: &PlanningWorkOrderRequest,
     ) -> Result<Option<PlanningWorkOrderAdmission>> {
         self.repository
-            .load_work_order(&request.workspace_directory, &request.work_order_id)?
+            .replay_work_order(
+                &request.workspace_directory,
+                &request.work_order_id,
+                &request.origin,
+                request.link_reference.as_ref(),
+            )?
             .map(|work_order| admission(request, work_order, false))
             .transpose()
     }

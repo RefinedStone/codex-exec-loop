@@ -104,7 +104,8 @@ impl PlanningWorkLinkReference {
 pub struct PlanningWorkOrderRecord {
     pub work_order_id: String,
     pub origin: String,
-    /// Publication metadata is immutable across retries, resets, and supplemental tasks.
+    /// Once present, publication metadata is immutable across retries, resets, and supplements.
+    /// A legacy missing reference may be recovered once without adding close authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_reference: Option<PlanningWorkLinkReference>,
     /// The first entry is the original task; supplemental tasks retain their attachment order.
@@ -377,6 +378,19 @@ pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
     ) -> Result<PlanningWorkOrderSupplementalAdmissionResult> {
         bail!("atomic work-order supplemental admission is unavailable")
     }
+
+    /// Return an existing identity before validating replacement task input or authority.
+    /// Under one transaction, validate its origin/lineage and preserve every permit and budget.
+    /// A missing legacy reference may become Some only with close_on_merge=false; any existing
+    /// reference must match exactly. Replaying never grants permits or bumps planning revision.
+    /// Stale permits do not prevent replay: the caller may be retrying to refresh them.
+    fn replay_work_order(
+        &self,
+        workspace_dir: &str,
+        work_order_id: &str,
+        origin: &str,
+        link_reference: Option<&PlanningWorkLinkReference>,
+    ) -> Result<Option<PlanningWorkOrderRecord>>;
 
     fn load_work_order(
         &self,

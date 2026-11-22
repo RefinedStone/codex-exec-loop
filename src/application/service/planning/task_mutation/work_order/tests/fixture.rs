@@ -11,8 +11,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkOrderLinkResult, PlanningWorkOrderRecord, PlanningWorkOrderRegistration,
-    PlanningWorkOrderRegistrationResult, PlanningWorkOrderRepositoryPort,
+    PlanningWorkLinkReference, PlanningWorkOrderLinkResult, PlanningWorkOrderRecord,
+    PlanningWorkOrderRegistration, PlanningWorkOrderRegistrationResult,
+    PlanningWorkOrderRepositoryPort,
 };
 use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
 use crate::domain::planning::{
@@ -178,6 +179,36 @@ impl PlanningTaskRepositoryPort for FixtureRepository {
 /// This fake scripts commit outcomes to exercise service retries. Atomicity and concurrent
 /// connections are tested against the real SQLite adapter, rather than inferred from this fake.
 impl PlanningWorkOrderRepositoryPort for FixtureRepository {
+    fn replay_work_order(
+        &self,
+        workspace_dir: &str,
+        work_order_id: &str,
+        origin: &str,
+        link_reference: Option<&PlanningWorkLinkReference>,
+    ) -> Result<Option<PlanningWorkOrderRecord>> {
+        assert_eq!(workspace_dir, self.workspace);
+        let mut script = self.script.lock().unwrap();
+        if script.orders.contains_key(work_order_id) && script.hide_existing_reads > 0 {
+            script.hide_existing_reads -= 1;
+            return Ok(None);
+        }
+        let Some(existing) = script.orders.get_mut(work_order_id) else {
+            return Ok(None);
+        };
+        existing.validate()?;
+        existing.ensure_origin(origin)?;
+        if existing.link_reference.as_ref() != link_reference {
+            match (&existing.link_reference, link_reference) {
+                (None, Some(reference)) if !reference.close_on_merge => {
+                    reference.validate()?;
+                    existing.link_reference = Some(reference.clone());
+                }
+                _ => bail!("work order publication reference changed"),
+            }
+        }
+        Ok(Some(existing.clone()))
+    }
+
     fn load_work_order(
         &self,
         workspace_dir: &str,
