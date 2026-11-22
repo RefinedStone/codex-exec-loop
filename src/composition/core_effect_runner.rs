@@ -2587,6 +2587,8 @@ mod tests {
 
     fn queue_task() -> TaskDefinition {
         TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-1".to_string(),
             direction_id: "direction-1".to_string(),
             direction_relation_note: String::new(),

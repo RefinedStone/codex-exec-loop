@@ -45,6 +45,8 @@ fn task(
     // production authority document가 가진 모든 field를 보존하되, 호출부에는 queue-sensitive
     // knob인 status/priority/timestamp만 노출한다. fixture noise 없이 queue 정책만 읽히게 한다.
     TaskDefinition {
+        acceptance: Vec::new(),
+        acceptance_revision: 0,
         id: id.to_string(),
         direction_id: direction_id.to_string(),
         direction_relation_note: "fits direction".to_string(),

@@ -13,6 +13,7 @@
  */
 use serde::{Deserialize, Serialize};
 
+mod acceptance;
 pub(crate) mod direction_policy;
 pub(crate) mod mutation;
 pub(crate) mod mutation_refusal;
@@ -27,6 +28,10 @@ pub(crate) mod task_references;
 mod validation;
 pub(crate) mod workspace_contract;
 
+pub use acceptance::{
+    TaskAcceptanceChannel, TaskAcceptanceCriterion, normalize_task_acceptance,
+    validate_task_acceptance,
+};
 pub(crate) use direction_policy::{
     PlanningActiveDirectionPolicy, PlanningActiveDirectionSelectionError,
 };
@@ -66,6 +71,11 @@ pub use workspace_contract::{
 
 // planning authority 문서의 schema version이다. adapter와 validation은 이 값을 기준으로 호환성을 판단한다.
 pub const PLANNING_FORMAT_VERSION: u32 = 1;
+// 완료 기준을 포함하는 task authority만 별도 버전으로 쓴다. directions는 1을 유지한다.
+pub const TASK_AUTHORITY_FORMAT_VERSION: u32 = 2;
+pub fn task_authority_format_version_supported(version: u32) -> bool {
+    matches!(version, 1 | TASK_AUTHORITY_FORMAT_VERSION)
+}
 // official completion refresh contract는 worker 완료 통지를 planning ledger에 반영하는 별도 wire contract다.
 pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 2;
 
@@ -331,6 +341,10 @@ pub struct TaskDefinition {
     pub title: String,
     // worker handoff prompt의 중심 설명이다.
     pub description: String,
+    #[serde(default)]
+    pub acceptance: Vec<TaskAcceptanceCriterion>,
+    #[serde(default)]
+    pub acceptance_revision: u64,
     // queue inclusion과 validation semantics를 결정하는 lifecycle state다.
     pub status: TaskStatus,
     // operator가 부여한 기본 우선순위다.
@@ -795,6 +809,14 @@ impl TaskDefinition {
         let mut normalized = self.clone();
         normalized.depends_on.sort();
         normalized.blocked_by.sort();
+        normalized.acceptance = normalized
+            .acceptance
+            .iter()
+            .map(TaskAcceptanceCriterion::normalized)
+            .collect();
+        normalized
+            .acceptance
+            .sort_by(|left, right| left.id.cmp(&right.id));
         normalized
     }
 }

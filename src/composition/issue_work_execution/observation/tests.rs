@@ -15,6 +15,8 @@ const STAMP: &str = "2026-11-21T09:00:00Z";
 
 fn task(id: &str, status: TaskStatus) -> TaskDefinition {
     TaskDefinition {
+        acceptance: Vec::new(),
+        acceptance_revision: 0,
         id: id.into(),
         direction_id: "direction".into(),
         direction_relation_note: "issue work".into(),

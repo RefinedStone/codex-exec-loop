@@ -6,7 +6,9 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkOrderSupplementalAdmission, PlanningWorkOrderSupplementalAdmissionResult,
     validate_admission_key, validate_work_order_id,
 };
-use crate::domain::planning::{OriginSessionKind, TaskMutationProvenance};
+use crate::domain::planning::{
+    OriginSessionKind, TASK_AUTHORITY_FORMAT_VERSION, TaskMutationProvenance,
+};
 
 use super::super::{
     MAX_COLLISION_SUFFIX_ATTEMPTS, MAX_REVISION_CONFLICT_RETRIES, PlanningTaskCreateInput,
@@ -27,6 +29,10 @@ impl PlanningWorkOrderService {
         &self,
         request: PlanningSupplementalWorkRequest,
     ) -> Result<PlanningWorkOrderAdmission> {
+        super::super::acceptance::create_fields(
+            &request.input,
+            PlanningTaskMutationSource::System,
+        )?;
         validate_work_order_id(&request.work_order_id)?;
         validate_admission_key(&request.admission_key)?;
         let generated_at = Utc::now();
@@ -62,6 +68,7 @@ impl PlanningWorkOrderService {
                 .task_mutation
                 .load_context(&request.workspace_directory)?;
             let mut candidate = context.task_authority.clone();
+            candidate.version = TASK_AUTHORITY_FORMAT_VERSION;
             let historical: Vec<_> = candidate
                 .tasks
                 .iter()

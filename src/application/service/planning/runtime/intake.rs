@@ -20,8 +20,9 @@ use crate::application::service::planning::task_mutation::{
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionState, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles,
-    PriorityQueueTask, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
+    DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueTask,
+    TASK_AUTHORITY_FORMAT_VERSION, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
+    task_authority_format_version_supported,
 };
 
 /*
@@ -379,11 +380,11 @@ impl PlanningTaskIntakeService {
         let task_authority = validation_result
             .task_authority
             .ok_or_else(|| anyhow!("valid planning workspace did not include task-authority"))?;
-        if task_authority.version != PLANNING_FORMAT_VERSION {
+        if !task_authority_format_version_supported(task_authority.version) {
             return Err(anyhow!(
-                "Unsupported task-authority version {}; expected {}.",
+                "Unsupported task-authority version {}; expected 1 or {}.",
                 task_authority.version,
-                PLANNING_FORMAT_VERSION
+                TASK_AUTHORITY_FORMAT_VERSION
             ));
         }
         Ok(PlanningTaskIntakeContext {
@@ -464,6 +465,7 @@ fn validate_task_link(
 // generated draft를 mutation service input shape로 변환한다.
 fn create_input_from_draft(draft: &PlanningTaskIntakeDraft) -> PlanningTaskCreateInput {
     PlanningTaskCreateInput {
+        acceptance: None,
         direction_id: Some(draft.task.direction_id.clone()),
         direction_relation_note: Some(draft.task.direction_relation_note.clone()),
         title: draft.task.title.clone(),

@@ -251,7 +251,7 @@ fn rejects_dependency_cycles() {
 #[test]
 fn rejects_unsupported_task_authority_version_without_schema_validation() {
     /*
-     * `{version: 2}`만 둔 payload는 task field noise를 제거한다. version compatibility가
+     * `{version: 3}`만 둔 payload는 task field noise를 제거한다. version compatibility가
      * 자체 semantic code로 보고되어야 repair tool이 migration 대상인지 수동 schema repair
      * 대상인지 구분할 수 있다.
      */
@@ -261,7 +261,7 @@ fn rejects_unsupported_task_authority_version_without_schema_validation() {
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
         directions: &artifacts.directions,
         task_authority_json: r#"{
-  "version": 2
+  "version": 3
 }"#,
         result_output_markdown: valid_result_output_markdown(),
     });

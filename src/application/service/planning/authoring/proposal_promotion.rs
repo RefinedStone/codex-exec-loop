@@ -18,9 +18,9 @@ use crate::application::service::planning::runtime::prompt::{
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningProposalPromotionDecision,
-    PlanningProposalPromotionPolicy, PlanningWorkspaceFiles, TaskActor, TaskAuthorityDocument,
-    TaskMutationProvenance, TaskStatus,
+    DirectionCatalogDocument, PlanningProposalPromotionDecision, PlanningProposalPromotionPolicy,
+    PlanningWorkspaceFiles, TASK_AUTHORITY_FORMAT_VERSION, TaskActor, TaskAuthorityDocument,
+    TaskMutationProvenance, TaskStatus, task_authority_format_version_supported,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +130,7 @@ impl PlanningProposalPromotionService {
             }
         };
 
+        task_authority.version = TASK_AUTHORITY_FORMAT_VERSION;
         // authority rewrite는 title이 아니라 task id로 수행한다. title은 presentation text라 중복되거나 변경될 수 있다.
         let promoted_task = task_authority
             .tasks
@@ -253,11 +254,11 @@ impl PlanningProposalPromotionService {
             anyhow!("validated planning workspace did not include task-authority")
         })?;
         // queue projection과 repository commit contract는 planning document schema version과 함께 움직인다.
-        if task_authority.version != PLANNING_FORMAT_VERSION {
+        if !task_authority_format_version_supported(task_authority.version) {
             return Err(anyhow!(
-                "unsupported task-authority version {}; expected {}",
+                "unsupported task-authority version {}; expected 1 or {}",
                 task_authority.version,
-                PLANNING_FORMAT_VERSION
+                TASK_AUTHORITY_FORMAT_VERSION
             ));
         }
 
@@ -295,8 +296,9 @@ mod tests {
     };
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{
-        DirectionDefinition, DirectionState, OriginSessionKind, PriorityQueueProjection,
-        QueueIdleConfig, QueueIdlePolicy, TaskDefinition, TaskMutationProvenance,
+        DirectionDefinition, DirectionState, OriginSessionKind, PLANNING_FORMAT_VERSION,
+        PriorityQueueProjection, QueueIdleConfig, QueueIdlePolicy, TaskDefinition,
+        TaskMutationProvenance,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -558,6 +560,8 @@ mod tests {
 
     fn task(id: &str, title: &str, priority: i32, status: TaskStatus) -> TaskDefinition {
         TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: id.to_string(),
             direction_id: "general-workstream".to_string(),
             direction_relation_note: "relates to the general workstream".to_string(),

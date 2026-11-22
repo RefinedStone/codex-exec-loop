@@ -462,7 +462,11 @@ export type State = ("queued" | "dispatching" | "running" | "interrupted" | "awa
 
 export type StoredPrReview = { readonly "head": string; readonly "result"?: (ReviewRecord | null); };
 
-export type TaskFields = { readonly "base_priority"?: (number | null); readonly "blocked_by"?: Array<string>; readonly "depends_on"?: Array<string>; readonly "description"?: (string | null); readonly "direction_id"?: (string | null); readonly "dynamic_priority_delta"?: (number | null); readonly "priority_reason"?: (string | null); readonly "status"?: (PlanningTaskStatus | null); readonly "title": string; };
+export type TaskAcceptanceChannel = ("command" | "data" | "http" | "screen");
+
+export type TaskAcceptanceCriterion = { readonly "channel": TaskAcceptanceChannel; readonly "essential": boolean; readonly "id": string; readonly "scenario": string; };
+
+export type TaskFields = { readonly "acceptance"?: (Array<TaskAcceptanceCriterion> | null); readonly "base_priority"?: (number | null); readonly "blocked_by"?: Array<string>; readonly "depends_on"?: Array<string>; readonly "description"?: (string | null); readonly "direction_id"?: (string | null); readonly "dynamic_priority_delta"?: (number | null); readonly "priority_reason"?: (string | null); readonly "status"?: (PlanningTaskStatus | null); readonly "title": string; };
 
 export type ThreadActivity = { readonly "active_turn_id"?: (string | null); readonly "approval"?: (ApprovalRequest | null); readonly "auto_follow_active": boolean; readonly "running": boolean; readonly "thread_id": string; };
 

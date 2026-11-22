@@ -3637,6 +3637,8 @@ mod tests {
 
     fn task_definition(id: &str, title: &str, status: TaskStatus) -> TaskDefinition {
         TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: id.to_string(),
             direction_id: "general-workstream".to_string(),
             direction_relation_note: "fits the general workstream".to_string(),

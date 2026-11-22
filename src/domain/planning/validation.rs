@@ -15,6 +15,7 @@ use chrono::DateTime;
 use super::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningFileKind, PlanningValidationReport,
     TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
+    task_authority_format_version_supported, validate_task_acceptance,
 };
 
 #[derive(Default, Clone)]
@@ -141,13 +142,13 @@ impl PlanningSemanticValidationService {
          * 작업에는 relation note를 요구해 자동 생성된 일이 어떤 direction을 만족시키려는지 나중에
          * 추적할 수 있게 한다.
          */
-        if task_authority.version != PLANNING_FORMAT_VERSION {
+        if !task_authority_format_version_supported(task_authority.version) {
             report.push_error(
                 PlanningFileKind::TaskAuthority,
                 "unsupported_task_authority_version",
                 format!(
-                    "task authority version {} does not match supported version {}",
-                    task_authority.version, PLANNING_FORMAT_VERSION
+                    "task authority version {} is not supported; expected 1 or 2",
+                    task_authority.version
                 ),
             );
         }
@@ -205,6 +206,14 @@ impl PlanningSemanticValidationService {
                     format!(
                         "task {task_id} must include priority_reason when dynamic_priority_delta is non-zero"
                     ),
+                );
+            }
+            if let Err(error) = validate_task_acceptance(&task.acceptance, task.acceptance_revision)
+            {
+                report.push_error(
+                    PlanningFileKind::TaskAuthority,
+                    "invalid_task_acceptance",
+                    format!("task {task_id}: {error}"),
                 );
             }
             self.validate_task_priority(task, report);
@@ -592,6 +601,8 @@ mod tests {
             priority_reason: String::new(),
             depends_on: Vec::new(),
             blocked_by: Vec::new(),
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             created_by: TaskActor::User,
             last_updated_by: TaskActor::User,
             source_turn_id: None,

@@ -2387,6 +2387,8 @@ fn parallel_entry_reset_preserves_existing_planning_tasks() {
     let task_authority = TaskAuthorityDocument {
         version: 1,
         tasks: vec![TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-1".to_string(),
             direction_id: "direction-1".to_string(),
             direction_relation_note: "covers the reset scope contract".to_string(),

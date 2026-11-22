@@ -70,6 +70,14 @@ impl PlanningTaskToolService {
             .planning_task_repository_port
             .load_task_authority_snapshot(workspace_directory)?
             .ok_or_else(|| anyhow!("planning task authority is unavailable"))?;
+        if !crate::domain::planning::task_authority_format_version_supported(
+            snapshot.task_authority.version,
+        ) {
+            return Err(anyhow!(
+                "unsupported task authority version {}",
+                snapshot.task_authority.version
+            ));
+        }
         let mut tasks = snapshot.task_authority.tasks;
         // list_tasks는 persisted authority state와 최신 queue projection을 읽지만 mutation service를
         // 호출하거나 revision을 올리지 않는다. model이 먼저 현재 상태를 확인하는 read-only 단계다.
@@ -175,6 +183,7 @@ impl From<PlanningTaskCreatePayload> for PlanningTaskCreateInput {
         // 변환은 lossless여야 한다. status/priority 같은 default는 `PlanningTaskMutationService`가
         // 소유해야 tool call과 fallback command가 같은 authority 결과를 만든다.
         Self {
+            acceptance: None,
             direction_id: input.direction_id,
             direction_relation_note: input.direction_relation_note,
             title: input.title,
@@ -193,6 +202,7 @@ impl From<PlanningTaskUpdatePayload> for PlanningTaskUpdateInput {
         // Option<Vec<_>>를 그대로 보존해 mutation service가 field omission과 명시적 empty list를
         // 구분하게 한다. 이 차이가 dependency/blocker clear semantics를 만든다.
         Self {
+            acceptance: None,
             task_id: input.task_id,
             direction_id: input.direction_id,
             direction_relation_note: input.direction_relation_note,
@@ -317,6 +327,8 @@ mod tests {
 
     fn task(id: &str, title: &str, status: TaskStatus, updated_at: &str) -> TaskDefinition {
         TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: id.to_string(),
             direction_id: "general-workstream".to_string(),
             direction_relation_note: "supports direction".to_string(),
@@ -850,5 +862,76 @@ mod tests {
                 Some("main-turn".to_string())
             )
         );
+    }
+    #[test]
+    fn worker_task_tool_rejects_acceptance_and_host_revision_fields() {
+        for operation in ["create_task", "update_task"] {
+            for (field, value) in [
+                ("acceptance", serde_json::json!([])),
+                ("acceptance", serde_json::Value::Null),
+                ("acceptance_revision", serde_json::json!(0)),
+            ] {
+                let mut request = serde_json::json!({
+                    "version": 1,
+                    "op": operation,
+                    "apply": true
+                });
+                if operation == "create_task" {
+                    request["title"] = serde_json::json!("A worker request");
+                } else {
+                    request["task_id"] = serde_json::json!("task-1");
+                }
+                request[field] = value;
+                let error = serde_json::from_value::<PlanningTaskToolRequest>(request)
+                    .expect_err("worker requests must not accept host-controlled criteria");
+                assert!(error.to_string().contains(field), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn list_tasks_rejects_future_task_authority_without_writing() {
+        let repo = repo();
+        let workspace = workspace("future-acceptance-schema");
+        seed(&repo, &workspace, Vec::new(), None);
+        let mut snapshot = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        snapshot.task_authority.version = 99;
+        repo.commit_task_authority_snapshot(
+            &workspace,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: Some(snapshot.planning_revision),
+                task_authority: &snapshot.task_authority,
+                queue_projection: &snapshot.queue_projection,
+            },
+        )
+        .unwrap();
+        let before = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        let error = service(repo.clone())
+            .handle_request(
+                &workspace,
+                PlanningTaskToolRequest::ListTasks(PlanningTaskToolListRequest {
+                    version: 1,
+                    status: Vec::new(),
+                    limit: None,
+                }),
+            )
+            .expect_err("future authority must not be interpreted as the current schema");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported task authority version 99")
+        );
+        let after = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.planning_revision, before.planning_revision);
+        assert_eq!(after.task_authority, before.task_authority);
     }
 }

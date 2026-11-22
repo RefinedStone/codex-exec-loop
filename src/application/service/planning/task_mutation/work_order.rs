@@ -14,7 +14,9 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkOrderRepositoryPort, validate_work_order_id, validate_work_order_identity,
     validate_work_order_task_id,
 };
-use crate::domain::planning::{OriginSessionKind, PriorityQueueService, TaskMutationProvenance};
+use crate::domain::planning::{
+    OriginSessionKind, PriorityQueueService, TASK_AUTHORITY_FORMAT_VERSION, TaskMutationProvenance,
+};
 
 use super::{
     MAX_COLLISION_SUFFIX_ATTEMPTS, MAX_REVISION_CONFLICT_RETRIES, PlanningTaskCreateInput,
@@ -74,6 +76,7 @@ impl PlanningWorkOrderService {
         request: PlanningWorkOrderRequest,
         generated_at: DateTime<Utc>,
     ) -> Result<PlanningWorkOrderAdmission> {
+        super::acceptance::create_fields(&request.input, PlanningTaskMutationSource::System)?;
         validate_work_order_identity(&request.work_order_id, &request.origin)?;
         if let Some(reference) = &request.link_reference {
             reference.validate()?;
@@ -128,6 +131,7 @@ impl PlanningWorkOrderService {
             }
 
             let mut candidate = context.task_authority;
+            candidate.version = TASK_AUTHORITY_FORMAT_VERSION;
             candidate.tasks.push(task);
             let queue_projection = self
                 .task_mutation

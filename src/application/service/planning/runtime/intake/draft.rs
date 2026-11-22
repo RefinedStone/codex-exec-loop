@@ -60,6 +60,8 @@ impl LocalPromptTaskDraftGenerator {
         // 원문 프롬프트를 source description으로 보존하고 목록용 title만 정규화한다.
         Ok(PlanningTaskIntakeDraft {
             task: crate::domain::planning::TaskDefinition {
+                acceptance: Vec::new(),
+                acceptance_revision: 0,
                 id: task_id,
                 direction_id: direction.id.trim().to_string(),
                 direction_relation_note: format!(

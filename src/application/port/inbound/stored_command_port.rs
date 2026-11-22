@@ -11,7 +11,9 @@ use crate::domain::issue_automation::intervention::{
 };
 
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
-use crate::domain::planning::{DirectionState, PlanningMutationRefusal, TaskStatus};
+use crate::domain::planning::{
+    DirectionState, PlanningMutationRefusal, TaskAcceptanceCriterion, TaskStatus,
+};
 
 /*
  * 저장 명령의 실행기이다 (plan 18 K4-9d, 설계 `docs/plan/18-k4-9d-planning-mutations.md` §3.1).
@@ -47,13 +49,14 @@ pub struct StoredCommandContext {
 
 /*
  * 작업의 필드이다. 만들기에서 없는 값은 기본값이다. 고치기는 admin 의 폼과 같다: 이유와 참조는 없으면 비우고, 방향,
- * 설명, 상태, 우선순위는 없으면 그대로 둔다 (`update_input`).
+ * 설명, 상태, 우선순위, 완료 기준은 없으면 그대로 둔다 (`update_input`). 완료 기준의 빈 배열은 명시적 비우기다.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTaskFields {
     pub direction_id: Option<String>,
     pub title: String,
     pub description: Option<String>,
+    pub acceptance: Option<Vec<TaskAcceptanceCriterion>>,
     pub status: Option<TaskStatus>,
     pub base_priority: Option<i32>,
     pub dynamic_priority_delta: Option<i32>,

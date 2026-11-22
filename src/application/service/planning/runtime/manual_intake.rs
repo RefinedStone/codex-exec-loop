@@ -304,6 +304,8 @@ mod tests {
             .expect("task authority should exist");
         let mut task_authority = task_snapshot.task_authority.clone();
         task_authority.tasks.push(TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-existing".to_string(),
             direction_id: "general-workstream".to_string(),
             direction_relation_note: "preexisting queue work".to_string(),

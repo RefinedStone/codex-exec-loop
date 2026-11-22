@@ -2778,6 +2778,7 @@ mod tests {
 
     fn create_task_input(title: &str, description: &str) -> PlanningTaskCreateInput {
         PlanningTaskCreateInput {
+            acceptance: None,
             direction_id: None,
             direction_relation_note: Some("supports direction".to_string()),
             title: title.to_string(),

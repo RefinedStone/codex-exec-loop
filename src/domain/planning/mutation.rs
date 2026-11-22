@@ -97,6 +97,8 @@ mod tests {
 
     fn task(status: TaskStatus) -> TaskDefinition {
         TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: "task-1".to_string(),
             direction_id: "direction-a".to_string(),
             direction_relation_note: "supports direction".to_string(),

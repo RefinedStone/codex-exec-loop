@@ -244,6 +244,7 @@ mod tests {
 
     fn task(id: &str, title: &str, revision: Option<i64>) -> PlanningAdminTaskMutationRequest {
         PlanningAdminTaskMutationRequest {
+            acceptance: None,
             id: id.to_string(),
             direction_id: String::new(),
             title: title.to_string(),

@@ -166,7 +166,7 @@ impl PlanningResetService {
             .load_task_authority_snapshot(workspace_dir)?
             .map(|snapshot| snapshot.task_authority)
             .unwrap_or_else(|| TaskAuthorityDocument {
-                version: crate::domain::planning::PLANNING_FORMAT_VERSION,
+                version: crate::domain::planning::TASK_AUTHORITY_FORMAT_VERSION,
                 tasks: Vec::new(),
             });
         let live_tasks = task_authority
@@ -348,7 +348,16 @@ impl PlanningResetService {
                 "planning reset requires complete direction and result-output authority"
             ));
         };
-        let task_authority_json = serde_json::to_string(task_authority)?;
+        if !crate::domain::planning::task_authority_format_version_supported(task_authority.version)
+        {
+            anyhow::bail!(
+                "unsupported task authority version {}",
+                task_authority.version
+            );
+        }
+        let mut task_authority = task_authority.clone();
+        task_authority.version = crate::domain::planning::TASK_AUTHORITY_FORMAT_VERSION;
+        let task_authority_json = serde_json::to_string(&task_authority)?;
         let validation_result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions,
@@ -1130,6 +1139,113 @@ mod tests {
     }
 
     #[test]
+    fn repo_scoped_directions_reset_rejects_future_task_version_without_changes() {
+        let workspace = TempPlanningWorkspace::new("repo-scoped-future-task-reset");
+        workspace.initialize_git();
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+            FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(authority.clone()),
+        );
+        let repository: Arc<dyn PlanningTaskRepositoryPort> = authority.clone();
+        let authority_port: Arc<dyn PlanningAuthorityPort> = authority.clone();
+        let bootstrap = PlanningBootstrapService::new();
+        let validation = PlanningValidationService::new();
+        let priority_queue = PriorityQueueService::new();
+        PlanningInitService::with_task_repository(
+            workspace_port.clone(),
+            bootstrap.clone(),
+            validation.clone(),
+            repository.clone(),
+            authority_port.clone(),
+            priority_queue.clone(),
+        )
+        .initialize_simple_workspace(workspace.path_str())
+        .expect("repo-scoped planning should initialize");
+        let initialized = authority
+            .load_planning_authority_documents(workspace.path_str())
+            .expect("initialized authority should load")
+            .expect("initialized authority should exist");
+        let mut completed_task = task(
+            "task-with-future-format",
+            "general-workstream",
+            TaskStatus::Done,
+        );
+        completed_task.acceptance = vec![crate::domain::planning::TaskAcceptanceCriterion {
+            id: "preserved-result".to_string(),
+            scenario: "The accepted result must remain available.".to_string(),
+            channel: crate::domain::planning::TaskAcceptanceChannel::Data,
+            essential: true,
+        }];
+        completed_task.acceptance_revision = 7;
+        let mut task_authority = TaskAuthorityDocument {
+            version: crate::domain::planning::TASK_AUTHORITY_FORMAT_VERSION,
+            tasks: vec![completed_task],
+        };
+        let queue_projection = priority_queue
+            .build_projection(&initialized.directions, &task_authority)
+            .expect("terminal task queue should build");
+        // Simulate a future writer while keeping the task JSON readable to this binary.
+        task_authority.version = 3;
+        authority
+            .commit_task_authority_snapshot(
+                workspace.path_str(),
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: Some(initialized.planning_revision),
+                    task_authority: &task_authority,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("future task authority fixture should persist");
+        let preserved_files = [
+            (DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, "Operator queue prompt"),
+            (
+                ".codex-exec-loop/planning/directions/keep.md",
+                "Operator direction details",
+            ),
+        ];
+        for (path, body) in preserved_files {
+            workspace_port
+                .replace_planning_workspace_file(workspace.path_str(), path, Some(body))
+                .expect("operator support document should persist");
+        }
+        let before = authority
+            .load_planning_authority_documents(workspace.path_str())
+            .expect("future authority should load for comparison")
+            .expect("future authority should exist");
+
+        let error = PlanningResetService::with_task_repository(
+            workspace_port.clone(),
+            bootstrap,
+            repository,
+            authority_port,
+            validation,
+            priority_queue,
+        )
+        .reset_workspace(
+            workspace.path_str(),
+            PlanningResetRequest::new(PlanningResetTarget::Directions, true),
+        )
+        .expect_err("directions reset must reject the original future task version");
+
+        assert_eq!(error.to_string(), "unsupported task authority version 3");
+        let after = authority
+            .load_planning_authority_documents(workspace.path_str())
+            .expect("authority should reload after refusal")
+            .expect("authority should remain present");
+        assert_eq!(after, before);
+        assert_eq!(after.task_authority, task_authority);
+        for (path, body) in preserved_files {
+            assert_eq!(
+                workspace_port
+                    .load_optional_planning_file(workspace.path_str(), path)
+                    .expect("operator support document should reload")
+                    .as_deref(),
+                Some(body)
+            );
+        }
+    }
+
+    #[test]
     fn runtime_claim_first_blocks_reset_before_any_authority_mutation() {
         let workspace = TempPlanningWorkspace::new("repo-scoped-runtime-first-reset");
         workspace.initialize_git();
@@ -1237,6 +1353,8 @@ mod tests {
 
     fn task(id: &str, direction_id: &str, status: TaskStatus) -> TaskDefinition {
         TaskDefinition {
+            acceptance: Vec::new(),
+            acceptance_revision: 0,
             id: id.to_string(),
             direction_id: direction_id.to_string(),
             direction_relation_note: "relates to the direction".to_string(),
