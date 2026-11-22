@@ -11,6 +11,9 @@ export const KERNEL_METHOD = {
   "command_confirmed": "akra/kernel/command_confirmed",
   "query": "akra/kernel/query",
   "event": "akra/kernel/event",
+  "extensions/list": "akra/kernel/extensions/list",
+  "extensions/call": "akra/kernel/extensions/call",
+  "extensions/changed": "akra/kernel/extensions/changed",
   "detach": "akra/kernel/detach"
 } as const;
 
@@ -122,6 +125,14 @@ export type EventNotification = { readonly "event": KernelEvent; };
 export type Evidence = { readonly "at": number; readonly "delivery": Delivery; readonly "phase": Phase; readonly "source": EvidenceSource; };
 
 export type EvidenceSource = ("browser" | "stream" | "callback" | "coordinator");
+
+export type ExtensionCall = { readonly "action": string; readonly "extension": string; readonly "input": unknown; readonly "kernel": string; readonly "version": number; };
+
+export type ExtensionChanged = { readonly "extension": string; readonly "kernel": string; };
+
+export type ExtensionManifest = { readonly "actions": Array<string>; readonly "enabled": boolean; readonly "id": string; readonly "label": string; readonly "panel": string; readonly "permissions": Array<string>; readonly "scope": string; readonly "version": number; };
+
+export type ExtensionScope = { readonly "kernel": string; };
 
 export type Fallback = { readonly "at": number; readonly "from": string; readonly "reason": EndReason; readonly "to": string; };
 

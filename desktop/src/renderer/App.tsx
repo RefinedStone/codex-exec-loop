@@ -2,6 +2,9 @@
 // 모양은 UX 블루프린트(`blueprint/`)를 따른다. 대화 상태는 `DesktopSession` 과 `desktopStore` 가 가진다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { extensionEvent, useRepositoryExtensions } from "./extensions/repositoryExtensions";
+import { ExtensionPanel } from "./extensions/ExtensionPanel";
+import { extensionPanels, panelForExtension } from "./extensions/registry";
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
@@ -59,6 +62,7 @@ const PANELS: { id: PanelId; label: string; icon: IconName; testId: string }[] =
   { id: "delegation", label: "위임", icon: "message", testId: "delegation-toggle" },
   { id: "work", label: "업무", icon: "briefcase", testId: "work-toggle" },
   { id: "docs", label: "문서", icon: "book", testId: "documents-toggle" },
+  ...extensionPanels,
   { id: "skills", label: "스킬", icon: "stack", testId: "skills-toggle" },
 ];
 
@@ -78,7 +82,7 @@ function navEntryExists(entry: NavEntry): boolean {
   return true;
 }
 
-function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegationEnabled }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void; delegationEnabled: boolean }) {
+function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegationEnabled, enabledExtensions }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void; enabledExtensions: string[]; delegationEnabled: boolean }) {
   // 스레드 목록이 바뀌면 갈 수 있는 곳도 바뀐다.
   useDesktopStore((state) => state.folders);
   const canGoBack = useUiStore((state) => stepNav(state.nav, -1, navEntryExists) !== null);
@@ -123,7 +127,7 @@ function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegat
         </div>
       )}
       <span className="bar-spacer" />
-      {PANELS.filter(({ id }) => id !== "delegation" || delegationEnabled).map((item) => {
+      {PANELS.filter(({ id }) => (id !== "delegation" || delegationEnabled) && (!panelForExtension(id) || enabledExtensions.includes(id))).map((item) => {
         const selected = panel === item.id;
         if (item.id === "review" && inThread && counts && counts.added + counts.removed > 0) {
           return (
@@ -199,22 +203,23 @@ function WriterElsewhereBanner({ onReconnect }: { onReconnect(): Promise<void> }
 const MIN_PANEL_WIDTH = 360;
 const MAX_PANEL_WIDTH = 900;
 
-function RightPanel({ panel, maximized, delegationEnabled, children }: { panel: PanelId; maximized: boolean; delegationEnabled: boolean; children: React.ReactNode }) {
+function RightPanel({ panel, maximized, delegationEnabled, enabledExtensions, children }: { panel: PanelId; maximized: boolean; enabledExtensions: string[]; delegationEnabled: boolean; children: React.ReactNode }) {
   const [width, startResize] = useResizableWidth(520, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
-  const maximizeLabel = panel === "delegation" ? "위임 패널" : "이슈 패널";
+  const extension = panelForExtension(panel);
+  const maximizeLabel = extension?.label ?? (panel === "delegation" ? "위임 패널" : "이슈 패널");
   return (
     <aside className="right-panel" style={maximized ? undefined : { width }} data-testid="right-panel" data-maximized={maximized}>
       {!maximized && <div className="resize-handle" onPointerDown={startResize} />}
       <header className="panel-tabs">
         <nav className="panel-tab-items" aria-label="오른쪽 패널">
-          {PANELS.filter(({ id }) => id !== "delegation" || delegationEnabled).map((item) => (
+          {PANELS.filter(({ id }) => (id !== "delegation" || delegationEnabled) && (!panelForExtension(id) || enabledExtensions.includes(id))).map((item) => (
             <button key={item.id} type="button" className={item.id === panel ? "selected" : undefined} aria-pressed={item.id === panel} onClick={() => openPanel(item.id)}>
               <Icon name={item.icon} size={14} />
               {item.label}
             </button>
           ))}
         </nav>
-        {(panel === "issues" || panel === "delegation") && (
+        {(extension || panel === "issues" || panel === "delegation") && (
           <button type="button" className="icon-button" title={`${maximizeLabel} ${maximized ? "복원" : "최대화"}`} aria-label={`${maximizeLabel} ${maximized ? "복원" : "최대화"}`} aria-expanded={maximized} onClick={() => useUiStore.setState({ panelMaximized: !maximized })} data-testid={`${panel}-${maximized ? "restore" : "maximize"}`}>
             <Icon name={maximized ? "panel" : "popOut"} />
           </button>
@@ -487,7 +492,10 @@ export function App() {
   const delegationWorkspace = openCwd ?? homeCwd;
   const reviewPr = tree.branch.phase === "loaded" && tree.branch.summary.ok ? tree.branch.summary.pullRequest : null;
   const [issueAttentionTarget, setIssueAttentionTarget] = useState<IssueDecisionAttention | null>(null);
-  const kernelWorkspace = panel === "delegation" && delegationEnabled ? delegationWorkspace
+  const selectedExtension = panelForExtension(panel);
+  const extensionWorkspace = view === "thread" ? openCwd : view === "home" ? homeCwd : null;
+  const kernelWorkspace = selectedExtension || overlay === "settings" || (view === "home" && homeCwd)
+    ? extensionWorkspace : panel === "delegation" && delegationEnabled ? delegationWorkspace
     : panel === "review" && reviewPr ? tree.cwd
       : panel === "issues" && issueAttentionTarget ? issueAttentionTarget.workspace : openCwd;
   const kernelInterest: KernelInterest = panel === "delegation" || panel === "review" ? "delegation"
@@ -606,11 +614,21 @@ export function App() {
     [],
   );
 
+  const connected = useDesktopStore((state) => state.connection?.phase === "connected");
+  const kernelId = useDesktopStore(s => s.kernel.kernel);
+  const subscribeExtension = useCallback((listener: (kernel: string) => void) =>
+    session.current?.onExtensionChanged(extensionEvent, listener) ?? (() => {}), []);
+  const extensions = useRepositoryExtensions(gatewayRequest, subscribeExtension,
+    connected && view !== "remote" && kernelPhase === "attached" && attachedWorkspace === kernelWorkspace ? kernelId : null);
+  const closeDisabledBlog = extensions.ready && !!selectedExtension && !extensions.enabledIds.includes(selectedExtension.id);
+  useEffect(() => {
+    if (closeDisabledBlog) useUiStore.setState({ panel: null, panelMaximized: false });
+  }, [closeDisabledBlog]);
+
   // 스레드를 열 때와 턴이 끝날 때 그 스레드의 관련 문서를 읽는다 (plan 22). Gateway 가 이때 새 기록에서 문서를 찾아
   // 장부에 적는다. 패널이 닫혀 있어도 한다. 모델을 부르지 않는 조회이다.
   // 목록을 먼저 보이고, 그 뒤에 문서가 바뀌었는지 확인한다. 확인은 외부 서비스에 물어서 느릴 수 있다.
   // 확인이 실패하면 (이전 Gateway, 서비스에 닿지 않음) 목록을 그대로 둔다.
-  const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const delegation = useMemo(() => delegationActions(
     (method, params) => session.current?.requestDelegation(method, params) ?? Promise.reject(new Error("Gateway 세션이 시작되지 않았습니다.")),
     window.akra.delegatedChat.open,
@@ -684,7 +702,7 @@ export function App() {
     <div className="shell">
       {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} />}
       <div className="workspace">
-        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} />
+        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={extensions.enabledIds} />
         <SessionBanner />
         <div className={panelMaximized ? "workspace-body with-maximized-panel" : "workspace-body"}>
           <main className="main">
@@ -710,7 +728,7 @@ export function App() {
             <TerminalDock bridge={window.akra.terminal} />
           </main>
           {panel && (
-            <RightPanel panel={panel} maximized={panelMaximized} delegationEnabled={delegationEnabled}>
+            <RightPanel panel={panel} maximized={panelMaximized} delegationEnabled={delegationEnabled} enabledExtensions={extensions.enabledIds}>
               {panel === "delegation" && delegationEnabled && (
                 <DelegationPanel
                   key={delegationWorkspace}
@@ -728,6 +746,7 @@ export function App() {
                   )}
                 </WorkingTreePanel>
               )}
+              {selectedExtension && <ExtensionPanel key={extensions.kernel} extensions={extensions} id={selectedExtension.id}/>}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} onOpenThread={openThread} />}
               {panel === "issues" && (
@@ -769,7 +788,10 @@ export function App() {
       </div>
       {overlay === "palette" && <CommandPalette onOpenThread={openThread} />}
       {overlay === "shortcuts" && <ShortcutsDialog />}
-      {overlay === "settings" && <SettingsDialog />}
+      {overlay === "settings" && <SettingsDialog extensions={extensions} chooseFolder={async () => {
+        const path = await window.akra.chooseFolder();
+        if (path) { showView("home"); useUiStore.setState({ homeCwd: path }); }
+      }}/>}
       <ZoomNotice />
       <Toasts />
     </div>

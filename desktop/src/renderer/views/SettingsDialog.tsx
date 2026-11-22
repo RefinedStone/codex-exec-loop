@@ -4,6 +4,8 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { type AppSettings, DEFAULT_SETTINGS, type FontArea, type KeepAwakeMode, MAX_FONT_PX, MIN_FONT_PX, type NotificationMode } from "../../shared/settings";
 import { Icon } from "../design/icons";
+import type { RepositoryExtensions } from "../extensions/repositoryExtensions";
+import { extensionPanels, panelForExtension } from "../extensions/registry";
 import { updateSettings, useSettings } from "../session/settingsStore";
 import { matchesSetting } from "../session/settingsView";
 import { MOD_KEY, toggleTheme, useUiStore } from "../session/uiStore";
@@ -136,13 +138,31 @@ function settingsRows(settings: AppSettings, theme: string, zoom: number): Row[]
   ];
 }
 
-export function SettingsDialog() {
+export function SettingsDialog({ extensions, chooseFolder }: { extensions?: RepositoryExtensions; chooseFolder?: () => Promise<void> } = {}) {
+  const [changing, setChanging] = useState(false);
+  const [extensionError, setExtensionError] = useState("");
   const settings = useSettings();
   const theme = useUiStore((state) => state.theme);
   const zoom = useZoomFactor();
   const [query, setQuery] = useState("");
   const close = () => useUiStore.setState({ overlay: null });
-  const rows = settingsRows(settings, theme, zoom).filter((row) => matchesSetting(row, query));
+  const entries = settingsRows(settings, theme, zoom);
+  const items = extensions?.items.length ? extensions.items : extensionPanels.map(p => ({...p, enabled:false}));
+  if (extensions) for (const item of items) {
+    const panel = panelForExtension(item.id);
+    entries.push({ id: item.id, section: "확장", label: panel?.label ?? item.id,
+    hint: extensionError || extensions.error || "현재 저장소의 글을 작성하고 AI와 함께 편집합니다.",
+    control: extensions.kernel ? <div className="segmented">
+      <button disabled={!extensions.ready || changing} aria-pressed={item.enabled} onClick={async () => {
+        setChanging(true); setExtensionError("");
+        try { await extensions.configure(item.id, !item.enabled); } catch (e) { setExtensionError(String(e)); }
+        finally { setChanging(false); }
+      }}>{item.enabled ? "끄기" : "켜기"}</button>
+      {item.enabled && panel && <button onClick={()=>useUiStore.setState({panel:panel.id, overlay:null})}>열기</button>}
+    </div> : <button onClick={()=>void chooseFolder?.()}>저장소 선택</button>,
+    });
+  }
+  const rows = entries.filter((row) => matchesSetting(row, query));
   const sections = [...new Set(rows.map((row) => row.section))];
   return (
     <div className="overlay" onClick={close}>

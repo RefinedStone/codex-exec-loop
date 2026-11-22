@@ -136,6 +136,7 @@ async fn serve_kernel_requests(
             .respond(request.id, &request.method, &request.text)
             .await;
         if let Some(recording) = &recording
+            && !crate::adapter::inbound::kernel_protocol::is_extension_request(&request.method)
             && !is_confirmation_method(&request.method)
             && !delegation::private_kernel_payload(&request.method, &request.text)
         {
@@ -158,6 +159,8 @@ struct KernelSession {
 }
 
 struct AttachedKernel {
+    kernel: String,
+    extension_events: Option<tokio::task::JoinHandle<()>>,
     workspace: String,
     /// 이슈 장부와 커서의 project scope다. 요청한 worktree와 다를 수 있다.
     issue_workspace: String,
@@ -187,6 +190,9 @@ impl AttachedKernel {
     /// 이벤트 스레드를 멈추게 하고 커널에서 뗀다. 스레드가 끝나기를 기다리지 않는다.
     fn signal_detach(&self) {
         self.stop_events.store(true, Ordering::SeqCst);
+        if let Some(events) = &self.extension_events {
+            events.abort();
+        }
         self.commands.detach();
     }
 }
@@ -206,6 +212,9 @@ impl KernelSession {
             .and_then(|message| message.get("params").cloned())
             .unwrap_or_else(|| json!({}));
         let result = match method {
+            method if crate::adapter::inbound::kernel_protocol::is_extension_request(method) => {
+                self.extension(method, params).await
+            }
             METHOD_DESCRIBE => to_result(describe()),
             METHOD_ATTACH => self.attach(params).await,
             METHOD_COMMAND => self.command(params).await,
@@ -224,6 +233,68 @@ impl KernelSession {
             }),
         };
         response_text(id, result)
+    }
+
+    async fn extension(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, KernelProtocolError> {
+        use crate::adapter::inbound::kernel_protocol::{
+            METHOD_EXTENSION_CHANGED, METHOD_EXTENSION_LIST,
+            extensions::{ExtensionCall, ExtensionChanged, ExtensionScope},
+        };
+        let (kernel, request) = if method == METHOD_EXTENSION_LIST {
+            let scope: ExtensionScope = parse_params(params)?;
+            (scope.kernel, None)
+        } else {
+            let call: ExtensionCall = parse_params(params)?;
+            (call.kernel.clone(), Some(call))
+        };
+        let attached = self.attached()?;
+        if attached.kernel != kernel {
+            return Err(unavailable("저장소 연결이 바뀌었습니다.".into()));
+        }
+        let host = self
+            .kernels
+            .extensions(&attached.kernel)
+            .map_err(|e| unavailable(e.to_string()))?;
+        if let Some(attached) = &mut self.attached
+            && attached.extension_events.is_none()
+        {
+            let mut events = host.subscribe();
+            let outbox = self.outbox.clone();
+            let change = Message::text(
+                json!({"jsonrpc":"2.0", "method":METHOD_EXTENSION_CHANGED,
+                "params":ExtensionChanged{kernel:attached.kernel.clone(), extension:"akra.tech-blog".into()}})
+                .to_string(),
+            );
+            attached.extension_events = Some(tokio::spawn(async move {
+                while !matches!(
+                    events.recv().await,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed)
+                ) {
+                    if outbox.send(change.clone()).await.is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        let Some(request) = request else {
+            return to_result(
+                host.catalog()
+                    .await
+                    .map_err(|e| unavailable(format!("{e:#}")))?,
+            );
+        };
+        host.call(
+            &request.extension,
+            request.version,
+            &request.action,
+            request.input,
+        )
+        .await
+        .map_err(|e| unavailable(format!("{e:#}")))
     }
 
     async fn attach(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
@@ -270,6 +341,8 @@ impl KernelSession {
             .spawn(move || forward_events(client, outbox, stop))
             .map_err(|error| unavailable(format!("failed to start the event thread: {error}")))?;
         self.attached = Some(AttachedKernel {
+            kernel: response.kernel.clone(),
+            extension_events: None,
             workspace: request.workspace,
             issue_workspace,
             client_name: request.client_name,
@@ -1011,6 +1084,8 @@ mod tests {
         for requested in ["/main/subfolder", "/worktrees/feature"] {
             let client = host.attach().expect("fake client");
             let attached = AttachedKernel {
+                kernel: "test".into(),
+                extension_events: None,
                 workspace: requested.to_string(),
                 issue_workspace: "/main".to_string(),
                 client_name: "cursor-fixture".to_string(),
@@ -1098,6 +1173,8 @@ mod tests {
             confirmation: None,
             delegations: Default::default(),
             attached: Some(AttachedKernel {
+                kernel: "test".into(),
+                extension_events: None,
                 workspace: format!("{workspace}/requested-subfolder"),
                 issue_workspace: workspace.clone(),
                 client_name: "policy-query-fixture".into(),

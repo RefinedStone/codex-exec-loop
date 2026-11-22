@@ -1,10 +1,11 @@
 // 화면 틀의 상태이다: 어떤 보기와 패널이 열려 있는지. 대화 상태는 `desktopStore` 에 있다.
+import type { ExtensionPanelId } from "../extensions/registry";
 import { create } from "zustand";
 
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
 
 export type View = "home" | "thread" | "fleet" | "remote";
-export type PanelId = "review" | "graph" | "kernel" | "issues" | "browser" | "work" | "docs" | "skills" | "delegation";
+export type PanelId = "review" | "graph" | "kernel" | "issues" | "browser" | "work" | "docs" | "skills" | "delegation" | ExtensionPanelId;
 export type Theme = "light" | "dark";
 export type Overlay = "palette" | "shortcuts" | "settings";
 

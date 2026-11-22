@@ -1,6 +1,6 @@
 // Only the JSON Schema forms exported by the Akra kernel are supported.
 // Fail on new forms instead of silently widening the generated wire contract.
-type Schema = {
+type Schema = boolean | {
   readonly $ref?: string;
   readonly type?: string | readonly string[];
   readonly const?: string | number | boolean | null;
@@ -39,6 +39,9 @@ export class KernelSchemaError extends Error {
 }
 
 function schemaType(schema: Schema, definitions: Readonly<Record<string, Schema>>, location: string): string {
+  // JSON Schema boolean schemas explicitly permit or reject every JSON value.
+  if (schema === true) return "unknown";
+  if (schema === false) return "never";
   for (const key of Object.keys(schema)) {
     if (!SUPPORTED_KEYS.has(key)) throw new KernelSchemaError(location, `unsupported keyword ${key}`);
   }
@@ -84,7 +87,7 @@ function schemaType(schema: Schema, definitions: Readonly<Record<string, Schema>
         break;
       }
       case "array":
-        if (!schema.items) throw new KernelSchemaError(location, "array needs items");
+        if (schema.items === undefined) throw new KernelSchemaError(location, "array needs items");
         parts.push(`Array<${schemaType(schema.items, definitions, `${location}/items`)}>`);
         break;
       case "string":

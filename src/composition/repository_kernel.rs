@@ -42,6 +42,7 @@ pub(crate) const KERNEL_IDLE_UNLOAD_AFTER: Duration = Duration::from_secs(10 * 6
 pub(crate) struct RepositoryKernel {
     // 필드는 선언 순서대로 버려진다. 호스트 스레드가 먼저 끝나고, 그 뒤에 잠금이 풀린다.
     host: KernelHost,
+    extensions: Arc<crate::composition::repository_extensions::RepositoryExtensions>,
     lock: RepositoryKernelLock,
     workspace_root: String,
 }
@@ -70,9 +71,10 @@ impl RepositoryKernel {
     }
 
     fn idle_long_enough(&self, now: Instant) -> bool {
-        self.host
-            .idle_for(now)
-            .is_some_and(|idle| self.host.idle_is_transient() || idle >= KERNEL_IDLE_UNLOAD_AFTER)
+        !self.extensions.busy()
+            && self.host.idle_for(now).is_some_and(|idle| {
+                self.host.idle_is_transient() || idle >= KERNEL_IDLE_UNLOAD_AFTER
+            })
     }
 }
 
@@ -227,6 +229,18 @@ impl RepositoryKernelRegistry {
             .collect()
     }
 
+    pub(crate) fn extensions(
+        &self,
+        key: &str,
+    ) -> Result<Arc<crate::composition::repository_extensions::RepositoryExtensions>> {
+        let entry = self.entry(key)?;
+        entry
+            .lock()
+            .as_ref()
+            .map(|k| k.extensions.clone())
+            .context("repository kernel is unavailable")
+    }
+
     fn entry(&self, repository_key: &str) -> Result<Arc<RepositoryKernelEntry>> {
         self.ensure_running()?;
         let mut repositories = self
@@ -300,6 +314,9 @@ fn start_repository_kernel(
     let host = KernelHost::start(runtime).context("failed to start the kernel host thread")?;
     Ok(RepositoryKernel {
         host,
+        extensions: crate::composition::repository_extensions::RepositoryExtensions::new(
+            workspace_dir,
+        ),
         lock,
         workspace_root: workspace_dir.to_string(),
     })

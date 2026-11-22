@@ -40,6 +40,7 @@ use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
 #[cfg(test)]
 mod tests;
 
+pub(crate) mod extensions;
 mod next;
 use next::error_next;
 pub use next::{NextStep, reason_next};
@@ -76,6 +77,12 @@ pub const METHOD_CONFIRMATION_REGISTER: &str = KernelMethodKind::ConfirmationReg
 pub const METHOD_CONFIRMATION_PREPARE: &str = KernelMethodKind::ConfirmationPrepare.name();
 pub const METHOD_COMMAND_CONFIRMED: &str = KernelMethodKind::CommandConfirmed.name();
 pub const METHOD_QUERY: &str = KernelMethodKind::Query.name();
+pub(crate) const METHOD_EXTENSION_LIST: &str = KernelMethodKind::ExtensionList.name();
+pub(crate) const METHOD_EXTENSION_CALL: &str = KernelMethodKind::ExtensionCall.name();
+pub(crate) const METHOD_EXTENSION_CHANGED: &str = KernelMethodKind::ExtensionChanged.name();
+pub(crate) fn is_extension_request(method: &str) -> bool {
+    matches!(method, METHOD_EXTENSION_LIST | METHOD_EXTENSION_CALL)
+}
 pub const METHOD_EVENT: &str = KernelMethodKind::Event.name();
 pub const METHOD_DETACH: &str = KernelMethodKind::Detach.name();
 
@@ -98,6 +105,12 @@ spec_names! {
             "Read one current value or a page of the decision log.";
         Event => "akra/kernel/event",
             "Notification from the kernel to an attached client.";
+        ExtensionList => "akra/kernel/extensions/list",
+            "List the installed repository extensions and their active state on this attachment.";
+        ExtensionCall => "akra/kernel/extensions/call",
+            "Call a versioned repository extension action in the attached kernel.";
+        ExtensionChanged => "akra/kernel/extensions/changed",
+            "An extension changed. Read the current state from the same repository kernel.";
         Detach => "akra/kernel/detach",
             "Detach this connection. No event arrives after the answer.";
     }
