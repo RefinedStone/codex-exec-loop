@@ -142,11 +142,29 @@ fake provider는 매 `CreateComment`마다 새 comment ID를 만든다. fake의 
 | 통합 후 검증 계약 부재로 구현을 다시 실행하지 않음 | 기존 `post_merge_contract_opens_human_recovery_and_never_reimplements`, `integrated_queue_recovery_is_blocked_even_with_zero_execution_cap`, `integrated_observation_recovery_requires_zero_execution_cap_and_preserves_attestation`, `trusted_integration_is_recorded_once_and_later_contract_recovery_stays_done` | live는 통합하지 않는 범위로 계획 |
 | 통합 상태와 외부 닫힘 분리 | 정상 흐름의 Done + 외부 Open, 기존 `external_closure` DB 회귀 4개; Desktop 표현은 [#2554 검증](desktop-issue-execution-tracking.md) | 실제 GitHub 닫힘 쓰기는 수행하지 않음 |
 | 댓글 생성 ACK 유실·readback 실패에서 중복 댓글 없음 | 새 feedback 회귀의 실제 SQLite intent·receipt·owner와 provider CreateComment 전체 1회 | 실제 GitHub 응답 유실은 미검증 |
-| 실제 확인 SHA·OS·명령·결과·skip 기록 | 아래 자동 회귀 기록과 명시적인 미실행 항목 | **실제 모델 확인은 사용자 허가 대기** |
+| 실제 확인 SHA·OS·명령·결과·skip 기록 | 아래 자동 회귀 기록과 명시적인 미실행 항목 | **사용자 허가는 확보했으며 실제 실행 준비 중** |
 
-## 실제 모델 확인 계획: 미실행
+## 실제 실행 준비에서 확인한 Gateway 제어 공백
 
-[AGENTS.md](../../AGENTS.md)의 검증 지침은 `turn/start`·`turn/steer` 전에 사용자 허가를 요구한다. #2555의 실제 모델 확인은 자동 회귀와 별도로, 대상 저장소·변경 범위·모델 실행 범위·외부 쓰기를 구체화해 사용자 허가를 받은 뒤 진행한다. 일반 개발·PR 작업 허가를 실제 모델 검증 허가로 바꾸어 해석하지 않는다.
+Gateway의 저장소 kernel은 이슈 observer를 구성하지만 병렬 풀은 꺼진 상태에서 시작했다. 공개 kernel 명령과 Desktop 화면에 실행을 켜는 경로가 없어 Propose의 Start 승인으로 task·permit을 등록해도 실행할 수 없었다. 별도 TUI는 동일 저장소 lock을 공유하지 못하므로 실제 이슈 관찰·전달 경로를 끝까지 확인하는 대안이 되지 않았다.
+
+후속 수정은 `parallel` scope의 `enable_parallel`·`disable_parallel` 명령과 Desktop 커널 패널의 시작·중단 버튼을 추가한다. 기존 NativeClientEvent 경로를 사용하며 readiness, 공개 저장소 opt-in, native Start 승인, work permit, PR 사람 리뷰를 그대로 검사한다. Propose 선택이나 Start 승인으로 전체 풀을 자동으로 켜지 않는다.
+
+명령은 요청 접수(accepted)만 응답한다. Desktop은 실제 query·후속 이벤트에서만 활성화 상태를 반영하고, 실패·조회 단절은 결과 불명으로 표시하며 자동 재전송하지 않는다. 기존 overview·resync·workspace 전환과의 경합도 회귀로 검사한다.
+
+| 후속 Gateway 제어 검증 | 결과 |
+| --- | --- |
+| 후속 코드 SHA | `896781dcbb55884d65ac473158aab55146e950ad` — 아래 로컬 검증을 통과한 Gateway·Desktop 코드 |
+| 명세 생성·일치 | `the_kernel_spec_file_matches_the_spec` 1 passed |
+| Rust 제어·권한·재연결 | `parallel_control explicit_parallel_command kernel_simulation_propose_coordinator a_kernel_attached_from_a_linked_worktree_works_in_the_primary_checkout` 11 passed. 하위 폴더·linked worktree에서 대표 checkout의 풀을 제어하는 회귀 포함 |
+| Desktop check·전체 회귀 | check 통과. Vitest 963 passed, 기존 7 skipped. 오래된 overview·resync·event 경쟁의 회귀 3개 포함 |
+| Windows Full | `powershell -NoProfile -File scripts/check_native_pr.ps1 -Mode Full` 통과. 기존 Git 시험 2개의 5초 제한 초과 뒤 `VITEST_MAX_WORKERS=2`로 같은 게이트를 재실행했다. 시험 코드·시간 제한은 유지했고 native contracts·check·clippy·Desktop 검사 모두 통과 |
+| Desktop 전체 E2E | `npm run e2e` 성공. 25개 spec 중 24개 실행 통과, 기존 Windows terminal spec 1개 skip. 시작·중지, pending, 오류, readiness 거부, 후속 상태 이벤트를 실제 Electron에서 확인 |
+| 실제 모델 턴 | 0회 |
+
+## 실제 모델 확인 계획: 허가 확보, 준비 중
+
+[AGENTS.md](../../AGENTS.md)의 검증 지침은 `turn/start`·`turn/steer` 전에 사용자 허가를 요구한다. #2555의 실제 모델 확인은 자동 회귀와 별도로, 대상 저장소·변경 범위·모델 실행 범위·외부 쓰기를 구체화했으며, 2026-11-22 사용자가 해당 계획을 승인했다. 일반 개발·PR 작업 허가를 실제 모델 검증 허가로 바꾸어 해석하지 않는다.
 
 또한 제품의 시작 결정은 [정식 native 확인 경로](issue-human-confirmation.md)를 거쳐야 한다. 위 테스트 capability를 실제 실행에 주입하거나 proof를 직접 만들지 않는다. runtime의 Propose 상향 확인과 해당 이슈의 Start 확인은 각각의 실제 native 행동이다.
 
@@ -163,7 +181,7 @@ fake provider는 매 `CreateComment`마다 새 comment ID를 만든다. fake의 
 
 따라서 “총 1회만 허용” 조건에서는 이 정상 경로를 PR까지 실행하지 않는다. 실행 범위를 다시 합의하거나 구현·planning 전체를 제한하는 장치를 마련한 뒤 계획을 확정해야 한다. 추가 모델 요청을 피하려면 [PR 리뷰 backend](../reference/pr-review-backend.md)도 `off`여야 한다. `observe`도 모델을 호출한다.
 
-### 허가 전에 확정할 대상과 쓰기 범위
+### 승인된 대상과 쓰기 범위
 
 | 항목 | 제안 범위 |
 | --- | --- |
@@ -171,9 +189,9 @@ fake provider는 매 `CreateComment`마다 새 comment ID를 만든다. fake의 
 | 실행본 | 실제 검증을 통과한 확정 SHA·바이너리 경로를 기록 |
 | 실행 환경 | Linux에서 같은 사용자로 Desktop·Gateway·확인 helper 실행, 사람이 사용할 수 있는 GUI |
 | 작업공간 | Linux 내부의 독립 clone 1개, 위 프로세스가 공유하는 시험 전용 `AKRA_HOME` |
-| 시험 base | 제안 이름 `codex/issue-2555-live-base-20261122`, 시작 코드 SHA `3f437930f45d925372448cf6b4955411fbeb2b64`. 실제 생성은 허가 후 수행 |
-| 선택 대상 | 시험용 이슈 1건만 선택하는 라벨. 라벨이 없으면 생성 1회도 쓰기 범위에 포함 |
-| 이슈 | 검증 문서 파일 하나와 명시적인 수락 기준을 담은 시험 이슈 생성 1회 |
+| 시험 base | `codex/issue-2555-live-base-20261122`를 `3f437930f45d925372448cf6b4955411fbeb2b64`에서 생성했다. 실제 실행 전 아래 Gateway 제어 수정을 검증한 SHA로 fast-forward하고 그 SHA를 기록한다 |
+| 선택 대상 | 시험용 이슈 1건만 선택하는 `akra-ia4-5-live-20261122` 라벨을 생성하고 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644)에만 붙였다 |
+| 이슈 | [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644) 생성 완료. `docs/validation/issue-2555-live-smoke-20261122.md` 한 파일만 추가하는 기준 |
 | PR | 실제 task branch를 push하고 시험 base 대상으로 PR 생성 목표 1회 |
 | 상태 댓글 | 새 댓글 1개 및 같은 댓글의 상태 갱신. 전체 수정 횟수의 설정 상한은 없음 |
 | 통합과 닫힘 | 운영·시험 base로의 결과 통합 0회, PR merge 0회, 이슈 close 0회 |
@@ -184,7 +202,7 @@ fake provider는 매 `CreateComment`마다 새 comment ID를 만든다. fake의 
 
 live 최소 구성은 같은 Linux 사용자·`AKRA_HOME`·로컬 파일시스템과 IPC를 공유하는 Desktop, Gateway, confirmation helper와 작업공간이다. Desktop이 로컬 `akra-gateway desktop-confirmation-bridge`를 시작하고 Gateway가 자기 `AKRA_HOME/run`의 파일과 Unix socket을 검증한다. 사용자는 실제 GUI의 native 확인 창에서 Propose 상향과 Start를 확인해야 한다. Windows Desktop의 원격 host 조회 기능은 이 로컬 승인 경로를 제공하지 않는다.
 
-WSLg의 `DISPLAY`와 display socket 존재는 읽기 전용으로 확인했지만, 실제 Linux Desktop 창 표시·native 확인과 GitHub·모델 인증은 아직 확인하지 않았다. 현재 WSL 준비 정보만으로 live 실행 가능 상태라고 판정하지 않는다. Linux 실행본의 검증 SHA와 경로, 실제 worker profile·모델 접근 권한, repo-local GitHub identity와 필요한 쓰기 권한, 설정을 덮어쓰는 환경변수, native Desktop/Gateway 연결, active direction·빈 task authority, PR 생성으로 작동할 CI·외부 리뷰를 실행 전에 확인한다. 자격 증명 원문은 출력하지 않는다.
+WSLg의 `DISPLAY`와 display socket, Linux의 GitHub 계정 `RefinedStone` 및 Codex ChatGPT 로그인 상태를 확인했다. 실제 Linux Desktop 창 표시·native 확인과 실제 모델 접근은 아직 확인하지 않았다. 현재 WSL 준비 정보만으로 live 실행 가능 상태라고 판정하지 않는다. Linux 실행본의 검증 SHA와 경로, 실제 worker profile·모델 접근 권한, repo-local GitHub identity와 필요한 쓰기 권한, 설정을 덮어쓰는 환경변수, native Desktop/Gateway 연결, active direction·빈 task authority, PR 생성으로 작동할 CI·외부 리뷰를 실행 전에 확인한다. 자격 증명 원문은 출력하지 않는다.
 
 ### 예정된 관찰과 종료 기준
 
@@ -198,11 +216,11 @@ akra kernel query parallel --workspace "$LiveWorkspace" --json
 akra kernel query issues --workspace "$LiveWorkspace" --json
 ```
 
-수집은 `akra kernel issue sync_issues`로, 실제 Start 승인은 Desktop native 확인으로 진행한다. 필요한 모델 허가와 준비 조건이 충족된 뒤에만 TUI `:parallel`로 실행한다. `:parallel on`은 지원 명령이 아니다. 상세 query에는 목록이 반환한 전체 `IssueEventReference`를 사용한다.
+수집은 `akra kernel issue sync_issues`로, 실제 Start 승인은 Desktop native 확인으로 진행한다. 준비 조건이 충족된 뒤 같은 Gateway에 `akra kernel parallel enable_parallel`을 보내거나 Desktop의 명시적 시작 버튼으로 실행한다. 하위 폴더·linked worktree에서 접속해도 명령은 대표 checkout의 풀을 제어한다. Start 승인 자체는 병렬 풀을 켜지 않는다. 상세 query에는 목록이 반환한 전체 `IssueEventReference`를 사용한다.
 
 성공 기준은 실제 task 하나, 지정 파일만의 변경, exact active validation lineage의 PR URL, 시험 base의 일치, 동일 status comment ID와 확정 journal이다. PR 사람 리뷰를 승인하지 않고 결과 통합을 수행하지 않으므로 integration 기록과 `Done`을 요구하지 않는다. 외부 이슈는 Open으로 남아야 한다.
 
-관찰 뒤 중단은 `akra kernel thread stop_all --workspace "$LiveWorkspace" --json`을 사용할 수 있다. 이 명령은 실행 종료 수단이며 모델 호출 수의 사전 상한이 아니다. 실제 호출 수·댓글 수정 수·게시 영수증·PR URL을 결과에 별도로 기록한다.
+관찰 뒤 `akra kernel parallel disable_parallel --workspace "$LiveWorkspace" --json`로 병렬 풀을 중지하고, `akra kernel thread stop_all --workspace "$LiveWorkspace" --json`로 남은 실행을 중단한다. 이 명령은 실행 종료 수단이며 모델 호출 수의 사전 상한이 아니다. 실제 호출 수·댓글 수정 수·게시 영수증·PR URL을 결과에 별도로 기록한다.
 
 ## 검증 기록 — 자동 회귀 완료, 실제 모델 확인 미실행
 
@@ -217,13 +235,13 @@ akra kernel query issues --workspace "$LiveWorkspace" --json
 | Windows DB 회귀 | `cargo test --locked --all-features --lib sqlite_issue_automation_store::execution::tests` — **15 passed, 0 failed** |
 | planner 결과 | `node scripts/agent-plan.mjs` → Full. `git diff --check`와 `powershell -NoProfile -File scripts/check_native_pr.ps1 -Mode Full` 모두 성공 |
 | Windows Full 세부 | native contracts, build·check·clippy, Desktop 검사 성공. Vitest **950 passed, 7 skipped**; 기존 skip 유지 |
-| UI E2E | 이 PR의 자체 UI 변경 없음. 선행 [#2554 검증](desktop-issue-execution-tracking.md)의 전체 25 spec 통과와 기존 Windows terminal skip 1개를 재사용; 이 항목을 이번 로컬 실행 결과로 합산하지 않음 |
+| UI E2E — 기존 검증 SHA | `3f437930`에는 자체 UI 변경이 없었다. 선행 [#2554 검증](desktop-issue-execution-tracking.md)의 전체 25 spec 통과와 기존 Windows terminal skip 1개를 재사용했다. 후속 Gateway 제어 UI는 아래 별도 기록으로 검증한다 |
 | 포맷·차이 검사 | `cargo fmt --all`, `git diff --check` 성공 |
 | Windows native 결합 suite | Unix-only publication lease 때문에 `#[cfg(unix)]`로 제외. Windows에서 이 7개가 통과했다고 보고하지 않음 |
-| 실제 모델 검증 사용자 허가 | 미확보·미실행 |
+| 실제 모델 검증 사용자 허가 | 2026-11-22 사용자 허가 확보. 실제 실행 준비 중이며 모델 턴은 아직 0회 |
 | 실제 모델 호출 수 | 0회 |
-| 시험용 실제 GitHub 이슈·PR·댓글 쓰기 | 0회. 이 변경을 전달하는 개발 PR은 시험용 실행에 포함하지 않음 |
-| live base·이슈·PR·comment ID·journal 증거 | 없음 — live 미실행 |
+| 시험용 실제 GitHub 이슈·PR·댓글 쓰기 | 시험 이슈 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644) 생성 1회. 시험 PR·상태 댓글은 아직 0회. 개발 PR은 시험용 실행에 포함하지 않음 |
+| live base·이슈·PR·comment ID·journal 증거 | base branch·선택 라벨·이슈 #2644를 생성했다. PR·댓글·journal은 아직 없음 — 모델 실행 미실시 |
 | OS process kill 시험 | 미실시 |
 
 Linux에서 실행한 결합·관련 회귀 명령:
@@ -247,3 +265,15 @@ cargo test --locked --all-features --lib -- \
 원본 결과 로그는 실행 호스트의 `C:/dev/akra-queue/analysis/issue-2555-flow-fixed.log`와 `C:/dev/akra-queue/analysis/issue-2555-final-full-gate.log`에 남겼다. PR의 최종 commit에 대한 공식 CI 결과는 PR 본문에서 연결한다.
 
 자동 회귀 결과와 live 결과는 따로 기록한다. 자동 회귀 통과만으로 실제 native 승인, 모델 수행, GitHub 전달 또는 OS crash 복구까지 성공했다고 결론 내리지 않는다.
+
+### 2026-11-22 실제 시험 준비 결과
+
+- 시험 이슈 [#2644](https://github.com/RefinedStone/codex-exec-loop/issues/2644), 시험 base branch와 단일 선택 라벨을 생성했다.
+- Linux 독립 clone과 시험 전용 `AKRA_HOME`을 만들고 사용자 정책 파일을 owner-only 권한으로 저장했다.
+- 기존 검증 코드 `3f437930`의 준비용 CLI로 기본 direction을 시험 문서 범위로 갱신했다. planning revision은 4이며 active/proposed/skipped task가 모두 비어 있다. 준비 작업은 모델을 호출하지 않았다.
+- Linux에서 repo-local `RefinedStone` identity의 `scripts/gh-akra.sh auth write-status`와 시험 base로의 `git push --dry-run`을 통과했다.
+- `feature_bindings`의 PR review는 `off`이고, 정책 query는 `ready`를 반환했다. Propose 상한·선택 라벨·trusted actor·1/1/1 예산·댓글만 허용·close never가 사용자 파일에서 해석됐음을 확인했다.
+- 실제 worker 실행 전에 후속 Gateway 제어 commit을 포함한 확정 코드로 실행 바이너리와 Desktop을 갱신하고, 시험 base도 같은 코드로 fast-forward한다. 준비용 CLI를 실제 모델 실행본으로 사용하지 않는다.
+- 이 시점의 실제 모델 턴·시험 PR·상태 댓글은 0회다. native Start 확인과 실제 모델 전달 흐름은 아직 미실행이다.
+
+후속 로컬 원본 로그: `C:/dev/akra-queue/analysis/issue-2555-parallel-control-rust-r2.log`, `issue-2555-parallel-control-desktop-r2.log`, `issue-2555-parallel-control-full-r4.log`. 원본 로그 경로는 실행 호스트 기준이며 공식 CI 링크는 PR 본문에 남긴다.
