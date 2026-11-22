@@ -174,4 +174,5 @@ pub(super) fn ensure_unowned_validation_source_can_be_linked(
     if legacy {
         bail!("an executed legacy validation source cannot be rebound to a work order");
     }
+    Ok(())
 }

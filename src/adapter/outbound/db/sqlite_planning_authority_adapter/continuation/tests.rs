@@ -175,13 +175,19 @@ impl Fixture {
     }
 
     fn enqueue(&mut self) -> PlanningWorkerContinuationReceipt {
+        let request = self.request.clone();
+        self.enqueue_request(&request).unwrap()
+    }
+    fn enqueue_request(
+        &mut self,
+        request: &PlanningWorkerContinuationRequest,
+    ) -> Result<PlanningWorkerContinuationReceipt> {
         let tx = self
             .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .unwrap();
-        let receipt = enqueue_in_transaction(&tx, &self.request).unwrap();
-        tx.commit().unwrap();
-        receipt
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let receipt = enqueue_in_transaction(&tx, request)?;
+        tx.commit()?;
+        Ok(receipt)
     }
     fn claim(&mut self) -> PlanningWorkerContinuationClaimOutcome {
         let tx = self
@@ -416,10 +422,10 @@ fn continuation_control_changes_after_claim_block_the_worker_without_a_retry() {
         fixture.enqueue();
         let claim = fixture.claimed();
         fixture.control(control);
-        let row = load(&fixture.connection, &fixture.request.command_id)
-            .unwrap()
-            .unwrap();
-        assert!(validate_start(&fixture.connection, &row, &claim).is_err());
+        let tx = fixture.connection.transaction().unwrap();
+        let row = load(&tx, &fixture.request.command_id).unwrap().unwrap();
+        assert!(validate_start(&tx, &row, &claim).is_err());
+        tx.commit().unwrap();
         assert!(
             matches!(fixture.claim(),PlanningWorkerContinuationClaimOutcome::Settled(receipt)
             if receipt.delivery==PlanningWorkerContinuationDelivery::Unknown)
@@ -486,10 +492,10 @@ fn continuation_waits_for_the_old_terminal_and_binds_immutable_payload() {
     );
     let mut changed = fixture.request.clone();
     changed.message = "another answer".into();
-    assert!(enqueue_in_transaction(&fixture.connection, &changed).is_err());
+    assert!(fixture.enqueue_request(&changed).is_err());
     changed = fixture.request.clone();
     changed.authorization_epoch = 1;
-    assert!(enqueue_in_transaction(&fixture.connection, &changed).is_err());
+    assert!(fixture.enqueue_request(&changed).is_err());
     detail.state_label = "awaiting_user".into();
     detail.completion_state_label = "awaiting_user".into();
     write_detail(&fixture.connection, &detail).unwrap();
@@ -545,10 +551,10 @@ fn continuation_lineage_loss_cannot_inherit_legacy_dispatch_permission() {
             [],
         )
         .unwrap();
-    let row = load(&fixture.connection, &fixture.request.command_id)
-        .unwrap()
-        .unwrap();
-    assert!(validate_start(&fixture.connection, &row, &claim).is_err());
+    let tx = fixture.connection.transaction().unwrap();
+    let row = load(&tx, &fixture.request.command_id).unwrap().unwrap();
+    assert!(validate_start(&tx, &row, &claim).is_err());
+    tx.commit().unwrap();
     assert_eq!(
         fixture.receipt().delivery,
         PlanningWorkerContinuationDelivery::Unknown
@@ -601,17 +607,14 @@ fn rejected_continuation_allows_a_new_epoch_approval_and_preserves_the_first_rec
     ));
     let mut same_epoch = original.clone();
     same_epoch.command_id = "same-epoch-answer".into();
-    assert!(enqueue_in_transaction(&fixture.connection, &same_epoch).is_err());
+    assert!(fixture.enqueue_request(&same_epoch).is_err());
     fixture.request.command_id = "new-epoch-answer".into();
     fixture.request.authorization_epoch = 1;
     assert_eq!(
         fixture.enqueue().delivery,
         PlanningWorkerContinuationDelivery::Queued
     );
-    assert_eq!(
-        enqueue_in_transaction(&fixture.connection, &original).unwrap(),
-        rejected
-    );
+    assert_eq!(fixture.enqueue_request(&original).unwrap(), rejected);
     assert_eq!(
         load(&fixture.connection, &original.command_id)
             .unwrap()
@@ -642,7 +645,7 @@ fn a_fresh_answer_never_replaces_a_still_queued_question() {
     let mut candidate = fixture.request.clone();
     candidate.command_id = "competing-answer".into();
     candidate.authorization_epoch = 1;
-    assert!(enqueue_in_transaction(&fixture.connection, &candidate).is_err());
+    assert!(fixture.enqueue_request(&candidate).is_err());
     assert_eq!(fixture.receipt(), original);
     assert!(
         load(&fixture.connection, &candidate.command_id)
@@ -669,7 +672,7 @@ fn unknown_and_accepted_questions_reject_new_answer_commands_even_in_a_fresh_epo
         let mut candidate = fixture.request.clone();
         candidate.command_id = "replacement-answer".into();
         candidate.authorization_epoch = 1;
-        assert!(enqueue_in_transaction(&fixture.connection, &candidate).is_err());
+        assert!(fixture.enqueue_request(&candidate).is_err());
         assert_eq!(fixture.receipt(), original);
         assert!(
             load(&fixture.connection, &candidate.command_id)
@@ -736,7 +739,7 @@ fn the_same_question_id_is_independent_between_work_orders() {
         let mut duplicate = fixture.request.clone();
         duplicate.command_id = "duplicate-for-this-work".into();
         duplicate.authorization_epoch = 10;
-        assert!(enqueue_in_transaction(&fixture.connection, &duplicate).is_err());
+        assert!(fixture.enqueue_request(&duplicate).is_err());
         assert!(
             load(&fixture.connection, &duplicate.command_id)
                 .unwrap()
