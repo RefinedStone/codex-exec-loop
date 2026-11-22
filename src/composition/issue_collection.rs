@@ -58,7 +58,7 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
         Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
     );
     let execution = Arc::new(
-        crate::adapter::outbound::akra_issue_work_execution::AkraIssueWorkExecutionAdapter::new(
+        crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
             authority.clone(),
             authority,
             parallel,
