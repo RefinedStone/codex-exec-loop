@@ -8,7 +8,9 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkOrderSupplementalAdmission, PlanningWorkOrderSupplementalAdmissionResult,
     validate_admission_key, validate_work_order_id, validate_work_order_task_id,
 };
-use crate::domain::planning::{OriginSessionKind, PriorityQueueService, TaskStatus};
+use crate::domain::planning::{
+    OriginSessionKind, PriorityQueueService, TaskStatus, task_authority_format_version_supported,
+};
 
 use super::super::{
     SqlitePlanningAuthorityAdapter, bump_planning_revision, load_direction_catalog_from_connection,
@@ -145,6 +147,9 @@ pub(super) fn admit(
         );
     }
     if let Some(task) = prior_task {
+        if !task_authority_format_version_supported(existing.task_authority.version) {
+            bail!("historical supplemental admission requires a supported task authority version");
+        }
         if task.provenance.origin_session_kind != Some(OriginSessionKind::System)
             || task.provenance.turn_id.as_deref() != Some(request.admission_key)
             || request.task_authority != &existing.task_authority

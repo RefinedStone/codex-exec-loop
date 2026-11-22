@@ -66,7 +66,9 @@ Kernel/Stored/admin 변환은 생략과 빈 배열의 차이를 보존한다. �
 - task 문서는 별도 `TASK_AUTHORITY_FORMAT_VERSION = 2`를 사용한다. v1과 v2를 읽고 미래 버전은
   application 검증과 task 조회에서 거절한다.
 - 이전 문서·SQLite `content_json`에 두 필드가 없으면 `acceptance: []`,
-  `acceptance_revision: 0`으로 읽는다. 새 bootstrap과 의미 있는 task mutation은 v2로 쓴다.
+  `acceptance_revision: 0`으로 읽는다. 새 bootstrap, 공용 task mutation, 새 WorkOrder task 생성은
+  v2로 쓴다. 기존 task를 재연결하거나 상태·설명만 갱신하는 일부 경로는 지원되는 원본 문서
+  버전을 유지한다.
 - 읽기나 의미상 no-op은 기존 문서를 다시 저장하지 않는다. SQLite의 기존 JSON 저장을 사용하므로
   SQL column 또는 별도 데이터베이스 migration은 필요하지 않다.
 - Worker의 일반 상태·제목 수정, 자동 proposal 승격, continuation과 audit snapshot은 기준을
