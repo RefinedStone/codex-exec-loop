@@ -251,6 +251,7 @@ struct FakeExecutionState {
     saved_revision: u64,
     registrations: usize,
     revoked: bool,
+    after_grant: Option<Box<dyn Fn() + Send + Sync>>,
     source_unavailable: bool,
     fail_after_register: bool,
     fail_after_grant: bool,
@@ -310,6 +311,11 @@ impl IssueWorkExecutionPort for FakeExecution {
         }
         if std::mem::take(&mut state.fail_after_grant) {
             bail!("simulated crash after durable grant");
+        }
+        let hook = state.after_grant.take();
+        drop(state);
+        if let Some(hook) = hook {
+            hook();
         }
         Ok(())
     }
@@ -477,7 +483,7 @@ fn approval_queues_once_across_restarts_and_uses_the_shared_approved_fields() {
     assert_eq!(work.task_ids, ["task-1"]);
     assert_eq!(
         work.blocked_reason,
-        Some(IssueWorkBlockReason::ParallelDisabled)
+        Some(IssueWorkBlockReason::ExecutionDisabled)
     );
     assert_eq!(work.order.acceptance, ["기능이 요구한 결과를 반환한다."]);
     assert_eq!(
@@ -505,7 +511,7 @@ fn approval_queues_once_across_restarts_and_uses_the_shared_approved_fields() {
             .as_ref()
             .unwrap()
             .blocked_reason,
-        Some(IssueWorkBlockReason::ParallelDisabled)
+        Some(IssueWorkBlockReason::ExecutionDisabled)
     );
 }
 
@@ -523,7 +529,12 @@ fn fresh_closed_unreadable_or_changed_fields_never_submit() {
                     issue: observation.issue,
                     reason: IssueSourceFailure::ProviderUnavailable,
                 };
-                h.tick(true).unwrap();
+                let facts = h.tick(true).unwrap();
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| matches!(fact, IssueCoordinatorFact::Triaged(_)))
+                );
                 assert!(h.work().is_none());
                 continue;
             }
@@ -538,7 +549,12 @@ fn fresh_closed_unreadable_or_changed_fields_never_submit() {
             }
         }
         *h.source.read.lock().unwrap() = IssueSourceRead::Observed(Box::new(observation));
-        h.tick(true).unwrap();
+        let facts = h.tick(true).unwrap();
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, IssueCoordinatorFact::Triaged(_)))
+        );
         assert_eq!(h.execution.state.lock().unwrap().registrations, 0);
     }
 }
@@ -806,4 +822,42 @@ labels_any = [\"akra:ready\"]",
     // source는 최초 무라벨 관찰을 반환한다. 본문 해시는 같아도 선택 근거가 사라졌다.
     h.tick(false).unwrap();
     assert_eq!(h.execution.state.lock().unwrap().registrations, 0);
+}
+
+#[test]
+fn grant_postcheck_revokes_on_changed_policy_or_unreadable_current_state() {
+    for unavailable in [false, true] {
+        let h = Harness::new();
+        h.tick(true).unwrap();
+        h.answer("start");
+        let policy = h.policy.clone();
+        h.execution.state.lock().unwrap().after_grant = Some(Box::new(move || {
+            if unavailable {
+                policy.unavailable.store(true, Ordering::Release);
+            } else {
+                *policy.text.lock().unwrap() =
+                    AUTO_POLICY.replace("mode = \"propose\"", "mode = \"observe\"");
+            }
+        }));
+        let result = h.tick(true);
+        if unavailable {
+            assert!(result.is_err());
+        } else {
+            result.unwrap();
+        }
+        assert!(h.execution.state.lock().unwrap().revoked);
+        let work = h.work().unwrap();
+        assert!(work.permit_source.is_none());
+        assert!(!work.delivery_granted);
+        let pending = h
+            .fixture
+            .store()
+            .pending_issue_work_events(&h.fixture.workspace)
+            .unwrap();
+        assert!(
+            pending
+                .iter()
+                .all(|event| !matches!(event.kind, IssueWorkEventKind::PermitGranted { .. }))
+        );
+    }
 }

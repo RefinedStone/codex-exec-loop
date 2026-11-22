@@ -920,16 +920,15 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
             .issues
             .issues(&IssueCollectionQuery::default())
             .unwrap();
-        if let Some(decision) = page.items[0].open_decisions.first() {
-            if !sim
+        if let Some(decision) = page.items[0].open_decisions.first()
+            && !sim
                 .host
                 .runtime
                 .issue_collection_view(Instant::now())
                 .unwrap()
                 .collecting
-            {
-                break decision.clone();
-            }
+        {
+            break decision.clone();
         }
         assert!(
             Instant::now() < deadline,
@@ -1002,7 +1001,7 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
         .unwrap();
     assert_eq!(
         work.blocked_reason,
-        Some(IssueWorkBlockReason::ParallelDisabled)
+        Some(IssueWorkBlockReason::ExecutionDisabled)
     );
     let first_order = execution.0.lock().unwrap().clone();
     drop(sim);

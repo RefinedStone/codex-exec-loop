@@ -32,6 +32,11 @@ type Collect = dyn Fn(&IssueCollectionCancellation, u64, bool, &Reporter) -> Res
 type TestCollect =
     dyn Fn(&IssueCollectionCancellation, u64) -> Result<IssueCollectionRunOutcome> + Send + Sync;
 
+#[cfg(test)]
+type TestCommittedCollect = dyn Fn(&IssueCollectionCancellation, u64, &Reporter) -> Result<IssueCollectionRunOutcome>
+    + Send
+    + Sync;
+
 /// 영속 투영에 이번 커널의 작업 상태만 더한다. 원문이나 공급자 응답은 보유하지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IssueCollectionHostView {
@@ -153,15 +158,7 @@ impl IssueObserver {
     #[cfg(test)]
     pub(crate) fn for_test_with_committed(
         projection: IssueCollectionProjection,
-        collect: Arc<
-            dyn Fn(
-                    &IssueCollectionCancellation,
-                    u64,
-                    &Reporter,
-                ) -> Result<IssueCollectionRunOutcome>
-                + Send
-                + Sync,
-        >,
+        collect: Arc<TestCommittedCollect>,
         waker: CoreInputWaker,
     ) -> Self {
         Self::with_collector(
