@@ -29,6 +29,8 @@ pub enum IssueSourceFailure {
     MalformedResponse,
     IdentityMismatch,
     MetadataIncomplete,
+    /// A locally sent label effect is awaiting read-only confirmation.
+    FeedbackUnconfirmed,
 }
 
 impl std::fmt::Display for IssueSourceFailure {
@@ -41,6 +43,7 @@ impl std::fmt::Display for IssueSourceFailure {
             Self::MalformedResponse => "issue source returned malformed data",
             Self::IdentityMismatch => "issue source identity does not match",
             Self::MetadataIncomplete => "issue source metadata is incomplete",
+            Self::FeedbackUnconfirmed => "issue feedback is awaiting confirmation",
         })
     }
 }

@@ -1,6 +1,11 @@
 //! 저장된 승인만 소비하는 propose 조정기다. 모델 호출 없이 host tick에서 진행한다.
 use super::issue_collection::{IssueCollectionCancellation, checked_resync_read};
 use super::issue_decision::IssueDecisionService;
+use super::issue_feedback::IssueFeedbackService;
+use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
+use crate::domain::issue_automation::feedback::IssueFeedbackEvent;
+
+mod feedback;
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
 use super::issue_triage::{IssueTriageService, IssueTriagedFact};
 use crate::application::port::outbound::issue_automation_store_port::{
@@ -28,6 +33,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueCoordinatorFact {
     Triaged(IssueTriagedFact),
+    FeedbackPosted(IssueFeedbackEvent),
     Decision {
         fact: IssueDecisionFact,
         revision: u64,
@@ -82,6 +88,9 @@ fn work_event_reporter<'a>(
                     | IssueCoordinatorFact::WorkPermitGranted { event_id, .. } => {
                         reported.insert(event_id.clone())
                     }
+                    IssueCoordinatorFact::FeedbackPosted(event) => {
+                        reported.insert(event.event_id.clone())
+                    }
                     IssueCoordinatorFact::Triaged(_) | IssueCoordinatorFact::Decision { .. } => {
                         true
                     }
@@ -102,6 +111,8 @@ pub struct IssueCoordinatorService {
     decisions: Arc<IssueDecisionService>,
     policy: IssuePolicyService,
     execution: Arc<dyn IssueWorkExecutionPort>,
+    feedback: Option<Arc<IssueFeedbackService>>,
+    publication_journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
     /// 한 host의 동시 tick/reconnect 호출을 직렬화한다. 실행기 상태는 소유하지 않는다.
     tick_gate: Mutex<()>,
 }
@@ -124,6 +135,8 @@ impl IssueCoordinatorService {
             decisions,
             policy,
             execution,
+            feedback: None,
+            publication_journal: None,
             tick_gate: Mutex::new(()),
         }
     }
@@ -140,6 +153,7 @@ impl IssueCoordinatorService {
         };
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
+        let feedback_error = self.reconcile_feedback(cancel).err();
         self.report_pending(committed)?;
         super::issue_intervention::recover_pending_controls(
             &self.workspace,
@@ -155,7 +169,8 @@ impl IssueCoordinatorService {
             committed,
             &mut execution_failures,
         )
-        .err();
+        .err()
+        .or(feedback_error);
         let mut after = None;
         'batches: loop {
             if cancel.is_cancelled() {
@@ -179,8 +194,12 @@ impl IssueCoordinatorService {
                     // 실행 사실을 읽거나 고정하지 못한 작업에는 이 tick에서 새 허가를 내지 않는다.
                     continue;
                 }
+                let issue = item.issue.clone();
                 let result =
                     self.reconcile(item, cancel, now_unix_ms, execution_enabled, committed);
+                if let Err(error) = self.sync_issue_feedback(&issue, now_unix_ms, cancel) {
+                    first_error.get_or_insert(error);
+                }
                 self.report_pending(committed)?;
                 if let Err(error) = result {
                     // One unreadable approval must not leave later work's permits valid.
@@ -196,6 +215,13 @@ impl IssueCoordinatorService {
     }
 
     pub fn acknowledge_event(&self, event_id: &str) -> Result<()> {
+        if event_id.starts_with("issue-feedback:") {
+            return self
+                .feedback
+                .as_ref()
+                .ok_or_else(|| anyhow!("the issue feedback outbox is unavailable"))?
+                .acknowledge_event(event_id);
+        }
         self.store
             .acknowledge_issue_work_event(&self.workspace, event_id)
     }
@@ -206,7 +232,7 @@ impl IssueCoordinatorService {
     }
 
     pub fn pending_facts(&self) -> Result<Vec<IssueCoordinatorFact>> {
-        let facts = self
+        let mut facts: Vec<_> = self
             .store
             .pending_issue_work_events(&self.workspace)?
             .into_iter()
@@ -251,6 +277,14 @@ impl IssueCoordinatorService {
                 },
             })
             .collect();
+        if let Some(feedback) = &self.feedback {
+            facts.extend(
+                feedback
+                    .pending_events()?
+                    .into_iter()
+                    .map(IssueCoordinatorFact::FeedbackPosted),
+            );
+        }
         Ok(facts)
     }
 
@@ -663,6 +697,7 @@ impl IssueCoordinatorService {
         } else {
             prior_revision
         };
+        let mut grant_source = None;
         cancel.commit_if_active(|| {
             // intent가 실행기 등록보다 먼저 durable해진다. 응답 유실 뒤 같은 ID로 재등록한다.
             let IssueWorkSaveResult::Saved { record, .. } =
@@ -737,9 +772,26 @@ impl IssueCoordinatorService {
             {
                 self.transition(issue, IssueTransition::Queue)?;
             }
-            let Some(source) = source else {
+            grant_source = source;
+            Ok(())
+        })?;
+        let Some(source) = grant_source else {
+            return Ok(());
+        };
+        if !self.prepare_feedback_for_grant(&work, cancel, committed)? {
+            return Ok(());
+        }
+        cancel.commit_if_active(|| {
+            let (fence, current_item, current, current_basis) =
+                self.current_or_revoke(&work, committed)?;
+            if !matches_approval(&current_item, &current, &basis, &current_basis) {
+                self.execution
+                    .revoke(&self.workspace, &work.order.work_order_id)?;
+                work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
+                self.store
+                    .save_issue_work(&self.workspace, fence, &current, &work)?;
                 return Ok(());
-            };
+            }
             self.execution.grant(
                 &self.workspace,
                 &IssueWorkPermitRequest {
@@ -864,6 +916,14 @@ impl IssueCoordinatorService {
         if state.config.mode != IssueCollectionMode::Observe || cancel.is_cancelled() {
             return Ok(false);
         }
+        let publication_lease = self
+            .publication_journal
+            .as_ref()
+            .map(|journal| journal.acquire_publication_lease(&self.workspace))
+            .transpose()?;
+        if let Some(lease) = &publication_lease {
+            lease.verify_identity()?;
+        }
         let policy = self.policy.resolve(&self.workspace)?;
         let disclosure = IssueSourceDisclosure {
             policy: *policy.disclosure_for(IssueDisclosureTarget::AiHandoff),
@@ -878,7 +938,21 @@ impl IssueCoordinatorService {
                 disclosure,
             }),
         );
+        // 미확정 자기 라벨은 새 관측 근거가 아니다. 기존 승인과 flags를 보존하되 허가는 미룬다.
+        if matches!(
+            &read,
+            IssueSourceRead::Unknown {
+                reason:
+                    crate::domain::issue_automation::source::IssueSourceFailure::FeedbackUnconfirmed,
+                ..
+            }
+        ) {
+            return Ok(false);
+        }
         let result = cancel.commit_if_active(|| {
+            if let Some(lease) = &publication_lease {
+                lease.verify_identity()?;
+            }
             self.store
                 .apply_issue_resync(&self.workspace, state.fence(), issue, &read)
         })?;

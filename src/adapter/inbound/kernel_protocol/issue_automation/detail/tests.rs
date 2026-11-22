@@ -51,6 +51,7 @@ fn detail(item: Option<IssueCollectionItem>) -> IssueCollectionDetail {
         item,
         report: Some(report()),
         interaction: None,
+        feedback: None,
     }
 }
 
@@ -297,4 +298,85 @@ fn issue_detail_exposes_server_actions_and_only_the_selected_safe_conversation_t
     assert!(unavailable["conversation"].get("shared_copy").is_none());
     assert!(unavailable["conversation"].get("thread_id").is_none());
     assert_wire_matches_spec(&unavailable);
+}
+
+#[test]
+fn issue_detail_feedback_projects_only_persisted_metadata_and_keeps_legacy_compatible() {
+    let item = IssueCollectionItem {
+        issue: reference(),
+        binding_id: IssueAutomationBindingId::new("binding").unwrap(),
+        tracked: None,
+        current: None,
+        observation_revision: None,
+        tracked_revision: None,
+        triage: None,
+        work: None,
+        open_decisions: Vec::new(),
+    };
+    let mut detail = detail(Some(item));
+    let legacy = serde_json::to_value(IssueState::from_domain(&detail)).unwrap();
+    assert!(legacy.get("feedback").is_none());
+    assert!(serde_json::from_value::<IssueState>(legacy).is_ok());
+
+    detail.feedback = Some(IssueFeedbackDetail {
+        revision: 9,
+        publication_attempts: 2,
+        comment_id: Some("IC_confirmed".into()),
+        reason: Some(IssueFeedbackDetailReason::FeedbackUnconfirmed),
+    });
+    let pending =
+        serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
+    assert_eq!(
+        pending["feedback"],
+        json!({
+            "revision": 9,
+            "publication_attempts": 2,
+            "comment_id": "IC_confirmed",
+            "reason": "feedback_unconfirmed"
+        })
+    );
+    assert_wire_matches_spec(&pending);
+
+    let feedback = detail.feedback.as_mut().unwrap();
+    feedback.revision = 10;
+    feedback.reason = None;
+    let confirmed =
+        serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
+    assert_eq!(
+        confirmed["feedback"],
+        json!({"revision": 10, "publication_attempts": 2, "comment_id": "IC_confirmed"})
+    );
+    assert_wire_matches_spec(&confirmed);
+
+    let feedback = detail.feedback.as_mut().unwrap();
+    feedback.comment_id = None;
+    feedback.reason = Some(IssueFeedbackDetailReason::FeedbackUnconfirmed);
+    let missing_ack =
+        serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
+    assert!(missing_ack["feedback"].get("comment_id").is_none());
+    assert_eq!(missing_ack["feedback"]["reason"], "feedback_unconfirmed");
+    assert_wire_matches_spec(&missing_ack);
+
+    detail.item = None;
+    let missing_issue = serde_json::to_value(IssueState::from_domain(&detail)).unwrap();
+    assert_eq!(missing_issue["status"], "not_found");
+    assert!(missing_issue.get("feedback").is_none());
+}
+
+#[test]
+fn issue_feedback_detail_rejects_raw_provider_fields_and_open_ended_reasons() {
+    let value = json!({
+        "revision": 5,
+        "publication_attempts": 1,
+        "reason": "feedback_unconfirmed"
+    });
+    assert!(serde_json::from_value::<IssueFeedbackDetailState>(value.clone()).is_ok());
+    for field in ["body", "actor_id", "intent", "response", "token"] {
+        let mut invalid = value.clone();
+        invalid[field] = json!("private-canary");
+        assert!(serde_json::from_value::<IssueFeedbackDetailState>(invalid).is_err());
+    }
+    let mut invalid = value;
+    invalid["reason"] = json!("raw-provider-error-canary");
+    assert!(serde_json::from_value::<IssueFeedbackDetailState>(invalid).is_err());
 }

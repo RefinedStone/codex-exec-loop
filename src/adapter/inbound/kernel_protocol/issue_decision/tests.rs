@@ -199,6 +199,7 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
         revision: 41,
         report: None,
         interaction: None,
+        feedback: None,
         item: Some(IssueCollectionItem {
             issue: reference(),
             binding_id: IssueAutomationBindingId::new("binding").unwrap(),

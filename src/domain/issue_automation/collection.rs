@@ -242,6 +242,22 @@ pub struct IssueCollectionDetail {
     pub item: Option<IssueCollectionItem>,
     pub report: Option<IssueTriageObserveReport>,
     pub interaction: Option<super::interaction::IssueInteractionProjection>,
+    /// 저장된 게시 사실만 담는다. 이 조회로 원격 재확인이나 새 게시를 시작하지 않는다.
+    pub feedback: Option<IssueFeedbackDetail>,
+}
+
+/// 댓글 본문·계정 정보·의도 원문을 상세 조회로 전달하지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueFeedbackDetail {
+    pub revision: u64,
+    pub publication_attempts: u64,
+    pub comment_id: Option<String>,
+    pub reason: Option<IssueFeedbackDetailReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueFeedbackDetailReason {
+    FeedbackUnconfirmed,
 }
 
 /// 범주는 서로 겹치지 않는다. 낡거나 읽지 못한 판정은 시작/승인 건수에 포함하지 않는다.
