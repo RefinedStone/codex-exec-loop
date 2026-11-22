@@ -38,6 +38,8 @@ pub mod issue_publish_journal;
 pub mod issue_policy;
 // 자동화 정책은 별도 파일과 사용자 권한 제한으로 해석한다 (#2540).
 pub mod issue_automation_policy;
+pub mod issue_autonomy;
+pub mod issue_interactions;
 pub mod issue_triage;
 // issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).
 pub mod issue_validation;

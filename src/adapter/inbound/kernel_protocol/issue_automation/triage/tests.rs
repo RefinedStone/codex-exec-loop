@@ -109,6 +109,7 @@ fn projection(
 ) -> IssueTriageProjection {
     let policy = policy(mode);
     let assessment = triage_issue(IssueTriageInput {
+        runtime_selection_revision: 0,
         issue,
         current,
         policy: &policy,

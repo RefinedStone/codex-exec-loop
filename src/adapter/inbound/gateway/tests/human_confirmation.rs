@@ -465,3 +465,172 @@ async fn only_main_proof_records_a_human_decision_and_later_agent_answers_preser
     helper.stop().await;
     kernels.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn desktop_autonomy_confirmation_is_scoped_replayable_and_rechecked_after_lowering() {
+    let folder = KernelTestFolder::new("human-autonomy");
+    let kernels = Arc::new(RepositoryKernelRegistry::default());
+    let mut main = connect_kernel_client(kernels.clone()).await;
+    let mut agent = connect_kernel_client(kernels.clone()).await;
+    named_attach(&mut main, "attach-main", &folder.workspace()).await;
+    named_attach(&mut agent, "attach-agent", &folder.workspace()).await;
+    let collection_off = kernel_request(
+        &mut agent,
+        "collection-off",
+        "akra/kernel/command",
+        json!({"command":{"type":"set_issue_automation_mode","mode":"off"},
+            "idempotency_key":"autonomy-collection-off"}),
+    )
+    .await;
+    assert!(
+        collection_off["result"]["failure"].is_null(),
+        "{collection_off}"
+    );
+
+    let command = json!({"type":"set_issue_autonomy","command_id":"autonomy-1","level":"propose"});
+    let unverified = kernel_request(
+        &mut agent,
+        "unverified",
+        "akra/kernel/command",
+        json!({"command":command,"idempotency_key":"autonomy-unverified"}),
+    )
+    .await;
+    assert_eq!(
+        unverified["result"]["rejection"]["reason"], "human_confirmation_required",
+        "{unverified}"
+    );
+
+    let mut helper = MainBroker::start().await;
+    let registration = helper.register(&mut main).await;
+    let request = json!({"command":command,"idempotency_key":"autonomy-confirmed"});
+    let prepared = kernel_request(
+        &mut main,
+        "prepare-autonomy",
+        "akra/kernel/confirmation/prepare",
+        json!({"request":request}),
+    )
+    .await;
+    let intent = prepared["result"]["intent"].clone();
+    assert_eq!(intent["target"]["kind"], "autonomy", "{prepared}");
+    assert_eq!(intent["target"]["command_id"], "autonomy-1");
+    assert_eq!(intent["target"]["from"], "observe");
+    assert_eq!(intent["target"]["to"], "propose");
+    assert_eq!(intent["target"]["cap"], "propose");
+    assert_eq!(intent["target"]["revision"], 0);
+    let proof_id = helper.approve(&registration, &intent).await;
+    let envelope = json!({"request":request,"confirmation":{
+        "registration_id":registration["registration_id"],"proof_id":proof_id,"intent":intent
+    }});
+    let mut altered = envelope.clone();
+    altered["request"]["command"]["command_id"] = json!("another-command");
+    let denied = kernel_request(
+        &mut main,
+        "altered-autonomy",
+        "akra/kernel/command_confirmed",
+        altered,
+    )
+    .await;
+    assert_eq!(denied["error"]["code"], -32602, "{denied}");
+
+    let accepted = kernel_request(
+        &mut main,
+        "confirmed-autonomy",
+        "akra/kernel/command_confirmed",
+        envelope,
+    )
+    .await;
+    assert!(accepted["result"]["rejection"].is_null(), "{accepted}");
+    assert!(accepted["result"]["failure"].is_null(), "{accepted}");
+    assert_eq!(
+        accepted["result"]["result"]["type"],
+        "issue_autonomy_changed"
+    );
+    assert_eq!(accepted["result"]["result"]["command_id"], "autonomy-1");
+    assert_eq!(accepted["result"]["result"]["changed"], true);
+    assert_eq!(
+        accepted["result"]["result"]["autonomy"]["effective_level"],
+        "propose"
+    );
+
+    let current = kernel_request(
+        &mut agent,
+        "autonomy-state",
+        "akra/kernel/query",
+        json!({"query":{"type":"issue_automation"}}),
+    )
+    .await;
+    assert_eq!(
+        current["result"]["autonomy"]["requested_level"], "propose",
+        "{current}"
+    );
+    assert_eq!(current["result"]["autonomy"]["effective_level"], "propose");
+    assert_eq!(current["result"]["mode"], "off");
+    assert_eq!(current["result"]["collecting"], false);
+
+    let replay = kernel_request(&mut main, "autonomy-replay", "akra/kernel/command", request).await;
+    assert_eq!(replay["result"]["operation"]["replayed"], true, "{replay}");
+    assert_eq!(
+        replay["result"]["operation"]["op_id"],
+        accepted["result"]["operation"]["op_id"]
+    );
+
+    let stale_request = json!({
+        "command":{"type":"set_issue_autonomy","command_id":"autonomy-stale","level":"propose"},
+        "idempotency_key":"autonomy-stale"
+    });
+    let stale_preview = kernel_request(
+        &mut main,
+        "prepare-stale",
+        "akra/kernel/confirmation/prepare",
+        json!({"request":stale_request}),
+    )
+    .await;
+    let stale_intent = stale_preview["result"]["intent"].clone();
+    assert_eq!(stale_intent["target"]["revision"], 1, "{stale_preview}");
+    let stale_proof = helper.approve(&registration, &stale_intent).await;
+    let lowered = kernel_request(
+        &mut agent,
+        "lower-autonomy",
+        "akra/kernel/command",
+        json!({"command":{"type":"set_issue_autonomy","command_id":"autonomy-off","level":"off"},
+            "idempotency_key":"autonomy-lower"}),
+    )
+    .await;
+    assert!(lowered["result"]["rejection"].is_null(), "{lowered}");
+    assert!(lowered["result"]["failure"].is_null(), "{lowered}");
+    assert_eq!(
+        lowered["result"]["result"]["autonomy"]["effective_level"],
+        "off"
+    );
+
+    let stale = kernel_request(
+        &mut main,
+        "stale-confirmed",
+        "akra/kernel/command_confirmed",
+        json!({"request":stale_request,"confirmation":{
+            "registration_id":registration["registration_id"],
+            "proof_id":stale_proof,"intent":stale_intent
+        }}),
+    )
+    .await;
+    assert_eq!(
+        stale["result"]["rejection"]["reason"], "human_confirmation_required",
+        "{stale}"
+    );
+    let final_state = kernel_request(
+        &mut agent,
+        "autonomy-final",
+        "akra/kernel/query",
+        json!({"query":{"type":"issue_automation"}}),
+    )
+    .await;
+    assert_eq!(
+        final_state["result"]["autonomy"]["effective_level"], "off",
+        "{final_state}"
+    );
+    assert_eq!(final_state["result"]["autonomy"]["revision"], 2);
+    detach(&mut main).await;
+    detach(&mut agent).await;
+    helper.stop().await;
+    kernels.shutdown();
+}

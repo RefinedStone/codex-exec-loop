@@ -118,6 +118,7 @@ fn input<'a>(
     previous: Option<&'a IssueTriageAssessment>,
 ) -> IssueTriageInput<'a> {
     IssueTriageInput {
+        runtime_selection_revision: 0,
         issue,
         current,
         policy,

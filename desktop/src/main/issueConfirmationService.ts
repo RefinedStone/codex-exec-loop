@@ -39,6 +39,10 @@ export class IssueConfirmationService {
     return this.enqueue("mode", input);
   }
 
+  confirmAutonomy(input: unknown): Promise<IssueConfirmationResponse> {
+    return this.enqueue("autonomy", input);
+  }
+
   invalidate(): void {
     this.generation++;
     this.active?.abort();

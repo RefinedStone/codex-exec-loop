@@ -190,3 +190,31 @@ fn validate_authorization(
     }
     Ok(())
 }
+
+pub(super) fn list(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+) -> Result<Vec<IssueWorkCheckpoint>> {
+    adapter.with_connection(workspace, |connection,_| {
+        let mut statement=connection.prepare("SELECT checkpoint, revision, work_order_id, provider, server_id, repository_id, issue_id FROM issue_work_checkpoints WHERE workspace_dir=?1 ORDER BY work_order_id")?;
+        let mut rows=statement.query([workspace])?;
+        let mut result=Vec::new();
+        while let Some(row)=rows.next()? {
+            let encoded:String=row.get(0)?;
+            if encoded.len()>512*1024 { bail!("the issue work checkpoint exceeds its bound"); }
+            let record:IssueWorkCheckpoint=serde_json::from_str(&encoded).map_err(|_|anyhow!("invalid issue work checkpoint"))?;
+            record.validate().map_err(|reason|anyhow!(reason))?;
+            validate_reference_scope(workspace,&record.order.issue)?;
+            if record.revision!=super::read_revision(row,1)?
+                || record.order.work_order_id!=row.get::<_,String>(2)?
+                || enum_name(&record.order.issue.provider)?!=row.get::<_,String>(3)?
+                || record.order.issue.server_id!=row.get::<_,String>(4)?
+                || record.order.issue.repository_id!=row.get::<_,String>(5)?
+                || record.order.issue.issue_id!=row.get::<_,String>(6)? {
+                bail!("the issue work checkpoint identity does not match");
+            }
+            result.push(record);
+        }
+        Ok(result)
+    })
+}

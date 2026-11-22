@@ -241,6 +241,7 @@ pub struct IssueCollectionDetail {
     pub revision: u64,
     pub item: Option<IssueCollectionItem>,
     pub report: Option<IssueTriageObserveReport>,
+    pub interaction: Option<super::interaction::IssueInteractionProjection>,
 }
 
 /// 범주는 서로 겹치지 않는다. 낡거나 읽지 못한 판정은 시작/승인 건수에 포함하지 않는다.
