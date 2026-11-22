@@ -170,16 +170,38 @@ impl IssueCoordinatorService {
 
     fn reconcile(
         &self,
-        item: IssueCollectionItem,
+        mut item: IssueCollectionItem,
         cancel: &IssueCollectionCancellation,
         now_unix_ms: u64,
         execution_enabled: bool,
         committed: &Reporter<'_>,
     ) -> Result<()> {
+        let mut work = self.store.get_issue_work(&self.workspace, &item.issue)?;
+        if let Some(candidate) = work.as_mut()
+            && candidate.task_ids.is_empty()
+        {
+            // 등록 직후의 crash는 승인 변경과 독립적으로 복구한다.
+            // 원격 조회나 새 등록 없이 실행기의 영속 연결만 되찾는다.
+            let task_ids = self
+                .execution
+                .task_ids(&self.workspace, &candidate.order.work_order_id)?;
+            if !task_ids.is_empty() {
+                candidate.task_ids = task_ids;
+                let (fence, current_item, assessment) = self.current(&item.issue, committed)?;
+                let saved = cancel.commit_if_active(|| {
+                    self.store
+                        .save_issue_work(&self.workspace, fence, &assessment, candidate)
+                })?;
+                let Some(IssueWorkSaveResult::Saved { record, .. }) = saved else {
+                    return Ok(());
+                };
+                item = current_item;
+                work = Some(*record);
+            }
+        }
         let Some(tracked) = item.tracked.as_ref() else {
             return Ok(());
         };
-        let work = self.store.get_issue_work(&self.workspace, &item.issue)?;
         let assessment = self.triage.assess_current(&item)?;
         let basis =
             IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None)?;
