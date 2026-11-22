@@ -32,6 +32,7 @@ pub enum IssueWorkBlockReason {
     ApprovalChanged,
     SourceUnavailable,
     SubmissionUnavailable,
+    FeedbackUnconfirmed,
 }
 
 /// 실행기 중립 명령이다. 본문은 현재 AiHandoff 공유본이며 원본을 담지 않는다.

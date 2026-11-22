@@ -538,7 +538,8 @@ IA4의 남은 조각은 §17에 기록한다.
 같은 task의 질문 답변 재개, 통합 후 `done` 보존은 reference의 계약을 따른다. 기존 PR 검증 FSM과
 원본 종료 기록은 유지하며, 보완 task 생성과 작업 지시 계보 등록은 같은 admission 트랜잭션에서 처리한다.
 
-게시 결과를 모르는 `publish_unknown`과 게시 횟수의 처리는 IA4-2 (#2552)의 남은 범위이다.
+IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한 번 센다. 미확정 의도는
+`feedback_unconfirmed`로 표시하고 읽기로만 확인한다. 이 횟수는 실행 시도 한도와 독립적이다.
 댓글이나 라벨 쓰기의 결과를 다시 읽어 확인하고, 결과를 확정하기 전에는 자동으로 다시 쓰지 않는 계약을
 해당 조각에서 구현·검증한다.
 
@@ -696,7 +697,8 @@ IA4의 남은 조각은 §17에 기록한다.
 | 조각 | 상태 | 계약과 남은 범위 |
 | --- | --- | --- |
 | IA4-1 · #2551 | 구현 PR [#2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638) · 미병합 | 실행 추적·종료 원인별 복구·횟수 분리·질문 답변. [reference](../reference/current-product.md#issue-automation-execution) |
-| IA4-2 ~ IA4-5 | 후속 | 외부 피드백 #2552, 닫힘 정책 #2553, Desktop 추적 표시 #2554, 전체 흐름 검증 #2555 |
+| IA4-2 · #2552 | 구현 브랜치 `codex/issue-2552-github-feedback` · 미병합 | 상태 댓글·진행 라벨·전송 일지·읽기 재확인·게시 횟수. [reference](../reference/current-product.md#issue-automation-feedback) |
+| IA4-3 ~ IA4-5 | 후속 | 닫힘 정책 #2553, Desktop 추적 표시 #2554, 전체 흐름 검증 #2555 |
 
 PR #2638은 선행 [PR #2637](https://github.com/RefinedStone/codex-exec-loop/pull/2637)의
 `codex/issue-2550-desktop-interventions` 브랜치를 base로 하는 연계 PR이다. 부모 체인도 미병합이며,
