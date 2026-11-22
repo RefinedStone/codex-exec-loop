@@ -46,6 +46,11 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         anyhow::bail!("interactive approval decisions are not supported by this runtime")
     }
 
+    /// 이 프로세스가 소유한 현재 worker stream binding만 조회한다. main이나 과거 턴은 반환하지 않는다.
+    fn active_worker_turn_id(&self, _thread_id: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn steer_turn(
         &self,
         _request: ConversationTurnSteerRequest,

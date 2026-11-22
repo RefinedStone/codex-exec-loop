@@ -26,7 +26,7 @@ use super::git::{GIT_METHOD_PREFIX, GitPorts, spawn_request as spawn_git_request
 use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::issue::{ISSUE_METHOD_PREFIX, spawn_request as spawn_issue_request};
 use super::issue_draft::{is_issue_draft_method, spawn_request as spawn_issue_draft_request};
-use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests, is_issue_decision_command};
+use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests, is_sensitive_issue_command};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::resource_version::{self, ProviderSession};
@@ -229,7 +229,7 @@ where
                         let sensitive_confirmation = is_confirmation_method(&method);
                         // 초안과 결정 답의 note에는 가리기 전의 로컬 글이 있다. 녹화에 남기지 않는다.
                         if !is_issue_draft_method(&method)
-                            && !is_issue_decision_command(&method, text.as_str())
+                            && !is_sensitive_issue_command(&method, text.as_str())
                             && !sensitive_confirmation
                             && !method.starts_with(super::delegation::PREFIX)
                             && !super::delegation::private_kernel_payload(&method, text.as_str())

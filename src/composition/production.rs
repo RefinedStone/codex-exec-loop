@@ -798,15 +798,20 @@ pub(crate) fn acquire_native_tui_kernel_lock() -> Result<Option<RepositoryKernel
     acquire_native_tui_kernel_lock_for_workspace(&native_tui_workspace_dir())
 }
 
-/// 잠금 파일을 만들지 못하는 오류(경합이 아닌 오류)는 TUI 를 막지 않는다. 경고를 남기고 잠금 없이 시작한다.
-/// 그 경우에도 planning 기준 데이터가 같은 디렉터리를 쓰므로 오류는 planning 화면에도 보인다.
+/// 잠금 파일 오류(경합이 아닌 오류)는 이전 개입의 planning fence를 복구한 경우에만 우회한다.
+/// 복구 실패는 runtime 시작을 막고, 복구 성공 시 경고를 남긴 뒤 잠금 없이 시작한다.
 pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
     workspace_dir: &str,
 ) -> Result<Option<RepositoryKernelLock>> {
     match acquire_repository_kernel_lock(workspace_dir) {
-        Ok(lock) => Ok(Some(lock)),
+        Ok(lock) => {
+            recover_pending_issue_interventions(workspace_dir)?;
+            Ok(Some(lock))
+        }
         Err(error) if error.downcast_ref::<RepositoryKernelLockHeld>().is_some() => Err(error),
         Err(error) => {
+            // 잠금 없이 시작하는 기존 fallback도 durable 제어 fence를 건너뛰지는 않는다.
+            recover_pending_issue_interventions(workspace_dir)?;
             tracing::warn!(
                 error = %format!("{error:#}"),
                 "kernel lock unavailable; the TUI starts without it"
@@ -814,6 +819,18 @@ pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
             Ok(None)
         }
     }
+}
+
+/// 잠금 획득 또는 잠금 파일 오류 fallback에서 runtime을 만들기 전에 호출한다.
+/// 수집 Off에서도 이전 제어 intent의 planning fence가 실행보다 먼저 적용되어야 한다.
+/// 조립/복구는 새 worker나 모델 턴을 시작하지 않는다.
+pub(crate) fn recover_pending_issue_interventions(workspace_dir: &str) -> Result<()> {
+    // 이슈 장부는 대표 checkout 범위다. 같은 저장소의 linked worktree도 같은 intent를 읽는다.
+    let workspace = repository_kernel_target(workspace_dir)?.workspace_root;
+    super::issue_collection::build_interventions(
+        &workspace,
+        Arc::new(crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering),
+    ).recover_before_runtime()
 }
 
 fn native_tui_workspace_dir() -> String {
@@ -850,15 +867,23 @@ pub(crate) fn recorded_commands_for_test(workspace_dir: &str) -> Vec<(String, Op
 
 /*
  * 저장 명령의 실행기이다 (plan 18 K4-9d). 커널의 조립이다: 변경을 직접 실행한다. 입구의 조립을 쓰면 명령이
- * 자기에게 돌아온다. 저장소와 파일만 쓴다. app-server 를 시작하지 않고 planning worker 를 부르지 않는다.
+ * 자기에게 돌아온다. 기본 명령 전용 조립은 저장소와 파일을 쓴다. 상주 커널이 주입한 steering은 이미
+ * 실행 중인 worker만 제어한다. 새 app-server나 planning worker를 시작하지 않는다.
  */
 pub(crate) fn stored_command_port(workspace_dir: &str) -> Arc<dyn StoredCommandPort> {
-    stored_command_port_with_issues(workspace_dir, super::issue_collection::build(workspace_dir))
+    stored_command_port_with_issues(
+        workspace_dir,
+        super::issue_collection::build(workspace_dir),
+        Arc::new(crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering),
+    )
 }
 
 pub(crate) fn stored_command_port_with_issues(
     workspace_dir: &str,
     issues: Arc<crate::application::service::issue_collection::IssueCollectionService>,
+    steering: Arc<
+        dyn crate::application::port::outbound::issue_work_steering_port::IssueWorkSteeringPort,
+    >,
 ) -> Arc<dyn StoredCommandPort> {
     struct NoPlanningWorker;
     impl PlanningWorkerPort for NoPlanningWorker {
@@ -880,7 +905,11 @@ pub(crate) fn stored_command_port_with_issues(
             store,
         ))
         .with_issue_collection(issues)
-        .with_issue_decisions(super::issue_collection::build_decisions(workspace_dir)),
+        .with_issue_decisions(super::issue_collection::build_decisions(workspace_dir))
+        .with_issue_interventions(super::issue_collection::build_interventions(
+            workspace_dir,
+            steering,
+        )),
     )
 }
 
@@ -946,6 +975,14 @@ fn build_native_application_for_workspace(
     let workspace_dir = workspace_dir.to_string();
     let capture_enabled = app_server_prompt_logging_enabled();
     let ports = build_shared_ports_with_app_server(capture_enabled, app_server);
+    let steering_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let issue_work_steering = Arc::new(
+        crate::adapter::outbound::akra_issue_work_steering::AkraIssueWorkSteeringAdapter::new(
+            steering_authority.clone(),
+            steering_authority,
+            ports.app_server_adapter.clone(),
+        ),
+    );
     let maintenance_mode = native_tui_prompt_log_maintenance_mode(capture_enabled);
     let startup_service = StartupService::new(ports.app_server_adapter.clone())
         .with_prompt_log_maintenance(
@@ -983,6 +1020,7 @@ fn build_native_application_for_workspace(
         ports.conversation_thread_turn_options_port,
         clipboard_image_probe_trigger,
     )
+    .with_issue_work_steering(issue_work_steering)
 }
 
 fn native_tui_prompt_log_maintenance_mode(
@@ -1343,6 +1381,7 @@ fn github_automation_port() -> Arc<dyn GithubAutomationPort> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::outbound::db::SqliteIssueAutomationStoreAdapter;
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInputRecord, AppServerPromptInteractionRecord,
     };
@@ -1351,8 +1390,22 @@ mod tests {
         GithubPrValidationSnapshot, GithubValidationCheckRun, GithubValidationRunStatus,
         GithubValidationSource, GithubValidationSourceObservation, GithubValidationSourceStatus,
     };
+    use crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort;
+    use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkControlRepositoryPort;
     use crate::application::service::planning::{PlanningControlCommand, PlanningControlRequest};
     use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
+    use crate::domain::issue_automation::collection::IssueCollectionMode;
+    use crate::domain::issue_automation::coordinator::issue_work_order_id;
+    use crate::domain::issue_automation::intervention::{
+        IssueInterventionAction, IssueInterventionRequest,
+    };
+    use crate::domain::issue_automation::{
+        IssueAutomationBinding, IssueAutomationBindingId, IssueAutomationSnapshot, TrackedIssue,
+    };
+    use crate::domain::issue_work::{
+        IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueProvider, IssueReference,
+        IssueSharedCopy,
+    };
     use crate::domain::parallel_mode::{
         PrValidationCommitSha, PrValidationRecord, PrValidationRecordKey, PrValidationTarget,
         PrValidationTargetShaSnapshot,
@@ -1939,6 +1992,236 @@ mod tests {
             native_tui_prompt_log_maintenance_mode(false),
             AppServerPromptLogMaintenanceMode::ClearAll
         );
+    }
+
+    fn pending_issue_hold_for_startup(
+        workspace: &TempWorkspace,
+    ) -> (
+        String,
+        SqliteIssueAutomationStoreAdapter,
+        IssueInterventionRequest,
+    ) {
+        let canonical = repository_kernel_target(workspace.path().to_str().unwrap())
+            .expect("the fixture has a canonical repository workspace")
+            .workspace_root;
+        let store = SqliteIssueAutomationStoreAdapter::new(|workspace| {
+            Ok(PathBuf::from(
+                SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?
+                    .runtime_dir,
+            ))
+        });
+        let issue = IssueReference {
+            provider: IssueProvider::GitHub,
+            server_id: "github.com".to_owned(),
+            repository_id: "R_startup_recovery".to_owned(),
+            issue_id: "I_pending_hold".to_owned(),
+            project_scope: IssueProjectScope {
+                workspace_dir: canonical.clone(),
+            },
+        };
+        let binding = IssueAutomationBinding::new(
+            IssueAutomationBindingId::new("startup-recovery-binding").unwrap(),
+            issue.provider,
+            &issue.server_id,
+            &issue.repository_id,
+            issue.project_scope.clone(),
+        )
+        .unwrap();
+        store.insert_binding(&canonical, &binding).unwrap();
+        let shared_copy = IssueSharedCopy {
+            title: "Pending startup hold".to_owned(),
+            body: "A committed hold must fence work before the next runtime starts.".to_owned(),
+        };
+        let tracked = TrackedIssue::discovered(
+            issue.clone(),
+            &binding,
+            IssueAutomationSnapshot {
+                basis: IssueComparisonBasis {
+                    field_hash: IssueFieldHash::of_fields(&shared_copy.title, &shared_copy.body),
+                    provider_updated_at: "2026-11-21T00:00:00Z".to_owned(),
+                },
+                shared_copy,
+                policy_version: "startup-recovery-policy".to_owned(),
+            },
+        )
+        .unwrap();
+        store.insert_issue(&canonical, &tracked).unwrap();
+        let collection = store.ensure_collection(&canonical).unwrap();
+        store
+            .set_collection_mode(&canonical, Some(collection.epoch), IssueCollectionMode::Off)
+            .unwrap();
+        let request = IssueInterventionRequest {
+            command_id: "startup-pending-hold".to_owned(),
+            issue,
+            action: IssueInterventionAction::Hold,
+        };
+        assert!(
+            store
+                .begin_issue_intervention(&canonical, &request)
+                .unwrap()
+                .receipt
+                .is_none()
+        );
+        let control = SqlitePlanningAuthorityAdapter::new()
+            .load_work_order_control(&canonical, &issue_work_order_id(&request.issue))
+            .unwrap();
+        assert!(!control.held);
+        assert_eq!(control.authorization_epoch, 0);
+        (canonical, store, request)
+    }
+
+    fn assert_startup_hold_recovered(
+        workspace: &str,
+        store: &SqliteIssueAutomationStoreAdapter,
+        request: &IssueInterventionRequest,
+    ) {
+        let control = SqlitePlanningAuthorityAdapter::new()
+            .load_work_order_control(workspace, &issue_work_order_id(&request.issue))
+            .unwrap();
+        assert!(control.held);
+        assert!(!control.allows_automation());
+        assert!(control.require_epoch(0).is_err());
+        assert_eq!(control.authorization_epoch, 1);
+        assert!(
+            store
+                .get_issue(workspace, &request.issue)
+                .unwrap()
+                .unwrap()
+                .flags()
+                .held
+        );
+        let receipt = store
+            .get_issue_intervention(workspace, &request.command_id)
+            .unwrap()
+            .unwrap()
+            .receipt
+            .unwrap();
+        assert_eq!(receipt.authorization_epoch, 1);
+        assert!(
+            store
+                .pending_issue_interventions(workspace)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .get_collection(workspace)
+                .unwrap()
+                .unwrap()
+                .config
+                .mode,
+            IssueCollectionMode::Off
+        );
+    }
+
+    #[test]
+    fn tui_startup_from_linked_worktree_recovers_the_primary_checkout_pending_hold() {
+        let workspace = TempWorkspace::new("tui-issue-recovery-primary");
+        initialize_git_workspace(&workspace);
+        let linked = TempWorkspace::new("tui-issue-recovery-linked");
+        let output = crate::test_utils::git_command()
+            .args(["worktree", "add", "--detach"])
+            .arg(linked.path())
+            .arg("HEAD")
+            .current_dir(workspace.path())
+            .output()
+            .expect("the linked worktree fixture should start");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let (canonical, store, request) = pending_issue_hold_for_startup(&workspace);
+        let linked_dir = linked.path().to_str().unwrap();
+        assert_ne!(linked_dir, canonical);
+        assert!(
+            store
+                .pending_issue_interventions(linked_dir)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store.pending_issue_interventions(&canonical).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            repository_kernel_target(linked_dir).unwrap().workspace_root,
+            canonical
+        );
+
+        // This is the production lock/recovery entry. No runtime or app-server is constructed.
+        let lock = acquire_native_tui_kernel_lock_for_workspace(linked_dir)
+            .expect("linked-worktree startup recovers its repository's control intents")
+            .expect("the fixture kernel lock is free");
+        assert_startup_hold_recovered(&canonical, &store, &request);
+        drop(lock);
+    }
+
+    #[test]
+    fn tui_startup_lock_file_failure_requires_pending_hold_recovery_to_succeed() {
+        for broken_planning_control in [false, true] {
+            let workspace = TempWorkspace::new("tui-issue-recovery-lock-error");
+            initialize_git_workspace(&workspace);
+            let (canonical, store, request) = pending_issue_hold_for_startup(&workspace);
+            let location =
+                SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&canonical)
+                    .unwrap();
+            let lock_path = Path::new(&location.runtime_dir).join("kernel.lock");
+            std::fs::create_dir(&lock_path).expect("a directory must block opening kernel.lock");
+            if broken_planning_control {
+                let connection =
+                    rusqlite::Connection::open(&location.authority_store_path).unwrap();
+                connection.execute(
+                    "INSERT INTO planning_work_order_controls (work_order_id, control_json) VALUES (?1, ?2)",
+                    rusqlite::params![issue_work_order_id(&request.issue), "invalid-control-json"],
+                ).unwrap();
+            }
+            let lock_error = acquire_repository_kernel_lock(&canonical)
+                .expect_err("the fixture must take the non-contention lock error path");
+            assert!(
+                lock_error
+                    .downcast_ref::<RepositoryKernelLockHeld>()
+                    .is_none()
+            );
+            assert!(format!("{lock_error:#}").contains("kernel.lock"));
+
+            let result = acquire_native_tui_kernel_lock_for_workspace(&canonical);
+            if broken_planning_control {
+                let error = result.expect_err("a failed planning fence must block runtime startup");
+                assert!(
+                    format!("{error:#}").contains("invalid work control record"),
+                    "{error:#}"
+                );
+                assert!(
+                    store
+                        .get_issue_intervention(&canonical, &request.command_id)
+                        .unwrap()
+                        .unwrap()
+                        .receipt
+                        .is_none()
+                );
+                assert_eq!(
+                    store.pending_issue_interventions(&canonical).unwrap().len(),
+                    1
+                );
+                assert!(
+                    !store
+                        .get_issue(&canonical, &request.issue)
+                        .unwrap()
+                        .unwrap()
+                        .flags()
+                        .held
+                );
+            } else {
+                assert!(
+                    result
+                        .expect("a recovered hold permits the existing lock fallback")
+                        .is_none()
+                );
+                assert_startup_hold_recovered(&canonical, &store, &request);
+            }
+            std::fs::remove_dir(&lock_path).unwrap();
+        }
     }
 
     #[test]

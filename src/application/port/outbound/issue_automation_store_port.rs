@@ -144,11 +144,52 @@ pub enum IssueDecisionSaveResult {
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
 /// 같은 안정 ID의 재삽입은 기존 내용을 보존한다. 갱신은 revision CAS로만 한다.
 pub trait IssueAutomationStorePort: Send + Sync {
+    fn issue_authorization_epoch(&self, _workspace: &str, _issue: &IssueReference) -> Result<u64> {
+        Ok(0)
+    }
+
     fn pending_issue_work_events(
         &self,
         workspace: &str,
     ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkEvent>>;
     fn acknowledge_issue_work_event(&self, workspace: &str, event_id: &str) -> Result<()>;
+    fn get_issue_intervention(
+        &self,
+        _workspace: &str,
+        _command_id: &str,
+    ) -> Result<Option<crate::domain::issue_automation::intervention::StoredIssueIntervention>>
+    {
+        anyhow::bail!("issue interventions are unavailable")
+    }
+    /// Atomically record the steering intent and Unknown receipt. Only the first claimant may act.
+    fn claim_issue_steer_delivery(
+        &self,
+        _workspace: &str,
+        _request: &crate::domain::issue_automation::intervention::IssueInterventionRequest,
+        _receipt: &crate::domain::issue_automation::intervention::IssueInterventionReceipt,
+    ) -> Result<bool> {
+        anyhow::bail!("atomic issue steering claims are unavailable")
+    }
+    fn begin_issue_intervention(
+        &self,
+        _workspace: &str,
+        _request: &crate::domain::issue_automation::intervention::IssueInterventionRequest,
+    ) -> Result<crate::domain::issue_automation::intervention::StoredIssueIntervention> {
+        anyhow::bail!("issue interventions are unavailable")
+    }
+    fn finish_issue_intervention(
+        &self,
+        _workspace: &str,
+        _receipt: &crate::domain::issue_automation::intervention::IssueInterventionReceipt,
+    ) -> Result<()> {
+        anyhow::bail!("issue interventions are unavailable")
+    }
+    fn pending_issue_interventions(
+        &self,
+        _workspace: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::intervention::StoredIssueIntervention>> {
+        Ok(Vec::new())
+    }
 
     fn get_issue_work(
         &self,

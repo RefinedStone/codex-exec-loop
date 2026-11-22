@@ -2,6 +2,7 @@ use super::*;
 
 fn basis() -> PlanningWorkPermitBasis {
     PlanningWorkPermitBasis {
+        authorization_epoch: 0,
         policy_version: "policy-1".into(),
         field_hash: "field-1".into(),
         gate_revision: 1,

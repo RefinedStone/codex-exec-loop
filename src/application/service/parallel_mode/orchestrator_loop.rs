@@ -848,7 +848,7 @@ where
 }
 
 fn run_parallel_dispatch_worker(
-    request: ParallelDispatchWorkerRequest,
+    mut request: ParallelDispatchWorkerRequest,
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
     turn_service: ParallelModeTurnService,
     planning: PlanningServices,
@@ -873,6 +873,24 @@ fn run_parallel_dispatch_worker(
             request.handoff_task.task_title
         )]);
     }
+    request.prompt = match turn_service.work_order_launch_prompt(
+        &request.planning_workspace_directory,
+        &request.expected_lease,
+        &request.prompt,
+    ) {
+        Ok(prompt) => prompt,
+        Err(failure) => {
+            let mut notices = vec![failure.detail];
+            // 중복 실행자는 먼저 claim한 worker의 미시작 lease도 건드리지 않는다.
+            if !failure.preserve_lease
+                && let Some(notice) =
+                    turn_service.release_unstarted_work_order_after_control(&request.expected_lease)
+            {
+                notices.push(notice);
+            }
+            return ParallelDispatchWorkerRunResult::launch_failed(notices);
+        }
+    };
     let (event_tx, event_rx) = conversation_stream_channel();
     let service_request = request.clone();
     event_log::emit_lazy("parallel_worker_stream_starting", || {

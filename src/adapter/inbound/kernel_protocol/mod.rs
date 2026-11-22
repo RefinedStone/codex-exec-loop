@@ -7,6 +7,7 @@ use crate::application::port::inbound::stored_command_port::{
     StoredTaskFields,
 };
 use crate::domain::issue_automation::decision::{IssueDecisionOutcome, IssueDecisionState};
+use crate::domain::issue_automation::intervention::IssueInterventionAction;
 use crate::domain::kernel_event::IssueDecisionFactRecord;
 pub use crate::domain::kernel_event::ReasonCode;
 use crate::domain::kernel_event::{
@@ -50,6 +51,7 @@ mod confirmation;
 mod issue_automation;
 mod issue_automation_policy;
 mod issue_decision;
+mod issue_intervention;
 pub use confirmation::{
     ConfirmationPrepareRequest, ConfirmationPrepareResponse, ConfirmationRegisterRequest,
     ConfirmationRegisterResponse, ConfirmedCommandRequest, HumanConfirmationSubmission,
@@ -58,6 +60,7 @@ pub use confirmation::{
 pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssueState, IssuesState};
 pub use issue_automation_policy::IssueAutomationPolicyState;
 pub use issue_decision::{IssueDecisionChangedState, IssueDecisionRequestState};
+pub use issue_intervention::{IssueInterventionReceiptState, IssueSteerDeliveryState};
 
 /// 프로토콜 판이다. 전송 모양을 호환되지 않게 바꿀 때만 올린다. 필드를 더하는 것은 올리지 않는다. K4-1 에서
 /// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
@@ -249,11 +252,6 @@ impl CommandRequest {
             .map(valid_idempotency_key)
             .transpose()?;
         let kind = self.command.kind();
-        if kind == KernelCommandKind::RetryDelegation && idempotency_key.is_none() {
-            return Err(KernelProtocolError::invalid_params(
-                "retry_delegation requires idempotency_key".to_owned(),
-            ));
-        }
         if !kind.is_recorded() {
             return Ok(None);
         }
@@ -276,11 +274,14 @@ impl CommandRequest {
             | KernelCommand::DeleteDirection { .. }
             | KernelCommand::SetIssueAutomationMode { .. }
             | KernelCommand::AnswerIssueDecision { .. }
-            | KernelCommand::SubmitDelegation { .. }
-            | KernelCommand::CancelDelegation { .. }
-            | KernelCommand::CheckpointDelegation { .. }
-            | KernelCommand::ReportDelegationResult { .. }
-            | KernelCommand::RetryDelegation { .. }
+            | KernelCommand::HoldIssue { .. }
+            | KernelCommand::ReleaseIssue { .. }
+            | KernelCommand::SteerIssue { .. }
+            | KernelCommand::TakeOverIssue { .. }
+            | KernelCommand::RetriageIssue { .. }
+            | KernelCommand::CancelIssueWork { .. }
+            | KernelCommand::TrackIssue { .. }
+            | KernelCommand::UntrackIssue { .. }
             | KernelCommand::SyncIssues {} => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
@@ -390,20 +391,8 @@ pub struct CommandResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandResult {
-    DelegationSubmitted {
-        delegation: crate::domain::delegation::Delegation,
-    },
-    DelegationCancelled {
-        delegation: crate::domain::delegation::Delegation,
-    },
-    DelegationCheckpointed {
-        delegation: crate::domain::delegation::Delegation,
-    },
-    DelegationResultReported {
-        delegation: crate::domain::delegation::Delegation,
-    },
-    DelegationRetried {
-        delegation: crate::domain::delegation::Delegation,
+    IssueIntervened {
+        receipt: Box<IssueInterventionReceiptState>,
     },
     IssueDecisionResolved {
         decision: Box<IssueDecisionFactRecord>,
@@ -452,6 +441,9 @@ pub enum CommandResult {
 impl CommandResult {
     fn from_stored(result: StoredCommandResult) -> Self {
         match result {
+            StoredCommandResult::IssueIntervened { receipt } => Self::IssueIntervened {
+                receipt: Box::new((*receipt).into()),
+            },
             StoredCommandResult::IssueDecisionResolved {
                 fact,
                 outcome,
@@ -537,11 +529,14 @@ impl CommandResult {
             KernelCommandKind::DeleteDirection => Some("direction_deleted"),
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
-            KernelCommandKind::SubmitDelegation => Some("delegation_submitted"),
-            KernelCommandKind::CancelDelegation => Some("delegation_cancelled"),
-            KernelCommandKind::CheckpointDelegation => Some("delegation_checkpointed"),
-            KernelCommandKind::ReportDelegationResult => Some("delegation_result_reported"),
-            KernelCommandKind::RetryDelegation => Some("delegation_retried"),
+            KernelCommandKind::HoldIssue
+            | KernelCommandKind::ReleaseIssue
+            | KernelCommandKind::SteerIssue
+            | KernelCommandKind::TakeOverIssue
+            | KernelCommandKind::RetriageIssue
+            | KernelCommandKind::CancelIssueWork
+            | KernelCommandKind::TrackIssue
+            | KernelCommandKind::UntrackIssue => Some("issue_intervened"),
             KernelCommandKind::LoadSessions
             | KernelCommandKind::RenameSession
             | KernelCommandKind::SubmitPrompt
@@ -805,30 +800,52 @@ pub enum KernelCommand {
         #[schemars(length(max = 4096))]
         note: Option<String>,
     },
-    /// Observe 모드에서 원격 읽기를 요청한다. 실행 완료 영수증을 만들지 않는다.
-    SyncIssues {},
-    SubmitDelegation {
-        instruction: String,
-        idempotency_key: String,
-        #[serde(default)]
-        session: crate::domain::delegation::ChatSession,
+    HoldIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
     },
-    CancelDelegation {
-        id: String,
+    ReleaseIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
     },
-    CheckpointDelegation {
-        id: String,
-        token: String,
+    SteerIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+        #[schemars(length(min = 1, max = 65536), regex(pattern = NON_BLANK))]
         message: String,
     },
-    ReportDelegationResult {
-        id: String,
-        token: String,
-        result: String,
+    TakeOverIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
     },
-    RetryDelegation {
-        id: String,
+    RetriageIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
     },
+    CancelIssueWork {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+        #[serde(default)]
+        confirm: bool,
+    },
+    TrackIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
+    UntrackIssue {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+    },
+    /// Observe 모드에서 원격 읽기를 요청한다. 실행 완료 영수증을 만들지 않는다.
+    SyncIssues {},
 }
 
 /*
@@ -966,27 +983,6 @@ pub enum KernelCommandInput {
     Core(AppCommand),
     Stored(StoredCommand),
     SyncIssues,
-    SubmitDelegation {
-        instruction: String,
-        idempotency_key: String,
-        session: crate::domain::delegation::ChatSession,
-    },
-    CancelDelegation {
-        id: String,
-    },
-    CheckpointDelegation {
-        id: String,
-        token: String,
-        message: String,
-    },
-    ReportDelegationResult {
-        id: String,
-        token: String,
-        result: String,
-    },
-    RetryDelegation {
-        id: String,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1026,12 +1022,15 @@ impl KernelCommand {
             Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
+            Self::HoldIssue { .. } => KernelCommandKind::HoldIssue,
+            Self::ReleaseIssue { .. } => KernelCommandKind::ReleaseIssue,
+            Self::SteerIssue { .. } => KernelCommandKind::SteerIssue,
+            Self::TakeOverIssue { .. } => KernelCommandKind::TakeOverIssue,
+            Self::RetriageIssue { .. } => KernelCommandKind::RetriageIssue,
+            Self::CancelIssueWork { .. } => KernelCommandKind::CancelIssueWork,
+            Self::TrackIssue { .. } => KernelCommandKind::TrackIssue,
+            Self::UntrackIssue { .. } => KernelCommandKind::UntrackIssue,
             Self::SyncIssues {} => KernelCommandKind::SyncIssues,
-            Self::SubmitDelegation { .. } => KernelCommandKind::SubmitDelegation,
-            Self::CancelDelegation { .. } => KernelCommandKind::CancelDelegation,
-            Self::CheckpointDelegation { .. } => KernelCommandKind::CheckpointDelegation,
-            Self::ReportDelegationResult { .. } => KernelCommandKind::ReportDelegationResult,
-            Self::RetryDelegation { .. } => KernelCommandKind::RetryDelegation,
         }
     }
 
@@ -1041,13 +1040,21 @@ impl KernelCommand {
         match self {
             Self::ResetPlanning { confirm, .. }
             | Self::DeleteTask { confirm, .. }
-            | Self::DeleteDirection { confirm, .. } => *confirm,
+            | Self::DeleteDirection { confirm, .. }
+            | Self::CancelIssueWork { confirm, .. } => *confirm,
             Self::CreateTask { .. }
             | Self::UpdateTask { .. }
             | Self::CreateDirection { .. }
             | Self::UpdateDirection { .. }
             | Self::SetIssueAutomationMode { .. }
-            | Self::AnswerIssueDecision { .. } => false,
+            | Self::AnswerIssueDecision { .. }
+            | Self::HoldIssue { .. }
+            | Self::ReleaseIssue { .. }
+            | Self::SteerIssue { .. }
+            | Self::TakeOverIssue { .. }
+            | Self::RetriageIssue { .. }
+            | Self::TrackIssue { .. }
+            | Self::UntrackIssue { .. } => false,
             Self::LoadSessions {}
             | Self::RenameSession { .. }
             | Self::SubmitPrompt { .. }
@@ -1057,12 +1064,7 @@ impl KernelCommand {
             | Self::SetAutoFollowMaxTurns { .. }
             | Self::PauseAutoFollow {}
             | Self::RefreshPlanning {}
-            | Self::SyncIssues {}
-            | Self::SubmitDelegation { .. }
-            | Self::CancelDelegation { .. }
-            | Self::CheckpointDelegation { .. }
-            | Self::ReportDelegationResult { .. }
-            | Self::RetryDelegation { .. } => false,
+            | Self::SyncIssues {} => false,
         }
     }
 
@@ -1072,6 +1074,9 @@ impl KernelCommand {
      */
     pub fn from_stored(command: StoredCommand) -> Self {
         match command {
+            StoredCommand::InterveneIssue { request } => {
+                issue_intervention::command_from_request(request)
+            }
             StoredCommand::CreateTask { task } => Self::CreateTask {
                 task: TaskFields::from_stored(task),
             },
@@ -1136,35 +1141,63 @@ impl KernelCommand {
         workspace_directory: &str,
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
+            Self::HoldIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Hold,
+                workspace_directory,
+            )?,
+            Self::ReleaseIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Release,
+                workspace_directory,
+            )?,
+            Self::SteerIssue {
+                issue,
+                command_id,
+                message,
+            } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Steer { message },
+                workspace_directory,
+            )?,
+            Self::TakeOverIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::TakeOver,
+                workspace_directory,
+            )?,
+            Self::RetriageIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Retriage,
+                workspace_directory,
+            )?,
+            Self::CancelIssueWork {
+                issue,
+                command_id,
+                confirm,
+            } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Cancel { confirm },
+                workspace_directory,
+            )?,
+            Self::TrackIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Track,
+                workspace_directory,
+            )?,
+            Self::UntrackIssue { issue, command_id } => issue_intervention::into_stored(
+                issue,
+                command_id,
+                IssueInterventionAction::Untrack,
+                workspace_directory,
+            )?,
             Self::SyncIssues {} => return Ok(KernelCommandInput::SyncIssues),
-            Self::SubmitDelegation {
-                instruction,
-                idempotency_key,
-                session,
-            } => {
-                if !session.valid() {
-                    return Err(KernelProtocolError::invalid_params(
-                        "invalid ChatGPT conversation URL",
-                    ));
-                }
-                return Ok(KernelCommandInput::SubmitDelegation {
-                    instruction,
-                    idempotency_key,
-                    session,
-                });
-            }
-            Self::CancelDelegation { id } => {
-                return Ok(KernelCommandInput::CancelDelegation { id });
-            }
-            Self::CheckpointDelegation { id, token, message } => {
-                return Ok(KernelCommandInput::CheckpointDelegation { id, token, message });
-            }
-            Self::ReportDelegationResult { id, token, result } => {
-                return Ok(KernelCommandInput::ReportDelegationResult { id, token, result });
-            }
-            Self::RetryDelegation { id } => {
-                return Ok(KernelCommandInput::RetryDelegation { id });
-            }
             Self::AnswerIssueDecision {
                 decision_id,
                 option,
@@ -1301,12 +1334,15 @@ impl KernelCommand {
             | Self::DeleteDirection { .. }
             | Self::SetIssueAutomationMode { .. }
             | Self::AnswerIssueDecision { .. }
-            | Self::SyncIssues {}
-            | Self::SubmitDelegation { .. }
-            | Self::CancelDelegation { .. }
-            | Self::CheckpointDelegation { .. }
-            | Self::ReportDelegationResult { .. }
-            | Self::RetryDelegation { .. } => {
+            | Self::HoldIssue { .. }
+            | Self::ReleaseIssue { .. }
+            | Self::SteerIssue { .. }
+            | Self::TakeOverIssue { .. }
+            | Self::RetriageIssue { .. }
+            | Self::CancelIssueWork { .. }
+            | Self::TrackIssue { .. }
+            | Self::UntrackIssue { .. }
+            | Self::SyncIssues {} => {
                 return Err(KernelProtocolError::invalid_params(
                     "a host or stored command is not a core command",
                 ));
@@ -1330,20 +1366,6 @@ fn non_blank(field: &str, value: String) -> Result<String, KernelProtocolError> 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelQuery {
-    Delegations {},
-    Delegation {
-        id: String,
-    },
-    DelegationResult {
-        id: String,
-    },
-    DelegationBackends {},
-    DelegationMyTurn {},
-    FeatureBindings {},
-    PrReviewResult {
-        #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
-        number: u64,
-    },
     Sessions {},
     AutoFollow {},
     ThreadActivity {},
@@ -1460,26 +1482,6 @@ impl KernelQuery {
             }
             Self::Issues { .. } => KernelQueryAnswer::Issues(IssuesState::unavailable()),
             Self::Issue { .. } => KernelQueryAnswer::Issue(IssueState::unavailable()),
-            Self::Delegations {} => KernelQueryAnswer::Delegations {
-                delegations: Vec::new(),
-            },
-            Self::Delegation { .. } => KernelQueryAnswer::Delegation { delegation: None },
-            Self::DelegationResult { .. } => KernelQueryAnswer::DelegationResult { text: None },
-            Self::DelegationMyTurn {} => KernelQueryAnswer::DelegationMyTurn { items: Vec::new() },
-            Self::FeatureBindings {} => KernelQueryAnswer::FeatureBindings {
-                repository: None,
-                pr_review: Default::default(),
-            },
-            Self::PrReviewResult { number } => KernelQueryAnswer::PrReviewResult {
-                number,
-                review: None,
-            },
-            Self::DelegationBackends {} => KernelQueryAnswer::DelegationBackends {
-                chatgpt_chat: crate::domain::delegation::ChatBackendStatus::unavailable(
-                    "gateway_unavailable",
-                ),
-                codex_thread: crate::domain::delegation::CodexBackendStatus::gateway_unavailable(),
-            },
         }
     }
 }
@@ -1487,13 +1489,6 @@ impl KernelQuery {
 spec_names! {
     /// 조회의 종류이다.
     pub(crate) enum KernelQueryKind {
-        Delegations => "delegations", "List the 100 most recent text-only delegations.";
-        Delegation => "delegation", "Read one text-only delegation by ID.";
-        DelegationResult => "delegation_result", "Read the stored text result for a delegation.";
-        DelegationBackends => "delegation_backends", "Check the live Desktop chat backend.";
-        DelegationMyTurn => "delegation_my_turn", "List delegations that require human attention.";
-        FeatureBindings => "feature_bindings", "Read the attached repository's stored PR review mode.";
-        PrReviewResult => "pr_review_result", "Read the latest stored review for a pull request in the attached repository.";
         Sessions => "sessions",
             "The session list of the workspace and its load state.";
         AutoFollow => "auto_follow",
@@ -1526,31 +1521,6 @@ spec_names! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KernelQueryAnswer {
-    Delegations {
-        delegations: Vec<crate::domain::delegation::Delegation>,
-    },
-    Delegation {
-        delegation: Option<crate::domain::delegation::Delegation>,
-    },
-    DelegationResult {
-        text: Option<String>,
-    },
-    DelegationBackends {
-        chatgpt_chat: crate::domain::delegation::ChatBackendStatus,
-        #[serde(default = "crate::domain::delegation::CodexBackendStatus::gateway_unavailable")]
-        codex_thread: crate::domain::delegation::CodexBackendStatus,
-    },
-    DelegationMyTurn {
-        items: Vec<crate::domain::delegation::MyTurn>,
-    },
-    FeatureBindings {
-        repository: Option<String>,
-        pr_review: crate::domain::pr_review::ReviewMode,
-    },
-    PrReviewResult {
-        number: u64,
-        review: Option<crate::domain::pr_review::StoredPrReview>,
-    },
     Sessions(SessionsState),
     AutoFollow(AutoFollowSettings),
     ThreadActivity {

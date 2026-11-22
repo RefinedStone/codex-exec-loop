@@ -75,6 +75,40 @@ fn sample_commands() -> Vec<KernelCommand> {
             option: "continue".to_owned(),
             note: None,
         },
+        KernelCommand::HoldIssue {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+        },
+        KernelCommand::ReleaseIssue {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+        },
+        KernelCommand::SteerIssue {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+            message: "Focus on tests".into(),
+        },
+        KernelCommand::TakeOverIssue {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+        },
+        KernelCommand::RetriageIssue {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+        },
+        KernelCommand::CancelIssueWork {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+            confirm: true,
+        },
+        KernelCommand::TrackIssue {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+        },
+        KernelCommand::UntrackIssue {
+            issue: (&sample_issue_reference()).into(),
+            command_id: "intervention-1".into(),
+        },
         KernelCommand::SyncIssues {},
         KernelCommand::SubmitDelegation {
             instruction: "Explain the test result.".into(),
@@ -2038,8 +2072,8 @@ fn a_destructive_command_needs_confirm_in_the_schema_and_in_the_code() {
         assert!(confirmed.confirmed(), "{name}");
     }
     assert_eq!(
-        destructive, 3,
-        "reset_planning, delete_task, and delete_direction are the destructive commands today"
+        destructive, 4,
+        "reset_planning, delete_task, delete_direction, and cancel_issue_work are the destructive commands today"
     );
 }
 
@@ -2176,6 +2210,21 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             work_order_id: "issue-work-1".into(),
             task_ids: vec!["task-1".into()],
             revision: 4,
+        },
+        Record::IssueHeld {
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: Some("issue-work-1".into()),
+            authorization_epoch: 2,
+        },
+        Record::IssueReleased {
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: Some("issue-work-1".into()),
+            authorization_epoch: 2,
+        },
+        Record::IssueWorkPermitRevoked {
+            issue: (&sample_issue_reference()).into(),
+            work_order_id: Some("issue-work-1".into()),
+            authorization_epoch: 2,
         },
         Record::IssueWorkPermitGranted {
             event_id: "work-permit-1".into(),
@@ -2467,6 +2516,7 @@ fn sample_issue_decision_fact() -> crate::domain::issue_automation::decision::Is
         gate: crate::domain::issue_automation::policy::IssueAutomationGate::Start,
         kind: IssueDecisionKind::StartApproval,
         basis: IssueDecisionBasis {
+            authorization_epoch: 0,
             policy_version: "a".repeat(64),
             field_hash: None,
             work_order_id: None,

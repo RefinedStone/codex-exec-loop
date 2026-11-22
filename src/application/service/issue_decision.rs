@@ -164,12 +164,15 @@ impl IssueDecisionService {
             let stored = snapshot.record;
             let (fence, item) = self.current_item(stored.request.issue())?;
             let current = self.triage.assess_current(&item)?;
-            let basis = IssueDecisionBasis::from_assessment(
+            let mut basis = IssueDecisionBasis::from_assessment(
                 &current,
                 stored.request.definition().gate,
                 None,
             )
             .map_err(|_| anyhow!("the current decision basis is invalid"))?;
+            basis.authorization_epoch = self
+                .store
+                .issue_authorization_epoch(&self.workspace_dir, stored.request.issue())?;
             let confirmation = context.human_confirmation.as_ref();
             if let Some(confirmation) = confirmation {
                 confirmation.require_target(&confirmation_target(

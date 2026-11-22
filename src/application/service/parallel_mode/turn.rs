@@ -8,6 +8,29 @@ use crate::domain::planning::{ParallelTurnHandoff, PostTurnContinuationPermit};
 
 pub type ParallelTurnSlotLeaseHandoff = ParallelTurnHandoff;
 
+pub(crate) struct ParallelWorkOrderLaunchFailure {
+    pub detail: String,
+    pub preserve_lease: bool,
+}
+
+fn append_work_order_instructions(
+    prompt: &str,
+    instructions: &[crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction],
+) -> String {
+    let mut prompt = prompt.to_owned();
+    for instruction in instructions {
+        let text = format!(
+            "Operator instruction [{}]:\n{}",
+            instruction.command_id, instruction.message
+        );
+        if !prompt.contains(&text) {
+            prompt.push_str("\n\n");
+            prompt.push_str(&text);
+        }
+    }
+    prompt
+}
+
 fn slot_lease_request_from_handoff(
     handoff: &ParallelTurnSlotLeaseHandoff,
 ) -> ParallelModeSlotLeaseRequest {
@@ -304,6 +327,39 @@ impl ParallelModeTurnService {
         self.automation_guard
             .as_ref()
             .is_none_or(|guard| guard.is_active(workspace_directory, epoch_id))
+    }
+
+    /// 후보 prompt 생성 뒤 접수한 지시도 lease 확보 후 다시 읽는다. issue 모듈은 알지 않는다.
+    pub(crate) fn work_order_launch_prompt(
+        &self,
+        workspace: &str,
+        lease: &ParallelModeSlotLeaseSnapshot,
+        prompt: &str,
+    ) -> Result<String, ParallelWorkOrderLaunchFailure> {
+        use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderLaunchError;
+        // 같은 transaction에서 현재 control/permit/lease와 지시 목록을 고정한다.
+        let instructions = self
+            .parallel_mode_service
+            .planning_authority
+            .claim_work_order_launch(workspace, lease)
+            .map_err(|error| ParallelWorkOrderLaunchFailure {
+                preserve_lease: matches!(
+                    error.downcast_ref::<PlanningWorkOrderLaunchError>(),
+                    Some(PlanningWorkOrderLaunchError::AlreadyClaimed)
+                ),
+                detail: format!("work order launch was withheld: {error}"),
+            })?;
+        Ok(append_work_order_instructions(prompt, &instructions))
+    }
+
+    pub(crate) fn release_unstarted_work_order_after_control(
+        &self,
+        lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Option<String> {
+        self.parallel_mode_service
+            .release_unstarted_work_order_lease_for_control(lease)
+            .err()
+            .map(|error| format!("withheld work order lease was preserved: {error}"))
     }
 
     /// 배분된 작업 스레드가 도는 동안 쥔다. guard 가 없으면 세지 않는다.
@@ -1342,6 +1398,23 @@ fn should_promote_missing_turn_started_before_success(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn work_order_instructions_survive_an_old_candidate_prompt_without_duplicate_append() {
+        use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkInstruction;
+        let instructions = vec![PlanningWorkInstruction {
+            command_id: "steer-1".to_owned(),
+            message: "새 지시".to_owned(),
+        }];
+        let once = super::append_work_order_instructions("기존 후보 prompt", &instructions);
+        assert!(once.contains("Operator instruction [steer-1]:\n새 지시"));
+        let twice = super::append_work_order_instructions(&once, &instructions);
+        assert_eq!(once, twice);
+        // 본문에 ID 마커만 있어도 실제 지시 내용은 누락되지 않는다.
+        let marker_only =
+            super::append_work_order_instructions("Operator instruction [steer-1]:", &instructions);
+        assert!(marker_only.contains("새 지시"));
+    }
+
     use super::{
         ParallelModeTurnService, ParallelOfficialCompletionDurableProof,
         ParallelOfficialCompletionFinalizeFailureStage, ParallelOfficialCompletionFinalizeOutcome,
