@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type WebSocket, WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { FakeChatHistory, type FakeChatAccount, type FakeChatOptions } from "./chatHistory.ts";
 
 interface RecordedLine {
