@@ -835,3 +835,5 @@ fn postintegration_successor_keeps_integration_identity_and_counts_only_fresh_ve
     assert_eq!(still_done.attempts.verification, 2);
     assert_eq!(still_done.integration, before.integration);
 }
+
+mod review_link;

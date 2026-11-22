@@ -270,6 +270,8 @@ fn project(
         execution_ids: execution_ids(runtime, started, &owned),
         terminals,
         current_terminal_id: current_terminal.map(|record| record.record_id),
+        review_pull_request_url: active_record
+            .map(|evidence| evidence.record.target().canonical_url()),
         integration,
         question,
     })

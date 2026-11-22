@@ -68,6 +68,66 @@ struct RepositoryPathResolution {
 }
 
 impl SqlitePlanningAuthorityAdapter {
+    /// 기존 marker만 읽는다. 상세 조회가 repository incarnation이나 store를 만들지 않는다.
+    pub(super) fn resolve_authority_location_for_read(
+        workspace_dir: &str,
+    ) -> Result<Option<PlanningAuthorityLocation>> {
+        let workspace_root = canonicalize_best_effort(Path::new(workspace_dir));
+        let (canonical_repo_root, repository_identity, project_root) =
+            if let Some(toplevel) = git_stdout(workspace_dir, &["rev-parse", "--show-toplevel"]) {
+                let common_dir = git_stdout(workspace_dir, &["rev-parse", "--git-common-dir"])
+                    .context("Git repository common directory could not be resolved")?;
+                let git_dir = git_stdout(workspace_dir, &["rev-parse", "--git-dir"])
+                    .context("Git repository metadata directory could not be resolved")?;
+                let common_dir = canonicalize_best_effort(&absolutize_path(
+                    Path::new(workspace_dir),
+                    Path::new(&common_dir),
+                ));
+                validate_repository_metadata_directory(&common_dir)?;
+                let Some(incarnation) = read_repository_incarnation_marker(&common_dir)? else {
+                    return Ok(None);
+                };
+                let toplevel = canonicalize_best_effort(&absolutize_path(
+                    Path::new(workspace_dir),
+                    Path::new(&toplevel),
+                ));
+                let git_dir = canonicalize_best_effort(&absolutize_path(
+                    Path::new(workspace_dir),
+                    Path::new(&git_dir),
+                ));
+                let canonical_repo_root = if git_dir.starts_with(common_dir.join("worktrees")) {
+                    resolve_primary_checkout_root(workspace_dir, &common_dir).unwrap_or(toplevel)
+                } else {
+                    toplevel
+                };
+                let project_root = akra_home_root()?
+                    .join(AKRA_PROJECTS_DIRECTORY)
+                    .join(&incarnation.project_namespace);
+                (
+                    canonical_repo_root,
+                    format!("{REPOSITORY_INCARNATION_MARKER_HEADER}:{}", incarnation.id),
+                    project_root,
+                )
+            } else {
+                (
+                    workspace_root.clone(),
+                    workspace_root.display().to_string(),
+                    management_project_root(&workspace_root, true)?,
+                )
+            };
+        let runtime_dir = project_root.join(RUNTIME_DIRECTORY);
+        Ok(Some(PlanningAuthorityLocation {
+            workspace_root: workspace_root.display().to_string(),
+            canonical_repo_root: canonical_repo_root.display().to_string(),
+            repository_identity,
+            authority_store_path: runtime_dir
+                .join(AUTHORITY_STORE_FILE_NAME)
+                .display()
+                .to_string(),
+            runtime_dir: runtime_dir.display().to_string(),
+        }))
+    }
+
     /*
     주어진 workspace가 Git repository로 해석되는지 확인한다.
 

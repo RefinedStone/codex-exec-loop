@@ -242,6 +242,10 @@ pub struct IssueCollectionDetail {
     pub item: Option<IssueCollectionItem>,
     pub report: Option<IssueTriageObserveReport>,
     pub interaction: Option<super::interaction::IssueInteractionProjection>,
+    /// 저장된 실행 사실만 읽는다. 기록이 없으면 None이며 읽기 실패와 구분한다.
+    pub execution: Option<super::execution::IssueExecutionDetail>,
+    /// 같은 이슈의 보존된 실제 기록이다. 없는 기록을 합성하지 않는다.
+    pub timeline: Option<super::timeline::IssueTimelineProjection>,
     /// 저장된 게시 사실만 담는다. 이 조회로 원격 재확인이나 새 게시를 시작하지 않는다.
     pub feedback: Option<IssueFeedbackDetail>,
 }

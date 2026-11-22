@@ -24,6 +24,7 @@ use crate::domain::kernel_event::{
 
 mod detail;
 mod presentation;
+mod timeline;
 mod triage;
 pub use detail::IssueState;
 pub use presentation::{IssueListGroup, IssueListPresentation};

@@ -36,6 +36,18 @@ pub const ISSUE_DISCOVERY_PAGE_SIZE: u16 = 25;
 pub const ISSUE_RESYNC_BATCH_SIZE: u16 = 10;
 const MODE_CAS_ATTEMPTS: usize = 3;
 
+/// 서로 독립적인 저장 장부를 조립하는 동안 사실이 바뀌었다. 조회 전체만 한 번 다시 읽는다.
+#[derive(Debug)]
+pub(super) struct IssueDetailSnapshotChanged;
+
+impl std::fmt::Display for IssueDetailSnapshotChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the issue detail changed during the read")
+    }
+}
+
+impl std::error::Error for IssueDetailSnapshotChanged {}
+
 /// 취소와 짧은 장부 commit을 선형화한다. 원격 호출 동안에는 commit_gate를 잡지 않는다.
 /// cancel이 먼저 끝나면 이후 commit은 없고, commit이 먼저 시작됐으면 cancel은 그 저장만 기다린다.
 #[derive(Default)]
@@ -218,16 +230,55 @@ impl IssueCollectionService {
         &self,
         reference: &IssueReference,
     ) -> Result<crate::domain::issue_automation::collection::IssueCollectionDetail> {
-        let mut detail = self
+        match self.read_issue_detail(reference) {
+            Err(error) if error.is::<IssueDetailSnapshotChanged>() => {
+                self.read_issue_detail(reference)
+            }
+            result => result,
+        }
+    }
+
+    fn read_issue_detail(
+        &self,
+        reference: &IssueReference,
+    ) -> Result<crate::domain::issue_automation::collection::IssueCollectionDetail> {
+        use crate::domain::issue_automation::execution::{
+            IssueExecutionDetail, IssueExecutionUnavailableReason,
+        };
+
+        let triage = self
             .triage
             .as_ref()
-            .ok_or_else(|| anyhow!("the issue triage service is unavailable"))?
-            .issue(reference)?;
+            .ok_or_else(|| anyhow!("the issue triage service is unavailable"))?;
+        let mut detail = triage.issue(reference)?;
+        if let Some(item) = &detail.item {
+            detail.execution = match self
+                .store
+                .get_issue_execution(&self.workspace_dir, reference)
+            {
+                Ok(Some(record)) => Some(IssueExecutionDetail::from_record(
+                    &item.issue,
+                    item.work.as_ref(),
+                    &record,
+                    triage.execution_attempt_limit().ok(),
+                )),
+                Ok(None) => None,
+                Err(_) => Some(IssueExecutionDetail::Unavailable {
+                    reason: IssueExecutionUnavailableReason::ReadFailed,
+                }),
+            };
+        }
         if let (Some(interactions), Some(item)) = (&self.interactions, &detail.item) {
             detail.interaction = Some(interactions.project(item)?);
         }
         if let (Some(coordinator), Some(_)) = (&self.coordinator, &detail.item) {
             detail.feedback = coordinator.feedback_detail(reference)?;
+        }
+        // Execution/work/collection changes share this catalog revision. Feedback has its own
+        // fence in feedback_detail; its counter must never be compared with the catalog.
+        let after = self.store.read_triage_batch(&self.workspace_dir, None, 1)?;
+        if after.revision != detail.revision {
+            return Err(IssueDetailSnapshotChanged.into());
         }
         Ok(detail)
     }

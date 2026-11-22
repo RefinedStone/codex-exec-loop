@@ -2917,6 +2917,16 @@
                 },
                 "type": "array"
               },
+              "execution": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueExecutionDetailState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "feedback": {
                 "anyOf": [
                   {
@@ -2955,6 +2965,16 @@
               "status": {
                 "const": "ready",
                 "type": "string"
+              },
+              "timeline": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueTimelineState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -7312,6 +7332,104 @@
       ],
       "type": "object"
     },
+    "IssueExecutionDetailState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "execution_attempt_limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "execution_attempts": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "recovery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IssueExecutionRecoveryState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "review_pull_request_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "$ref": "#/$defs/IssueExecutionState"
+            },
+            "state_label": {
+              "type": "string"
+            },
+            "status": {
+              "const": "ready",
+              "type": "string"
+            },
+            "terminal_class": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IssueExecutionTerminalClass"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "verification_attempts": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "work_order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "work_order_id",
+            "revision",
+            "state",
+            "state_label",
+            "execution_attempts",
+            "verification_attempts"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/IssueExecutionUnavailableReasonState"
+            },
+            "status": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "IssueExecutionIntegration": {
       "additionalProperties": false,
       "properties": {
@@ -7357,6 +7475,13 @@
             }
           ]
         },
+        "review_pull_request_url": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "revision": {
           "format": "uint64",
           "minimum": 0,
@@ -7381,6 +7506,42 @@
         "attempts",
         "attempts_exhausted",
         "revision"
+      ],
+      "type": "object"
+    },
+    "IssueExecutionRecoveryReasonState": {
+      "enum": [
+        "attempts_exhausted",
+        "rework_needed",
+        "observe_again",
+        "contract_recovery",
+        "identity_conflict",
+        "pull_request_closed",
+        "queue_recovery"
+      ],
+      "type": "string"
+    },
+    "IssueExecutionRecoveryState": {
+      "additionalProperties": false,
+      "properties": {
+        "next_summary": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/IssueExecutionRecoveryReasonState"
+        },
+        "requires_human": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "summary",
+        "next_summary",
+        "requires_human"
       ],
       "type": "object"
     },
@@ -7420,6 +7581,13 @@
         "classification"
       ],
       "type": "object"
+    },
+    "IssueExecutionUnavailableReasonState": {
+      "enum": [
+        "read_failed",
+        "work_id_mismatch"
+      ],
+      "type": "string"
     },
     "IssueExternalStateRecord": {
       "enum": [
@@ -8033,6 +8201,72 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "IssueTimelineEntryState": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "recorded_at",
+        "kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "IssueTimelineState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/IssueTimelineEntryState"
+              },
+              "type": "array"
+            },
+            "has_older": {
+              "type": "boolean"
+            },
+            "status": {
+              "const": "ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "entries",
+            "has_older"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "IssueTrackedState": {
       "additionalProperties": false,
@@ -10455,6 +10689,16 @@
                   },
                   "type": "array"
                 },
+                "execution": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueExecutionDetailState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "feedback": {
                   "anyOf": [
                     {
@@ -10493,6 +10737,16 @@
                 "status": {
                   "const": "ready",
                   "type": "string"
+                },
+                "timeline": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueTimelineState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [

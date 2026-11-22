@@ -1603,3 +1603,190 @@ describe("issue decisions and interventions", () => {
     expect(h.view().issues.policyError).toBeNull();
   });
 });
+
+function executionTrackingDetail(issue = issueReference(), revision = 7, label = "서버 실행 중") {
+  return {
+    ...issueDetail(issue, revision),
+    execution: {
+      status: "ready", work_order_id: "work-order-fixture", revision: 41,
+      state: "running", state_label: label, execution_attempts: 2, execution_attempt_limit: 3,
+      verification_attempts: 4, review_pull_request_url: null, terminal_class: null, recovery: null,
+    },
+    feedback: { revision: 2, publication_attempts: 5, external_state: "open", reason: "feedback_unconfirmed" },
+    timeline: { status: "ready", entries: [{ sequence: 101, recorded_at: "2026-11-22T09:00:00Z", kind: "issue_execution_progressed", summary: "저장된 서버 기록" }], has_older: false },
+  };
+}
+
+function executionTrackingEvent(kind: string, revision = 2, issue = issueReference()) {
+  const common = { kind, revision, issue, event_id: "fixture-" + kind };
+  const integration = { record_id: "integration-1", source_sha: "a".repeat(40), integration_sha: "b".repeat(40), pull_request_url: "https://github.com/sample/widgets/pull/9" };
+  const event = kind === "issue_execution_progressed"
+    ? { ...common, work_order_id: "work-order-fixture", progress: { revision, state: "running", attempts: { execution: 2, verification: 4, publication: 0 }, attempts_exhausted: false } }
+    : kind === "issue_integrated" ? { ...common, work_order_id: "work-order-fixture", integration }
+      : kind === "issue_feedback_posted" ? { ...common, intent_id: "intent-1", actor_id: "actor-1", action: "comment_created", comment_id: "comment-1" }
+        : { ...common, origin: "confirmed_feedback", intent_id: "close-1", actor_id: "actor-1", closure_event_id: "closure-1" };
+  return { event: { type: "recorded", sequence: 101, recorded_at: "2026-11-22T09:00:00Z", event } };
+}
+
+describe("issue execution recorded-event refresh", () => {
+  it.each(["issue_execution_progressed", "issue_integrated", "issue_closed", "issue_feedback_posted"])(
+    "reads a fresh detail after %s even when the journal revision is below the catalog",
+    async (kind) => {
+      const h = harness();
+      await h.openIssues();
+      const selected = h.connection.selectIssue(issueReference());
+      h.reply(h.query("issue"), executionTrackingDetail());
+      await selected;
+      const before = h.queries("issue").length;
+      h.connection.handleEvent(executionTrackingEvent(kind, 2));
+      expect(h.view().issues).toMatchObject({ detail: null, detailStale: true });
+      await h.when(() => h.queries("issue").length === before + 1);
+      h.answerIssueReads();
+      const fresh = executionTrackingDetail(issueReference(), 7, "서버가 재조회한 상태");
+      h.reply(h.query("issue"), fresh);
+      await h.when(() => !h.view().issues.detailLoading);
+      expect(h.view().issues.detail).toEqual(fresh);
+      expect(h.requests("akra/kernel/command")).toHaveLength(0);
+      expect(h.requests("turn/start")).toHaveLength(0);
+      expect(h.requests("turn/steer")).toHaveLength(0);
+    },
+  );
+
+  it("coalesces recorded progress and never treats a large journal revision as a catalog watermark", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), executionTrackingDetail());
+    await selected;
+    const before = h.queries("issue").length;
+    h.connection.handleEvent(executionTrackingEvent("issue_execution_progressed", 900));
+    h.connection.handleEvent(executionTrackingEvent("issue_feedback_posted", 901));
+    h.connection.handleEvent(executionTrackingEvent("issue_closed", 902));
+    await h.when(() => h.queries("issue").length === before + 1);
+    h.answerIssueReads();
+    const fresh = executionTrackingDetail(issueReference(), 7, "별도 revision 공간");
+    h.reply(h.query("issue"), fresh);
+    await h.when(() => !h.view().issues.detailLoading);
+    expect(h.queries("issue")).toHaveLength(before + 1);
+    expect(h.view().issues).toMatchObject({ detail: fresh, detailStale: false, detailError: null });
+  });
+
+  it("discards an in-flight pre-event execution snapshot with the same catalog revision", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), executionTrackingDetail());
+    await selected;
+    const oldRefresh = h.connection.refreshIssueDetail();
+    const oldRequest = h.query("issue");
+    const before = h.queries("issue").length;
+    h.connection.handleEvent(executionTrackingEvent("issue_integrated", 4));
+    await h.when(() => h.queries("issue").length === before + 1);
+    const freshRequest = h.query("issue");
+    h.reply(oldRequest, executionTrackingDetail(issueReference(), 7, "이벤트 전의 오래된 실행"));
+    await oldRefresh;
+    expect(h.view().issues.detail).toBeNull();
+    h.answerIssueReads();
+    const fresh = executionTrackingDetail(issueReference(), 7, "통합 후 서버 상태");
+    h.reply(freshRequest, fresh);
+    await h.when(() => !h.view().issues.detailLoading);
+    expect(h.view().issues.detail).toEqual(fresh);
+    expect(JSON.stringify(h.view().issues)).not.toContain("이벤트 전의 오래된 실행");
+  });
+
+  it("ignores foreign workspaces and repositories without invalidating the current execution", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    const shown = executionTrackingDetail();
+    h.reply(h.query("issue"), shown);
+    await selected;
+    const count = h.requests("akra/kernel/query").length;
+    for (const issue of [
+      issueReference("I_first", "/foreign"),
+      { ...issueReference(), repository_id: "R_foreign" },
+      { ...issueReference(), server_id: "github.example" },
+      { ...issueReference(), provider: "jira" as const },
+    ]) h.connection.handleEvent(executionTrackingEvent("issue_feedback_posted", 999, issue));
+    await Promise.resolve();
+    expect(h.requests("akra/kernel/query")).toHaveLength(count);
+    expect(h.view().issues.detail).toEqual(shown);
+    expect(h.view().issues.detailStale).toBe(false);
+  });
+
+  it("rechecks an unconfirmed result using only the selected issue query", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), executionTrackingDetail());
+    await selected;
+    const start = h.sent.length;
+    const refresh = h.connection.refreshIssueDetail();
+    h.reply(h.query("issue"), { ...executionTrackingDetail(), feedback: { revision: 3, publication_attempts: 5, external_state: "open" } });
+    await refresh;
+    expect(h.sent.slice(start)).toHaveLength(1);
+    expect(h.sent[start]).toMatchObject({ method: "akra/kernel/query", params: { query: { type: "issue", issue: issueReference() } } });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.requests("turn/start")).toHaveLength(0);
+    expect(h.requests("turn/steer")).toHaveLength(0);
+  });
+
+  it("rejects a malformed tracking response and clears previously visible execution data", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    const fresh = executionTrackingDetail();
+    h.reply(h.query("issue"), fresh);
+    await selected;
+    const refresh = h.connection.refreshIssueDetail();
+    h.reply(h.query("issue"), { ...fresh, execution: { ...fresh.execution, execution_attempts: -1 } });
+    await refresh;
+    expect(h.view().issues).toMatchObject({ detail: null, detailStale: true, detailLoading: false });
+    expect(h.view().issues.detailError).toContain("표시 계약");
+  });
+});
+
+describe("issue execution snapshot fencing", () => {
+  it("retries an execution response older than a freshly queried catalog without using event journal revisions", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), executionTrackingDetail());
+    await selected;
+    const before = h.queries("issue").length;
+    h.connection.handleEvent(executionTrackingEvent("issue_feedback_posted", 1));
+    await h.when(() => h.queries("issue").length === before + 1);
+    h.answerIssueReads(issuePage(["I_first"], 8, null), automation(8));
+    h.reply(h.query("issue"), executionTrackingDetail(issueReference(), 7, "이전 catalog의 실행"));
+    await h.when(() => h.queries("issue").length === before + 2);
+    expect(h.view().issues.detail).toBeNull();
+    const fresh = executionTrackingDetail(issueReference(), 8, "현재 catalog의 실행");
+    h.reply(h.query("issue"), fresh);
+    await h.when(() => !h.view().issues.detailLoading);
+    expect(h.view().issues.detail).toEqual(fresh);
+    expect(JSON.stringify(h.view().issues)).not.toContain("이전 catalog의 실행");
+  });
+
+  it("never applies late execution data from the previous workspace", async () => {
+    const h = harness({ autoPolicy: false });
+    await h.openIssues();
+    const oldDetail = h.connection.selectIssue(issueReference());
+    const oldRequest = h.query("issue");
+    const shown = h.connection.show("/second/worktree", ["issues"]);
+    await h.answerAttach("second-kernel");
+    h.reply(oldRequest, executionTrackingDetail(issueReference(), 999, "이전 저장소 작업"));
+    await oldDetail;
+    expect(h.view().issues).toMatchObject({ selectedIssue: null, detail: null, detailError: null });
+    const page = issuePage(["I_second"], 1, null);
+    page.items[0]!.issue = issueReference("I_second", "/second");
+    h.answerIssueReads(page, automation(1));
+    await h.answerPolicyBootstrap(policyAnswer("second-policy", "/second"));
+    await shown;
+    expect(JSON.stringify(h.view().issues)).not.toContain("이전 저장소 작업");
+    const count = h.requests("akra/kernel/query").length;
+    h.connection.handleEvent(executionTrackingEvent("issue_closed", 1000, issueReference()));
+    await Promise.resolve();
+    expect(h.requests("akra/kernel/query")).toHaveLength(count);
+    expect(h.view().issues.page).toMatchObject({ revision: 1 });
+  });
+});

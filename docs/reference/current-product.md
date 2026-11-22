@@ -307,8 +307,8 @@ implementation task; post-integration queue recovery is blocked. A previously ex
 issue may become `done` when trusted integration arrives, while cancellation and the held flag are
 preserved.
 
-Expanded Desktop execution tracking (#2554) and the complete results-return validation (#2555)
-remain separate IA4 slices. Provider closing follows the contract below.
+Desktop execution tracking follows the detail contract below. The complete results-return
+validation (#2555) remains a separate IA4 slice. Provider closing follows the contract below.
 
 ## Issue Automation Feedback
 
@@ -389,6 +389,36 @@ not claim to know who closed the issue. Ordinary tasks without an issue work ord
 existing PR body. `provider_link` does not guarantee provider closure: the distributor's existing
 integration/PR lifecycle is unchanged, and external closure remains an observed fact. The
 `prerelease`-to-`main` promotion is outside this workflow.
+
+## Desktop Issue Execution Tracking
+
+IA4-4 ([#2554](https://github.com/RefinedStone/codex-exec-loop/issues/2554)) adds execution
+tracking to the existing issue detail. The list continues to use the server's running, review, and
+done groups. The detail exposes a saved execution projection, server-generated state/recovery
+summaries, and the existing conversation, issue, and PR links.
+
+Implementation attempts use the current effective policy limit; a failed policy read leaves the
+limit unknown. Verification attempts and feedback publication attempts are separate counts. The
+executor's revoked or completed execution limit is not used as the display budget. A missing
+execution record is distinct from an unavailable or mismatched record. A review PR URL is retained
+only from the validated work-order/task/active-validation lineage; the UI does not assemble a URL
+from an issue number or substitute another task's PR.
+
+Trusted integration, current external issue state, and feedback confirmation remain independent.
+The detail can show integration complete with an open external issue, a contract-recovery reason,
+or an unconfirmed publication at the same time. Recovery reasons and next-action summaries come
+from the server, while available intervention commands remain the existing server actions.
+Opening the conversation rechecks its exact stored target through the existing navigation path.
+The “다시 확인” button sends only the issue detail query: it does not wake collection, reconcile
+execution, retry feedback, or start a model turn.
+
+The recent timeline contains at most 20 real recorded events for the full stable issue identity.
+It merges retained storage with recent runtime records, deduplicates by sequence, and preserves
+sequence order even if wall-clock timestamps move backwards. The query asks for one extra matching
+record to report that older retained records exist. An unavailable event store is explicit; missing
+history is not reconstructed from projection revisions. This view adds no generic history paging.
+Execution, integration, closure, and feedback events schedule fresh queries, using the existing
+workspace, connection-generation, selection, and stale-response fences.
 
 ## Parallel Contract
 

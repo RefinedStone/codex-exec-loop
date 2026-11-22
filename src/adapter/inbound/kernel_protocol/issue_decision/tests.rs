@@ -196,9 +196,11 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
     closed_record.state = IssueDecisionState::Withdrawn;
     let closed = IssueDecisionRequest::hydrate(closed_record).unwrap();
     let detail = IssueCollectionDetail {
+        timeline: None,
         revision: 41,
         report: None,
         interaction: None,
+        execution: None,
         feedback: None,
         item: Some(IssueCollectionItem {
             issue: reference(),

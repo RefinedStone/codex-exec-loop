@@ -41,6 +41,17 @@ pub trait KernelEventLogPort: Send + Sync {
     /// 이 종류(`KernelEvent::kind`)의 사건만 기록 순서대로 읽는다.
     fn load_kernel_events(&self, workspace_dir: &str, kinds: &[&str]) -> Result<Vec<KernelEvent>>;
 
+    /// 전체 이슈 좌표가 같은 최근 기록을 최대 limit개 읽는다. 반환 기록은 sequence 오름차순이다.
+    /// 미지원이면 None이며, 조회는 저장소 생성·migration·원격 수집을 시작하지 않는다.
+    fn load_recent_issue_kernel_events(
+        &self,
+        _workspace_dir: &str,
+        _issue: &crate::domain::issue_work::IssueReference,
+        _limit: usize,
+    ) -> Result<Option<Vec<RecordedKernelEvent>>> {
+        Ok(None)
+    }
+
     /// `after` 보다 뒤의 사건을 최대 `limit` 개 기록 순서대로 읽는다 (plan 19 Q3-3). `limit` 은
     /// `MAX_KERNEL_EVENT_PAGE` 를 넘지 않는다. 기본값은 빈 쪽이다 (조회를 쓰지 않는 시험용 기록).
     fn load_kernel_events_after(
