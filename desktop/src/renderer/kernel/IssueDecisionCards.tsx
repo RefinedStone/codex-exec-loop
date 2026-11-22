@@ -1,24 +1,28 @@
-import { useState } from "react";
 import type { IssueDecisionRequestState } from "./protocol";
-import { ISSUE_DECISION_KIND_LABEL, ISSUE_DECISION_STATE_LABEL, issueTextBytes, type ReadyIssueDetail } from "./issueInteractions";
+import { EMPTY_ISSUE_DECISION_DRAFT, ISSUE_DECISION_KIND_LABEL, ISSUE_DECISION_STATE_LABEL, decisionDraftIdentity, issueTextBytes, type IssueDecisionDraft, type ReadyIssueDetail } from "./issueInteractions";
 
 export interface IssueDecisionCardsProps {
   decisions: readonly IssueDecisionRequestState[];
   history: ReadyIssueDetail["decision_history"];
   busy: boolean;
+  drafts: ReadonlyMap<string, IssueDecisionDraft>;
+  onDraftChange(key: string, draft: IssueDecisionDraft): void;
   onAnswer(decisionId: string, option: string, note: string): Promise<void>;
 }
 
 /** 질문·선택지·권고는 현재 공개 정책을 통과한 서버 표시값만 사용한다. */
-function DecisionCard({ request, busy, state = request.state, reason, onAnswer }: {
+function DecisionCard({ request, busy, state = request.state, reason, onAnswer, draft = EMPTY_ISSUE_DECISION_DRAFT, onDraftChange }: {
   request: IssueDecisionRequestState;
   busy: boolean;
   state?: string;
   reason?: string;
   onAnswer: IssueDecisionCardsProps["onAnswer"];
+  draft?: IssueDecisionDraft;
+  onDraftChange?(draft: IssueDecisionDraft): void;
 }) {
-  const [option, setOption] = useState("");
-  const [note, setNote] = useState("");
+  const { option, note } = draft;
+  const setOption = (option: string) => onDraftChange?.({ ...draft, option });
+  const setNote = (note: string) => onDraftChange?.({ ...draft, note });
   const open = state === "open";
   const tooLong = issueTextBytes(note) > 4_096;
   const selected = request.options.some((value) => value.id === option);
@@ -59,12 +63,15 @@ function DecisionCard({ request, busy, state = request.state, reason, onAnswer }
   );
 }
 
-export function IssueDecisionCards({ decisions, history, busy, onAnswer }: IssueDecisionCardsProps) {
+export function IssueDecisionCards({ decisions, history, busy, onAnswer, drafts, onDraftChange }: IssueDecisionCardsProps) {
   const openIds = new Set(decisions.map((request) => request.id));
   const resolved = (history ?? []).filter((entry) => !openIds.has(entry.decision.decision_id));
   return (
     <div className="issues-decisions" data-testid="issue-decisions">
-      {decisions.map((request) => <DecisionCard key={request.id + ":" + request.revision} request={request} busy={busy} onAnswer={onAnswer} />)}
+      {decisions.map((request) => {
+        const key = decisionDraftIdentity(request);
+        return <DecisionCard key={key} request={request} busy={busy} onAnswer={onAnswer} draft={drafts.get(key)} onDraftChange={(draft) => onDraftChange(key, draft)} />;
+      })}
       {resolved.length > 0 && (
         <section className="issues-decision-history" aria-label="이전 결정" data-testid="issue-decision-history">
           <h3>이전 결정</h3>
