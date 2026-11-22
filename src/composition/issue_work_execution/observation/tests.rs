@@ -9,6 +9,8 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::{PLANNING_FORMAT_VERSION, TaskActor, TaskMutationProvenance};
 
+mod legacy_validation;
+
 const STAMP: &str = "2026-11-21T09:00:00Z";
 
 fn task(id: &str, status: TaskStatus) -> TaskDefinition {
