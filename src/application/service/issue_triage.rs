@@ -293,10 +293,12 @@ impl IssueTriageService {
             Ok(())
         })?;
         Ok(IssueCollectionDetail {
+            timeline: None,
             revision: report.revision,
             item,
             report: Some(report),
             interaction: None,
+            execution: None,
             feedback: None,
         })
     }

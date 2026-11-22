@@ -210,6 +210,8 @@ export async function startFakeGateway(
   options: {
     kernel?: FakeKernel;
     onRequest?(method: string, params: Record<string, unknown>): void;
+    /** 화면의 정확한 대화 이동을 시험하는 읽기 응답이다. 생략하면 기존 녹화를 사용한다. */
+    readThread?(params: Record<string, unknown>): unknown;
     mcpHub?: FakeMcpHub;
     threadDocuments?: Record<string, FakeThreadDocument[]>;
     /** `akra/git/graph` 의 답이다 (plan 27). 요청의 params 를 받아 쪽 하나를 돌려준다. 없으면 모르는 method 로 답한다. */
@@ -452,6 +454,10 @@ export async function startFakeGateway(
       }
       if (options.mcpHub && message.method.startsWith("akra/mcp/")) {
         answerMcpHub(options.mcpHub, socket, message);
+        return;
+      }
+      if (hasId && options.readThread && (message.method === "thread/resume" || message.method === "thread/read")) {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: options.readThread(message.params ?? {}) }));
         return;
       }
       if (message.id !== undefined && message.id !== null) {

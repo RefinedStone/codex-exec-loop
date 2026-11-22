@@ -666,3 +666,48 @@ fn observe_again_successors_keep_done_and_emit_no_duplicate_integration_event() 
         1,
     );
 }
+
+#[test]
+fn stored_review_link_survives_adapter_reopen_without_duplicate_receipts() {
+    let fixture = Fixture::new("execution-review-link");
+    let work = seed(&fixture);
+    let mut observed = running(&work);
+    observed.phase = IssueExecutionPhase::InReview;
+    observed.review_pull_request_url =
+        Some("https://github.com/actual/review-target/pull/42".into());
+    let first = saved(
+        fixture
+            .adapter()
+            .apply_issue_execution(fixture.cwd(), &work, 0, &observed, Some(3))
+            .unwrap(),
+    );
+    let reopened = fixture.adapter();
+    let restored = reopened
+        .get_issue_execution(fixture.cwd(), &work.order.issue)
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored, first);
+    assert_eq!(
+        restored.progress.review_pull_request_url,
+        observed.review_pull_request_url
+    );
+    let events = reopened.pending_issue_work_events(fixture.cwd()).unwrap();
+    let replay = reopened
+        .apply_issue_execution(
+            fixture.cwd(),
+            &work,
+            first.progress.revision,
+            &observed,
+            Some(3),
+        )
+        .unwrap();
+    assert!(matches!(
+        replay,
+        IssueExecutionSaveResult::Saved { changed: false, .. }
+    ));
+    assert_eq!(saved(replay).progress.attempts.execution, 1);
+    assert_eq!(
+        reopened.pending_issue_work_events(fixture.cwd()).unwrap(),
+        events
+    );
+}

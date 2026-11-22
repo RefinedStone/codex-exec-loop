@@ -4,6 +4,7 @@ import { Icon } from "../design/icons";
 import { IssueTriageView } from "./IssueTriageView";
 import { IssueDecisionCards } from "./IssueDecisionCards";
 import { IssueInterventions } from "./IssueInterventions";
+import { IssueExecutionTracking } from "./IssueExecutionTracking";
 import {
   EMPTY_ISSUE_DECISION_DRAFT, EMPTY_ISSUE_INTERVENTION_DRAFT,
   decisionDraftIdentity, interventionDraftIdentity, issueDraftIdentity,
@@ -21,6 +22,7 @@ interface IssueDetailProps {
   onAnswer(decisionId: string, option: string, note: string): Promise<void>;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
+  onRefresh(): Promise<void>;
   onBack(): void;
   onOpenUrl(url: string): void;
 }
@@ -38,7 +40,7 @@ export function IssueDetail(props: IssueDetailProps) {
 }
 
 /** 현재 선택과 일치하는 최신 응답에서만 공유본을 읽는다. 저장된 판정의 stale 여부는 본문과 별개다. */
-function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, busy, onAnswer, onIntervene, onOpenConversation, onBack, onOpenUrl }: IssueDetailProps) {
+function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, busy, onAnswer, onIntervene, onOpenConversation, onRefresh, onBack, onOpenUrl }: IssueDetailProps) {
   const current = !stale && detail?.status === "ready" && sameIssue(selectedIssue, detail.item.issue) ? detail : null;
   // 재조회 중에는 서버의 과거 표시값을 숨기되 사용자 초안만 이슈 상세 수명에 보관한다.
   const [storedDrafts, setDrafts] = useState(() => ({
@@ -70,7 +72,10 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
   const shared = item?.current.status === "observed" && item.current.content.kind === "shared" ? item.current.content.shared_copy : null;
   return (
     <article className="issues-detail" aria-label="이슈 상세" data-testid="issues-detail" aria-busy={loading}>
-      <button type="button" className="issues-back" onClick={onBack} data-testid="issues-detail-back"><Icon name="chevronLeft" size={14} />목록으로</button>
+      <div className="issues-detail-toolbar">
+        <button type="button" className="issues-back" onClick={onBack} data-testid="issues-detail-back"><Icon name="chevronLeft" size={14} />목록으로</button>
+        <button type="button" className="issues-file-open" disabled={loading} onClick={() => void onRefresh()} data-testid="issue-execution-refresh"><Icon name="refresh" size={14} />다시 확인</button>
+      </div>
       {error && <p className="issues-inline-notice error" role="alert" data-testid="issues-detail-error">{error}</p>}
       {loading && <p className="issues-inline-notice muted" role="status" data-testid="issues-detail-loading">현재 이슈 상세를 확인하고 있습니다.</p>}
       {!loading && stale && !error && <p className="issues-inline-notice muted" role="status">새로 고침으로 현재 이슈 상세를 확인하세요.</p>}
@@ -88,6 +93,7 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
             <p className="issues-detail-reason">{item.presentation.reason.summary}</p>
           </header>
           {current && <>
+            <IssueExecutionTracking execution={current.execution} feedback={current.feedback} timeline={current.timeline} onOpenUrl={onOpenUrl} />
             <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} busy={busy || loading} onAnswer={onAnswer} drafts={drafts.decisions} onDraftChange={(key, draft) => {
               setDrafts((previous) => {
                 if (!previous.decisions.has(key)) return previous;

@@ -14,6 +14,9 @@ use crate::domain::issue_automation::decision::IssueDecisionState;
 use crate::domain::issue_automation::execution::IssueExecutionIntegration;
 use crate::domain::issue_work::IssueReference;
 
+mod execution;
+pub use execution::IssueExecutionDetailState;
+
 const MAX_ISSUE_COORDINATE_BYTES: usize = 4096;
 const MAX_ISSUE_REFERENCE_BYTES: usize = 16 * 1024;
 
@@ -48,6 +51,10 @@ pub struct IssueDetailState {
     pub report: Option<IssueTriageObserveReportState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<IssueFeedbackDetailState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<IssueExecutionDetailState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<super::timeline::IssueTimelineState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -146,6 +153,8 @@ impl IssueState {
                     .unwrap_or_default(),
                 report,
                 feedback: detail.feedback.as_ref().map(Into::into),
+                execution: detail.execution.as_ref().map(Into::into),
+                timeline: detail.timeline.as_ref().map(Into::into),
             })),
             None => Self::NotFound {
                 revision: detail.revision,

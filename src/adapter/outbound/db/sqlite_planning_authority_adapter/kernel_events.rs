@@ -32,7 +32,18 @@ fn ensure_kernel_event_table(connection: &Connection) -> Result<()> {
         .context("failed to ensure the kernel event table")
 }
 
+mod issue_timeline;
+
 impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
+    fn load_recent_issue_kernel_events(
+        &self,
+        workspace_dir: &str,
+        issue: &crate::domain::issue_work::IssueReference,
+        limit: usize,
+    ) -> Result<Option<Vec<RecordedKernelEvent>>> {
+        issue_timeline::load_recent(workspace_dir, issue, limit)
+    }
+
     fn has_issue_work_event(&self, workspace_dir: &str, event_id: &str) -> Result<bool> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;

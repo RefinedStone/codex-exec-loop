@@ -25,7 +25,7 @@ import {
   type ThreadActivity,
 } from "./protocol";
 import { sendKernelCommand } from "./sendKernelCommand";
-import { hasValidIssueAutonomy, hasValidIssueInteractions } from "./issuePresentationValidation";
+import { hasValidIssueAutonomy, hasValidIssueExecutionTracking, hasValidIssueInteractions } from "./issuePresentationValidation";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
 export type KernelInterest = "overview" | "issues" | "delegation" | "issue_attention";
@@ -215,7 +215,7 @@ function isIssueDetailAnswer(value: unknown): value is IssueDetailAnswer {
   const item = value.item;
   // 목록과 같은 표시 계약을 재사용하고, 상세에서 실제로 그릴 공유본의 모양도 확인한다.
   if (!isIssuesPageAnswer({ type: "issues", status: "ready", revision: value.revision, items: [item], groups: [{ id: "detail", label: "", item_indices: [0] }] })) return false;
-  if (!isRecord(item.issue) || !hasValidIssueInteractions(value, item.issue)) return false;
+  if (!isRecord(item.issue) || !hasValidIssueInteractions(value, item.issue) || !hasValidIssueExecutionTracking(value)) return false;
   if (!isRecord(item.current)) return false;
   if (item.current.status === "observed") {
     if (!isRecord(item.current.content)) return false;
@@ -521,6 +521,9 @@ export class KernelConnection {
       const record = event.event;
       if (record.kind === "issue_decision_requested" || record.kind === "issue_decision_resolved") {
         this.applyIssueDecision(record.decision, record.revision);
+      } else if (record.kind === "issue_execution_progressed" || record.kind === "issue_integrated"
+        || record.kind === "issue_closed" || record.kind === "issue_feedback_posted") {
+        this.refreshIssueFromRecord(record.issue, record.revision);
       } else if (["issue_held", "issue_released", "issue_work_permit_revoked", "issue_work_submitted", "issue_work_permit_granted", "issue_automation_mode_changed"].includes(record.kind)) {
         this.scheduleIssueRefresh();
       }
@@ -550,6 +553,28 @@ export class KernelConnection {
       attention.push(known ?? { workspace: this.wanted, kernel: view.kernel, decisionId: decision.decision_id, issue: decision.subject.issue });
     }
     this.store.setKernel({ ...view, issueAttention: attention.slice(-64) });
+    this.scheduleIssueRefresh();
+  }
+
+  /** 이벤트는 읽기 요청만 무효화한다. journal revision을 catalog revision과 비교하지 않는다. */
+  private refreshIssueFromRecord(issue: IssueEventReference, revision: number): void {
+    if (!this.canRead("issues") || !isIssueReference(issue) || !isRevision(revision)) return;
+    const issues = this.store.getKernel().issues;
+    const expected = (issues.automation?.status === "ready" ? issues.automation.binding : null)
+      ?? issues.selectedIssue ?? (issues.page?.status === "ready" ? issues.page.items[0]?.issue : null);
+    if (expected ? issue.provider !== expected.provider || issue.server_id !== expected.server_id
+      || issue.repository_id !== expected.repository_id || issue.project_scope.workspace_dir !== expected.project_scope.workspace_dir
+      : issue.project_scope.workspace_dir !== this.wanted) return;
+    // 이벤트 전의 진행 중 응답은 같은 catalog 판이어도 새 표시를 덮을 수 없다.
+    this.issueStateRequest += 1;
+    this.issuePageRequest += 1;
+    this.issueDetailRequest += 1;
+    this.activeIssuePage = null;
+    this.activeIssueDetail = null;
+    this.updateIssues({
+      ...(issues.selectedIssue === null ? {} : { detail: null, detailStale: true }),
+      stale: issues.page !== null, canGoBack: false,
+    });
     this.scheduleIssueRefresh();
   }
 

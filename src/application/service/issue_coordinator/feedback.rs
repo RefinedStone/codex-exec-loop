@@ -34,10 +34,25 @@ impl IssueCoordinatorService {
         let Some(feedback) = &self.feedback else {
             return Ok(None);
         };
-        let Some(snapshot) = feedback.snapshot(issue)? else {
+        let snapshot = feedback.snapshot(issue)?;
+        let unresolved = if snapshot.is_some() {
+            feedback.unresolved(issue)?
+        } else {
+            Vec::new()
+        };
+        let after = feedback.snapshot(issue)?;
+        // Intent changes use the feedback counter, independently of the triage catalog.
+        // Check before the revision-zero early return so the first intent is fenced too.
+        if snapshot.as_ref().map(|value| value.state.revision)
+            != after.as_ref().map(|value| value.state.revision)
+        {
+            return Err(
+                crate::application::service::issue_collection::IssueDetailSnapshotChanged.into(),
+            );
+        }
+        let Some(snapshot) = snapshot else {
             return Ok(None);
         };
-        let unresolved = feedback.unresolved(issue)?;
         let needs_confirmation = unresolved.iter().any(|record| record.state.is_unresolved());
         let integration = snapshot
             .execution

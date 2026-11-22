@@ -3,6 +3,12 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod detail;
+pub use detail::{
+    IssueExecutionDetail, IssueExecutionReadyDetail, IssueExecutionRecovery,
+    IssueExecutionRecoveryReason, IssueExecutionUnavailableReason,
+};
+
 /// Execution facts, rather than provider-specific validation phases.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +98,9 @@ pub struct IssueWorkExecutionObservation {
     pub execution_ids: Vec<String>,
     pub terminals: Vec<IssueExecutionTerminalRecord>,
     pub current_terminal_id: Option<String>,
+    /// 현재 작업 계보의 활성 검증이 확인한 정확한 PR URL이다. 번호로 추측하지 않는다.
+    #[serde(default)]
+    pub review_pull_request_url: Option<String>,
     pub integration: Option<IssueExecutionIntegration>,
     pub question: Option<IssueExecutionQuestion>,
 }
@@ -198,6 +207,8 @@ pub struct IssueExecutionProgress {
     pub state: IssueExecutionState,
     pub attempts: IssueExecutionAttempts,
     pub terminal: Option<IssueExecutionTerminalRecord>,
+    #[serde(default)]
+    pub review_pull_request_url: Option<String>,
     pub integration: Option<IssueExecutionIntegration>,
     pub attempts_exhausted: bool,
     pub revision: u64,
@@ -239,6 +250,7 @@ impl IssueExecutionProgress {
     ) -> Result<Self, &'static str> {
         observation.validate()?;
         let mut next = self.clone();
+        next.review_pull_request_url = observation.review_pull_request_url.clone();
         next.attempts.execution = next
             .attempts
             .execution
