@@ -298,6 +298,16 @@ try {
   await panel.getByTestId("issues-title").click();
   const currentCard = () => panel.locator('[data-testid="issue-decision-card"][data-state="open"]').first();
   await currentCard().waitFor();
+
+  // 최신 이슈 상세의 제품 버튼이 전체 대상 좌표로 전용 창을 연다. 자동화 프로필은 native 복원을 차단한다.
+  const originalWindowOpened = app.waitForEvent("window");
+  await panel.getByTestId("issues-detail-original").click();
+  const originalWindow = await originalWindowOpened;
+  await originalWindow.locator('#root[data-phase="held"]').waitFor({ timeout: 10_000 });
+  assert.match(await originalWindow.getByTestId("vault-restore-detail").innerText(), /자동화/);
+  assert.equal(await originalWindow.getByTestId("vault-restored-body").count(), 0);
+  await originalWindow.close();
+  console.log("PASS current issue original button opens a separate restore window under the profile hold");
   assert.equal(await currentCard().getByTestId("issue-decision-question").innerText(), question);
   assert.match(await currentCard().innerText(), /권고/);
   assert.equal(await currentCard().getByTestId("issue-decision-answer").isDisabled(), true);
@@ -322,6 +332,7 @@ try {
       await panel.getByTestId("issues-detail-loading").waitFor();
       assert.equal(await currentCard().count(), 0, "stale server decisions stay hidden while the reply is held");
       assert.equal(await panel.getByTestId("issues-shared-copy").count(), 0);
+      assert.equal(await panel.getByTestId("issues-detail-original").count(), 0, "a stale detail cannot open a native restore target");
       assert.equal(await panel.getByTestId("issue-steer-message").count(), 0);
       assert.equal(await panel.getByTestId("issue-cancel-confirm").count(), 0);
       assert.deepEqual(draftCommandCounts(), beforeDraftCommands);

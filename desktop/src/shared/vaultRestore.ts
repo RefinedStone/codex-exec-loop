@@ -1,3 +1,5 @@
+import type { IssueEventReference } from "./kernel-protocol/generated";
+
 // 로컬 복원본 창의 상태·표시와 채널 값이다 (#2427). window.akra 권한 계약은 bridge.ts 에 있다.
 // 복원 평문은 main 에서 복원 창의 renderer 로만 간다. Gateway 와 Kernel 프로토콜로 가지 않는다.
 
@@ -18,8 +20,9 @@ export type VaultRestoreHold =
   | "profile_dev_renderer"
   | "profile_hidden_window"
   | "agent_working"
-  // 이 앱에 로컬 복원 경로가 연결되지 않았다.
+  // 로컬 helper를 열 수 없거나 이 플랫폼이 native Vault 열람을 지원하지 않는다.
   | "source_unavailable"
+  | "platform_unsupported"
   | "confirmation_cancelled"
   // Vault 복원 서비스의 보류 상태이다 (`VaultRestoreHold`, #2425).
   | "locked"
@@ -83,13 +86,16 @@ export type VaultRestoreViewState =
   /** `cause` 가 null 이면 아직 열지 않았다. */
   | { phase: "locked"; cause: VaultRelockCause | null }
   | { phase: "opening" }
-  | { phase: "held"; reason: VaultRestoreHold }
+  | { phase: "held"; reason: VaultRestoreHold; canReconnect?: boolean }
   | { phase: "restored"; title: string; body: string; expiresAt: number }
   | { phase: "review"; review: VaultReconnectReview };
 
 /** 로컬 복원본을 여는 대상이다: github.com 의 이슈 주소 하나이다. */
 export function isVaultRestoreIssueUrl(url: unknown): url is string {
-  return typeof url === "string" && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/.test(url);
+  if (typeof url !== "string") return false;
+  const match = /^https:\/\/github\.com\/([\w.-]{1,100})\/([\w.-]{1,100})\/issues\/([1-9]\d{0,18})$/.exec(url);
+  return match !== null && ![".", ".."].includes(match[1]!) && ![".", ".."].includes(match[2]!) &&
+    BigInt(match[3]!) <= 9_223_372_036_854_775_807n;
 }
 
 /** main 이 직접 확인한 실행 프로필의 사실이다. renderer 가 준 값은 쓰지 않는다. */
@@ -123,7 +129,8 @@ const HOLD_TEXT: Record<VaultRestoreHold, string> = {
   profile_dev_renderer: "화면을 개발 서버에서 읽었습니다. 이 실행 방식에서는 열람을 보류합니다.",
   profile_hidden_window: "창을 숨기는 시험 방식으로 실행 중입니다. 이 실행 방식에서는 열람을 보류합니다.",
   agent_working: "이 앱에서 에이전트 턴이 실행 중입니다. 턴이 끝난 뒤에 다시 여세요.",
-  source_unavailable: "이 앱에 로컬 복원 경로가 연결되지 않았습니다. 공유본만 볼 수 있습니다.",
+  source_unavailable: "로컬 복원 경로를 열 수 없습니다. 공유본만 볼 수 있습니다.",
+  platform_unsupported: "현재 환경에서는 신뢰할 수 있는 로컬 Vault 열람 경로를 사용할 수 없습니다. 공유본만 볼 수 있습니다.",
   confirmation_cancelled: "확인을 취소했습니다. 복원본을 열지 않았습니다.",
   locked: "Vault 잠금을 해제하지 못했습니다. 공유본만 볼 수 있습니다.",
   latest_read_failed: "최신 게시본을 읽지 못했습니다. 이전에 읽은 글로 복원하지 않습니다.",
@@ -170,12 +177,61 @@ export function vaultRestoreView(state: VaultRestoreViewState): VaultRestoreView
     case "held":
       return {
         heading: "열람 보류",
-        detail: HOLD_TEXT[state.reason],
-        actions: isReconnectableHold(state.reason) ? ["review", "lock"] : ["unlock"],
+        detail: HOLD_TEXT[state.reason] + (isReconnectableHold(state.reason) && state.canReconnect !== true ? " 이 열람 경로에서는 재연결을 지원하지 않습니다." : ""),
+        actions: isReconnectableHold(state.reason) && state.canReconnect === true ? ["review", "lock"] : ["unlock"],
       };
     case "restored":
       return { heading: "로컬 복원본 · 읽기 전용", detail: "이 글은 이 창에만 있습니다. 창을 닫거나 시간이 끝나면 다시 잠깁니다.", actions: ["lock"] };
     case "review":
       return { heading: "재연결 검토", detail: "표식마다 지금 공유본의 자리를 고릅니다. 고르지 않은 표식은 표식으로 남습니다.", actions: ["lock"] };
   }
+}
+
+/** 같은 URL의 다른 저장소를 구분하기 위해 확인과 복원을 전체 좌표에 묶는다. */
+export interface VaultRestoreTarget {
+  workspace: string;
+  issueUrl: string;
+  issue: IssueEventReference;
+}
+
+export function isVaultRestoreTarget(value: unknown): value is VaultRestoreTarget {
+  if (!record(value) || !fields(value, ["workspace", "issueUrl", "issue"]) ||
+    !bounded(value.workspace, 4_096) || !absoluteWorkspace(value.workspace) ||
+    !isVaultRestoreIssueUrl(value.issueUrl) || value.issueUrl.length > 4_096 || !record(value.issue)) return false;
+  const issue = value.issue;
+  return fields(issue, ["provider", "server_id", "repository_id", "issue_id", "project_scope"]) &&
+    issue.provider === "github" && issue.server_id === "github.com" &&
+    token(issue.repository_id) && token(issue.issue_id) && record(issue.project_scope) &&
+    fields(issue.project_scope, ["workspace_dir"]) && issue.project_scope.workspace_dir === value.workspace;
+}
+
+export function copyVaultRestoreTarget(value: VaultRestoreTarget): VaultRestoreTarget {
+  return {
+    workspace: value.workspace,
+    issueUrl: value.issueUrl,
+    issue: {
+      provider: value.issue.provider,
+      server_id: value.issue.server_id,
+      repository_id: value.issue.repository_id,
+      issue_id: value.issue.issue_id,
+      project_scope: { workspace_dir: value.workspace },
+    },
+  };
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function fields(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+function bounded(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.trim() === value && new TextEncoder().encode(value).length <= maximum &&
+    !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+}
+function token(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_=-]{1,200}$/.test(value);
+}
+function absoluteWorkspace(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value);
 }

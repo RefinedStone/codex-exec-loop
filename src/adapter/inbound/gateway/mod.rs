@@ -67,6 +67,7 @@ enum GatewayCommand {
     Help,
     DesktopBrowserBridge,
     DesktopConfirmationBridge,
+    DesktopRestoreBridge,
 }
 
 pub async fn run_from_env() -> Result<()> {
@@ -84,6 +85,9 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         }
         GatewayCommand::DesktopConfirmationBridge => {
             return super::desktop_confirmation_bridge::run().await;
+        }
+        GatewayCommand::DesktopRestoreBridge => {
+            return super::desktop_restore_bridge::run().await;
         }
         GatewayCommand::Run => {}
     }
@@ -172,6 +176,9 @@ fn parse_args(args: &[String]) -> Result<GatewayCommand> {
         }
         [command] if command == "desktop-confirmation-bridge" => {
             Ok(GatewayCommand::DesktopConfirmationBridge)
+        }
+        [command] if command == "desktop-restore-bridge" => {
+            Ok(GatewayCommand::DesktopRestoreBridge)
         }
         [flag] if flag == "-h" || flag == "--help" => Ok(GatewayCommand::Help),
         [unsupported, ..] => bail!("unsupported argument: {unsupported}\n\n{USAGE}"),
