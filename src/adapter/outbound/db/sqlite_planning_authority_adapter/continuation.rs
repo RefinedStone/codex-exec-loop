@@ -1,7 +1,7 @@
 //! Durable, one-shot isolated-thread continuation. Unknown is never automatically retried.
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::outbound::planning_authority_port::{
@@ -90,7 +90,7 @@ pub(super) fn enqueue(
 }
 
 fn enqueue_in_transaction(
-    connection: &Connection,
+    connection: &Transaction<'_>,
     request: &PlanningWorkerContinuationRequest,
 ) -> Result<PlanningWorkerContinuationReceipt> {
     if let Some(stored) = load(connection, &request.command_id)? {
@@ -208,7 +208,7 @@ pub(super) fn recheck_queued(
 }
 
 fn recheck_queued_in_transaction(
-    connection: &Connection,
+    connection: &Transaction<'_>,
     command_id: &str,
 ) -> Result<PlanningWorkerContinuationReceipt> {
     let mut row = load(connection, command_id)?.context("worker continuation disappeared")?;
@@ -240,7 +240,7 @@ pub(super) fn claim(
 }
 
 fn claim_in_transaction(
-    connection: &Connection,
+    connection: &Transaction<'_>,
     command_id: &str,
     new_generation: &str,
     owner: Option<ParallelModeSlotLeaseOwnerProcess>,
