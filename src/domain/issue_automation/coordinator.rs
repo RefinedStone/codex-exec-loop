@@ -78,6 +78,10 @@ impl IssueWorkCheckpoint {
             || self.order.attempt != 1
             || self.order.title != self.order.handoff.title
             || self.order.title.trim().is_empty()
+            || self.order.title.len() > super::triage::MAX_ISSUE_TRIAGE_TITLE_BYTES
+            || self.permit_source.as_ref().is_some_and(|sha| {
+                !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
             || self.order.handoff.body.len() > super::triage::MAX_ISSUE_TRIAGE_BODY_BYTES
             || self.order.acceptance.is_empty()
             || self.approved_basis.field_hash.as_ref() != Some(&self.order.field_hash)
@@ -106,6 +110,7 @@ pub struct IssueCoordinatorInput<'a> {
 }
 
 pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
+    let _ = input.now_unix_ms; // propose는 시간 경과만으로 승인/만료를 만들지 않는다.
     use IssueCoordinatorAction::*;
     if matches!(
         input.state,
@@ -213,6 +218,48 @@ impl From<&IssueWorkCheckpoint> for IssueWorkSummary {
             task_ids: work.task_ids.clone(),
             blocked_reason: work.blocked_reason,
             delivery_granted: work.delivery_granted,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssueWorkEvent {
+    pub event_id: String,
+    pub issue: IssueReference,
+    pub work_order_id: String,
+    pub kind: IssueWorkEventKind,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum IssueWorkEventKind {
+    Submitted {
+        task_ids: Vec<String>,
+    },
+    PermitGranted {
+        source_sha: String,
+        gate_revision: u64,
+        delivery: bool,
+    },
+}
+
+impl IssueWorkEvent {
+    pub fn new(
+        issue: IssueReference,
+        work_order_id: String,
+        kind: IssueWorkEventKind,
+        revision: u64,
+    ) -> Self {
+        let bytes = serde_json::to_vec(&(&issue, &work_order_id, &kind, revision))
+            .expect("typed work event identity serializes");
+        Self {
+            event_id: format!("issue-event-{:x}", Sha256::digest(bytes)),
+            issue,
+            work_order_id,
+            kind,
+            revision,
         }
     }
 }

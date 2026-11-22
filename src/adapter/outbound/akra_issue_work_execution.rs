@@ -6,9 +6,8 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
 };
 use crate::application::service::parallel_mode::ParallelModeService;
-use crate::application::service::planning::task_mutation::{
-    PlanningTaskCreateInput, PlanningWorkOrderRequest, PlanningWorkOrderService,
-};
+use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
+use crate::application::service::planning::{PlanningWorkOrderRequest, PlanningWorkOrderService};
 use crate::domain::issue_automation::coordinator::IssueWorkOrder;
 use crate::domain::planning::PriorityQueueService;
 use anyhow::{Result, anyhow, bail};
@@ -162,6 +161,13 @@ Work order: {}",
     }
 
     fn revoke(&self, workspace: &str, work_order_id: &str) -> Result<()> {
+        if self
+            .repository
+            .load_work_order(workspace, work_order_id)?
+            .is_none()
+        {
+            return Ok(());
+        }
         self.repository.revoke_work_order_permits(
             workspace,
             work_order_id,

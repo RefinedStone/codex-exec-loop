@@ -32,12 +32,14 @@ pub enum IssueCoordinatorFact {
         revision: u64,
     },
     WorkSubmitted {
+        event_id: String,
         issue: IssueReference,
         work_order_id: String,
         task_ids: Vec<String>,
         revision: u64,
     },
     WorkPermitGranted {
+        event_id: String,
         issue: IssueReference,
         work_order_id: String,
         source_sha: String,
@@ -46,7 +48,7 @@ pub enum IssueCoordinatorFact {
         revision: u64,
     },
 }
-type Reporter = dyn Fn(Vec<IssueCoordinatorFact>) + Send + Sync;
+type Reporter<'a> = dyn Fn(Vec<IssueCoordinatorFact>) + Send + Sync + 'a;
 
 pub struct IssueCoordinatorService {
     workspace: String,
@@ -87,11 +89,12 @@ impl IssueCoordinatorService {
         cancel: &IssueCollectionCancellation,
         now_unix_ms: u64,
         execution_enabled: bool,
-        committed: &Reporter,
+        committed: &Reporter<'_>,
     ) -> Result<()> {
         let Ok(_guard) = self.tick_gate.try_lock() else {
             return Ok(());
         };
+        self.report_pending(committed)?;
         let mut after = None;
         loop {
             if cancel.is_cancelled() {
@@ -111,7 +114,10 @@ impl IssueCoordinatorService {
                 if cancel.is_cancelled() {
                     return Ok(());
                 }
-                self.reconcile(item, cancel, now_unix_ms, execution_enabled, committed)?;
+                let result =
+                    self.reconcile(item, cancel, now_unix_ms, execution_enabled, committed);
+                self.report_pending(committed)?;
+                result?;
             }
             after = batch.next_after;
             if after.is_none() {
@@ -120,13 +126,54 @@ impl IssueCoordinatorService {
         }
     }
 
+    pub fn acknowledge_event(&self, event_id: &str) -> Result<()> {
+        self.store
+            .acknowledge_issue_work_event(&self.workspace, event_id)
+    }
+
+    fn report_pending(&self, committed: &Reporter<'_>) -> Result<()> {
+        committed(self.pending_facts()?);
+        Ok(())
+    }
+
+    pub fn pending_facts(&self) -> Result<Vec<IssueCoordinatorFact>> {
+        let facts = self
+            .store
+            .pending_issue_work_events(&self.workspace)?
+            .into_iter()
+            .map(|event| match event.kind {
+                IssueWorkEventKind::Submitted { task_ids } => IssueCoordinatorFact::WorkSubmitted {
+                    event_id: event.event_id,
+                    issue: event.issue,
+                    work_order_id: event.work_order_id,
+                    task_ids,
+                    revision: event.revision,
+                },
+                IssueWorkEventKind::PermitGranted {
+                    source_sha,
+                    gate_revision,
+                    delivery,
+                } => IssueCoordinatorFact::WorkPermitGranted {
+                    event_id: event.event_id,
+                    issue: event.issue,
+                    work_order_id: event.work_order_id,
+                    source_sha,
+                    gate_revision,
+                    delivery,
+                    revision: event.revision,
+                },
+            })
+            .collect();
+        Ok(facts)
+    }
+
     fn reconcile(
         &self,
         item: IssueCollectionItem,
         cancel: &IssueCollectionCancellation,
         now_unix_ms: u64,
         execution_enabled: bool,
-        committed: &Reporter,
+        committed: &Reporter<'_>,
     ) -> Result<()> {
         let Some(tracked) = item.tracked.as_ref() else {
             return Ok(());
@@ -147,9 +194,23 @@ impl IssueCoordinatorService {
                 decision.request.definition().kind == IssueDecisionKind::StartApproval
             })
         });
-        let execution = if work.is_some() {
-            self.execution
-                .snapshot(&self.workspace, &issue_work_order_id(&item.issue))?
+        let execution = if work.as_ref().is_some_and(|work| {
+            work.permit_source.is_some()
+                && work.approved_basis == basis
+                && ready_for_propose(&assessment)
+        }) {
+            match self
+                .execution
+                .snapshot(&self.workspace, &issue_work_order_id(&item.issue))
+            {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    if let Some(work) = work.as_ref() {
+                        self.block_work(work, IssueWorkBlockReason::SourceUnavailable, cancel)?;
+                    }
+                    return Ok(());
+                }
+            }
         } else {
             Default::default()
         };
@@ -222,7 +283,6 @@ impl IssueCoordinatorService {
                         work,
                         cancel,
                         execution_enabled,
-                        committed,
                     )?;
                 }
             }
@@ -264,7 +324,7 @@ impl IssueCoordinatorService {
                 } else if decision
                     .is_some_and(|stored| stored.request.state() == IssueDecisionState::Answered)
                 {
-                    self.ready(&item.issue)?;
+                    cancel.commit_if_active(|| self.ready(&item.issue))?;
                 }
             }
             // 이 slice는 expiry timer, feedback, 완료 수명주기를 실행하지 않는다.
@@ -282,8 +342,11 @@ impl IssueCoordinatorService {
         existing: Option<IssueWorkCheckpoint>,
         cancel: &IssueCollectionCancellation,
         execution_enabled: bool,
-        committed: &Reporter,
     ) -> Result<()> {
+        // 느린 integration target fetch를 먼저 마친다. 제출 직전의 마지막 원격 읽기는 이슈다.
+        let execution = self
+            .execution
+            .snapshot(&self.workspace, &issue_work_order_id(issue));
         // 승인 직후에도 반드시 원격을 다시 읽는다. 취소 중에는 원격을 취소할 수 없어도 저장/제출은 하지 않는다.
         if !self.fresh_resync(issue, cancel)? {
             return Ok(());
@@ -303,6 +366,7 @@ impl IssueCoordinatorService {
                     self.execution
                         .revoke(&self.workspace, &work.order.work_order_id)
                 })?;
+                self.block_work(&work, IssueWorkBlockReason::ApprovalChanged, cancel)?;
             }
             return Ok(());
         }
@@ -310,27 +374,34 @@ impl IssueCoordinatorService {
             Some(work) => work,
             None => self.build_work(&item, decision)?,
         };
-        let execution = self
-            .execution
-            .snapshot(&self.workspace, &work.order.work_order_id)?;
-        let source = execution
-            .frozen_source
-            .clone()
-            .or(execution.saved_source.clone())
-            .or_else(|| work.permit_source.clone())
-            .or(execution.dispatch_source.clone())
-            .ok_or_else(|| anyhow!("the work source commit is unavailable"))?;
-        let delivery = execution.frozen_source.is_some();
+        // 실행 baseline을 읽을 수 없어도 승인한 작업 등록은 보존한다. 허가만 보류한다.
+        let execution = execution.ok();
+        let source = execution.as_ref().and_then(|snapshot| {
+            snapshot
+                .frozen_source
+                .clone()
+                .or(snapshot.saved_source.clone())
+                .or_else(|| work.permit_source.clone())
+                .or(snapshot.dispatch_source.clone())
+        });
+        let delivery = execution
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.frozen_source.is_some());
         // source 변경만 더 높은 판을 허용한다. revoke된 동일 source를 새 판으로 재승인하지 않는다.
         let prior_source = execution
-            .saved_source
-            .as_deref()
+            .as_ref()
+            .and_then(|snapshot| snapshot.saved_source.as_deref())
             .or(work.permit_source.as_deref());
         let prior_revision = execution
-            .saved_gate_revision
+            .as_ref()
+            .map(|snapshot| snapshot.saved_gate_revision)
+            .unwrap_or(0)
             .max(work.permit_revision)
             .max(basis.gate_revision);
-        let gate_revision = if prior_source.is_some_and(|old| old != source) {
+        let gate_revision = if prior_source
+            .zip(source.as_deref())
+            .is_some_and(|(old, source)| old != source)
+        {
             prior_revision
                 .checked_add(1)
                 .filter(|revision| *revision <= i64::MAX as u64)
@@ -347,10 +418,20 @@ impl IssueCoordinatorService {
                 return Ok(());
             };
             work = *record;
-            let task_ids = self.execution.submit(&self.workspace, &work.order)?;
-            let newly_submitted = work.task_ids.is_empty();
+            let task_ids = match self.execution.submit(&self.workspace, &work.order) {
+                Ok(task_ids) => task_ids,
+                Err(_) => {
+                    work.blocked_reason = Some(IssueWorkBlockReason::SubmissionUnavailable);
+                    let (fence, _, assessment) = self.current(issue)?;
+                    self.store
+                        .save_issue_work(&self.workspace, fence, &assessment, &work)?;
+                    bail!("the issue work submission was interrupted");
+                }
+            };
             work.task_ids = task_ids;
-            work.blocked_reason = if execution_enabled {
+            work.blocked_reason = if source.is_none() {
+                Some(IssueWorkBlockReason::SourceUnavailable)
+            } else if execution_enabled {
                 Some(IssueWorkBlockReason::AwaitingSource)
             } else {
                 Some(IssueWorkBlockReason::ParallelDisabled)
@@ -365,25 +446,29 @@ impl IssueCoordinatorService {
                     .revoke(&self.workspace, &work.order.work_order_id)?;
                 return Ok(());
             }
-            let IssueWorkSaveResult::Saved {
-                record,
-                catalog_revision,
-                ..
-            } = self
-                .store
-                .save_issue_work(&self.workspace, fence, &current, &work)?
+            let IssueWorkSaveResult::Saved { record, .. } =
+                self.store
+                    .save_issue_work(&self.workspace, fence, &current, &work)?
             else {
                 return Ok(());
             };
             work = *record;
-            if newly_submitted {
-                committed(vec![IssueCoordinatorFact::WorkSubmitted {
-                    issue: issue.clone(),
-                    work_order_id: work.order.work_order_id.clone(),
-                    task_ids: work.task_ids.clone(),
-                    revision: catalog_revision,
-                }]);
+            self.ready(issue)?;
+            if self
+                .store
+                .get_issue(&self.workspace, issue)?
+                .is_some_and(|tracked| {
+                    matches!(
+                        tracked.state(),
+                        IssueAutomationState::Ready | IssueAutomationState::Queued
+                    )
+                })
+            {
+                self.transition(issue, IssueTransition::Queue)?;
             }
+            let Some(source) = source else {
+                return Ok(());
+            };
             self.execution.grant(
                 &self.workspace,
                 &IssueWorkPermitRequest {
@@ -394,8 +479,6 @@ impl IssueCoordinatorService {
                     delivery,
                 },
             )?;
-            let changed = work.permit_source.as_deref() != Some(source.as_str())
-                || work.delivery_granted != delivery;
             work.permit_source = Some(source.clone());
             work.permit_revision = gate_revision;
             work.delivery_granted = delivery;
@@ -403,25 +486,25 @@ impl IssueCoordinatorService {
                 work.blocked_reason = None;
             }
             let (fence, _, current) = self.current(issue)?;
-            if let IssueWorkSaveResult::Saved {
-                catalog_revision, ..
-            } = self
-                .store
-                .save_issue_work(&self.workspace, fence, &current, &work)?
-            {
-                if changed {
-                    committed(vec![IssueCoordinatorFact::WorkPermitGranted {
-                        issue: issue.clone(),
-                        work_order_id: work.order.work_order_id.clone(),
-                        source_sha: source,
-                        gate_revision,
-                        delivery,
-                        revision: catalog_revision,
-                    }]);
-                }
-            }
-            self.ready(issue)?;
-            self.transition(issue, IssueTransition::Queue)?;
+            self.store
+                .save_issue_work(&self.workspace, fence, &current, &work)?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    fn block_work(
+        &self,
+        work: &IssueWorkCheckpoint,
+        reason: IssueWorkBlockReason,
+        cancel: &IssueCollectionCancellation,
+    ) -> Result<()> {
+        let mut candidate = work.clone();
+        candidate.blocked_reason = Some(reason);
+        let (fence, _, assessment) = self.current(&work.order.issue)?;
+        cancel.commit_if_active(|| {
+            self.store
+                .save_issue_work(&self.workspace, fence, &assessment, &candidate)?;
             Ok(())
         })?;
         Ok(())
@@ -533,7 +616,7 @@ impl IssueCoordinatorService {
                 branch_hint: None,
                 link_reference: observation.web.as_ref().map(|web| web.url.clone()),
                 profile: None,
-                priority: 100,
+                priority: 80,
                 attempt: 1,
             },
             decision_id: decision.id().clone(),

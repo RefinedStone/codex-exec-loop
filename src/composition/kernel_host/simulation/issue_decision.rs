@@ -897,9 +897,18 @@ trusted_actors = [{provider="github",server_id="github.com",actor_id="U_decision
         .with_triage(services.triage.clone())
         .with_coordinator(coordinator),
     );
+    let state = services
+        .store
+        .get_collection(&fixture.workspace)
+        .unwrap()
+        .unwrap();
     services
-        .issues
-        .set_mode(IssueCollectionMode::Observe)
+        .store
+        .set_collection_mode(
+            &fixture.workspace,
+            Some(state.epoch),
+            IssueCollectionMode::Observe,
+        )
         .unwrap();
     let log = Arc::new(SimKernelLog::default());
     let mut sim = fixture.boot(&services, log.clone());
