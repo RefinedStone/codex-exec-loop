@@ -47,7 +47,7 @@ Windows 작업 호스트에서 실행한 결과와 CI에서 확인할 범위를 
 | 통합 후 가짜 Gateway/합성 데이터 기반 원문 화면·이슈 진입점 | 전용 화면 20개 및 issue-interventions 10개 통과 |
 | 전체 Electron E2E | 기본 25개 spec 중 24개 통과, Windows terminal 1개 제외 |
 | 실제 Windows helper 바이너리 smoke | prepare → platform_unsupported, 종료 코드 0, stderr 0바이트 |
-| planner 지정 Windows Full gate | 구조 수정 후 최종 실행 대상 |
+| planner 지정 Windows Full gate | 구조 수정 후 실제 prerelease 기준 통과 (종료 코드 0) |
 | CI Gate | 최종 PR head의 Checks에 결과 기록 |
 
 전체 Electron E2E는 기능 구현 기준에서 수행했고, 이후 #2643·#2646의 이슈 상세/실행 제어와 #2649의 알림 회귀가 포함된 통합 후보에 반영한 뒤 Windows Full과 관련 두 화면 spec을 다시 통과했습니다. 최종 PR의 전체 CI는 Checks에 남습니다.
