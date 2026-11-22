@@ -996,7 +996,13 @@ impl NativeClientRuntime {
         &mut self,
         completion: ParallelModeControlPlaneBackgroundEvent,
     ) -> NativeClientDispatchOutcome {
-        if let Some(observer) = &mut self.issue_observer {
+        // 주기적인 제어면 조회는 원격 수집 주기와 실패 backoff를 앞당기지 않는다.
+        // 현재 작업자의 종료(성공 또는 실패)만 저장된 작업 상태의 재평가를 깨운다.
+        if let ParallelModeControlPlaneBackgroundEvent::WorkerEvent { event, .. } = &completion
+            && self.current_parallel_epoch_id_for_workspace(&event.workspace_directory)
+                == Some(event.epoch_id)
+            && let Some(observer) = &mut self.issue_observer
+        {
             observer.request_sync(Instant::now());
         }
         NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
@@ -2154,6 +2160,9 @@ impl NativeClientPort for NativeClientRuntime {
         NativeClientRuntime::recv_parallel_completion_for_test(self, timeout)
     }
 }
+
+#[cfg(test)]
+mod issue_observer_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {
