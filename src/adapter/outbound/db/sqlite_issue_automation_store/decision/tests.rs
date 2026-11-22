@@ -432,7 +432,7 @@ fn schema_v3_migration_preserves_existing_catalog_assessment_and_source() {
     adapter
         .with_connection(fixture.cwd(), |connection, _guard| {
             connection
-                .execute_batch("DROP TABLE issue_decision_requests; PRAGMA user_version = 3;")?;
+                .execute_batch("DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; PRAGMA user_version = 3;")?;
             super::super::validate_schema_version(connection, 3)
         })
         .unwrap();
@@ -446,7 +446,7 @@ fn schema_v3_migration_preserves_existing_catalog_assessment_and_source() {
         .with_connection(fixture.cwd(), |connection, _guard| {
             assert_eq!(
                 super::super::schema_identity(connection)?,
-                (super::super::APPLICATION_ID, 4)
+                (super::super::APPLICATION_ID, super::super::SCHEMA_VERSION)
             );
             super::super::validate_schema(connection)
         })

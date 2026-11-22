@@ -181,6 +181,7 @@ fn issue_detail_distinguishes_not_found_from_unavailable_and_keeps_global_report
 fn issue_detail_unknown_has_no_content_fallback_and_uses_the_catalog_revision() {
     let issue = reference();
     let item = IssueCollectionItem {
+        work: None,
         open_decisions: Vec::new(),
         issue: issue.clone(),
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),

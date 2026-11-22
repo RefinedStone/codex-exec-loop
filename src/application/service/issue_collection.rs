@@ -110,6 +110,7 @@ pub struct IssueCollectionService {
     origin: Arc<dyn IssueCollectionOriginPort>,
     policy: IssuePolicyService,
     triage: Option<Arc<super::issue_triage::IssueTriageService>>,
+    coordinator: Option<Arc<super::issue_coordinator::IssueCoordinatorService>>,
 }
 
 impl IssueCollectionService {
@@ -127,7 +128,22 @@ impl IssueCollectionService {
             origin,
             policy,
             triage: None,
+            coordinator: None,
         }
+    }
+
+    pub fn with_coordinator(
+        mut self,
+        coordinator: Arc<super::issue_coordinator::IssueCoordinatorService>,
+    ) -> Self {
+        self.coordinator = Some(coordinator);
+        self
+    }
+
+    pub fn coordinator_service(
+        &self,
+    ) -> Option<Arc<super::issue_coordinator::IssueCoordinatorService>> {
+        self.coordinator.clone()
     }
 
     pub fn with_triage(mut self, triage: Arc<super::issue_triage::IssueTriageService>) -> Self {
@@ -628,7 +644,7 @@ fn report_committed(
     Ok(())
 }
 
-fn checked_resync_read(
+pub(crate) fn checked_resync_read(
     reference: &IssueReference,
     policy_version: &str,
     read: IssueSourceRead,

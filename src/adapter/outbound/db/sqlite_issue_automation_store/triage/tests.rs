@@ -434,7 +434,7 @@ fn v2_migration_preserves_workflow_observation_binding_and_collection_rows() {
         .get_binding(fixture.cwd(), &before.binding_id)
         .unwrap();
     adapter.with_connection(fixture.cwd(), |connection, _| {
-        connection.execute_batch("DROP TABLE issue_decision_requests; DROP TABLE issue_triage_assessments; DROP TABLE issue_automation_catalog; PRAGMA user_version = 2;")?;
+        connection.execute_batch("DROP TABLE issue_work_checkpoints; DROP TABLE issue_decision_requests; DROP TABLE issue_triage_assessments; DROP TABLE issue_automation_catalog; PRAGMA user_version = 2;")?;
         Ok(())
     }).unwrap();
 
