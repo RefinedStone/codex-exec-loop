@@ -1,6 +1,9 @@
 //! Akra planning 등록/permit을 중립 이슈 실행 계약으로 옮긴다.
 use crate::application::port::outbound::issue_work_execution_port::*;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+};
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthoritySnapshot;
 use crate::application::port::outbound::planning_work_order_repository_port::{
     PlanningWorkOrderRepositoryPort, PlanningWorkPermit, PlanningWorkPermitBasis,
     PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
@@ -9,7 +12,7 @@ use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
 use crate::application::service::planning::{PlanningWorkOrderRequest, PlanningWorkOrderService};
 use crate::domain::issue_automation::coordinator::IssueWorkOrder;
-use crate::domain::planning::PriorityQueueService;
+use crate::domain::planning::{PriorityQueueService, TaskStatus};
 use anyhow::{Result, anyhow, bail};
 use std::sync::Arc;
 
@@ -46,39 +49,18 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
         let basis = self
             .repository
             .load_work_order_permit_basis(workspace, work_order_id)?;
-        let mut sources: Vec<String> = self
-            .authority
-            .load_runtime_projections(workspace)?
-            .distributor_queue_records
-            .into_iter()
-            .filter(|record| task_ids.contains(&record.task_id))
-            .map(|record| record.effective_source_commit_sha())
-            .filter(|source| !source.is_empty())
-            .collect();
-        sources.sort();
-        sources.dedup();
-        if sources.len() > 1 {
-            bail!("the work has ambiguous frozen source commits");
-        }
-        let frozen_source = sources.pop();
-        // 실제 dispatch와 동일한 configured remote/base를 새로 fetch/검증한다. checkout HEAD는 쓰지 않는다.
-        let dispatch_source = if basis.is_none() && frozen_source.is_none() {
-            Some(
+        let runtime = self.authority.load_runtime_projections(workspace)?;
+        execution_snapshot(
+            task_ids,
+            basis.as_ref(),
+            &runtime,
+            || self.repository.load_task_authority_snapshot(workspace),
+            || {
                 self.parallel
                     .work_order_dispatch_source_sha(workspace)
-                    .map_err(|_| anyhow!("the configured work dispatch source is unavailable"))?,
-            )
-        } else {
-            None
-        };
-        Ok(IssueWorkExecutionSnapshot {
-            task_ids,
-            dispatch_source,
-            frozen_source,
-            saved_source: basis.as_ref().map(|basis| basis.source_sha.clone()),
-            saved_gate_revision: basis.as_ref().map(|basis| basis.gate_revision).unwrap_or(0),
-            blocked_reason: None,
-        })
+                    .map_err(|_| anyhow!("the configured work dispatch source is unavailable"))
+            },
+        )
     }
 
     fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {
@@ -185,3 +167,67 @@ Work order: {}",
         Ok(())
     }
 }
+
+fn execution_snapshot(
+    task_ids: Vec<String>,
+    basis: Option<&PlanningWorkPermitBasis>,
+    runtime: &PlanningAuthorityRuntimeProjectionSnapshot,
+    load_tasks: impl FnOnce() -> Result<Option<PlanningTaskAuthoritySnapshot>>,
+    fetch_dispatch_source: impl FnOnce() -> Result<String>,
+) -> Result<IssueWorkExecutionSnapshot> {
+    let mut sources: Vec<String> = runtime
+        .distributor_queue_records
+        .iter()
+        .filter(|record| task_ids.contains(&record.task_id))
+        .map(|record| record.effective_source_commit_sha())
+        .filter(|source| !source.is_empty())
+        .collect();
+    sources.sort();
+    sources.dedup();
+    if sources.len() > 1 {
+        bail!("the work has ambiguous frozen source commits");
+    }
+    let frozen_source = sources.pop();
+    // Leased 단계도 배정이 끝난 상태다. 실제 실행/전달 source를 새 integration HEAD로 바꾸지 않는다.
+    let pending_dispatch = if frozen_source.is_some()
+        || runtime
+            .slot_leases
+            .values()
+            .any(|lease| task_ids.contains(&lease.task_id))
+    {
+        false
+    } else if task_ids.is_empty() {
+        true
+    } else {
+        let tasks =
+            load_tasks()?.ok_or_else(|| anyhow!("the planning execution tasks are unavailable"))?;
+        let mut pending = true;
+        for task_id in &task_ids {
+            let task = tasks
+                .task_authority
+                .tasks
+                .iter()
+                .find(|task| &task.id == task_id)
+                .ok_or_else(|| anyhow!("the work task is missing from planning authority"))?;
+            pending &= matches!(task.status, TaskStatus::Ready | TaskStatus::Proposed);
+        }
+        pending
+    };
+    // 슬롯 대기 중에는 저장된 permit basis가 있어도 실제 dispatch와 같은 configured remote/base를 읽는다.
+    let dispatch_source = if pending_dispatch {
+        Some(fetch_dispatch_source()?)
+    } else {
+        None
+    };
+    Ok(IssueWorkExecutionSnapshot {
+        task_ids,
+        dispatch_source,
+        frozen_source,
+        saved_source: basis.map(|basis| basis.source_sha.clone()),
+        saved_gate_revision: basis.map(|basis| basis.gate_revision).unwrap_or(0),
+        blocked_reason: None,
+    })
+}
+
+#[cfg(test)]
+mod tests;
