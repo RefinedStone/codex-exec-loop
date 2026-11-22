@@ -10,9 +10,6 @@ use crate::application::port::inbound::stored_command_port::{
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 #[cfg(test)]
 use crate::application::port::outbound::conversation_thread_turn_options_port::NoopConversationThreadTurnOptionsPort;
-use crate::application::port::outbound::issue_work_steering_port::{
-    IssueWorkSteeringPort, UnavailableIssueWorkSteering,
-};
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::application::port::outbound::repository_state_port::RepositoryStatePort;
 use crate::application::service::conversation_service::ConversationService;
@@ -165,7 +162,6 @@ pub(crate) struct NativeClientRuntime {
     kernel_event_log: Option<(Arc<dyn KernelEventLogPort>, String)>,
     // 저장 명령의 실행기와 그 작업 공간이다 (plan 18 K4-9d). 저장소 커널만 붙인다. 없으면 저장 명령은 실패한다.
     stored_commands: Option<(Arc<dyn StoredCommandPort>, String)>,
-    issue_work_steering: Option<Arc<dyn IssueWorkSteeringPort>>,
     // 마지막으로 정한 기록 sequence 이다 (plan 19 Q3-3b). 저장소 커널은 잠금으로 하나뿐이라 커널이 정한다.
     last_kernel_sequence: i64,
     // 작업 공간의 git 관찰자와 마지막으로 기록한 상태이다 (plan 20 §4.1). 기록이 붙은 커널만 관찰한다.
@@ -203,7 +199,6 @@ pub(crate) struct NativeTuiApplicationComposition {
     parallel_control_plane: ParallelModeControlPlaneComposition,
     turn_control_truth: ConversationRuntimeControlTruth,
     clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
-    issue_work_steering: Option<Arc<dyn IssueWorkSteeringPort>>,
     github_review_polling: Option<crate::core::app::GithubReviewPollingSettings>,
 }
 
@@ -515,14 +510,8 @@ impl NativeTuiApplicationComposition {
             parallel_control_plane,
             turn_control_truth,
             clipboard_image_probe_trigger,
-            issue_work_steering: None,
             github_review_polling: None,
         }
-    }
-
-    pub(crate) fn with_issue_work_steering(mut self, port: Arc<dyn IssueWorkSteeringPort>) -> Self {
-        self.issue_work_steering = Some(port);
-        self
     }
 
     /// 프로세스 설정에서 읽은 GitHub 리뷰 폴링 값을 호스트에 넘긴다 (plan 18 K2-6).
@@ -538,7 +527,6 @@ impl NativeTuiApplicationComposition {
         let mut client_runtime =
             NativeClientRuntime::from_parts(self.core_runtime, self.parallel_control_plane);
         client_runtime.github_review_polling = self.github_review_polling;
-        client_runtime.issue_work_steering = self.issue_work_steering;
         BoundNativeTuiApplication {
             client_runtime,
             turn_control_truth: self.turn_control_truth,
@@ -658,7 +646,6 @@ impl NativeClientRuntime {
             kernel_events: None,
             kernel_event_log: None,
             stored_commands: None,
-            issue_work_steering: None,
             last_kernel_sequence: 0,
             repository_observer: None,
             repository_state: None,
@@ -1454,12 +1441,6 @@ impl NativeClientRuntime {
      * 저장 명령의 실행기를 붙인다 (plan 18 K4-9d). 저장소 잠금을 쥐 커널(Gateway 의 커널)이 붙인다. `workspace_dir`
      * 은 실행 뒤에 planning 을 다시 읽을 작업 공간이다.
      */
-    pub(crate) fn issue_work_steering_port(&self) -> Arc<dyn IssueWorkSteeringPort> {
-        self.issue_work_steering
-            .clone()
-            .unwrap_or_else(|| Arc::new(UnavailableIssueWorkSteering))
-    }
-
     pub(crate) fn attach_stored_commands(
         &mut self,
         port: Arc<dyn StoredCommandPort>,

@@ -11556,7 +11556,9 @@ fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
         .find("RepositoryKernelLockAdapter::acquire_for_owner(")
         .expect("the repository kernel must take the lock");
     let build = kernel
-        .find("production::build_headless_kernel_runtime(workspace_dir, app_server)")
+        .find(
+            "production::build_headless_kernel_runtime(workspace_dir, app_server, issues.clone())",
+        )
         .expect("the repository kernel must build its runtime");
     assert!(
         lock < build,

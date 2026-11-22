@@ -6,14 +6,14 @@ use crate::application::port::outbound::issue_work_execution_port::IssueWorkExec
 use crate::application::port::outbound::issue_work_steering_port::{
     IssueWorkSteerRequest, IssueWorkSteeringPort,
 };
-use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkControlAction, PlanningWorkInstruction, PlanningWorkInstructionAdmission,
-};
 use crate::domain::issue_automation::coordinator::issue_work_order_id;
 use crate::domain::issue_automation::intervention::{
     IssueInterventionAction, IssueInterventionReceipt, IssueInterventionRequest, IssueSteerDelivery,
 };
 use crate::domain::issue_automation::source::{IssueSourceContent, IssueSourceRead};
+use crate::domain::issue_automation::work_control::{
+    IssueWorkControlAction, IssueWorkInstruction, IssueWorkInstructionAdmission,
+};
 use crate::domain::issue_work::{IssueReference, IssueSharedCopy};
 use anyhow::{Result, bail};
 use std::sync::{Arc, Mutex};
@@ -135,7 +135,7 @@ impl IssueInterventionService {
         }
         // The intent and Unknown receipt are durable together before admission or external delivery.
         // A crash or an uncertain admission cannot leave a pending command that blocks later controls.
-        let instruction = PlanningWorkInstruction {
+        let instruction = IssueWorkInstruction {
             command_id: request.command_id.clone(),
             message: message.clone(),
         };
@@ -151,13 +151,13 @@ impl IssueInterventionService {
             }
         };
         match admission {
-            PlanningWorkInstructionAdmission::Queued { changed } => {
+            IssueWorkInstructionAdmission::Queued { changed } => {
                 receipt.delivery = Some(IssueSteerDelivery::Queued);
                 receipt.changed = changed;
                 self.store
                     .finish_issue_intervention(&self.workspace, &receipt)?;
             }
-            PlanningWorkInstructionAdmission::Active => {
+            IssueWorkInstructionAdmission::Active => {
                 let task_ids = match self.execution.task_ids(&self.workspace, &work_order_id) {
                     Ok(task_ids) => task_ids,
                     Err(_) => return Ok(receipt),
@@ -312,13 +312,13 @@ fn fence_control(
     request.validate()?;
     let work_order_id = issue_work_order_id(&request.issue);
     let action = match request.action {
-        IssueInterventionAction::Hold => PlanningWorkControlAction::Hold,
-        IssueInterventionAction::Release => PlanningWorkControlAction::Release,
-        IssueInterventionAction::TakeOver => PlanningWorkControlAction::TakeOver,
-        IssueInterventionAction::Retriage => PlanningWorkControlAction::Retriage,
-        IssueInterventionAction::Cancel { .. } => PlanningWorkControlAction::Cancel,
-        IssueInterventionAction::Track => PlanningWorkControlAction::Track,
-        IssueInterventionAction::Untrack => PlanningWorkControlAction::Untrack,
+        IssueInterventionAction::Hold => IssueWorkControlAction::Hold,
+        IssueInterventionAction::Release => IssueWorkControlAction::Release,
+        IssueInterventionAction::TakeOver => IssueWorkControlAction::TakeOver,
+        IssueInterventionAction::Retriage => IssueWorkControlAction::Retriage,
+        IssueInterventionAction::Cancel { .. } => IssueWorkControlAction::Cancel,
+        IssueInterventionAction::Track => IssueWorkControlAction::Track,
+        IssueInterventionAction::Untrack => IssueWorkControlAction::Untrack,
         IssueInterventionAction::Steer { .. } => {
             bail!("a steering message is not a control mutation")
         }
