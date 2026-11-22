@@ -1,3 +1,15 @@
+mod validation_recovery_port;
+pub use validation_recovery_port::{
+    PlanningValidationRecoveryKind, PlanningValidationRecoveryOutcome,
+    PlanningValidationRecoveryReceipt, PlanningValidationRecoveryRequest,
+};
+
+mod admission_port;
+pub(crate) use admission_port::validate_admission_key;
+pub use admission_port::{
+    PlanningWorkOrderAdmissionSnapshot, PlanningWorkOrderSupplementalAdmission,
+    PlanningWorkOrderSupplementalAdmissionResult,
+};
 mod control_port;
 pub use control_port::{
     PlanningWorkControl, PlanningWorkControlAction, PlanningWorkControlRepositoryPort,
@@ -120,6 +132,22 @@ pub struct PlanningWorkOrderLinkResult {
     pub planning_revision: i64,
 }
 
+/// Immutable correlation survives distributor queue pruning and task document replacement.
+/// None ownership is verified legacy; no source record at all is unavailable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningValidationSource {
+    pub validation_record_key: String,
+    pub source_task_id: String,
+    pub work_order_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningWorkOrderValidationLink {
+    pub validation_record_key: String,
+    pub work_order_id: String,
+    pub source_task_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningWorkOrderError {
     OriginConflict {
@@ -157,6 +185,49 @@ impl std::error::Error for PlanningWorkOrderError {}
 /// A neutral outbound boundary owned by planning. One implementation also owns its task authority,
 /// so callers cannot accidentally persist the task and its durable lineage in different stores.
 pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
+    /// 원본 CAS, 현재 제어/정책 세대, 후속 기록/계보/성공 영수증을 같은 transaction에서 검사한다.
+    fn recover_work_order_validation(
+        &self,
+        _workspace: &str,
+        _request: PlanningValidationRecoveryRequest<'_>,
+    ) -> Result<PlanningValidationRecoveryReceipt> {
+        bail!("work-order validation recovery is unavailable")
+    }
+
+    /// 등록된 후속 기록만 최초 원본의 보완 admission identity를 상속한다.
+    fn load_work_order_validation_recovery_origin(
+        &self,
+        _workspace: &str,
+        _validation_record_key: &str,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn load_work_order_admission_snapshot(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+    ) -> Result<Option<PlanningWorkOrderAdmissionSnapshot>> {
+        bail!("atomic work-order supplemental admission is unavailable")
+    }
+
+    fn load_work_order_supplemental_task(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _admission_key: &str,
+    ) -> Result<Option<String>> {
+        bail!("atomic work-order supplemental admission is unavailable")
+    }
+
+    fn admit_supplemental_work_order_task(
+        &self,
+        _workspace: &str,
+        _request: PlanningWorkOrderSupplementalAdmission<'_>,
+    ) -> Result<PlanningWorkOrderSupplementalAdmissionResult> {
+        bail!("atomic work-order supplemental admission is unavailable")
+    }
+
     fn load_work_order(
         &self,
         workspace_dir: &str,
@@ -168,6 +239,40 @@ pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
         workspace_dir: &str,
         task_id: &str,
     ) -> Result<Option<PlanningWorkOrderRecord>>;
+
+    /// A legacy source task has no work-order correlation and returns None.
+    fn link_work_order_validation_record(
+        &self,
+        _workspace_dir: &str,
+        _validation_record_key: &str,
+        _source_task_id: &str,
+    ) -> Result<Option<PlanningWorkOrderValidationLink>> {
+        bail!("work-order validation correlation is unavailable")
+    }
+
+    fn load_work_order_validation_source(
+        &self,
+        _workspace: &str,
+        _validation_record_key: &str,
+    ) -> Result<Option<PlanningValidationSource>> {
+        bail!("work-order validation source is unavailable")
+    }
+
+    fn load_work_order_validation_link(
+        &self,
+        _workspace_dir: &str,
+        _validation_record_key: &str,
+    ) -> Result<Option<PlanningWorkOrderValidationLink>> {
+        bail!("work-order validation correlation is unavailable")
+    }
+
+    fn work_order_validation_record_keys(
+        &self,
+        _workspace_dir: &str,
+        _work_order_id: &str,
+    ) -> Result<Vec<String>> {
+        bail!("work-order validation correlation is unavailable")
+    }
 
     /// Existing identity wins before revision, authority guard, or candidate validation.
     /// An existing ID with a different origin is a typed OriginConflict error.

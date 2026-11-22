@@ -242,6 +242,58 @@ pub trait IssueAutomationStorePort: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Unknown을 먼저 저장한 최초 claimant만 실행 포트에 전달할 수 있다.
+    fn claim_issue_execution_answer(
+        &self,
+        _workspace: &str,
+        _intent: &crate::domain::issue_automation::execution_answer::IssueExecutionAnswerIntent,
+    ) -> Result<crate::domain::issue_automation::execution_answer::IssueExecutionAnswerClaim> {
+        anyhow::bail!("durable issue answer claims are unavailable")
+    }
+
+    /// 재시작/응답 유실 때에는 이 목록을 읽어 영수증만 조회하고 다시 보내지 않는다.
+    fn pending_issue_execution_answers(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+    ) -> Result<Vec<crate::domain::issue_automation::execution_answer::IssueExecutionAnswerRecord>>
+    {
+        Ok(Vec::new())
+    }
+
+    /// 동일 ACK는 멱등이며, 서로 다른 ACK/최종 거절은 덮어쓰지 않는다. None은 revision 충돌이다.
+    fn save_issue_execution_answer(
+        &self,
+        _workspace: &str,
+        _command_id: &str,
+        _expected_revision: u64,
+        _status: &crate::domain::issue_automation::execution_answer::IssueExecutionAnswerStatus,
+    ) -> Result<Option<crate::domain::issue_automation::execution_answer::IssueExecutionAnswerRecord>>
+    {
+        anyhow::bail!("durable issue answer receipts are unavailable")
+    }
+
+    /// 실행 관측은 수집 모드와 독립적으로 읽는다. 외부 이슈나 새 작업을 만들지 않는다.
+    fn get_issue_execution(
+        &self,
+        _workspace: &str,
+        _issue: &IssueReference,
+    ) -> Result<Option<crate::domain::issue_automation::execution::IssueExecutionRecord>> {
+        Ok(None)
+    }
+
+    /// work/progress CAS, 실행·검증 영수증, lineage, 수명과 outbox를 한 transaction으로 확정한다.
+    fn apply_issue_execution(
+        &self,
+        _workspace: &str,
+        _work: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+        _expected_progress_revision: u64,
+        _observation: &crate::domain::issue_automation::execution::IssueWorkExecutionObservation,
+        _max_attempts: Option<u32>,
+    ) -> Result<IssueExecutionSaveResult> {
+        anyhow::bail!("issue execution observations are unavailable")
+    }
+
     fn get_issue_work(
         &self,
         workspace: &str,
@@ -462,6 +514,16 @@ pub trait IssueAutomationStorePort: Send + Sync {
 pub enum IssueWorkSaveResult {
     Saved {
         record: Box<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>,
+        catalog_revision: u64,
+        changed: bool,
+    },
+    Conflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueExecutionSaveResult {
+    Saved {
+        record: Box<crate::domain::issue_automation::execution::IssueExecutionRecord>,
         catalog_revision: u64,
         changed: bool,
     },

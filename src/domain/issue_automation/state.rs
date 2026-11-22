@@ -92,6 +92,7 @@ pub enum IssueTransition {
     Start,
     OpenReview,
     Rework,
+    /// 신뢰된 통합 완료 사실이다. 한도 소진 뒤 확인한 완료도 재실행 없이 반영한다.
     Complete,
     /// 일반 조회/CI 오류가 아니다. 실행 시도 한도가 소진된 사실이다.
     ExhaustAttempts,
@@ -180,7 +181,7 @@ pub(super) fn next_state(
         Transition::Rework if matches!(state, State::InReview | State::Running) => {
             plain(State::Running)
         }
-        Transition::Complete if matches!(state, State::InReview | State::Done) => {
+        Transition::Complete if matches!(state, State::InReview | State::Failed | State::Done) => {
             plain(State::Done)
         }
         Transition::ExhaustAttempts

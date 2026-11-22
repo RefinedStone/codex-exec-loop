@@ -104,8 +104,9 @@ impl IssueDecisionService {
         if definition.subject.issue().project_scope.workspace_dir != self.workspace_dir {
             bail!("the decision belongs to a different workspace")
         }
-        if definition.basis.work_order_id.is_some() {
-            bail!("work-order decisions are not available in this version")
+        self.validate_work_subject(&definition)?;
+        if !self.work_context_current(&definition)? {
+            bail!("the work decision no longer matches its execution context")
         }
         let policy = self
             .policy
@@ -167,12 +168,37 @@ impl IssueDecisionService {
             let mut basis = IssueDecisionBasis::from_assessment(
                 &current,
                 stored.request.definition().gate,
-                None,
+                stored.request.definition().basis.work_order_id.clone(),
             )
             .map_err(|_| anyhow!("the current decision basis is invalid"))?;
             basis.authorization_epoch = self
                 .store
                 .issue_authorization_epoch(&self.workspace_dir, stored.request.issue())?;
+            self.validate_work_subject(stored.request.definition())?;
+            if !self.work_context_current(stored.request.definition())? {
+                let mut obsolete = stored.request.to_record();
+                obsolete.state = IssueDecisionState::Superseded;
+                let obsolete = IssueDecisionRequest::hydrate(obsolete)?;
+                let saved = self
+                    .store
+                    .save_issue_decision(
+                        &self.workspace_dir,
+                        IssueDecisionFence {
+                            triage: fence,
+                            decision_revision: stored.revision,
+                        },
+                        &current,
+                        &obsolete,
+                    )
+                    .map_err(ledger_unavailable)?;
+                if let IssueDecisionSaveResult::Saved(commit) = saved {
+                    return Ok(IssueDecisionAnswerResult {
+                        commit: *commit,
+                        outcome: IssueDecisionOutcome::Superseded,
+                    });
+                }
+                continue;
+            }
             let confirmation = context.human_confirmation.as_ref();
             if let Some(confirmation) = confirmation {
                 confirmation.require_target(&confirmation_target(
@@ -181,7 +207,7 @@ impl IssueDecisionService {
                     option,
                 ))?;
             }
-            let gate_action = current
+            let mut gate_action = current
                 .gates()
                 .iter()
                 .find(|gate| gate.gate == stored.request.definition().gate)
@@ -191,7 +217,20 @@ impl IssueDecisionService {
                 .policy
                 .resolve(&self.workspace_dir)
                 .map_err(|_| policy_unavailable())?;
+            let is_worker_question = stored.request.definition().basis.work_order_id.is_some()
+                && stored.request.definition().kind
+                    == crate::domain::issue_automation::decision::IssueDecisionKind::AgentQuestion;
+            let is_work_recovery = stored.request.definition().basis.work_order_id.is_some()
+                && stored.request.definition().kind
+                    == crate::domain::issue_automation::decision::IssueDecisionKind::FailureRecovery;
+            if is_worker_question || is_work_recovery {
+                gate_action =
+                    crate::domain::issue_automation::policy::IssueAutomationGateAction::Human;
+            }
             let shared_note = note.map(|note| shared_text(note, &policy)).transpose()?;
+            if is_worker_question && option == "reply" && shared_note.is_none() {
+                bail!("the worker question requires a shared answer note")
+            }
             let caller = context
                 .caller
                 .as_deref()
@@ -247,6 +286,64 @@ impl IssueDecisionService {
             }
         }
         bail!("the decision changed concurrently")
+    }
+
+    fn validate_work_subject(&self, definition: &IssueDecisionDefinition) -> Result<()> {
+        use crate::domain::issue_automation::decision::IssueDecisionKind;
+        let Some(id) = &definition.basis.work_order_id else {
+            return Ok(());
+        };
+        let work = self
+            .store
+            .get_issue_work(&self.workspace_dir, definition.subject.issue())?
+            .ok_or_else(|| anyhow!("the work decision has no registered work"))?;
+        if &work.order.work_order_id != id
+            || !matches!(
+                definition.kind,
+                IssueDecisionKind::AgentQuestion | IssueDecisionKind::FailureRecovery
+            )
+        {
+            bail!("the decision does not belong to a supported work context");
+        }
+        Ok(())
+    }
+
+    fn work_context_current(&self, definition: &IssueDecisionDefinition) -> Result<bool> {
+        use crate::domain::issue_automation::decision::IssueDecisionKind;
+        let Some(id) = &definition.basis.work_order_id else {
+            return Ok(true);
+        };
+        let Some(work) = self
+            .store
+            .get_issue_work(&self.workspace_dir, definition.subject.issue())?
+        else {
+            return Ok(false);
+        };
+        let Some(record) = self
+            .store
+            .get_issue_execution(&self.workspace_dir, definition.subject.issue())?
+        else {
+            return Ok(false);
+        };
+        if &work.order.work_order_id != id || &record.work_order_id != id {
+            return Ok(false);
+        }
+        Ok(match definition.kind {
+            IssueDecisionKind::AgentQuestion => {
+                work.current_authorization_basis().authorization_epoch
+                    == definition.basis.authorization_epoch
+                    && definition.basis.field_hash.as_ref() == Some(&work.order.field_hash)
+                    && record.question.as_ref().is_some_and(|question| {
+                        definition.evidence == [format!("question:{}", question.question_id)]
+                    })
+            }
+            IssueDecisionKind::FailureRecovery => {
+                record.progress.terminal.as_ref().is_some_and(|terminal| {
+                    definition.evidence == [format!("terminal:{}", terminal.record_id)]
+                })
+            }
+            _ => false,
+        })
     }
 
     fn current_item(
@@ -315,7 +412,7 @@ fn sanitize_definition(
     Ok(())
 }
 
-fn shared_text(value: &str, policy: &IssuePolicy) -> Result<IssueDecisionSharedText> {
+pub(crate) fn shared_text(value: &str, policy: &IssuePolicy) -> Result<IssueDecisionSharedText> {
     if value.len() > MAX_ISSUE_DECISION_TEXT_BYTES {
         bail!("the decision text exceeds its allowed length")
     }

@@ -95,6 +95,16 @@ impl ParallelModeService {
                 expected_lease.slot_id
             ));
         }
+        if self
+            .planning_authority
+            .worker_task_requires_preservation(
+                &resolution.context.repo_root,
+                &resolution.lease.task_id,
+            )
+            .map_err(|_| "waiting worker state could not be checked".to_string())?
+        {
+            return Err("awaiting-user worker cannot prepare an official completion commit".into());
+        }
         Ok(resolution)
     }
 }
