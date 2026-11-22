@@ -28,7 +28,7 @@ import { sendKernelCommand } from "./sendKernelCommand";
 import { hasValidIssueAutonomy, hasValidIssueInteractions } from "./issuePresentationValidation";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
-export type KernelInterest = "overview" | "issues" | "issue_attention";
+export type KernelInterest = "overview" | "issues" | "delegation" | "issue_attention";
 export type IssueCommandPending = "mode" | "sync" | "autonomy" | "decision" | "intervention";
 
 export interface IssueDecisionAttention {
