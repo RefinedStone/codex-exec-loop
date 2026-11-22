@@ -145,3 +145,86 @@ fn frozen_source_stays_pinned_when_the_dispatch_base_advances() {
     assert_eq!(state.grants, grants);
     assert_eq!(state.registrations, 1);
 }
+
+#[test]
+fn pre_dispatch_base_change_uses_the_renewed_human_authorization_epoch() {
+    use crate::application::port::inbound::issue_intervention_port::IssueInterventionPort;
+    use crate::application::port::inbound::stored_command_port::StoredCommandContext;
+    use crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering;
+    use crate::domain::issue_automation::intervention::{
+        IssueInterventionAction, IssueInterventionRequest,
+    };
+
+    let h = started(true);
+    let original = h.work().unwrap();
+    let service = crate::application::service::issue_intervention::IssueInterventionService::new(
+        h.fixture.workspace.clone(),
+        h.fixture.store(),
+        h.execution.clone(),
+        Arc::new(UnavailableIssueWorkSteering),
+    );
+    let context = StoredCommandContext {
+        human_confirmation: None,
+        caller: Some("test".into()),
+        channel: "test".into(),
+        at: "2026-11-21T00:00:00Z".into(),
+    };
+    let request = |id: &str, action| IssueInterventionRequest {
+        command_id: id.into(),
+        issue: h.fixture.reference("I_001"),
+        action,
+    };
+    service
+        .intervene(
+            request("hold-before-dispatch", IssueInterventionAction::Hold),
+            &context,
+        )
+        .unwrap();
+    h.tick(true).unwrap();
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
+    service
+        .intervene(
+            request("release-before-dispatch", IssueInterventionAction::Release),
+            &context,
+        )
+        .unwrap();
+    h.tick(true).unwrap();
+    assert_eq!(
+        h.decision().request.definition().basis.authorization_epoch,
+        2
+    );
+    assert_eq!(h.execution.state.lock().unwrap().grants.len(), 1);
+    h.answer("start");
+    h.tick(true).unwrap();
+    let renewed = h.work().unwrap();
+    assert_eq!(renewed.order, original.order);
+    assert_eq!(renewed.approved_basis, original.approved_basis);
+    assert_eq!(renewed.current_authorization_basis().authorization_epoch, 2);
+    assert_eq!(renewed.permit_authorization_epoch, 2);
+    assert_eq!(renewed.permit_source, original.permit_source);
+    assert!(renewed.permit_revision > original.permit_revision);
+
+    let reads = h.source.calls.load(Ordering::SeqCst);
+    h.execution.state.lock().unwrap().dispatch_source = Some("c".repeat(40));
+    h.tick(true).unwrap();
+
+    let after = h.work().unwrap();
+    assert_eq!(after.order, original.order);
+    assert_eq!(after.task_ids, original.task_ids);
+    assert_eq!(after.approved_basis, original.approved_basis);
+    assert_eq!(
+        after.current_authorization_basis(),
+        renewed.current_authorization_basis()
+    );
+    assert_eq!(after.permit_authorization_epoch, 2);
+    assert_eq!(after.permit_source, Some("c".repeat(40)));
+    assert_eq!(after.permit_revision, renewed.permit_revision + 1);
+    assert_eq!(h.source.calls.load(Ordering::SeqCst), reads + 1);
+    let state = h.execution.state.lock().unwrap();
+    assert_eq!(state.registrations, 1);
+    assert_eq!(state.grants.len(), 3);
+    let grant = state.grants.last().unwrap();
+    assert_eq!(grant.authorization_epoch, 2);
+    assert_eq!(&grant.approval, renewed.current_authorization_basis());
+    assert!(!grant.delivery);
+}
