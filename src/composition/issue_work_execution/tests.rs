@@ -13,6 +13,7 @@ const STAMP: &str = "2026-11-21T00:00:00Z";
 
 fn basis() -> PlanningWorkPermitBasis {
     PlanningWorkPermitBasis {
+        authorization_epoch: 3,
         policy_version: "p".repeat(64),
         field_hash: format!("v1:{}", "f".repeat(64)),
         gate_revision: 7,
@@ -115,6 +116,7 @@ fn saved_dispatch_basis_does_not_hide_a_changed_pre_dispatch_source() {
         assert_eq!(result.dispatch_source, Some("c".repeat(40)));
         assert_eq!(result.saved_source, Some("a".repeat(40)));
         assert_eq!(result.saved_gate_revision, 7);
+        assert_eq!(result.saved_authorization_epoch, 3);
         assert!(result.frozen_source.is_none());
     }
 }
@@ -139,6 +141,7 @@ fn assigned_work_never_fetches_a_new_dispatch_base_even_before_running() {
         assert!(result.frozen_source.is_none());
         assert_eq!(result.saved_source, Some("a".repeat(40)));
         assert_eq!(result.saved_gate_revision, 7);
+        assert_eq!(result.saved_authorization_epoch, 3);
     }
 }
 
@@ -200,6 +203,7 @@ fn unregistered_work_reads_the_dispatch_source_without_task_authority() {
     assert_eq!(calls.get(), 1);
     assert_eq!(result.dispatch_source, Some("a".repeat(40)));
     assert!(result.saved_source.is_none());
+    assert_eq!(result.saved_authorization_epoch, 0);
 }
 
 #[test]

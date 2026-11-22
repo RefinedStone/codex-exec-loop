@@ -312,7 +312,7 @@ impl IssueCoordinatorService {
         } else {
             Default::default()
         };
-        let action = next_action(IssueCoordinatorInput {
+        let mut action = next_action(IssueCoordinatorInput {
             authorization_epoch: control.authorization_epoch,
             state: tracked.state,
             flags: tracked.flags,
@@ -322,6 +322,24 @@ impl IssueCoordinatorService {
             frozen_source: execution.frozen_source.as_deref(),
             now_unix_ms,
         });
+        if action == IssueCoordinatorAction::None
+            && !matches!(
+                tracked.state,
+                IssueAutomationState::Done | IssueAutomationState::Cancelled
+            )
+            && let Some(work) = &work
+            && work.current_authorization_basis() == &basis
+            && ready_for_propose(&assessment)
+            && decision.is_some_and(|decision| human_start(&decision.request))
+            && execution.frozen_source.is_none()
+            && execution
+                .dispatch_source
+                .as_ref()
+                .is_some_and(|source| work.permit_source.as_ref() != Some(source))
+        {
+            // 배정 전 base가 바뀌면 같은 작업을 기존의 원격 재조회/승인 검사 경로로 보낸다.
+            action = IssueCoordinatorAction::SubmitWork;
+        }
         match action {
             IssueCoordinatorAction::OpenDecision => {
                 let definition = start_definition(&item.issue, basis)?;
@@ -515,9 +533,9 @@ impl IssueCoordinatorService {
             snapshot
                 .frozen_source
                 .clone()
+                .or(snapshot.dispatch_source.clone())
                 .or(snapshot.saved_source.clone())
                 .or_else(|| work.permit_source.clone())
-                .or(snapshot.dispatch_source.clone())
         });
         let delivery = execution
             .as_ref()
