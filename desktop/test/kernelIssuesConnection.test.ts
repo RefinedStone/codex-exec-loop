@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView, type IssueConfirmationBridge } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
-import type { IssueEventReference } from "../src/renderer/kernel/protocol";
+import type { IssueAutomationAnswer, IssueAutonomyLevel, IssueAutonomyState, IssueEventReference } from "../src/renderer/kernel/protocol";
 import type { ConfirmIssueAutomationModeRequest, IssueConfirmationResponse } from "../src/shared/issueConfirmation";
 
 interface Sent {
@@ -15,7 +15,7 @@ interface Sent {
   };
 }
 
-function automation(revision = 7, mode: "off" | "observe" = "observe") {
+function automation(revision = 7, mode: "off" | "observe" = "observe"): Extract<IssueAutomationAnswer, { status: "ready" }> {
   return {
     type: "issue_automation", status: "ready", mode, epoch: 1, revision,
     binding_id: null, binding: null, collecting: false, next_poll_after_ms: 300_000,
@@ -1132,7 +1132,7 @@ describe("issue kernel connection", () => {
 });
 
 
-function autonomyState(level: "off" | "observe" | "propose" = "observe") {
+function autonomyState(level: IssueAutonomyLevel = "observe"): Extract<IssueAutonomyState, { status: "ready" }> {
   return {
     status: "ready" as const, requested_level: level, effective_level: level, cap: "propose" as const,
     revision: 1, policy_version: "runtime-policy-1", pending: false,
@@ -1171,7 +1171,7 @@ async function selectInteraction(h: ReturnType<typeof harness>) {
   await selected;
 }
 
-async function completeInteractionRefresh(h: ReturnType<typeof harness>, before: number, state = { ...automation(), autonomy: autonomyState() }) {
+async function completeInteractionRefresh(h: ReturnType<typeof harness>, before: number, state: Extract<IssueAutomationAnswer, { status: "ready" }> = { ...automation(), autonomy: autonomyState() }) {
   await h.when(() => h.queries("issues").length > before);
   h.answerIssueReads(issuePage(), state);
   if (h.view().issues.selectedIssue) h.reply(h.query("issue"), interactionDetail());
@@ -1184,8 +1184,30 @@ function deferredValue<T>() {
 }
 
 describe("issue decisions and interventions", () => {
+  it("accepts policy-inherited autonomy when the wire response omits requested_level", async () => {
+    const h = harness();
+    const { requested_level: _requested, ...inherited } = autonomyState();
+    const state = { ...automation(), autonomy: inherited };
+    await h.openIssues(issuePage(), state);
+    expect(Object.hasOwn(inherited, "requested_level")).toBe(false);
+    expect(h.view().issues.automation).toEqual(state);
+    expect(h.view().issues.error).toBeNull();
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it.each(["unavailable", "policy_blocked"] as const)("accepts the generated %s autonomy state without a reason field", async (status) => {
+    const h = harness();
+    const autonomy: IssueAutonomyState = { status };
+    const state = { ...automation(), autonomy };
+    await h.openIssues(issuePage(), state);
+    expect(h.view().issues.automation).toEqual(state);
+    expect(h.view().issues.error).toBeNull();
+    await h.connection.setIssueAutonomy("propose");
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
   it("cancels a native decision without any kernel write", async () => {
-    const confirmation = vi.fn(async () => ({ cancelled: true as const }));
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: true as const }));
     const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
     await h.openIssues();
     await selectInteraction(h);
@@ -1198,7 +1220,7 @@ describe("issue decisions and interventions", () => {
 
   it("allows only one native decision submission while a click is pending", async () => {
     const native = deferredValue<IssueConfirmationResponse>();
-    const confirmation = vi.fn(() => native.promise);
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(() => native.promise);
     const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
     await h.openIssues();
     await selectInteraction(h);
@@ -1215,7 +1237,7 @@ describe("issue decisions and interventions", () => {
   });
 
   it("re-reads after an unknown confirmation outcome without replaying the answer", async () => {
-    const confirmation = vi.fn(async () => ({ cancelled: false as const, outcome: "unknown" as const }));
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: false as const, outcome: "unknown" as const }));
     const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
     await h.openIssues();
     await selectInteraction(h);
@@ -1229,7 +1251,7 @@ describe("issue decisions and interventions", () => {
   });
 
   it("cannot answer a removed, foreign, or stale decision", async () => {
-    const confirmation = vi.fn(async () => ({ cancelled: true as const }));
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: true as const }));
     const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
     await h.openIssues();
     await selectInteraction(h);
@@ -1245,7 +1267,7 @@ describe("issue decisions and interventions", () => {
   });
 
   it("uses a native confirmation for an enabled rise and refuses a disabled cap choice", async () => {
-    const confirmation = vi.fn(async () => ({ cancelled: true as const }));
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueAutonomy"]>>(async () => ({ cancelled: true as const }));
     const h = harness({ confirmations: { confirmIssueAutonomy: confirmation } });
     const autonomy = autonomyState();
     await h.openIssues(issuePage(), { ...automation(), autonomy });
@@ -1304,7 +1326,7 @@ describe("issue decisions and interventions", () => {
 
 
   it("re-reads a changed autonomy cap after confirmation failure without another submission", async () => {
-    const confirmation = vi.fn(async () => ({
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueAutonomy"]>>(async () => ({
       cancelled: false as const,
       response: { processed: false, failure: "자율 수준 상한이 확인 중 바뀌었습니다." },
     }));
@@ -1312,7 +1334,7 @@ describe("issue decisions and interventions", () => {
     await h.openIssues(issuePage(), { ...automation(), autonomy: autonomyState() });
     const before = h.queries("issues").length;
     const changed = h.connection.setIssueAutonomy("propose");
-    const fresh = {
+    const fresh: Extract<IssueAutonomyState, { status: "ready" }> = {
       ...autonomyState(), cap: "observe" as const, revision: 2, policy_version: "runtime-policy-2",
       choices: autonomyState().choices.map((choice) => ({
         ...choice, enabled: choice.level !== "propose", reason: choice.level === "propose" ? "현재 정책 상한입니다." : null,
@@ -1329,7 +1351,7 @@ describe("issue decisions and interventions", () => {
   });
 
   it.each(["steer", "confirmation"] as const)("retains an Unknown %s notice across same-kernel reconnect without replay", async (kind) => {
-    const confirmation = vi.fn(async () => ({ cancelled: false as const, outcome: "unknown" as const }));
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => ({ cancelled: false as const, outcome: "unknown" as const }));
     const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
     await h.openIssues();
     await selectInteraction(h);
