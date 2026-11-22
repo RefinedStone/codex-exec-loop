@@ -65,9 +65,10 @@ function reviewForm(review: VaultReconnectReview): HTMLElement[] {
     }
     return fieldset;
   });
-  const confirm = button("고른 표식 재연결", "vault-reconnect-confirm", () =>
-    bridge.reconnect([...choices.values()].filter((mapping) => mapping !== null)),
-  );
+  const confirm = button("고른 표식 재연결", "vault-reconnect-confirm", () => {
+    confirm.disabled = true;
+    bridge.reconnect([...choices.values()].filter((mapping) => mapping !== null));
+  });
   return [
     ...section("지금 공유본 · 제목", review.publishedTitle, "vault-review-title"),
     ...section("지금 공유본 · 본문", review.publishedBody, "vault-review-body"),

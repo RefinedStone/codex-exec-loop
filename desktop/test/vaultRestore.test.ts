@@ -172,7 +172,7 @@ describe("VaultRestoreSession", () => {
   it("keeps the session for a reconnect review when the published copy changed", async () => {
     const restore = vi
       .fn<VaultRestoreChannel["restore"]>()
-      .mockResolvedValueOnce({ kind: "held", reason: "marker_duplicated" })
+      .mockResolvedValueOnce({ kind: "held", reason: "marker_duplicated", canReconnect: true })
       .mockResolvedValueOnce(RESTORED);
     const channel = fakeChannel({ restore });
     const { session, last } = setup({}, channel);
@@ -202,7 +202,7 @@ describe("VaultRestoreSession", () => {
     ["one marker twice", [{ marker: "[[akra:mask:1]]", field: "body", position: 7 }, { marker: "[[akra:mask:1]]", field: "body", position: 27 }]],
     ["a value that is not a list", "all"],
   ])("rejects an approval with %s", async (_name, mappings) => {
-    const channel = fakeChannel({ restore: vi.fn(() => Promise.resolve({ kind: "held" as const, reason: "published_copy_changed" as const })) });
+    const channel = fakeChannel({ restore: vi.fn(() => Promise.resolve({ kind: "held" as const, reason: "published_copy_changed" as const, canReconnect: true })) });
     const { session, last } = setup({}, channel);
     await session.unlock();
     await session.requestReview();
@@ -214,7 +214,7 @@ describe("VaultRestoreSession", () => {
 
   it("drops a late review reply after a lock", async () => {
     const reply = deferred<{ kind: "review"; review: VaultReconnectReview }>();
-    const restore = vi.fn(() => Promise.resolve({ kind: "held" as const, reason: "marker_moved" as const }));
+    const restore = vi.fn(() => Promise.resolve({ kind: "held" as const, reason: "marker_moved" as const, canReconnect: true }));
     const { session, last } = setup({}, fakeChannel({ restore, review: vi.fn(() => reply.promise) }));
     await session.unlock();
     const pending = session.requestReview();
@@ -378,5 +378,131 @@ describe("bound restore target", () => {
     Object.assign(value.issue.project_scope, { workspace_dir: "C:/other" });
     Object.assign(value.issue, { issue_id: "I_other" });
     expect(copy).toEqual(TARGET);
+  });
+});
+
+
+describe("single native reconnect session", () => {
+  function changedChannel(overrides: Partial<VaultRestoreChannel> = {}) {
+    return fakeChannel({
+      restore: vi.fn<VaultRestoreChannel["restore"]>()
+        .mockResolvedValueOnce({ kind: "held", reason: "marker_moved", canReconnect: true })
+        .mockResolvedValue(RESTORED),
+      ...overrides,
+    });
+  }
+  it("requires explicit per-reply reconnect permission even from a capable channel", async () => {
+    const channel = changedChannel({ restore: vi.fn<VaultRestoreChannel["restore"]>(async () => ({ kind: "held", reason: "marker_moved" })) });
+    const { session, last } = setup({}, channel);
+    await session.unlock();
+    expect(last()).toEqual({ phase: "held", reason: "marker_moved" });
+    await session.requestReview();
+    expect(channel.review).not.toHaveBeenCalled();
+    expect(channel.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs only one review and one reconnect despite duplicate and out-of-order requests", async () => {
+    const reviewing = deferred<{ kind: "review"; review: VaultReconnectReview }>();
+    const reconnecting = deferred<{ kind: "reconnected" }>();
+    const channel = changedChannel({
+      review: vi.fn(() => reviewing.promise), reconnect: vi.fn(() => reconnecting.promise),
+    });
+    const { session, last } = setup({}, channel);
+    await session.unlock();
+    await session.reconnect([]);
+    expect(channel.reconnect).not.toHaveBeenCalled();
+    const reviewPending = session.requestReview();
+    await session.requestReview();
+    await session.reconnect([]);
+    expect(channel.review).toHaveBeenCalledTimes(1);
+    expect(last()).toEqual({ phase: "reviewing" });
+    reviewing.resolve({ kind: "review", review: REVIEW });
+    await reviewPending;
+    const writePending = session.reconnect([]);
+    await session.reconnect([]);
+    await session.requestReview();
+    expect(channel.reconnect).toHaveBeenCalledTimes(1);
+    expect(channel.reconnect).toHaveBeenCalledWith(REVIEW.reviewedHash, []);
+    expect(channel.review).toHaveBeenCalledTimes(1);
+    expect(last()).toEqual({ phase: "reconnecting" });
+    reconnecting.resolve({ kind: "reconnected" });
+    await writePending;
+    expect(last()?.phase).toBe("restored");
+    await session.requestReview();
+    await session.reconnect([]);
+    expect(channel.reconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a final changed-copy hold even if a faulty channel offers it", async () => {
+    const channel = changedChannel({ restore: vi.fn<VaultRestoreChannel["restore"]>(async () => ({ kind: "held", reason: "marker_missing", canReconnect: true })) });
+    const { session, last } = setup({}, channel);
+    await session.unlock();
+    await session.requestReview();
+    await session.reconnect([]);
+    expect(last()).toEqual({ phase: "held", reason: "marker_missing" });
+    await session.requestReview();
+    expect(channel.review).toHaveBeenCalledTimes(1);
+    expect(channel.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["os_lock", "renderer_changed", "project_switch", "session_expired"] as const)(
+    "drops late reconnect success and does not read plaintext after %s", async (cause) => {
+      const reconnecting = deferred<{ kind: "reconnected" }>();
+      const channel = changedChannel({ reconnect: vi.fn(() => reconnecting.promise) });
+      const { session, last } = setup({}, channel);
+      await session.unlock();
+      await session.requestReview();
+      const pending = session.reconnect([]);
+      session.lock(cause);
+      reconnecting.resolve({ kind: "reconnected" });
+      await pending;
+      expect(last()).toEqual({ phase: "locked", cause });
+      expect(channel.restore).toHaveBeenCalledTimes(1);
+      expect(channel.close).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not extend the original deadline while waiting for rewrite confirmation", async () => {
+    let now = 0;
+    const reconnecting = deferred<{ kind: "reconnected" }>();
+    const channel = changedChannel({ reconnect: vi.fn(() => reconnecting.promise) });
+    const { session, last } = setup({ now: () => now }, channel);
+    await session.unlock();
+    await session.requestReview();
+    const pending = session.reconnect([]);
+    now = 1_001;
+    reconnecting.resolve({ kind: "reconnected" });
+    await pending;
+    expect(last()).toEqual({ phase: "locked", cause: "session_expired" });
+    expect(channel.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an uncertain write terminal and asks the user to reopen without an automatic retry", async () => {
+    const channel = changedChannel({ reconnect: vi.fn<VaultRestoreChannel["reconnect"]>(async () => ({ kind: "held", reason: "write_outcome_unknown" })) });
+    const { session, last } = setup({}, channel);
+    await session.unlock();
+    await session.requestReview();
+    await session.reconnect([]);
+    expect(last()).toEqual({ phase: "held", reason: "write_outcome_unknown" });
+    expect(vaultRestoreView(last()!).actions).toEqual(["unlock"]);
+    expect(vaultRestoreView(last()!).detail).toContain("완료됐을 수");
+    await session.reconnect([]);
+    await session.requestReview();
+    expect(channel.reconnect).toHaveBeenCalledTimes(1);
+    expect(channel.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the session if the execution profile changes during rewrite confirmation", async () => {
+    let hold: VaultRestoreHold | null = null;
+    const channel = changedChannel({ reconnect: vi.fn<VaultRestoreChannel["reconnect"]>(async () => {
+      hold = "agent_working";
+      return { kind: "reconnected" };
+    }) });
+    const { session, last } = setup({ profileHold: () => hold }, channel);
+    await session.unlock();
+    await session.requestReview();
+    await session.reconnect([]);
+    expect(last()).toEqual({ phase: "held", reason: "agent_working" });
+    expect(channel.restore).toHaveBeenCalledTimes(1);
   });
 });

@@ -110,13 +110,15 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
   for a `github.com` issue URL plus its full stable coordinates and workspace, and to lock it.
 - **Plaintext path.** Restored text goes from main to this window only, on the dedicated state
   channel. It does not use the Gateway or the kernel protocol. Main does not persist the text or put it in general-window state. The screen writes the text with `textContent` (no Markdown, no HTML).
-- **Local read-only source.** `vaultRestoreSource.ts` launches `akra-gateway desktop-restore-bridge`
-  over inherited stdin/stdout. The helper binds one prepare/restore session to the URL, stable
-  issue coordinates, and canonical primary checkout. It reads existing records on macOS/Linux;
-  Windows returns `platform_unsupported` before provider, key, or Vault access. The channel does
-  not create keys, write records, or restore a remote Gateway host's Vault.
+- **Local native source.** `vaultRestoreSource.ts` launches `akra-gateway desktop-restore-bridge`
+  over inherited stdin/stdout. Protocol v2 binds one viewing and optional reconnect session to the
+  URL, stable issue coordinates, and canonical primary checkout. It reads existing records on
+  macOS/Linux and updates a binding only after a separate native write confirmation. Windows
+  returns `platform_unsupported` before provider, key, or Vault access. The channel does not create
+  keys or Vault roots and does not restore a remote Gateway host's Vault.
 - **User confirmation.** The helper itself shows a native OS dialog with cancel as the default.
-  No request field can supply an approval result. macOS uses the trusted system `osascript`;
+  Viewing and `RewriteBinding` use separate confirmations. No request field can supply an approval
+  result or replace the helper-owned original review. macOS uses the trusted system `osascript`;
   Linux requires a trusted system `zenity`. Missing native support holds viewing. Main checks the
   execution profile and session generation before preparation, after confirmation, and before
   displaying a restored response. After each lock a new confirmation is necessary.
@@ -125,18 +127,29 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
   server, windows are hidden for tests, or a turn runs in a window of this app (the default agent
   profile has a general shell). Turns of other clients and of background workers are not seen by
   this check.
-- **Re-lock.** The window locks again when the user locks it, the window closes, hides, or reloads,
-  the viewing session ends (5 minutes), the OS screen locks, the system suspends, the opener window
-  changes its project folder or closes, or a turn starts. A lock closes the restore channel, drops
-  late replies (generation check), and replaces the DOM.
-- **Reconnect support.** The native source advertises `reconnect: false`. A changed published copy
-  holds viewing and shows no reconnect action. The existing service-level reconnect and review
-  contracts use the [atomic binding store](./evidence-vault-bindings.md). Wiring that storage
-  operation into the native helper and the dedicated window remains separate work.
+- **Re-lock.** The window locks again when the user locks it, the window closes, hides, reloads,
+  navigates, or loses its renderer, the viewing session ends (5 minutes), the OS screen locks, the
+  system suspends, the opener changes project or ends its renderer lifetime, or a turn starts.
+  Lifecycle invalidation closes the channel immediately and makes the target inactive; a fresh
+  open request with current full coordinates must reactivate it. Late replies are dropped by the
+  generation check and the DOM is replaced. Review and write confirmation do not extend the deadline.
+- **Reconnect support.** A prepared v2 helper advertises reconnect support. Only its first
+  changed-copy or marker hold may return `can_reconnect: true`. The dedicated window requests a
+  review, selects marker candidates, and sends the exact reviewed hash and mappings. The helper
+  keeps the original review and grant, obtains separate native write confirmation, rechecks the
+  latest copy and local binding, and commits through the [atomic binding store](./evidence-vault-bindings.md).
+  One final restore follows; later holds are terminal even if their reason describes a changed copy.
+  Duplicate or out-of-order requests do not repeat the operation.
+- **Write cancellation.** A one-shot gate immediately before `binding.commit` shares the session
+  state mutex with cancellation. Cancellation before admission writes nothing. After admission,
+  the atomic write may complete while the channel and late plaintext are discarded.
+  `write_outcome_unknown` is a terminal result: reopen to inspect the current binding rather than
+  automatically resending. A changed remote copy or local binding requires a new review.
 - **Limits.** Content protection (`setContentProtection`) is requested, but Akra does not guarantee
   that capture is blocked (it has no effect on Linux). Selection and copy by the user are possible.
   The window has no print and no find function. The limits in
   [Protection limits](#protection-limits) apply.
 
-The [native restore validation record](../validation/desktop-vault-native-restore.md) separates
-synthetic protocol/UI tests from the unperformed real OS-dialog plus key-store round trip.
+The [original native read validation](../validation/desktop-vault-native-restore.md) and
+[native reconnect validation](../validation/desktop-vault-native-reconnect.md) distinguish synthetic
+protocol/UI tests from the unperformed real OS-dialog plus key-store round trip.

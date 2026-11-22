@@ -1,5 +1,9 @@
 use super::*;
-use crate::application::port::inbound::vault_restore_session_port::MAX_VIEWING_SESSION as SESSION_LIFETIME;
+use crate::application::port::inbound::vault_restore_session_port::{
+    MAX_VIEWING_SESSION as SESSION_LIFETIME, VaultRestoreSessionFailure, VaultRestoreSessionHold,
+    VaultRestoreSessionPrepared,
+};
+mod reconnect;
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultKey, VaultPlaintext, VaultRecordLoadRequest,
     VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
@@ -12,7 +16,8 @@ use crate::application::port::outbound::vault_key_store_port::{
     VaultKeyStoreError, VaultKeyStorePort,
 };
 use crate::application::port::outbound::vault_native_confirmation_port::{
-    VaultNativeConfirmationOutcome, VaultNativeConfirmationPort, VaultNativeConfirmationRequest,
+    VaultNativeConfirmationOutcome, VaultNativeConfirmationPort, VaultNativeConfirmationPurpose,
+    VaultNativeConfirmationRequest,
 };
 use crate::application::port::outbound::vault_restore_workspace_port::{
     VaultRestoreWorkspaceError, VaultRestoreWorkspacePort,
@@ -87,6 +92,9 @@ struct Records {
     values: Mutex<HashMap<VaultRecordScope, VaultPlaintext>>,
     writes: AtomicUsize,
     corrupt: AtomicBool,
+    write_gate: Mutex<Option<Arc<Gate>>>,
+    lose_commit_reply: AtomicBool,
+    commits: AtomicUsize,
 }
 impl EvidenceVaultStorePort for Records {
     fn begin_binding(
@@ -107,10 +115,21 @@ impl EvidenceVaultStorePort for Records {
             request,
             crate::test_utils::vault_binding::TestBindingHooks {
                 before_write: Some(Box::new(|_| {
+                    let gate = self.write_gate.lock().unwrap().clone();
+                    if let Some(gate) = gate {
+                        gate.wait();
+                    }
                     self.writes.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 })),
-                after_pointer: None,
+                after_pointer: Some(Box::new(|| {
+                    self.commits.fetch_add(1, Ordering::SeqCst);
+                    if self.lose_commit_reply.swap(false, Ordering::SeqCst) {
+                        Err(VaultStoreError::WriteOutcomeUnknown)
+                    } else {
+                        Ok(())
+                    }
+                })),
             },
         )
     }
@@ -174,16 +193,26 @@ struct Confirmation {
     calls: AtomicUsize,
     outcome: VaultNativeConfirmationOutcome,
     gate: Option<Arc<Gate>>,
+    purposes: Mutex<Vec<VaultNativeConfirmationPurpose>>,
+    write_outcome: Mutex<Option<VaultNativeConfirmationOutcome>>,
+    write_gate: Mutex<Option<Arc<Gate>>>,
 }
 impl VaultNativeConfirmationPort for Confirmation {
     fn confirm(
         &self,
-        _: &VaultNativeConfirmationRequest,
+        request: &VaultNativeConfirmationRequest,
         cancelled: &AtomicBool,
         deadline: Instant,
     ) -> VaultNativeConfirmationOutcome {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(gate) = &self.gate {
+        self.purposes.lock().unwrap().push(request.purpose);
+        let write = request.purpose == VaultNativeConfirmationPurpose::RewriteBinding;
+        let gate = if write {
+            self.write_gate.lock().unwrap().clone()
+        } else {
+            self.gate.clone()
+        };
+        if let Some(gate) = &gate {
             gate.started.notify_one();
             while !gate.released.load(Ordering::SeqCst)
                 && !cancelled.load(Ordering::SeqCst)
@@ -194,6 +223,8 @@ impl VaultNativeConfirmationPort for Confirmation {
         }
         if cancelled.load(Ordering::SeqCst) || Instant::now() >= deadline {
             VaultNativeConfirmationOutcome::Cancelled
+        } else if write {
+            self.write_outcome.lock().unwrap().unwrap_or(self.outcome)
         } else {
             self.outcome
         }
@@ -236,6 +267,9 @@ impl Fixture {
                 calls: AtomicUsize::new(0),
                 outcome,
                 gate,
+                purposes: Mutex::new(Vec::new()),
+                write_outcome: Mutex::new(None),
+                write_gate: Mutex::new(None),
             }),
         }
     }
@@ -338,14 +372,14 @@ fn seed(
 }
 fn prepare_request() -> Value {
     json!({
-        "version": 1, "id": "test-session", "command": "prepare",
+        "version": 2, "id": "test-session", "command": "prepare",
         "issue_url": "https://github.com/acme/project/issues/1",
         "issue": { "provider": "github", "server_id": "github.com", "repository_id": "R_1", "issue_id": "I_1",
             "project_scope": { "workspace_dir": "/work/project" } }
     })
 }
 fn restore_request() -> Value {
-    json!({"version":1,"id":"test-session","command":"restore"})
+    json!({"version":2,"id":"test-session","command":"restore"})
 }
 async fn run_test_io<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     input: R,
@@ -511,9 +545,11 @@ async fn remote_edit_after_native_confirmation_holds_without_reconnecting() {
         .push_str(" changed remotely");
     send(&mut client, &restore_request()).await;
     assert_eq!(
-        response(&mut client).await["result"]["reason"],
-        "published_copy_changed"
+        response(&mut client).await["result"],
+        json!({"kind":"held","reason":"published_copy_changed","can_reconnect":true})
     );
+    client.get_mut().shutdown().await.unwrap();
+    no_more_output(&mut client).await;
     task.await.unwrap().unwrap();
     assert_eq!(fixture.records.writes.load(Ordering::SeqCst), writes);
 }
@@ -619,7 +655,7 @@ async fn corrupted_record_returns_only_a_fixed_hold() {
     let output = response(&mut client).await;
     assert_eq!(
         output["result"],
-        json!({"kind":"held","reason":"record_unavailable"})
+        json!({"kind":"held","reason":"record_unavailable","can_reconnect":false})
     );
     task.await.unwrap().unwrap();
 }
@@ -627,20 +663,23 @@ async fn corrupted_record_returns_only_a_fixed_hold() {
 #[test]
 fn protected_frame_is_bounded_after_json_escaping() {
     let oversized = "\0".repeat(protocol::MAX_OUTPUT_BYTES / 3);
-    let encoded = protocol::encode(
-        "test",
-        Reply::Restored {
-            title: "",
-            body: &oversized,
-        },
-    )
-    .unwrap();
-    let value: Value = serde_json::from_slice(&encoded).unwrap();
+    let encoded = protocol::OutputBudget::new()
+        .encode(
+            "test",
+            Reply::Restored {
+                title: "",
+                body: &oversized,
+            },
+            true,
+        )
+        .unwrap();
+    let value: Value = serde_json::from_slice(&encoded.bytes).unwrap();
     assert_eq!(
         value["result"],
-        json!({"kind":"held","reason":"source_unavailable"})
+        json!({"kind":"held","reason":"source_unavailable","can_reconnect":false})
     );
-    assert!(encoded.len() < 200);
+    assert!(encoded.bytes.len() < 200);
+    assert!(encoded.terminal);
 }
 
 #[tokio::test]
@@ -738,7 +777,10 @@ fn direct_port_cannot_restore_before_native_prepare() {
     let port = session_port(&fixture);
     assert!(matches!(
         port.restore(),
-        Err(VaultRestoreSessionHold::Locked)
+        Err(VaultRestoreSessionFailure {
+            reason: VaultRestoreSessionHold::Locked,
+            can_reconnect: false
+        })
     ));
     fixture.assert_no_key_access();
     assert_eq!(fixture.remote.resolves.load(Ordering::SeqCst), 0);
@@ -749,7 +791,10 @@ fn direct_port_cannot_restore_before_native_prepare() {
 fn direct_port_prepares_once_consumes_restore_once_and_remains_live_for_output() {
     let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
     let port = session_port(&fixture);
-    assert_eq!(port.prepare(session_request()), Ok(()));
+    assert_eq!(
+        port.prepare(session_request()),
+        Ok(VaultRestoreSessionPrepared { reconnect: true })
+    );
     let mut other_target = session_request();
     other_target.issue_url = "https://github.com/other/project/issues/2".into();
     other_target.issue.repository_id = "R_other".into();
@@ -768,7 +813,10 @@ fn direct_port_prepares_once_consumes_restore_once_and_remains_live_for_output()
     let loads = fixture.keys.loads.load(Ordering::SeqCst);
     assert!(matches!(
         port.restore(),
-        Err(VaultRestoreSessionHold::Locked)
+        Err(VaultRestoreSessionFailure {
+            reason: VaultRestoreSessionHold::Locked,
+            can_reconnect: false
+        })
     ));
     assert_eq!(
         port.prepare(session_request()),
@@ -782,7 +830,10 @@ fn direct_port_prepares_once_consumes_restore_once_and_remains_live_for_output()
 fn direct_port_cancel_after_prepare_rejects_every_later_entry() {
     let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
     let port = session_port(&fixture);
-    assert_eq!(port.prepare(session_request()), Ok(()));
+    assert_eq!(
+        port.prepare(session_request()),
+        Ok(VaultRestoreSessionPrepared { reconnect: true })
+    );
     port.cancel();
     assert!(!port.is_live());
     assert_eq!(
@@ -791,7 +842,10 @@ fn direct_port_cancel_after_prepare_rejects_every_later_entry() {
     );
     assert!(matches!(
         port.restore(),
-        Err(VaultRestoreSessionHold::Locked)
+        Err(VaultRestoreSessionFailure {
+            reason: VaultRestoreSessionHold::Locked,
+            can_reconnect: false
+        })
     ));
     fixture.assert_no_key_access();
     assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 1);
@@ -821,7 +875,10 @@ fn direct_port_validates_target_without_trusting_the_protocol_adapter() {
         );
         assert!(matches!(
             port.restore(),
-            Err(VaultRestoreSessionHold::Locked)
+            Err(VaultRestoreSessionFailure {
+                reason: VaultRestoreSessionHold::Locked,
+                can_reconnect: false
+            })
         ));
         fixture.assert_no_key_access();
         assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 0);
@@ -840,7 +897,10 @@ fn direct_port_caps_the_deadline_and_rejects_expired_requests() {
     );
     assert!(matches!(
         expired.restore(),
-        Err(VaultRestoreSessionHold::Locked)
+        Err(VaultRestoreSessionFailure {
+            reason: VaultRestoreSessionHold::Locked,
+            can_reconnect: false
+        })
     ));
     fixture.assert_no_key_access();
     assert_eq!(fixture.confirmation.calls.load(Ordering::SeqCst), 0);
@@ -902,7 +962,10 @@ async fn direct_port_cancellation_does_not_wait_for_prompt_or_revive_late_approv
     );
     assert!(matches!(
         port.restore(),
-        Err(VaultRestoreSessionHold::Locked)
+        Err(VaultRestoreSessionFailure {
+            reason: VaultRestoreSessionHold::Locked,
+            can_reconnect: false
+        })
     ));
     fixture.assert_no_key_access();
 }

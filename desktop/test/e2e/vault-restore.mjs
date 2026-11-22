@@ -1,6 +1,7 @@
 // 화면 시험 (#2427): 로컬 복원본 창을 열고, 자동화로 실행한 앱에서는 열람을 보류하는지, 그 창이 일반 표면과 나뉘어
 // 있는지 확인한다. Playwright 프로필에서는 실제 native 복원이 차단된다. 별도로 main 시험 harness가 보낸
-// synthetic restored state로 전용 화면의 평문 표시/삭제만 확인하며, native 승인 성공으로 취급하지 않는다.
+// synthetic restored/review state로 평문 표시·삭제, 후보 선택·단회 전송, 재연결 진행·결과 미확정 안내와
+// 창 reload 시 잠금·대상 수명을 확인하며, native 승인 성공으로 취급하지 않는다.
 // 실제 codex, 턴, 키 저장소, GitHub 는 쓰지 않는다 (가짜 Gateway). userData 는 임시 폴더를 쓴다.
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -101,6 +102,64 @@ try {
   await restore.locator('#root[data-phase="held"]').waitFor();
   check("unsupported reconnect is absent from the dedicated screen", await restore.getByTestId("vault-restore-review").count() === 0
     && (await restore.getByTestId("vault-restore-detail").textContent()).includes("재연결을 지원하지 않습니다"));
+
+  // 화면만 검증하는 재연결 fixture다. 실제 native 쓰기 확인으로 간주하지 않는다.
+  const reviewText = "합성 공유본 <img src=x onerror=alert(1)> [[mask]]";
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.__vaultReconnectSelections = [];
+    ipcMain.on("akra-vault-restore:reconnect", (_event, mappings) => {
+      globalThis.__vaultReconnectSelections.push(mappings);
+    });
+  });
+  await showSynthetic({ phase: "review", review: {
+    reviewedHash: "1:" + "a".repeat(64), publishedTitle: "<b>합성 검토 제목</b>", publishedBody: reviewText,
+    markers: [{ marker: "[[mask]]", previous: { field: "body", position: 300 },
+      candidates: [{ field: "body", position: 46, context: "<img src=x> [[mask]]" }] }],
+  } });
+  await restore.locator('#root[data-phase="review"]').waitFor();
+  check("synthetic review uses literal text and starts with no mapping selected",
+    await restore.getByTestId("vault-review-body").textContent() === reviewText
+    && await restore.locator("#root img, #root b").count() === 0
+    && await restore.locator('input[type="radio"]').first().isChecked());
+  await restore.locator('input[type="radio"]').nth(1).check();
+  await restore.getByTestId("vault-reconnect-confirm").evaluate((button) => { button.click(); button.click(); });
+  const selections = await app.evaluate(async () => {
+    for (let attempt = 0; attempt < 100 && globalThis.__vaultReconnectSelections.length === 0; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return globalThis.__vaultReconnectSelections;
+  });
+  check("one selected mapping is sent once while the confirmation button is disabled",
+    selections.length === 1 && selections[0].length === 1 && selections[0][0].marker === "[[mask]]"
+    && selections[0][0].field === "body" && selections[0][0].position === 46
+    && await restore.getByTestId("vault-reconnect-confirm").isDisabled());
+  await showSynthetic({ phase: "reconnecting" });
+  await restore.locator('#root[data-phase="reconnecting"]').waitFor();
+  check("rewrite confirmation state removes the selectable review",
+    await restore.getByTestId("vault-reconnect-confirm").count() === 0
+    && await restore.getByTestId("vault-restore-lock").count() === 1);
+  await showSynthetic({ phase: "held", reason: "write_outcome_unknown" });
+  await restore.locator('#root[data-phase="held"]').waitFor();
+  check("uncertain persistence offers reopen without a retry button",
+    (await restore.getByTestId("vault-restore-detail").textContent()).includes("완료됐을 수")
+    && await restore.getByTestId("vault-restore-unlock").count() === 1
+    && await restore.getByTestId("vault-reconnect-confirm").count() === 0);
+  await showSynthetic({ phase: "restored", ...synthetic, expiresAt: Date.now() + 60_000 });
+  await restore.getByTestId("vault-restored-body").waitFor();
+  await restore.reload();
+  await restore.locator('#root[data-phase="locked"]').waitFor();
+  check("dedicated reload clears synthetic plaintext before another unlock",
+    !(await restore.locator("body").textContent()).includes("synthetic-private-body"));
+  await restore.getByTestId("vault-restore-unlock").click();
+  await restore.locator('#root[data-phase="held"]').waitFor();
+  check("a reloaded dedicated window cannot reactivate its previous target",
+    (await restore.getByTestId("vault-restore-detail").textContent()).includes("복원 경로"));
+  await showSynthetic({ phase: "restored", ...synthetic, expiresAt: Date.now() + 60_000 });
+  await restore.getByTestId("vault-restored-body").waitFor();
+  await page.reload();
+  await restore.locator('#root[data-phase="locked"]').waitFor();
+  check("opener reload clears the dedicated synthetic plaintext",
+    !(await restore.locator("body").textContent()).includes("synthetic-private-body"));
 
   const protectedWindow = await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().filter((window) => window.webContents.getURL().endsWith("vault-restore.html")).map((window) => window.isContentProtected?.() ?? null),

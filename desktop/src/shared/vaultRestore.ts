@@ -34,13 +34,15 @@ export type VaultRestoreHold =
   | "marker_missing"
   | "changed_during_review"
   | "mapping_rejected"
-  | "record_unavailable";
+  | "record_unavailable"
+  | "write_outcome_unknown";
 
 /** 다시 잠근 이유이다. */
 export type VaultRelockCause =
   | "user"
   | "window_closed"
   | "window_hidden"
+  | "renderer_changed"
   | "session_expired"
   | "os_lock"
   | "suspend"
@@ -86,6 +88,8 @@ export type VaultRestoreViewState =
   /** `cause` 가 null 이면 아직 열지 않았다. */
   | { phase: "locked"; cause: VaultRelockCause | null }
   | { phase: "opening" }
+  | { phase: "reviewing" }
+  | { phase: "reconnecting" }
   | { phase: "held"; reason: VaultRestoreHold; canReconnect?: boolean }
   | { phase: "restored"; title: string; body: string; expiresAt: number }
   | { phase: "review"; review: VaultReconnectReview };
@@ -139,15 +143,17 @@ const HOLD_TEXT: Record<VaultRestoreHold, string> = {
   marker_moved: "가림 표식이 다른 자리로 옮겨졌습니다. 재연결 검토가 필요합니다.",
   marker_duplicated: "같은 가림 표식이 두 번 이상 있습니다. 재연결 검토가 필요합니다.",
   marker_missing: "가림 표식이 게시본에 없습니다. 재연결 검토가 필요합니다.",
-  changed_during_review: "검토하는 동안 게시본이 다시 바뀌었습니다. 재연결을 확정하지 않았습니다.",
+  changed_during_review: "검토하는 동안 게시본이나 로컬 연결이 바뀌었습니다. 재연결을 확정하지 않았습니다.",
   mapping_rejected: "승인한 연결이 지금 게시본과 맞지 않습니다. 재연결을 확정하지 않았습니다.",
   record_unavailable: "복원 기록을 읽거나 쓰지 못했습니다.",
+  write_outcome_unknown: "연결 저장이 완료됐을 수 있습니다. 다시 열어 결과를 확인하세요.",
 };
 
 const RELOCK_TEXT: Record<VaultRelockCause, string> = {
   user: "잠갔습니다.",
   window_closed: "창을 닫아서 잠갔습니다.",
   window_hidden: "창을 숨겨서 잠갔습니다.",
+  renderer_changed: "화면 연결이 바뀌어 잠갔습니다. 현재 이슈에서 다시 여세요.",
   session_expired: "열람 시간이 끝나서 잠갔습니다.",
   os_lock: "화면이 잠겨서 잠갔습니다.",
   suspend: "절전으로 들어가서 잠갔습니다.",
@@ -174,6 +180,10 @@ export function vaultRestoreView(state: VaultRestoreViewState): VaultRestoreView
       };
     case "opening":
       return { heading: "여는 중", detail: "사용자 확인과 최신 게시본 확인을 기다립니다.", actions: ["lock"] };
+    case "reviewing":
+      return { heading: "검토 준비 중", detail: "최신 공유본의 표식 위치를 확인하고 있습니다.", actions: ["lock"] };
+    case "reconnecting":
+      return { heading: "재연결 확인 중", detail: "운영체제 확인 창에서 고른 표식의 연결 변경을 확인하세요.", actions: ["lock"] };
     case "held":
       return {
         heading: "열람 보류",
@@ -234,4 +244,23 @@ function token(value: unknown): value is string {
 }
 function absoluteWorkspace(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value);
+}
+
+/** 전용 renderer의 선택만 복사한다. 추가 필드·중복·제시하지 않은 후보를 승인으로 보내지 않는다. */
+export function approvedVaultMappings(review: VaultReconnectReview, mappings: unknown): VaultApprovedMapping[] | null {
+  if (!Array.isArray(mappings) || mappings.length > review.markers.length) return null;
+  const offered = new Map(review.markers.map((marker) => [marker.marker, marker]));
+  const selected = new Set<string>();
+  const approved: VaultApprovedMapping[] = [];
+  for (const mapping of mappings) {
+    if (!record(mapping) || Object.keys(mapping).length !== 3 || !fields(mapping, ["marker", "field", "position"]) ||
+      typeof mapping.marker !== "string" || (mapping.field !== "title" && mapping.field !== "body") ||
+      typeof mapping.position !== "number" || !Number.isSafeInteger(mapping.position) || mapping.position < 0 ||
+      selected.has(mapping.marker)) return null;
+    const marker = offered.get(mapping.marker);
+    if (!marker?.candidates.some((place) => place.field === mapping.field && place.position === mapping.position)) return null;
+    selected.add(mapping.marker);
+    approved.push({ marker: mapping.marker, field: mapping.field, position: mapping.position });
+  }
+  return approved;
 }

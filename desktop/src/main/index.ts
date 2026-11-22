@@ -418,9 +418,15 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
   });
   // 접속은 renderer 가 수신 함수를 등록하고 `ready` 를 보낸 뒤에 연다 (아래 ipcMain 처리).
   const contentsId = contents.id;
-  window.on("close", () => issueConfirmations.get(contentsId)?.invalidate());
+  window.on("close", () => {
+    issueConfirmations.get(contentsId)?.invalidate();
+    vaultRestores.lockOpenedBy(contentsId, "window_closed");
+  });
   contents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
-    if (isMainFrame && !isInPlace) issueConfirmations.get(contentsId)?.invalidate();
+    if (isMainFrame && !isInPlace) {
+      issueConfirmations.get(contentsId)?.invalidate();
+      vaultRestores.lockOpenedBy(contentsId, "renderer_changed");
+    }
   });
   contents.once("destroyed", () => {
     connections.get(contentsId)?.close();
@@ -453,6 +459,7 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
 /** Renderer reinitialization does not destroy WebContents: native PTYs and browser
  * views must be released by owner before attaching the replacement renderer. */
 function closeRendererResources(contentsId: number): void {
+  vaultRestores.lockOpenedBy(contentsId, "renderer_changed");
   issueConfirmations.get(contentsId)?.invalidate();
   issueConfirmations.delete(contentsId);
   terminals.closeAllOf(contentsId);
