@@ -227,3 +227,38 @@ fn missing_owned_task_fails_closed_without_fetching() {
         assert!(result.is_err());
     }
 }
+
+#[test]
+fn conversation_requires_one_valid_thread_from_this_work_order() {
+    let tasks = vec!["task-1".to_owned(), "task-2".to_owned()];
+    assert_eq!(
+        unique_conversation_thread_id(&tasks, [("unrelated", Some("other"))].into_iter()).unwrap(),
+        None
+    );
+    assert_eq!(
+        unique_conversation_thread_id(
+            &tasks,
+            [
+                ("task-1", Some("thread-1")),
+                ("task-2", Some("thread-1")),
+                ("unrelated", Some("other"))
+            ]
+            .into_iter()
+        )
+        .unwrap()
+        .as_deref(),
+        Some("thread-1")
+    );
+    assert!(
+        unique_conversation_thread_id(
+            &tasks,
+            [("task-1", Some("thread-1")), ("task-2", Some("thread-2"))].into_iter()
+        )
+        .is_err()
+    );
+    for invalid in ["", " thread", "thread\nother"] {
+        assert!(
+            unique_conversation_thread_id(&tasks, [("task-1", Some(invalid))].into_iter()).is_err()
+        );
+    }
+}
