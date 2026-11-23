@@ -1970,6 +1970,15 @@ mod tests {
             ),
             KernelEvent::issue_decision_requested(&open_decision, 9),
             KernelEvent::issue_decision_resolved(&answered_decision, 10),
+            KernelEvent::issue_decision_reminded(
+                &crate::domain::issue_automation::decision::IssueDecisionReminder {
+                    event_id: format!("issue-decision-reminder:{}", "a".repeat(64)),
+                    fact: open_decision.clone(),
+                    due_at: "2026-11-12T00:00:00Z".into(),
+                    reminded_at: "2026-11-11T22:00:00Z".into(),
+                    revision: 11,
+                },
+            ),
             KernelEvent::IssueWorkSubmitted {
                 event_id: "work-submitted-1".into(),
                 issue: (&IssueReference {

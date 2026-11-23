@@ -2278,6 +2278,15 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         ),
         Record::issue_decision_requested(&sample_issue_decision_fact(), 5),
         Record::issue_decision_resolved(&sample_issue_decision_fact(), 6),
+        Record::issue_decision_reminded(
+            &crate::domain::issue_automation::decision::IssueDecisionReminder {
+                event_id: format!("issue-decision-reminder:{}", "a".repeat(64)),
+                fact: sample_issue_decision_fact(),
+                due_at: "2026-11-12T00:00:00Z".into(),
+                reminded_at: "2026-11-11T22:00:00Z".into(),
+                revision: 7,
+            },
+        ),
         Record::IssueWorkSubmitted {
             event_id: "work-submitted-1".into(),
             issue: (&sample_issue_reference()).into(),
