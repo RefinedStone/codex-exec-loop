@@ -67,6 +67,7 @@ use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPo
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::port::outbound::issue_automation_restart_registry_port::IssueAutomationRestartEntry;
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::application::port::outbound::parallel_agent_profile_repository_port::ParallelAgentProfileRepositoryPort;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
@@ -804,6 +805,29 @@ pub(crate) fn repository_kernel_target(workspace_dir: &str) -> Result<Repository
     })
 }
 
+/// 무인 재시작 후보의 기존 Git 신원만 읽는다. marker나 runtime을 만들지 않는다.
+/// 등록부와 실제 실행은 같은 대표 checkout을 사용하며, 병렬 pool은 별도 커널 후보가 아니다.
+pub(crate) fn issue_automation_restart_target(
+    workspace_dir: &str,
+) -> Result<Option<IssueAutomationRestartEntry>> {
+    let Some(location) =
+        SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(workspace_dir)?
+    else {
+        return Ok(None);
+    };
+    let primary_checkout = Path::new(&location.canonical_repo_root);
+    if crate::application::service::parallel_mode::workspace_is_inside_parallel_pool(
+        primary_checkout,
+        Path::new(&location.workspace_root),
+    ) {
+        anyhow::bail!("the issue automation restart candidate is an Akra parallel slot worktree");
+    }
+    Ok(Some(IssueAutomationRestartEntry {
+        repository_key: location.repository_identity,
+        workspace_root: location.canonical_repo_root,
+    }))
+}
+
 /// TUI 가 시작 폴더의 저장소 잠금을 잡는다 (plan 18 K3-4). 다른 프로세스가 그 저장소의 커널을 돌리면 오류를
 /// 돌려주고, TUI 는 화면을 열기 전에 그 이유를 보이고 끝난다.
 pub(crate) fn acquire_native_tui_kernel_lock() -> Result<Option<RepositoryKernelLock>> {
@@ -837,13 +861,46 @@ pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
 /// 수집 Off에서도 이전 제어 intent의 planning fence가 실행보다 먼저 적용되어야 한다.
 /// 조립/복구는 새 worker나 모델 턴을 시작하지 않는다.
 pub(crate) fn recover_pending_issue_interventions(workspace_dir: &str) -> Result<()> {
+    let workspace = recover_issue_interventions_in_primary_checkout(workspace_dir)?;
+    super::issue_collection::build_autonomy(&workspace).recover_before_manual_runtime()
+}
+
+/// 무인 시작은 후보 조정까지 완료되어야 한다. 기존 신원을 다시 만들거나 바꾸지 않는다.
+pub(crate) fn recover_pending_issue_interventions_for_restart(
+    workspace_dir: &str,
+    expected_repository_key: &str,
+) -> Result<()> {
+    let workspace = verify_restart_recovery_scope(workspace_dir, expected_repository_key)?;
+    super::issue_collection::build_interventions(
+        &workspace,
+        Arc::new(crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering),
+    ).recover_before_runtime()?;
+    verify_restart_recovery_scope(&workspace, expected_repository_key)?;
+    super::issue_collection::build_autonomy(&workspace).recover_before_runtime()?;
+    verify_restart_recovery_scope(&workspace, expected_repository_key)?;
+    Ok(())
+}
+
+fn verify_restart_recovery_scope(
+    workspace_dir: &str,
+    expected_repository_key: &str,
+) -> Result<String> {
+    let target = issue_automation_restart_target(workspace_dir)?
+        .context("restart recovery requires an existing Git repository identity")?;
+    if target.repository_key != expected_repository_key {
+        anyhow::bail!("the repository identity changed before restart recovery");
+    }
+    Ok(target.workspace_root)
+}
+
+fn recover_issue_interventions_in_primary_checkout(workspace_dir: &str) -> Result<String> {
     // 이슈 장부는 대표 checkout 범위다. 같은 저장소의 linked worktree도 같은 intent를 읽는다.
     let workspace = repository_kernel_target(workspace_dir)?.workspace_root;
     super::issue_collection::build_interventions(
         &workspace,
         Arc::new(crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering),
     ).recover_before_runtime()?;
-    super::issue_collection::build_autonomy(&workspace).recover_before_runtime()
+    Ok(workspace)
 }
 
 fn native_tui_workspace_dir() -> String {

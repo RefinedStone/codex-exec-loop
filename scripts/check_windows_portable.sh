@@ -19,7 +19,12 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'telegram_bot::tests::telegram_config_windows_' \
   'telegram_global_runner_lease::tests::' \
   'private_sqlite::tests::' \
-  'filesystem::issue_publish_intent_journal::' \
+  'filesystem::issue_publish_intent_journal::' \ \
+  'sqlite_issue_automation_restart_registry::tests::' \
+  'application::service::issue_coordinator::tests::autonomy::' \
+  'composition::issue_collection::restart_registry_tests::' \
+  'composition::repository_kernel::restart_tests::' \
+  'adapter::inbound::gateway::restart::tests::'
   'filesystem::issue_template::' \
   'issue_draft::tests::filesystem_template::' \
   'gateway::tests::issue_shared_copy_flow::' \
