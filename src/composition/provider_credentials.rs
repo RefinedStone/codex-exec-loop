@@ -28,7 +28,8 @@ fn profile_at(home: PathBuf) -> Result<ProviderProfile> {
     let id = identity_hash(&identity);
     Ok(ProviderProfile {
         id,
-        runtime: home.join("provider-credentials").join("runtime"),
+        // Keep the Unix IPC suffix shorter than the existing /run/gateway.sock endpoint.
+        runtime: home.join("credentials"),
     })
 }
 fn identity_hash(identity: &Path) -> String {
@@ -141,7 +142,7 @@ impl ProviderProfileOwner {
         #[cfg(unix)]
         {
             use std::os::unix::fs::{FileTypeExt, MetadataExt};
-            let path = runtime.join("migration.sock");
+            let path = crate::private_ipc::provider_credential_socket_path(&runtime);
             let before = match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -287,26 +288,92 @@ mod tests {
     #[tokio::test]
     async fn exclusive_owner_recovers_stale_socket_but_preserves_live_or_foreign_entries() {
         use std::os::unix::fs::PermissionsExt;
-        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
-            "pc-owner-{}-{:x}",
-            std::process::id(),
-            rand::random::<u32>()
-        ));
-        let profile = profile_at(root.clone()).unwrap();
+        // macOS TMPDIR already occupies most of sun_path before the profile suffix is added.
+        // Keep this real-socket fixture below the shared 103-byte IPC limit on every Unix host.
+        let root = tempfile::Builder::new()
+            .prefix("pc-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = std::fs::canonicalize(root.path()).unwrap();
+        let profile = profile_at(home).unwrap();
         let owner = acquire_owner(&profile).unwrap();
-        let socket = profile.runtime.join("migration.sock");
+        let socket = crate::private_ipc::provider_credential_socket_path(&profile.runtime);
+        assert!(socket.as_os_str().len() <= 103);
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(owner.prepare_endpoint().await.is_err());
         assert!(socket.exists());
         drop(listener);
+        // A parallel test may fork while this process owns the listener. Build a fresh stale
+        // socket in an isolated child and wait for its exit before checking stale recovery.
+        std::fs::remove_file(&socket).unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "composition::provider_credentials::tests::stale_socket_fixture_worker",
+                "--test-threads=1",
+            ])
+            .env("AKRA_TEST_PROVIDER_CREDENTIAL_STALE_SOCKET", &socket)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let output = crate::subprocess::wait_with_output_timeout(
+            crate::subprocess::spawn(&mut command).unwrap(),
+            "provider credential stale socket fixture",
+            std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+        assert!(output.status.success());
+        let stale = std::fs::symlink_metadata(&socket).unwrap();
+        assert!(std::os::unix::fs::FileTypeExt::is_socket(
+            &stale.file_type()
+        ));
+        assert_eq!(stale.permissions().mode() & 0o777, 0o600);
         owner.prepare_endpoint().await.unwrap();
         assert!(!socket.exists());
         std::fs::write(&socket, b"not a socket").unwrap();
         assert!(owner.prepare_endpoint().await.is_err());
         assert_eq!(std::fs::read(&socket).unwrap(), b"not a socket");
         drop(owner);
-        std::fs::remove_dir_all(root).unwrap();
+        root.close().unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn stale_socket_fixture_worker() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(path) = std::env::var_os("AKRA_TEST_PROVIDER_CREDENTIAL_STALE_SOCKET") else {
+            return;
+        };
+        let path = std::path::PathBuf::from(path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        drop(listener);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn credential_endpoint_preserves_the_existing_gateway_home_length_limit() {
+        let root = tempfile::Builder::new()
+            .prefix("pc-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        // The existing Gateway accepts 86-byte homes: 86 + /run/gateway.sock = 103.
+        let prefix_len = base.as_os_str().len() + 1;
+        assert!(prefix_len < 86);
+        let home = base.join("h".repeat(86 - prefix_len));
+        assert_eq!(home.join("run/gateway.sock").as_os_str().len(), 103);
+        let profile = profile_at(home).unwrap();
+        let owner = acquire_owner(&profile).unwrap();
+        let socket = crate::private_ipc::provider_credential_socket_path(&profile.runtime);
+        assert_eq!(socket.as_os_str().len(), 102);
+        let listener =
+            crate::private_ipc::PrivateIpcListener::bind(socket.to_str().unwrap()).unwrap();
+        assert!(owner.prepare_endpoint().await.is_err());
+        drop(listener);
+        owner.prepare_endpoint().await.unwrap();
+        drop(owner);
+        root.close().unwrap();
     }
     #[cfg(windows)]
     #[test]

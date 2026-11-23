@@ -15,6 +15,11 @@ pub(crate) type ClientConnection = tokio::net::UnixStream;
 pub(crate) type ClientConnection = tokio::net::windows::named_pipe::NamedPipeServer;
 
 #[cfg(unix)]
+pub(crate) fn provider_credential_socket_path(runtime: &std::path::Path) -> std::path::PathBuf {
+    runtime.join("ipc")
+}
+
+#[cfg(unix)]
 pub(crate) struct PrivateIpcListener {
     listener: tokio::net::UnixListener,
     path: std::path::PathBuf,
