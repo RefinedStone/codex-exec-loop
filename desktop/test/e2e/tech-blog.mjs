@@ -16,11 +16,16 @@ let article;
 let fail = true;
 const commits = [1, 2, 3].map(n => ({sha: String(n).repeat(40), time: Math.floor(Date.now() / 1000) - n * 3600, subject: `feat: 작업 ${n}`}));
 const STAGES = ["collect", "write", "review"];
+let codex = true;
 // 단계 하나씩 커널의 변경 알림을 보낸다. 첫 실행은 초안 쓰기에서 실패하고, 이어서 하기는 그 단계부터 다시 한다.
 function advance() {
   setTimeout(() => {
     if (!article.job) return;
-    if (article.stage === "write" && fail) {
+    if (article.task !== "generate") {
+      if (article.stage === "revise") Object.assign(article, {stage: "review", draft: "# 짧게 고친 글\n\n두 번째 판", calls: article.calls + 1});
+      else Object.assign(article, {state: "reviewed", stage: null, job: null, calls: article.calls + 1, review: {state: "reviewed", findings: []}});
+      if (article.job) advance();
+    } else if (article.stage === "write" && fail) {
       fail = false;
       Object.assign(article, {state: "stopped", job: null, stopped: {reason: "failed", code: "model_timeout", message: "모델의 답이 10분을 넘었습니다."}});
     } else if (article.stage === "review") {
@@ -46,20 +51,42 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     if (params.action === "catalog") return {result:{enabled}};
     if (params.action === "configure") { enabled = data.enabled; return {result:{enabled}}; }
     assert.ok(enabled);
-    if (params.action === "targets") return {result:{commits, fresh: 2, selected: commits.slice(0, 2).map(c => c.sha), first: false, limit: 30, codex: true}};
-    if (params.action === "list") return {result:article ? [{id:article.id,title:article.title,state:article.state,stage:article.stage,attempt:0,updated:article.updated}] : []};
+    if (params.action === "targets") return {result:{commits, fresh: 2, selected: commits.slice(0, 2).map(c => c.sha), first: false, limit: 30, codex}};
+    if (params.action === "list") return {result:article ? [{id:article.id,title:article.title,state:article.state,stage:article.stage,task:article.task,updated:article.updated}] : []};
     if (params.action === "generate") {
       assert.deepEqual(data.commits, commits.slice(0, 2).map(c => c.sha));
       assert.equal(data.topic, "");
       const now = Math.floor(Date.now() / 1000);
       article = {id:"one",version:2,title:"",topic:"",commits:data.commits,state:"running",stage:"collect",attempt:0,calls:0,
-        evidence:null,draft:"",claims:[],figures:[],review:null,stopped:null,messages:[],revision:1,created:now,updated:now,job:{id:"job",started:now}};
+        evidence:null,draft:"",claims:[],figures:[],review:null,stopped:null,messages:[],revision:1,created:now,updated:now,job:{id:"job",started:now},
+        task:"generate",edition:1,previous:null,exported:null};
       advance();
     } else if (params.action === "resume") {
       assert.equal(data.revision,article.revision);
       Object.assign(article, {state:"running", stopped:null, job:{id:"job2",started:Math.floor(Date.now() / 1000)}});
       article.revision++;
       advance();
+    } else if (params.action === "export") {
+      assert.equal(data.revision,article.revision);
+      article.exported = {path:"blog/2026-11-23-review-post/post.md", edition:article.edition};
+      article.revision++;
+    } else if (params.action === "revise" || params.action === "review") {
+      assert.equal(data.revision,article.revision);
+      if (params.action === "revise") {
+        assert.equal(data.instruction, "더 짧게");
+        article.previous = {draft: article.draft}; article.edition++;
+      }
+      Object.assign(article, {task:params.action, stage:params.action, state:"running", job:{id:"job3",started:Math.floor(Date.now() / 1000)}});
+      article.revision++;
+      advance();
+    } else if (params.action === "restore") {
+      const current = article.draft;
+      Object.assign(article, {draft: article.previous.draft, previous: {draft: current}, edition: article.edition + 1});
+      article.revision++;
+    } else if (params.action === "save") {
+      article.previous = {draft: article.draft}; article.edition++;
+      Object.assign(article, {draft: data.draft, state: "edited", review: null});
+      article.revision++;
     } else if (params.action !== "open") throw new Error(`unexpected action ${params.action}`);
     return {result:article};
   }},
@@ -90,12 +117,37 @@ try {
   assert.equal(await panel.locator(".blog-preview strong").textContent(), "본문");
   await panel.getByRole("button",{name:"원문"}).click();
   assert.match(await panel.locator(".blog-preview pre").textContent(), /\*\*본문\*\*/);
+  await panel.getByRole("button",{name:"파일로 내보내기"}).click();
+  await panel.getByText("blog/2026-11-23-review-post/post.md").waitFor();
+  await panel.getByRole("button",{name:"편집기로 열기"}).waitFor();
+  await panel.getByRole("button",{name:"다시 쓰기…"}).click();
+  await panel.getByRole("button",{name:"더 짧게"}).click();
+  await panel.getByRole("button",{name:"다시 쓰기",exact:true}).click();
+  await panel.getByText("판 2").waitFor();
+  await panel.getByText("내보낸 파일보다 새 판입니다.").waitFor();
+  assert.equal(await panel.locator(".blog-preview h1").textContent(), "짧게 고친 글");
+  await panel.getByRole("button",{name:"이전 판으로"}).click();
+  await panel.getByText("판 3").waitFor();
+  assert.equal(await panel.locator(".blog-preview h1").textContent(), "리뷰를 글로 옮기기");
+  await panel.getByRole("button",{name:"직접 고치기"}).click();
+  await panel.getByLabel("원고",{exact:true}).fill("# 사람이 고친 글");
+  await panel.getByRole("button",{name:"저장"}).click();
+  await panel.getByText("검수 안 함").waitFor();
+  await panel.getByLabel("더 보기").click();
+  await panel.getByRole("button",{name:/검수하기/}).click();
+  await panel.getByText("검수 통과").waitFor();
   await panel.getByRole("button",{name:"← 글 목록"}).click();
   await page.getByTestId("tech-blog-toggle").click();
   await page.getByTestId("tech-blog-toggle").click();
   await panel.getByRole("button",{name:/리뷰를 글로 옮기기/}).click();
   await panel.getByTestId("blog-result").waitFor();
-  console.log("PASS one-press blog generation, failure, resume, preview and reopen");
+  codex = false;
+  await page.getByTestId("tech-blog-toggle").click();
+  await page.getByTestId("tech-blog-toggle").click();
+  await panel.getByTestId("blog-setup").waitFor();
+  await panel.getByRole("button",{name:/리뷰를 글로 옮기기/}).click();
+  await panel.getByTestId("blog-result").waitFor();
+  console.log("PASS one-press blog generation, failure, resume, export, rewrite, restore, edit, review and reopen; saved articles stay open without Codex CLI");
 } finally {
   if (app) await app.close();
   await gateway.close();

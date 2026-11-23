@@ -12,7 +12,7 @@ import tech_blog_studio as studio
 
 
 def draft_answer(text="# 키 생성 경합 막기\n본문"):
-    return {"title": "키 생성 경합 막기", "style": "PROBLEM_SOLVING", "draft": text, "reply": "초안을 썼습니다.",
+    return {"title": "키 생성 경합 막기", "slug": "key-race", "style": "PROBLEM_SOLVING", "draft": text, "reply": "초안을 썼습니다.",
             "claims": [{"id": "c1", "text": "키를 한 번만 만든다", "sources": ["s1"]}]}
 
 
@@ -24,9 +24,10 @@ def review_answer(decision):
 class FakeModel:
     """스키마 파일 이름으로 집필과 검수를 가른다. 받은 입력을 기록한다."""
 
-    def __init__(self, *reviews, fail_on=None):
+    def __init__(self, *reviews, fail_on=None, text=None):
         self.reviews = list(reviews)
         self.fail_on = fail_on
+        self.text = text
         self.prompts = []
 
     def __call__(self, model, prompt, schema, images):
@@ -35,7 +36,9 @@ class FakeModel:
         self.prompts.append((kind, prompt.decode()))
         if kind == self.fail_on:
             raise studio.blog.ReviewerError("boom", "model_timeout")
-        return draft_answer() if kind == "write" else review_answer(self.reviews.pop(0))
+        if kind == "write":
+            return draft_answer(self.text) if self.text else draft_answer()
+        return review_answer(self.reviews.pop(0))
 
 
 class StudioTest(unittest.TestCase):
@@ -176,7 +179,7 @@ class StudioTest(unittest.TestCase):
         self.host.db.execute("INSERT INTO article VALUES (?,?)", ("v1", json.dumps(old)))
         shown = self.host.request("open", {"id": "v1"})
         self.assertEqual((1, "예전 글", "reviewed"), (shown["version"], shown["title"], shown["state"]))
-        self.assertIn({"id": "v1", "title": "예전 글", "state": "reviewed", "stage": None, "attempt": None,
+        self.assertIn({"id": "v1", "title": "예전 글", "state": "reviewed", "stage": None, "task": None,
                        "updated": None}, self.host.request("list", {}))
         self.host.request("delete", {"id": a["id"]})
         with self.assertRaisesRegex(ValueError, "찾을 수 없"):
@@ -190,6 +193,65 @@ class StudioTest(unittest.TestCase):
         self.host.request("configure", {"enabled": True})
         self.assertEqual({"more": False}, self.host.execute_job(a["id"], a["job"]["id"]))
         self.assertEqual("stopped", self.host.request("open", {"id": a["id"]})["state"])
+
+    def test_manual_rewrite_keeps_the_previous_edition_and_does_not_rewrite_twice(self):
+        a = self.run_all(self.generate(), FakeModel("revise", "revise"))
+        self.assertEqual("findings", a["state"])
+        running = self.host.request("generate", {"commits": [self.host.request("targets", {})["commits"][0]["sha"]]})
+        with self.assertRaisesRegex(ValueError, "작업이 끝난 뒤"):
+            self.host.request("revise", {"id": running["id"], "revision": running["revision"]})
+        with self.assertRaisesRegex(ValueError, "다른 글을 만드는 중"):
+            self.host.request("revise", {"id": a["id"], "revision": a["revision"]})
+        self.host.request("cancel", {"id": running["id"]})
+        job = self.host.request("revise", {"id": a["id"], "revision": a["revision"], "instruction": "더 짧게"})
+        self.assertEqual(("running", "revise", "revise"), (job["state"], job["stage"], job["task"]))
+        model = FakeModel("revise", text="# 짧은 글")
+        b = self.run_all(job, model)
+        self.assertEqual(["write", "review"], [kind for kind, _ in model.prompts])
+        self.assertIn("더 짧게", model.prompts[0][1])
+        self.assertEqual(("findings", "# 짧은 글", 2), (b["state"], b["draft"], b["edition"]))
+        self.assertEqual("# 키 생성 경합 막기\n본문", b["previous"]["draft"])
+        c = self.host.request("restore", {"id": a["id"], "revision": b["revision"]})
+        self.assertEqual(("# 키 생성 경합 막기\n본문", "# 짧은 글"), (c["draft"], c["previous"]["draft"]))
+        checked = self.run_all(self.host.request("review", {"id": a["id"], "revision": c["revision"]}), FakeModel("pass"))
+        self.assertEqual(("reviewed", 3), (checked["state"], checked["edition"]))
+        before = checked["previous"]
+        job = self.host.request("revise", {"id": a["id"], "revision": checked["revision"], "instruction": "x"})
+        failed = self.run_all(job, FakeModel(fail_on="write"))
+        self.assertEqual(("reviewed", None, 3), (failed["state"], failed["stage"], failed["edition"]))
+        self.assertEqual(("model_timeout", before), (failed["stopped"]["code"], failed["previous"]))
+        job = self.host.request("revise", {"id": a["id"], "revision": failed["revision"], "instruction": "y"})
+        self.assertIsNone(job["stopped"])
+        cancelled = self.run_all(job, FakeModel(fail_on="review"))
+        self.assertEqual(("edited", 4, "# 키 생성 경합 막기\n본문"), (cancelled["state"], cancelled["edition"], cancelled["draft"]))
+
+    def test_saved_edit_is_a_new_edition(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        b = self.host.request("save", {"id": a["id"], "revision": a["revision"], "draft": "사람의 판"})
+        self.assertEqual(("edited", "사람의 판", "reviewed"), (b["state"], b["draft"], b["previous"]["state"]))
+
+    def test_export_writes_one_post_per_article_and_refuses_foreign_files(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        b = self.host.request("export", {"id": a["id"], "revision": a["revision"]})
+        post = self.repo / b["exported"]["path"]
+        self.assertRegex(b["exported"]["path"], r"^blog/\d{4}-\d{2}-\d{2}-key-race/post.md$")
+        text = post.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---\ntitle: \"키 생성 경합 막기\"\n"))
+        self.assertIn(f"akra_article: {a['id']}", text)
+        self.assertTrue(text.endswith("본문\n"))
+        again = self.host.request("export", {"id": a["id"], "revision": b["revision"]})
+        self.assertEqual(b["exported"]["path"], again["exported"]["path"])
+        post.write_text("다른 사람의 글", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "다른 파일"):
+            self.host.request("export", {"id": a["id"], "revision": again["revision"]})
+        post.unlink()
+        post.parent.rmdir()
+        outside = self.repo.parent / "outside"
+        outside.mkdir()
+        post.parent.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "다른 파일"):
+            self.host.request("export", {"id": a["id"], "revision": again["revision"]})
+        self.assertEqual([], list(outside.iterdir()))
 
 
 if __name__ == "__main__":

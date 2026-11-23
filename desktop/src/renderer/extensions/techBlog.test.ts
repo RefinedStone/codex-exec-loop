@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { stageMarks, stateLabel } from "./techBlogStages";
+import { stageMarks, stateLabel, taskMarks, taskStages } from "./techBlogStages";
 
 describe("stageMarks", () => {
   it("marks earlier stages done and waits on the optional rewrite", () => {
@@ -19,4 +19,15 @@ describe("stageMarks", () => {
 
 describe("stateLabel", () => {
   it("counts findings", () => expect(stateLabel("findings", 2)).toBe("지적 2건"));
+});
+
+describe("taskMarks", () => {
+  it("shows only the rewrite and its review for a manual rewrite", () => {
+    expect(taskStages("revise").map(s => s.id)).toEqual(["revise", "review"]);
+    expect(taskMarks("revise", "review", 1, false)).toEqual(["done", "active"]);
+    expect(taskMarks("revise", "revise", 1, true)).toEqual(["failed", "wait"]);
+  });
+  it("shows one step for a manual review", () => {
+    expect(taskMarks("review", "review", 1, false)).toEqual(["active"]);
+  });
 });
