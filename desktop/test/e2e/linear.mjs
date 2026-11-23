@@ -116,8 +116,25 @@ try {
     shell.openExternal = async url => { globalThis.linearFixture.opened.push(url); };
   });
   const page = await app.firstWindow();
-  const capture = async name => writeFile(join(evidence, name + ".png"), Buffer.from(await app.evaluate(async ({ BrowserWindow }) =>
-    (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64")), "base64"));
+  const capture = async (name, expectedTestId, theme = null) => {
+    await page.getByTestId(expectedTestId).first().waitFor({ timeout: 5_000 });
+    if (theme) await page.waitForFunction(expected => {
+      const style = getComputedStyle(document.documentElement);
+      return document.documentElement.dataset.theme === expected && style.colorScheme === expected
+        && style.getPropertyValue("--bg").trim() === (expected === "dark" ? "#111214" : "#ffffff");
+    }, theme, { timeout: 5_000 });
+    await page.evaluate(label => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Screenshot paint timed out: " + label)), 5_000);
+      document.fonts.ready.then(() => {
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+          clearTimeout(timer);
+          resolve();
+        }, 0)));
+      }, error => { clearTimeout(timer); reject(error); });
+    }), name);
+    await writeFile(join(evidence, name + ".png"), Buffer.from(await app.evaluate(async ({ BrowserWindow }) =>
+      (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64")), "base64"));
+  };
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
   await page.getByTestId("work-toggle").click();
   await page.getByTestId("linear-toggle").click();
@@ -125,7 +142,7 @@ try {
   assert.equal(await page.getByTestId("linear-panel").locator('input[type="password"]').count(), 0);
   assert.equal(await page.getByTestId("linear-key").count(), 0);
   assert.deepEqual(await page.evaluate(() => [typeof window.akra.jira, typeof window.akra.linear]), ["undefined", "undefined"]);
-  await capture("disconnected");
+  await capture("disconnected", "linear-connect");
   await page.getByTestId("linear-connect-submit").click();
   await page.getByTestId("linear-error").waitFor();
   await page.getByTestId("linear-connect-submit").click();
@@ -139,7 +156,7 @@ try {
   assert.ok((await page.getByTestId("linear-issue").innerText()).includes("AKR-1"));
   await page.getByTestId("linear-project").selectOption("project-OPS-2");
   await page.getByTestId("linear-filtered-empty").waitFor();
-  await capture("filtered-empty");
+  await capture("filtered-empty", "linear-filtered-empty");
   await page.getByTestId("linear-project").selectOption("");
   await page.getByTestId("linear-team").selectOption("");
   await page.getByTestId("linear-cycle").check();
@@ -156,7 +173,7 @@ try {
     await page.waitForFunction(width => innerWidth === width, width);
     for (const theme of ["light", "dark"]) {
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-      await capture("list-" + width + "-" + theme);
+      await capture("list-" + width + "-" + theme, "linear-issue", theme);
     }
   }
   const composer = page.getByTestId("composer-input");
@@ -171,7 +188,7 @@ try {
   const draft = await composer.inputValue();
   assert.ok(draft.includes("fixture/akr-1") && draft.includes("Latest fixture comment") && draft.includes("https://linear.app/"));
   assert.ok(draft.length <= 20_000);
-  await capture("draft");
+  await capture("draft", "composer-input");
   assert.ok(!gateway.receivedMethods.some(method => ["thread/start", "turn/start", "turn/steer"].includes(method)));
   const folderCalls = await app.evaluate(() => globalThis.linearFixture.folderCalls);
   await page.getByTestId("thread-entry").first().click();
@@ -179,12 +196,12 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-testid="composer-input"]')?.value.includes("AKR-1"));
   assert.equal(await app.evaluate(() => globalThis.linearFixture.folderCalls), folderCalls);
 
-  emptySummary = true; await page.getByTestId("linear-refresh").click(); await page.getByTestId("linear-empty").waitFor(); await capture("empty");
+  emptySummary = true; await page.getByTestId("linear-refresh").click(); await page.getByTestId("linear-empty").waitFor(); await capture("empty", "linear-empty");
   emptySummary = false; await page.getByTestId("linear-refresh").click(); await page.getByTestId("linear-issue").first().waitFor();
-  failSummary = true; await page.getByTestId("linear-refresh").click(); await page.getByTestId("linear-error").waitFor(); await capture("fetch-error");
+  failSummary = true; await page.getByTestId("linear-refresh").click(); await page.getByTestId("linear-error").waitFor(); await capture("fetch-error", "linear-error");
   failSummary = false; holdSummary = true;
   const held = once(events, "summaryHeld", { signal: AbortSignal.timeout(10_000) });
-  await page.getByTestId("linear-refresh").click(); await held; await capture("loading");
+  await page.getByTestId("linear-refresh").click(); await held; await capture("loading", "linear-loading");
   await page.getByTestId("linear-disconnect").click(); await page.getByTestId("linear-connect").waitFor();
   pendingSummary?.();
   assert.equal(await page.getByTestId("linear-issue").count(), 0);
@@ -192,7 +209,7 @@ try {
   await page.getByTestId("documents-toggle").filter({ hasText: "문서 1" }).waitFor();
   await page.getByTestId("documents-toggle").click(); await page.getByTestId("documents-item").waitFor();
   assert.ok((await page.getByTestId("documents-group").innerText()).startsWith("Linear (1)"));
-  await capture("related-document");
+  await capture("related-document", "documents-item");
   assert.equal(await app.evaluate(() => globalThis.linearFixture.httpCalls), 0);
   assert.equal(JSON.stringify(await app.evaluate(() => globalThis.linearFixture.ipc)).includes(canary), false);
   assert.equal((await page.content()).includes(canary), false);
