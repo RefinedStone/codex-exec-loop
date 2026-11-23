@@ -40,7 +40,7 @@ pub(crate) fn with_running_worker<T>(
         guard
             .verify_pool_root(&resolution.context.pool_root)
             .map_err(|_| TaskEvidenceError::Unavailable)?;
-        if !runtime.paths_match_securely(&canonical, Path::new(&resolution.context.repo_root))
+        if !runtime.paths_match_securely(&canonical, &resolution.context.canonical_repo_root)
             || resolution.lease.state != ParallelModeSlotLeaseState::Running
             || !resolution.lease.same_generation_as(expected)
             || resolution.lease.lease_generation.is_none()

@@ -76,7 +76,7 @@ impl ParallelModeService {
             ) || !current.lease.same_generation_as(expected)
                 || !self.parallel_runtime.paths_match_securely(
                     Path::new(workspace),
-                    Path::new(&current.context.repo_root),
+                    &current.context.canonical_repo_root,
                 )
             {
                 return Err("worker evidence lease identity changed".into());

@@ -372,8 +372,17 @@ fn validate(schema: &Value, value: &Value, spec: &Value, path: &str) -> Result<(
             "{path}: invalid string length"
         );
         if let Some(pattern) = schema["pattern"].as_str() {
-            ensure!(pattern == r"\S", "{path}: unsupported schema pattern");
-            ensure!(!text.trim().is_empty(), "{path}: must not be blank");
+            match pattern {
+                r"\S" => ensure!(!text.trim().is_empty(), "{path}: must not be blank"),
+                "^[a-f0-9]{64}$" => ensure!(
+                    text.len() == 64
+                        && text
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                    "{path}: expected 64 lowercase hexadecimal characters"
+                ),
+                _ => bail!("{path}: unsupported schema pattern"),
+            }
         }
     }
     if let Some(number) = value.as_f64() {
@@ -403,9 +412,17 @@ fn validate(schema: &Value, value: &Value, spec: &Value, path: &str) -> Result<(
             }
         }
     }
-    if let (Some(items), Some(values)) = (schema.get("items"), value.as_array()) {
-        for item in values {
-            validate(items, item, spec, path)?;
+    if let Some(values) = value.as_array() {
+        let length = values.len() as u64;
+        ensure!(
+            schema["minItems"].as_u64().is_none_or(|min| length >= min)
+                && schema["maxItems"].as_u64().is_none_or(|max| length <= max),
+            "{path}: invalid array length"
+        );
+        if let Some(items) = schema.get("items") {
+            for (index, item) in values.iter().enumerate() {
+                validate(items, item, spec, &format!("{path}[{index}]"))?;
+            }
         }
     }
     Ok(())
@@ -537,6 +554,7 @@ mod tests {
             kind => kind.as_str().unwrap_or("object").to_string(),
         };
         match kind.as_str() {
+            "string" if schema["pattern"] == "^[a-f0-9]{64}$" => json!("a".repeat(64)),
             "string" => json!("test-value"),
             "boolean" => json!(true),
             "array" => json!([sample_value(&schema["items"], spec)]),
@@ -596,6 +614,54 @@ mod tests {
                 entry["name"]
             );
         }
+    }
+
+    #[test]
+    fn evidence_tokens_and_page_lengths_are_checked_before_dispatch() {
+        let token = "a".repeat(64);
+        for candidate in [
+            token.clone(),
+            "A".repeat(64),
+            "g".repeat(64),
+            "a".repeat(63),
+            "a".repeat(65),
+            format!(" {token}"),
+            format!("{token}\n"),
+        ] {
+            let parsed = parse(&arguments(&[
+                "planning",
+                "prepare_evidence",
+                "--request-id",
+                "prepare-1",
+                "--task-id",
+                "task-1",
+                "--criterion-id",
+                "criterion-1",
+                "--scope-id",
+                &candidate,
+                "--expected-acceptance-revision",
+                "1",
+            ]));
+            assert_eq!(parsed.is_ok(), candidate == token, "{candidate:?}");
+        }
+        for (length, accepted) in [(0, false), (1, true), (256, true), (257, false)] {
+            let ids = (0..length)
+                .map(|index| format!("task-{index}"))
+                .collect::<Vec<_>>();
+            let ids = serde_json::to_string(&ids).unwrap();
+            let parsed = parse(&arguments(&["query", "task_evidence", "--task-ids", &ids]));
+            assert_eq!(parsed.is_ok(), accepted, "task_ids length {length}");
+        }
+        assert!(parse(&arguments(&["query", "task_evidence", "--task-ids", "[1]"])).is_err());
+        assert!(
+            validate(
+                &json!({ "pattern": "unknown" }),
+                &json!("anything"),
+                &json!({}),
+                "text"
+            )
+            .is_err()
+        );
     }
 
     #[test]

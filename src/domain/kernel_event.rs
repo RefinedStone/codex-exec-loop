@@ -454,16 +454,6 @@ pub enum KernelEvent {
         at: String,
         revision: u64,
     },
-    CriterionEvidenceRecorded {
-        event_id: String,
-        evidence_revision: u64,
-        evidence: TaskCriterionEvidenceRecord,
-    },
-    CriterionWaived {
-        event_id: String,
-        evidence_revision: u64,
-        waiver: TaskCriterionWaiverRecord,
-    },
     /// 영속 work-order 연결이 확정된 사실이다. handoff 본문은 포함하지 않는다.
     IssueWorkSubmitted {
         event_id: String,
@@ -549,6 +539,16 @@ pub enum KernelEvent {
         by: IssueChangeOrigin,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caller: Option<String>,
+    },
+    CriterionEvidenceRecorded {
+        event_id: String,
+        evidence_revision: u64,
+        evidence: TaskCriterionEvidenceRecord,
+    },
+    CriterionWaived {
+        event_id: String,
+        evidence_revision: u64,
+        waiver: TaskCriterionWaiverRecord,
     },
 }
 
