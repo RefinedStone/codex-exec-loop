@@ -292,9 +292,7 @@ struct FakeExecution {
 impl IssueWorkExecutionPort for FakeExecution {
     fn frozen_delivery_source(&self, _: &str, _: &str) -> Result<Option<String>> {
         let state = self.state.lock().unwrap();
-        if state.source_unavailable {
-            bail!("configured source is unavailable");
-        }
+        // source_unavailable은 remote dispatch base 조회 장애다. 이 경계는 로컬 queue만 읽는다.
         Ok(state.frozen.clone())
     }
     fn delivery_diff(

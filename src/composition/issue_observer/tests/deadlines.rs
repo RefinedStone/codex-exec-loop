@@ -10,7 +10,7 @@ fn open_decision() -> IssueObserverCommittedFact {
     use crate::domain::issue_automation::policy::IssueAutomationGate;
     use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
 
-    IssueObserverCommittedFact::Coordinated(IssueCoordinatorFact::Decision {
+    IssueObserverCommittedFact::Coordinated(Box::new(IssueCoordinatorFact::Decision {
         fact: IssueDecisionFact {
             delivery_review: None,
             decision_id: IssueDecisionId::new("new-short-deadline").unwrap(),
@@ -38,7 +38,7 @@ fn open_decision() -> IssueObserverCommittedFact {
             option: None,
         },
         revision: 1,
-    })
+    }))
 }
 
 #[test]

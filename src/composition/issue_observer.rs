@@ -22,7 +22,7 @@ const TRACKING_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) enum IssueObserverCommittedFact {
     Tracked(IssueCollectionTrackedFact),
     Triaged(IssueTriagedFact),
-    Coordinated(crate::application::service::issue_coordinator::IssueCoordinatorFact),
+    Coordinated(Box<crate::application::service::issue_coordinator::IssueCoordinatorFact>),
 }
 
 type Reporter = dyn Fn(Vec<IssueObserverCommittedFact>) + Send + Sync;
@@ -127,6 +127,7 @@ impl IssueObserver {
                         committed(
                             facts
                                 .into_iter()
+                                .map(Box::new)
                                 .map(IssueObserverCommittedFact::Coordinated)
                                 .collect(),
                         );
@@ -148,6 +149,7 @@ impl IssueObserver {
                     committed(
                         facts
                             .into_iter()
+                            .map(Box::new)
                             .map(IssueObserverCommittedFact::Coordinated)
                             .collect(),
                     );
@@ -427,14 +429,15 @@ impl IssueObserver {
 
     fn track_new_decisions(&mut self, committed: &[IssueObserverCommittedFact], now: Instant) {
         if committed.iter().any(|fact| {
+            let IssueObserverCommittedFact::Coordinated(fact) = fact else {
+                return false;
+            };
             matches!(
-                fact,
-                IssueObserverCommittedFact::Coordinated(
-                    crate::application::service::issue_coordinator::IssueCoordinatorFact::Decision {
-                        fact,
-                        ..
-                    }
-                ) if fact.state == crate::domain::issue_automation::decision::IssueDecisionState::Open
+                fact.as_ref(),
+                crate::application::service::issue_coordinator::IssueCoordinatorFact::Decision {
+                    fact,
+                    ..
+                } if fact.state == crate::domain::issue_automation::decision::IssueDecisionState::Open
             )
         }) {
             // 수집이 새 질문을 만들었으면 5초 fallback 전에 그 질문의 짧은 기한도 읽는다.

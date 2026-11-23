@@ -20,9 +20,16 @@ fn open_delivery(
     id: &str,
     source: &str,
 ) -> (IssueWorkCheckpoint, IssueDecisionCommit) {
+    let preview = services
+        .issues
+        .prepare_mode_confirmation(IssueCollectionMode::Observe)
+        .unwrap();
     services
         .issues
-        .set_mode(IssueCollectionMode::Observe)
+        .set_mode_with_confirmation(
+            IssueCollectionMode::Observe,
+            Some(&verified(preview.target)),
+        )
         .unwrap();
     let batch = services
         .store
