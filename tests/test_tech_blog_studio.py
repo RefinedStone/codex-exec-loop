@@ -253,6 +253,44 @@ class StudioTest(unittest.TestCase):
             self.host.request("export", {"id": a["id"], "revision": again["revision"]})
         self.assertEqual([], list(outside.iterdir()))
 
+    def test_export_overwrites_only_figures_it_wrote(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        b = self.host.request("export", {"id": a["id"], "revision": a["revision"]})
+        folder = (self.repo / b["exported"]["path"]).parent
+        (folder / "fig1.png").write_bytes(b"user file")
+        figure = {"id": "fig1", "path": "fig1.png", "alt": "그림", "caption": "그림"}
+        b["figures"].append(figure)
+        self.host.db.execute("UPDATE article SET value=? WHERE id=?", (json.dumps(b), a["id"]))
+        with self.assertRaisesRegex(ValueError, "다른 파일"):
+            self.host.request("export", {"id": a["id"], "revision": b["revision"]})
+        self.assertEqual(b"user file", (folder / "fig1.png").read_bytes())
+
+    def test_registering_a_figure_makes_a_new_edition(self):
+        try:
+            from io import BytesIO
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow 가 없다")
+        buffer = BytesIO()
+        Image.new("RGB", (4, 4)).save(buffer, format="PNG")
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        b = self.host.request("export", {"id": a["id"], "revision": a["revision"]})
+        import base64
+        c = self.host.request("figure", {"id": a["id"], "revision": b["revision"], "caption": "화면",
+                                         "png": base64.b64encode(buffer.getvalue()).decode()})
+        self.assertEqual((2, a["draft"]), (c["edition"], c["previous"]["draft"]))
+        self.assertTrue(c["draft"].endswith("![화면](fig1.png)\n"))
+        self.assertNotEqual(c["edition"], c["exported"]["edition"])
+
+    def test_articles_from_slice_one_read_with_edition_defaults(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        stored = {k: v for k, v in a.items() if k not in ("edition", "previous", "exported", "task", "slug")}
+        self.host.db.execute("UPDATE article SET value=? WHERE id=?", (json.dumps(stored), a["id"]))
+        shown = self.host.request("open", {"id": a["id"]})
+        self.assertEqual((1, None, None), (shown["edition"], shown["previous"], shown["exported"]))
+        b = self.host.request("export", {"id": a["id"], "revision": shown["revision"]})
+        self.assertEqual(b["edition"], b["exported"]["edition"])
+
 
 if __name__ == "__main__":
     unittest.main()

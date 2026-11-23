@@ -167,9 +167,10 @@ def review_article(db, a, sources):
 
 
 def present(a):
-    """버전 1 의 글을 지금의 모양으로 보여 준다. 저장한 값은 바꾸지 않는다."""
+    """예전 글을 지금의 모양으로 보여 준다. 저장한 값은 바꾸지 않는다."""
     if a.get("version") == VERSION:
-        return a
+        # B1 에서 만든 글에는 판과 내보내기 값이 없다.
+        return {"task": "generate", "edition": 1, "previous": None, "exported": None, "slug": None, **a}
     reviewed = (a.get("review") or {}).get("state") == "reviewed"
     return {**a, "version": 1, "title": a["topic"], "state": "reviewed" if reviewed else "edited", "stage": None,
             "stopped": None, "commits": [], "evidence": None, "calls": 0, "edition": 1, "previous": None}
@@ -368,7 +369,9 @@ class Studio:
         if not all(regular_or_missing(folder / name) for name in names):
             raise ValueError(EXPORT_BLOCKED)
         owned = post.exists() and front_matter_id(post) == a["id"]
-        if not owned and any((folder / name).exists() for name in names):
+        previous = a.get("exported") or {}
+        written = set(previous.get("files", ["post.md"])) if previous.get("path") == f"{relative}/post.md" else {"post.md"}
+        if any((folder / name).exists() and not (owned and name in written) for name in names):
             raise ValueError(EXPORT_BLOCKED)
         head = ["---", f"title: {json.dumps(shown['title'], ensure_ascii=False)}", f"date: {day}",
                 f"commits: {json.dumps(shown.get('commits', []))}",
@@ -378,7 +381,7 @@ class Studio:
             if row:
                 write_file(folder, figure["path"], row[0])
         write_file(folder, "post.md", ("\n".join(head) + shown["draft"].rstrip() + "\n").encode("utf-8"))
-        a["exported"] = {"path": f"{relative}/post.md", "edition": a.get("edition", 1), "at": now()}
+        a["exported"] = {"path": f"{relative}/post.md", "edition": a.get("edition", 1), "at": now(), "files": names}
 
     def idle(self):
         if self.running():
@@ -444,6 +447,8 @@ class Studio:
                 raise ValueError("PNG를 읽을 수 없습니다.")
         self.db.execute("INSERT INTO image VALUES (?,?,?)", (a["id"], ident, raw))
         a["figures"].append(figure)
+        if a.get("version") == VERSION and a["state"] != "stopped":
+            self.new_edition(a)
         a["draft"] = a["draft"].rstrip() + f"\n\n![{caption}]({figure['path']})\n"
         self.edited(a)
 
