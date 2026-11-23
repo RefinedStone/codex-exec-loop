@@ -285,17 +285,27 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[cfg(unix)]
+    fn short_private_temp_dir() -> PathBuf {
+        use std::os::unix::fs::DirBuilderExt;
+        let root = std::fs::canonicalize("/tmp").unwrap().join(format!(
+            "pc-{}-{:016x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        root
+    }
+    #[cfg(unix)]
     #[tokio::test]
     async fn exclusive_owner_recovers_stale_socket_but_preserves_live_or_foreign_entries() {
         use std::os::unix::fs::PermissionsExt;
         // macOS TMPDIR already occupies most of sun_path before the profile suffix is added.
         // Keep this real-socket fixture below the shared 103-byte IPC limit on every Unix host.
-        let root = tempfile::Builder::new()
-            .prefix("pc-")
-            .tempdir_in("/tmp")
-            .unwrap();
-        let home = std::fs::canonicalize(root.path()).unwrap();
-        let profile = profile_at(home).unwrap();
+        let root = short_private_temp_dir();
+        let profile = profile_at(root.clone()).unwrap();
         let owner = acquire_owner(&profile).unwrap();
         let socket = crate::private_ipc::provider_credential_socket_path(&profile.runtime);
         assert!(socket.as_os_str().len() <= 103);
@@ -336,7 +346,7 @@ mod tests {
         assert!(owner.prepare_endpoint().await.is_err());
         assert_eq!(std::fs::read(&socket).unwrap(), b"not a socket");
         drop(owner);
-        root.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[cfg(unix)]
     #[test]
@@ -353,15 +363,11 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn credential_endpoint_preserves_the_existing_gateway_home_length_limit() {
-        let root = tempfile::Builder::new()
-            .prefix("pc-")
-            .tempdir_in("/tmp")
-            .unwrap();
-        let base = std::fs::canonicalize(root.path()).unwrap();
-        // The existing Gateway accepts 86-byte homes: 86 + /run/gateway.sock = 103.
-        let prefix_len = base.as_os_str().len() + 1;
+        let root = short_private_temp_dir();
+        // The existing Gateway socket allows 86-byte homes: 86 + /run/gateway.sock = 103.
+        let prefix_len = root.as_os_str().len() + 1;
         assert!(prefix_len < 86);
-        let home = base.join("h".repeat(86 - prefix_len));
+        let home = root.join("h".repeat(86 - prefix_len));
         assert_eq!(home.join("run/gateway.sock").as_os_str().len(), 103);
         let profile = profile_at(home).unwrap();
         let owner = acquire_owner(&profile).unwrap();
@@ -373,7 +379,7 @@ mod tests {
         drop(listener);
         owner.prepare_endpoint().await.unwrap();
         drop(owner);
-        root.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[cfg(windows)]
     #[test]
