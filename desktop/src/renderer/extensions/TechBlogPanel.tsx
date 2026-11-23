@@ -25,8 +25,14 @@ function StateBadge({ state, findings = 0 }: { state: State; findings?: number }
 }
 
 export default function TechBlogPanel({ call, epoch, workspace }: { call: ExtensionCall; epoch: number; workspace: string | null }) {
-  const [selected, select] = useState(() => takeBlogFocus() ?? "");
-  useEffect(() => onBlogFocus(() => { const id = takeBlogFocus(); if (id) select(id); }), []);
+  const [selected, select] = useState("");
+  useEffect(() => {
+    // Suspense가 다시 시도할 수 있는 렌더에서는 대기 중인 글 선택을 소비하지 않는다.
+    const receiveFocus = () => { const id = takeBlogFocus(); if (id) select(id); };
+    const unsubscribe = onBlogFocus(receiveFocus);
+    receiveFocus();
+    return unsubscribe;
+  }, []);
   return <section className="blog-studio" aria-label="기술 블로그">
     {selected ? <ArticleView key={selected} id={selected} call={call} epoch={epoch} workspace={workspace} onBack={() => select("")} />
       : <Home call={call} epoch={epoch} onOpen={select} />}
