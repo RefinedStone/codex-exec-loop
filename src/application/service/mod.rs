@@ -94,3 +94,7 @@ pub mod issue_intervention;
 pub(crate) mod kernel_extensions;
 pub mod storage_analysis;
 pub(crate) mod storage_sharing;
+
+pub mod provider_credentials;
+
+pub mod provider_work;

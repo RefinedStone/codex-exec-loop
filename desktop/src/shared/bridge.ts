@@ -1,6 +1,6 @@
 // main 과 renderer 가 공유하는 메시지 버스 계약이다. main 은 메시지를 해석하지 않고 문자열 그대로 전달한다.
 import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
-import type { LinearBridge } from "./linear";
+import type { ProviderConnectionBridge, ProviderCredentialBridge } from "./providerCredentials";
 import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings, AppSettingsPatch } from "./settings";
 import type { SkillsBridge } from "./skills";
@@ -75,19 +75,11 @@ export const IPC_CHANNELS = {
   githubProject: "akra:github-project",
   githubRepository: "akra:github-repository",
   openExternal: "akra:open-external",
-  jiraStatus: "akra:jira-status",
-  jiraChanged: "akra:jira-changed",
-  jiraCurrentVersion: "akra:jira-current-version",
-  jiraConnect: "akra:jira-connect",
-  jiraDisconnect: "akra:jira-disconnect",
-  jiraSummary: "akra:jira-summary",
-  jiraIssuePrompt: "akra:jira-issue-prompt",
-  linearStatus: "akra:linear-status",
-  linearConnect: "akra:linear-connect",
-  linearDisconnect: "akra:linear-disconnect",
-  linearSummary: "akra:linear-summary",
-  linearIssuePrompt: "akra:linear-issue-prompt",
-  linearOpenExternal: "akra:linear-open-external",
+  providerLegacyStatus: "akra:provider-legacy-status",
+  providerMigrateLegacy: "akra:provider-migrate-legacy",
+  providerPrepareDisconnect: "akra:provider-prepare-disconnect",
+  providerCleanupLegacy: "akra:provider-cleanup-legacy",
+  providerOpenExternal: "akra:provider-open-external",
   dotsGetEnabled: "akra:dots-get-enabled",
   dotsSetEnabled: "akra:dots-set-enabled",
   dotsOpenWindow: "akra:dots-open-window",
@@ -181,16 +173,6 @@ export interface GitHubBridge {
 /** cloud: Atlassian Cloud (이메일 + API 토큰). server: Server/Data Center (PAT). */
 export type JiraDeployment = "cloud" | "server";
 
-/** 연결 화면에서 main 으로 한 번만 보낸다. main 은 토큰을 renderer 로 돌려주지 않는다. */
-export interface JiraConnectRequest {
-  siteUrl: string;
-  deployment: JiraDeployment;
-  email: string;
-  token: string;
-}
-
-export type JiraStatus = { connected: false } | { connected: true; siteUrl: string; deployment: JiraDeployment; email: string | null };
-
 export interface JiraIssue {
   key: string;
   summary: string;
@@ -210,18 +192,12 @@ export interface JiraSummary {
   issues: JiraIssue[];
 }
 
-/** Jira 업무 패널이다 (R4). main 이 Jira REST 를 직접 부른다. */
-export interface JiraBridge {
-  status(): Promise<JiraStatus>;
-  onChanged(listener: () => void): () => void;
+/** Jira 업무 패널의 renderer facade이다. 인증과 HTTP는 Gateway가 소유한다. */
+export interface JiraBridge extends ProviderConnectionBridge {
   currentVersion(request: { readonly key: string; readonly url: string }): Promise<{ version: string }>;
-  connect(request: JiraConnectRequest): Promise<JiraStatus>;
-  disconnect(): Promise<JiraStatus>;
   summary(): Promise<JiraSummary>;
-  /** 티켓 내용(설명, 최근 댓글)으로 만든 첫 메시지이다. */
   issuePrompt(key: string): Promise<string>;
-  /** 연결된 Jira 사이트의 티켓 주소를 기본 브라우저로 연다. */
-  openExternal(url: string): void;
+  openExternal(url: string): Promise<void>;
 }
 
 /** Notion 업무 패널이다 (plan 21). 데이터는 renderer 가 Gateway 의 MCP hub 로 읽는다. */
@@ -474,8 +450,7 @@ export interface AkraBridge {
     open(conversationUrl?: string): Promise<boolean>;
   };
   github: GitHubBridge;
-  jira: JiraBridge;
-  linear: LinearBridge;
+  providerCredentials: ProviderCredentialBridge;
   notion: NotionBridge;
   dots: DotsBridge;
   zoom: ZoomBridge;

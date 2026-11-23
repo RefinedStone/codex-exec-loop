@@ -1,6 +1,7 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { LinearBridge, LinearFilters, LinearIssue, LinearStatus, LinearSummary } from "../../shared/linear";
+import type { LinearBridge, LinearFilters, LinearIssue, LinearSummary } from "../../shared/linear";
+import { providerConnectionKey, useProviderConnection } from "./useProviderConnection";
 import "./LinearPanel.css";
 
 const NO_FILTERS: LinearFilters = { teamId: null, projectId: null, currentCycle: false };
@@ -72,27 +73,28 @@ function IssueRow({
 }
 
 export function LinearPanel({ linear, onHandOff }: { linear: LinearBridge; onHandOff(issue: LinearIssue): Promise<void> }) {
-  const [status, setStatus] = useState<LinearStatus | null>(null);
-  const [token, setToken] = useState("");
+  const connection = useProviderConnection(linear);
+  const { state, busy, run } = connection;
+  const active = state?.activeConnection;
+  const scope = providerConnectionKey(state);
   const [filters, setFilters] = useState<LinearFilters>(NO_FILTERS);
   const [summary, setSummary] = useState<LinearSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
   const mounted = useRef(false);
   const request = useRef(0);
 
   const load = useCallback(async (nextFilters: LinearFilters, refresh: boolean) => {
     const id = ++request.current;
     setLoading(true);
-    setError(null);
+    setListError(null);
     try {
       const next = await linear.summary(nextFilters, refresh);
       if (mounted.current && request.current === id) setSummary(next);
     } catch (cause) {
       if (mounted.current && request.current === id) {
         setSummary(null);
-        setError(message(cause));
+        setListError(message(cause));
       }
     } finally {
       if (mounted.current && request.current === id) setLoading(false);
@@ -101,134 +103,62 @@ export function LinearPanel({ linear, onHandOff }: { linear: LinearBridge; onHan
 
   useEffect(() => {
     mounted.current = true;
-    const id = ++request.current;
-    setStatus(null);
-    setSummary(null);
-    setFilters(NO_FILTERS);
-    setToken("");
-    setBusy(false);
-    setLoading(true);
-    setError(null);
-    void linear.status().then(
-      (next) => {
-        if (!mounted.current || request.current !== id) return;
-        setStatus(next);
-        if (next.connected) void load(NO_FILTERS, true);
-        else setLoading(false);
-      },
-      (cause: unknown) => {
-        if (!mounted.current || request.current !== id) return;
-        setStatus({ connected: false });
-        setLoading(false);
-        setError(message(cause));
-      },
-    );
-    return () => {
-      mounted.current = false;
-      request.current++;
-    };
-  }, [linear, load]);
+    request.current++;
+    setSummary(null); setFilters(NO_FILTERS); setListError(null);
+    setLoading(Boolean(scope));
+    if (scope) void load(NO_FILTERS, true);
+    return () => { mounted.current = false; request.current++; };
+  }, [linear, load, scope]);
 
-  const connect = async (event: FormEvent) => {
-    event.preventDefault();
-    if (busy || !token.trim()) return;
-    const id = ++request.current;
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await linear.connect(token.trim());
-      if (!mounted.current || request.current !== id) return;
-      setStatus(next);
-      if (next.connected) {
-        setToken("");
-        setFilters(NO_FILTERS);
-        setBusy(false);
-        void load(NO_FILTERS, true);
-      } else {
-        setBusy(false);
-        setError("연결되지 않았습니다. 개인 API 키를 확인하고 다시 연결하세요.");
-      }
-    } catch (cause) {
-      if (mounted.current && request.current === id) {
-        setBusy(false);
-        setError(message(cause));
-      }
-    }
-  };
-
-  const disconnect = async () => {
-    const id = ++request.current;
-    setBusy(true);
-    setLoading(false);
-    setSummary(null);
-    setError(null);
-    try {
-      const next = await linear.disconnect();
-      if (!mounted.current || request.current !== id) return;
-      setStatus(next);
-      setToken("");
-      setFilters(NO_FILTERS);
-      setBusy(false);
-      if (next.connected) void load(NO_FILTERS, false);
-    } catch (cause) {
-      if (mounted.current && request.current === id) {
-        setBusy(false);
-        setError(message(cause));
-      }
-    }
-  };
-
-  const filter = (next: LinearFilters) => {
-    setFilters(next);
-    void load(next, false);
-  };
+  const filter = (next: LinearFilters) => { setFilters(next); void load(next, false); };
   const groups = new Map<string, { name: string; issues: LinearIssue[] }>();
   for (const issue of summary?.issues ?? []) {
     const group = groups.get(issue.state.id) ?? { name: issue.state.name, issues: [] };
     group.issues.push(issue);
     groups.set(issue.state.id, group);
   }
+  const error = connection.error ?? listError;
 
   return (
     <aside className="work-panel linear-panel" data-testid="linear-panel" aria-label="Linear">
       <div className="work-header">
         <strong>Linear</strong>
-        {status?.connected && <span className="muted linear-viewer">{status.viewerName}</span>}
-        {status?.connected && (
-          <span className="work-actions">
-            <button type="button" onClick={() => void load(filters, true)} disabled={busy || loading} data-testid="linear-refresh">
-              새로 고침
-            </button>
-            <button type="button" onClick={() => void disconnect()} disabled={busy} data-testid="linear-disconnect">
-              {busy ? "해제 중…" : "연결 해제"}
-            </button>
-          </span>
-        )}
+        {active && <span className="muted linear-viewer">{active.metadata.accountName}</span>}
+        {active && <span className="work-actions">
+          <button type="button" onClick={() => void load(filters, true)} disabled={busy || loading} data-testid="linear-refresh">새로 고침</button>
+          <button type="button" onClick={() => void run(() => linear.connect())} disabled={busy || !connection.canConnect} data-testid="linear-reconnect">연결 변경</button>
+          <button type="button" onClick={() => void run(() => linear.disconnect())} data-testid="linear-disconnect">연결 해제</button>
+        </span>}
       </div>
-      {status && !status.connected && (
-        <form className="work-section work-form" onSubmit={(event) => void connect(event)} data-testid="linear-connect">
-          <p className="muted">개인 API 키로 배정된 이슈를 읽습니다. 키는 이 컴퓨터의 OS 암호화로만 저장합니다.</p>
-          <p className="muted">Linear 설정의 Security &amp; access → Personal API keys에서 키를 만드세요.</p>
-          <label>
-            개인 API 키
-            <input
-              type="password"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={busy}
-              required
-              data-testid="linear-key"
-            />
-          </label>
-          <button type="submit" disabled={busy || !token.trim()} data-testid="linear-connect-submit">
-            {busy ? "확인 중…" : "연결"}
-          </button>
-        </form>
-      )}
+      {!state && !error && <p className="muted work-section" role="status">연결 상태 확인 중…</p>}
+      {state && !active && <div className="work-section work-form" data-testid="linear-connect">
+        <p className="muted">개인 API 키로 배정된 이슈를 읽습니다. 키는 별도 시스템 창에서 입력하고 OS 키 저장소에 보관합니다.</p>
+        <p className="muted">회사 데이터 정책을 확인한 뒤 Linear 설정의 Security &amp; access → Personal API keys에서 만든 키로 연결하세요.</p>
+        <button type="button" disabled={busy || !connection.canConnect} onClick={() => void run(() => linear.connect())} data-testid="linear-connect-submit">
+          {busy ? "확인 중…" : "시스템 창에서 연결"}
+        </button>
+        {!connection.canConnect && <p className="muted" role="status">이 환경에서는 새 자격 증명을 입력할 수 없습니다.</p>}
+      </div>}
+      {connection.canMigrate && <div className="work-section">
+        <button type="button" disabled={busy} onClick={() => void run(() => linear.migrateLegacy())} data-testid="linear-migrate">
+          {connection.legacy.kind === "pending" ? "기존 연결 이관 확인" : "기존 연결 옮기기"}
+        </button>
+        <p className="muted">저장한 키를 다시 입력하지 않고 옮깁니다.</p>
+      </div>}
+      {connection.canCleanLegacy && <div className="work-section" role="status">
+        <p className="muted">연결은 해제되어 있습니다. 저장된 기존 연결을 정리할 수 있습니다.</p>
+        <button type="button" disabled={busy} onClick={() => void run(() => linear.disconnect())} data-testid="linear-disconnect-legacy">남은 기존 연결 삭제</button>
+      </div>}
+      {(busy || connection.pending) && <div className="work-section" role="status">
+        연결 작업을 확인하고 있습니다.
+        <button type="button" onClick={() => void run(() => linear.cancel())} data-testid="linear-cancel">작업 취소</button>
+      </div>}
+      {state?.operation?.cleanupPending && <p className="muted work-section" role="status">{state.operation.kind === "disconnect" ? "연결은 해제했습니다. 저장소에서 자격 증명을 지우는 작업이 남아 있습니다." : "현재 연결은 유지됩니다. 이전 자격 증명 정리가 남아 있습니다."}</p>}
       {error && <div className="error work-section" role="alert" data-testid="linear-error">{error}</div>}
-      {status?.connected && (
+      {(error || connection.pending || state?.operation?.cleanupPending) && <div className="work-section">
+        <button type="button" onClick={() => void run(() => linear.retry())} data-testid="linear-retry">{state?.operation?.kind === "disconnect" && state.operation.cleanupPending ? "삭제 다시 시도" : "상태 확인"}</button>
+      </div>}
+      {active && (
         <div className="work-section linear-filters" aria-label="이슈 필터">
           <label>
             팀
@@ -267,7 +197,7 @@ export function LinearPanel({ linear, onHandOff }: { linear: LinearBridge; onHan
         </div>
       )}
       {loading && <p className="muted work-section" role="status" data-testid="linear-loading">읽는 중…</p>}
-      {status?.connected && !loading && summary && (
+      {active && !loading && summary && (
         <div className="work-scroll">
           <div className="work-section">
             <h3>나에게 배정된 이슈 ({summary.issues.length})</h3>
