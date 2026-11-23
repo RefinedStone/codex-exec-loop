@@ -19,6 +19,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const restoring = loading && !snapshot;
   const scope = useRef({ key: scopeKey, enabled, epoch: 0 });
   if (scope.current.key !== scopeKey || scope.current.enabled !== enabled) scope.current = { key: scopeKey, enabled, epoch: scope.current.epoch + 1 };
   const currentSnapshot = useRef(snapshot);
@@ -87,6 +88,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       if (isActiveJob(latest) && typeof progress?.volume_id === "string" && progress.volume_id) setVolumeId(progress.volume_id);
       if (currentJobId.current !== latest.id) {
         currentJobId.current = latest.id; currentSnapshot.current = null; interaction.current++;
+        if (latest.result) setVolumeId(latest.result.volume_id);
         setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]);
       }
       if (!latest.result) {
@@ -131,7 +133,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
 
   const scan = async () => {
     const life = scope.current;
-    if (!enabled || busy || !volumes.some(volume => volume.id === volumeId && volume.supported)) return;
+    if (!enabled || busy || restoring || !volumes.some(volume => volume.id === volumeId && volume.supported)) return;
     setBusy(true); setError(""); interaction.current++;
     try {
       await call<ExtensionJob>("scan", { volume_id: volumeId, options: {} }, crypto.randomUUID());
@@ -158,7 +160,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
     });
   };
   return { call, scope, interaction, volumes, jobs, snapshot, nodes, pages, expanded, selectedId, volumeId,
-    setVolumeId, error, setError, busy, loading, scan, cancel, refresh, loadChildren, select, toggle,
+    setVolumeId, error, setError, busy, loading, restoring, scan, cancel, refresh, loadChildren, select, toggle,
     setNodes, setPages, setExpanded, setSelectedId, revealedPath, setRevealedPath, currentSnapshot };
 }
 export type StorageExplorer = ReturnType<typeof useStorageExplorer>;
