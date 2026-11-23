@@ -31,7 +31,8 @@ const check = (name, ok) => {
 const app = await electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env });
 try {
   await app.evaluate(({ ipcMain }) => {
-    for (const channel of ["akra:github-project", "akra:github-repository"]) ipcMain.removeHandler(channel);
+    for (const channel of ["akra:github-project", "akra:github-repository", "akra:github-summary"]) ipcMain.removeHandler(channel);
+    ipcMain.handle("akra:github-summary", () => ({ login: "fixture", myPullRequests: [], reviewRequests: [] }));
     const issue = (number, repository, status) => ({ kind: "issue", title: `Issue ${number}`, url: `https://github.com/${repository}/issues/${number}`, repository, number, status });
     ipcMain.handle("akra:github-project", (_event, project) => {
       if (project !== "sample/1") throw new Error(`Unexpected project ${project}`);

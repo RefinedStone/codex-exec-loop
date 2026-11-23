@@ -28,6 +28,7 @@ use super::issue::{ISSUE_METHOD_PREFIX, spawn_request as spawn_issue_request};
 use super::issue_draft::{is_issue_draft_method, spawn_request as spawn_issue_draft_request};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests, is_sensitive_issue_command};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
+use super::provider_credentials::{self, ProviderSession as CredentialSession};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::resource_version::{self, ProviderSession};
 use super::router::{
@@ -67,6 +68,7 @@ pub(super) fn websocket_config() -> WebSocketConfig {
 #[cfg_attr(test, derive(Default))]
 pub(super) struct GatewayServices {
     pub(super) delegations: Arc<super::delegation::Delegations>,
+    pub(super) providers: Option<crate::composition::provider_credentials::ProviderServices>,
     pub(super) mcp_hub: Option<Arc<GatewayMcpHub>>,
     pub(super) work_context: Option<Arc<dyn WorkContextPort>>,
     pub(super) resource_versions:
@@ -186,6 +188,12 @@ where
         None
     };
 
+    let credential_session = services
+        .providers
+        .as_ref()
+        .filter(|_| is_local)
+        .map(|services| CredentialSession::start(services.clone(), outbox.clone()));
+
     let client_to_upstream = async {
         // 이 접속이 보는 dot 방들이다. 접속이 끝나면 함께 멈춘다.
         let mut dot_watches = DotWatches::default();
@@ -198,196 +206,242 @@ where
                 }
             };
             match message {
-                Message::Text(text) => match route_client_text(text.as_str()) {
-                    ClientTextRoute::Forward => {
-                        if let Some((id, response)) = super::delegation::response(text.as_str()) {
-                            if let Some(driver) = &delegation_driver {
-                                driver.answer(id, response);
-                            }
-                            continue;
-                        }
-                        if is_confirmation_frame(text.as_str()) {
-                            let response = serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"invalid human confirmation request"}});
-                            if outbox
-                                .send(Message::text(response.to_string()))
-                                .await
-                                .is_err()
-                            {
-                                return SessionEnd::ClientClosed;
-                            }
-                            continue;
-                        }
-                        if let Some(id) = resource_version::response_id(text.as_str()) {
-                            if let Some(provider) = &provider_session {
-                                provider.answer(&id, text.as_str());
-                            }
-                            continue;
-                        }
-                        if let Some(context) = &storage_conversation {
-                            context.client_message(text.as_str());
-                        }
-                        record(RecordDirection::Client, text.as_str());
-                        if upstream_sink.send(Message::Text(text)).await.is_err() {
-                            return SessionEnd::UpstreamClosed;
-                        }
-                    }
-                    ClientTextRoute::AkraRequest { id, method } => {
-                        let sensitive_confirmation = is_confirmation_method(&method);
-                        // 초안과 결정 답의 note에는 가리기 전의 로컬 글이 있다. 녹화에 남기지 않는다.
-                        if !crate::adapter::inbound::kernel_protocol::is_extension_request(&method)
-                            && !is_issue_draft_method(&method)
-                            && !is_sensitive_issue_command(&method, text.as_str())
-                            && !sensitive_confirmation
-                            && !method.starts_with(super::delegation::PREFIX)
-                            && !super::delegation::private_kernel_payload(&method, text.as_str())
+                Message::Text(text) => {
+                    if provider_credentials::malformed_provider_frame(text.as_str()) {
+                        if outbox
+                            .send(Message::text(provider_credentials::invalid_response(
+                                serde_json::Value::Null,
+                            )))
+                            .await
+                            .is_err()
                         {
+                            return SessionEnd::ClientClosed;
+                        }
+                        continue;
+                    }
+                    match route_client_text(text.as_str()) {
+                        ClientTextRoute::Forward => {
+                            if let Some((id, response)) = super::delegation::response(text.as_str())
+                            {
+                                if let Some(driver) = &delegation_driver {
+                                    driver.answer(id, response);
+                                }
+                                continue;
+                            }
+                            if is_confirmation_frame(text.as_str()) {
+                                let response = serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"invalid human confirmation request"}});
+                                if outbox
+                                    .send(Message::text(response.to_string()))
+                                    .await
+                                    .is_err()
+                                {
+                                    return SessionEnd::ClientClosed;
+                                }
+                                continue;
+                            }
+                            if let Some(id) = resource_version::response_id(text.as_str()) {
+                                if let Some(provider) = &provider_session {
+                                    provider.answer(&id, text.as_str());
+                                }
+                                continue;
+                            }
+                            if let Some(context) = &storage_conversation {
+                                context.client_message(text.as_str());
+                            }
                             record(RecordDirection::Client, text.as_str());
-                        }
-                        let mcp_hub_for_method = services
-                            .mcp_hub
-                            .as_ref()
-                            .filter(|_| method.starts_with(MCP_METHOD_PREFIX));
-                        let context_for_method = services
-                            .work_context
-                            .as_ref()
-                            .filter(|_| method.starts_with(CONTEXT_METHOD_PREFIX));
-                        let git_for_method = services
-                            .git_graph
-                            .as_ref()
-                            .filter(|_| is_local && method.starts_with(GIT_METHOD_PREFIX));
-                        let issue_for_method = services
-                            .issue_handoff
-                            .as_ref()
-                            .filter(|_| is_local && method.starts_with(ISSUE_METHOD_PREFIX));
-                        let dots_for_method = services
-                            .dots
-                            .as_ref()
-                            .filter(|_| method.starts_with(DOTS_METHOD_PREFIX));
-                        let chats_for_method = services
-                            .chats
-                            .as_ref()
-                            .filter(|_| !is_local && method.starts_with(CHATS_METHOD_PREFIX));
-                        let drafts_for_method = services
-                            .issue_drafts
-                            .as_ref()
-                            .filter(|_| is_local && is_issue_draft_method(&method));
-                        let immediate = if let Some(drafts) = drafts_for_method {
-                            spawn_issue_draft_request(
-                                drafts.clone(),
-                                services.delegations.clone(),
-                                id,
-                                method,
-                                text.as_str().to_string(),
-                                outbox.clone(),
-                            );
-                            None
-                        } else if method.starts_with(super::delegation::PREFIX) {
-                            Some(match &delegation_driver {
-                                Some(driver) => driver.request(id, &method),
-                                None => refuse_kernel_on_remote_host(id, &method),
-                            })
-                        } else if method.starts_with(resource_version::METHOD_PREFIX) {
-                            Some(match &provider_session {
-                                Some(provider) => provider.request(id, &method, text.as_str()),
-                                None => refuse_kernel_on_remote_host(id, &method),
-                            })
-                        } else if method.starts_with(KERNEL_METHOD_PREFIX) {
-                            match &kernel_requests {
-                                Some(kernel_requests) => kernel_requests
-                                    .submit(id, method, text.as_str().to_string())
-                                    .err(),
-                                None => Some(refuse_kernel_on_remote_host(id, &method)),
+                            if upstream_sink.send(Message::Text(text)).await.is_err() {
+                                return SessionEnd::UpstreamClosed;
                             }
-                        } else if !is_local && method.starts_with(CONTEXT_METHOD_PREFIX) {
-                            Some(remote_context_response(id))
-                        } else if let Some(response) = dots_for_method.and_then(|dots| {
-                            dot_watches.handle(dots.as_ref(), &id, &method, text.as_str(), &outbox)
-                        }) {
-                            Some(response)
-                        } else if let Some(dots) = dots_for_method {
-                            spawn_dots_request(
-                                dots.clone(),
-                                id,
-                                method,
-                                text.as_str().to_string(),
-                                outbox.clone(),
-                            );
-                            None
-                        } else if let Some(chats) = chats_for_method {
-                            spawn_chats_request(
-                                chats.clone(),
-                                id,
-                                method,
-                                text.as_str().to_string(),
-                                outbox.clone(),
-                            );
-                            None
-                        } else if let Some(hub) = mcp_hub_for_method {
-                            spawn_mcp_request(
-                                hub.clone(),
-                                id,
-                                method,
-                                text.as_str().to_string(),
-                                outbox.clone(),
-                                recording.clone(),
-                            );
-                            None
-                        } else if let Some(graph) = git_for_method {
-                            spawn_git_request(
-                                GitPorts {
-                                    graph: graph.clone(),
-                                    operations: services.git_operations.clone(),
-                                },
-                                id,
-                                method,
-                                text.as_str().to_string(),
-                                outbox.clone(),
-                                recording.clone(),
-                            );
-                            None
-                        } else if let Some(handoff) = issue_for_method {
-                            spawn_issue_request(
-                                handoff.clone(),
-                                id,
-                                method,
-                                text.as_str().to_string(),
-                                outbox.clone(),
-                                recording.clone(),
-                            );
-                            None
-                        } else if let Some(context) = context_for_method {
-                            spawn_context_request(
-                                context.clone(),
-                                id,
-                                method,
-                                text.as_str().to_string(),
-                                outbox.clone(),
-                                recording.clone(),
-                            );
-                            None
-                        } else {
-                            Some(respond_to_akra_request(
-                                id,
+                        }
+                        ClientTextRoute::AkraRequest { id, method } => {
+                            let sensitive_confirmation = is_confirmation_method(&method);
+                            let sensitive_provider =
+                                provider_credentials::is_provider_method(&method);
+                            // 초안과 결정 답의 note에는 가리기 전의 로컬 글이 있다. 녹화에 남기지 않는다.
+                            if !crate::adapter::inbound::kernel_protocol::is_extension_request(
                                 &method,
-                                host_id,
-                                &hosts.snapshots(),
-                            ))
-                        };
-                        if let Some(response) = immediate {
-                            if !sensitive_confirmation {
-                                record(RecordDirection::Gateway, &response);
+                            ) && !is_issue_draft_method(&method)
+                                && !is_sensitive_issue_command(&method, text.as_str())
+                                && !sensitive_confirmation
+                                && !sensitive_provider
+                                && !method.starts_with(super::delegation::PREFIX)
+                                && !super::delegation::private_kernel_payload(
+                                    &method,
+                                    text.as_str(),
+                                )
+                            {
+                                record(RecordDirection::Client, text.as_str());
                             }
-                            if outbox.send(Message::text(response)).await.is_err() {
-                                return SessionEnd::ClientClosed;
+                            let mcp_hub_for_method = services
+                                .mcp_hub
+                                .as_ref()
+                                .filter(|_| method.starts_with(MCP_METHOD_PREFIX));
+                            let context_for_method = services
+                                .work_context
+                                .as_ref()
+                                .filter(|_| method.starts_with(CONTEXT_METHOD_PREFIX));
+                            let git_for_method = services
+                                .git_graph
+                                .as_ref()
+                                .filter(|_| is_local && method.starts_with(GIT_METHOD_PREFIX));
+                            let issue_for_method = services
+                                .issue_handoff
+                                .as_ref()
+                                .filter(|_| is_local && method.starts_with(ISSUE_METHOD_PREFIX));
+                            let dots_for_method = services
+                                .dots
+                                .as_ref()
+                                .filter(|_| method.starts_with(DOTS_METHOD_PREFIX));
+                            let chats_for_method = services
+                                .chats
+                                .as_ref()
+                                .filter(|_| !is_local && method.starts_with(CHATS_METHOD_PREFIX));
+                            let drafts_for_method = services
+                                .issue_drafts
+                                .as_ref()
+                                .filter(|_| is_local && is_issue_draft_method(&method));
+                            let immediate = if sensitive_provider {
+                                match &credential_session {
+                                    Some(session) => {
+                                        session.request(
+                                            id,
+                                            method,
+                                            text.as_str().to_owned(),
+                                            outbox.clone(),
+                                        );
+                                        None
+                                    }
+                                    None => Some(provider_credentials::unavailable_response(id)),
+                                }
+                            } else if let Some(drafts) = drafts_for_method {
+                                spawn_issue_draft_request(
+                                    drafts.clone(),
+                                    services.delegations.clone(),
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
+                                );
+                                None
+                            } else if method.starts_with(super::delegation::PREFIX) {
+                                Some(match &delegation_driver {
+                                    Some(driver) => driver.request(id, &method),
+                                    None => refuse_kernel_on_remote_host(id, &method),
+                                })
+                            } else if method.starts_with(resource_version::METHOD_PREFIX) {
+                                Some(match &provider_session {
+                                    Some(provider) => provider.request(id, &method, text.as_str()),
+                                    None => refuse_kernel_on_remote_host(id, &method),
+                                })
+                            } else if method.starts_with(KERNEL_METHOD_PREFIX) {
+                                match &kernel_requests {
+                                    Some(kernel_requests) => kernel_requests
+                                        .submit(id, method, text.as_str().to_string())
+                                        .err(),
+                                    None => Some(refuse_kernel_on_remote_host(id, &method)),
+                                }
+                            } else if !is_local && method.starts_with(CONTEXT_METHOD_PREFIX) {
+                                Some(remote_context_response(id))
+                            } else if let Some(response) = dots_for_method.and_then(|dots| {
+                                dot_watches.handle(
+                                    dots.as_ref(),
+                                    &id,
+                                    &method,
+                                    text.as_str(),
+                                    &outbox,
+                                )
+                            }) {
+                                Some(response)
+                            } else if let Some(dots) = dots_for_method {
+                                spawn_dots_request(
+                                    dots.clone(),
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
+                                );
+                                None
+                            } else if let Some(chats) = chats_for_method {
+                                spawn_chats_request(
+                                    chats.clone(),
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
+                                );
+                                None
+                            } else if let Some(hub) = mcp_hub_for_method {
+                                spawn_mcp_request(
+                                    hub.clone(),
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
+                                    recording.clone(),
+                                );
+                                None
+                            } else if let Some(graph) = git_for_method {
+                                spawn_git_request(
+                                    GitPorts {
+                                        graph: graph.clone(),
+                                        operations: services.git_operations.clone(),
+                                    },
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
+                                    recording.clone(),
+                                );
+                                None
+                            } else if let Some(handoff) = issue_for_method {
+                                spawn_issue_request(
+                                    handoff.clone(),
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
+                                    recording.clone(),
+                                );
+                                None
+                            } else if let Some(context) = context_for_method {
+                                spawn_context_request(
+                                    context.clone(),
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
+                                    recording.clone(),
+                                );
+                                None
+                            } else {
+                                Some(respond_to_akra_request(
+                                    id,
+                                    &method,
+                                    host_id,
+                                    &hosts.snapshots(),
+                                ))
+                            };
+                            if let Some(response) = immediate {
+                                if !sensitive_confirmation && !sensitive_provider {
+                                    record(RecordDirection::Gateway, &response);
+                                }
+                                if outbox.send(Message::text(response)).await.is_err() {
+                                    return SessionEnd::ClientClosed;
+                                }
+                            }
+                        }
+                        ClientTextRoute::AkraNotification { method } => {
+                            if !is_confirmation_method(&method)
+                                && !provider_credentials::is_provider_method(&method)
+                            {
+                                tracing::debug!(
+                                    method,
+                                    "ignored gateway notification without an id"
+                                );
                             }
                         }
                     }
-                    ClientTextRoute::AkraNotification { method } => {
-                        if !is_confirmation_method(&method) {
-                            tracing::debug!(method, "ignored gateway notification without an id");
-                        }
-                    }
-                },
+                }
                 Message::Binary(bytes) => {
                     if upstream_sink.send(Message::Binary(bytes)).await.is_err() {
                         return SessionEnd::UpstreamClosed;
@@ -461,6 +515,7 @@ where
         context.invalidate();
     }
     drop(provider_session);
+    drop(credential_session);
     drop(delegation_driver);
     // Kernel workers can hold additional outbox senders; stop them before flushing.
     if let Some(kernel_requests) = kernel_requests {

@@ -33,6 +33,7 @@ mod issue_flow;
 mod issue_intervention;
 #[cfg(any(unix, windows))]
 mod issue_shared_copy_flow;
+mod provider_credentials;
 mod repository_extensions;
 mod resource_versions;
 

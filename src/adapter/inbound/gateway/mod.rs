@@ -19,6 +19,7 @@ mod issue_draft;
 mod kernel;
 mod listener;
 mod mcp;
+mod provider_credentials;
 mod recorder;
 mod resource_version;
 mod restart;
@@ -70,6 +71,8 @@ enum GatewayCommand {
     DesktopBrowserBridge,
     DesktopConfirmationBridge,
     DesktopRestoreBridge,
+    ProviderCredentialPrompt,
+    ProviderCredentialMigration,
 }
 
 pub async fn run_from_env() -> Result<()> {
@@ -91,12 +94,44 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         GatewayCommand::DesktopRestoreBridge => {
             return super::desktop_restore_bridge::run().await;
         }
+        GatewayCommand::ProviderCredentialPrompt => {
+            return tokio::task::spawn_blocking(|| {
+                super::provider_credential_prompt::run(
+                    crate::composition::provider_credentials::native_input(),
+                )
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("provider credential input unavailable"))?;
+        }
+        GatewayCommand::ProviderCredentialMigration => {
+            let profile = crate::composition::provider_credentials::profile()?;
+            return super::provider_credential_migration::run(profile.id, profile.runtime).await;
+        }
         GatewayCommand::Run => {}
     }
     let akra_home = crate::configuration::akra_home_dir()?;
     let run_dir = akra_home.join(crate::gateway_endpoint::RUN_DIRECTORY_NAME);
     crate::private_directory::ensure_private_directory(&run_dir)?;
     let _instance_lock = acquire_instance_lock(&run_dir)?;
+    let providers = crate::composition::provider_credentials::build()?;
+    let recovering = providers.credentials.clone();
+    tokio::task::spawn_blocking(move || recovering.recover())
+        .await
+        .map_err(|_| anyhow::anyhow!("provider credential recovery unavailable"))??;
+    providers.owner.prepare_endpoint().await?;
+    let validating = providers.work.clone();
+    let migration = super::provider_credential_migration::start(
+        providers.profile.id.clone(),
+        providers.profile.runtime.clone(),
+        providers.credentials.clone(),
+        Arc::new(move |reference, url| {
+            use crate::application::port::outbound::provider_work_port::ProviderLinkPort;
+            validating.validate_link(&crate::domain::provider_work::ProviderLinkRequest {
+                connection: reference.clone(),
+                url: url.to_owned(),
+            })
+        }),
+    )?;
     let recorder = GatewayRecorder::from_env(&akra_home)?.map(Arc::new);
     let listener = GatewayListener::bind(&run_dir)?;
     let production::GatewayBackend {
@@ -105,7 +140,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         kernels,
         mcp_hub,
         work_context,
-        resource_versions,
+        providers,
         git_graph,
         git_operations,
         issue_handoff,
@@ -113,7 +148,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         chats,
         issue_drafts,
         delegations,
-    } = production::build_gateway_backend(&run_dir)?;
+    } = production::build_gateway_backend(&run_dir, providers)?;
     println!("akra-gateway listening on {}", listener.endpoint());
     let _ = std::io::stdout().flush();
     tracing::info!(
@@ -130,6 +165,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         );
     }
     let hosts = GatewayHosts::new(upstream, other_hosts);
+    let stopping_credentials = providers.credentials.clone();
     serve(
         listener,
         hosts.clone(),
@@ -137,7 +173,8 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         session::GatewayServices {
             mcp_hub: Some(mcp_hub.clone()),
             work_context: Some(work_context),
-            resource_versions: Some(resource_versions),
+            resource_versions: None,
+            providers: Some(providers),
             delegations,
             git_graph: Some(git_graph),
             git_operations: Some(git_operations),
@@ -149,6 +186,8 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         recorder,
     )
     .await;
+    let _ = tokio::task::spawn_blocking(move || stopping_credentials.shutdown()).await;
+    migration.shutdown().await;
     stop_backend(hosts, kernels, mcp_hub).await;
     tracing::info!("akra_gateway_stopped");
     Ok(())
@@ -181,6 +220,12 @@ fn parse_args(args: &[String]) -> Result<GatewayCommand> {
         }
         [command] if command == "desktop-restore-bridge" => {
             Ok(GatewayCommand::DesktopRestoreBridge)
+        }
+        [command] if command == "provider-credential-prompt" => {
+            Ok(GatewayCommand::ProviderCredentialPrompt)
+        }
+        [command] if command == "provider-credential-migration" => {
+            Ok(GatewayCommand::ProviderCredentialMigration)
         }
         [flag] if flag == "-h" || flag == "--help" => Ok(GatewayCommand::Help),
         [unsupported, ..] => bail!("unsupported argument: {unsupported}\n\n{USAGE}"),

@@ -5,6 +5,15 @@
  */
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    // Private credential helpers never initialize recording/tracing or print a raw error.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if matches!(args.as_slice(), [command] if command == "provider-credential-prompt" || command == "provider-credential-migration")
+    {
+        return match codex_exec_loop_native::adapter::inbound::gateway::run_with_args(args).await {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(_) => std::process::ExitCode::FAILURE,
+        };
+    }
     let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
     #[cfg(windows)]
     attach_windowless_console();

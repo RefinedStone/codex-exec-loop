@@ -429,8 +429,7 @@ pub(crate) struct GatewayBackend {
     pub(crate) kernels: Arc<RepositoryKernelRegistry>,
     pub(crate) mcp_hub: Arc<GatewayMcpHub>,
     pub(crate) work_context: Arc<dyn WorkContextPort>,
-    pub(crate) resource_versions:
-        Arc<crate::application::service::resource_version::ResourceVersionService>,
+    pub(crate) providers: crate::composition::provider_credentials::ProviderServices,
     /// 커밋 그래프 읽기이다 (plan 27 G1).
     pub(crate) git_graph: Arc<dyn GitGraphPort>,
     /// git 작업 엔진이다 (plan 27 G3).
@@ -482,7 +481,10 @@ pub(crate) fn login_codex_delegation() -> Result<i32> {
     crate::adapter::outbound::app_server::codex_thread::login()
 }
 
-pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
+pub(crate) fn build_gateway_backend(
+    run_dir: &Path,
+    providers: crate::composition::provider_credentials::ProviderServices,
+) -> Result<GatewayBackend> {
     let upstream = AppServerGatewayUpstream::start(run_dir)?;
     let kernels = Arc::new(RepositoryKernelRegistry::sharing_app_server(
         upstream.kernel_socket(),
@@ -493,8 +495,6 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         hub.clone(),
     ));
     let upstream: Arc<dyn GatewayUpstreamPort> = Arc::new(upstream);
-    let resource_versions =
-        Arc::new(crate::application::service::resource_version::ResourceVersionService::default());
     let work_context: Arc<dyn WorkContextPort> = Arc::new(
         WorkContextService::new(
             Arc::new(AppServerThreadTranscript::new(upstream.clone())),
@@ -504,7 +504,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
             Arc::new(GithubResourceVersionAdapter::new(
                 crate::configuration::akra_home_dir()?,
             )),
-            resource_versions.clone(),
+            providers.work.clone(),
             Arc::new(NotionResourceVersionAdapter::new(hub)),
         ]),
     );
@@ -514,7 +514,7 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         kernels,
         mcp_hub,
         work_context,
-        resource_versions,
+        providers,
         git_graph: Arc::new(GitGraphService::new(Arc::new(GitHistoryAdapter))),
         git_operations: build_git_operations(),
         issue_handoff: Arc::new(

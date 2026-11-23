@@ -142,3 +142,7 @@ pub(crate) mod vault_native_confirmation_port;
 pub(crate) mod vault_restore_workspace_port;
 
 pub mod storage_analysis_port;
+
+pub mod provider_credentials_port;
+
+pub mod provider_work_port;

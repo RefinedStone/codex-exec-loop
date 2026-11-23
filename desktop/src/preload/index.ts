@@ -1,7 +1,6 @@
 // renderer 에 노출하는 것은 AkraBridge 의 함수뿐이다. Node API 와 ipcRenderer 자체는 노출하지 않는다.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { GitHunkAction, GitHunkDiff } from "../shared/gitHunks";
-import type { LinearFilters, LinearStatus, LinearSummary } from "../shared/linear";
 import type { BrowserAgentState } from "../shared/browserAgent";
 
 import {
@@ -23,9 +22,6 @@ import {
   type GitStatusResult,
   type IssueAutomationPolicyFileRequest,
   IPC_CHANNELS,
-  type JiraConnectRequest,
-  type JiraStatus,
-  type JiraSummary,
   type TerminalOpenRequest,
   type TerminalOpenResult,
 } from "../shared/bridge";
@@ -168,40 +164,17 @@ const bridge: AkraBridge = {
       ipcRenderer.send(IPC_CHANNELS.openExternal, url);
     },
   },
-  jira: {
-    onChanged: (listener) => listen<[]>(IPC_CHANNELS.jiraChanged, listener),
-    currentVersion: (request) => ipcRenderer.invoke(IPC_CHANNELS.jiraCurrentVersion, request),
-    status(): Promise<JiraStatus> {
-      return ipcRenderer.invoke(IPC_CHANNELS.jiraStatus) as Promise<JiraStatus>;
-    },
-    connect(request: JiraConnectRequest): Promise<JiraStatus> {
-      return ipcRenderer.invoke(IPC_CHANNELS.jiraConnect, request) as Promise<JiraStatus>;
-    },
-    disconnect(): Promise<JiraStatus> {
-      return ipcRenderer.invoke(IPC_CHANNELS.jiraDisconnect) as Promise<JiraStatus>;
-    },
-    summary(): Promise<JiraSummary> {
-      return ipcRenderer.invoke(IPC_CHANNELS.jiraSummary) as Promise<JiraSummary>;
-    },
-    issuePrompt(key: string): Promise<string> {
-      return ipcRenderer.invoke(IPC_CHANNELS.jiraIssuePrompt, key) as Promise<string>;
-    },
-    openExternal(url: string): void {
-      ipcRenderer.send(IPC_CHANNELS.openExternal, url);
-    },
+  providerCredentials: {
+    legacyStatus: provider => ipcRenderer.invoke(IPC_CHANNELS.providerLegacyStatus, provider),
+    migrateLegacy: target => ipcRenderer.invoke(IPC_CHANNELS.providerMigrateLegacy, target),
+    prepareLegacyDisconnect: request => ipcRenderer.invoke(IPC_CHANNELS.providerPrepareDisconnect, request),
+    cleanupLegacy: request => ipcRenderer.invoke(IPC_CHANNELS.providerCleanupLegacy, request),
+    openExternal: request => ipcRenderer.invoke(IPC_CHANNELS.providerOpenExternal, request),
   },
   notion: {
     openExternal(url: string): void {
       ipcRenderer.send(IPC_CHANNELS.openExternal, url);
     },
-  },
-  linear: {
-    status: (): Promise<LinearStatus> => ipcRenderer.invoke(IPC_CHANNELS.linearStatus),
-    connect: (token: string): Promise<LinearStatus> => ipcRenderer.invoke(IPC_CHANNELS.linearConnect, token),
-    disconnect: (): Promise<LinearStatus> => ipcRenderer.invoke(IPC_CHANNELS.linearDisconnect),
-    summary: (filters: LinearFilters, refresh: boolean): Promise<LinearSummary> => ipcRenderer.invoke(IPC_CHANNELS.linearSummary, filters, refresh),
-    issuePrompt: (id: string): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.linearIssuePrompt, id),
-    openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.linearOpenExternal, url),
   },
   dots: {
     getEnabled(): Promise<boolean> {

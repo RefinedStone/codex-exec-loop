@@ -573,8 +573,8 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
 | --- | --- | --- | --- | --- |
 | GitHub Issues | `gh api graphql`. 발견: 선택 조건의 열린 이슈, `updatedAt` 커서. 재동기화: node ID 로 한 건 | 댓글, 라벨, 담당자. 닫기는 §12.2 | `gh` 로그인. Gateway 에서 된다 | 첫 번째 |
 | GitHub Projects | 보드의 열과 필드 | `issue_board_field_port` (있음) | `read:project` | 뒤 |
-| Jira Cloud | JQL, `updated` 커서 | 댓글, 전이 | Electron main 에만 있다. 결정이 필요하다 | 뒤 |
-| Linear | GraphQL, `updatedAt` | 댓글, 상태 | Electron main 에만 있다. 결정이 필요하다 | 뒤 |
+| Jira Cloud | JQL, `updated` 커서 | 댓글, 전이 | Gateway OS 키 저장소 (§13.1, #2562) | 출처 adapter는 뒤 |
+| Linear | GraphQL, `updatedAt` | 댓글, 상태 | Gateway OS 키 저장소 (§13.1, #2562) | 출처 adapter는 뒤 |
 
 - 수집은 폴링이다. 기본 주기는 5분이다. "지금 동기화" 명령이 있다. 실패하면 간격을 늘린다.
 - webhook 은 받지 않는다. 로컬 데몬은 공개 주소가 없다.
@@ -603,7 +603,112 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
 | (b) 연결된 Desktop 에 되묻기 | `akra/resourceVersion/current` 의 방식 | 앱이 꺼지면 수집이 멈춘다 |
 | (c) MCP hub 의 로그인 | Notion 버전 확인의 방식 | 서버마다 도구 모양이 다르다. 쓰기의 일지를 직접 다루기 어렵다 |
 
-제안은 (a) 이다 (§19 Q-IA2).
+(a)를 채택한다 (§19 Q-IA2, #2562). 업무 패널도 같은 소유권을 사용한다.
+
+
+### 13.1 Gateway 자격 증명 소유권 (IA7-1, #2562)
+
+Q-IA2는 **(a) Gateway의 OS 키 저장소**로 정한다. Jira·Linear 업무 패널도 같은 Gateway 연결을 사용한다.
+이 조각은 연결·읽기·기존 연결 이전을 맡는다. 자동 수집·재동기화·피드백 adapter와 OAuth는
+#2563·#2564의 후속 범위이다. 업무 패널의 "작업하기"는 첫 메시지 초안만 만들며 모델 턴을 시작하지 않는다.
+
+#### 저장과 권한
+
+- 프로필은 planning authority와 같은 검증된 `AKRA_HOME` 해석을 쓴다. 프로필 ID는 해당 경로 정체성의
+  SHA-256이다. 키 이름은 프로필·provider·새 연결 ID·부분 번호로만 만든다. renderer가 저장소 namespace나
+  키 이름을 고르지 않는다. 프로필마다 Jira 하나와 Linear 하나를 연결한다.
+- Gateway 설정 홈과 별개로 이 프로필 runtime의 비밀 없는 `owner.db`에 배타 transaction을 잡은 뒤 복구한다.
+  원장 접근마다 owner의 경로 정체성을 다시 확인한다. Unix의 이전 migration socket도 독점 owner가
+  현재 사용자·socket 유형·파일 정체성과 비활성 상태를 확인한 경우에만 정리한다.
+- `provider-credentials/runtime/provider-credentials.db`에는 연결 메타데이터, revision, 작업 영수증, 이전할 암호문의
+  snapshot ID, 각 부분의 저장 상태만 둔다. 토큰과 토큰 해시는 이 DB에 없다. 기존 private SQLite 검증을
+  재사용하며, 읽기가 잘못된 기존 권한이나 스키마를 고쳐서 받아들이지 않는다.
+- 토큰은 Windows Credential Manager, macOS Keychain, Linux Secret Service의 항목으로 저장한다.
+  Windows의 2,560바이트 항목 제한을 지키기 위해 2,048바이트 조각과 연결·작업 binding을 사용한다.
+  모든 조각을 다시 읽어 검증한 다음에만 연결을 게시한다. 토큰의 완전성 해시는 키 저장소 capsule 안에만 있다.
+- Linear는 기존 4,096 UTF-16 code unit 한도를 보존한다(UTF-8 최대 12,288바이트).
+  Jira 토큰의 명시적 한도는 UTF-8 64 KiB이다. 이를 넘는 기존 토큰은 자르거나 삭제하지 않는다.
+- 상태 조회와 startup 복구는 원장만 읽는다. 상태를 보기 위해 OS 키 저장소를 열거나 잠금을 풀지 않는다.
+  실제 provider 읽기나 명시적 연결·해제에서 OS 접근이 필요하며, Linux Secret Service가 잠긴 경우 OS의
+  잠금 해제가 필요할 수 있다. 토큰 저장을 평문 파일로 대체하지 않는다.
+- OS 호출은 전용 worker 하나에서 직렬화한다. 대기에는 상한이 있고 취소·기한이 지난 미시작 작업은
+  건너뛴다. 이미 OS에 제출한 쓰기의 결과가 불명확하면 `outcomeUnknown`/`cleanupPending`을 유지한다.
+  OS가 응답하지 않는 동안 SQLite writer lock을 잡거나 Gateway 종료를 무기한 막지 않는다.
+
+#### 입력과 기존 연결의 이전
+
+새 연결에서는 Desktop이 site·deployment·email 같은 메타데이터만 public RPC로 보낸다. Gateway가 소유한
+별도 native helper가 회사 데이터 정책 확인과 API 토큰 입력창을 연다. Windows는 CredUI, macOS는 숨김 입력
+대화상자, Linux는 설치된 zenity를 사용한다. 화면 세션/입력 수단이 없으면 명시적으로 실패한다. 정책 확인은
+사용자의 해당 장치 연결 동의이며, 회사 정책의 자동 판정이나 모델·자동 실행에 대한 포괄 동의가 아니다.
+
+토큰은 Gateway와 그 helper 사이의 상속된 pipe로만 돌아온다. helper argv, 환경 변수, 평문 파일, stderr,
+공개 JSON-RPC, renderer, Gateway 녹화로 보내지 않는다. stdin/stdout이 terminal이나 regular file이면
+비밀 helper를 실행하지 않는다. timeout, EOF, 창 종료, Gateway 종료는 작업 owner를 취소한다.
+
+기존 `jira-token.bin`/`linear-token.bin`의 암호는 Electron main의 safeStorage만 해독할 수 있으므로,
+main은 **이전 전용** 책임을 유지한다. 기존 인증 HTTP와 토큰 저장 IPC는 제거한다.
+
+1. main이 고정된 사용자 데이터 경로에서 크기가 제한된 암호문과 메타데이터 snapshot을 잡는다.
+2. native client가 별도 private endpoint의 OS 사용자와 프로필을 확인한다. Windows는 named-pipe peer PID의
+   token SID, Unix는 peer UID를 확인한다. Gateway의 정책 확인과 durable prepared 영수증이 먼저이다.
+3. main은 그 뒤에만 safeStorage를 해독하고, 길이가 제한된 token frame을 private inherited pipe로 보낸다.
+   public Gateway relay나 녹화 경로를 거치지 않는다.
+4. Gateway의 keyring 저장·readback·revision CAS가 끝난 동일 snapshot의 committed 영수증을 확인한 뒤
+   main이 기존 암호문을 정리한다. 파일 정체성·bytes가 달라졌으면 보존한다. 암호문 quarantine도 평문이 아니다.
+5. ACK 유실은 동일 작업 영수증을 다시 조회한다. 아직 결과를 모르면 원본을 보존하며 토큰을 자동 재전송하지
+   않는다. 정리 ACK는 권한을 소모하고, 동일 snapshot의 ACK 재시도는 같은 완료 결과를 반환한다.
+
+이전은 한 번도 설정하지 않은 revision 0에만 허용한다. 연결 해제의 tombstone이나 이후 연결을 이전 코드가
+되살릴 수 없다. 회사 정책 확인은 필요하지만 기존 사용자가 토큰 자체를 다시 입력할 필요는 없다.
+
+#### 원자성과 재시도
+
+`ConnectionRef = {profileId, provider, connectionId, revision}`는 공개 연결 식별자이며 비밀 권한 토큰이 아니다.
+새 연결은 고유 OS 슬롯을 쓰므로 과거 연결의 늦은 삭제가 새 연결을 지우지 않는다. 연결 요청이 실패하거나
+입력창을 취소하면 기존 active 연결을 유지한다. 취소·shutdown과 최종 게시의 CAS는 writer 안에서 owner와
+deadline을 다시 검사한다.
+
+Gateway의 연결 해제는 active를 먼저 비우고 revision/tombstone을 영속화한 다음 이전 슬롯을 지운다. OS 삭제가
+실패하면 이미 읽기 권한은 사라졌고 `cleanupPending`이 남는다. 사용자의 명시적인 같은 operation ID 재시도는
+이전 세대 슬롯만 다시 지우며 revision을 다시 올리거나 새 연결을 삭제하지 않는다. 상태·영수증 조회는 OS 작업을
+재전송하지 않는다. 원장 작업 수에는 256개 상한이 있고 마지막 해제 슬롯을 예약한다. 한도에 이르면 새 연결을
+명시적으로 거절하며 과거 영수증을 버리고 같은 ID의 뜻을 바꾸지 않는다.
+
+Desktop은 공개 `disconnect` 전에 main의 `prepareLegacyDisconnect(DisconnectRequest)`로 기존 암호문의
+snapshot 또는 **파일 없음** 증거를 `profileId/provider/operationId/expectedRevision`에 묶은 immutable manifest에
+영속화한다. committed 해제 영수증을 확인한 뒤에는 이 기존 manifest만 정리하며 새 snapshot을 잡지 않는다.
+파일 정체성·bytes가 바뀌면 보존하고, manifest가 없는 과거 작업도 파일을 건드리지 않는다. manifest와 완료 증거를
+보존하여 같은 operation ID의 재준비·재시도가 나중에 생긴 파일에 삭제 권한을 얻지 못하게 한다.
+
+manifest 준비가 실패해도 Gateway의 권한 해제와 OS 슬롯 삭제는 진행한다. 기존 암호문 정리만 미완료로 표시하며,
+남은 파일을 새로 정리하려면 사용자가 별도의 명시적 해제 작업을 시작한다. 같은 작업의 재시도는 기존 manifest와
+그 staging만 정리한다.
+
+#### 업무 패널과 버전 조회
+
+| 경계 | 동작 |
+| --- | --- |
+| `akra/providerCredentials/state` | 토큰 없는 현재 프로필·revision·active 연결·작업 상태 |
+| `connect / disconnect / cancel / operation` | 메타데이터 의도 또는 기존 작업 식별자, 결과는 토큰 없는 영수증 |
+| `akra/providers/jira/summary / issuePrompt / currentVersion` | 현재 ConnectionRef에 묶인 고정 Jira 읽기 |
+| `akra/providers/linear/summary / issuePrompt` | 고정 GraphQL 읽기, 30개 캐시, 필터 변경은 캐시에서만 계산 |
+| private `validateLink` | 현재 연결의 실제 사이트·port·context path·이슈 경로를 검증한 뒤 main이 외부 링크 열기 |
+
+공개 자격 증명·provider method 계열은 잘못된 요청과 알 수 없는 method도 입력 검증 전에 녹화에서 제외한다.
+토큰 필드, 임의 URL·header·GraphQL을 public params로 받지 않으며 remote host 접속에서 로컬 자격 증명을 쓰지 않는다.
+HTTP는 HTTPS와 인증서 검증을 강제하고 redirect와 자동 retry를 하지 않는다. 응답 byte 수와 요청 시간에 상한을
+두며 API 오류 원문은 노출하지 않는다. 응답의 원문·JSON 문자열과 Authorization 값(Basic payload 포함)에서
+요청 토큰의 반사가 확인되면 응답을 거절하여 화면·원장으로 내보내지 않는다.
+
+Jira 현재 버전의 production 제공자는 Gateway가 직접 읽는다. 연결된 Desktop의 reverse provider 등록이 필요하지
+않다. Linear 동시 새로고침은 같은 요청을 공유한다. 모든 비동기 읽기는 응답 직전에 현재 연결 revision을 다시
+검사한다. `akra/providerCredentials/changed` 알림으로 여러 창이 변경을 보고, reconnect/lag에서 상태를 다시 읽는다.
+
+TLS는 OS 인증서 검증과 시스템·환경 proxy 설정을 사용하는 Gateway HTTP client로 이동한다. Chromium의 PAC나
+인증 proxy 동작과 완전히 같다고 가정하지 않는다. 인증서 검증 우회나 Electron 토큰 소유권으로의 자동 fallback은 없다.
+OS 키 저장소와 endpoint는 현재 OS 사용자 경계이며, 같은 OS 사용자로 실행하는 모든 악성 프로세스까지 격리한다고
+주장하지 않는다.
 
 ## 14. 안전
 
@@ -776,7 +881,7 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 | ID | 질문 | 기본값 (답이 없을 때) |
 | --- | --- | --- |
 | Q-IA1 | `gated` 와 `auto` 는 사람의 건별 행동 없이 턴을 시작한다. 제품의 계약을 "자율 수준을 켠 것이 opt-in 이고 예산이 한도이다"로 정하는가. D-13 은 개발과 검증의 규칙이므로 바꾸지 않는다 | 2026-11-22 사용자 승인. 명시적인 자율 수준 상향이 자동 시작의 동의이며 사용자 파일의 예산을 강제한다. IA5의 전달·통합에는 사람 리뷰를 유지한다. 개발·검증의 실제 모델 허가는 별개이다 |
-| Q-IA2 | Jira 와 Linear 의 자격 증명을 어디에 두는가 | Gateway 의 OS 키 저장소 (§13 의 a) |
+| Q-IA2 | Jira 와 Linear 의 자격 증명을 어디에 두는가 | (a) Gateway OS 키 저장소로 확정 (#2562, §13.1). Jira·Linear 업무 패널도 같은 연결 사용 |
 | Q-IA3 | 공개 저장소에서 어디까지 허락하는가 | 상한은 `propose` 이다. 신뢰하는 행위자의 라벨이 필수이다 |
 | Q-IA4 | 중재자는 어떤 모델과 프로필인가. 확신의 기준은 무엇인가 | 병렬 에이전트 프로필 하나를 읽기 전용으로 쓴다. 기준은 IA6 에서 측정으로 정한다 |
 | Q-IA5 | 이슈 하나가 task 여럿이 되는가 | 이슈 하나는 작업 지시 하나이다. 작업 지시는 최초 task 하나와 PR 검증의 보완 task 들을 가진다. 범위의 분해는 하위 이슈를 제안하는 것으로 한다 |
