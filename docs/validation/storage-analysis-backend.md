@@ -2,7 +2,7 @@
 
 이 문서는 저장 공간 분석기의 구현 계약, 이슈 댓글 반영, 재현 가능한 시험 범위와 남은 검증을 구분합니다. 사용자용 API·상태·공유 설명은 [저장 공간 분석기](../reference/storage-analysis.md), 공통 확장 호스트의 별도 검증은 [커널 확장 호스트](kernel-extension-host.md)를 참고하세요.
 
-**현재 상태: 최종 제품 소스의 backend 회귀 75개, 확장 필터 49개, Windows Full과 아래 V3 native 측정을 통과했습니다. 아키텍처 경계 144개도 통합 검증에서 통과했습니다.** 아래의 중간 성공 이력을 최종 커밋 전체의 통과로 계산하지 않습니다. 실제 모델 턴은 검증의 전제 조건에 포함하지 않습니다.
+**검증 기준: 소스 `3379ca69`에서 backend 회귀 75개, 확장 필터 50개와 로컬 Windows Full을 통과했습니다. 후속 `d7d165bb`·K `0d639e8f` 통합은 저장 공간 구성요소의 동일성 확인과 원격 Full로 검증하고, 마지막 Windows Full은 최종 Desktop 통합 기록에서 확인합니다. V3 native 측정은 `c690571b`의 결과로 유지합니다.** 아래의 중간 성공 이력을 최종 커밋 전체의 통과로 계산하지 않습니다. 실제 모델 턴은 검증의 전제 조건에 포함하지 않습니다.
 
 ## 1. 기록 원칙과 최종 결과
 
@@ -18,16 +18,26 @@
 
 | 항목 | 기록 |
 | --- | --- |
-| 제품·측정 source commit | `c690571b778a51e90dae8cef16c9d8a6ce5170fc`. 이후 검증 문서·측정 JSON 커밋은 제품 소스를 변경하지 않습니다. |
+| 최신 통합 제품 소스 | 고정 upstream `d7d165bbb76ae06f9c51768640e2bee6a6d721a9`를 포함한 K `0d639e8f595b8bb32ae2a078e22a26466cfb357a`를 저장 공간 브랜치에 병합했습니다. 이 통합의 정확한 제품 SHA와 원격 Full 결과는 [PR #2669 검증 절](https://github.com/RefinedStone/codex-exec-loop/pull/2669)에 기록합니다. |
+| 로컬 회귀·Full source commit | `3379ca69e22bcf8fcf02a581f2ffde86ac3c19fb`. 아래의 75개/50개 집중 검사와 Desktop 1,066개를 포함한 Windows Full은 이 소스의 결과입니다. 후속 통합에서 같은 로컬 Cargo 검사를 반복한 것으로 표시하지 않습니다. |
+| native 측정 source commit | `c690571b778a51e90dae8cef16c9d8a6ce5170fc`. 원시 측정 JSON의 SHA와 값은 유지합니다. 아래 소스 동일성 확인에 따라 블로그 계약 통합 후 재측정하지 않았습니다. |
 | Windows/파일 시스템/장치 식별 | Windows 11 Pro 10.0.26200, NTFS, SHPP41-2000GM NVMe SSD. 2026-11-23 측정. |
-| backend 집중 검사 | `cargo test --locked --lib storage_`: 75 passed, 0 failed, 2 ignored. ignored 두 개는 별도 실행용 benchmark입니다. |
-| 공통 확장 호스트 검사 | `cargo test --locked --lib extension`: 49 passed. 아키텍처 144개는 통합 소스 `1270bb7`에서 통과했고 이후 Windows import 분리와 일반 드라이브 표기의 런타임 보호 회귀를 추가했습니다. 최종 소스의 전체 CI 결과는 PR에 연결합니다. K의 프로토콜 32개·시뮬레이션 24개는 [호스트 검증 기록](kernel-extension-host.md) 참고. |
-| Windows Full | `powershell -File scripts/check_native_pr.ps1 -Mode Full`: exit 0. Node/Admin, Windows 계약, fmt·Clippy, Desktop 타입 검사·빌드·1,064개 테스트 통과(7 skip). |
+| backend 집중 검사 | `3379ca69`에서 `cargo test --locked --lib storage_`: 75 passed, 0 failed, 2 ignored. ignored 두 개는 별도 실행용 benchmark입니다. |
+| 확장·연결 회귀 검사 | `3379ca69`에서 `cargo test --locked --lib extension`: 50 passed, 0 failed. K 통합 소스 `0f4b26be`의 아키텍처 144개·프로토콜 32개·시뮬레이션 24개 검증은 [호스트 검증 기록](kernel-extension-host.md)에서 별도 확인합니다. |
+| Windows Full | `3379ca69`에서 `powershell -File scripts/check_native_pr.ps1 -Mode Full`: exit 0. Node/Admin, Windows 계약, fmt·Clippy, Desktop 타입 검사·빌드·1,066개 테스트 통과(7 skip). |
 | Desktop 확장 UI·실제 공통 서비스 왕복 | 후속 Desktop PR과 [별도 검증 기록](https://github.com/RefinedStone/codex-exec-loop/blob/codex/storage-desktop/docs/validation/storage-analysis/README.md)에 기록합니다. 이 행은 위 기존 Desktop gate와 구분합니다. |
-| 원격 전체 CI | [PR #2669](https://github.com/RefinedStone/codex-exec-loop/pull/2669)에 제품 소스 SHA와 Full CI 결과를 연결합니다. |
+| 원격 전체 CI | 최신 통합의 정확한 제품 SHA·Full CI 링크·최종 상태는 [PR #2669 검증 절](https://github.com/RefinedStone/codex-exec-loop/pull/2669)에 연결합니다. 위 `3379ca69`의 로컬 Full 결과와 최신 통합의 원격 검증을 구분합니다. |
 | V3 세 데이터셋 반복 측정 | 18회 scan + 3회 취소 비교, benchmark 1 passed/0 failed, native process exit 0. [원시 측정값](storage-analysis-native-metrics.json). |
 | 실제 모델 턴 | 실행하지 않음 |
 | 실제 사용자 전체 볼륨 분석 | 이 검증을 위해 실행하지 않음 |
+
+### native 측정 소스와 최종 통합 소스의 동일성
+
+`c690571b`와 `3379ca69` 사이에 이어, `d7d165bb`·K `0d639e8f`를 반영한 후속 통합에서도 저장 공간 domain·service·native adapter·공유 service와 해당 composition 파일의 diff가 없음을 확인했습니다. 최신 통합 checkout에서 아래 명령은 종료 코드 0을 반환합니다. native 측정 원시 JSON과 18회 scan·3회 취소의 관측값은 측정 당시 SHA에 그대로 연결하며, 이를 새 통합 커밋에서 다시 측정한 결과로 표시하지 않습니다.
+
+```text
+git diff --exit-code c690571b HEAD -- src/domain/storage_analysis src/application/service/storage_analysis src/application/service/storage_sharing src/adapter/outbound/storage_analysis src/composition/storage_extension.rs src/composition/storage_extension src/composition/repository_kernel/storage.rs
+```
 
 ### 중간 이력 — 최종 게이트가 아님
 

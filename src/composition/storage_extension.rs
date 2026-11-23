@@ -1,5 +1,6 @@
 //! The storage package assembly. Its scanner, read-only queries and shared reads use one index.
 mod schemas;
+use crate::domain::kernel_extension::ExtensionContext;
 #[cfg(test)]
 mod tests;
 
@@ -14,7 +15,7 @@ use crate::adapter::outbound::storage_analysis::{
     NativeStorageAnalysisAdapter, StorageRuntimeProbe,
 };
 use crate::application::service::kernel_extensions::{
-    ExtensionContext, ExtensionJobContext,
+    ExtensionJobContext,
     registry::{ExtensionHandler, ExtensionRegistration, ExtensionResponseGuard},
 };
 use crate::application::service::storage_analysis::StorageAnalysisService;
