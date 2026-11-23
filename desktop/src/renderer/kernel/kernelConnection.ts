@@ -31,6 +31,8 @@ import { hasValidPlanningEvidence } from "./taskEvidenceValidation";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
 export type KernelInterest = "overview" | "issues" | "delegation" | "issue_attention";
+/** 마지막으로 수락한 planning 조회의 현재성이다. 증거의 의미는 커널이 판정한다. */
+export type PlanningEvidenceFreshness = "current" | "refreshing" | "stale";
 export type IssueCommandPending = "mode" | "sync" | "autonomy" | "decision" | "intervention";
 
 export interface IssueDecisionAttention {
@@ -108,6 +110,7 @@ export interface KernelView {
   threads: ThreadActivity[];
   autoFollow: AutoFollowSettings | null;
   planning: PlanningState | null;
+  planningEvidenceFreshness: PlanningEvidenceFreshness;
   parallel: ParallelState | null;
   parallelControl: ParallelControlView;
   issues: KernelIssuesView;
@@ -125,6 +128,7 @@ export const EMPTY_KERNEL_VIEW: KernelView = {
   threads: [],
   autoFollow: null,
   planning: null,
+  planningEvidenceFreshness: "stale",
   parallel: null,
   parallelControl: EMPTY_PARALLEL_CONTROL,
   issues: EMPTY_KERNEL_ISSUES,
@@ -286,6 +290,8 @@ export class KernelConnection {
   private generation = 0;
   private overviewGeneration = 0;
   private overviewRequest = 0;
+  private planningEvidenceRequest = 0;
+  private scheduledEvidenceRefresh: { generation: number; interest: number } | null = null;
   /** resync는 조회 응답을 대체하지만, 명시적인 planning 새로 고침 요청을 취소하지 않는다. */
   private overviewRefreshRequest = 0;
   private readonly eventCounts = new Map<string, number>();
@@ -343,6 +349,7 @@ export class KernelConnection {
       this.overviewGeneration += 1;
       this.overviewRequest += 1;
       this.overviewRefreshRequest += 1;
+      this.invalidatePlanningEvidence();
       this.updateParallelControl(EMPTY_PARALLEL_CONTROL);
     }
     if (issuesChanged || !sameWorkspace) this.invalidateIssues();
@@ -383,6 +390,7 @@ export class KernelConnection {
     this.overviewGeneration += 1;
     this.overviewRequest += 1;
     this.overviewRefreshRequest += 1;
+    this.invalidatePlanningEvidence();
     this.eventCounts.clear();
     this.invalidateIssues();
     void this.attach();
@@ -593,7 +601,9 @@ export class KernelConnection {
     }
     if (event.type === "recorded") {
       const record = event.event;
-      if (record.kind === "issue_decision_requested" || record.kind === "issue_decision_resolved") {
+      if (record.kind === "criterion_evidence_recorded" || record.kind === "criterion_waived") {
+        this.schedulePlanningEvidenceRead();
+      } else if (record.kind === "issue_decision_requested" || record.kind === "issue_decision_resolved") {
         this.applyIssueDecision(record.decision, record.revision);
       } else if (record.kind === "issue_decision_reminded") {
         this.applyIssueDecision(record.decision, record.revision, record.event_id);
@@ -614,7 +624,18 @@ export class KernelConnection {
       }
       return;
     }
-    if (this.interests.has("overview")) this.applyOverview(event);
+    if (this.interests.has("overview")) {
+      if (event.type === "planning") {
+        // Native planning 알림에는 증거 metadata가 없다. 큐와 증거는 query에서
+        // 함께 수락하고, metadata 없는 구 Gateway의 query 응답과 구분한다.
+        if (event.task_evidence == null) {
+          this.schedulePlanningEvidenceRead();
+          return;
+        }
+        this.planningEvidenceRequest += 1;
+      }
+      this.applyOverview(event);
+    }
   }
 
   private applyIssueDecision(decision: IssueDecisionFactRecord, revision: number, reminderId?: string): void {
@@ -752,6 +773,29 @@ export class KernelConnection {
     });
   }
 
+  private invalidatePlanningEvidence(): void {
+    this.planningEvidenceRequest += 1;
+    this.scheduledEvidenceRefresh = null;
+    this.store.setKernel({ ...this.store.getKernel(), planningEvidenceFreshness: "stale" });
+  }
+
+  private schedulePlanningEvidenceRead(): void {
+    if (!this.canRead("overview")) return;
+    // 이미 resolve된 query의 continuation도 예약된 읽기보다 먼저 실행될 수 있다.
+    // 영수증은 합치지 않고, 여기서 즉시 이전 planning 응답과 실패를 무효화한다.
+    this.planningEvidenceRequest += 1;
+    this.eventCounts.set("planning", (this.eventCounts.get("planning") ?? 0) + 1);
+    this.store.setKernel({ ...this.store.getKernel(), planningEvidenceFreshness: "refreshing" });
+    if (this.scheduledEvidenceRefresh !== null) return;
+    const scheduled = { generation: this.generation, interest: this.overviewGeneration };
+    this.scheduledEvidenceRefresh = scheduled;
+    queueMicrotask(() => {
+      if (this.scheduledEvidenceRefresh !== scheduled) return;
+      this.scheduledEvidenceRefresh = null;
+      if (this.overviewScopeCurrent(scheduled.generation, scheduled.interest)) void this.readOverview(false);
+    });
+  }
+
   private async attach(): Promise<void> {
     const workspace = this.wanted;
     if (workspace === null) return;
@@ -761,7 +805,7 @@ export class KernelConnection {
     }
     const generation = ++this.generation;
     const previous = this.store.getKernel();
-    this.store.setKernel({ ...previous, phase: "attaching", workspace, message: null });
+    this.store.setKernel({ ...previous, phase: "attaching", workspace, message: null, planningEvidenceFreshness: "stale" });
     let attached: AttachResponse;
     try {
       attached = await this.client.request<AttachResponse>(KERNEL_METHOD.attach, { workspace, client_name: CLIENT_NAME });
@@ -817,21 +861,36 @@ export class KernelConnection {
     const generation = this.generation;
     const interest = this.overviewGeneration;
     const request = ++this.overviewRequest;
+    const planningRequest = ++this.planningEvidenceRequest;
     const refresh = refreshPlanning ? ++this.overviewRefreshRequest : null;
-    this.store.setKernel({ ...this.store.getKernel(), message: null });
+    this.scheduledEvidenceRefresh = null;
+    this.store.setKernel({ ...this.store.getKernel(), message: null, planningEvidenceFreshness: "refreshing" });
     try {
       await Promise.all(KERNEL_VIEW_QUERIES.map(async (type) => {
         const seen = this.eventCounts.get(type) ?? 0;
-        const event = await this.client.request<KernelViewAnswer>(KERNEL_METHOD.query, { query: { type } });
-        if (this.overviewCurrent(generation, interest, request) && (this.eventCounts.get(type) ?? 0) === seen) {
-          this.applyOverview(event);
+        const current = () => this.overviewScopeCurrent(generation, interest)
+          && (this.eventCounts.get(type) ?? 0) === seen
+          // 병렬 제어의 상태 읽기는 planning query를 취소하지 않는다.
+          && (type === "planning" ? planningRequest === this.planningEvidenceRequest : request === this.overviewRequest);
+        try {
+          const event = await this.client.request<KernelViewAnswer>(KERNEL_METHOD.query, { query: { type } });
+          if (current()) this.applyOverview(event);
+        } catch (error) {
+          if (current()) {
+            const view = this.store.getKernel();
+            this.store.setKernel({
+              ...view,
+              planningEvidenceFreshness: type === "planning" ? "stale" : view.planningEvidenceFreshness,
+              message: `커널 상태를 읽지 못했습니다: ${failureMessage(error)}`,
+            });
+          }
+          throw error;
         }
       }));
       if (refresh !== null) await this.refreshPlanningForOverview(generation, interest, refresh);
-    } catch (error) {
-      if (this.overviewCurrent(generation, interest, request)) {
-        this.store.setKernel({ ...this.store.getKernel(), message: `커널 상태를 읽지 못했습니다: ${failureMessage(error)}` });
-      }
+    } catch {
+      // 각 query가 자기 응답 token으로 실패를 처리한다. 다른 조회의 실패가
+      // 이미 수락한 planning의 현재성을 덮거나 늦은 실패를 되살리지 않는다.
     }
   }
 
@@ -1194,7 +1253,7 @@ export class KernelConnection {
         if (!hasValidPlanningEvidence(planning)) {
           planning.task_evidence = { unavailable: "invalid", tasks: [], truncated: false };
         }
-        this.store.setKernel({ ...view, planning });
+        this.store.setKernel({ ...view, planning, planningEvidenceFreshness: "current" });
         break;
       }
       case "parallel": {

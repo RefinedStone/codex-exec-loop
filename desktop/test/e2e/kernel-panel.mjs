@@ -3,6 +3,7 @@
 // 창은 숨긴 채로 돌리고 패널의 글을 출력한다 (숨긴 창 텍스트 캡처).
 import { createRequire } from "node:module";
 import { once } from "node:events";
+import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -11,6 +12,42 @@ import { _electron as electron } from "playwright-core";
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const electronPath = createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
+
+const { taskEvidenceFixture } = await import("../fixtures/taskEvidence.ts");
+
+function evidenceSnapshot() {
+  const snapshot = taskEvidenceFixture();
+  const first = snapshot.tasks[0];
+  first.criteria.push({
+    criterion: { id: "visual-review", scenario: "A person reviews the visible result.", channel: "screen", essential: false },
+    state: "waived",
+    waiver: {
+      event_id: "criterion-waiver:fixture", evidence_revision: 4,
+      waiver: {
+        scope: { ...first.scope }, criterion_id: "visual-review", reason_digest: "1".repeat(64),
+        by: "human", recorded_at: "2026-11-23T00:00:02Z",
+      },
+    },
+  });
+  snapshot.tasks.push({
+    scope: { task_id: "task-2", scope_id: "2".repeat(64), acceptance_revision: 0, criteria_sha256: "0".repeat(64) },
+    criteria: [],
+  });
+  return snapshot;
+}
+
+// Native planning notifications omit the query-only evidence enrichment.
+function planningNotification(planning) {
+  const { task_evidence: _evidence, ...notification } = planning;
+  return notification;
+}
+
+function evidenceRecorded(receipt, sequence) {
+  return {
+    type: "recorded", sequence, recorded_at: "2026-11-23T00:00:03Z",
+    event: { kind: "criterion_evidence_recorded", ...structuredClone(receipt) },
+  };
+}
 
 const THREAD_ID = "01a1abfb-8f0a-7581-a8e4-c2953347f470";
 const task = (rank, id, title, status) => ({ rank, task_id: id, direction_title: "Desktop", title, status, priority: 10 });
@@ -30,6 +67,7 @@ const kernel = {
       type: "planning",
       status: "ready_with_task",
       queue_summary: "2 tasks",
+      task_evidence: evidenceSnapshot(),
       next_task: task(1, "task-1", "Show kernel events", "in_progress"),
       active_tasks: [task(1, "task-1", "Show kernel events", "in_progress"), task(2, "task-2", "Write the e2e", "ready")],
       proposed_tasks: [],
@@ -69,6 +107,9 @@ const kernel = {
   },
   onRequest(method, params) {
     const type = params.command?.type;
+    if (method === "akra/kernel/command" && type === "refresh_planning") {
+      return { result: { processed: true }, events: [planningNotification(kernel.queries.planning)] };
+    }
     if (method !== "akra/kernel/command" || !["enable_parallel", "disable_parallel"].includes(type)) return undefined;
     if (rejectNextParallel) {
       rejectNextParallel = false;
@@ -137,6 +178,82 @@ try {
   await page.getByTestId("kernel-thread").waitFor({ timeout: 10_000 });
   const threadRow = (await page.getByTestId("kernel-thread").textContent()) ?? "";
   check("a thread_activity event shows the running thread with its approval", threadRow.includes("승인 대기: run tests"));
+
+  const evidenceCard = page.locator('[data-testid="task-evidence"][data-task-id="task-1"]');
+  const evidenceStatus = evidenceCard.getByTestId("task-evidence-status").first();
+  const openReportMetadata = async () => {
+    const summary = evidenceCard.locator("summary").filter({ hasText: "작업자 보고 정보" }).first();
+    if (!(await summary.evaluate((element) => element.parentElement.open))) await summary.click();
+  };
+  await evidenceCard.locator("summary").first().focus();
+  await evidenceCard.locator("summary").first().press("Enter");
+  await evidenceStatus.filter({ hasText: /^작업자 보고: 통과$/ }).waitFor();
+  await openReportMetadata();
+  check("the evidence card opens by keyboard and shows the agreed criterion",
+    (await evidenceCard.innerText()).includes("The expected output exists."));
+  check("worker reports and human waivers have distinct labels",
+    (await evidenceCard.innerText()).includes("fixture-worker")
+    && (await evidenceCard.innerText()).includes("사람 면제"));
+  const emptyEvidence = page.locator('[data-testid="task-evidence"][data-task-id="task-2"]');
+  await emptyEvidence.locator("summary").first().click();
+  check("an explicitly empty criterion list is identified",
+    (await emptyEvidence.innerText()).includes("등록된 완료 기준이 없습니다."));
+  if (process.env.AKRA_EVIDENCE_SCREENSHOT) {
+    // Hidden Windows windows use Electron capturePage, as in the other screen fixtures.
+    await evidenceCard.locator("summary").filter({ hasText: "작업자 보고 정보" }).first().click();
+    await evidenceCard.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    const capture = () => app.evaluate(async ({ BrowserWindow }) =>
+      (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined, { stayHidden: true })).toPNG().toString("base64"));
+    await capture();
+    await writeFile(process.env.AKRA_EVIDENCE_SCREENSHOT, Buffer.from(await capture(), "base64"));
+  }
+
+  const oldReceipt = structuredClone(kernel.queries.planning.task_evidence.tasks[0].criteria[0].evidence);
+  const staleSnapshot = evidenceSnapshot();
+  staleSnapshot.tasks[0].criteria[0].state = "stale";
+  staleSnapshot.tasks[0].source.tree.tree_sha = "9".repeat(40);
+  kernel.queries.planning = { ...kernel.queries.planning, task_evidence: staleSnapshot };
+  gateway.sendKernelEvent(planningNotification(kernel.queries.planning));
+  await evidenceStatus.filter({ hasText: "이전 범위의 보고" }).waitFor();
+  check("a changed source removes the current worker pass badge",
+    !(await evidenceStatus.innerText()).includes("작업자 보고: 통과"));
+
+  kernel.queries.planning = {
+    ...kernel.queries.planning,
+    task_evidence: { unavailable: "unavailable", tasks: [], truncated: false },
+  };
+  gateway.sendKernelEvent(planningNotification(kernel.queries.planning));
+  await evidenceCard.getByText("현재 상태를 확인할 수 없습니다.", { exact: false }).waitFor();
+  check("unavailable evidence cannot retain the previous pass state",
+    (await evidenceCard.getByTestId("task-evidence-status").count()) === 0);
+
+  const refreshedSnapshot = evidenceSnapshot();
+  refreshedSnapshot.evidence_revision = 5;
+  const refreshedCriterion = refreshedSnapshot.tasks[0].criteria[0];
+  refreshedCriterion.state = "fail";
+  refreshedCriterion.evidence.evidence_revision = 5;
+  refreshedCriterion.evidence.evidence.status = "fail";
+  refreshedCriterion.evidence.evidence.by = "query-worker";
+  kernel.queries.planning = { ...kernel.queries.planning, task_evidence: refreshedSnapshot };
+  const planningReads = () => requests.filter(({ method, params }) =>
+    method === "akra/kernel/query" && params.query?.type === "planning").length;
+  const planningRefreshes = () => requests.filter(({ method, params }) =>
+    method === "akra/kernel/command" && params.command?.type === "refresh_planning").length;
+  const readsBeforeEvidence = planningReads();
+  const commandsBeforeEvidence = planningRefreshes();
+  gateway.sendKernelEvent(evidenceRecorded(oldReceipt, 50));
+  await evidenceStatus.filter({ hasText: /^작업자 보고: 실패$/ }).waitFor();
+  await openReportMetadata();
+  check("recorded evidence triggers a query instead of projecting its older pass receipt",
+    planningReads() > readsBeforeEvidence && (await evidenceCard.innerText()).includes("query-worker"));
+  check("the passive evidence update does not send a planning mutation",
+    planningRefreshes() === commandsBeforeEvidence);
+  check("the evidence view sends no recording, waiver, or model commands",
+    !requests.some(({ method, params }) =>
+      method === "turn/start" || method === "turn/steer" ||
+      (method === "akra/kernel/command"
+        && ["prepare_evidence", "record_evidence", "waive_criterion"].includes(params.command?.type))));
+
 
   // 워커 상태판 (#2378): 두 워커의 상태와 worktree 를 한 화면에서 구분하고, 실패한 워커에서 실패 카드와 로그로 간다.
   const workers = page.getByTestId("kernel-agent");
@@ -229,13 +346,14 @@ try {
       });
     });
   });
+  gateway.sendKernelEvent(evidenceRecorded(oldReceipt, 51));
   gateway.sendKernelEvent({ type: "resync" });
   check("the closed panel retains its live metadata-only kernel subscription", await page.evaluate(() => globalThis.kernelPanelClosedResync));
   await page.evaluate(() => { delete globalThis.kernelPanelClosedResync; });
 
   const closedRequests = requests.slice(beforeClose);
   check("closing the panel keeps the existing kernel attachment", !closedRequests.some(({ method }) => method === "akra/kernel/detach" || method === "akra/kernel/attach"));
-  check("the closed panel stops overview and planning reads after resync", !closedRequests.some(({ method, params }) =>
+  check("the closed panel stops overview and planning reads after evidence and resync", !closedRequests.some(({ method, params }) =>
     (method === "akra/kernel/query" && ["thread_activity", "auto_follow", "planning", "parallel"].includes(params.query?.type)) ||
     (method === "akra/kernel/command" && params.command?.type === "refresh_planning")));
   check("the closed panel does not read issue content after resync", !closedRequests.some(({ method, params }) =>

@@ -3,7 +3,8 @@
 import { useState } from "react";
 
 import { useDesktopStore } from "../session/desktopStore";
-import type { KernelView, ParallelControlView } from "./kernelConnection";
+import type { KernelView, ParallelControlView, PlanningEvidenceFreshness } from "./kernelConnection";
+import { TaskEvidenceView, type TaskEvidenceViewProps } from "./TaskEvidenceView";
 import type { ParallelAgent, ParallelState, PlanningState, PlanningTask, ThreadActivity } from "./protocol";
 import { WORKER_STATUS_LABEL, WORKER_STEP, workerStatus, type WorkerStatus } from "./workerStatus";
 import { folderName } from "../sidebar/threadStatus";
@@ -48,7 +49,7 @@ function ThreadRow({ activity, title }: { activity: ThreadActivity; title: strin
   );
 }
 
-function TaskRow({ task }: { task: PlanningTask }) {
+function TaskRow({ task, snapshot, freshness }: { task: PlanningTask } & Omit<TaskEvidenceViewProps, "taskId">) {
   return (
     <li className="work-item" data-testid="kernel-task">
       <span>
@@ -58,11 +59,12 @@ function TaskRow({ task }: { task: PlanningTask }) {
         <span className="muted">{task.direction_title}</span>
         <span className="work-badge">{TASK_STATUS[task.status]}</span>
       </div>
+      <TaskEvidenceView taskId={task.task_id} snapshot={snapshot} freshness={freshness} />
     </li>
   );
 }
 
-function PlanningSection({ planning }: { planning: PlanningState | null }) {
+function PlanningSection({ planning, freshness }: { planning: PlanningState | null; freshness: PlanningEvidenceFreshness }) {
   if (!planning) {
     return <p className="muted">읽는 중…</p>;
   }
@@ -76,7 +78,7 @@ function PlanningSection({ planning }: { planning: PlanningState | null }) {
       {planning.auto_follow_pause_reason && <p className="warning">자동 후속 멈춤: {planning.auto_follow_pause_reason}</p>}
       <ul>
         {planning.active_tasks.map((task) => (
-          <TaskRow key={task.task_id} task={task} />
+          <TaskRow key={task.task_id} task={task} snapshot={planning.task_evidence} freshness={freshness} />
         ))}
       </ul>
       {planning.proposed_tasks.length > 0 && <p className="muted">받아들이지 않은 제안 {planning.proposed_tasks.length}건</p>}
@@ -255,7 +257,7 @@ function KernelBody({
       </section>
       <section className="work-section">
         <h3>planning 큐</h3>
-        <PlanningSection planning={kernel.planning} />
+        <PlanningSection planning={kernel.planning} freshness={kernel.planningEvidenceFreshness} />
       </section>
     </div>
   );
