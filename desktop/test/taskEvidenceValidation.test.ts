@@ -57,6 +57,26 @@ describe("task evidence wire metadata", () => {
     expect(isTaskEvidenceState({ ...snapshot, tasks: [{ ...waived, scope: { ...task.scope, scope_id: "2".repeat(64) } }] })).toBe(false);
   });
 
+  it("rejects line terminators in Git object ids and SHA-256 tokens", () => {
+    for (const width of [40, 64]) {
+      const valid = taskEvidenceFixture();
+      valid.tasks[0]!.source.tree.head_commit_sha = "a".repeat(width);
+      expect(isTaskEvidenceState(valid)).toBe(true);
+      for (const suffix of ["\n", "\r", "\u2028", "\u2029"]) {
+        for (const digits of [width - 1, width]) {
+          const invalid = taskEvidenceFixture();
+          invalid.tasks[0]!.source.tree.head_commit_sha = "a".repeat(digits) + suffix;
+          expect(isTaskEvidenceState(invalid)).toBe(false);
+        }
+      }
+    }
+    for (const suffix of ["\n", "\r", "\u2028", "\u2029"]) {
+      const invalid = taskEvidenceFixture();
+      invalid.tasks[0]!.criteria[0]!.evidence.evidence.artifact.sha256 = "a".repeat(64) + suffix;
+      expect(isTaskEvidenceState(invalid)).toBe(false);
+    }
+  });
+
   it("rejects malformed bounds, duplicate coordinates, private payloads, and unknown states", () => {
     const snapshot = taskEvidenceFixture();
     const task = snapshot.tasks[0]!;

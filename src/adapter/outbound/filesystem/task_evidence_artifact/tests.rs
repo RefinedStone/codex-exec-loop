@@ -83,8 +83,18 @@ fn write_private(path: &Path, contents: &[u8]) {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    #[cfg(windows)]
+    {
+        use crate::private_fs::*;
+        use std::os::windows::fs::OpenOptionsExt;
+        options.access_mode(WINDOWS_GENERIC_WRITE | WINDOWS_READ_CONTROL | WINDOWS_WRITE_DAC);
+    }
     use std::io::Write;
-    options.open(path).unwrap().write_all(contents).unwrap();
+    let mut file = options.open(path).unwrap();
+    // Model a host-created private capture, including its explicit owner ACL.
+    #[cfg(windows)]
+    crate::private_fs::set_windows_private_acl(&file, false).unwrap();
+    file.write_all(contents).unwrap();
 }
 
 #[test]
