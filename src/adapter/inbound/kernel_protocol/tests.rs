@@ -2633,11 +2633,13 @@ mod erased {
 fn sample_issue_decision_fact() -> crate::domain::issue_automation::decision::IssueDecisionFact {
     use crate::domain::issue_automation::decision::*;
     IssueDecisionFact {
+        delivery_review: None,
         decision_id: IssueDecisionId::new("decision-1").unwrap(),
         subject: IssueDecisionSubject::Issue(sample_issue_reference()),
         gate: crate::domain::issue_automation::policy::IssueAutomationGate::Start,
         kind: IssueDecisionKind::StartApproval,
         basis: IssueDecisionBasis {
+            delivery: None,
             authorization_epoch: 0,
             policy_version: "a".repeat(64),
             field_hash: None,

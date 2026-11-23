@@ -9,6 +9,133 @@ use crate::domain::issue_automation::execution::{
 use crate::domain::planning::TaskStatus;
 use anyhow::{Result, anyhow, bail};
 
+#[derive(Debug, PartialEq, Eq)]
+struct DeliveryTarget {
+    task_id: String,
+    session_key: String,
+    worktree: String,
+    base: String,
+    source: String,
+}
+
+pub(super) fn frozen_delivery_source(
+    adapter: &AkraIssueWorkExecutionAdapter,
+    workspace: &str,
+    work_order_id: &str,
+) -> Result<Option<String>> {
+    observation::load(adapter, workspace, work_order_id)?
+        .map(|loaded| frozen_source(&loaded.observation, &loaded.runtime))
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(super) fn delivery_diff(
+    adapter: &AkraIssueWorkExecutionAdapter,
+    workspace: &str,
+    work_order_id: &str,
+    expected_source: &str,
+) -> Result<crate::domain::issue_automation::delivery::IssueDeliveryDiff> {
+    let target = load_delivery_target(adapter, workspace, work_order_id, expected_source)?;
+    let diff = adapter
+        .parallel
+        .inspect_work_order_delivery_diff(&target.worktree, &target.base, &target.source)
+        .map_err(|error| anyhow!(error))?;
+    if diff.base_commit_sha != target.base
+        || diff.source_commit_sha != target.source
+        || load_delivery_target(adapter, workspace, work_order_id, expected_source)? != target
+    {
+        bail!("the frozen delivery range changed during diff inspection");
+    }
+    Ok(diff)
+}
+
+pub(super) fn verify_delivery_context(
+    adapter: &AkraIssueWorkExecutionAdapter,
+    workspace: &str,
+    work_order_id: &str,
+    expected_base: &str,
+    expected_source: &str,
+) -> Result<()> {
+    let target = load_delivery_target(adapter, workspace, work_order_id, expected_source)?;
+    if target.base != expected_base {
+        bail!("the frozen delivery base changed after diff review");
+    }
+    Ok(())
+}
+
+fn load_delivery_target(
+    adapter: &AkraIssueWorkExecutionAdapter,
+    workspace: &str,
+    work_order_id: &str,
+    expected_source: &str,
+) -> Result<DeliveryTarget> {
+    let observed = observation::load(adapter, workspace, work_order_id)?
+        .ok_or_else(|| anyhow!("the delivery execution is unavailable"))?;
+    select_delivery_target(&observed.observation, &observed.runtime, expected_source)
+}
+
+fn select_delivery_target(
+    observation: &IssueWorkExecutionObservation,
+    runtime: &PlanningAuthorityRuntimeProjectionSnapshot,
+    expected_source: &str,
+) -> Result<DeliveryTarget> {
+    if frozen_source(observation, runtime)?.as_deref() != Some(expected_source) {
+        bail!("the delivery source is no longer the current frozen commit");
+    }
+    let task_id = observation
+        .active_task_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("the delivery has no current execution"))?;
+    let lease = runtime
+        .slot_leases
+        .values()
+        .find(|lease| lease.task_id == task_id);
+    let mut selected = None;
+    for record in runtime
+        .distributor_queue_records
+        .iter()
+        .filter(|record| record.task_id == task_id)
+    {
+        if lease.is_some_and(|lease| record.session_key != lease.session_key()) {
+            continue;
+        }
+        if record.effective_source_commit_sha() != expected_source
+            || record.worktree_path.is_empty()
+        {
+            bail!("the frozen delivery worktree or source is unavailable");
+        }
+        crate::domain::issue_automation::delivery::validate_commit_range(
+            &record.source_base_commit_sha,
+            expected_source,
+        )
+        .map_err(|error| anyhow!(error))?;
+        if let Some(lease) = lease {
+            let target = lease
+                .delivery_target
+                .as_ref()
+                .ok_or_else(|| anyhow!("the delivery lease has no frozen integration base"))?;
+            if target.integration_base_commit_sha != record.source_base_commit_sha {
+                bail!("the delivery base does not match the current lease generation");
+            }
+        }
+        let candidate = DeliveryTarget {
+            task_id: task_id.into(),
+            session_key: record.session_key.clone(),
+            worktree: record.worktree_path.clone(),
+            base: record.source_base_commit_sha.clone(),
+            source: expected_source.into(),
+        };
+        if selected
+            .as_ref()
+            .is_some_and(|previous| previous != &candidate)
+        {
+            bail!("the current execution has ambiguous frozen delivery ranges");
+        }
+        selected = Some(candidate);
+    }
+    selected.ok_or_else(|| anyhow!("the frozen delivery range is unavailable"))
+}
+
 pub(super) fn snapshot(
     adapter: &AkraIssueWorkExecutionAdapter,
     workspace: &str,

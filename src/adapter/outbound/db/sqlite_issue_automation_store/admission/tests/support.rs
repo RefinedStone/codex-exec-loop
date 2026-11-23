@@ -187,6 +187,7 @@ fn prepare_with_default_answer(
         let request = IssueDecisionRequest::new(
             id.clone(),
             IssueDecisionDefinition {
+                delivery_review: None,
                 subject: IssueDecisionSubject::Issue(item.issue.clone()),
                 gate: IssueAutomationGate::Start,
                 kind: IssueDecisionKind::StartApproval,
@@ -276,6 +277,8 @@ fn prepare_with_default_answer(
         _ => unreachable!(),
     };
     let work = IssueWorkCheckpoint {
+        delivery_assessment: None,
+        delivery_revision: 0,
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {

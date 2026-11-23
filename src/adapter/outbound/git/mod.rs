@@ -5,6 +5,7 @@
 pub(crate) mod history;
 pub mod issue_form_repository;
 pub(crate) mod issue_origin;
+mod parallel_commit_diff;
 pub mod parallel_mode_runtime;
 mod parallel_normalization_fs;
 mod parallel_pool_lock;

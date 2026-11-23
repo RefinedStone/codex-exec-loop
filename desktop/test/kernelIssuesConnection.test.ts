@@ -1214,6 +1214,25 @@ function interventionResponse(request: Sent | undefined, delivery: "queued" | "s
 }
 
 describe("issue decisions and interventions", () => {
+  it("accepts a human Delivery review without changing the stored running state or Start gate", async () => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    const detail = interactionDetail();
+    const delivery = { ...decisionRequest(), kind: "risk_exception", gate: "delivery",
+      basis: { ...decisionRequest().basis, work_order_id: "work-delivery",
+        delivery: { base_commit_sha: "a".repeat(40), source_commit_sha: "b".repeat(40) } },
+      delivery_review: { changed_files: 2, changed_lines: 14, reasons: ["protected_path"] } };
+    const work = { work_order_id: "work-delivery", task_ids: ["task-delivery"],
+      blocked_reason: "awaiting_delivery_approval", delivery_granted: false };
+    h.reply(h.query("issue"), { ...detail, open_decisions: [delivery], item: { ...detail.item, work,
+      tracked: { state: "running", held: false, stale: false, unknown: false } } });
+    await selected;
+    expect(h.view().issues.detail).toMatchObject({ status: "ready", open_decisions: [delivery],
+      item: { work, tracked: { state: "running" }, triage: detail.item.triage } });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
   it("accepts legacy choices and routes Gated through native confirmation when the server enables it", async () => {
     const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueAutonomy"]>>(async () => ({ cancelled: true as const }));
     const h = harness({ confirmations: { confirmIssueAutonomy: confirmation } });

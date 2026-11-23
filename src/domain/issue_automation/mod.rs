@@ -13,6 +13,7 @@ pub mod feedback;
 pub mod interaction;
 // 판에 묶인 결정 요청과 답이다 (#2544).
 pub mod decision;
+pub mod delivery;
 // 수집/실행과 독립된 자동화 정책의 typed 효과값이다 (#2540).
 pub mod policy;
 // 현재 관찰과 정책의 결정적 판정이다. 실행 허가는 만들지 않는다 (#2541).

@@ -56,6 +56,16 @@ pub(super) fn basis(basis: &IssueDecisionBasis) -> Result<(), IssueDecisionError
     if let Some(id) = &basis.work_order_id {
         identifier(id, "basis.work_order_id", 256)?;
     }
+    if let Some(delivery) = &basis.delivery {
+        if basis.work_order_id.is_none() || basis.field_hash.is_none() {
+            return Err(IssueDecisionError::InvalidBasis);
+        }
+        super::super::delivery::validate_commit_range(
+            &delivery.base_commit_sha,
+            &delivery.source_commit_sha,
+        )
+        .map_err(|_| IssueDecisionError::InvalidBasis)?;
+    }
     Ok(())
 }
 
@@ -63,6 +73,21 @@ pub(super) fn definition(value: &IssueDecisionDefinition) -> Result<(), IssueDec
     super::super::validate_reference(value.subject.issue())
         .map_err(|_| IssueDecisionError::InvalidField { field: "subject" })?;
     basis(&value.basis)?;
+    let has_delivery_context = value.basis.delivery.is_some()
+        || value.delivery_review.is_some()
+        || (value.kind == IssueDecisionKind::RiskException && value.basis.work_order_id.is_some());
+    if has_delivery_context
+        && (!value.is_delivery_risk_exception()
+            || value.on_timeout != super::IssueDecisionTimeout::Wait
+            || value
+                .delivery_review
+                .as_ref()
+                .is_none_or(|review| review.validate().is_err() || !review.requires_human()))
+    {
+        return Err(IssueDecisionError::InvalidField {
+            field: "delivery_review",
+        });
+    }
     shared_text(
         value.question.as_str(),
         "question",

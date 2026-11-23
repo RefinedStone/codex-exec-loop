@@ -1860,6 +1860,7 @@ mod tests {
             IssueDecisionKind, IssueDecisionState, IssueDecisionSubject,
         };
         let open_decision = IssueDecisionFact {
+            delivery_review: None,
             decision_id: IssueDecisionId::new("decision-kind-sample").unwrap(),
             subject: IssueDecisionSubject::Issue(IssueReference {
                 provider: IssueProvider::GitHub,
@@ -1873,6 +1874,7 @@ mod tests {
             gate: crate::domain::issue_automation::policy::IssueAutomationGate::Start,
             kind: IssueDecisionKind::AgentQuestion,
             basis: IssueDecisionBasis {
+                delivery: None,
                 authorization_epoch: 0,
                 policy_version: "a".repeat(64),
                 field_hash: None,

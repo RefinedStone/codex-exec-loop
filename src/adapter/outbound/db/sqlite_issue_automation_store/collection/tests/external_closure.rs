@@ -40,6 +40,8 @@ fn work(fixture: &Fixture, submitted: bool) -> IssueWorkCheckpoint {
     let shared = &queued.snapshot().shared_copy;
     let field_hash = queued.snapshot().basis.field_hash.clone();
     let work = IssueWorkCheckpoint {
+        delivery_assessment: None,
+        delivery_revision: 0,
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {
@@ -61,6 +63,7 @@ fn work(fixture: &Fixture, submitted: bool) -> IssueWorkCheckpoint {
             crate::domain::issue_automation::coordinator::IssueWorkStartAuthority::Human,
         decision_id: Some(IssueDecisionId::new("fixture-close-start").unwrap()),
         approved_basis: IssueDecisionBasis {
+            delivery: None,
             authorization_epoch: 0,
             policy_version: "a".repeat(64),
             field_hash: Some(field_hash),

@@ -13,6 +13,7 @@ use super::{
 
 fn basis(revision: u64) -> PlanningWorkPermitBasis {
     PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 0,
         policy_version: "policy-1".into(),
         field_hash: "field-1".into(),
@@ -472,5 +473,6 @@ fn work_permit_concurrent_independent_grants_preserve_every_stage() {
 }
 
 mod control;
+mod delivery_review;
 
 mod execution;

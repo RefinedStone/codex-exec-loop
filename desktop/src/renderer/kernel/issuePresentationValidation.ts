@@ -20,13 +20,31 @@ function sameCoordinates(left: unknown, right: ObjectValue): boolean {
 function decision(value: unknown, issue: ObjectValue): boolean {
   if (!record(value) || !text(value.id) || !value.id || !text(value.question) || !revision(value.revision)
     || !named(value.state, states) || !record(value.subject) || !sameCoordinates(value.subject.issue, issue)
-    || !Array.isArray(value.options) || !optionalText(value.recommended)) return false;
+    || !Array.isArray(value.options) || !optionalText(value.recommended) || !deliveryReview(value)) return false;
   const ids = new Set<string>();
   for (const option of value.options) {
     if (!record(option) || !text(option.id) || !option.id || ids.has(option.id) || !text(option.label) || !text(option.effect)) return false;
     ids.add(option.id);
   }
   return ids.size > 0 && (value.recommended == null || ids.has(value.recommended as string));
+}
+
+function deliveryReview(value: ObjectValue): boolean {
+  const basis = record(value.basis) ? value.basis : null;
+  const delivery = basis?.delivery;
+  const review = value.delivery_review;
+  const workBound = value.kind === "risk_exception" && value.gate === "delivery"
+    && typeof basis?.work_order_id === "string" && basis.work_order_id.length > 0;
+  if (!workBound) return delivery == null && review == null;
+  if (!record(delivery) || !record(review) || value.on_timeout !== "wait") return false;
+  const { base_commit_sha: base, source_commit_sha: source } = delivery;
+  const sha = (value: unknown): value is string => typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
+  if (!sha(base) || !sha(source) || base.length !== source.length || base === source
+    || !revision(review.changed_files) || (review.changed_files as number) < 1 || (review.changed_files as number) > 4_096
+    || !Array.isArray(review.reasons) || review.reasons.length === 0
+    || !review.reasons.every((reason: unknown) => named(reason, ["protected_path", "diff_too_large", "binary_diff"]))
+    || new Set(review.reasons).size !== review.reasons.length) return false;
+  return review.reasons.includes("binary_diff") ? review.changed_lines === null : revision(review.changed_lines);
 }
 
 export function hasValidIssueInteractions(value: ObjectValue, issue: ObjectValue): boolean {

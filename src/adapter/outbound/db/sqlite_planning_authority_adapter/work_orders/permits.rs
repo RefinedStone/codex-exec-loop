@@ -169,6 +169,14 @@ impl PlanningWorkPermitRepositoryPort for SqlitePlanningAuthorityAdapter {
         let mut work_order = require_work_order(&transaction, &permit.work_order_id)?;
         super::control::load_control(&transaction, &permit.work_order_id)?
             .require_epoch(permit.basis.authorization_epoch)?;
+        if work_order.origin == "issue_automation"
+            && permit.stage != PlanningWorkPermitStage::Dispatch
+            && permit.basis.delivery_review.is_none()
+        {
+            bail!(
+                "permit_missing: issue automation delivery requires reviewed frozen diff evidence"
+            );
+        }
         if load_basis(&transaction, &permit.work_order_id)?.as_ref() != Some(&permit.basis) {
             bail!("permit_stale: grant does not match current work-order evidence");
         }
@@ -364,6 +372,7 @@ pub(super) fn fence_new_lineage(transaction: &Transaction<'_>, work_order_id: &s
         current.gate_revision = revoked_through
             .checked_add(1)
             .context("work-order permit gate revision exhausted")?;
+        current.delivery_review = None;
         transaction.execute(
             "UPDATE planning_work_order_permit_basis SET basis_json=?2 WHERE work_order_id=?1",
             params![work_order_id, serde_json::to_string(current)?],

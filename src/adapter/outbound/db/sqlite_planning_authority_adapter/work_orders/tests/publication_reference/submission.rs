@@ -30,7 +30,7 @@ fn execution_adapter() -> AkraIssueWorkExecutionAdapter {
 }
 
 #[test]
-fn legacy_publication_reference_real_submit_recovers_before_delivery_permit_refresh() {
+fn legacy_publication_reference_real_submit_does_not_upgrade_unreviewed_delivery() {
     let workspace = legacy_workspace("legacy-reference-real-submit", "issue_automation");
     let original = stored(&workspace, ORDER);
     let before = rows_except_links(&workspace);
@@ -99,59 +99,50 @@ fn legacy_publication_reference_real_submit_recovers_before_delivery_permit_refr
         PlanningWorkPermitDecision::Denied(PlanningWorkPermitBlockReason::Stale)
     );
 
-    // Now the existing coordinator grant path may refresh delivery for its frozen source.
-    // The confirmation basis here is synthetic; this test does not claim a native user action.
+    // Link recovery cannot invent either diff review or an owned frozen queue range.
     let frozen_source = "c".repeat(40);
-    adapter
-        .grant(
-            &workspace,
-            &IssueWorkPermitRequest {
-                authorization_epoch: 0,
-                work_order_id: ORDER.into(),
-                approval: IssueDecisionBasis {
-                    authorization_epoch: 0,
-                    policy_version: "d".repeat(64),
-                    field_hash: Some(order.field_hash),
-                    work_order_id: Some(ORDER.into()),
-                    gate_revision: 3,
-                },
-                source_sha: frozen_source.clone(),
-                gate_revision: 3,
-                delivery: true,
-            },
-        )
-        .unwrap();
-    let refreshed = stored(&workspace, ORDER);
-    let current_basis = SqlitePlanningAuthorityAdapter::new()
-        .load_work_order_permit_basis(&workspace, ORDER)
-        .unwrap()
-        .unwrap();
-    for stage in [
-        PlanningWorkPermitStage::Push,
-        PlanningWorkPermitStage::PullRequest,
-        PlanningWorkPermitStage::Integrate,
-    ] {
-        assert_eq!(
-            evaluate_work_order_permit(
-                &refreshed,
-                Some(&current_basis),
-                stage,
-                Some(&frozen_source),
-            ),
-            PlanningWorkPermitDecision::Granted {
-                requires_human_review: stage == PlanningWorkPermitStage::Integrate,
-            }
+    let approval = IssueDecisionBasis {
+        authorization_epoch: 0,
+        policy_version: "d".repeat(64),
+        field_hash: Some(order.field_hash),
+        work_order_id: Some(ORDER.into()),
+        gate_revision: 3,
+        delivery: None,
+    };
+    let mut review = approval.clone();
+    review.delivery = Some(
+        crate::domain::issue_automation::decision::IssueDecisionDeliveryContext {
+            base_commit_sha: "b".repeat(40),
+            source_commit_sha: frozen_source.clone(),
+        },
+    );
+    for delivery_review in [None, Some(review)] {
+        assert!(
+            adapter
+                .grant(
+                    &workspace,
+                    &IssueWorkPermitRequest {
+                        authorization_epoch: 0,
+                        work_order_id: ORDER.into(),
+                        approval: approval.clone(),
+                        source_sha: frozen_source.clone(),
+                        gate_revision: 3,
+                        delivery: true,
+                        delivery_review,
+                    }
+                )
+                .is_err()
         );
+        assert_eq!(rows_except_links(&workspace), before);
+        assert_eq!(stored(&workspace, ORDER), recovered);
     }
-    assert_eq!(refreshed.link_reference, Some(reference()));
     assert_eq!(snapshot(&workspace), authority_before);
-    let after_grant = rows_except_links(&workspace);
     assert_eq!(
         execution_adapter()
             .submit(&workspace, &legacy_order)
             .unwrap(),
         recovered.task_ids
     );
-    assert_eq!(rows_except_links(&workspace), after_grant);
+    assert_eq!(rows_except_links(&workspace), before);
     assert_eq!(count(&workspace, "planning_work_order_links"), 1);
 }

@@ -35,7 +35,7 @@ pub(super) fn append(
         && old.is_none_or(|old| {
             old.permit_source != work.permit_source
                 || old.permit_revision != work.permit_revision
-                || old.delivery_granted != work.delivery_granted
+                || (!old.delivery_granted && work.delivery_granted)
         })
     {
         kinds.push(IssueWorkEventKind::PermitGranted {

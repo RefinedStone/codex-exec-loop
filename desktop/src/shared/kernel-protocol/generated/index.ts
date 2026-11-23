@@ -204,11 +204,15 @@ export type IssueConversationState = ({ readonly "kind": "thread"; readonly "thr
 
 export type IssueDecisionAnswerBy = ("human" | "agent" | "default" | "arbiter");
 
-export type IssueDecisionBasis = { readonly "authorizationEpoch"?: number; readonly "fieldHash"?: (IssueFieldHash | null); readonly "gateRevision": number; readonly "policyVersion": string; readonly "workOrderId"?: (string | null); };
+export type IssueDecisionBasis = { readonly "authorizationEpoch"?: number; readonly "delivery"?: (IssueDecisionDeliveryContext | null); readonly "fieldHash"?: (IssueFieldHash | null); readonly "gateRevision": number; readonly "policyVersion": string; readonly "workOrderId"?: (string | null); };
 
-export type IssueDecisionBasisRecord = { readonly "authorization_epoch"?: number; readonly "field_hash"?: (IssueDecisionFieldHashRecord | null); readonly "gate_revision": number; readonly "policy_version": string; readonly "work_order_id"?: (string | null); };
+export type IssueDecisionBasisRecord = { readonly "authorization_epoch"?: number; readonly "delivery"?: (IssueDecisionDeliveryContextRecord | null); readonly "field_hash"?: (IssueDecisionFieldHashRecord | null); readonly "gate_revision": number; readonly "policy_version": string; readonly "work_order_id"?: (string | null); };
 
-export type IssueDecisionFactRecord = { readonly "answer_by"?: (IssueDecisionAnswerBy | null); readonly "basis": IssueDecisionBasisRecord; readonly "decision_id": string; readonly "gate": IssueDecisionGateRecord; readonly "kind": IssueDecisionKind; readonly "option"?: (string | null); readonly "state": IssueDecisionState; readonly "subject": IssueDecisionSubjectRecord; };
+export type IssueDecisionDeliveryContext = { readonly "baseCommitSha": string; readonly "sourceCommitSha": string; };
+
+export type IssueDecisionDeliveryContextRecord = { readonly "base_commit_sha": string; readonly "source_commit_sha": string; };
+
+export type IssueDecisionFactRecord = { readonly "answer_by"?: (IssueDecisionAnswerBy | null); readonly "basis": IssueDecisionBasisRecord; readonly "decision_id": string; readonly "delivery_review"?: (IssueDeliveryDiffVerdictRecord | null); readonly "gate": IssueDecisionGateRecord; readonly "kind": IssueDecisionKind; readonly "option"?: (string | null); readonly "state": IssueDecisionState; readonly "subject": IssueDecisionSubjectRecord; };
 
 export type IssueDecisionFieldHashRecord = { readonly "sha256": string; readonly "version": number; };
 
@@ -224,7 +228,7 @@ export type IssueDecisionOptionState = { readonly "effect": string; readonly "id
 
 export type IssueDecisionOutcome = ("answered" | "superseded" | "already_resolved");
 
-export type IssueDecisionRequestState = { readonly "basis": IssueDecisionBasisRecord; readonly "due_at"?: (string | null); readonly "gate": IssueDecisionGateRecord; readonly "id": string; readonly "kind": IssueDecisionKind; readonly "on_timeout": IssueDecisionTimeout; readonly "options": Array<IssueDecisionOptionState>; readonly "question": string; readonly "recommended"?: (string | null); readonly "revision": number; readonly "state": IssueDecisionState; readonly "subject": IssueDecisionSubjectRecord; };
+export type IssueDecisionRequestState = { readonly "basis": IssueDecisionBasisRecord; readonly "delivery_review"?: (IssueDeliveryReviewState | null); readonly "due_at"?: (string | null); readonly "gate": IssueDecisionGateRecord; readonly "id": string; readonly "kind": IssueDecisionKind; readonly "on_timeout": IssueDecisionTimeout; readonly "options": Array<IssueDecisionOptionState>; readonly "question": string; readonly "recommended"?: (string | null); readonly "revision": number; readonly "state": IssueDecisionState; readonly "subject": IssueDecisionSubjectRecord; };
 
 export type IssueDecisionResolutionCode = ("answered" | "expired" | "withdrawn" | "basis_changed");
 
@@ -235,6 +239,12 @@ export type IssueDecisionState = ("open" | "answered" | "expired" | "withdrawn" 
 export type IssueDecisionSubjectRecord = ({ readonly "issue": IssueEventReference; readonly "kind": "issue"; });
 
 export type IssueDecisionTimeout = ("wait" | "default" | "arbiter");
+
+export type IssueDeliveryDiffVerdictRecord = { readonly "changed_files": number; readonly "changed_lines"?: (number | null); readonly "reasons": Array<IssueDeliveryRiskReason>; };
+
+export type IssueDeliveryReviewState = { readonly "changed_files": number; readonly "changed_lines"?: (number | null); readonly "reasons": Array<IssueDeliveryRiskReason>; };
+
+export type IssueDeliveryRiskReason = ("protected_path" | "diff_too_large" | "binary_diff");
 
 export type IssueEventProjectScope = { readonly "workspace_dir": string; };
 
@@ -290,7 +300,7 @@ export type IssueListPresentation = { readonly "number"?: (number | null); reado
 
 export type IssueListReason = { readonly "code": IssueListReasonCode; readonly "summary": string; };
 
-export type IssueListReasonCode = ("observed" | "source_read_failed" | "disclosure_confirmation_required" | "not_yet_observed" | "held" | "stale" | "remote_closed" | "workflow" | "triage");
+export type IssueListReasonCode = ("observed" | "source_read_failed" | "disclosure_confirmation_required" | "not_yet_observed" | "held" | "stale" | "remote_closed" | "workflow" | "triage" | "protected_path" | "diff_too_large" | "binary_diff");
 
 export type IssueListStatus = { readonly "code": IssueListStatusCode; readonly "label": string; };
 
@@ -352,7 +362,7 @@ export type IssueTriageState = { readonly "basis": IssueTriageBasisState; readon
 
 export type IssueWithheldReasonState = ("user_confirmation_required");
 
-export type IssueWorkBlockReason = ("execution_disabled" | "awaiting_source" | "approval_changed" | "source_unavailable" | "submission_unavailable" | "feedback_unconfirmed");
+export type IssueWorkBlockReason = ("execution_disabled" | "awaiting_source" | "awaiting_delivery_approval" | "approval_changed" | "source_unavailable" | "submission_unavailable" | "feedback_unconfirmed");
 
 export type IssueWorkSummary = { readonly "blocked_reason"?: (IssueWorkBlockReason | null); readonly "delivery_granted": boolean; readonly "task_ids": Array<string>; readonly "work_order_id": string; };
 

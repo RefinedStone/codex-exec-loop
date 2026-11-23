@@ -93,6 +93,8 @@ fn admit_current(
         return Ok(IssueWorkAdmissionResult::Conflict);
     }
     if candidate.authorization.is_some()
+        || candidate.delivery_assessment.is_some()
+        || candidate.delivery_revision != 0
         || !candidate.task_ids.is_empty()
         || candidate.permit_source.is_some()
         || candidate.permit_revision != 0

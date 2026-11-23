@@ -229,6 +229,7 @@ fn ensure_recovery_decision(
         "같은 작업 지시의 최초 작업과 모든 보완 작업의 자동 실행 및 전달을 취소합니다.",
     )?);
     let definition = IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(work.order.issue.clone()),
         gate: IssueAutomationGate::Spec,
         kind: IssueDecisionKind::FailureRecovery,

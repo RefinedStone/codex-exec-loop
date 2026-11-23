@@ -1,5 +1,6 @@
 import type { IssueDecisionRequestState } from "./protocol";
 import { issueDeadlineDateLabel, issueDecisionDeadline } from "./issueDecisionDeadline";
+import { issueDeliveryReview } from "./issueDeliveryReview";
 import { EMPTY_ISSUE_DECISION_DRAFT, ISSUE_DECISION_KIND_LABEL, ISSUE_DECISION_STATE_LABEL, decisionDraftIdentity, issueTextBytes, type IssueDecisionDraft, type ReadyIssueDetail } from "./issueInteractions";
 
 export interface IssueDecisionCardsProps {
@@ -27,18 +28,32 @@ function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason
   const setOption = (option: string) => onDraftChange?.({ ...draft, option });
   const setNote = (note: string) => onDraftChange?.({ ...draft, note });
   const open = state === "open";
+  const delivery = issueDeliveryReview(request);
+  const heading = delivery ? "결과 제출 승인" : ISSUE_DECISION_KIND_LABEL[request.kind] ?? "결정";
   const deadline = issueDecisionDeadline(request, asOfUnixMs);
   const tooLong = issueTextBytes(note) > 4_096;
   const selected = request.options.some((value) => value.id === option);
   const noteRequired = request.kind === "agent_question" && option === "reply";
   const missingNote = noteRequired && note.trim().length === 0;
   return (
-    <section className="issues-decision-card" data-testid="issue-decision-card" data-decision-id={request.id} data-state={state} aria-label={ISSUE_DECISION_KIND_LABEL[request.kind] ?? "결정"}>
+    <section className="issues-decision-card" data-testid="issue-decision-card" data-decision-id={request.id} data-state={state} aria-label={heading}>
       <div className="issues-decision-heading">
-        <strong>{ISSUE_DECISION_KIND_LABEL[request.kind] ?? "결정"}</strong>
-        <span className="issues-status" data-status={state}>{ISSUE_DECISION_STATE_LABEL[state] ?? state}</span>
+        <strong>{heading}</strong>
+        <span className="issues-status" data-status={state}>{delivery && open ? "사람 승인 대기" : ISSUE_DECISION_STATE_LABEL[state] ?? state}</span>
       </div>
       <p className="issues-decision-question" data-testid="issue-decision-question">{request.question}</p>
+      {delivery && <div className="issues-delivery-review" data-testid="issue-delivery-review">
+        <p>{open ? "이 변경에 대한 사람의 답변을 기다립니다." : "이 결정에서 검토한 변경 범위입니다."}</p>
+        <ul className="issues-reasons" aria-label="결과 제출 검토 이유">
+          {delivery.reasons.map((reason) => <li key={reason.code} data-testid="issue-delivery-reason" data-reason={reason.code}>{reason.label}</li>)}
+        </ul>
+        <dl className="issues-facts">
+          <div><dt>비교 기준 커밋</dt><dd><code data-testid="issue-delivery-base">{delivery.baseSha}</code></dd></div>
+          <div><dt>제출 대상 커밋</dt><dd><code data-testid="issue-delivery-source">{delivery.sourceSha}</code></dd></div>
+          <div><dt>변경 파일</dt><dd data-testid="issue-delivery-files">{delivery.files}</dd></div>
+          <div><dt>변경 줄</dt><dd data-testid="issue-delivery-lines">{delivery.lines}</dd></div>
+        </dl>
+      </div>}
       {deadline && <div className="issues-inline-notice muted" data-testid="issue-decision-deadline">
         <p>응답 기한 <time dateTime={deadline.dueAt}>{issueDeadlineDateLabel(deadline.dueAt)}</time></p>
         {open && <>

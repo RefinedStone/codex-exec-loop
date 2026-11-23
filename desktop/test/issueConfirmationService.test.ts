@@ -50,6 +50,27 @@ function harness(queue = new IssueConfirmationQueue()) {
 }
 
 describe("utility issue confirmation", () => {
+  it("preserves the exact server delivery range in native proof and confirmed submission", async () => {
+    const h = harness();
+    const intent = { ...INTENT, target: { kind: "decision", workspace: REQUEST.workspace,
+      decision_id: REQUEST.decisionId, option: REQUEST.option, decision_revision: 9,
+      basis: { policyVersion: "a".repeat(64), fieldHash: { version: 1, sha256: "d".repeat(64) }, workOrderId: "work-1", gateRevision: 4,
+        delivery: { baseCommitSha: "b".repeat(40), sourceCommitSha: "c".repeat(40) } } } };
+    const original = h.rpc.request.getMockImplementation()!;
+    h.rpc.request.mockImplementation(async (method, params) => method === "akra/kernel/confirmation/prepare"
+      ? { intent, display: DISPLAY } : original(method, params));
+    const result = h.service.confirmDecision(REQUEST);
+    await h.untilDialog();
+    expect(h.helper.approve).not.toHaveBeenCalled();
+    h.native.resolve(true);
+    expect(await result).toEqual({ cancelled: false, response: { processed: true } });
+    expect(h.helper.approve).toHaveBeenCalledExactlyOnceWith(REGISTRATION.registration_id, intent);
+    expect(h.submitted()[0]?.[1]).toMatchObject({ confirmation: { intent } });
+    expect(h.rpc.request.mock.calls.find(([method]) => method === "akra/kernel/confirmation/prepare")?.[1])
+      .toEqual({ request: { command: { type: "answer_issue_decision", decision_id: REQUEST.decisionId,
+        option: REQUEST.option, note: REQUEST.note }, idempotency_key: REQUEST.key } });
+  });
+
   it("rejects a server prompt that echoes a private registration before contacting native UI", async () => {
     const h = harness();
     const original = h.rpc.request.getMockImplementation()!;

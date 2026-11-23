@@ -135,6 +135,13 @@ impl IssueDecisionKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssueDecisionDeliveryContext {
+    pub base_commit_sha: String,
+    pub source_commit_sha: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueDecisionBasis {
     /// 개입 뒤에는 같은 원문/정책이어도 새 사람 승인을 요구한다.
     #[serde(default, skip_serializing_if = "initial_authorization_epoch")]
@@ -143,6 +150,9 @@ pub struct IssueDecisionBasis {
     pub field_hash: Option<IssueFieldHash>,
     pub work_order_id: Option<String>,
     pub gate_revision: u64,
+    /// Start의 기존 직렬화/식별자는 유지하고 실제 전달 범위만 별도로 고정한다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<IssueDecisionDeliveryContext>,
 }
 
 fn initial_authorization_epoch(value: &u64) -> bool {
@@ -169,6 +179,7 @@ impl IssueDecisionBasis {
             field_hash: assessment.basis().field_hash.clone(),
             work_order_id,
             gate_revision: gate.gate_revision,
+            delivery: None,
         };
         basis.validate()?;
         Ok(basis)
@@ -212,6 +223,19 @@ pub struct IssueDecisionDefinition {
     pub asked_by: String,
     /// 공유된 근거의 식별자/참조만 넣는다. 근거 원문은 넣지 않는다.
     pub evidence: Vec<String>,
+    /// 결정 당시 diff 요약이다. 이후 checkpoint가 바뀌어도 이 기록은 불변이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_review: Option<super::delivery::IssueDeliveryDiffVerdict>,
+}
+
+impl IssueDecisionDefinition {
+    pub fn is_delivery_risk_exception(&self) -> bool {
+        self.kind == IssueDecisionKind::RiskException
+            && self.gate == IssueAutomationGate::Delivery
+            && self.basis.work_order_id.is_some()
+            && self.basis.delivery.is_some()
+            && self.delivery_review.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -308,6 +332,8 @@ pub struct IssueDecisionFact {
     pub state: IssueDecisionState,
     pub answer_by: Option<IssueDecisionAnswerBy>,
     pub option: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_review: Option<super::delivery::IssueDeliveryDiffVerdict>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,6 +461,7 @@ impl IssueDecisionRequest {
             state: self.state(),
             answer_by: self.answer().map(|answer| answer.by),
             option: self.answer().map(|answer| answer.option.clone()),
+            delivery_review: definition.delivery_review.clone(),
         }
     }
 
@@ -486,7 +513,8 @@ impl IssueDecisionRequest {
             } else if matches!(
                 gate_action,
                 IssueAutomationGateAction::Human | IssueAutomationGateAction::TimeoutDefault
-            ) {
+            ) || self.definition().is_delivery_risk_exception()
+            {
                 return Err(IssueDecisionError::HumanConfirmationRequired);
             }
             validation::answer(&answer, self.definition())?;

@@ -7146,6 +7146,16 @@
           "minimum": 0,
           "type": "integer"
         },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDecisionDeliveryContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "fieldHash": {
           "anyOf": [
             {
@@ -7186,6 +7196,16 @@
           "minimum": 0,
           "type": "integer"
         },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDecisionDeliveryContextRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "field_hash": {
           "anyOf": [
             {
@@ -7217,6 +7237,38 @@
       ],
       "type": "object"
     },
+    "IssueDecisionDeliveryContext": {
+      "additionalProperties": false,
+      "properties": {
+        "baseCommitSha": {
+          "type": "string"
+        },
+        "sourceCommitSha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseCommitSha",
+        "sourceCommitSha"
+      ],
+      "type": "object"
+    },
+    "IssueDecisionDeliveryContextRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "base_commit_sha": {
+          "type": "string"
+        },
+        "source_commit_sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_commit_sha",
+        "source_commit_sha"
+      ],
+      "type": "object"
+    },
     "IssueDecisionFactRecord": {
       "additionalProperties": false,
       "properties": {
@@ -7235,6 +7287,16 @@
         },
         "decision_id": {
           "type": "string"
+        },
+        "delivery_review": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDeliveryDiffVerdictRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "gate": {
           "$ref": "#/$defs/IssueDecisionGateRecord"
@@ -7376,6 +7438,16 @@
         "basis": {
           "$ref": "#/$defs/IssueDecisionBasisRecord"
         },
+        "delivery_review": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueDeliveryReviewState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "due_at": {
           "type": [
             "string",
@@ -7496,6 +7568,72 @@
         "wait",
         "default",
         "arbiter"
+      ],
+      "type": "string"
+    },
+    "IssueDeliveryDiffVerdictRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "changed_files": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "changed_lines": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/IssueDeliveryRiskReason"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changed_files",
+        "reasons"
+      ],
+      "type": "object"
+    },
+    "IssueDeliveryReviewState": {
+      "additionalProperties": false,
+      "properties": {
+        "changed_files": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "changed_lines": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/IssueDeliveryRiskReason"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changed_files",
+        "reasons"
+      ],
+      "type": "object"
+    },
+    "IssueDeliveryRiskReason": {
+      "enum": [
+        "protected_path",
+        "diff_too_large",
+        "binary_diff"
       ],
       "type": "string"
     },
@@ -8192,7 +8330,10 @@
         "stale",
         "remote_closed",
         "workflow",
-        "triage"
+        "triage",
+        "protected_path",
+        "diff_too_large",
+        "binary_diff"
       ],
       "type": "string"
     },
@@ -8916,6 +9057,7 @@
       "enum": [
         "execution_disabled",
         "awaiting_source",
+        "awaiting_delivery_approval",
         "approval_changed",
         "source_unavailable",
         "submission_unavailable",

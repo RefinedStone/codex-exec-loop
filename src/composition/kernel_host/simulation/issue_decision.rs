@@ -232,6 +232,7 @@ impl Services {
         )
         .unwrap();
         IssueDecisionDefinition {
+            delivery_review: None,
             subject: IssueDecisionSubject::Issue(item.issue),
             gate: IssueAutomationGate::Start,
             kind: IssueDecisionKind::StartApproval,

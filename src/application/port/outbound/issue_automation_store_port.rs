@@ -323,6 +323,16 @@ pub trait IssueAutomationStorePort: Send + Sync {
         assessment: &IssueTriageAssessment,
         candidate: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
     ) -> Result<IssueWorkSaveResult>;
+    /// 현재 policy/Observe 상태와 무관하게 전달 권한만 줄인다. Start와 revision floor는 보존한다.
+    fn clear_issue_delivery(
+        &self,
+        _workspace: &str,
+        _issue: &IssueReference,
+        _expected_work_revision: u64,
+        _reason: crate::domain::issue_automation::coordinator::IssueWorkBlockReason,
+    ) -> Result<IssueWorkSaveResult> {
+        anyhow::bail!("issue delivery invalidation is unavailable")
+    }
     /// 한 건의 강제 재조회다. 정기 배치의 커서는 이동하지 않는다.
     fn apply_issue_resync(
         &self,

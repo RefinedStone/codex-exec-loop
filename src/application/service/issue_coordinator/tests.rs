@@ -279,6 +279,8 @@ struct FakeExecutionState {
     after_grant: Option<Box<dyn Fn() + Send + Sync>>,
     after_revoke: Option<Box<dyn Fn() + Send + Sync>>,
     source_unavailable: bool,
+    delivery_diff: Option<crate::domain::issue_automation::delivery::IssueDeliveryDiff>,
+    delivery_diff_unavailable: bool,
     fail_before_register: bool,
     fail_after_register: bool,
     fail_after_grant: bool,
@@ -288,6 +290,39 @@ struct FakeExecution {
     state: Mutex<FakeExecutionState>,
 }
 impl IssueWorkExecutionPort for FakeExecution {
+    fn frozen_delivery_source(&self, _: &str, _: &str) -> Result<Option<String>> {
+        let state = self.state.lock().unwrap();
+        if state.source_unavailable {
+            bail!("configured source is unavailable");
+        }
+        Ok(state.frozen.clone())
+    }
+    fn delivery_diff(
+        &self,
+        _: &str,
+        _: &str,
+        expected_source: &str,
+    ) -> Result<crate::domain::issue_automation::delivery::IssueDeliveryDiff> {
+        use crate::domain::issue_automation::delivery::*;
+        let state = self.state.lock().unwrap();
+        if state.delivery_diff_unavailable || state.frozen.as_deref() != Some(expected_source) {
+            bail!("the fixture delivery diff is unavailable");
+        }
+        Ok(state
+            .delivery_diff
+            .clone()
+            .unwrap_or_else(|| IssueDeliveryDiff {
+                base_commit_sha: "a".repeat(40),
+                source_commit_sha: expected_source.into(),
+                files: vec![IssueDeliveryDiffFile {
+                    path: "src/feature.rs".into(),
+                    lines: IssueDeliveryDiffLines::Text {
+                        added: 1,
+                        deleted: 0,
+                    },
+                }],
+            }))
+    }
     fn execution_limit(&self, _: &str, work_order_id: &str, max_attempts: u32) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         let entry = (work_order_id.to_string(), max_attempts);
@@ -1195,4 +1230,5 @@ mod closure;
 mod execution_detail;
 
 mod deadlines;
+mod delivery;
 mod gated;

@@ -358,3 +358,142 @@ fn issue_list_presentation_and_group_codes_are_closed_enums() {
     assert!(serde_json::from_value::<IssueListGroupId>(json!("my_turn")).is_ok());
     assert!(serde_json::from_value::<IssueListGroupId>(json!("provider_custom_group")).is_err());
 }
+
+fn delivery_item(reason: IssueDeliveryRiskReason) -> IssueCollectionItem {
+    use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkSummary};
+    use crate::domain::issue_automation::decision::{
+        IssueDecisionBasis, IssueDecisionDefinition, IssueDecisionDeliveryContext, IssueDecisionId,
+        IssueDecisionOption, IssueDecisionRequest, IssueDecisionSharedText, IssueDecisionSubject,
+        IssueDecisionTimeout, StoredIssueDecision,
+    };
+    let mut item = item("I_delivery", Some(IssueAutomationState::Running));
+    item.work = Some(IssueWorkSummary {
+        work_order_id: "work-delivery".to_owned(),
+        task_ids: vec!["task-delivery".to_owned()],
+        blocked_reason: Some(IssueWorkBlockReason::AwaitingDeliveryApproval),
+        delivery_granted: false,
+    });
+    let text = |value: &str| IssueDecisionSharedText::new_shared(value).unwrap();
+    let request = IssueDecisionRequest::new(
+        IssueDecisionId::new("delivery-1").unwrap(),
+        IssueDecisionDefinition {
+            subject: IssueDecisionSubject::Issue(item.issue.clone()),
+            gate: IssueAutomationGate::Delivery,
+            kind: IssueDecisionKind::RiskException,
+            question: text("검토한 결과를 제출할까요?"),
+            options: vec![IssueDecisionOption {
+                id: "approve".to_owned(),
+                label: text("제출 승인"),
+                effect: text("검토한 결과를 제출합니다."),
+            }],
+            recommended: None,
+            basis: IssueDecisionBasis {
+                authorization_epoch: 0,
+                policy_version: "a".repeat(64),
+                field_hash: Some(basis().field_hash),
+                work_order_id: Some("work-delivery".to_owned()),
+                gate_revision: 2,
+                delivery: Some(IssueDecisionDeliveryContext {
+                    base_commit_sha: "a".repeat(40),
+                    source_commit_sha: "b".repeat(40),
+                }),
+            },
+            delivery_review: Some(IssueDeliveryDiffVerdict {
+                changed_files: if reason == IssueDeliveryRiskReason::DiffTooLarge {
+                    51
+                } else {
+                    2
+                },
+                changed_lines: (reason != IssueDeliveryRiskReason::BinaryDiff).then_some(10),
+                reasons: vec![reason],
+            }),
+            on_timeout: IssueDecisionTimeout::Wait,
+            due_at: None,
+            asked_by: "coordinator".to_owned(),
+            evidence: Vec::new(),
+        },
+    )
+    .unwrap();
+    item.open_decisions = vec![StoredIssueDecision {
+        request,
+        revision: 1,
+    }];
+    item
+}
+
+#[test]
+fn open_delivery_risks_display_my_turn_without_changing_execution_or_start_state() {
+    for (reason, code) in [
+        (
+            IssueDeliveryRiskReason::ProtectedPath,
+            IssueListReasonCode::ProtectedPath,
+        ),
+        (
+            IssueDeliveryRiskReason::DiffTooLarge,
+            IssueListReasonCode::DiffTooLarge,
+        ),
+        (
+            IssueDeliveryRiskReason::BinaryDiff,
+            IssueListReasonCode::BinaryDiff,
+        ),
+    ] {
+        let item = delivery_item(reason);
+        let before = item.clone();
+        let presentation = IssueListPresentation::from_domain(&item);
+        assert_eq!(group_id(&item), IssueListGroupId::MyTurn);
+        assert_eq!(
+            presentation.status.code,
+            IssueListStatusCode::AwaitingDecision
+        );
+        assert_eq!(presentation.reason.code, code);
+        assert!(presentation.reason.summary.contains("결과 제출 승인"));
+        assert_eq!(
+            item.tracked.as_ref().unwrap().state,
+            IssueAutomationState::Running
+        );
+        assert_eq!(item, before);
+    }
+}
+
+#[test]
+fn delivery_display_requires_a_current_open_work_bound_decision_and_preserves_terminal_states() {
+    use crate::domain::issue_automation::decision::IssueDecisionRequest;
+    let original = delivery_item(IssueDeliveryRiskReason::ProtectedPath);
+    for state in [IssueAutomationState::Done, IssueAutomationState::Cancelled] {
+        let mut item = original.clone();
+        item.tracked.as_mut().unwrap().state = state;
+        assert_eq!(group_id(&item), IssueListGroupId::Done);
+        assert_eq!(
+            IssueListPresentation::from_domain(&item).status.code,
+            IssueListStatusCode::from(state)
+        );
+    }
+    for change in 0..6 {
+        let mut item = original.clone();
+        match change {
+            0 => item.work = None,
+            1 => item.work.as_mut().unwrap().work_order_id = "other-work".to_owned(),
+            2 => item.work.as_mut().unwrap().delivery_granted = true,
+            3 => observed(&mut item).content = withheld(),
+            4 => {
+                let mut record = item.open_decisions[0].request.to_record();
+                record.state = IssueDecisionState::Superseded;
+                item.open_decisions[0].request = IssueDecisionRequest::hydrate(record).unwrap();
+            }
+            _ => {
+                let mut record = item.open_decisions[0].request.to_record();
+                record.definition.kind = IssueDecisionKind::StartApproval;
+                record.definition.gate = IssueAutomationGate::Start;
+                record.definition.basis.work_order_id = None;
+                record.definition.basis.delivery = None;
+                record.definition.delivery_review = None;
+                item.open_decisions[0].request = IssueDecisionRequest::hydrate(record).unwrap();
+            }
+        }
+        assert_eq!(group_id(&item), IssueListGroupId::Running, "{change}");
+        assert_eq!(
+            IssueListPresentation::from_domain(&item).status.code,
+            IssueListStatusCode::Running
+        );
+    }
+}

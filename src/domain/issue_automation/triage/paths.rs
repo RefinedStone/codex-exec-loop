@@ -136,7 +136,7 @@ fn escaped(bytes: &[u8], index: usize) -> bool {
 }
 
 /// None은 지원 범위를 넘겨 읽지 못했다는 뜻이다. 불일치(false)로 대신하면 안 된다.
-pub(super) fn matches_glob(pattern: &str, path: &str) -> Option<bool> {
+pub(in crate::domain::issue_automation) fn matches_glob(pattern: &str, path: &str) -> Option<bool> {
     if pattern.len() > MAX_MATCHED_GLOB_BYTES || path.len() > MAX_MENTIONED_PATH_BYTES {
         return None;
     }

@@ -380,7 +380,7 @@ pub(super) fn save(
                         crate::domain::issue_automation::decision::IssueDecisionKind::AgentQuestion
                             | crate::domain::issue_automation::decision::IssueDecisionKind::FailureRecovery
                             | crate::domain::issue_automation::decision::IssueDecisionKind::CloseApproval
-                    )))
+                    )) || request.definition().is_delivery_risk_exception())
                 && request.answer().is_none_or(|answer|
                     answer.by != crate::domain::issue_automation::decision::IssueDecisionAnswerBy::Human
                         || answer.confirmation.is_none())
@@ -599,6 +599,14 @@ pub(super) fn current_basis(
     )?;
     basis.authorization_epoch =
         super::intervention::authorization_epoch(connection, workspace, request.issue())?;
+    if request.definition().is_delivery_risk_exception()
+        && let Some(work) = super::coordinator::read(connection, workspace, request.issue())?
+        && let Some(delivery) = &work.delivery_assessment
+        && delivery.matches_work(&work)
+        && delivery.matches_triage(assessment, basis.authorization_epoch)
+    {
+        return Ok(delivery.basis.clone());
+    }
     Ok(basis)
 }
 
@@ -617,6 +625,11 @@ pub(super) fn work_context_current(
     };
     if &work.order.work_order_id != work_order_id {
         return Ok(false);
+    }
+    if definition.is_delivery_risk_exception() {
+        return Ok(work.delivery_assessment.as_ref().is_some_and(|delivery| {
+            delivery.matches_work(&work) && delivery.matches_decision(definition)
+        }));
     }
     let Some(execution) = super::execution::read(connection, workspace, work_order_id)? else {
         return Ok(false);

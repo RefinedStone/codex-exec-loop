@@ -8,8 +8,8 @@ use crate::application::port::outbound::issue_automation_store_port::{
 };
 use crate::domain::issue_automation::collection::IssueCollectionMode;
 use crate::domain::issue_automation::coordinator::{
-    IssueWorkCheckpoint, IssueWorkStartAuthority, human_start, policy_start, ready_for_start,
-    timeout_default_start,
+    IssueWorkBlockReason, IssueWorkCheckpoint, IssueWorkStartAuthority, human_start, policy_start,
+    ready_for_start, timeout_default_start,
 };
 use crate::domain::issue_automation::decision::{IssueDecisionBasis, IssueDecisionId};
 use crate::domain::issue_automation::policy::IssueAutomationGate;
@@ -120,6 +120,9 @@ pub(super) fn save(
             if current.revision != candidate.revision {
                 return Ok(IssueWorkSaveResult::Conflict);
             }
+            if !validate_delivery_change(tx, workspace, assessment, &current, candidate)? {
+                return Ok(IssueWorkSaveResult::Conflict);
+            }
             if current == *candidate {
                 return Ok(IssueWorkSaveResult::Saved {
                     record: Box::new(current),
@@ -135,6 +138,101 @@ pub(super) fn save(
             persist(tx, workspace, Some(&current), candidate)
         })
     })
+}
+
+/// 권한을 늘릴 candidate를 받지 않고 최신 저장 work에서 취소만 구성한다.
+pub(super) fn clear_delivery(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+    issue: &IssueReference,
+    expected_work_revision: u64,
+    reason: IssueWorkBlockReason,
+) -> Result<IssueWorkSaveResult> {
+    validate_reference_scope(workspace, issue)?;
+    super::validate_expected_revision(expected_work_revision)?;
+    adapter.with_connection(workspace, |connection, guard| {
+        transaction(connection, guard, |tx| {
+            let Some(current) = read(tx, workspace, issue)? else {
+                return Ok(IssueWorkSaveResult::Conflict);
+            };
+            if current.revision != expected_work_revision {
+                return Ok(IssueWorkSaveResult::Conflict);
+            }
+            let mut candidate = current.clone();
+            candidate.delivery_assessment = None;
+            candidate.delivery_granted = false;
+            candidate.blocked_reason = Some(reason);
+            if candidate == current {
+                return Ok(IssueWorkSaveResult::Saved {
+                    record: Box::new(current),
+                    catalog_revision: super::triage::catalog_revision(tx, workspace)?,
+                    changed: false,
+                });
+            }
+            candidate.validate().map_err(|reason| anyhow!(reason))?;
+            persist(tx, workspace, Some(&current), &candidate)
+        })
+    })
+}
+
+fn validate_delivery_change(
+    tx: &Connection,
+    workspace: &str,
+    assessment: &IssueTriageAssessment,
+    current: &IssueWorkCheckpoint,
+    candidate: &IssueWorkCheckpoint,
+) -> Result<bool> {
+    let changed = current.delivery_assessment != candidate.delivery_assessment;
+    if candidate.delivery_revision < current.delivery_revision {
+        bail!("the delivery assessment revision cannot move backwards");
+    }
+    if changed && candidate.delivery_granted {
+        bail!("a changed delivery assessment requires suspending its permit first");
+    }
+    let Some(delivery) = &candidate.delivery_assessment else {
+        if candidate.delivery_revision != current.delivery_revision {
+            bail!("clearing a delivery assessment must preserve its revision");
+        }
+        if candidate.delivery_granted
+            && (!current.delivery_granted
+                || candidate.permit_source != current.permit_source
+                || candidate.permit_revision != current.permit_revision
+                || candidate.permit_authorization_epoch != current.permit_authorization_epoch)
+        {
+            bail!("a new delivery permit requires a current diff assessment");
+        }
+        return Ok(true);
+    };
+    if changed || candidate.delivery_granted {
+        let epoch =
+            super::intervention::authorization_epoch(tx, workspace, &candidate.order.issue)?;
+        if !delivery.matches_work(candidate) || !delivery.matches_triage(assessment, epoch) {
+            return Ok(false);
+        }
+    }
+    if changed {
+        let floor = current
+            .delivery_revision
+            .max(current.permit_revision)
+            .max(delivery.triage_gate_revision);
+        if delivery.basis.gate_revision <= floor {
+            bail!("a changed delivery assessment requires a newer gate revision");
+        }
+    }
+    if candidate.delivery_granted {
+        let range = delivery
+            .basis
+            .delivery
+            .as_ref()
+            .expect("validated delivery basis");
+        if candidate.permit_source.as_deref() != Some(&range.source_commit_sha)
+            || candidate.permit_revision < delivery.basis.gate_revision
+            || candidate.permit_authorization_epoch != delivery.basis.authorization_epoch
+        {
+            bail!("the delivery permit does not match its assessed source and revision");
+        }
+    }
+    Ok(true)
 }
 
 pub(super) fn validate_current(

@@ -5,6 +5,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::domain::issue_automation::delivery::IssueDeliveryDiff;
+
 pub trait ParallelPoolMutationPermit: Send {
     fn verify_pool_root(&self, pool_root: &Path) -> Result<(), String>;
 }
@@ -62,6 +64,13 @@ pub struct ParallelWorkerCommitRequest<'a> {
     pub expected_head_commit_sha: &'a str,
     pub commit_message: &'a str,
     pub commit_timestamp: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelCommitDiffRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub base_commit_sha: &'a str,
+    pub source_commit_sha: &'a str,
 }
 
 // `ParallelModeRuntimePort`는 parallel mode application service가 OS, git, gh, filesystem에
@@ -226,6 +235,14 @@ pub trait ParallelModeRuntimePort: Send + Sync {
         _request: ParallelWorkerCommitRequest<'_>,
     ) -> Result<ParallelWorkerCommitOutcome, String> {
         Err("host-owned parallel worker commit is unavailable in this runtime".to_string())
+    }
+
+    /// Reads the complete frozen commit range. Unsupported or bounded output must fail closed.
+    fn inspect_parallel_commit_diff(
+        &self,
+        _request: ParallelCommitDiffRequest<'_>,
+    ) -> Result<IssueDeliveryDiff, String> {
+        Err("frozen parallel commit diff inspection is unavailable in this runtime".to_string())
     }
 
     // audit/log/lease timestamp에 쓸 현재 시간을 runtime에서 제공한다. 테스트 fake는 deterministic

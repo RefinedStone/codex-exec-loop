@@ -13,6 +13,7 @@ fn current_policy_failures_revoke_dispatch_and_delivery_permits() {
         }
         let before = h.work().unwrap();
         let grants_before = h.execution.state.lock().unwrap().grants.len();
+        let revocations_before = h.execution.state.lock().unwrap().revoked_work_orders.len();
         let reads_before = h.source.calls.load(Ordering::SeqCst);
         assert_eq!(before.delivery_granted, delivery);
         if unavailable {
@@ -27,7 +28,7 @@ fn current_policy_failures_revoke_dispatch_and_delivery_permits() {
             let state = h.execution.state.lock().unwrap();
             assert!(state.revoked);
             assert_eq!(
-                state.revoked_work_orders.as_slice(),
+                &state.revoked_work_orders[revocations_before..],
                 std::slice::from_ref(&before.order.work_order_id)
             );
             assert_eq!(state.grants.len(), grants_before);
@@ -219,6 +220,7 @@ pub(super) fn seed_approved_work_checkpoint(
         .grant(
             &h.fixture.workspace,
             &IssueWorkPermitRequest {
+                delivery_review: None,
                 authorization_epoch: record.current_authorization_basis().authorization_epoch,
                 work_order_id: record.order.work_order_id.clone(),
                 approval: record.current_authorization_basis().clone(),
@@ -244,13 +246,11 @@ fn lost_delivery_grant_response_remains_recoverable_with_valid_current_approval(
     }
 
     assert!(h.tick(true).is_err());
-    assert!(
-        h.execution
-            .state
-            .lock()
-            .unwrap()
-            .revoked_work_orders
-            .is_empty()
+    // 새 diff 판정을 저장할 때 이전 Dispatch 허가만 한 번 회수했다.
+    // 정확한 범위의 grant 응답 유실은 같은 판의 멱등 복구를 막지 않는다.
+    assert_eq!(
+        h.execution.state.lock().unwrap().revoked_work_orders.len(),
+        1
     );
     h.tick(true).unwrap();
 
@@ -258,7 +258,7 @@ fn lost_delivery_grant_response_remains_recoverable_with_valid_current_approval(
     assert!(work.delivery_granted);
     assert_eq!(work.permit_source.as_deref(), Some("b".repeat(40).as_str()));
     let state = h.execution.state.lock().unwrap();
-    assert!(state.revoked_work_orders.is_empty());
+    assert_eq!(state.revoked_work_orders.len(), 1);
     assert_eq!(state.grants.len(), 2);
     assert_eq!(state.registrations, 1);
 }

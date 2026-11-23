@@ -35,6 +35,7 @@ fn observed(
 
 fn basis(source: char) -> PlanningWorkPermitBasis {
     PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 3,
         policy_version: "p".repeat(64),
         field_hash: format!("v1:{}", "f".repeat(64)),
@@ -74,6 +75,97 @@ fn delivery(lease: &ParallelModeSlotLeaseSnapshot, source: char) -> crate::appli
 
 fn no_fetch() -> Result<String> {
     panic!("assigned, frozen, or running work must preserve its actual source")
+}
+
+#[test]
+fn delivery_target_requires_the_complete_range_owned_by_the_current_lease() {
+    use crate::domain::parallel_mode::{
+        ParallelModeDeliveryTargetSnapshot, ParallelModeRepositoryVisibility,
+    };
+    let mut loaded = observed(
+        &["initial"],
+        "initial",
+        IssueExecutionPhase::Queued,
+        TaskStatus::Done,
+    );
+    let mut current = lease("initial", 'a');
+    current.delivery_target = Some(ParallelModeDeliveryTargetSnapshot::new(
+        "origin",
+        "acme/project",
+        ParallelModeRepositoryVisibility::Private,
+        "prerelease",
+        "0".repeat(40),
+    ));
+    loaded
+        .runtime
+        .distributor_queue_records
+        .push(delivery(&current, 'b'));
+    loaded
+        .runtime
+        .slot_leases
+        .insert(current.slot_id.clone(), current);
+    let selected =
+        select_delivery_target(&loaded.observation, &loaded.runtime, &"b".repeat(40)).unwrap();
+    assert_eq!(selected.base, "0".repeat(40));
+    assert_eq!(selected.source, "b".repeat(40));
+    loaded.runtime.distributor_queue_records[0].source_base_commit_sha = "c".repeat(40);
+    assert!(select_delivery_target(&loaded.observation, &loaded.runtime, &"b".repeat(40)).is_err());
+}
+
+#[test]
+fn missing_base_or_ambiguous_worktree_cannot_be_replaced_by_current_head() {
+    let mut loaded = observed(
+        &["initial"],
+        "initial",
+        IssueExecutionPhase::Queued,
+        TaskStatus::Done,
+    );
+    let record = delivery(&lease("initial", 'a'), 'b');
+    loaded
+        .runtime
+        .distributor_queue_records
+        .push(record.clone());
+    assert!(select_delivery_target(&loaded.observation, &loaded.runtime, &"b".repeat(40)).is_ok());
+    assert!(select_delivery_target(&loaded.observation, &loaded.runtime, &"c".repeat(40)).is_err());
+    loaded.runtime.distributor_queue_records[0]
+        .source_base_commit_sha
+        .clear();
+    assert!(select_delivery_target(&loaded.observation, &loaded.runtime, &"b".repeat(40)).is_err());
+    loaded.runtime.distributor_queue_records = vec![record.clone(), record];
+    loaded.runtime.distributor_queue_records[1].worktree_path = "/work/another".into();
+    assert!(select_delivery_target(&loaded.observation, &loaded.runtime, &"b".repeat(40)).is_err());
+}
+
+#[test]
+fn previous_lease_generation_does_not_contribute_a_delivery_base() {
+    use crate::domain::parallel_mode::{
+        ParallelModeDeliveryTargetSnapshot, ParallelModeRepositoryVisibility,
+    };
+    let mut loaded = observed(
+        &["initial"],
+        "initial",
+        IssueExecutionPhase::Queued,
+        TaskStatus::Done,
+    );
+    let old = lease("initial", 'a');
+    let mut current = lease("initial", 'b');
+    current.delivery_target = Some(ParallelModeDeliveryTargetSnapshot::new(
+        "origin",
+        "acme/project",
+        ParallelModeRepositoryVisibility::Private,
+        "prerelease",
+        "0".repeat(40),
+    ));
+    let mut old_record = delivery(&old, 'c');
+    old_record.source_base_commit_sha = "d".repeat(40);
+    loaded.runtime.distributor_queue_records = vec![old_record, delivery(&current, 'e')];
+    loaded
+        .runtime
+        .slot_leases
+        .insert(current.slot_id.clone(), current);
+    let selected =
+        select_delivery_target(&loaded.observation, &loaded.runtime, &"e".repeat(40)).unwrap();
+    assert_eq!(selected.base, "0".repeat(40));
 }
 
 #[test]

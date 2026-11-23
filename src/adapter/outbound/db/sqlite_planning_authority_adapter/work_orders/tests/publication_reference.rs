@@ -40,6 +40,7 @@ fn legacy_workspace(label: &str, origin: &str) -> String {
         .link_supplemental_task(&workspace, ORDER, "supplement")
         .unwrap();
     let basis = PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 0,
         policy_version: "legacy-policy".into(),
         field_hash: "v1:legacy-hash".into(),
@@ -53,6 +54,23 @@ fn legacy_workspace(label: &str, origin: &str) -> String {
         PlanningWorkPermitStage::Dispatch,
         PlanningWorkPermitStage::Push,
     ] {
+        if origin == "issue_automation" && stage == PlanningWorkPermitStage::Push {
+            // Install the actual pre-review payload; current grant admission must reject it.
+            let mut legacy_permits = stored(&workspace, ORDER).permits;
+            legacy_permits.push(PlanningWorkPermit {
+                work_order_id: ORDER.into(),
+                stage,
+                basis: basis.clone(),
+                requires_human_review: true,
+            });
+            connection(&workspace)
+                .execute(
+                    "UPDATE planning_work_orders SET permits_json=?2 WHERE work_order_id=?1",
+                    rusqlite::params![ORDER, serde_json::to_string(&legacy_permits).unwrap()],
+                )
+                .unwrap();
+            continue;
+        }
         adapter
             .grant_work_order_permit(
                 &workspace,

@@ -115,6 +115,8 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
         }),
     };
     let work = IssueWorkCheckpoint {
+        delivery_assessment: None,
+        delivery_revision: 0,
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {
@@ -136,6 +138,7 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
             crate::domain::issue_automation::coordinator::IssueWorkStartAuthority::Human,
         decision_id: Some(IssueDecisionId::new("feedback-start").unwrap()),
         approved_basis: IssueDecisionBasis {
+            delivery: None,
             authorization_epoch: 0,
             policy_version: "a".repeat(64),
             field_hash: Some(hash),

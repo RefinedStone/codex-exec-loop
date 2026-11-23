@@ -59,6 +59,7 @@ export function decisionDraftIdentity(request: IssueDecisionRequestState): strin
     issueDraftIdentity(request.subject.issue), request.id, request.revision, request.kind, request.gate, request.state,
     basis.policy_version, basis.gate_revision, basis.authorization_epoch ?? 0, basis.work_order_id ?? null,
     basis.field_hash?.version ?? null, basis.field_hash?.sha256 ?? null,
+    basis.delivery?.base_commit_sha ?? null, basis.delivery?.source_commit_sha ?? null,
   ]);
 }
 

@@ -58,7 +58,8 @@ impl IssueDecisionRequest {
             }));
         }
         let definition = self.definition();
-        let requires_human = definition.kind == IssueDecisionKind::CloseApproval
+        let requires_human = definition.is_delivery_risk_exception()
+            || definition.kind == IssueDecisionKind::CloseApproval
             || (definition.basis.work_order_id.is_some()
                 && matches!(
                     definition.kind,

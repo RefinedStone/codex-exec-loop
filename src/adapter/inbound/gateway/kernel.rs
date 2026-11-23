@@ -1339,6 +1339,7 @@ mod tests {
         let open = IssueDecisionRequest::new(
             IssueDecisionId::new("wire-decision").unwrap(),
             IssueDecisionDefinition {
+                delivery_review: None,
                 subject: IssueDecisionSubject::Issue(issue("/workspace", "I_decision")),
                 gate: IssueAutomationGate::Start,
                 kind: IssueDecisionKind::StartApproval,
@@ -1350,6 +1351,7 @@ mod tests {
                 }],
                 recommended: Some("continue".to_owned()),
                 basis: IssueDecisionBasis {
+                    delivery: None,
                     authorization_epoch: 0,
                     policy_version: "a".repeat(64),
                     field_hash: None,

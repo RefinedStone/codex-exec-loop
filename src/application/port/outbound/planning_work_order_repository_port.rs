@@ -18,9 +18,9 @@ use super::planning_task_repository_port::{
 
 mod permits_port;
 pub use permits_port::{
-    PlanningWorkPermit, PlanningWorkPermitBasis, PlanningWorkPermitBlockReason,
-    PlanningWorkPermitDecision, PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
-    evaluate_work_order_permit,
+    PlanningWorkDeliveryReview, PlanningWorkPermit, PlanningWorkPermitBasis,
+    PlanningWorkPermitBlockReason, PlanningWorkPermitDecision, PlanningWorkPermitRepositoryPort,
+    PlanningWorkPermitStage, evaluate_work_order_permit,
 };
 
 pub const MAX_WORK_ORDER_ID_BYTES: usize = 512;

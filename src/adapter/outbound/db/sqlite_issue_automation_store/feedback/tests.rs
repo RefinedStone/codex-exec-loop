@@ -305,6 +305,8 @@ fn existing_work(fixture: &Fixture, issue: &IssueReference) -> IssueWorkCheckpoi
     .unwrap();
     approved_basis.authorization_epoch = snapshot.authorization_epoch;
     let work = IssueWorkCheckpoint {
+        delivery_assessment: None,
+        delivery_revision: 0,
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {

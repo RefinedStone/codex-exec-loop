@@ -108,6 +108,25 @@ impl IssueTriageService {
             .map_err(|_| anyhow!("the current execution attempt policy is unavailable"))
     }
 
+    /// 실행 뒤 diff에도 Start와 같은 합성 정책 판의 보호 경로를 적용한다.
+    pub(crate) fn assess_delivery_diff_for_policy(
+        &self,
+        expected_version: &str,
+        diff: &crate::domain::issue_automation::delivery::IssueDeliveryDiff,
+    ) -> Result<crate::domain::issue_automation::delivery::IssueDeliveryDiffVerdict> {
+        let context = self
+            .context()
+            .ok_or_else(|| anyhow!("the current delivery protection policy is unavailable"))?;
+        if context.automation.version != expected_version {
+            bail!("the delivery protection policy changed");
+        }
+        crate::domain::issue_automation::delivery::assess_delivery_diff(
+            &context.automation.policy,
+            diff,
+        )
+        .map_err(|error| anyhow!(error))
+    }
+
     /// 요청과 같은 정책 판의 기한 설정만 사용한다.
     pub(crate) fn decision_timeouts_for_policy(
         &self,

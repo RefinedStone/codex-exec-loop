@@ -7,6 +7,7 @@ fn target() -> IssueConfirmationTarget {
         decision_id: IssueDecisionId::new("decision-1").unwrap(),
         option: "accept".into(),
         basis: IssueDecisionBasis {
+            delivery: None,
             authorization_epoch: 0,
             policy_version: "a".repeat(64),
             field_hash: Some(IssueFieldHash::of_fields("shared", "body")),
