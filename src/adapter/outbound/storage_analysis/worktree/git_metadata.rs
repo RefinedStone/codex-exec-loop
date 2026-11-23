@@ -104,7 +104,9 @@ pub(super) fn runtime_node(db: &StorageIndex, candidate: &Path) -> Result<Option
     let Some((id, path, identity)) = row else {
         return Ok(None);
     };
-    let metadata = native::metadata(Path::new(&path), &db.path("n1")?, None)?;
+    // Volume catalog roots use ordinary drive paths; native containment checks use final paths.
+    let root = fs::canonicalize(db.path("n1")?)?;
+    let metadata = native::metadata(Path::new(&path), &root, None)?;
     ensure!(
         metadata.directory
             && metadata.issue.is_none()

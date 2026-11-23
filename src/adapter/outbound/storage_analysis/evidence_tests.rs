@@ -99,6 +99,87 @@ fn storage_analysis_known_runtime_root_is_protected_without_git_discovery() {
         "known roots without observed Git metadata must not launch Git"
     );
 }
+#[cfg(windows)]
+#[test]
+fn storage_analysis_windows_plain_volume_root_preserves_runtime_protection() {
+    let fixture = Fixture::new();
+    fs::create_dir(fixture.source.join("child")).unwrap();
+    fs::write(fixture.source.join("child/data"), "fixture").unwrap();
+    let adapter = fixture.adapter();
+    scan(&adapter, "plain-volume-root");
+
+    let canonical = fs::canonicalize(&fixture.source).unwrap();
+    let plain = canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap();
+    assert_eq!(plain.as_bytes().get(1), Some(&b':'));
+    let plain = PathBuf::from(plain);
+    let index_dir = fixture.index.join("plain-volume-root");
+    let mut db = index::StorageIndex::open(&index_dir).unwrap();
+    db.conn = rusqlite::Connection::open(index_dir.join("index.sqlite3")).unwrap();
+    db.conn
+        .execute(
+            "UPDATE nodes SET path=?1 WHERE id=1",
+            [plain.to_str().unwrap()],
+        )
+        .unwrap();
+    assert_eq!(db.path("n1").unwrap(), plain);
+    let child: i64 = db
+        .conn
+        .query_row(
+            "SELECT id FROM nodes WHERE parent=1 AND name='child'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let known = vec![plain.clone(), plain.join("child")];
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observations = calls.clone();
+    let probe = StorageRuntimeProbe {
+        known_roots: Arc::new(move |_| StorageRuntimeRoots {
+            paths: known.clone(),
+            complete: true,
+        }),
+        observe: Arc::new(move |_| {
+            observations.fetch_add(1, Ordering::AcqRel);
+            vec![StorageEvidence {
+                code: "active_session".into(),
+                detail: "existing fixture session".into(),
+                observed_at: chrono::Utc::now().to_rfc3339(),
+            }]
+        }),
+    };
+    worktree::annotate(&db, &AtomicBool::new(false), Some(&probe)).unwrap();
+    assert_eq!(calls.load(Ordering::Acquire), 2);
+    for id in [1, child] {
+        let node = adapter
+            .get_node("plain-volume-root", &format!("n{id}"), None)
+            .unwrap();
+        for code in [
+            "akra_known_repository",
+            "active_session",
+            "git_metadata_unverified",
+        ] {
+            assert!(
+                node.protection.iter().any(|reason| reason.code == code),
+                "n{id}: missing {code}"
+            );
+        }
+        assert!(
+            !node
+                .protection
+                .iter()
+                .any(|reason| reason.code == "runtime_candidates_partial")
+        );
+    }
+    let queried: u64 = db
+        .conn
+        .query_row("SELECT count(*) FROM git_worktree_cache", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(queried, 0, "runtime-only roots do not launch Git");
+}
+
 #[test]
 fn storage_analysis_cleanup_preserves_file_created_after_validation() {
     let fixture = Fixture::new();
