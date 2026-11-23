@@ -10,7 +10,7 @@ use super::{IssueListItem, IssueTriageObserveReportState};
 use crate::domain::issue_automation::collection::{
     IssueCollectionDetail, IssueExternalState, IssueFeedbackDetail, IssueFeedbackDetailReason,
 };
-use crate::domain::issue_automation::decision::IssueDecisionState;
+use crate::domain::issue_automation::decision::{IssueDecisionState, IssueDecisionTimeout};
 use crate::domain::issue_automation::execution::IssueExecutionIntegration;
 use crate::domain::issue_work::IssueReference;
 
@@ -134,7 +134,23 @@ impl IssueState {
                     .open_decisions
                     .iter()
                     .filter(|stored| stored.request.state() == IssueDecisionState::Open)
-                    .map(Into::into)
+                    .map(|stored| {
+                        let mut request = IssueDecisionRequestState::from(stored);
+                        if stored.request.definition().on_timeout == IssueDecisionTimeout::Arbiter {
+                            request.arbiter_wait = detail
+                                .arbiter_waits
+                                .iter()
+                                .find(|wait| {
+                                    wait.decision_id == *stored.request.id()
+                                        && wait.decision_revision == stored.revision
+                                        && wait.basis == stored.request.definition().basis
+                                })
+                                .map(|wait| super::super::issue_decision::IssueArbiterWaitState {
+                                    reason: wait.reason,
+                                });
+                        }
+                        request
+                    })
                     .collect(),
                 control: detail
                     .interaction

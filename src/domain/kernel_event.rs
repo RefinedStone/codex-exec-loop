@@ -439,6 +439,14 @@ pub enum KernelEvent {
         reminded_at: String,
         revision: u64,
     },
+    /// 마감 중재의 확정 결과다. 출력 원문은 포함하지 않고 영속 ID로 재전달을 억제한다.
+    IssueDecisionArbiterFinished {
+        event_id: String,
+        decision: IssueDecisionFactRecord,
+        outcome: crate::domain::issue_automation::arbiter::IssueArbiterFinishedOutcome,
+        at: String,
+        revision: u64,
+    },
     /// 영속 work-order 연결이 확정된 사실이다. handoff 본문은 포함하지 않는다.
     IssueWorkSubmitted {
         event_id: String,
@@ -846,6 +854,9 @@ impl KernelEvent {
             Self::IssueDecisionRequested { .. } => KernelRecordKind::IssueDecisionRequested,
             Self::IssueDecisionResolved { .. } => KernelRecordKind::IssueDecisionResolved,
             Self::IssueDecisionReminded { .. } => KernelRecordKind::IssueDecisionReminded,
+            Self::IssueDecisionArbiterFinished { .. } => {
+                KernelRecordKind::IssueDecisionArbiterFinished
+            }
             Self::IssueAutomationModeChanged { .. } => KernelRecordKind::IssueAutomationModeChanged,
             Self::AutoFollowConfigured { .. } => KernelRecordKind::AutoFollowConfigured,
             Self::ThreadPromptQueued(_) => KernelRecordKind::ThreadPromptQueued,
@@ -882,6 +893,7 @@ impl KernelEvent {
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionReminded { .. }
+            | Self::IssueDecisionArbiterFinished { .. }
             | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => "",
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
@@ -931,6 +943,7 @@ impl KernelEvent {
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionReminded { .. }
+            | Self::IssueDecisionArbiterFinished { .. }
             | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => None,
         }
@@ -990,6 +1003,7 @@ impl KernelEvent {
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
             | Self::IssueDecisionReminded { .. }
+            | Self::IssueDecisionArbiterFinished { .. }
             | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => return None,
         };
@@ -1322,6 +1336,7 @@ impl KernelEvent {
         match self {
             Self::IssueWorkSubmitted { event_id, .. }
             | Self::IssueDecisionReminded { event_id, .. }
+            | Self::IssueDecisionArbiterFinished { event_id, .. }
             | Self::IssueWorkPermitGranted { event_id, .. }
             | Self::IssueExecutionProgressed { event_id, .. }
             | Self::IssueIntegrated { event_id, .. }
@@ -1969,6 +1984,17 @@ mod tests {
                 8,
                 2,
                 &"a".repeat(64),
+            ),
+            KernelEvent::issue_decision_arbiter_finished(
+                &crate::domain::issue_automation::arbiter::IssueArbiterFinishedEvent {
+                    event_id: format!("issue-arbiter-finished:{}", "b".repeat(64)),
+                    fact: open_decision.clone(),
+                    outcome: crate::domain::issue_automation::arbiter::IssueArbiterFinishedOutcome::Waiting {
+                        reason: crate::domain::issue_automation::arbiter::IssueArbiterWaitReason::LowConfidence,
+                    },
+                    at: "2026-11-12T00:00:00Z".into(),
+                    catalog_revision: 12,
+                },
             ),
             KernelEvent::issue_decision_requested(&open_decision, 9),
             KernelEvent::issue_decision_resolved(&answered_decision, 10),

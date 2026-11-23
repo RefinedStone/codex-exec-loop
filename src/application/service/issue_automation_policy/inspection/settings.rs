@@ -103,6 +103,26 @@ pub(super) fn from_policy(
         "댓글 쓰기 허용",
         &policy.feedback.comment,
     )?;
+    settings.add(
+        "arbiter.min_confidence",
+        "중재자 최소 확신 (만분율)",
+        &policy.arbiter.min_confidence,
+    )?;
+    settings.add(
+        "arbiter.max_running",
+        "동시 중재자 호출 상한",
+        &policy.arbiter.max_running,
+    )?;
+    settings.add(
+        "arbiter.max_started_per_day",
+        "하루 중재자 호출 상한",
+        &policy.arbiter.max_started_per_day,
+    )?;
+    settings.add(
+        "arbiter.timeout_seconds",
+        "중재자 호출 제한 시간 (초)",
+        &policy.arbiter.timeout_seconds,
+    )?;
     settings.add("feedback.labels", "라벨 쓰기 허용", &policy.feedback.labels)?;
     settings.add(
         "feedback.transition",
@@ -180,6 +200,9 @@ fn resolution_summary(resolution: IssueAutomationPolicyResolution) -> &'static s
         IssueAutomationPolicyResolution::Override => "가장 높은 우선순위의 명시한 값을 사용합니다.",
         IssueAutomationPolicyResolution::Minimum => {
             "내장·사용자 허용값과 저장소 제한값 중 작은 값을 사용합니다."
+        }
+        IssueAutomationPolicyResolution::Maximum => {
+            "사용자 최소값과 저장소 제한값 중 큰 값을 사용합니다."
         }
         IssueAutomationPolicyResolution::And => {
             "내장·사용자 허용값과 저장소 설정이 모두 허용한 경우에만 켭니다."

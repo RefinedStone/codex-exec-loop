@@ -67,6 +67,7 @@ pub enum IssueAutomationPolicyResolutionState {
     Default,
     Override,
     Minimum,
+    Maximum,
     And,
     Intersection,
     Union,
@@ -182,6 +183,9 @@ impl From<&IssueAutomationPolicySetting> for IssueAutomationPolicySettingState {
                 }
                 IssueAutomationPolicyResolution::Minimum => {
                     IssueAutomationPolicyResolutionState::Minimum
+                }
+                IssueAutomationPolicyResolution::Maximum => {
+                    IssueAutomationPolicyResolutionState::Maximum
                 }
                 IssueAutomationPolicyResolution::And => IssueAutomationPolicyResolutionState::And,
                 IssueAutomationPolicyResolution::Intersection => {

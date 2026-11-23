@@ -2280,6 +2280,17 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         ),
         Record::issue_decision_requested(&sample_issue_decision_fact(), 5),
         Record::issue_decision_resolved(&sample_issue_decision_fact(), 6),
+        Record::issue_decision_arbiter_finished(
+            &crate::domain::issue_automation::arbiter::IssueArbiterFinishedEvent {
+                event_id: format!("issue-arbiter-finished:{}", "b".repeat(64)),
+                fact: sample_issue_decision_fact(),
+                outcome: crate::domain::issue_automation::arbiter::IssueArbiterFinishedOutcome::Waiting {
+                    reason: crate::domain::issue_automation::arbiter::IssueArbiterWaitReason::LowConfidence,
+                },
+                at: "2026-11-12T00:00:00Z".into(),
+                catalog_revision: 7,
+            },
+        ),
         Record::issue_decision_reminded(
             &crate::domain::issue_automation::decision::IssueDecisionReminder {
                 event_id: format!("issue-decision-reminder:{}", "a".repeat(64)),

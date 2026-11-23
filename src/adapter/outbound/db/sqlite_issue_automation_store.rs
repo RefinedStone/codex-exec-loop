@@ -39,6 +39,7 @@ use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 
 mod admission;
+mod arbiter;
 mod autonomy;
 mod collection;
 mod coordinator;
@@ -58,7 +59,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -146,6 +147,58 @@ impl SqliteIssueAutomationStoreAdapter {
 }
 
 impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
+    fn claim_issue_arbiter(
+        &self,
+        workspace: &str,
+        request: &crate::application::port::outbound::issue_automation_store_port::IssueArbiterClaimRequest,
+    ) -> Result<
+        crate::application::port::outbound::issue_automation_store_port::IssueArbiterClaimResult,
+    > {
+        arbiter::claim(self, workspace, request)
+    }
+    fn finish_issue_arbiter(
+        &self,
+        workspace: &str,
+        request: &crate::application::port::outbound::issue_automation_store_port::IssueArbiterFinishRequest,
+    ) -> Result<
+        crate::application::port::outbound::issue_automation_store_port::IssueArbiterFinishResult,
+    > {
+        arbiter::finish(self, workspace, request)
+    }
+    fn record_issue_arbiter_wait(
+        &self,
+        workspace: &str,
+        request: &crate::application::port::outbound::issue_automation_store_port::IssueArbiterWaitRequest,
+    ) -> Result<
+        crate::application::port::outbound::issue_automation_store_port::IssueArbiterFinishResult,
+    > {
+        arbiter::record_wait(self, workspace, request)
+    }
+    fn unfinished_issue_arbiter_attempts(
+        &self,
+        workspace: &str,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::domain::issue_automation::arbiter::IssueArbiterAttempt>> {
+        arbiter::unfinished(self, workspace, after_id, limit)
+    }
+    fn pending_issue_arbiter_events(
+        &self,
+        workspace: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::domain::issue_automation::arbiter::IssueArbiterFinishedEvent>> {
+        arbiter::pending(self, workspace, limit)
+    }
+    fn acknowledge_issue_arbiter_event(&self, workspace: &str, event_id: &str) -> Result<()> {
+        arbiter::acknowledge(self, workspace, event_id)
+    }
+    fn issue_decision_arbiter_waits(
+        &self,
+        workspace: &str,
+        ids: &[IssueDecisionId],
+    ) -> Result<crate::domain::issue_automation::arbiter::IssueArbiterWaitSnapshot> {
+        arbiter::waits(self, workspace, ids)
+    }
     fn issue_autonomy_selection(
         &self,
         workspace: &str,
@@ -866,7 +919,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=10) => {
+            (APPLICATION_ID, version @ 1..=11) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -909,7 +962,10 @@ fn ensure_schema(
                 if version < 10 {
                     admission::create_schema(transaction)?;
                 }
-                decision_deadlines::create_schema(transaction)?;
+                if version < 11 {
+                    decision_deadlines::create_schema(transaction)?;
+                }
+                arbiter::create_schema(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -942,6 +998,7 @@ fn ensure_schema(
                 feedback::create_schema(transaction)?;
                 admission::create_schema(transaction)?;
                 decision_deadlines::create_schema(transaction)?;
+                arbiter::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -1022,6 +1079,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 11 {
         expected.extend(decision_deadlines::schema_objects());
+    }
+    if version >= 12 {
+        expected.extend(arbiter::schema_objects());
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

@@ -9,6 +9,8 @@ use crate::application::service::issue_coordinator::IssueCoordinatorService;
 use crate::composition::issue_observer::{IssueObserver, IssueObserverCommittedFact};
 use crate::domain::issue_automation::coordinator::IssueWorkOrder;
 
+mod arbiter;
+
 const START_UTC_MS: u64 = 1_000_000;
 const TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 const REMINDER_MS: u64 = TTL_MS - 2 * 60 * 60 * 1_000;

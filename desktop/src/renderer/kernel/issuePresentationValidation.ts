@@ -1,4 +1,5 @@
 /** 추가된 조작 DTO의 모양만 확인한다. 권한과 실행 조건은 서버가 정한다. */
+import { isIssueArbiterWaitReason } from "./issueArbiter";
 type ObjectValue = Record<string, unknown>;
 const record = (value: unknown): value is ObjectValue => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string";
@@ -21,6 +22,10 @@ function decision(value: unknown, issue: ObjectValue): boolean {
   if (!record(value) || !text(value.id) || !value.id || !text(value.question) || !revision(value.revision)
     || !named(value.state, states) || !record(value.subject) || !sameCoordinates(value.subject.issue, issue)
     || !Array.isArray(value.options) || !optionalText(value.recommended) || !deliveryReview(value)) return false;
+  if (value.arbiter_wait != null && (!record(value.arbiter_wait)
+    || Object.keys(value.arbiter_wait).some((key) => key !== "reason")
+    || !isIssueArbiterWaitReason(value.arbiter_wait.reason)
+    || value.state !== "open" || value.on_timeout !== "arbiter")) return false;
   const ids = new Set<string>();
   for (const option of value.options) {
     if (!record(option) || !text(option.id) || !option.id || ids.has(option.id) || !text(option.label) || !text(option.effect)) return false;
@@ -59,6 +64,7 @@ export function hasValidIssueInteractions(value: ObjectValue, issue: ObjectValue
   if (value.decision_history != null && (!Array.isArray(value.decision_history) || !value.decision_history.every((item: unknown) => {
     if (!record(item) || !record(item.decision) || !text(item.decision.decision_id) || !named(item.decision.state, states)
       || !text(item.decision.kind) || !record(item.decision.subject) || !sameCoordinates(item.decision.subject.issue, issue)) return false;
+    if (item.decision.answer_by != null && !named(item.decision.answer_by, ["human", "agent", "default", "arbiter"])) return false;
     if (item.request != null && (!decision(item.request, issue) || (item.request as ObjectValue).id !== item.decision.decision_id)) return false;
     return item.resolution_reason == null || (record(item.resolution_reason)
       && named(item.resolution_reason.code, ["answered", "expired", "withdrawn", "basis_changed"]) && text(item.resolution_reason.summary));

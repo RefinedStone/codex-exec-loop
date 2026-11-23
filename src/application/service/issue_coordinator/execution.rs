@@ -21,6 +21,9 @@ impl IssueCoordinatorService {
         }
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
+        let arbiter_error = self
+            .process_arbiters(cancel, now_unix_ms, execution_enabled, committed)
+            .err();
         let deadline_error = self
             .process_decision_deadlines(cancel, now_unix_ms, committed)
             .err();
@@ -39,7 +42,12 @@ impl IssueCoordinatorService {
             committed,
             &mut std::collections::BTreeSet::new(),
         );
-        result.and_then(|()| feedback_error.or(deadline_error).map_or(Ok(()), Err))
+        result.and_then(|()| {
+            feedback_error
+                .or(deadline_error)
+                .or(arbiter_error)
+                .map_or(Ok(()), Err)
+        })
     }
 }
 
@@ -147,7 +155,10 @@ fn reconcile_timeout_start(
     if let Some(work) = service
         .store
         .get_issue_work(&service.workspace, &item.issue)?
-        && work.current_start_authority() == IssueWorkStartAuthority::TimeoutDefault
+        && matches!(
+            work.current_start_authority(),
+            IssueWorkStartAuthority::TimeoutDefault | IssueWorkStartAuthority::TimeoutArbiter
+        )
     {
         if !observing {
             return fence_execution(service, &work);
@@ -168,14 +179,16 @@ fn reconcile_timeout_start(
     };
     if !triage.assessment.gates().iter().any(|gate| {
         gate.gate == IssueAutomationGate::Start
-            && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutDefault
+            && matches!(gate.action, crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutDefault | crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutArbiter)
     }) { return Ok(()); }
     let basis = service.approval_basis(&triage.assessment)?;
     let id = start_decision_id(&item.issue, &basis);
     let Some(decision) = service.store.get_issue_decision(&service.workspace, &id)? else {
         return Ok(());
     };
-    if timeout_default_start(&triage.assessment, &decision.request) {
+    if timeout_default_start(&triage.assessment, &decision.request)
+        || timeout_arbiter_start(&triage.assessment, &decision.request)
+    {
         service.reconcile(
             item.clone(),
             cancel,

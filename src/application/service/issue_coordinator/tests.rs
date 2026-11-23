@@ -1227,6 +1227,7 @@ mod closure;
 
 mod execution_detail;
 
+mod arbiter;
 mod deadlines;
 mod delivery;
 mod gated;

@@ -6,14 +6,14 @@ const MAX_MENTIONED_PATHS: usize = 128;
 const MAX_MENTIONED_PATH_BYTES: usize = 1024;
 const MAX_MATCHED_GLOB_BYTES: usize = 4096;
 
-pub(super) struct MentionedPaths {
+pub(crate) struct MentionedPaths {
     pub paths: Vec<String>,
     pub incomplete: bool,
 }
 
 /// Markdown 링크, URL, 절대 경로, 코드 울타리의 예제에서 저장소 경로를 추론하지 않는다.
 /// inline code 안의 명시한 상대 경로만 읽는다. 읽기 한도를 넘으면 위험을 높일 근거를 남긴다.
-pub(super) fn mentioned_paths(body: &str) -> MentionedPaths {
+pub(crate) fn mentioned_paths(body: &str) -> MentionedPaths {
     let mut markdown = IssueMarkdownHeadings::default();
     let mut paths = BTreeSet::new();
     let mut incomplete = false;
@@ -136,7 +136,7 @@ fn escaped(bytes: &[u8], index: usize) -> bool {
 }
 
 /// None은 지원 범위를 넘겨 읽지 못했다는 뜻이다. 불일치(false)로 대신하면 안 된다.
-pub(in crate::domain::issue_automation) fn matches_glob(pattern: &str, path: &str) -> Option<bool> {
+pub(crate) fn matches_glob(pattern: &str, path: &str) -> Option<bool> {
     if pattern.len() > MAX_MATCHED_GLOB_BYTES || path.len() > MAX_MENTIONED_PATH_BYTES {
         return None;
     }

@@ -122,7 +122,8 @@ const kernel = {
       revision++;
       const resolved = supersedeAnswer ? "superseded" : "answered";
       const decision = { ...fact(current, resolved), option: supersedeAnswer ? null : command.option, answer_by: supersedeAnswer ? null : "human" };
-      history.unshift({ decision, request: { ...current, state: resolved }, resolution_reason: { code: supersedeAnswer ? "basis_changed" : "answered",
+      const { arbiter_wait: _wait, ...definition } = current;
+      history.unshift({ decision, request: { ...definition, state: resolved }, resolution_reason: { code: supersedeAnswer ? "basis_changed" : "answered",
         summary: supersedeAnswer ? "판정 기준이 바뀌어 이전 결정을 종료했습니다." : "사용자의 답변을 기록했습니다." } });
       openDecisions = openDecisions.filter((value) => value.id !== current.id);
       return { result: { processed: true, result: { type: "issue_decision_resolved", catalog_revision: revision, changed: true, decision, outcome: supersedeAnswer ? "superseded" : "answered" } } };
@@ -752,6 +753,85 @@ try {
   assert.equal(await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length), beforeDeliveryDialogs);
   await capture("delivery-review");
   console.log("PASS frozen delivery reasons, size and commits; same-range drafts survive and changed ranges clear drafts");
+
+  const arbiterRequest = { ...requestDecision("decision-arbiter-wait"), on_timeout: "arbiter" };
+  const arbiterCard = () => panel.locator('[data-testid="issue-decision-card"][data-decision-id="decision-arbiter-wait"][data-state="open"]');
+  const arbiterFinished = (event) => gateway.sendKernelEvent({ type: "recorded", sequence: 1_000 + event.revision,
+    recorded_at: "2026-11-22T09:00:01Z", event: { kind: "issue_decision_arbiter_finished", at: "2026-11-22T09:00:01Z", ...event } });
+  openDecisions = [arbiterRequest]; revision++;
+  await panel.getByTestId("issue-execution-refresh").click();
+  await arbiterCard().waitFor();
+  assert.match(await arbiterCard().getByTestId("issue-decision-timeout").innerText(), /중재자가 검토합니다/);
+  await arbiterCard().locator('input[value="approve"]').check();
+  const arbiterNote = "중재 결과를 기다리며 검토한 메모";
+  await arbiterCard().getByTestId("issue-decision-note").fill(arbiterNote);
+  const beforeArbiterNotices = await page.evaluate(() => window.issueNotifications.length);
+  const beforeArbiterCommands = commandRequests("answer_issue_decision").length;
+  openDecisions = [{ ...arbiterRequest, arbiter_wait: { reason: "low_confidence" } }]; revision++;
+  queriedAt = Date.parse("2026-11-22T09:00:01Z");
+  const waitingEvent = { event_id: "arbiter-wait-finished", revision, decision: fact(arbiterRequest), outcome: { kind: "waiting", reason: "low_confidence" } };
+  arbiterFinished(waitingEvent);
+  arbiterFinished(waitingEvent);
+  await until(async () => await arbiterCard().getByTestId("issue-arbiter-wait").count() === 1
+    && await arbiterCard().getByTestId("issue-decision-answer").isEnabled()
+    && await page.evaluate(() => window.issueNotifications.length) === beforeArbiterNotices + 1, "current arbiter Wait and one notification");
+  assert.match(await arbiterCard().innerText(), /사람 답변 대기/);
+  assert.match(await arbiterCard().getByTestId("issue-arbiter-wait").innerText(), /판단 확신이 기준에 미치지 못했습니다/);
+  assert.equal(await arbiterCard().locator('input[value="approve"]').isChecked(), true);
+  assert.equal(await arbiterCard().getByTestId("issue-decision-note").inputValue(), arbiterNote);
+  assert.match(await arbiterCard().getByTestId("issue-decision-timeout").innerText(), /사람의 답변을 기다립니다/);
+  const waitNotice = await page.evaluate(() => window.issueNotifications.at(-1).options);
+  assert.equal(waitNotice.body, "이슈 결정에 사람의 답변이 필요합니다. 이슈 탭에서 확인해 주세요.");
+  assert.ok(!JSON.stringify(waitNotice).includes(question) && !JSON.stringify(waitNotice).includes(arbiterNote));
+  await capture("arbiter-wait");
+
+  const beforeWaitRefresh = requests.filter((entry) => entry.params.query?.type === "issue").length;
+  arbiterFinished(waitingEvent);
+  await panel.getByTestId("issue-execution-refresh").click();
+  await until(async () => requests.filter((entry) => entry.params.query?.type === "issue").length > beforeWaitRefresh
+    && await arbiterCard().getByTestId("issue-decision-answer").isEnabled(), "Wait persists after acknowledged-event replay and reread");
+  assert.equal(await arbiterCard().locator('input[value="approve"]').isChecked(), true);
+  assert.equal(await arbiterCard().getByTestId("issue-decision-note").inputValue(), arbiterNote);
+  assert.equal(await page.evaluate(() => window.issueNotifications.length), beforeArbiterNotices + 1);
+  assert.equal(commandRequests("answer_issue_decision").length, beforeArbiterCommands);
+
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
+  await arbiterCard().getByTestId("issue-decision-answer").click();
+  const answeredArbiter = panel.locator('[data-testid="issue-decision-card"][data-decision-id="decision-arbiter-wait"][data-state="answered"]');
+  await until(async () => commandRequests("answer_issue_decision").length === beforeArbiterCommands + 1
+    && await answeredArbiter.getByTestId("issue-decision-origin").count() === 1, "a confirmed Human answer remains possible after arbiter Wait");
+  assert.equal(commandRequests("answer_issue_decision").at(-1).request.command.note, arbiterNote);
+  assert.equal(commandRequests("answer_issue_decision").at(-1).method, "akra/kernel/command_confirmed");
+  assert.match(await answeredArbiter.getByTestId("issue-decision-origin").innerText(), /사람이 답변했습니다/);
+  assert.equal(await answeredArbiter.getByTestId("issue-arbiter-wait").count(), 0);
+  const beforeLateWaitReads = requests.filter((entry) => entry.params.query?.type === "issue").length;
+  arbiterFinished({ ...waitingEvent, event_id: "late-arbiter-wait" });
+  await until(async () => requests.filter((entry) => entry.params.query?.type === "issue").length > beforeLateWaitReads
+    && await panel.getByTestId("issues-detail").getAttribute("aria-busy") === "false"
+    && await answeredArbiter.getByTestId("issue-decision-origin").count() === 1, "a late Waiting fact rechecks the Human history");
+  assert.equal(await arbiterCard().count(), 0);
+  assert.equal(await page.evaluate(() => window.issueNotifications.length), beforeArbiterNotices + 1);
+
+  await page.getByTestId("issues-toggle").click();
+  await panel.waitFor({ state: "detached" });
+  const appliedRequest = { ...requestDecision("decision-arbiter-applied"), on_timeout: "arbiter", state: "answered" };
+  const appliedFact = { ...fact(appliedRequest), answer_by: "arbiter", option: "approve" };
+  history.unshift({ decision: appliedFact, request: appliedRequest, resolution_reason: { code: "answered", summary: "중재자의 답변을 기록했습니다." } });
+  revision++;
+  const appliedEvent = { event_id: "arbiter-applied-finished", revision, decision: appliedFact, outcome: { kind: "applied" } };
+  arbiterFinished(appliedEvent);
+  arbiterFinished(appliedEvent);
+  await until(async () => await page.evaluate(() => window.issueNotifications.length) === beforeArbiterNotices + 2, "one verified Applied notification while the issue panel is closed");
+  assert.equal(await page.evaluate(() => window.issueNotifications.at(-1).options.body), "중재자가 이슈 결정에 답변했습니다. 이슈 탭에서 확인해 주세요.");
+  await page.evaluate(() => window.issueNotifications.at(-1).onclick());
+  const appliedCard = panel.locator('[data-testid="issue-decision-card"][data-decision-id="decision-arbiter-applied"][data-state="answered"]');
+  await appliedCard.waitFor();
+  assert.match(await appliedCard.getByTestId("issue-decision-origin").innerText(), /중재자가 답변했습니다/);
+  assert.match(await answeredArbiter.getByTestId("issue-decision-origin").innerText(), /사람이 답변했습니다/);
+  assert.equal(await appliedCard.getByTestId("issue-decision-answer").count(), 0);
+  assert.equal(await page.evaluate(() => window.issueNotifications.length), beforeArbiterNotices + 2);
+  await capture("arbiter-history");
+  console.log("PASS current arbiter Wait preserves drafts and Human confirmation; late Wait cannot reopen; Applied history and notifications retain original actor");
   assert.equal(gateway.receivedMethods.includes("turn/start"), false);
   assert.equal(gateway.receivedMethods.includes("turn/steer"), false);
   assert.deepEqual(pageErrors, []);

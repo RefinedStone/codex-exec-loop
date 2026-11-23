@@ -1,10 +1,11 @@
-//! 사람 승인 또는 명시적 Gated 정책 권한을 소비한다. 모델 호출 없이 host tick에서 진행한다.
+//! 사람·명시적 정책·검증된 마감 결정의 권한을 기존 실행 경계에서 소비한다.
 use super::issue_collection::{IssueCollectionCancellation, checked_resync_read};
 use super::issue_decision::IssueDecisionService;
 use super::issue_feedback::IssueFeedbackService;
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::domain::issue_automation::feedback::IssueFeedbackEvent;
 
+mod arbiter;
 mod closure;
 mod delivery;
 mod feedback;
@@ -44,6 +45,7 @@ pub enum IssueCoordinatorFact {
         revision: u64,
     },
     DecisionReminded(IssueDecisionReminder),
+    DecisionArbiterFinished(crate::domain::issue_automation::arbiter::IssueArbiterFinishedEvent),
     ExecutionProgressed {
         event_id: String,
         issue: IssueReference,
@@ -105,6 +107,9 @@ fn work_event_reporter<'a>(
                     IssueCoordinatorFact::FeedbackPosted(event) => {
                         reported.insert(event.event_id.clone())
                     }
+                    IssueCoordinatorFact::DecisionArbiterFinished(event) => {
+                        reported.insert(event.event_id.clone())
+                    }
                     IssueCoordinatorFact::DecisionReminded(event) => {
                         reported.insert(event.event_id.clone())
                     }
@@ -136,6 +141,7 @@ pub struct IssueCoordinatorService {
     policy: IssuePolicyService,
     execution: Arc<dyn IssueWorkExecutionPort>,
     feedback: Option<Arc<IssueFeedbackService>>,
+    arbiter: Option<arbiter::ArbiterRuntime>,
     publication_journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
     /// 한 host의 동시 tick/reconnect 호출을 직렬화한다. 실행기 상태는 소유하지 않는다.
     tick_gate: Mutex<()>,
@@ -162,6 +168,7 @@ impl IssueCoordinatorService {
             policy,
             execution,
             feedback: None,
+            arbiter: None,
             publication_journal: None,
             tick_gate: Mutex::new(()),
             #[cfg(test)]
@@ -198,6 +205,9 @@ impl IssueCoordinatorService {
         }
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
+        let arbiter_error = self
+            .process_arbiters(cancel, now_unix_ms, execution_enabled, committed)
+            .err();
         let deadline_error = self
             .process_decision_deadlines(cancel, now_unix_ms, committed)
             .err();
@@ -219,7 +229,8 @@ impl IssueCoordinatorService {
         )
         .err()
         .or(feedback_error)
-        .or(deadline_error);
+        .or(deadline_error)
+        .or(arbiter_error);
         let mut after = None;
         'batches: loop {
             if cancel.is_cancelled() {
@@ -265,6 +276,11 @@ impl IssueCoordinatorService {
     }
 
     pub fn acknowledge_event(&self, event_id: &str) -> Result<()> {
+        if event_id.starts_with("issue-arbiter-finished:") {
+            return self
+                .store
+                .acknowledge_issue_arbiter_event(&self.workspace, event_id);
+        }
         if event_id.starts_with("issue-decision-reminder:") {
             return self
                 .store
@@ -355,12 +371,20 @@ impl IssueCoordinatorService {
                 .into_iter()
                 .map(IssueCoordinatorFact::DecisionReminded),
         );
+        facts.extend(
+            self.store
+                .pending_issue_arbiter_events(&self.workspace, 256)?
+                .into_iter()
+                .map(IssueCoordinatorFact::DecisionArbiterFinished),
+        );
         Ok(facts)
     }
 
     /// Scheduling reads only persisted request times; processing rechecks current authority.
     pub(crate) fn next_decision_deadline_at(&self, now_unix_ms: u64) -> Result<Option<u64>> {
-        self.decisions.next_deadline_at(now_unix_ms)
+        let ordinary = self.decisions.next_deadline_at(now_unix_ms)?;
+        let arbiter = self.next_arbiter_deadline_at(now_unix_ms)?;
+        Ok(ordinary.into_iter().chain(arbiter).min())
     }
 
     fn process_decision_deadlines(
@@ -540,6 +564,8 @@ impl IssueCoordinatorService {
                 }
                 IssueWorkStartAuthority::TimeoutDefault => decision
                     .is_some_and(|decision| timeout_default_start(&assessment, &decision.request)),
+                IssueWorkStartAuthority::TimeoutArbiter => decision
+                    .is_some_and(|decision| timeout_arbiter_start(&assessment, &decision.request)),
             }
         {
             let floor = self.revoke_on_current_error(
@@ -566,6 +592,12 @@ impl IssueCoordinatorService {
                         && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutDefault
                 }) {
                     definition.on_timeout = IssueDecisionTimeout::Default;
+                    definition.recommended = Some("start".to_owned());
+                } else if assessment.gates().iter().any(|gate| {
+                    gate.gate == IssueAutomationGate::Start && gate.action
+                        == crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutArbiter
+                }) {
+                    definition.on_timeout = IssueDecisionTimeout::Arbiter;
                     definition.recommended = Some("start".to_owned());
                 }
                 cancel.commit_if_active(|| {
@@ -632,6 +664,8 @@ impl IssueCoordinatorService {
                     decision.map(|decision| {
                         if timeout_default_start(&assessment, &decision.request) {
                             StartAuthorization::TimeoutDefault(&decision.request)
+                        } else if timeout_arbiter_start(&assessment, &decision.request) {
+                            StartAuthorization::TimeoutArbiter(&decision.request)
                         } else { StartAuthorization::Human(&decision.request) }
                     })
                 };

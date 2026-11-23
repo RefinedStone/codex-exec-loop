@@ -68,6 +68,9 @@ pub(super) fn reconcile(
     {
         return Ok(());
     }
+    if !timeout_recovery_observing(service, work)? {
+        return Ok(());
+    }
     let (item, assessment) = current_assessment(service, &work.order.issue, committed)?;
     let basis = service.approval_basis(&assessment)?;
     let decision = match work.current_authorization_decision_id() {
@@ -87,6 +90,9 @@ pub(super) fn reconcile(
         IssueWorkStartAuthority::TimeoutDefault => decision
             .as_ref()
             .map(|stored| StartAuthorization::TimeoutDefault(&stored.request)),
+        IssueWorkStartAuthority::TimeoutArbiter => decision
+            .as_ref()
+            .map(|stored| StartAuthorization::TimeoutArbiter(&stored.request)),
     };
     if work.current_authorization_basis() != &basis
         || !authorization.is_some_and(|authorization| {
@@ -113,7 +119,9 @@ pub(super) fn reconcile(
         policy_version: basis.policy_version,
     };
     cancel.commit_if_active(|| {
-        if !current_record_matches(service, work, record)? {
+        if !current_record_matches(service, work, record)?
+            || !timeout_recovery_observing(service, work)?
+        {
             return Ok(());
         }
         let receipt = service
@@ -137,6 +145,39 @@ pub(super) fn reconcile(
         Ok(())
     })?;
     Ok(())
+}
+
+/// 관측은 Off에서도 보존하지만 자동 마감 승인으로 새 검증을 등록하지 않는다.
+/// 관찰 모드 조회 실패도 허가를 닫은 뒤 전파한다. Human/Policy의 기존 복구 의미는 유지한다.
+fn timeout_recovery_observing(
+    service: &IssueCoordinatorService,
+    work: &IssueWorkCheckpoint,
+) -> Result<bool> {
+    if !matches!(
+        work.current_start_authority(),
+        IssueWorkStartAuthority::TimeoutDefault | IssueWorkStartAuthority::TimeoutArbiter
+    ) {
+        return Ok(true);
+    }
+    let observing = service
+        .store
+        .get_collection(&service.workspace)
+        .map(|collection| {
+            collection
+                .is_some_and(|collection| collection.config.mode == IssueCollectionMode::Observe)
+        });
+    if matches!(observing, Ok(true)) {
+        return Ok(true);
+    }
+    if let Err(fence_error) = fence_execution(service, work) {
+        return Err(match observing {
+            Err(error) => error.context(format!(
+                "timeout recovery permits could not be fenced: {fence_error}"
+            )),
+            Ok(_) => fence_error,
+        });
+    }
+    observing
 }
 
 fn ensure_recovery_decision(

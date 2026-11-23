@@ -184,6 +184,7 @@ pub(super) fn answer(
             super::validate_issue_decision_confirmation_reference(reference)?;
         }
         (IssueDecisionAnswerBy::Default, None) if valid_default_answer(value, definition) => {}
+        (IssueDecisionAnswerBy::Arbiter, None) if valid_arbiter_answer(value, definition) => {}
         _ => return Err(IssueDecisionError::UnsupportedAnswerOrigin),
     }
     if let Some(note) = &value.note {
@@ -208,6 +209,26 @@ fn valid_default_answer(value: &IssueDecisionAnswer, definition: &IssueDecisionD
             .and_then(|due_at| chrono::DateTime::parse_from_rfc3339(due_at).ok())
             .zip(chrono::DateTime::parse_from_rfc3339(&value.at).ok())
             .is_some_and(|(due_at, answered_at)| answered_at >= due_at)
+}
+
+fn valid_arbiter_answer(value: &IssueDecisionAnswer, definition: &IssueDecisionDefinition) -> bool {
+    definition.on_timeout == super::IssueDecisionTimeout::Arbiter
+        && definition.basis.work_order_id.is_none()
+        && definition.basis.delivery.is_none()
+        && definition.delivery_review.is_none()
+        && matches!(
+            (definition.kind, definition.gate),
+            (IssueDecisionKind::StartApproval, IssueAutomationGate::Start)
+                | (IssueDecisionKind::PlanApproval, IssueAutomationGate::Plan)
+        )
+        && value.caller.is_none()
+        && value.channel == super::super::arbiter::ISSUE_ARBITER_CHANNEL
+        && definition
+            .due_at
+            .as_deref()
+            .and_then(|due| chrono::DateTime::parse_from_rfc3339(due).ok())
+            .zip(chrono::DateTime::parse_from_rfc3339(&value.at).ok())
+            .is_some_and(|(due, at)| at >= due)
 }
 
 fn timestamp(value: &str, field: &'static str) -> Result<(), IssueDecisionError> {

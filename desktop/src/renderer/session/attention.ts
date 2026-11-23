@@ -1,6 +1,7 @@
 // 사용자에게 알릴 일을 저장소의 앞뒤 값에서 찾는다 (plan 26 A1): 턴이 끝났다, 승인 요청이 왔다.
 // shortcut: 지금 있는 스레드 상태 값으로 계산한다. plan 23 의 주의 항목 목록이 생기면 그 목록을 읽게 바꾼다.
 import type { DesktopState } from "./desktopStore";
+import type { IssueDecisionAttention } from "../kernel/kernelConnection";
 
 export type AttentionKind = "finished" | "failed" | "approval";
 
@@ -42,10 +43,20 @@ export const ATTENTION_TEXT: Record<AttentionKind, string> = {
   approval: "승인을 기다립니다.",
 };
 
-/** 새 요청과 새 영속 재알림만 알린다. 같은 event ID의 재방송이나 재조회는 제외한다. */
+/** 새 요청·재알림·현재 조회로 확인한 중재 결과만 알린다. */
 export function issueDecisionAttentionEvents(previous: Pick<DesktopState, "connection" | "kernel">, next: Pick<DesktopState, "connection" | "kernel">) {
   if (previous.connection?.phase !== "connected" || next.connection?.phase !== "connected"
     || previous.kernel.phase !== "attached" || next.kernel.phase !== "attached" || previous.kernel.kernel !== next.kernel.kernel) return [];
-  return next.kernel.issueAttention.filter((event) => !previous.kernel.issueAttention.some((known) =>
-    known.decisionId === event.decisionId && known.reminderId === event.reminderId));
+  const previousEvents = [...previous.kernel.issueAttention, ...previous.kernel.issueArbiterNotices];
+  return [...next.kernel.issueAttention, ...next.kernel.issueArbiterNotices].filter((event) => !previousEvents.some((known) =>
+    known.decisionId === event.decisionId && known.reminderId === event.reminderId
+      && known.arbiter?.eventId === event.arbiter?.eventId));
+}
+
+/** OS 포커스 조회가 끝나기 전에 사람이나 중재자가 답했을 수 있다. */
+export function isCurrentIssueDecisionAttention({ kernel }: Pick<DesktopState, "kernel">, event: IssueDecisionAttention): boolean {
+  if (kernel.phase !== "attached" || kernel.kernel !== event.kernel || kernel.workspace !== event.workspace) return false;
+  return event.arbiter
+    ? kernel.issueArbiterNotices.some((notice) => notice.decisionId === event.decisionId && notice.arbiter?.eventId === event.arbiter?.eventId)
+    : kernel.issueAttention.some((notice) => notice.decisionId === event.decisionId && notice.reminderId === event.reminderId);
 }

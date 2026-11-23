@@ -19,7 +19,11 @@ export function issueDecisionDeadline(request: IssueDecisionRequestState, asOfUn
     ? `기한까지 답변이 없으면 권고한 ‘${recommended}’ 선택을 적용합니다.`
     : request.on_timeout === "wait"
       ? "기한 후에도 사람의 답변을 기다립니다."
-      : "기한 후 처리 방식은 다시 확인해 주세요.";
+      : request.on_timeout === "arbiter"
+        ? request.arbiter_wait
+          ? "이 요청은 사람의 답변을 기다립니다."
+          : "기한까지 답변이 없으면 중재자가 검토합니다. 확정할 수 없으면 사람의 답변을 기다립니다."
+        : "기한 후 처리 방식은 다시 확인해 주세요.";
   return {
     dueAt: new Date(due).toISOString(),
     asOf: asOf === null ? null : new Date(asOf).toISOString(),

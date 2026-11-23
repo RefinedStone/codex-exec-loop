@@ -9,7 +9,7 @@ use crate::application::port::outbound::issue_automation_store_port::{
 use crate::domain::issue_automation::collection::IssueCollectionMode;
 use crate::domain::issue_automation::coordinator::{
     IssueWorkBlockReason, IssueWorkCheckpoint, IssueWorkStartAuthority, human_start, policy_start,
-    ready_for_start, timeout_default_start,
+    ready_for_start, timeout_arbiter_start, timeout_default_start,
 };
 use crate::domain::issue_automation::decision::{IssueDecisionBasis, IssueDecisionId};
 use crate::domain::issue_automation::policy::IssueAutomationGate;
@@ -342,6 +342,22 @@ pub(super) fn validate_authorization(
                 || decision.request.definition().basis != *approved
             {
                 bail!("the issue work does not have a current default start decision");
+            }
+            validate_gated_selection(tx, workspace, assessment)?;
+        }
+        IssueWorkStartAuthority::TimeoutArbiter => {
+            let decision = super::decision::read(
+                tx,
+                workspace,
+                decision_id.expect("validated timeout-arbiter authority"),
+            )?
+            .ok_or_else(|| anyhow!("the issue work arbiter start decision was not found"))?;
+            if !timeout_arbiter_start(assessment, &decision.request)
+                || decision.request.issue() != issue
+                || decision.request.definition().basis != *approved
+                || !super::arbiter::applied_decision_current(tx, workspace, &decision)?
+            {
+                bail!("the issue work does not have a current arbiter start decision");
             }
             validate_gated_selection(tx, workspace, assessment)?;
         }

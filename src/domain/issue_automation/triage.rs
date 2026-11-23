@@ -18,7 +18,7 @@ mod gates;
 mod paths;
 mod readiness;
 
-pub(super) use paths::matches_glob;
+pub(crate) use paths::{matches_glob, mentioned_paths};
 pub use readiness::{
     IssueExpectedGate, IssueReadinessInput, IssueReadinessResult, inspect_issue_readiness,
 };

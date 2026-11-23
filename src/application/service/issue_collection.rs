@@ -274,6 +274,36 @@ impl IssueCollectionService {
         if let (Some(coordinator), Some(_)) = (&self.coordinator, &detail.item) {
             detail.feedback = coordinator.feedback_detail(reference)?;
         }
+        if let Some(item) = &detail.item {
+            let ids: Vec<_> = item
+                .open_decisions
+                .iter()
+                .filter(|decision| {
+                    decision.request.definition().on_timeout
+                        == crate::domain::issue_automation::decision::IssueDecisionTimeout::Arbiter
+                })
+                .map(|decision| decision.request.id().clone())
+                .collect();
+            if !ids.is_empty() {
+                let waits = self
+                    .store
+                    .issue_decision_arbiter_waits(&self.workspace_dir, &ids)?;
+                if waits.catalog_revision != detail.revision {
+                    return Err(IssueDetailSnapshotChanged.into());
+                }
+                for wait in &waits.waits {
+                    let matching = item.open_decisions.iter().any(|decision| {
+                        decision.request.id() == &wait.decision_id
+                            && decision.revision == wait.decision_revision
+                            && decision.request.definition().basis == wait.basis
+                    });
+                    if !matching {
+                        return Err(IssueDetailSnapshotChanged.into());
+                    }
+                }
+                detail.arbiter_waits = waits.waits;
+            }
+        }
         // Execution/work/collection changes share this catalog revision. Feedback has its own
         // fence in feedback_detail; its counter must never be compared with the catalog.
         let after = self.store.read_triage_batch(&self.workspace_dir, None, 1)?;

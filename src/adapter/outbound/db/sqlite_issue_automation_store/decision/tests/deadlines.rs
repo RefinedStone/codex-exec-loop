@@ -423,6 +423,7 @@ fn version_ten_migration_preserves_definitions_and_does_not_invent_reminder_hist
     let selection = adapter.issue_autonomy_selection(fixture.cwd()).unwrap();
     adapter
         .with_connection(fixture.cwd(), |connection, _| {
+            super::super::super::tests::make_pre_arbiter_schema(connection);
             connection
                 .execute_batch("DROP TABLE issue_decision_reminders; PRAGMA user_version=10;")?;
             super::super::super::validate_schema_version(connection, 10)

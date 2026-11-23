@@ -50,6 +50,9 @@ pub mod issue_automation_policy_source_port;
 pub mod vault_key_store_port;
 // issue review model port 는 이슈 초안 품질 검토에 쓰는 모델의 경계이다 (#2430).
 pub mod issue_review_model_port;
+// deadline assessment has a bounded read-only model and immutable repository evidence.
+pub mod issue_assessment_evidence_port;
+pub mod issue_assessment_model_port;
 // evidence vault backup port 는 복구 키로 여는 Vault 백업의 내보내기와 가져오기 계약이다 (#2432).
 pub mod evidence_vault_backup_port;
 // issue template source port 는 대상 저장소의 이슈 템플릿 파일을 읽는 경계이다 (#2417).

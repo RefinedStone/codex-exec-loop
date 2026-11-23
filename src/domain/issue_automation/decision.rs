@@ -10,6 +10,7 @@ use super::MAX_ISSUE_AUTOMATION_REVISION;
 use super::policy::{IssueAutomationGate, IssueAutomationGateAction};
 use super::triage::IssueTriageAssessment;
 
+mod arbiter;
 mod deadline;
 mod validation;
 
@@ -512,8 +513,11 @@ impl IssueDecisionRequest {
                 answer.confirmation = Some(reference.to_owned());
             } else if matches!(
                 gate_action,
-                IssueAutomationGateAction::Human | IssueAutomationGateAction::TimeoutDefault
-            ) || self.definition().is_delivery_risk_exception()
+                IssueAutomationGateAction::Human
+                    | IssueAutomationGateAction::TimeoutDefault
+                    | IssueAutomationGateAction::TimeoutArbiter
+            ) || self.definition().on_timeout == IssueDecisionTimeout::Arbiter
+                || self.definition().is_delivery_risk_exception()
             {
                 return Err(IssueDecisionError::HumanConfirmationRequired);
             }

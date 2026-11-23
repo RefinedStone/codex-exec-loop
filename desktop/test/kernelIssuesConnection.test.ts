@@ -5,6 +5,8 @@ import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
 import { issueDecisionAttentionEvents } from "../src/renderer/session/attention";
 import type { CommandResponse, IssueAutomationAnswer, IssueAutonomyLevel, IssueAutonomyState, IssueEventReference } from "../src/renderer/kernel/protocol";
 import type { ConfirmIssueAutomationModeRequest, IssueConfirmationResponse } from "../src/shared/issueConfirmation";
+import { arbiterDetail, arbiterEvent, arbiterFact, arbiterRequest } from "./fixtures/issueArbiter";
+import type { IssueArbiterFinishedRecord } from "../src/renderer/kernel/issueArbiter";
 
 interface Sent {
   id: number;
@@ -1766,16 +1768,256 @@ describe("issue decisions and interventions", () => {
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 
-  it("accepts a derived policy display value emitted by the server", async () => {
+  it.each(["derived", "maximum"])("accepts a %s policy display value emitted by the server", async (resolution) => {
     const h = harness({ autoPolicy: false });
     await h.openIssues();
     const pending = h.connection.refreshIssueAutomationPolicy();
     const answer = policyAnswer();
-    answer.settings[0]!.resolution = "derived";
+    answer.settings[0]!.resolution = resolution;
     h.reply(h.query("issue_automation_policy"), answer);
     await pending;
     expect(h.view().issues.policy).toEqual(answer);
     expect(h.view().issues.policyError).toBeNull();
+  });
+});
+
+describe("arbiter finished notification verification", () => {
+  const recorded = (event: IssueArbiterFinishedRecord) => ({ event: { type: "recorded", sequence: event.revision, recorded_at: event.at, event } });
+  const request = () => arbiterRequest(issueReference());
+  const waitingDetail = (revision = 8) => arbiterDetail({ ...request(), arbiter_wait: { reason: "low_confidence" } }, revision);
+  const closedDetail = (answerBy: "human" | "arbiter", revision = 9) => ({ ...arbiterDetail(request(), revision), open_decisions: [],
+    decision_history: [{ decision: { ...arbiterFact(request()), state: "answered" as const, answer_by: answerBy, option: "approve" } }] });
+  const openBackground = async (workspace = "/repo") => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const shown = h.connection.show(workspace, ["issue_attention"]);
+    h.reply(h.requests("akra/kernel/attach")[0], { client_id: "1", protocol_version: 1, kernel: "repo" });
+    await shown;
+    return h;
+  };
+
+  it.each(["waiting", "applied"] as const)("verifies one current background %s result and deduplicates in-flight and completed delivery", async (outcome) => {
+    const h = await openBackground();
+    const current = outcome === "waiting" ? waitingDetail() : closedDetail("arbiter", 8);
+    const event: IssueArbiterFinishedRecord = outcome === "waiting" ? arbiterEvent(request())
+      : { ...arbiterEvent(request()), decision: closedDetail("arbiter", 8).decision_history[0]!.decision, outcome: { kind: "applied" } };
+    h.connection.handleEvent(recorded(event));
+    h.connection.handleEvent(recorded(event));
+    expect(h.queries("issue")).toHaveLength(1);
+    expect(h.view().issueAttention).toEqual([]);
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    h.reply(h.query("issue"), current);
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+    const notice = { workspace: "/repo", kernel: "repo", decisionId: request().id, issue: issueReference(), arbiter: { eventId: event.event_id, outcome } };
+    expect(h.view().issueArbiterNotices).toEqual([notice]);
+    expect(JSON.stringify(notice)).not.toContain(request().question);
+    expect(h.view().issues.detail).toBeNull();
+    expect(h.view().issues.selectedIssue).toBeNull();
+    h.connection.handleEvent(recorded(event));
+    await Promise.resolve();
+    expect(h.queries("issue")).toHaveLength(1);
+    expect(h.view().issueArbiterNotices).toEqual([notice]);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    expect(h.requests("turn/start")).toHaveLength(0);
+    expect(h.requests("turn/steer")).toHaveLength(0);
+  });
+
+  it("keeps a Human-first result when a late Waiting event carries an older Open fact", async () => {
+    const h = await openBackground();
+    h.connection.handleEvent(recorded(arbiterEvent(request())));
+    h.reply(h.query("issue"), closedDetail("human"));
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    expect(h.view().issueAttention).toEqual([]);
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: arbiterFact(request()), revision: 10 } });
+    expect(h.view().issueAttention).toEqual([]);
+    expect(h.queries("issue")).toHaveLength(1);
+  });
+
+  it.each([false, true])("rejects an older foreground detail before Finished verification completes, with Human already resolved: %s", async (humanResolved) => {
+    const h = harness();
+    await h.openIssues();
+    const selected = h.connection.selectIssue(issueReference());
+    h.reply(h.query("issue"), arbiterDetail(request(), 7));
+    await selected;
+    const before = h.queries("issue").length;
+    if (humanResolved) h.connection.handleEvent({ event: { type: "issue_decision", decision: closedDetail("human").decision_history[0]!.decision, revision: 9 } });
+    h.connection.handleEvent(recorded(arbiterEvent(request())));
+    const verification = h.query("issue");
+    await h.when(() => h.queries("issue").length === before + 2);
+    h.reply(h.query("issue"), arbiterDetail(request(), humanResolved ? 8 : 7));
+    await h.when(() => h.queries("issue").length === before + 3);
+    expect(h.view().issues.detail).toBeNull();
+    expect(h.view().issues.detailStale).toBe(true);
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    const current = humanResolved ? closedDetail("human") : waitingDetail();
+    h.answerIssueReads(issuePage([issueReference().issue_id], current.revision));
+    h.reply(h.query("issue"), current);
+    h.reply(verification, current);
+    await h.when(() => !h.view().issues.detailLoading && h.view().issueArbiterNotices.length === (humanResolved ? 0 : 1));
+    expect(h.view().issues.detail).toEqual(current);
+  });
+
+  it("retries a stale current query once and rejects Waiting when Human wins during the read", async () => {
+    const h = await openBackground();
+    h.connection.handleEvent(recorded(arbiterEvent(request())));
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: closedDetail("human").decision_history[0]!.decision, revision: 9 } });
+    h.reply(h.query("issue"), waitingDetail());
+    await h.when(() => h.queries("issue").length === 2);
+    h.reply(h.query("issue"), closedDetail("human"));
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    expect(h.view().issueAttention).toEqual([]);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("withdraws a pending Wait notice when a newer Discarded record arrives and never restores it from the older read", async () => {
+    const h = await openBackground();
+    const event = arbiterEvent(request());
+    h.connection.handleEvent(recorded(event));
+    h.reply(h.query("issue"), waitingDetail());
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+    const discarded: IssueArbiterFinishedRecord = { ...event, event_id: "discarded-event", revision: 9,
+      decision: closedDetail("human").decision_history[0]!.decision, outcome: { kind: "discarded" } };
+    h.connection.handleEvent(recorded(discarded));
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    h.reply(h.query("issue"), closedDetail("human"));
+    await Promise.resolve();
+    h.connection.handleEvent(recorded(event));
+    expect(h.queries("issue")).toHaveLength(2);
+    expect(h.view().issueArbiterNotices).toEqual([]);
+  });
+
+  it("fences an older Waiting query behind a newer Finished event", async () => {
+    const h = await openBackground();
+    const event = arbiterEvent(request());
+    h.connection.handleEvent(recorded(event));
+    const older = h.query("issue");
+    h.connection.handleEvent(recorded({ ...event, event_id: "newer-discarded", revision: 9,
+      decision: closedDetail("human").decision_history[0]!.decision, outcome: { kind: "discarded" } }));
+    h.reply(older, waitingDetail());
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    h.reply(h.query("issue"), closedDetail("human"));
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices).toEqual([]);
+  });
+
+  it("does not remove another decision's newer Wait notice when an older verification response arrives last", async () => {
+    const h = await openBackground();
+    h.connection.handleEvent(recorded(arbiterEvent(request())));
+    const oldRead = h.query("issue");
+    const next = { ...request(), id: "next-decision" };
+    const nextEvent = { ...arbiterEvent(next, 9), event_id: "next-arbiter-event" };
+    const nextDetail = arbiterDetail({ ...next, arbiter_wait: { reason: "low_confidence" } }, 9);
+    h.connection.handleEvent(recorded(nextEvent));
+    h.reply(h.query("issue"), nextDetail);
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+    h.reply(oldRead, waitingDetail());
+    await h.when(() => h.queries("issue").length === 3);
+    expect(h.view().issueArbiterNotices.map((notice) => notice.decisionId)).toEqual([next.id]);
+    h.reply(h.query("issue"), nextDetail);
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices.map((notice) => notice.decisionId)).toEqual([next.id]);
+  });
+
+  it("clears the old request attention from verified Applied history and ignores a later Open reminder", async () => {
+    const h = await openBackground();
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: arbiterFact(request()), revision: 7 } });
+    expect(h.view().issueAttention).toHaveLength(1);
+    h.connection.handleEvent(recorded({ ...arbiterEvent(request()), decision: closedDetail("arbiter", 8).decision_history[0]!.decision, outcome: { kind: "applied" } }));
+    h.reply(h.query("issue"), closedDetail("arbiter", 8));
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+    expect(h.view().issueAttention).toEqual([]);
+    h.connection.handleEvent({ event: { type: "recorded", sequence: 9, recorded_at: "now", event: {
+      kind: "issue_decision_reminded", event_id: "late-after-arbiter", revision: 9,
+      decision: arbiterFact(request()), due_at: request().due_at, reminded_at: "2026-11-23T09:00:00Z",
+    } } });
+    expect(h.view().issueAttention).toEqual([]);
+    expect(h.view().issueArbiterNotices).toHaveLength(1);
+  });
+
+  it("retries a failed verification on replay without ever notifying from the event alone", async () => {
+    const h = await openBackground();
+    const event = recorded(arbiterEvent(request()));
+    h.connection.handleEvent(event);
+    h.fail(h.query("issue"));
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    h.connection.handleEvent(event);
+    expect(h.queries("issue")).toHaveLength(2);
+    h.reply(h.query("issue"), waitingDetail());
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+  });
+
+  it("permits a current replay after reconnect while discarding the old connection's in-flight reply", async () => {
+    const h = await openBackground();
+    const event = recorded(arbiterEvent(request()));
+    h.connection.handleEvent(event);
+    const oldRead = h.query("issue");
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    h.reply(h.requests("akra/kernel/attach").at(-1), { client_id: "2", protocol_version: 1, kernel: "repo" });
+    await h.when(() => h.view().phase === "attached");
+    h.connection.handleEvent(event);
+    expect(h.queries("issue")).toHaveLength(2);
+    h.reply(oldRead, waitingDetail());
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    h.reply(h.query("issue"), waitingDetail());
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+  });
+
+  it("does not announce an already handled event again after reconnect", async () => {
+    const h = await openBackground();
+    const event = recorded(arbiterEvent(request()));
+    h.connection.handleEvent(event);
+    h.reply(h.query("issue"), waitingDetail());
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    h.reply(h.requests("akra/kernel/attach").at(-1), { client_id: "2", protocol_version: 1, kernel: "repo" });
+    await h.when(() => h.view().phase === "attached");
+    h.connection.handleEvent(event);
+    expect(h.queries("issue")).toHaveLength(1);
+    expect(h.view().issueArbiterNotices).toEqual([]);
+  });
+
+  it("verifies the primary checkout through the attached kernel when only a linked worktree path is known", async () => {
+    const h = await openBackground("/repo-linked-worktree");
+    const event = arbiterEvent(request());
+    h.connection.handleEvent(recorded(event));
+    expect(h.query("issue")?.params.query?.issue).toEqual(issueReference());
+    h.reply(h.query("issue"), waitingDetail());
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
+    expect(h.view().issueArbiterNotices[0]).toMatchObject({ workspace: "/repo-linked-worktree", issue: issueReference(), arbiter: { eventId: event.event_id } });
+  });
+
+  it("drops an in-flight result after the selected repository changes", async () => {
+    const h = await openBackground();
+    h.connection.handleEvent(recorded(arbiterEvent(request())));
+    const oldRead = h.query("issue");
+    const shown = h.connection.show("/other", ["issue_attention"]);
+    h.reply(h.requests("akra/kernel/attach").at(-1), { client_id: "2", protocol_version: 1, kernel: "other" });
+    await shown;
+    h.reply(oldRead, waitingDetail());
+    await Promise.resolve();
+    expect(h.view().issueArbiterNotices).toEqual([]);
+    expect(h.view().issueAttention).toEqual([]);
+  });
+
+  it("does not query an unknown Wait reason or foreign repository and does not poison the valid event id", async () => {
+    const h = harness();
+    await h.openIssues();
+    const event = arbiterEvent(request());
+    h.connection.handleEvent({ event: { type: "recorded", event: { ...event, outcome: { kind: "waiting", reason: "invented" } } } });
+    h.connection.handleEvent(recorded({ ...event, decision: { ...event.decision,
+      subject: { kind: "issue", issue: { ...issueReference(), repository_id: "R_other", project_scope: { workspace_dir: "/other" } } } } }));
+    expect(h.queries("issue")).toHaveLength(0);
+    h.connection.handleEvent(recorded(event));
+    expect(h.queries("issue")).toHaveLength(1);
+    h.reply(h.query("issue"), waitingDetail());
+    await h.when(() => h.view().issueArbiterNotices.length === 1);
   });
 });
 

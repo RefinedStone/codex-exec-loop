@@ -127,6 +127,20 @@ impl IssueTriageService {
         .map_err(|error| anyhow!(error))
     }
 
+    /// 중재자 입력도 현재 판정과 같은 효과 정책만 사용한다.
+    pub(crate) fn automation_policy_for_version(
+        &self,
+        expected_version: &str,
+    ) -> Result<crate::domain::issue_automation::policy::IssueAutomationPolicy> {
+        let context = self
+            .context()
+            .ok_or_else(|| anyhow!("the current issue automation policy is unavailable"))?;
+        if context.automation.version != expected_version {
+            bail!("the issue automation policy changed");
+        }
+        Ok(context.automation.policy)
+    }
+
     /// 요청과 같은 정책 판의 기한 설정만 사용한다.
     pub(crate) fn decision_timeouts_for_policy(
         &self,
@@ -340,6 +354,7 @@ impl IssueTriageService {
             Ok(())
         })?;
         Ok(IssueCollectionDetail {
+            arbiter_waits: Vec::new(),
             timeline: None,
             revision: report.revision,
             item,

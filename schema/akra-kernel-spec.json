@@ -4058,6 +4058,44 @@
       }
     },
     {
+      "name": "issue_decision_arbiter_finished",
+      "summary": "A bounded deadline assessment ended as applied, waiting, superseded or discarded. Its durable event ID deduplicates retries; raw model text and authority capabilities are excluded.",
+      "payload": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/$defs/IssueDecisionFactRecord"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "issue_decision_arbiter_finished",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/$defs/IssueArbiterFinishedOutcome"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "decision",
+          "outcome",
+          "at",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "issue_work_submitted",
       "summary": "A durable issue work order was registered. Only stable identity and task IDs are recorded.",
       "payload": {
@@ -6642,6 +6680,92 @@
       ],
       "type": "object"
     },
+    "IssueArbiterFinishedOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "applied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "waiting",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/IssueArbiterWaitReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "superseded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "discarded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IssueArbiterWaitReason": {
+      "enum": [
+        "low_confidence",
+        "blockers_present",
+        "invalid_response",
+        "outcome_unknown",
+        "model_unavailable",
+        "budget_exhausted",
+        "evidence_unavailable",
+        "evidence_changed",
+        "context_unavailable"
+      ],
+      "type": "string"
+    },
+    "IssueArbiterWaitState": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/IssueArbiterWaitReason"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
     "IssueAutomationAutonomy": {
       "enum": [
         "off",
@@ -6782,6 +6906,7 @@
         "default",
         "override",
         "minimum",
+        "maximum",
         "and",
         "intersection",
         "union",
@@ -7700,6 +7825,16 @@
     "IssueDecisionRequestState": {
       "additionalProperties": false,
       "properties": {
+        "arbiter_wait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueArbiterWaitState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "basis": {
           "$ref": "#/$defs/IssueDecisionBasisRecord"
         },
@@ -12006,6 +12141,40 @@
             "decision",
             "due_at",
             "reminded_at",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "decision": {
+              "$ref": "#/$defs/IssueDecisionFactRecord"
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "issue_decision_arbiter_finished",
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/$defs/IssueArbiterFinishedOutcome"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "decision",
+            "outcome",
+            "at",
             "revision"
           ],
           "type": "object"

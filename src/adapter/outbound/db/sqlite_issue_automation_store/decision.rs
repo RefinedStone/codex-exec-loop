@@ -347,11 +347,13 @@ pub(super) fn save(
 ) -> Result<IssueDecisionSaveResult> {
     validate_reference_scope(workspace, request.issue())?;
     validate_expected_revision(expected.decision_revision)?;
-    if request
-        .answer()
-        .is_some_and(|answer| answer.by == IssueDecisionAnswerBy::Default)
-    {
-        bail!("default answers require the deadline transition")
+    if request.answer().is_some_and(|answer| {
+        matches!(
+            answer.by,
+            IssueDecisionAnswerBy::Default | IssueDecisionAnswerBy::Arbiter
+        )
+    }) {
+        bail!("automatic answers require their dedicated deadline transition")
     }
     adapter.with_connection(workspace, |connection, guard| {
         transaction(connection, guard, |transaction| {
@@ -373,7 +375,8 @@ pub(super) fn save(
                 && work_context_current(transaction, workspace, request)?;
             if basis_matches && (assessment.gates().iter().any(|gate|
                 gate.gate == existing.request.definition().gate
-                    && matches!(gate.action, IssueAutomationGateAction::Human | IssueAutomationGateAction::TimeoutDefault))
+                    && matches!(gate.action, IssueAutomationGateAction::Human | IssueAutomationGateAction::TimeoutDefault | IssueAutomationGateAction::TimeoutArbiter))
+                || request.definition().on_timeout == crate::domain::issue_automation::decision::IssueDecisionTimeout::Arbiter
                 || (request.definition().basis.work_order_id.is_some()
                     && matches!(
                         request.definition().kind,
@@ -489,7 +492,7 @@ fn timeout_gate(
     Ok(IssueAutomationGateAction::TimeoutDefault)
 }
 
-fn persist_resolution(
+pub(super) fn persist_resolution(
     transaction: &Transaction<'_>,
     workspace: &str,
     existing: &StoredIssueDecision,

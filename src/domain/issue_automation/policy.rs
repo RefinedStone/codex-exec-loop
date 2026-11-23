@@ -42,6 +42,8 @@ pub struct IssueAutomationPolicy {
     pub gates: IssueAutomationPolicyGates,
     pub timeouts: IssueAutomationTimeouts,
     pub budget: IssueAutomationBudget,
+    #[serde(skip_serializing_if = "super::arbiter::IssueArbiterSettings::is_default")]
+    pub arbiter: super::arbiter::IssueArbiterSettings,
     pub feedback: IssueAutomationFeedback,
     pub close: IssueAutomationClose,
     pub protection: IssueAutomationProtection,
@@ -303,6 +305,7 @@ impl IssueAutomationPolicy {
                 max_started_per_day: 5,
                 max_attempts: 3,
             },
+            arbiter: Default::default(),
             feedback: IssueAutomationFeedback::default(),
             close: IssueAutomationClose::default(),
             protection: IssueAutomationProtection {

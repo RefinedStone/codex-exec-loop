@@ -5,6 +5,7 @@ use crate::domain::issue_automation::coordinator::IssueWorkStartAuthority;
 use crate::domain::issue_automation::{IssueAutomationState, IssueTransition, IssueTriageResult};
 use std::sync::{Arc, Barrier};
 
+mod arbiter;
 mod fences;
 mod migration;
 mod support;

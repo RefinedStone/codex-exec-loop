@@ -56,6 +56,20 @@ pub(super) fn prepare_unanswered_default(
     )
 }
 
+pub(super) fn prepare_unanswered_arbiter(
+    fixture: &Fixture,
+    id: &str,
+    budget: &IssueAutomationBudget,
+) -> Prepared {
+    prepare_with_default_answer(
+        fixture,
+        id,
+        IssueWorkStartAuthority::TimeoutArbiter,
+        budget,
+        false,
+    )
+}
+
 fn prepare_with_default_answer(
     fixture: &Fixture,
     id: &str,
@@ -149,10 +163,10 @@ fn prepare_with_default_answer(
     } else {
         "gated"
     };
-    let start_gate = if authority == IssueWorkStartAuthority::TimeoutDefault {
-        "timeout_default"
-    } else {
-        "auto"
+    let start_gate = match authority {
+        IssueWorkStartAuthority::TimeoutDefault => "timeout_default",
+        IssueWorkStartAuthority::TimeoutArbiter => "timeout_arbiter",
+        _ => "auto",
     };
     let policy = resolve_issue_automation_policy(Some(&format!(
         "[binding.github]\nmode = \"{mode}\"\n[authority]\nautonomy_cap = \"gated\"\n[select]\nmode = \"all_open\"\ntrusted_actors = [{{provider=\"github\",server_id=\"github.com\",actor_id=\"U_author\"}}]\n[gates.gated.normal]\nstart = \"{start_gate}\"\n[budget]\nmax_running={}\nmax_started_per_day={}\nmax_attempts={}\n",
@@ -183,6 +197,7 @@ fn prepare_with_default_answer(
     let decision_id = if authority != IssueWorkStartAuthority::Policy {
         let id = start_decision_id(&item.issue, &approved_basis);
         let is_default = authority == IssueWorkStartAuthority::TimeoutDefault;
+        let is_arbiter = authority == IssueWorkStartAuthority::TimeoutArbiter;
         let shared = |text: &str| IssueDecisionSharedText::new_shared(text).unwrap();
         let request = IssueDecisionRequest::new(
             id.clone(),
@@ -201,10 +216,12 @@ fn prepare_with_default_answer(
                 basis: approved_basis.clone(),
                 on_timeout: if is_default {
                     IssueDecisionTimeout::Default
+                } else if is_arbiter {
+                    IssueDecisionTimeout::Arbiter
                 } else {
                     IssueDecisionTimeout::Wait
                 },
-                due_at: is_default.then(|| "1970-01-01T00:00:01Z".into()),
+                due_at: (is_default || is_arbiter).then(|| "1970-01-01T00:00:01Z".into()),
                 asked_by: "fixture".into(),
                 evidence: vec![],
             },
@@ -237,7 +254,7 @@ fn prepare_with_default_answer(
                                 answer.by == IssueDecisionAnswerBy::Default)
                 ));
             }
-        } else {
+        } else if !is_arbiter {
             let answered = request
                 .answer_for_gate(
                     &approved_basis,

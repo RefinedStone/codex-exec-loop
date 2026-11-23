@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const ISSUE_DRAFT_REVIEW_FEATURE: &str = "issue_draft_review";
+pub(crate) const ISSUE_ASSESSMENT_FEATURE: &str = "issue_assessment";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
