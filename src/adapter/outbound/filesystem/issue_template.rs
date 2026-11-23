@@ -27,12 +27,20 @@ impl IssueTemplateSourcePort for FilesystemIssueTemplateSourceAdapter {
     }
 }
 
+#[cfg(windows)]
+mod windows;
+
 const MAX_TEMPLATE_BYTES: usize = 1024 * 1024;
 
+#[cfg(not(windows))]
 fn read_template(root: &Path, relative: &Path) -> Result<Option<String>> {
-    // Use the established descriptor-anchored reader. Unsupported platforms
-    // return Unreadable through the service rather than bypassing this boundary.
+    // Keep the established descriptor-anchored reader and its platform boundary.
     super::secure_fs::read_optional_file_with_limit(root, relative, MAX_TEMPLATE_BYTES)
+}
+
+#[cfg(windows)]
+fn read_template(root: &Path, relative: &Path) -> Result<Option<String>> {
+    windows::read_template(root, relative, MAX_TEMPLATE_BYTES)
 }
 
 #[cfg(test)]
@@ -59,7 +67,6 @@ mod tests {
         path
     }
 
-    #[cfg(unix)]
     #[test]
     fn template_is_read_from_the_workspace_and_a_missing_file_is_none() {
         let workspace = temp_workspace("read");
@@ -139,7 +146,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn template_reads_keep_the_existing_one_mebibyte_limit() {
         let workspace = temp_workspace("size");
@@ -156,17 +162,87 @@ mod tests {
         fs::remove_dir_all(workspace).unwrap();
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_template_reads_fail_closed_until_rooted_reads_are_supported() {
-        let workspace = temp_workspace("windows-unsupported");
-        fs::write(workspace.join(TEMPLATE_PATH), "## Summary\n").unwrap();
-        for relative in [TEMPLATE_PATH, ".github/ISSUE_TEMPLATE/missing.md"] {
-            let error = FilesystemIssueTemplateSourceAdapter::new()
-                .load_template(workspace.to_str().unwrap(), relative)
-                .unwrap_err();
-            assert!(error.to_string().contains("unsupported on Windows"));
+    fn empty_and_exact_limit_templates_are_readable_but_invalid_utf8_is_not() {
+        let workspace = temp_workspace("boundary");
+        let adapter = FilesystemIssueTemplateSourceAdapter::new();
+        for body in [String::new(), "x".repeat(super::MAX_TEMPLATE_BYTES)] {
+            fs::write(workspace.join(TEMPLATE_PATH), body.as_bytes()).unwrap();
+            assert_eq!(
+                adapter
+                    .load_template(workspace.to_str().unwrap(), TEMPLATE_PATH)
+                    .unwrap(),
+                Some(body)
+            );
         }
+        fs::write(workspace.join(TEMPLATE_PATH), [0xff, 0xfe]).unwrap();
+        assert!(
+            adapter
+                .load_template(workspace.to_str().unwrap(), TEMPLATE_PATH)
+                .is_err()
+        );
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn filesystem_templates_resolve_required_fields_and_reject_stale_versions() {
+        use std::sync::Arc;
+
+        use crate::application::service::issue_template::IssueTemplateService;
+        use crate::domain::issue_template::{
+            IssueTemplateFormat, IssueTemplateInputKind, IssueTemplateResolution,
+            IssueTemplateVersionCheck,
+        };
+
+        let workspace = temp_workspace("service");
+        let cwd = workspace.to_str().unwrap();
+        let source =
+            IssueTemplateService::new(Arc::new(FilesystemIssueTemplateSourceAdapter::new()));
+        for (path, body, expected_format, expected_label, expected_kind) in [
+            (
+                TEMPLATE_PATH,
+                "## 재현 순서\n",
+                IssueTemplateFormat::Markdown,
+                "재현 순서",
+                IssueTemplateInputKind::Section,
+            ),
+            (
+                ".github/ISSUE_TEMPLATE/bug.yaml",
+                "name: Bug\nbody:\n  - type: textarea\n    id: steps\n    attributes:\n      label: 재현 순서\n    validations:\n      required: true\n",
+                IssueTemplateFormat::IssueForm,
+                "재현 순서",
+                IssueTemplateInputKind::Textarea,
+            ),
+        ] {
+            fs::write(workspace.join(path), body).unwrap();
+            let IssueTemplateResolution::Resolved(convention) = source.resolve(cwd, Some(path))
+            else {
+                panic!("filesystem template should resolve: {path}");
+            };
+            assert_eq!(convention.format, expected_format);
+            assert_eq!(convention.required_inputs.len(), 1);
+            assert_eq!(convention.required_inputs[0].label, expected_label);
+            assert_eq!(convention.required_inputs[0].kind, expected_kind);
+            assert_eq!(
+                source.check_draft_version(cwd, Some(path), Some(&convention.version)),
+                IssueTemplateVersionCheck::Unchanged
+            );
+            fs::write(workspace.join(path), format!("{body}\n")).unwrap();
+            assert!(matches!(
+                source.check_draft_version(cwd, Some(path), Some(&convention.version)),
+                IssueTemplateVersionCheck::ReviewRequired { .. }
+            ));
+        }
+        fs::write(workspace.join(TEMPLATE_PATH), [0xff]).unwrap();
+        assert!(matches!(
+            source.resolve(cwd, Some(TEMPLATE_PATH)),
+            IssueTemplateResolution::Unreadable { .. }
+        ));
+        fs::remove_file(workspace.join(TEMPLATE_PATH)).unwrap();
+        assert!(matches!(
+            source.resolve(cwd, Some(TEMPLATE_PATH)),
+            IssueTemplateResolution::Missing { .. }
+        ));
         fs::remove_dir_all(workspace).unwrap();
     }
 }

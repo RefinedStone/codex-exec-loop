@@ -1080,6 +1080,10 @@ strategy in the production TUI.
   A missing, unreadable, or invalid template and an unsupported required input are separate
   results; callers must not treat them as "no requirement". A draft keeps the template version
   (content SHA-256), and `check_issue_template_version` asks for review when it changed.
+  On Windows, the template-specific reader pins local repository paths, verifies file identity
+  and ACLs, rejects reparse points and hard links, and retains the 1 MiB UTF-8 limit. It does not
+  enable the generic planning/Vault filesystem adapter. See
+  [Windows issue templates](./windows-issue-templates.md).
 - User code validators run only through `application/service/issue_code_validator`. The input is an
   `IssueValidationPassed`; the command and content hash come only from the user policy file.
   `gate_issue_publish_with_code_validators` blocks publish when a required validator rejects or
