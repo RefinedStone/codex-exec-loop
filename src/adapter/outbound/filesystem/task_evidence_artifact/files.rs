@@ -339,9 +339,11 @@ mod platform {
         destination: &str,
     ) -> std::io::Result<()> {
         use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+        // The verified ancestor handles remain pinned while resolving the extended
+        // Windows spelling required by this raw API for paths beyond MAX_PATH.
+        let directory = std::fs::canonicalize(directory.path())?;
         let wide = |name: &str| {
             directory
-                .path()
                 .join(name)
                 .as_os_str()
                 .encode_wide()
