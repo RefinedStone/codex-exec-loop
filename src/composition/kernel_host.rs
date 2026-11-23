@@ -288,6 +288,13 @@ pub(crate) struct KernelHost {
 }
 
 impl KernelHost {
+    /// Observe an existing host without attaching a client or starting a repository.
+    pub(crate) fn observe(&self, timeout: Duration) -> Result<KernelHostView, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox.send(KernelHostInput::Query { reply })?;
+        wait_reply(&answer, timeout)
+    }
+
     pub(crate) fn start(runtime: NativeClientRuntime) -> std::io::Result<Self> {
         let (sender, inputs) = mpsc::channel();
         let inbox = KernelInbox {

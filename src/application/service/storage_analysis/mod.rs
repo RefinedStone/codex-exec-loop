@@ -1,7 +1,7 @@
 //! Validated storage use cases. The host owns activation, jobs, scopes and cancellation.
 use crate::application::port::outbound::storage_analysis_port::StorageAnalysisPort;
 use crate::domain::storage_analysis::*;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::AtomicBool};
 
@@ -10,6 +10,14 @@ pub struct StorageAnalysisService {
     port: Arc<dyn StorageAnalysisPort>,
 }
 impl StorageAnalysisService {
+    pub fn live_children(&self, query: &StorageLiveQuery) -> Result<StorageLivePage> {
+        validate_id(&query.job_id)?;
+        self.port.live_children(query)
+    }
+    pub fn prioritize(&self, job_id: &str, node_id: &str) -> Result<StoragePriorityResult> {
+        validate_id(job_id)?;
+        self.port.prioritize(job_id, node_id)
+    }
     pub fn new(port: Arc<dyn StorageAnalysisPort>) -> Self {
         Self { port }
     }
@@ -48,6 +56,13 @@ impl StorageAnalysisService {
         thresholds: &HotspotThresholds,
     ) -> Result<StoragePage<StorageHotspot>> {
         validate_query(query)?;
+        ensure!(
+            matches!(query.sort, StorageSort::AllocatedDesc)
+                && query.name_filter.is_none()
+                && query.extension_filter.is_none()
+                && !query.recursive,
+            "storage_hotspot_options_unsupported"
+        );
         thresholds.values().map_err(|e| anyhow!(e))?;
         self.port.find_hotspots(query, thresholds)
     }

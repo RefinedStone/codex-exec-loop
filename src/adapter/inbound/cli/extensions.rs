@@ -5,15 +5,21 @@ use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::io::Write;
 
-pub(super) const USAGE: &str = "Usage: akra extensions list [--scope local_user|repository] [--workspace <path>] --json\n       akra extensions call <extension> <action> --version <n> --input <json> [--idempotency-key <key>] [--scope local_user|repository] --json";
+pub(super) const USAGE: &str = "Usage: akra extensions list [--scope local_user|repository] [--workspace <path>] --json\n       akra extensions call <extension> <action> --version <n> --input <json> [--idempotency-key <key>] [--thread-id <verified-thread>] [--scope local_user|repository] --json";
 struct Invocation {
     scope: String,
     workspace: String,
     call: Option<Value>,
+    thread_id: Option<String>,
 }
 pub(super) fn run(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
     let result = parse(args).and_then(|i| {
-        crate::composition::kernel_extensions::cli_request(&i.scope, &i.workspace, i.call)
+        crate::composition::kernel_extensions::cli_request(
+            &i.scope,
+            &i.workspace,
+            i.call,
+            i.thread_id.as_deref(),
+        )
     });
     let (code, value) = match result {
         Ok(value) => (0, value),
@@ -47,7 +53,12 @@ fn parse(args: &[OsString]) -> Result<Invocation> {
                 ensure!(
                     matches!(
                         flag,
-                        "scope" | "workspace" | "version" | "input" | "idempotency-key"
+                        "scope"
+                            | "workspace"
+                            | "version"
+                            | "input"
+                            | "idempotency-key"
+                            | "thread-id"
                     ),
                     "unknown extension option"
                 );
@@ -73,12 +84,20 @@ fn parse(args: &[OsString]) -> Result<Invocation> {
         .get("workspace")
         .map(|p| (*p).to_owned())
         .unwrap_or(std::env::current_dir()?.to_string_lossy().into_owned());
+    let thread_id = flags.get("thread-id").map(|value| (*value).to_owned());
+    if let Some(thread) = &thread_id {
+        ensure!(
+            !thread.is_empty() && thread.len() <= 256,
+            "invalid thread identifier"
+        );
+    }
     let call = match positional.as_slice() {
         ["list"] => {
             ensure!(
                 !flags.contains_key("input")
                     && !flags.contains_key("version")
-                    && !flags.contains_key("idempotency-key"),
+                    && !flags.contains_key("idempotency-key")
+                    && !flags.contains_key("thread-id"),
                 "call options cannot be used with list"
             );
             None
@@ -102,6 +121,7 @@ fn parse(args: &[OsString]) -> Result<Invocation> {
         scope,
         workspace,
         call,
+        thread_id,
     })
 }
 #[cfg(test)]

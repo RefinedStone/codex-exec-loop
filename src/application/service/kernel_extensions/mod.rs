@@ -169,6 +169,7 @@ impl ExtensionService {
             connection_id,
             repository_key,
             verified_thread: None,
+            conversation_generation: None,
             activation_revision: 0,
         }
     }
@@ -282,13 +283,32 @@ impl ExtensionService {
             self.authorize(entry)? == revision,
             "extension activation changed before dispatch"
         );
+        let guard_input = input.clone();
         let output = entry.handler.invoke(&context, action, input)?;
-        self.check_context(&context)?;
-        ensure!(
-            self.authorize(entry)? == revision,
-            "extension activation changed during dispatch"
-        );
         validate_output(&operation.output, &output)?;
+        // Handler authority is locked first. No handler invocation or cleanup is permitted
+        // while the host lock is held, except this non-I/O, non-reentrant final guard check.
+        let response_guard =
+            entry
+                .handler
+                .response_guard(&context, action, &guard_input, &output)?;
+        {
+            let state = self.lock();
+            ensure!(!state.stopped, "extension host is stopping");
+            let activation = &state.durable.activations[&entry.manifest.id];
+            ensure!(
+                activation.desired_enabled
+                    && activation.lifecycle == ExtensionLifecycle::Enabled
+                    && activation.revision == revision,
+                "extension activation changed during dispatch"
+            );
+            if let Some(guard) = &response_guard {
+                guard.validate()?;
+            }
+        }
+        // This is the response commit point: revoke and disable serialize against the checks
+        // above. No asynchronous work, schema checks or output conversion follow in this host.
+        drop(response_guard);
         Ok(output)
     }
 

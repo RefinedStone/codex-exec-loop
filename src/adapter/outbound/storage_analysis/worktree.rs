@@ -1,11 +1,14 @@
+mod git_metadata;
+mod tracked;
+
 use super::index::StorageIndex;
 use crate::domain::storage_analysis::*;
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use rusqlite::{OptionalExtension, params};
 use std::{
-    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
-    path::{Path, PathBuf},
+    path::Path,
+    process::Output,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -27,6 +30,7 @@ pub(super) fn parse_porcelain(bytes: &[u8]) -> Result<Vec<WorktreeRecord>> {
     for field in bytes.split(|v| *v == 0) {
         if field.is_empty() {
             if !record.path.is_empty() {
+                ensure!(output.len() < 4096, "storage_git_worktree_limit");
                 output.push(std::mem::take(&mut record));
             }
             continue;
@@ -50,15 +54,32 @@ pub(super) fn parse_porcelain(bytes: &[u8]) -> Result<Vec<WorktreeRecord>> {
         }
     }
     if !record.path.is_empty() {
+        ensure!(output.len() < 4096, "storage_git_worktree_limit");
         output.push(record);
     }
     Ok(output)
 }
-fn git(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let mut command = crate::git_subprocess::command([OsStr::new("-C"), path.as_os_str()]);
+fn git_output(
+    path: &Path,
+    metadata: &git_metadata::GitMetadata,
+    args: &[&str],
+    cancelled: &AtomicBool,
+) -> Result<Output> {
+    ensure!(!cancelled.load(Ordering::Acquire), "storage_git_cancelled");
+    let workspace = git_metadata::git_argument(path);
+    let mut command = crate::git_subprocess::command([OsStr::new("-C"), workspace.as_os_str()]);
+    command
+        .arg("--git-dir")
+        .arg(git_metadata::git_argument(&metadata.git_dir));
+    if let Some(work_tree) = &metadata.work_tree {
+        command
+            .arg("--work-tree")
+            .arg(git_metadata::git_argument(work_tree));
+    }
     command
         .args(["--no-optional-locks", "-c", "core.fsmonitor=false"])
         .args(args);
+    ensure!(!cancelled.load(Ordering::Acquire), "storage_git_cancelled");
     let output = crate::subprocess::command_output_with_input_timeout_and_limits(
         &mut command,
         "storage Git metadata",
@@ -67,29 +88,83 @@ fn git(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
         1024 * 1024,
         64 * 1024,
     )?;
-    if !output.status.success() {
-        bail!("Git metadata query failed");
-    }
+    Ok(output)
+}
+fn git(
+    path: &Path,
+    metadata: &git_metadata::GitMetadata,
+    args: &[&str],
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>> {
+    let output = git_output(path, metadata, args, cancelled)?;
+    ensure!(output.status.success(), "Git metadata query failed");
     Ok(output.stdout)
+}
+fn cached_index_changes(
+    path: &Path,
+    metadata: &git_metadata::GitMetadata,
+    cancelled: &AtomicBool,
+) -> Result<bool> {
+    let output = git_output(
+        path,
+        metadata,
+        &[
+            "diff-index",
+            "--cached",
+            "--quiet",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=all",
+            "--no-renames",
+            "HEAD",
+            "--",
+        ],
+        cancelled,
+    )?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => bail!("Git index state could not be verified"),
+    }
+}
+fn cached_worktrees(
+    db: &StorageIndex,
+    path: &Path,
+    metadata: &git_metadata::GitMetadata,
+    cancelled: &AtomicBool,
+) -> Result<Vec<WorktreeRecord>> {
+    let common_key = git_metadata::key(&metadata.common_dir);
+    let cached: Option<Option<Vec<u8>>> = db
+        .conn
+        .query_row(
+            "SELECT records FROM git_worktree_cache WHERE common_key=?1",
+            [&common_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let bytes = match cached {
+        Some(Some(bytes)) => bytes,
+        Some(None) => bail!("Git worktree registration unavailable"),
+        None => {
+            let result = git(
+                path,
+                metadata,
+                &["worktree", "list", "--porcelain", "-z"],
+                cancelled,
+            );
+            db.conn.execute(
+                "INSERT INTO git_worktree_cache(common_key,records) VALUES(?1,?2)",
+                params![common_key, result.as_ref().ok().map(Vec::as_slice)],
+            )?;
+            result?
+        }
+    };
+    parse_porcelain(&bytes)
 }
 fn text(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes)
         .trim_end_matches(['\r', '\n'])
         .to_string()
-}
-fn key(path: &Path) -> String {
-    let value = std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-    #[cfg(windows)]
-    {
-        value.to_lowercase()
-    }
-    #[cfg(not(windows))]
-    {
-        value
-    }
 }
 fn evidence(code: &str, detail: impl Into<String>) -> StorageEvidence {
     StorageEvidence {
@@ -102,52 +177,59 @@ fn evidence(code: &str, detail: impl Into<String>) -> StorageEvidence {
 pub(super) fn annotate(
     db: &StorageIndex,
     cancelled: &AtomicBool,
-    runtime_probe: Option<&(dyn Fn(&Path) -> Vec<StorageEvidence> + Send + Sync)>,
+    runtime_probe: Option<&super::StorageRuntimeProbe>,
 ) -> Result<()> {
-    let mut cache: BTreeMap<String, Result<Vec<WorktreeRecord>, String>> = BTreeMap::new();
-    let mut seen = BTreeSet::new();
-    let mut candidates=db.conn.prepare("SELECT DISTINCT parent FROM nodes WHERE name='.git' UNION
-        SELECT parent FROM nodes WHERE name IN ('HEAD','objects','refs') GROUP BY parent HAVING count(DISTINCT name)=3")?;
-    for row in candidates.query_map([], |r| r.get::<_, Option<i64>>(0))? {
+    let Some(runtime_complete) = prepare_candidates(db, runtime_probe)? else {
+        return classify(db);
+    };
+    let mut candidates = db
+        .conn
+        .prepare("SELECT node,git_discovered,runtime_known FROM git_candidates ORDER BY node")?;
+    for row in candidates.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, bool>(1)?,
+            r.get::<_, bool>(2)?,
+        ))
+    })? {
         if cancelled.load(Ordering::Acquire) {
             break;
         }
-        let Some(id) = row? else {
-            continue;
-        };
-        if !seen.insert(id) {
-            continue;
-        }
+        let (id, git_discovered, runtime_known) = row?;
         let path = db.path(&format!("n{id}"))?;
-        let mut reasons = runtime_probe.map(|probe| probe(&path)).unwrap_or_default();
+        let mut reasons = runtime_probe
+            .map(|probe| (probe.observe)(&path))
+            .unwrap_or_default();
         if reasons.is_empty() {
             reasons.push(evidence(
                 "runtime_unknown",
                 "Runtime ownership has not been verified; no session or kernel was started",
             ));
         }
-        let common = git(
-            &path,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )
-        .map(text);
-        match common {
+        if runtime_known {
+            reasons.push(evidence("akra_known_repository", "An existing kernel root matched an observed directory identity; no kernel was started"));
+        }
+        reasons.push(evidence(
+            "status_unknown",
+            "Working tree contents and ignore rules are not read; observed index/path evidence is not a complete or clean status",
+        ));
+        let metadata = if git_discovered {
+            git_metadata::observe(db, &path)
+        } else {
+            Err(anyhow::anyhow!("storage_git_metadata_unobserved"))
+        };
+        match metadata {
             Err(_) => reasons.push(evidence(
-                "git_unavailable",
-                "Git metadata could not be verified",
+                "git_metadata_unverified",
+                "Git metadata is unobserved, partial, changed, external, or contains a placeholder/link; Git commands were skipped",
             )),
-            Ok(common) => {
-                let common = PathBuf::from(common);
-                let entry = cache.entry(key(&common)).or_insert_with(|| {
-                    git(&path, &["worktree", "list", "--porcelain", "-z"])
-                        .and_then(|bytes| parse_porcelain(&bytes))
-                        .map_err(|e| e.to_string())
-                });
-                match entry {
+            Ok(metadata) => {
+                let records = cached_worktrees(db, &path, &metadata, cancelled);
+                match &records {
                     Ok(records) => {
                         let current = records.iter().find(|r| {
-                            key(Path::new(&String::from_utf8_lossy(&r.path).into_owned()))
-                                == key(&path)
+                            git_metadata::key(Path::new(&String::from_utf8_lossy(&r.path).into_owned()))
+                                == git_metadata::key(&path)
                         });
                         if let Some(current) = current {
                             if !current.bare
@@ -204,39 +286,36 @@ pub(super) fn annotate(
                         "Worktree registration query failed",
                     )),
                 }
-                if git(&path, &["rev-parse", "--show-superproject-working-tree"])
-                    .is_ok_and(|v| !text(v).is_empty())
-                {
+                // Querying a superproject through Git can inspect an unobserved parent's index.
+                // Retain the standard registered metadata layout as an explicit, read-only reason.
+                if metadata.common_dir.ancestors().any(|ancestor| {
+                    ancestor.file_name().is_some_and(|name| name == "modules")
+                        && ancestor.parent().and_then(Path::file_name).is_some_and(|name| name == ".git")
+                }) {
                     reasons.push(evidence(
                         "submodule",
-                        "Git identifies this checkout as a submodule",
+                        "The observed Git metadata is registered below a .git/modules directory",
                     ));
                 }
-                match git(
-                    &path,
-                    &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-                ) {
-                    Ok(status) => {
-                        if status.split(|b| *b == 0).any(|p| p.starts_with(b"?? ")) {
-                            reasons
-                                .push(evidence("untracked_files", "Untracked paths were observed"));
-                        }
-                        if status
-                            .split(|b| *b == 0)
-                            .any(|p| !p.is_empty() && !p.starts_with(b"?? "))
-                        {
-                            reasons.push(evidence(
-                                "modified_files",
-                                "Working tree or index changes were observed",
-                            ));
-                        }
-                    }
+                if cancelled.load(Ordering::Acquire) { break; }
+                match cached_index_changes(&path, &metadata, cancelled) {
+                    Ok(true) => reasons.push(evidence(
+                        "index_changes",
+                        "Index entries differ from local HEAD; working tree contents were not read",
+                    )),
+                    Ok(false) => reasons.push(evidence(
+                        "index_unchanged",
+                        "Index entries match local HEAD; this is not a clean working tree determination",
+                    )),
                     Err(_) => reasons.push(evidence(
-                        "status_unknown",
-                        "Working tree status could not be verified",
+                        "index_unknown",
+                        "Index versus local HEAD could not be verified",
                     )),
                 }
-                match git(&path, &["rev-list", "--count", "@{upstream}..HEAD"]).map(text) {
+                if cancelled.load(Ordering::Acquire) { break; }
+                reasons.extend(tracked::observe(db, id, &path, &metadata, cancelled));
+                if cancelled.load(Ordering::Acquire) { break; }
+                match git(&path, &metadata, &["rev-list", "--count", "@{upstream}..HEAD"], cancelled).map(text) {
                     Ok(count) if count.parse::<u64>().is_ok_and(|v| v > 0) => {
                         reasons.push(evidence(
                             "local_commits",
@@ -261,7 +340,56 @@ pub(super) fn annotate(
             params![serde_json::to_string(&reasons)?, id],
         )?;
     }
+    if !runtime_complete {
+        let raw: String =
+            db.conn
+                .query_row("SELECT protection FROM nodes WHERE id=1", [], |row| {
+                    row.get(0)
+                })?;
+        let mut reasons: Vec<StorageEvidence> = serde_json::from_str(&raw)?;
+        reasons.push(evidence("runtime_candidates_partial", "The bounded existing-kernel root inventory was incomplete; absence does not mean inactive"));
+        db.conn.execute(
+            "UPDATE nodes SET protection=?1 WHERE id=1",
+            [serde_json::to_string(&reasons)?],
+        )?;
+    }
     classify(db)
+}
+fn prepare_candidates(
+    db: &StorageIndex,
+    probe: Option<&super::StorageRuntimeProbe>,
+) -> Result<Option<bool>> {
+    const LIMIT: usize = 256;
+    let mut known =
+        probe
+            .map(|probe| (probe.known_roots)(LIMIT))
+            .unwrap_or(super::StorageRuntimeRoots {
+                paths: Vec::new(),
+                complete: true,
+            });
+    if known.paths.len() > LIMIT {
+        known.paths.truncate(LIMIT);
+        known.complete = false;
+    }
+    let discovered: bool=db.conn.query_row("SELECT EXISTS(SELECT parent FROM nodes WHERE name='.git' UNION SELECT parent FROM nodes WHERE name IN ('HEAD','objects','refs') GROUP BY parent HAVING count(DISTINCT name)=3)",[],|row|row.get(0))?;
+    if !discovered && known.paths.is_empty() && known.complete {
+        return Ok(None);
+    }
+    git_metadata::prepare(db)?;
+    db.conn.execute_batch("CREATE TABLE git_candidates(node INTEGER PRIMARY KEY,git_discovered INTEGER NOT NULL,runtime_known INTEGER NOT NULL);
+        INSERT INTO git_candidates SELECT id,1,0 FROM nodes WHERE kind='directory' AND id IN(
+          SELECT parent FROM nodes WHERE name='.git' UNION
+          SELECT parent FROM nodes WHERE name IN ('HEAD','objects','refs') GROUP BY parent HAVING count(DISTINCT name)=3);")?;
+    for path in known.paths {
+        match git_metadata::runtime_node(db, &path) {
+            Ok(Some(id)) => {
+                db.conn.execute("INSERT INTO git_candidates VALUES(?1,0,1) ON CONFLICT(node) DO UPDATE SET runtime_known=1",[id])?;
+            }
+            Ok(None) => {} // Outside this observed volume is never opened or exposed.
+            Err(_) => known.complete = false,
+        }
+    }
+    Ok(Some(known.complete))
 }
 fn classify(db: &StorageIndex) -> Result<()> {
     let mut stmt=db.conn.prepare("SELECT id,parent,name FROM nodes WHERE kind='directory' AND name IN ('target','node_modules','Library')")?;
@@ -292,7 +420,7 @@ fn classify(db: &StorageIndex) -> Result<()> {
             .is_some();
         let classification = StorageClassification {
             kind: if present {
-                format!("candidate_{name}")
+                format!("candidate_{}", name.to_ascii_lowercase())
             } else {
                 "unclassified".into()
             },
@@ -324,5 +452,10 @@ mod tests {
         assert_eq!(rows[0].locked, Some(vec![]));
         assert!(rows[1].detached);
         assert_eq!(rows[1].prunable.as_deref(), Some(&b"missing path"[..]));
+    }
+    #[test]
+    fn worktree_record_count_is_bounded_even_for_tiny_records() {
+        let bytes = b"worktree a\0\0".repeat(4097);
+        assert!(parse_porcelain(&bytes).is_err());
     }
 }

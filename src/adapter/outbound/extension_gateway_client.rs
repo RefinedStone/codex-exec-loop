@@ -9,7 +9,12 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
-pub(crate) fn request(scope: &str, workspace: &str, call: Option<Value>) -> Result<Value> {
+pub(crate) fn request(
+    scope: &str,
+    workspace: &str,
+    call: Option<Value>,
+    thread_id: Option<&str>,
+) -> Result<Value> {
     let endpoint = crate::gateway_endpoint::client_endpoint()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -24,15 +29,46 @@ pub(crate) fn request(scope: &str, workspace: &str, call: Option<Value>) -> Resu
         .context("start akra-gateway before using extensions")?;
         let (mut socket, _) =
             tokio_tungstenite::client_async("ws://localhost/rpc", connected).await?;
-        let result = tokio::time::timeout(
-            Duration::from_secs(30),
-            request_over_socket(&mut socket, scope, workspace, call),
-        )
+        let result = tokio::time::timeout(Duration::from_secs(30), async {
+            if let Some(thread) = thread_id {
+                verify_thread(&mut socket, thread).await?;
+            }
+            request_over_socket(&mut socket, scope, workspace, call).await
+        })
         .await
         .context("extension Gateway request timed out")?;
         let _ = socket.close(None).await;
         result
     })
+}
+/// The upstream server must resolve the thread before scoped extension queries are admitted.
+/// Resuming with excludeTurns reads metadata only and never starts or steers a model turn.
+async fn verify_thread<S: AsyncRead + AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    thread_id: &str,
+) -> Result<()> {
+    ensure!(
+        !thread_id.is_empty() && thread_id.len() <= 256,
+        "invalid thread identifier"
+    );
+    exchange(socket,4,"initialize",json!({"clientInfo":{"name":"akra-extensions-cli","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
+    socket
+        .send(Message::text(
+            json!({"jsonrpc":"2.0","method":"initialized","params":{}}).to_string(),
+        ))
+        .await?;
+    let resumed = exchange(
+        socket,
+        5,
+        "thread/resume",
+        json!({"threadId":thread_id,"excludeTurns":true}),
+    )
+    .await?;
+    ensure!(
+        resumed.pointer("/thread/id").and_then(Value::as_str) == Some(thread_id),
+        "server did not verify the requested conversation"
+    );
+    Ok(())
 }
 pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
     socket: &mut WebSocketStream<S>,
@@ -142,4 +178,60 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         }
     }
     bail!("Gateway closed before the extension response")
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    #[tokio::test]
+    async fn storage_cli_thread_binding_uses_metadata_and_rejects_a_different_server_thread() {
+        for matched in [true, false] {
+            let (client, server) = tokio::io::duplex(16 * 1024);
+            let server = tokio::spawn(async move {
+                let mut socket = tokio_tungstenite::accept_async(server).await.unwrap();
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("initialize")
+                };
+                let initialize: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(initialize["method"], "initialize");
+                socket
+                    .send(Message::text(
+                        json!({"id":initialize["id"],"result":{}}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("initialized")
+                };
+                let initialized: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(initialized["method"], "initialized");
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("resume")
+                };
+                let resume: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(resume["method"], "thread/resume");
+                assert_eq!(
+                    resume["params"],
+                    json!({"threadId":"verified-thread","excludeTurns":true})
+                );
+                socket
+                    .send(Message::text(
+                        json!({"id":resume["id"],"result":{"thread":{
+                            "id":if matched {"verified-thread"}else{"wrong-thread"}
+                        }}})
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            });
+            let (mut socket, _) = tokio_tungstenite::client_async("ws://localhost/rpc", client)
+                .await
+                .unwrap();
+            assert_eq!(
+                verify_thread(&mut socket, "verified-thread").await.is_ok(),
+                matched
+            );
+            server.await.unwrap();
+        }
+    }
 }

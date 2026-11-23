@@ -5,6 +5,12 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 pub trait StorageAnalysisPort: Send + Sync {
+    fn live_children(&self, _query: &StorageLiveQuery) -> Result<StorageLivePage> {
+        Err(anyhow::anyhow!("storage_live_unavailable"))
+    }
+    fn prioritize(&self, _job_id: &str, _node_id: &str) -> Result<StoragePriorityResult> {
+        Err(anyhow::anyhow!("storage_live_unavailable"))
+    }
     fn list_volumes(&self) -> Result<Vec<StorageVolume>>;
     fn scan(
         &self,

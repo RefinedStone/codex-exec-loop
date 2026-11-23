@@ -23,6 +23,7 @@ mod recorder;
 mod resource_version;
 mod router;
 mod session;
+mod storage_context;
 #[cfg(test)]
 mod tests;
 

@@ -31,7 +31,7 @@ fn native_host_crash_child() {
         return;
     };
     let root = std::path::PathBuf::from(root);
-    let host = build(&root, ExtensionScope::LocalUser, None).unwrap();
+    let host = build(&root, ExtensionScope::LocalUser, None, None).unwrap();
     call(
         &host,
         "configure",
@@ -98,7 +98,7 @@ fn native_forced_host_exit_recovers_interrupted_work_without_rerunning() {
     };
     child.0.kill().unwrap();
     assert!(!child.0.wait().unwrap().success());
-    let restored = build(&root, ExtensionScope::LocalUser, None).unwrap();
+    let restored = build(&root, ExtensionScope::LocalUser, None, None).unwrap();
     assert_eq!(restored.host_id(), ready["host_id"].as_str().unwrap());
     assert_ne!(restored.generation(), ready["generation"].as_str().unwrap());
     assert!(restored.catalog()[0].enabled);

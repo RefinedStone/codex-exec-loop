@@ -23,10 +23,16 @@ impl Drop for AttachedExtension {
 
 impl KernelSession {
     pub(super) fn extension_context(&self, host: &dyn ExtensionHostPort) -> ExtensionContext {
-        host.context(
+        let mut context = host.context(
             self.connection_id.clone(),
             (host.scope() == HostScope::Repository).then(|| host.host_id().to_owned()),
-        )
+        );
+        if let Some(verified) = &self.request_conversation {
+            context.verified_thread = Some(verified.thread_id.clone());
+            context.conversation_generation =
+                Some((verified.epoch, verified.current_epoch.clone()));
+        }
+        context
     }
     pub(super) async fn extension(
         &mut self,

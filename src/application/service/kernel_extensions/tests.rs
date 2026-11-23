@@ -1,5 +1,6 @@
 mod admission;
 mod lifecycle;
+mod response_guard;
 use super::*;
 use registry::{ExtensionHandler, ExtensionRegistration};
 use std::sync::atomic::AtomicUsize;

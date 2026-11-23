@@ -7,6 +7,13 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// A short, non-I/O authority check held across the host's response commit.
+/// Implementations may retain their own permission-store lock. Acquiring the guard must not
+/// hold the host lock; validate must not perform I/O or reenter the host.
+pub(crate) trait ExtensionResponseGuard {
+    fn validate(&self) -> Result<()>;
+}
+
 pub(crate) trait ExtensionHandler: Send + Sync {
     fn operations(&self) -> &'static [&'static str];
     fn invoke(&self, _context: &ExtensionContext, _action: &str, _input: Value) -> Result<Value> {
@@ -14,6 +21,18 @@ pub(crate) trait ExtensionHandler: Send + Sync {
     }
     fn run(&self, _context: &ExtensionJobContext, _action: &str, _input: Value) -> Result<Value> {
         bail!("extension operation is not a background job")
+    }
+    /// Called after output-schema validation and before the host takes its state lock.
+    /// The lock order is the handler's authority store, then the host. The returned guard is
+    /// dropped after the host lock is released, on both success and rejection.
+    fn response_guard<'a>(
+        &'a self,
+        _context: &ExtensionContext,
+        _action: &str,
+        _input: &Value,
+        _output: &Value,
+    ) -> Result<Option<Box<dyn ExtensionResponseGuard + 'a>>> {
+        Ok(None)
     }
     fn dedupe_key(&self, _action: &str, _input: &Value) -> Result<Option<String>> {
         Ok(None)

@@ -74,12 +74,14 @@ struct KernelRequest {
     id: Value,
     method: String,
     text: String,
+    conversation: Option<super::storage_context::VerifiedConversation>,
 }
 
 /// 접속의 커널 요청 처리 작업이다. 요청을 받은 차례대로 처리하고 답을 접속의 보내기 함으로 보낸다.
 pub(super) struct KernelRequests {
     sender: mpsc::Sender<KernelRequest>,
     worker: tokio::task::JoinHandle<()>,
+    conversation: Arc<super::storage_context::StorageConversationContext>,
 }
 
 impl KernelRequests {
@@ -90,22 +92,39 @@ impl KernelRequests {
         delegations: Arc<Delegations>,
     ) -> Self {
         let (sender, requests) = mpsc::channel(KERNEL_REQUEST_QUEUE_CAPACITY);
+        let conversation = Arc::new(super::storage_context::StorageConversationContext::default());
         let session = KernelSession {
             kernels,
             outbox,
             attached: None,
             local_extension: None,
+            request_conversation: None,
             connection_id: random_id(16).unwrap_or_default(),
             confirmation: None,
             delegations,
         };
         let worker = tokio::spawn(serve_kernel_requests(session, requests, recording));
-        Self { sender, worker }
+        Self {
+            sender,
+            worker,
+            conversation,
+        }
     }
 
     /// 요청을 처리 차례에 넣는다. 기다리는 요청이 너무 많거나 작업이 끝났으면 바로 보낼 오류 응답을 돌려준다.
+    pub(super) fn conversation_context(
+        &self,
+    ) -> Arc<super::storage_context::StorageConversationContext> {
+        self.conversation.clone()
+    }
+
     pub(super) fn submit(&self, id: Value, method: String, text: String) -> Result<(), String> {
-        let request = KernelRequest { id, method, text };
+        let request = KernelRequest {
+            id,
+            method,
+            text,
+            conversation: self.conversation.current(),
+        };
         self.sender.try_send(request).map_err(|error| {
             let (request, reason) = match error {
                 TrySendError::Full(request) => (
@@ -135,6 +154,7 @@ async fn serve_kernel_requests(
     recording: Option<Arc<SessionRecording>>,
 ) {
     while let Some(request) = requests.recv().await {
+        session.request_conversation = request.conversation;
         let response = session
             .respond(request.id, &request.method, &request.text)
             .await;
@@ -157,6 +177,7 @@ struct KernelSession {
     outbox: mpsc::Sender<Message>,
     attached: Option<AttachedKernel>,
     local_extension: Option<extensions::AttachedExtension>,
+    request_conversation: Option<super::storage_context::VerifiedConversation>,
     connection_id: String,
     confirmation: Option<ConfirmationRegistration>,
     delegations: Arc<Delegations>,
@@ -1175,6 +1196,7 @@ mod tests {
                 delegations: Default::default(),
                 attached: Some(attached),
                 local_extension: None,
+                request_conversation: None,
             };
             let response = session
                 .command(json!({
@@ -1232,6 +1254,7 @@ mod tests {
             confirmation: None,
             delegations: Default::default(),
             local_extension: None,
+            request_conversation: None,
             attached: Some(AttachedKernel {
                 kernel: "test".into(),
                 extension_events: None,

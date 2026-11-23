@@ -3,6 +3,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub mod hotspots;
+mod live;
+pub use live::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -107,7 +109,7 @@ pub struct StorageNode {
     /// None means the allocation is not fully known. Zero is a known zero.
     pub allocated_bytes: Option<String>,
     pub known_allocated_bytes: String,
-    /// Logical bytes count observed directory entries; hardlink paths remain visible.
+    /// Aggregate logical bytes use the same unique-file owner as allocation; file queries retain every observed hardlink path.
     pub logical_bytes: String,
     pub ratio: StorageRatio,
     pub state: StorageState,
@@ -168,6 +170,7 @@ pub struct ScanRequest {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ScanProgress {
+    pub volume_id: String,
     pub snapshot_id: String,
     pub files_scanned: u64,
     pub directories_scanned: u64,

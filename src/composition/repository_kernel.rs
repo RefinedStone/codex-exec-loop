@@ -13,6 +13,8 @@
 //! `unload_idle_kernels` 가 같은 순서로 멈추고 잠금을 푼다. 마지막 접속이 transient 였으면 대기 없이 내린다. 그래야 같은 저장소의 TUI 가 시작할 수 있다. 다음 붙기가
 //! 커널을 다시 만든다. 남은 일은 `NativeClientRuntime::has_remaining_work` 가 정한다.
 
+mod storage;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
@@ -244,7 +246,7 @@ impl RepositoryKernelRegistry {
     }
 
     pub(crate) fn local_extensions(
-        &self,
+        self: &Arc<Self>,
     ) -> Result<Arc<dyn crate::application::port::inbound::extension_host_port::ExtensionHostPort>>
     {
         self.ensure_running()?;
@@ -255,7 +257,23 @@ impl RepositoryKernelRegistry {
         if let Some(host) = &*local {
             return Ok(host.clone());
         }
-        let host = crate::composition::kernel_extensions::build_local()?;
+        let registry = Arc::downgrade(self);
+        let roots_registry = registry.clone();
+        let probe = crate::adapter::outbound::storage_analysis::StorageRuntimeProbe {
+            observe: Arc::new(move |path: &std::path::Path| {
+                registry
+                    .upgrade()
+                    .map_or_else(Vec::new, |registry| registry.storage_runtime_evidence(path))
+            }),
+            known_roots: Arc::new(move |limit| {
+                roots_registry
+                    .upgrade()
+                    .map_or_else(Default::default, |registry| {
+                        registry.storage_known_roots(limit)
+                    })
+            }),
+        };
+        let host = crate::composition::kernel_extensions::build_local(Some(probe))?;
         *local = Some(host.clone());
         Ok(host)
     }
