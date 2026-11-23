@@ -18,7 +18,7 @@ fn running_lease(
     Ok(lease)
 }
 
-fn require_host_lease(
+pub(super) fn require_host_lease(
     transaction: &Transaction<'_>,
     task: &TaskDefinition,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -80,12 +80,19 @@ pub(super) fn claim(
     {
         return Err(TaskEvidenceError::Invalid.into());
     }
-    let fingerprint = digest(&(
+    if let Some(expected) = &commit.expected_lease {
+        validate_captured_lease(expected)?;
+        if expected.task_id != commit.task_id {
+            return Err(TaskEvidenceError::LeaseChanged.into());
+        }
+    }
+    let fingerprint = claim_fingerprint(
         &commit.task_id,
         &commit.criterion_id,
         &commit.scope_id,
         commit.expected_acceptance_revision,
-    ))?;
+        commit.expected_lease.as_ref(),
+    )?;
     let mut connection = connection(workspace)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     require_owner(&transaction, &commit.owner_token)?;
@@ -100,6 +107,10 @@ pub(super) fn claim(
         let run = read_run(&transaction, &id)?.ok_or(TaskEvidenceError::Unavailable)?;
         if run.claim_fingerprint != fingerprint {
             return Err(TaskEvidenceError::Conflict.into());
+        }
+        if let Some(expected) = &commit.expected_lease {
+            // Replay returns the original fact, never a replacement lease or execution key.
+            require_captured_lease(&run.stored.lease, expected)?;
         }
         transaction.commit()?;
         return Ok(TaskVerificationClaimResult {
@@ -118,6 +129,9 @@ pub(super) fn claim(
     let task = require_current_scope(&transaction, &scope, &commit.criterion_id)?;
     let recipe = current_recipe(&task, &commit.criterion_id)?;
     let lease = running_lease(&transaction, &task)?;
+    if let Some(expected) = &commit.expected_lease {
+        require_captured_lease(&lease, expected)?;
+    }
     let unfinished: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM task_verification_runs WHERE phase!='finished')",
         [],

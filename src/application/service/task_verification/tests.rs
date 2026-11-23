@@ -9,6 +9,8 @@ use crate::application::port::outbound::task_verification_repository_port::*;
 use crate::domain::planning::evidence::*;
 use crate::domain::planning::verification::*;
 
+mod automatic;
+mod cancellation;
 mod capture;
 mod fixtures;
 mod repository;
@@ -91,6 +93,11 @@ fn host_verification_request_replay_spawns_once_and_busy_workspace_rejects_anoth
     );
     assert_eq!(f.spawn_calls.load(Ordering::SeqCst), 1);
     assert_eq!(f.jobs.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.wakes.load(Ordering::SeqCst),
+        1,
+        "reservation wakes the Native poll loop"
+    );
     assert_eq!(f.runner.prepares.load(Ordering::SeqCst), 0);
 }
 
@@ -204,7 +211,11 @@ fn host_verification_drop_cancels_a_reserved_worker_before_any_git_preparation()
         f.repository.finish_calls.lock().unwrap().is_empty(),
         "a dropped owner cannot persist a completion"
     );
-    assert_eq!(f.wakes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        f.wakes.load(Ordering::SeqCst),
+        2,
+        "reservation and completion each wake the host"
+    );
 }
 
 #[test]

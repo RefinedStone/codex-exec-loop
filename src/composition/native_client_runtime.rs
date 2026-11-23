@@ -39,7 +39,9 @@ use crate::application::service::post_turn_evaluation::PostTurnEvaluationService
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::application::service::task_evidence::TaskEvidenceService;
-use crate::application::service::task_verification::TaskVerificationService;
+use crate::application::service::task_verification::{
+    TaskVerificationHandle, TaskVerificationService,
+};
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::composition::issue_observer::{
@@ -630,6 +632,11 @@ impl NativeCoreRuntime {
 /// 저장소 잠금을 푼다. 그렇지 않으면 같은 저장소의 다음 커널과 이전 작업 스레드가 같은 큐를 배분할 수 있다 (K3-5).
 impl Drop for NativeClientRuntime {
     fn drop(&mut self) {
+        // A post-turn worker may still hold a strong service reference. Close
+        // execution authority before observers, parallel work, and the OS lock end.
+        if let Some(service) = self.task_verification.as_ref() {
+            service.shutdown();
+        }
         // 다른 필드를 버리거나 기록을 flush하기 전에 관찰 commit 경계를 닫는다.
         if let Some(mut observer) = self.issue_observer.take() {
             let committed = observer.cancel_and_take_committed();
@@ -1817,10 +1824,21 @@ impl NativeClientRuntime {
     pub(super) fn attach_task_verification(
         &mut self,
         service: Arc<TaskVerificationService>,
+        handle: &TaskVerificationHandle,
     ) -> anyhow::Result<()> {
-        service.initialize_live_owner(
-            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        )?;
+        anyhow::ensure!(
+            self.task_verification.is_none(),
+            "host verification is already attached to this runtime"
+        );
+        let attached = service
+            .initialize_live_owner(
+                &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            )
+            .and_then(|()| handle.attach(&service));
+        if let Err(error) = attached {
+            service.shutdown();
+            return Err(error);
+        }
         self.task_verification = Some(service);
         self.drain_task_evidence_outbox(Instant::now());
         Ok(())

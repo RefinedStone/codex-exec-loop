@@ -214,7 +214,10 @@ function Invoke-WindowsPortableChecks {
             "parallel_mode::tests::pool::lease::task_evidence::",
             "trusted_executable::fingerprint::tests::",
             "adapter::outbound::git::task_verification::tests::",
-            "parallel_mode::tests::pool::lease::task_verification::"
+            "parallel_mode::tests::pool::lease::task_verification::",
+            "application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::",
+            "application::service::post_turn_evaluation::tests::automatic_verification::",
+            "application::service::parallel_mode::tests::automatic_verification::"
         )
     }
     foreach ($testFilter in $testFilters) {

@@ -466,7 +466,7 @@ fn resume_task_after_ack(
     Ok(())
 }
 
-fn write_detail(
+pub(super) fn write_detail(
     connection: &Connection,
     detail: &ParallelModeAgentSessionDetailSnapshot,
 ) -> Result<()> {
@@ -474,6 +474,24 @@ fn write_detail(
         VALUES(?1,?2,?3,?4) ON CONFLICT(session_key) DO UPDATE SET updated_at=excluded.updated_at,content=excluded.content",
         params![detail.session_key,detail.slot_id,detail.updated_at,serde_json::to_string(detail)?])?;
     Ok(())
+}
+
+pub(super) fn mark_awaiting_user_detail(
+    detail: &mut ParallelModeAgentSessionDetailSnapshot,
+    at: &str,
+) {
+    detail.state_label = "awaiting_user".into();
+    detail.completion_state_label = "awaiting_user".into();
+    detail.latest_summary =
+        "사용자 답변을 기다리며 기존 작업 디렉터리와 스레드를 보존합니다.".into();
+    detail.updated_at = at.to_owned();
+    detail
+        .history
+        .push(ParallelModeAgentSessionHistoryEntry::new(
+            "awaiting_user",
+            &detail.updated_at,
+            &detail.latest_summary,
+        ));
 }
 
 pub(super) fn preserve_waiting(
@@ -516,18 +534,7 @@ pub(super) fn preserve_waiting(
         bail!("waiting worker detail identity changed");
     }
     if detail.completion_state_label != "awaiting_user" {
-        detail.state_label = "awaiting_user".into();
-        detail.completion_state_label = "awaiting_user".into();
-        detail.latest_summary =
-            "사용자 답변을 기다리며 기존 작업 디렉터리와 스레드를 보존합니다.".into();
-        detail.updated_at = Utc::now().to_rfc3339();
-        detail
-            .history
-            .push(ParallelModeAgentSessionHistoryEntry::new(
-                "awaiting_user",
-                &detail.updated_at,
-                &detail.latest_summary,
-            ));
+        mark_awaiting_user_detail(&mut detail, &Utc::now().to_rfc3339());
         write_detail(&tx, &detail)?;
     }
     tx.commit()?;

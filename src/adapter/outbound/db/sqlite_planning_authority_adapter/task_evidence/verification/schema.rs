@@ -21,6 +21,7 @@ const RUNS: &str = "CREATE TABLE task_verification_runs (
     finish_fingerprint TEXT,
     receipt_json TEXT,
     finished_revision INTEGER,
+    failure_limit_application_json TEXT CHECK (failure_limit_application_json IS NULL OR phase='finished'),
     CHECK ((phase='pending' AND manifest_json IS NULL AND receipt_json IS NULL)
         OR (phase='running' AND manifest_json IS NOT NULL AND receipt_json IS NULL)
         OR (phase='finished' AND receipt_json IS NOT NULL)),
@@ -39,8 +40,16 @@ const OBJECTS: [(&str, &str); 4] = [
     ("task_verification_latest", LATEST),
 ];
 
-fn validate(connection: &Connection) -> Result<()> {
+fn legacy_runs() -> String {
+    RUNS.replace(
+        "    failure_limit_application_json TEXT CHECK (failure_limit_application_json IS NULL OR phase='finished'),\n",
+        "",
+    )
+}
+
+fn validate(connection: &Connection, allow_legacy: bool) -> Result<bool> {
     let normalized = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut legacy = false;
     for (name, expected) in OBJECTS {
         let sql: Option<String> = connection
             .query_row(
@@ -49,8 +58,16 @@ fn validate(connection: &Connection) -> Result<()> {
                 |row| row.get(0),
             )
             .optional()?;
-        if sql.as_deref().map(normalized) != Some(normalized(expected)) {
-            return Err(TaskEvidenceError::Unavailable.into());
+        let actual = sql.as_deref().map(normalized);
+        if actual != Some(normalized(expected)) {
+            if allow_legacy
+                && name == "task_verification_runs"
+                && actual == Some(normalized(&legacy_runs()))
+            {
+                legacy = true;
+            } else {
+                return Err(TaskEvidenceError::Unavailable.into());
+            }
         }
     }
     let count: i64 =
@@ -60,7 +77,7 @@ fn validate(connection: &Connection) -> Result<()> {
     if count != 1 {
         return Err(TaskEvidenceError::Unavailable.into());
     }
-    Ok(())
+    Ok(legacy)
 }
 
 pub(super) fn ensure(connection: &mut Connection) -> Result<()> {
@@ -68,8 +85,8 @@ pub(super) fn ensure(connection: &mut Connection) -> Result<()> {
         "SELECT count(*) FROM sqlite_master WHERE name IN ('task_verification_state','task_verification_runs','task_verification_one_unfinished','task_verification_latest')",
         [],|row| row.get(0),
     )?;
-    if count != 0 {
-        return validate(connection);
+    if count != 0 && !validate(connection, true)? {
+        return Ok(());
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if !table_exists(&transaction, "task_verification_state")? {
@@ -77,8 +94,15 @@ pub(super) fn ensure(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch(sql)?;
         }
         transaction.execute("INSERT INTO task_verification_state VALUES(1,NULL)", [])?;
+    } else if validate(&transaction, true)? {
+        // The immutable receipt and all existing ordinals/quota facts stay untouched. A single
+        // private decision marker prevents an old automatic request from pausing a resumed task.
+        transaction.execute_batch(
+            "ALTER TABLE task_verification_runs ADD COLUMN failure_limit_application_json TEXT
+             CHECK (failure_limit_application_json IS NULL OR phase='finished')",
+        )?;
     }
-    validate(&transaction)?;
+    validate(&transaction, false)?;
     transaction.commit()?;
     Ok(())
 }
