@@ -315,12 +315,12 @@ fn query_finished(value: &Value) -> Result<bool> {
 }
 
 #[cfg(unix)]
-async fn connect(endpoint: &str) -> std::io::Result<tokio::net::UnixStream> {
+pub(crate) async fn connect(endpoint: &str) -> std::io::Result<tokio::net::UnixStream> {
     tokio::net::UnixStream::connect(endpoint).await
 }
 
 #[cfg(windows)]
-async fn connect(
+pub(crate) async fn connect(
     endpoint: &str,
 ) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
     tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint)

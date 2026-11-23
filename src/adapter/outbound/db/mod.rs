@@ -12,3 +12,4 @@ pub use self::sqlite_planning_authority_adapter::{
 };
 
 pub use self::sqlite_issue_automation_store::SqliteIssueAutomationStoreAdapter;
+pub(crate) mod extension_state_store;

@@ -94,7 +94,11 @@ impl RepositoryKernelEntry {
     /// 커널이 있으면 멈추고 잠금을 푼다. 버리는 쪽이 호스트 스레드가 끝날 때까지 기다린다. 자리 잠금을 쥔 채
     /// 버리므로, 같은 저장소의 다음 붙기는 이전 커널이 잠금을 푼 뒤에 커널을 만든다.
     fn stop_kernel(&self) {
-        *self.lock() = None;
+        let mut slot = self.lock();
+        if let Some(kernel) = slot.as_ref() {
+            kernel.extensions.shutdown();
+        }
+        *slot = None;
     }
 
     /// 오래 한가한 커널을 내린다. 커널을 만들거나 붙는 중인 자리는 건너뛴다.
@@ -121,6 +125,8 @@ pub(crate) struct RepositoryKernelRegistry {
     // 목록 잠금은 자리를 찾거나 넣을 때만 잡는다.
     repositories: Mutex<BTreeMap<String, Arc<RepositoryKernelEntry>>>,
     stopped: AtomicBool,
+    local_extensions:
+        Mutex<Option<Arc<crate::application::service::kernel_extensions::ExtensionService>>>,
     /// 커널이 붙을 app-server 이다. 없으면 커널마다 자기 app-server 를 띄운다 (시험).
     app_server: Option<GatewayUpstreamSocket>,
     idle_notification: Mutex<Option<std::task::Waker>>,
@@ -214,6 +220,14 @@ impl RepositoryKernelRegistry {
     /// 잠금을 푼다. 그 뒤의 붙기는 거절한다. 접속이 목록이나 클라이언트 핸들을 아직 쥐고 있어도 커널은 멈춘다.
     pub(crate) fn shutdown(&self) {
         self.stopped.store(true, Ordering::SeqCst);
+        if let Some(host) = self
+            .local_extensions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
+            host.shutdown();
+        }
         for entry in self.entries() {
             entry.stop_kernel();
         }
@@ -227,6 +241,22 @@ impl RepositoryKernelRegistry {
             .filter(|(_, entry)| entry.unload_if_idle(now))
             .map(|(repository_key, _)| repository_key)
             .collect()
+    }
+
+    pub(crate) fn local_extensions(
+        &self,
+    ) -> Result<Arc<crate::application::service::kernel_extensions::ExtensionService>> {
+        self.ensure_running()?;
+        let mut local = self
+            .local_extensions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(host) = &*local {
+            return Ok(host.clone());
+        }
+        let host = crate::composition::kernel_extensions::build_local()?;
+        *local = Some(host.clone());
+        Ok(host)
     }
 
     pub(crate) fn extensions(

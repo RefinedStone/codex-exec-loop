@@ -73,3 +73,4 @@ pub(crate) mod work_context;
 pub(crate) mod issue_markdown;
 
 pub mod issue_creation;
+pub(crate) mod kernel_extension;

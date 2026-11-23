@@ -250,15 +250,35 @@
       }
     },
     {
+      "name": "akra/kernel/extensions/attach",
+      "kind": "request",
+      "summary": "Attach to the local OS user extension host without changing the repository attachment.",
+      "params": {
+        "$ref": "#/$defs/ExtensionAttachRequest"
+      },
+      "result": {
+        "$ref": "#/$defs/ExtensionAttachResponse"
+      }
+    },
+    {
+      "name": "akra/kernel/extensions/detach",
+      "kind": "request",
+      "summary": "Detach from the local extension host without cancelling its jobs.",
+      "params": {
+        "$ref": "#/$defs/ExtensionScope2"
+      },
+      "result": true
+    },
+    {
       "name": "akra/kernel/extensions/list",
       "kind": "request",
-      "summary": "List the installed repository extensions and their active state on this attachment.",
+      "summary": "List statically registered extensions, standalone schemas and host-owned activation state.",
       "params": {
-        "$ref": "#/$defs/ExtensionScope"
+        "$ref": "#/$defs/ExtensionScope2"
       },
       "result": {
         "items": {
-          "$ref": "#/$defs/ExtensionManifest"
+          "$ref": "#/$defs/ExtensionCatalogItem"
         },
         "type": "array"
       }
@@ -266,7 +286,7 @@
     {
       "name": "akra/kernel/extensions/call",
       "kind": "request",
-      "summary": "Call a versioned repository extension action in the attached kernel.",
+      "summary": "Call a versioned extension action in an attached repository or local user host.",
       "params": {
         "$ref": "#/$defs/ExtensionCall"
       },
@@ -6154,6 +6174,41 @@
       ],
       "type": "string"
     },
+    "ExtensionAttachRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "client_name": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ExtensionScope"
+        }
+      },
+      "required": [
+        "scope",
+        "client_name"
+      ],
+      "type": "object"
+    },
+    "ExtensionAttachResponse": {
+      "properties": {
+        "generation": {
+          "type": "string"
+        },
+        "kernel": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ExtensionScope"
+        }
+      },
+      "required": [
+        "kernel",
+        "scope",
+        "generation"
+      ],
+      "type": "object"
+    },
     "ExtensionCall": {
       "additionalProperties": false,
       "properties": {
@@ -6162,6 +6217,13 @@
         },
         "extension": {
           "type": "string"
+        },
+        "idempotency_key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "input": true,
         "kernel": {
@@ -6182,13 +6244,164 @@
       ],
       "type": "object"
     },
+    "ExtensionCatalogEntry": {
+      "properties": {
+        "actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "api_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compatibility_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compatible": {
+          "type": "boolean"
+        },
+        "desired_enabled": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ExtensionLifecycle"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/ExtensionOperation"
+          },
+          "type": "array"
+        },
+        "panel": {
+          "type": "string"
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "registration_errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ExtensionScope"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "api_version",
+        "scope",
+        "label",
+        "panel",
+        "permissions",
+        "actions",
+        "operations",
+        "compatible",
+        "enabled",
+        "desired_enabled",
+        "lifecycle",
+        "revision",
+        "generation",
+        "sequence",
+        "registration_errors"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogItem": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtensionCatalogEntry"
+        },
+        {
+          "$ref": "#/$defs/ExtensionManifest"
+        }
+      ]
+    },
     "ExtensionChanged": {
       "properties": {
         "extension": {
           "type": "string"
         },
+        "generation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kernel": {
           "type": "string"
+        },
+        "resync": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -6196,6 +6409,15 @@
         "extension"
       ],
       "type": "object"
+    },
+    "ExtensionLifecycle": {
+      "enum": [
+        "disabled",
+        "enabled",
+        "disabling",
+        "error"
+      ],
+      "type": "string"
     },
     "ExtensionManifest": {
       "properties": {
@@ -6244,7 +6466,43 @@
       ],
       "type": "object"
     },
+    "ExtensionOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "input_schema": true,
+        "kind": {
+          "$ref": "#/$defs/ExtensionOperationKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "output_schema": true,
+        "progress_schema": true
+      },
+      "required": [
+        "name",
+        "kind",
+        "input_schema",
+        "output_schema"
+      ],
+      "type": "object"
+    },
+    "ExtensionOperationKind": {
+      "enum": [
+        "query",
+        "command",
+        "job"
+      ],
+      "type": "string"
+    },
     "ExtensionScope": {
+      "enum": [
+        "repository",
+        "local_user"
+      ],
+      "type": "string"
+    },
+    "ExtensionScope2": {
       "additionalProperties": false,
       "properties": {
         "kernel": {

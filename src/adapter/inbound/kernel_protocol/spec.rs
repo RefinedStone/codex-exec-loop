@@ -190,11 +190,17 @@ pub fn describe() -> KernelSpec {
                     Some(schemas.reference::<ConfirmedCommandRequest>()),
                     Some(command_output.clone()),
                 ),
+                KernelMethodKind::ExtensionAttach => (
+                    Some(schemas.reference::<super::extensions::ExtensionAttachRequest>()),
+                    Some(schemas.reference::<super::extensions::ExtensionAttachResponse>()),
+                ),
+                KernelMethodKind::ExtensionDetach => (
+                    Some(schemas.reference::<super::extensions::ExtensionScope>()),
+                    Some(schemas.reference::<Value>()),
+                ),
                 KernelMethodKind::ExtensionList => (
                     Some(schemas.reference::<super::extensions::ExtensionScope>()),
-                    Some(schemas.reference::<Vec<
-                        crate::domain::repository_extension::ExtensionManifest,
-                    >>()),
+                    Some(schemas.reference::<Vec<super::extensions::ExtensionCatalogItem>>()),
                 ),
                 KernelMethodKind::ExtensionCall => (
                     Some(schemas.reference::<super::extensions::ExtensionCall>()),

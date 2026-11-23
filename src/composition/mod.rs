@@ -16,6 +16,7 @@ pub(crate) mod issue_observer;
 pub(crate) mod issue_work_execution;
 pub(crate) mod kernel_command_execution;
 pub(crate) mod kernel_event_recorder;
+pub(crate) mod kernel_extensions;
 pub(crate) mod kernel_host;
 pub(crate) mod kernel_routed_planning_admin;
 pub(crate) mod native_client_runtime;
