@@ -27,6 +27,7 @@ pub(crate) mod runtime_contracts;
 pub(crate) mod task_id;
 pub(crate) mod task_references;
 mod validation;
+pub mod verification;
 pub(crate) mod workspace_contract;
 
 pub use acceptance::{

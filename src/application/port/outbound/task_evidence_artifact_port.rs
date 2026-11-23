@@ -35,4 +35,24 @@ pub trait TaskEvidenceArtifactPort: Send + Sync {
         attempt: &TaskEvidenceAttempt,
         artifact: &TaskEvidenceArtifact,
     ) -> Result<()>;
+
+    /// Seal host-generated capture only, in a separate verification namespace.
+    /// The caller has already reserved this host attempt's artifact quota.
+    fn seal_host_capture(
+        &self,
+        _workspace: &str,
+        _attempt_id: &str,
+        _bytes: &[u8],
+    ) -> Result<TaskEvidenceArtifact> {
+        anyhow::bail!("host verification artifact capture is unavailable")
+    }
+
+    fn verify_host_capture(
+        &self,
+        _workspace: &str,
+        _attempt_id: &str,
+        _artifact: &TaskEvidenceArtifact,
+    ) -> Result<()> {
+        anyhow::bail!("host verification artifact verification is unavailable")
+    }
 }

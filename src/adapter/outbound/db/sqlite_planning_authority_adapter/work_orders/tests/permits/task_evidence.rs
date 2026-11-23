@@ -38,6 +38,7 @@ fn task_evidence_work_control_changes_close_new_records_in_the_same_planning_tra
             scenario: "The verification result is observable".into(),
             channel: TaskAcceptanceChannel::Command,
             essential: true,
+            verification_recipe: None,
         }];
         task.acceptance_revision = 1;
         adapter

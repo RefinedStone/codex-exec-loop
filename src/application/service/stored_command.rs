@@ -16,6 +16,7 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskUpdateInput,
 };
 use crate::application::service::task_evidence::TaskEvidenceService;
+use crate::application::service::task_verification::TaskVerificationService;
 use crate::domain::kernel_spec::ReasonCode;
 use crate::domain::planning::PlanningMutationRefusal;
 
@@ -29,6 +30,7 @@ pub struct StoredCommandService {
     decisions: Option<Arc<IssueDecisionService>>,
     interventions: Option<Arc<dyn IssueInterventionPort>>,
     task_evidence: Option<Arc<TaskEvidenceService>>,
+    task_verification: Option<Arc<TaskVerificationService>>,
 }
 
 impl StoredCommandService {
@@ -39,6 +41,7 @@ impl StoredCommandService {
             decisions: None,
             interventions: None,
             task_evidence: None,
+            task_verification: None,
         }
     }
 
@@ -57,6 +60,11 @@ impl StoredCommandService {
         self
     }
 
+    pub fn with_task_verification(mut self, verification: Arc<TaskVerificationService>) -> Self {
+        self.task_verification = Some(verification);
+        self
+    }
+
     pub fn with_issue_interventions(
         mut self,
         interventions: Arc<dyn IssueInterventionPort>,
@@ -71,6 +79,19 @@ impl StoredCommandService {
         context: Option<&StoredCommandContext>,
     ) -> Result<StoredCommandResult> {
         match command {
+            StoredCommand::RequestTaskVerification { request } => {
+                let context = context
+                    .ok_or_else(|| anyhow::anyhow!("host verification requires server context"))?;
+                let result = self
+                    .task_verification
+                    .as_ref()
+                    .ok_or(crate::domain::planning::evidence::TaskEvidenceError::Unavailable)?
+                    .request_verification(request, context)?;
+                Ok(StoredCommandResult::TaskVerificationRequested {
+                    attempt_id: result.stored.attempt.attempt_id,
+                    changed: result.changed,
+                })
+            }
             StoredCommand::PrepareEvidence { request } => {
                 let context = context
                     .ok_or_else(|| anyhow::anyhow!("task evidence requires server context"))?;
@@ -360,6 +381,7 @@ mod tests {
                 scenario: "The expected result is observable.".into(),
                 channel: TaskAcceptanceChannel::Command,
                 essential: true,
+                verification_recipe: None,
             }]),
         ] {
             let fields = StoredTaskFields {

@@ -168,6 +168,9 @@ pub enum TaskEvidenceEvent {
     Waived {
         receipt: Box<TaskCriterionWaiverReceipt>,
     },
+    VerificationFinished {
+        receipt: Box<super::verification::TaskVerificationReceipt>,
+    },
 }
 
 impl TaskEvidenceEvent {
@@ -175,6 +178,7 @@ impl TaskEvidenceEvent {
         match self {
             Self::Recorded { receipt } => &receipt.event_id,
             Self::Waived { receipt } => &receipt.event_id,
+            Self::VerificationFinished { receipt } => &receipt.event_id,
         }
     }
 
@@ -182,6 +186,7 @@ impl TaskEvidenceEvent {
         match self {
             Self::Recorded { receipt } => receipt.evidence_revision,
             Self::Waived { receipt } => receipt.evidence_revision,
+            Self::VerificationFinished { receipt } => receipt.evidence_revision,
         }
     }
 
@@ -189,6 +194,7 @@ impl TaskEvidenceEvent {
         match self {
             Self::Recorded { receipt } => receipt.validate(),
             Self::Waived { receipt } => receipt.validate(),
+            Self::VerificationFinished { receipt } => receipt.validate(),
         }
     }
 }

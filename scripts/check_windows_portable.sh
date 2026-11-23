@@ -30,6 +30,19 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'parallel_worker_commit::tree_snapshot::tests::' \
   'parallel_mode::tests::pool::lease::task_evidence::' \
   'worker_evidence::' \
+  'domain::planning::verification::' \
+  'domain::kernel_event::task_verification::' \
+  'adapter::inbound::kernel_protocol::task_verification::' \
+  'kernel_events::tests::task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload' \
+  'task_evidence_outbox::tests::host_verification_' \
+  'application::service::task_verification::tests::' \
+  'application::service::task_evidence::tests::verification::' \
+  'composition::native_client_runtime::task_verification_tests::' \
+  'composition::kernel_command_execution::tests::task_verification::' \
+  'trusted_executable::fingerprint::tests::' \
+  'subprocess::controlled::tests::' \
+  'adapter::outbound::git::task_verification::tests::' \
+  'parallel_mode::tests::pool::lease::task_verification::' \
   'trace_event_log::tests::exact_trace_file_rejects_windows_' \
   'trace_event_log::tests::windows_trace_file_and_rolling_directory_receive_private_owner_acl' \
   'actual_windows_environment_filter_accepts_mixed_case_allowlisted_keys' \

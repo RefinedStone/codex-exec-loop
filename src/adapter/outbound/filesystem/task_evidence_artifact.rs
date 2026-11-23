@@ -15,7 +15,7 @@ use crate::domain::planning::evidence::{
 };
 use crate::private_sqlite::PinnedPrivateDirectory;
 
-mod files;
+pub(crate) mod files;
 #[cfg(test)]
 mod tests;
 
@@ -174,9 +174,71 @@ impl TaskEvidenceArtifactPort for FilesystemTaskEvidenceArtifactAdapter {
                 }
             })
     }
+
+    fn seal_host_capture(
+        &self,
+        workspace: &str,
+        attempt_id: &str,
+        bytes: &[u8],
+    ) -> Result<TaskEvidenceArtifact> {
+        validate_host_id(attempt_id)?;
+        let artifact = artifact_for_bytes(bytes)?;
+        // Resolve once, before retaining any pins. Never touch a worker incoming file.
+        let directory = self
+            .evidence_root(workspace, true)?
+            .child("sealed", true)?
+            .child("verification", true)?
+            .child(attempt_id, true)?;
+        match files::StableFile::open(&directory, ARTIFACT_FILE) {
+            Ok(mut existing) => {
+                let previous =
+                    existing.read_bounded(&directory, MAX_TASK_EVIDENCE_ARTIFACT_BYTES)?;
+                if artifact_for_bytes(&previous)? != artifact {
+                    bail!("host capture retry differs from the immutable artifact");
+                }
+                return Ok(artifact);
+            }
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => return Err(error),
+        }
+        let mut temporary = files::TemporaryFile::create(&directory, "capture")?;
+        temporary.write_all(bytes)?;
+        temporary.publish_noreplace(ARTIFACT_FILE)?;
+        verify_artifact(&directory, &artifact)?;
+        Ok(artifact)
+    }
+
+    fn verify_host_capture(
+        &self,
+        workspace: &str,
+        attempt_id: &str,
+        artifact: &TaskEvidenceArtifact,
+    ) -> Result<()> {
+        validate_host_id(attempt_id)?;
+        artifact.validate()?;
+        let result = self
+            .evidence_root(workspace, false)
+            .and_then(|root| root.child("sealed", false))
+            .and_then(|root| root.child("verification", false))
+            .and_then(|root| root.child(attempt_id, false))
+            .and_then(|directory| verify_artifact(&directory, artifact));
+        result.map_err(|error| {
+            if is_not_found(&error) {
+                TaskEvidenceError::ArtifactMissing.into()
+            } else {
+                error
+            }
+        })
+    }
 }
 
 fn artifact_for_bytes(bytes: &[u8]) -> Result<TaskEvidenceArtifact> {
+    if bytes.is_empty() {
+        return Err(TaskEvidenceError::ArtifactMissing.into());
+    }
+    if bytes.len() as u64 > MAX_TASK_EVIDENCE_ARTIFACT_BYTES {
+        return Err(TaskEvidenceError::Limit.into());
+    }
     let artifact = TaskEvidenceArtifact {
         sha256: format!("{:x}", Sha256::digest(bytes)),
         size_bytes: u64::try_from(bytes.len()).map_err(|_| anyhow!("artifact size overflow"))?,

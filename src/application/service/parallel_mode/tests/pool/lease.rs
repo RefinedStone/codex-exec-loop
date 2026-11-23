@@ -8,6 +8,7 @@ use crate::application::service::parallel_mode::{
 use chrono::DateTime;
 
 mod task_evidence;
+mod task_verification;
 mod worker_evidence;
 
 fn leave_stale_integrated_tracking_ref_and_break_fetch(

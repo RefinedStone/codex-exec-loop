@@ -1739,6 +1739,7 @@ mod tests {
                         scenario: "The original task stays available after promotion.".to_string(),
                         channel: TaskAcceptanceChannel::Data,
                         essential: true,
+                        verification_recipe: None,
                     }],
                     acceptance_revision: 7,
                     created_by: TaskActor::User,

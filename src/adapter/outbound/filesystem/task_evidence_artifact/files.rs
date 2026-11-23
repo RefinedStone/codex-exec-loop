@@ -5,14 +5,14 @@ use anyhow::{Context, Result, bail};
 
 use crate::private_sqlite::PinnedPrivateDirectory;
 
-pub(super) struct StableFile {
+pub(crate) struct StableFile {
     file: File,
     name: String,
     identity: platform::Identity,
 }
 
 impl StableFile {
-    pub(super) fn open(directory: &PinnedPrivateDirectory, name: &str) -> Result<Self> {
+    pub(crate) fn open(directory: &PinnedPrivateDirectory, name: &str) -> Result<Self> {
         directory.file_path(name)?;
         directory.verify()?;
         let file = platform::open_file(directory, name, false)?;
@@ -25,7 +25,7 @@ impl StableFile {
         })
     }
 
-    pub(super) fn verify(&self, directory: &PinnedPrivateDirectory) -> Result<()> {
+    pub(crate) fn verify(&self, directory: &PinnedPrivateDirectory) -> Result<()> {
         verify_file(directory, &self.name, &self.file)?;
         if platform::identity(&self.file)? != self.identity {
             bail!("task evidence artifact identity changed while being read");
@@ -33,7 +33,7 @@ impl StableFile {
         Ok(())
     }
 
-    pub(super) fn read_bounded(
+    pub(crate) fn read_bounded(
         &mut self,
         directory: &PinnedPrivateDirectory,
         max_bytes: u64,
@@ -56,7 +56,7 @@ impl StableFile {
     }
 }
 
-pub(super) fn create_empty_if_missing(
+pub(crate) fn create_empty_if_missing(
     directory: &PinnedPrivateDirectory,
     name: &str,
 ) -> Result<()> {
@@ -76,7 +76,7 @@ pub(super) fn create_empty_if_missing(
     directory.verify()
 }
 
-pub(super) struct TemporaryFile<'a> {
+pub(crate) struct TemporaryFile<'a> {
     directory: &'a PinnedPrivateDirectory,
     name: String,
     file: File,
@@ -84,7 +84,7 @@ pub(super) struct TemporaryFile<'a> {
 }
 
 impl<'a> TemporaryFile<'a> {
-    pub(super) fn create(directory: &'a PinnedPrivateDirectory, name: &str) -> Result<Self> {
+    pub(crate) fn create(directory: &'a PinnedPrivateDirectory, name: &str) -> Result<Self> {
         directory.file_path(name)?;
         directory.verify()?;
         let file = match platform::open_file(directory, name, true) {
@@ -109,14 +109,14 @@ impl<'a> TemporaryFile<'a> {
         })
     }
 
-    pub(super) fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+    pub(crate) fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         self.directory.verify()?;
         self.file.write_all(bytes)?;
         self.file.sync_all()?;
         verify_file(self.directory, &self.name, &self.file)
     }
 
-    pub(super) fn publish_noreplace(&mut self, destination: &str) -> Result<()> {
+    pub(crate) fn publish_noreplace(&mut self, destination: &str) -> Result<()> {
         self.directory.file_path(destination)?;
         verify_file(self.directory, &self.name, &self.file)?;
         match platform::publish_noreplace(self.directory, &self.name, destination) {

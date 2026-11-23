@@ -81,12 +81,18 @@ impl KernelEvent {
                 evidence_revision: receipt.evidence_revision,
                 waiver: (&receipt.waiver).into(),
             },
+            TaskEvidenceEvent::VerificationFinished { receipt } => Self::TaskVerificationFinished {
+                event_id: receipt.event_id.clone(),
+                evidence_revision: receipt.evidence_revision,
+                verification: Box::new(receipt.as_ref().into()),
+            },
         }
     }
 
     pub fn task_evidence_event_id(&self) -> Option<&str> {
         match self {
             Self::CriterionEvidenceRecorded { event_id, .. }
+            | Self::TaskVerificationFinished { event_id, .. }
             | Self::CriterionWaived { event_id, .. } => Some(event_id),
             _ => None,
         }

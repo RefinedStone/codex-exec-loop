@@ -553,7 +553,20 @@ jobs:
             'sqlite_planning_authority_adapter::tests::task_evidence::' \
             'parallel_worker_commit::tree_snapshot::tests::' \
             'parallel_mode::tests::pool::lease::task_evidence::' \
-            'worker_evidence::'
+            'worker_evidence::' \
+            'domain::planning::verification::' \
+            'domain::kernel_event::task_verification::' \
+            'adapter::inbound::kernel_protocol::task_verification::' \
+            'kernel_events::tests::task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload' \
+            'task_evidence_outbox::tests::host_verification_' \
+            'application::service::task_verification::tests::' \
+            'application::service::task_evidence::tests::verification::' \
+            'composition::native_client_runtime::task_verification_tests::' \
+            'composition::kernel_command_execution::tests::task_verification::' \
+            'trusted_executable::fingerprint::tests::' \
+            'subprocess::controlled::tests::' \
+            'adapter::outbound::git::task_verification::tests::' \
+            'parallel_mode::tests::pool::lease::task_verification::'
 
       - name: Test the built macOS confirmation process
         if: matrix.target != 'x86_64-pc-windows-msvc'

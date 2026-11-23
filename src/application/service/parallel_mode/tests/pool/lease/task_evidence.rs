@@ -29,6 +29,15 @@ pub(super) fn seed_accepted_task(
     adapter: &SqlitePlanningAuthorityAdapter,
     task_id: &str,
 ) {
+    seed_accepted_task_with_recipe(workspace, adapter, task_id, None);
+}
+
+pub(super) fn seed_accepted_task_with_recipe(
+    workspace: &str,
+    adapter: &SqlitePlanningAuthorityAdapter,
+    task_id: &str,
+    recipe: Option<crate::domain::planning::verification::TaskVerificationRecipe>,
+) {
     let directions = DirectionCatalogDocument {
         version: 1,
         queue_idle: QueueIdleConfig::default(),
@@ -63,6 +72,7 @@ pub(super) fn seed_accepted_task(
             scenario: "The fixture result is recorded for this code tree".into(),
             channel: TaskAcceptanceChannel::Command,
             essential: true,
+            verification_recipe: recipe,
         }],
         acceptance_revision: 1,
         status: TaskStatus::Ready,

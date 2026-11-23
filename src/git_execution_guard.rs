@@ -11,7 +11,7 @@ const MAX_GIT_CONFIG_STDERR_BYTES: usize = 64 * 1024;
 const MAX_REPORTED_EXECUTION_KEYS: usize = 64;
 const MAX_GIT_CONFIG_KEY_BYTES: usize = 4 * 1024;
 const MAX_REPORTED_CONFIG_KEY_BYTES: usize = 256;
-const EXECUTABLE_CONFIG_SECTION_REGEX: &str =
+pub(crate) const EXECUTABLE_CONFIG_SECTION_REGEX: &str =
     "^(filter\\.|merge\\.|diff\\.|interactive\\.|core\\.|tar\\.|mergetool\\.|difftool\\.)";
 
 pub(crate) fn ensure_git_command_execution_config_safe(
@@ -277,8 +277,20 @@ fn ensure_host_git_execution_config_safe_with_policy(
         );
     }
 
+    validate_execution_config_keys_with_policy(&output.stdout, allow_verified_core_worktree)
+}
+
+/// Reuse the same policy when an audited caller owns a stricter process deadline.
+pub(crate) fn validate_host_git_execution_config_keys(payload: &[u8]) -> Result<()> {
+    validate_execution_config_keys_with_policy(payload, false)
+}
+
+fn validate_execution_config_keys_with_policy(
+    payload: &[u8],
+    allow_verified_core_worktree: bool,
+) -> Result<()> {
     let unsafe_keys =
-        unsafe_execution_config_keys_with_policy(&output.stdout, allow_verified_core_worktree)?;
+        unsafe_execution_config_keys_with_policy(payload, allow_verified_core_worktree)?;
     if !unsafe_keys.is_empty() {
         let labels = unsafe_keys
             .iter()

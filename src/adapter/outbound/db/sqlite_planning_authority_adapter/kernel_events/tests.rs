@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::kernel_event::sample_task_evidence_events;
+use crate::domain::kernel_event::{sample_task_evidence_events, sample_task_verification_event};
 
 struct Workspace(std::path::PathBuf);
 impl Workspace {
@@ -34,7 +34,16 @@ fn task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload(
     let directory = Workspace::new("retention");
     let workspace = directory.name();
     let adapter = SqlitePlanningAuthorityAdapter::new();
-    let events = sample_task_evidence_events().map(|event| KernelEvent::task_evidence(&event));
+    let events: Vec<_> = sample_task_evidence_events()
+        .into_iter()
+        .chain(std::iter::once(sample_task_verification_event()))
+        .map(|event| KernelEvent::task_evidence(&event))
+        .collect();
+    let kinds = [
+        "criterion_evidence_recorded",
+        "criterion_waived",
+        "task_verification_finished",
+    ];
     for (index, event) in events.iter().enumerate() {
         adapter
             .append_kernel_events(&workspace, &[record(index as i64 + 1, event.clone())])
@@ -47,17 +56,14 @@ fn task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload(
         );
     }
     adapter
-        .append_kernel_events(&workspace, &[record(3, events[0].clone())])
+        .append_kernel_events(&workspace, &[record(4, events[0].clone())])
         .unwrap();
     assert_eq!(
         adapter
-            .load_kernel_events(
-                &workspace,
-                &["criterion_evidence_recorded", "criterion_waived"]
-            )
+            .load_kernel_events(&workspace, &kinds)
             .unwrap()
             .len(),
-        2
+        3
     );
     adapter
         .append_kernel_events(
@@ -74,10 +80,7 @@ fn task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload(
         .unwrap();
     assert!(
         adapter
-            .load_kernel_events(
-                &workspace,
-                &["criterion_evidence_recorded", "criterion_waived"]
-            )
+            .load_kernel_events(&workspace, &kinds)
             .unwrap()
             .is_empty()
     );
@@ -95,10 +98,7 @@ fn task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload(
     }
     assert!(
         adapter
-            .load_kernel_events(
-                &workspace,
-                &["criterion_evidence_recorded", "criterion_waived"]
-            )
+            .load_kernel_events(&workspace, &kinds)
             .unwrap()
             .is_empty(),
         "replayed ACK recovery must not resurrect trimmed history"
@@ -115,6 +115,24 @@ fn task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload(
     assert!(
         adapter
             .append_kernel_events(&workspace, &[record(RETAINED_KERNEL_EVENTS + 20, changed)])
+            .is_err()
+    );
+    let mut changed_host = events[2].clone();
+    let KernelEvent::TaskVerificationFinished { verification, .. } = &mut changed_host else {
+        panic!("expected a host execution receipt");
+    };
+    verification.artifact.as_mut().unwrap().sha256 = "9".repeat(64);
+    assert!(
+        adapter
+            .has_task_evidence_event(&workspace, &changed_host)
+            .is_err()
+    );
+    assert!(
+        adapter
+            .append_kernel_events(
+                &workspace,
+                &[record(RETAINED_KERNEL_EVENTS + 21, changed_host)]
+            )
             .is_err()
     );
 }

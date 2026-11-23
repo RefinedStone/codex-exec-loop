@@ -724,6 +724,85 @@
       }
     },
     {
+      "name": "request_task_verification",
+      "scope": "planning",
+      "state": "runtime",
+      "summary": "Reserve asynchronous host execution of the fixed recipe explicitly agreed in this criterion. The response confirms only the reservation; read task_evidence and task_verification_finished for the host result. Requires a running kernel. Worker-supplied recipes, commands, statuses and execution facts are not accepted. This does not grant delivery or integration authority.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "kernel_unreachable"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "criterion_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "expected_acceptance_revision": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "scope_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "task_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "request_task_verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "request_id",
+          "task_id",
+          "criterion_id",
+          "scope_id",
+          "expected_acceptance_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "attempt_id": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "type": {
+            "const": "task_verification_requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "attempt_id",
+          "changed"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "prepare_evidence",
       "scope": "planning",
       "state": "store",
@@ -4903,6 +4982,36 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "task_verification_finished",
+      "summary": "An immutable host verification outcome was committed for the agreed fixed recipe. Execution outcome, input and environment fingerprints, and bounded artifact metadata remain separate from worker-reported evidence. Current validity comes from task_evidence; no delivery or integration authority is implied.",
+      "payload": {
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "evidence_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "task_verification_finished",
+            "type": "string"
+          },
+          "verification": {
+            "$ref": "#/$defs/TaskVerificationRecord"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "evidence_revision",
+          "verification"
+        ],
+        "type": "object"
+      }
     }
   ],
   "reasons": [
@@ -5961,6 +6070,26 @@
     },
     "CommandResult": {
       "oneOf": [
+        {
+          "properties": {
+            "attempt_id": {
+              "type": "string"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "task_verification_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attempt_id",
+            "changed"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "preparation": {
@@ -10251,6 +10380,50 @@
               "type": "string"
             },
             "type": {
+              "const": "request_task_verification",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "task_id",
+            "criterion_id",
+            "scope_id",
+            "expected_acceptance_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "criterion_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "expected_acceptance_revision": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "request_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "scope_id": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "task_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
               "const": "prepare_evidence",
               "type": "string"
             }
@@ -13315,6 +13488,32 @@
             "waiver"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "evidence_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "task_verification_finished",
+              "type": "string"
+            },
+            "verification": {
+              "$ref": "#/$defs/TaskVerificationRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "evidence_revision",
+            "verification"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -13941,6 +14140,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/TaskEvidenceReceiptState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskVerificationState"
             },
             {
               "type": "null"
@@ -14601,6 +14810,16 @@
           "minLength": 1,
           "pattern": "\\S",
           "type": "string"
+        },
+        "verification_recipe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskVerificationRecipe"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -15063,6 +15282,421 @@
       },
       "required": [
         "title"
+      ],
+      "type": "object"
+    },
+    "TaskVerificationAttemptRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "type": "string"
+        },
+        "criterion_id": {
+          "type": "string"
+        },
+        "recipe": {
+          "$ref": "#/$defs/TaskVerificationRecipe"
+        },
+        "requested_at": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/TaskEvidenceScope"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "scope",
+        "criterion_id",
+        "recipe",
+        "attempt",
+        "requested_at"
+      ],
+      "type": "object"
+    },
+    "TaskVerificationCurrentState": {
+      "enum": [
+        "pending",
+        "running",
+        "passed",
+        "failed",
+        "not_run",
+        "stale",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "TaskVerificationExecutionManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "base_commit_sha": {
+          "type": "string"
+        },
+        "base_tree_sha": {
+          "type": "string"
+        },
+        "command_sha256": {
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "type": "string"
+        },
+        "environment_sha256": {
+          "type": "string"
+        },
+        "git_binary_sha256": {
+          "type": "string"
+        },
+        "recipe": {
+          "$ref": "#/$defs/TaskVerificationRecipe"
+        },
+        "source": {
+          "$ref": "#/$defs/TaskEvidenceTree"
+        }
+      },
+      "required": [
+        "recipe",
+        "base_commit_sha",
+        "base_tree_sha",
+        "source",
+        "git_binary_sha256",
+        "command_sha256",
+        "environment_sha256",
+        "configuration_sha256"
+      ],
+      "type": "object"
+    },
+    "TaskVerificationExecutionOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "exit_code": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "exited",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "exit_code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "timed_out",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "output_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "signalled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "io_failure",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TaskVerificationNotRunReason": {
+      "enum": [
+        "unavailable",
+        "invalid_input",
+        "stale",
+        "scope_changed",
+        "lease_changed",
+        "configuration_changed",
+        "spawn_failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "TaskVerificationObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "finished_at": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/TaskVerificationExecutionOutcome"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "stderr": {
+          "$ref": "#/$defs/TaskVerificationStream"
+        },
+        "stdout": {
+          "$ref": "#/$defs/TaskVerificationStream"
+        }
+      },
+      "required": [
+        "outcome",
+        "started_at",
+        "finished_at",
+        "duration_ms",
+        "stdout",
+        "stderr"
+      ],
+      "type": "object"
+    },
+    "TaskVerificationPhase": {
+      "enum": [
+        "pending",
+        "running",
+        "finished"
+      ],
+      "type": "string"
+    },
+    "TaskVerificationReceiptState": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "type": "string"
+        },
+        "evidence_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verification": {
+          "$ref": "#/$defs/TaskVerificationRecord"
+        }
+      },
+      "required": [
+        "event_id",
+        "evidence_revision",
+        "verification"
+      ],
+      "type": "object"
+    },
+    "TaskVerificationRecipe": {
+      "enum": [
+        "git_diff_check_v1"
+      ],
+      "type": "string"
+    },
+    "TaskVerificationRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempt": {
+          "$ref": "#/$defs/TaskVerificationAttemptRecord"
+        },
+        "finished_at": {
+          "type": "string"
+        },
+        "manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskVerificationExecutionManifest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/TaskVerificationResult"
+        }
+      },
+      "required": [
+        "attempt",
+        "result",
+        "finished_at"
+      ],
+      "type": "object"
+    },
+    "TaskVerificationResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "executed",
+              "type": "string"
+            },
+            "observation": {
+              "$ref": "#/$defs/TaskVerificationObservation"
+            }
+          },
+          "required": [
+            "kind",
+            "observation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "not_run",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/TaskVerificationNotRunReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "interrupted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TaskVerificationState": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskVerificationAttemptRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/TaskVerificationPhase"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskVerificationReceiptState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/TaskVerificationCurrentState"
+        },
+        "unavailable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "state"
+      ],
+      "type": "object"
+    },
+    "TaskVerificationStream": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sha256",
+        "size_bytes",
+        "complete"
       ],
       "type": "object"
     },

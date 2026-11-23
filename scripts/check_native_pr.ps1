@@ -174,6 +174,16 @@ function Invoke-WindowsPortableChecks {
         "application::service::evidence_vault_unlock::",
         "task_evidence_artifact::tests::",
         "sqlite_planning_authority_adapter::tests::task_evidence::",
+        "domain::planning::verification::",
+        "domain::kernel_event::task_verification::",
+        "adapter::inbound::kernel_protocol::task_verification::",
+        "kernel_events::tests::task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload",
+        "task_evidence_outbox::tests::host_verification_",
+        "application::service::task_verification::tests::",
+        "application::service::task_evidence::tests::verification::",
+        "composition::native_client_runtime::task_verification_tests::",
+        "composition::kernel_command_execution::tests::task_verification::",
+        "subprocess::controlled::tests::",
         "trace_event_log::tests::exact_trace_file_rejects_windows_",
         "trace_event_log::tests::windows_trace_file_and_rolling_directory_receive_private_owner_acl",
         "actual_windows_environment_filter_accepts_mixed_case_allowlisted_keys",
@@ -190,7 +200,10 @@ function Invoke-WindowsPortableChecks {
             "host_owned_worker_commit_",
             "parallel_worker_commit::tree_snapshot::tests::",
             "worker_evidence::",
-            "parallel_mode::tests::pool::lease::task_evidence::"
+            "parallel_mode::tests::pool::lease::task_evidence::",
+            "trusted_executable::fingerprint::tests::",
+            "adapter::outbound::git::task_verification::tests::",
+            "parallel_mode::tests::pool::lease::task_verification::"
         )
     }
     foreach ($testFilter in $testFilters) {

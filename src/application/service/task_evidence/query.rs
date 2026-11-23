@@ -8,6 +8,7 @@ use crate::domain::planning::evidence::{
     TaskCriterionEvidenceState, TaskEvidenceStatus, TaskEvidenceTree,
 };
 
+use super::verification::VerificationEnvironment;
 use super::*;
 
 impl TaskEvidenceQueryPort for TaskEvidenceService {
@@ -28,10 +29,11 @@ impl TaskEvidenceQueryPort for TaskEvidenceService {
                 )));
             }
         };
-        let tasks = first
+        let mut environments = VerificationEnvironment::default();
+        let mut tasks: Vec<_> = first
             .tasks
             .iter()
-            .map(|task| self.project_task(task))
+            .map(|task| self.project_task(task, &mut environments))
             .collect();
         let second = match self
             .repository
@@ -49,6 +51,7 @@ impl TaskEvidenceQueryPort for TaskEvidenceService {
                 TaskEvidenceError::Stale,
             ));
         }
+        environments.finish(self.verification_runner.as_deref(), &mut tasks);
         Ok(TaskEvidencePlanningSnapshot {
             planning_revision: Some(first.planning_revision),
             evidence_revision: Some(first.evidence_revision),
@@ -61,7 +64,11 @@ impl TaskEvidenceQueryPort for TaskEvidenceService {
 }
 
 impl TaskEvidenceService {
-    fn project_task(&self, task: &TaskEvidenceTaskSnapshot) -> TaskEvidenceTaskProjection {
+    fn project_task(
+        &self,
+        task: &TaskEvidenceTaskSnapshot,
+        environments: &mut VerificationEnvironment,
+    ) -> TaskEvidenceTaskProjection {
         let mut projection = TaskEvidenceTaskProjection {
             scope: task.scope.clone(),
             source: None,
@@ -79,7 +86,10 @@ impl TaskEvidenceService {
                 receipt.evidence.attempt.criterion_id == criterion.id
                     && receipt.evidence.attempt.scope == task.scope
             })
-        });
+        }) || task
+            .host_verifications
+            .iter()
+            .any(|stored| stored.attempt.scope == task.scope && stored.manifest.is_some());
         let source = needs_source.then(|| self.observe_source(task));
         if let Some(Ok((current, _))) = &source {
             projection.source = Some(current.clone());
@@ -101,6 +111,7 @@ impl TaskEvidenceService {
                 state: Some(TaskCriterionEvidenceState::Pending),
                 evidence: evidence.map(record_projection),
                 waiver: waiver.map(waiver_projection),
+                host_verification: None,
             };
             if evidence.is_some_and(|value| value.validate().is_err())
                 || waiver.is_some_and(|value| value.validate().is_err())
@@ -138,6 +149,15 @@ impl TaskEvidenceService {
             } else if waiver.is_some() {
                 row.state = Some(TaskCriterionEvidenceState::Stale);
             }
+            match self.project_verification(
+                task,
+                criterion,
+                source.as_ref().and_then(|source| source.as_ref().ok()),
+                environments,
+            ) {
+                Ok(host) => row.host_verification = host,
+                Err(error) => projection.unavailable = Some(error_kind(&error)),
+            }
             projection.criteria.push(row);
         }
         if let Some(Ok((initial, initial_session))) = &source
@@ -165,6 +185,17 @@ impl TaskEvidenceService {
             // A task has one observed source. If any current artifact cannot be verified,
             // do not mix a seemingly usable Pass with that task's unavailable observation.
             for row in &mut projection.criteria {
+                if let Some(host) = &mut row.host_verification
+                    && matches!(
+                        host.state,
+                        crate::domain::planning::verification::TaskVerificationCurrentState::Passed
+                            | crate::domain::planning::verification::TaskVerificationCurrentState::Failed
+                            | crate::domain::planning::verification::TaskVerificationCurrentState::Running
+                    )
+                {
+                    host.state = crate::domain::planning::verification::TaskVerificationCurrentState::Unavailable;
+                    host.unavailable = projection.unavailable;
+                }
                 if matches!(
                     row.state,
                     Some(

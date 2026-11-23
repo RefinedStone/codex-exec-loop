@@ -11,7 +11,9 @@ E2는 작업자가 제출한 `pass`, `fail`, `blocked`와 호스트가 관찰한
 이 기록만으로 task 완료·push·PR·통합 권한이 생기지 않는다.
 
 기존 기준 없는 작업과 실행·완료·전달 정책은 유지한다. 필수 기준을 전달 관문으로 강제하는 E3,
-증거 탐색·면제 버튼을 제공하는 Desktop 화면 E4, 독립 검증자는 별도 후속 범위다.
+증거 탐색·면제 버튼을 제공하는 Desktop 화면 E4는 별도 후속 범위다.
+사용자가 선택한 고정 recipe의 실제 실행은 [호스트 검증](task-verification.md) 계약이며,
+아래 작업자 보고와 별도의 `host_verification`으로 조회한다.
 이 변경은 일반 worker가 사용자 완료 기준을 수정할 수 있게 하지 않는다.
 
 ## 기록 순서
@@ -103,6 +105,11 @@ tree와 같으면 HEAD commit이 달라졌다는 이유만으로 무효로 만�
 scope에는 task ID 외에 별도의 무작위 식별자, acceptance revision 및 정규화한 기준 hash가 포함된다.
 task나 기준을 지웠다가 같은 ID·같은 내용으로 다시 만들어도 과거 증거와 면제가 되살아나지 않는다.
 제목이나 기준 순서만 바뀐 no-op은 scope를 바꾸지 않는다. 과거 receipt와 이벤트는 감사용으로 남긴다.
+
+호스트 recipe가 있는 기준은 선택적인 `host_verification`을 함께 반환한다. 작업자 보고의
+`state`와 호스트 실행의 `state`는 별개이며, 작업자 `pass`를 호스트 `passed`로 승격하지 않는다.
+현재 호스트 성공은 실행 receipt, 원래 기준 scope·recipe, base/source·환경과 sealed capture를
+다시 확인한 결과다. 공개 metadata에는 private 실행 token이나 출력 원문을 포함하지 않는다.
 
 `planning`은 기존 큐 응답에 선택적인 첫 증거 페이지를 추가한다. 페이지 크기는 최대 256 task이며,
 완료·제외된 task도 증거 조회 대상이다. 상세 `task_evidence` 조회는 명시적 task 목록 또는

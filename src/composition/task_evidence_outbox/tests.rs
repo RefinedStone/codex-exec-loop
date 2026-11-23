@@ -2,7 +2,7 @@ use super::*;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
 use crate::application::port::outbound::task_evidence_repository_port::*;
-use crate::domain::kernel_event::sample_task_evidence_events;
+use crate::domain::kernel_event::{sample_task_evidence_events, sample_task_verification_event};
 use crate::domain::planning::evidence::*;
 use anyhow::Result;
 use std::sync::{
@@ -17,6 +17,8 @@ pub(crate) struct Outbox {
     acknowledgements: AtomicUsize,
     fail_ack_once: AtomicBool,
 }
+
+impl crate::application::port::outbound::task_verification_repository_port::TaskVerificationRepositoryPort for Outbox {}
 
 impl TaskEvidenceRepositoryPort for Outbox {
     fn load_current_snapshot(
@@ -185,6 +187,63 @@ fn a_reused_event_id_with_changed_payload_never_acknowledges_the_outbox() {
     assert!(result.retry);
     assert!(result.records.is_empty());
     assert_eq!(outbox.acknowledgements.load(Ordering::SeqCst), 0);
+    assert_eq!(sequence, 1);
+}
+
+#[test]
+fn host_verification_ack_loss_retries_without_republishing_or_reusing_issue_identity() {
+    let event = sample_task_verification_event();
+    let (service, outbox, log) = fixture(vec![event.clone()]);
+    outbox.fail_ack_once.store(true, Ordering::SeqCst);
+    let mut sequence = 8;
+    let first = drain(&service, log.as_ref(), "/workspace", &mut sequence);
+    assert!(first.retry);
+    assert_eq!(first.records.len(), 1);
+    assert_eq!(first.records[0].event.kind(), "task_verification_finished");
+    assert_eq!(
+        first.records[0].event.task_evidence_event_id(),
+        Some(event.event_id())
+    );
+    assert!(first.records[0].event.issue_work_event_id().is_none());
+    assert_eq!(outbox.events.lock().unwrap().len(), 1);
+
+    let recovered = drain(&service, log.as_ref(), "/workspace", &mut sequence);
+    assert!(!recovered.retry);
+    assert!(recovered.records.is_empty());
+    assert!(outbox.events.lock().unwrap().is_empty());
+    assert_eq!(log.records.lock().unwrap().len(), 1);
+    assert_eq!(sequence, 9);
+    assert_eq!(outbox.acknowledgements.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn host_verification_changed_execution_fact_cannot_ack_an_existing_event_id() {
+    let event = sample_task_verification_event();
+    let (service, outbox, log) = fixture(vec![event.clone()]);
+    let mut changed = KernelEvent::task_evidence(&event);
+    let KernelEvent::TaskVerificationFinished { verification, .. } = &mut changed else {
+        panic!("expected a host execution fact");
+    };
+    let crate::domain::planning::verification::TaskVerificationResult::Executed { observation } =
+        &mut verification.result
+    else {
+        panic!("expected an executed fact");
+    };
+    observation.outcome =
+        crate::domain::planning::verification::TaskVerificationExecutionOutcome::Exited {
+            exit_code: 1,
+        };
+    log.records.lock().unwrap().push(RecordedKernelEvent {
+        sequence: 1,
+        recorded_at: "2026-11-23T00:00:00Z".into(),
+        event: changed,
+    });
+    let mut sequence = 1;
+    let result = drain(&service, log.as_ref(), "/workspace", &mut sequence);
+    assert!(result.retry);
+    assert!(result.records.is_empty());
+    assert_eq!(outbox.acknowledgements.load(Ordering::SeqCst), 0);
+    assert_eq!(outbox.events.lock().unwrap().len(), 1);
     assert_eq!(sequence, 1);
 }
 

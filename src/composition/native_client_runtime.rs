@@ -1,6 +1,8 @@
 mod issue_timeline;
 #[cfg(test)]
 mod task_evidence_tests;
+#[cfg(test)]
+mod task_verification_tests;
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -37,6 +39,7 @@ use crate::application::service::post_turn_evaluation::PostTurnEvaluationService
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::application::service::task_evidence::TaskEvidenceService;
+use crate::application::service::task_verification::TaskVerificationService;
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::composition::issue_observer::{
@@ -181,6 +184,7 @@ pub(crate) struct NativeClientRuntime {
     issue_collection: Option<Arc<IssueCollectionService>>,
     issue_observer: Option<IssueObserver>,
     task_evidence: Option<Arc<TaskEvidenceService>>,
+    task_verification: Option<Arc<TaskVerificationService>>,
     task_evidence_outbox_deadline: Option<Instant>,
     // Only controls idle lifetime. Execution always revalidates live policy and durable authority.
     issue_automation_keepalive: Cell<bool>,
@@ -667,6 +671,7 @@ impl NativeClientRuntime {
             issue_collection: None,
             issue_observer: None,
             task_evidence: None,
+            task_verification: None,
             task_evidence_outbox_deadline: None,
             issue_automation_keepalive: Cell::new(false),
             published_issue_change: false,
@@ -1074,10 +1079,18 @@ impl NativeClientRuntime {
             .issue_observer
             .as_ref()
             .and_then(|observer| observer.next_deadline(now));
-        [core, parallel, issues, self.task_evidence_outbox_deadline]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            core,
+            parallel,
+            issues,
+            self.task_evidence_outbox_deadline,
+            self.task_verification
+                .as_ref()
+                .and_then(|service| service.next_deadline()),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     pub(crate) fn run_host_cycle(
@@ -1129,6 +1142,13 @@ impl NativeClientRuntime {
             self.record_repository_state(current);
         }
         self.poll_issue_observer(now);
+        if self
+            .task_verification
+            .as_ref()
+            .is_some_and(|service| service.poll(now))
+        {
+            self.drain_task_evidence_outbox(now);
+        }
         if self
             .task_evidence_outbox_deadline
             .is_some_and(|deadline| deadline <= now)
@@ -1383,6 +1403,7 @@ impl NativeClientRuntime {
             StoredCommand::PrepareEvidence { .. }
                 | StoredCommand::RecordEvidence { .. }
                 | StoredCommand::WaiveCriterion { .. }
+                | StoredCommand::RequestTaskVerification { .. }
         );
         let context =
             crate::application::port::inbound::stored_command_port::StoredCommandContext {
@@ -1793,6 +1814,18 @@ impl NativeClientRuntime {
         self.drain_task_evidence_outbox(Instant::now());
     }
 
+    pub(super) fn attach_task_verification(
+        &mut self,
+        service: Arc<TaskVerificationService>,
+    ) -> anyhow::Result<()> {
+        service.initialize_live_owner(
+            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        )?;
+        self.task_verification = Some(service);
+        self.drain_task_evidence_outbox(Instant::now());
+        Ok(())
+    }
+
     fn drain_task_evidence_outbox(&mut self, now: Instant) {
         let (Some(service), Some((log, workspace))) =
             (self.task_evidence.clone(), self.kernel_event_log.clone())
@@ -2116,6 +2149,10 @@ impl NativeClientRuntime {
             || self.parallel_control_plane.has_remaining_work()
             || self.issue_automation_keepalive.get()
             || self.task_evidence_outbox_deadline.is_some()
+            || self
+                .task_verification
+                .as_ref()
+                .is_some_and(|service| service.has_pending())
     }
 
     /// Called only when attachment, issue commands or observer state changes, never by idle checks.

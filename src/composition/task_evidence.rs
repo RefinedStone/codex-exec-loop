@@ -26,13 +26,19 @@ pub(crate) fn artifacts() -> Arc<dyn TaskEvidenceArtifactPort> {
 
 pub(crate) fn build(workspace: &str) -> Arc<TaskEvidenceService> {
     let store = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    Arc::new(TaskEvidenceService::new(
-        workspace.to_owned(),
-        store.clone(),
-        artifacts(),
-        Arc::new(GitParallelModeRuntimeAdapter::new()),
-        store,
-    ))
+    Arc::new(
+        TaskEvidenceService::new(
+            workspace.to_owned(),
+            store.clone(),
+            artifacts(),
+            Arc::new(GitParallelModeRuntimeAdapter::new()),
+            store,
+        )
+        .with_verification_runner(Arc::new(
+            crate::adapter::outbound::git::task_verification::GitTaskVerificationRunnerAdapter::new(
+            ),
+        )),
+    )
 }
 
 pub(crate) fn query(

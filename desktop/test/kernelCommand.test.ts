@@ -26,6 +26,10 @@ const commands = {
   retry_delegation: { type: "retry_delegation", id: "delegation-1" },
   load_sessions: { type: "load_sessions" },
   refresh_planning: { type: "refresh_planning" },
+  request_task_verification: {
+    type: "request_task_verification", request_id: "verification-1", task_id: "task-1", criterion_id: "criterion-1",
+    scope_id: "a".repeat(64), expected_acceptance_revision: 1,
+  },
   prepare_evidence: {
     type: "prepare_evidence", request_id: "prepare-1", task_id: "task-1", criterion_id: "criterion-1",
     scope_id: "a".repeat(64), expected_acceptance_revision: 1,

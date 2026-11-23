@@ -7,6 +7,7 @@ fn criterion(id: &str) -> TaskAcceptanceCriterion {
         scenario: "The expected result is observable".into(),
         channel: TaskAcceptanceChannel::Command,
         essential: true,
+        verification_recipe: None,
     }
 }
 

@@ -15,7 +15,11 @@ pub trait KernelEventLogPort: Send + Sync {
             .ok_or_else(|| anyhow::anyhow!("expected a task evidence event"))?;
         for event in self.load_kernel_events(
             workspace_dir,
-            &["criterion_evidence_recorded", "criterion_waived"],
+            &[
+                "criterion_evidence_recorded",
+                "criterion_waived",
+                "task_verification_finished",
+            ],
         )? {
             if event.task_evidence_event_id() == Some(event_id) {
                 anyhow::ensure!(

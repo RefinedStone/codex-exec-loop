@@ -6,6 +6,10 @@ use crate::domain::planning::evidence::{
     TaskCriterionEvidenceState, TaskEvidenceArtifact, TaskEvidenceError, TaskEvidenceScope,
     TaskEvidenceStatus, TaskEvidenceTree,
 };
+use crate::domain::planning::verification::{
+    TaskVerificationAttempt, TaskVerificationCurrentState, TaskVerificationExecutionManifest,
+    TaskVerificationPhase, TaskVerificationReceipt, TaskVerificationRecipe, TaskVerificationResult,
+};
 
 pub use crate::application::port::outbound::task_evidence_repository_port::TaskEvidenceSnapshotQuery;
 
@@ -59,6 +63,65 @@ pub struct TaskCriterionEvidenceProjection {
     pub state: Option<TaskCriterionEvidenceState>,
     pub evidence: Option<TaskEvidenceRecordProjection>,
     pub waiver: Option<TaskCriterionWaiverProjection>,
+    /// 호스트의 실행 사실은 작업자가 보고한 상태와 별도로 보존한다.
+    pub host_verification: Option<TaskVerificationProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskVerificationProjection {
+    pub attempt: Option<TaskVerificationAttemptProjection>,
+    pub phase: TaskVerificationPhase,
+    pub receipt: Option<TaskVerificationReceiptProjection>,
+    pub state: TaskVerificationCurrentState,
+    pub unavailable: Option<TaskEvidenceError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskVerificationAttemptProjection {
+    pub attempt_id: String,
+    pub scope: TaskEvidenceScope,
+    pub criterion_id: String,
+    pub recipe: TaskVerificationRecipe,
+    pub attempt: u32,
+    pub requested_at: String,
+}
+
+impl From<&TaskVerificationAttempt> for TaskVerificationAttemptProjection {
+    fn from(attempt: &TaskVerificationAttempt) -> Self {
+        Self {
+            attempt_id: attempt.attempt_id.clone(),
+            scope: attempt.scope.clone(),
+            criterion_id: attempt.criterion_id.clone(),
+            recipe: attempt.recipe,
+            attempt: attempt.attempt,
+            requested_at: attempt.requested_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskVerificationReceiptProjection {
+    pub event_id: String,
+    pub evidence_revision: u64,
+    pub attempt: TaskVerificationAttemptProjection,
+    pub manifest: Option<TaskVerificationExecutionManifest>,
+    pub result: TaskVerificationResult,
+    pub artifact: Option<TaskEvidenceArtifact>,
+    pub finished_at: String,
+}
+
+impl From<&TaskVerificationReceipt> for TaskVerificationReceiptProjection {
+    fn from(receipt: &TaskVerificationReceipt) -> Self {
+        Self {
+            event_id: receipt.event_id.clone(),
+            evidence_revision: receipt.evidence_revision,
+            attempt: (&receipt.attempt).into(),
+            manifest: receipt.manifest.clone(),
+            result: receipt.result.clone(),
+            artifact: receipt.artifact.clone(),
+            finished_at: receipt.finished_at.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

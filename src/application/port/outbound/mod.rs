@@ -11,6 +11,7 @@ pub mod conversation_thread_turn_options_port;
 pub mod kernel_event_log_port;
 pub mod kernel_gateway_port;
 pub mod task_evidence_repository_port;
+pub mod task_verification_repository_port;
 // planning reset route port 는 입구의 planning 초기화를 저장소 커널의 명령으로 보낸다 (plan 18 K4-9a).
 pub mod planning_reset_route_port;
 pub mod repository_state_port;
@@ -124,6 +125,7 @@ pub mod issue_collection_origin_port;
 pub mod issue_source_port;
 pub mod issue_work_execution_port;
 pub mod task_evidence_artifact_port;
+pub mod task_verification_runner_port;
 
 pub(crate) mod delegation_store_port;
 pub mod issue_creation_provenance_port;

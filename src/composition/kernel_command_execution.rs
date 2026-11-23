@@ -259,6 +259,11 @@ impl KernelCommandPort for CommandOnlyKernel {
         if request.command.kind() != kind {
             bail!("command kind does not match its input");
         }
+        // A durable claim needs a live owner to poll and persist its background completion.
+        // Reject before runtime preparation, lock acquisition, or any command-history write.
+        if kind == KernelCommandKind::RequestTaskVerification {
+            return unreachable_answer("Host verification requires the running repository kernel.");
+        }
         let input = request
             .command
             .clone()
@@ -760,6 +765,7 @@ mod tests {
     mod issue_decision;
     mod issue_intervention;
     mod issue_queries;
+    mod task_verification;
     use super::*;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::service::planning::PlanningServices;

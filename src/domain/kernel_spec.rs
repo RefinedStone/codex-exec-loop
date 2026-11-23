@@ -85,6 +85,8 @@ spec_names! {
             "Delete planning data (the queue, the directions, or all of it).";
         RefreshPlanning => "refresh_planning",
             "Read the planning queue again. The result arrives as the `planning` event.";
+        RequestTaskVerification => "request_task_verification",
+            "Reserve asynchronous host execution of the fixed recipe explicitly agreed in this criterion. The response confirms only the reservation; read task_evidence and task_verification_finished for the host result. Requires a running kernel. Worker-supplied recipes, commands, statuses and execution facts are not accepted. This does not grant delivery or integration authority.";
         PrepareEvidence => "prepare_evidence",
             "Reserve one evidence attempt for the current task, acceptance scope and running lease. The host chooses the artifact path and observes the source tree. Reuse request_id to recover the same reservation; client-supplied paths, hashes and actor claims are not accepted.";
         RecordEvidence => "record_evidence",
@@ -396,6 +398,7 @@ impl KernelCommandKind {
             | Self::StopAll
             | Self::DecideApproval
             | Self::ResetPlanning
+            | Self::RequestTaskVerification
             | Self::PrepareEvidence
             | Self::RecordEvidence
             | Self::WaiveCriterion
@@ -530,6 +533,12 @@ impl KernelCommandKind {
                 &[Reason::KernelUnreachable],
             ),
             Self::ResetPlanning => (CommandScope::Planning, Destructive, Natural, &[]),
+            Self::RequestTaskVerification => (
+                CommandScope::Planning,
+                Write,
+                Keyed,
+                &[Reason::KernelUnreachable],
+            ),
             Self::PrepareEvidence | Self::RecordEvidence => {
                 (CommandScope::Planning, Write, Keyed, &[])
             }
@@ -600,6 +609,7 @@ impl KernelCommandKind {
                 | Self::SetAutoFollowMaxTurns
                 | Self::PauseAutoFollow
                 | Self::RefreshPlanning
+                | Self::RequestTaskVerification
                 | Self::SyncIssues
                 | Self::SubmitDelegation
                 | Self::CancelDelegation
@@ -691,6 +701,8 @@ spec_names! {
             "An immutable task criterion evidence receipt was committed after host artifact and source observation. Its durable event ID deduplicates replay; raw paths, evidence content and notes are excluded. Current validity comes from the planning query.";
         CriterionWaived => "criterion_waived",
             "A verified human exemption was committed for one task criterion and acceptance scope. Its durable event ID deduplicates replay; raw reason text and confirmation capability are excluded. It does not approve delivery or integration.";
+        TaskVerificationFinished => "task_verification_finished",
+            "An immutable host verification outcome was committed for the agreed fixed recipe. Execution outcome, input and environment fingerprints, and bounded artifact metadata remain separate from worker-reported evidence. Current validity comes from task_evidence; no delivery or integration authority is implied.";
     }
 }
 

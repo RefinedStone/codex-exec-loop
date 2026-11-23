@@ -1,3 +1,4 @@
+use crate::domain::planning::verification::TaskVerificationRecipe;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,8 @@ pub struct TaskAcceptanceCriterion {
     pub scenario: String,
     pub channel: TaskAcceptanceChannel,
     pub essential: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_recipe: Option<TaskVerificationRecipe>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -41,6 +44,7 @@ impl From<CoreTaskAcceptanceCriterion> for TaskAcceptanceCriterion {
                 CoreTaskAcceptanceChannel::Screen => TaskAcceptanceChannel::Screen,
             },
             essential: criterion.essential,
+            verification_recipe: criterion.verification_recipe,
         }
     }
 }
@@ -57,6 +61,7 @@ impl From<TaskAcceptanceCriterion> for CoreTaskAcceptanceCriterion {
                 TaskAcceptanceChannel::Screen => CoreTaskAcceptanceChannel::Screen,
             },
             essential: criterion.essential,
+            verification_recipe: criterion.verification_recipe,
         }
     }
 }
@@ -126,6 +131,64 @@ mod tests {
             assert_eq!(KernelCommand::from_stored(stored), command);
             assert_matches_spec(&spec, "commands", "input", &value);
         }
+    }
+
+    #[test]
+    fn host_recipe_round_trips_without_changing_legacy_criterion_json() {
+        let legacy = json!({
+            "id": "whitespace", "scenario": "No new whitespace errors.",
+            "channel": "command", "essential": true
+        });
+        for value in [legacy.clone(), {
+            let mut value = legacy.clone();
+            value["verification_recipe"] = serde_json::Value::Null;
+            value
+        }] {
+            let wire: TaskAcceptanceCriterion = serde_json::from_value(value).unwrap();
+            assert!(wire.verification_recipe.is_none());
+            let core: CoreTaskAcceptanceCriterion = wire.into();
+            assert_eq!(serde_json::to_value(&core).unwrap(), legacy);
+            assert_eq!(
+                serde_json::to_value(TaskAcceptanceCriterion::from(core)).unwrap(),
+                legacy
+            );
+        }
+
+        let mut selected = legacy.clone();
+        selected["verification_recipe"] = json!("git_diff_check_v1");
+        let command: KernelCommand = serde_json::from_value(json!({
+            "type": "update_task", "task_id": "task-1", "expected_planning_revision": 7,
+            "task": {"title": "Task", "acceptance": [selected.clone()]}
+        }))
+        .unwrap();
+        let KernelCommandInput::Stored(stored) = command.clone().into_input("/workspace").unwrap()
+        else {
+            panic!("recipe selection must use the existing task authoring boundary");
+        };
+        let StoredCommand::UpdateTask { task, .. } = &stored else {
+            panic!("expected an update");
+        };
+        let criterion = &task.acceptance.as_ref().unwrap()[0];
+        assert_eq!(
+            criterion.verification_recipe,
+            Some(TaskVerificationRecipe::GitDiffCheckV1)
+        );
+        assert_eq!(KernelCommand::from_stored(stored), command);
+        assert_matches_spec(
+            &serde_json::to_value(describe()).unwrap(),
+            "commands",
+            "input",
+            &serde_json::to_value(command).unwrap(),
+        );
+
+        for channel in ["data", "http", "screen"] {
+            let mut value = selected.clone();
+            value["channel"] = json!(channel);
+            let wire: TaskAcceptanceCriterion = serde_json::from_value(value).unwrap();
+            assert!(crate::domain::planning::normalize_task_acceptance(&[wire.into()]).is_err());
+        }
+        selected["verification_recipe"] = json!("worker_supplied_command");
+        assert!(serde_json::from_value::<TaskAcceptanceCriterion>(selected).is_err());
     }
 
     #[test]

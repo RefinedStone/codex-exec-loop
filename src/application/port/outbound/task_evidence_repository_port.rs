@@ -11,6 +11,9 @@ use crate::domain::planning::evidence::{
 };
 
 use super::planning_authority_port::PlanningAuthorityDistributorQueueRecord;
+use super::task_verification_repository_port::{
+    StoredTaskVerification, TaskVerificationRepositoryPort,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskEvidenceSnapshotQuery {
@@ -51,6 +54,8 @@ pub struct TaskEvidenceTaskSnapshot {
     /// for Stale projection; it must never become current by task/criterion id alone.
     pub evidence: Vec<TaskEvidenceReceipt>,
     pub waivers: Vec<TaskCriterionWaiverReceipt>,
+    /// Latest host attempt per criterion; worker-reported evidence remains separate.
+    pub host_verifications: Vec<StoredTaskVerification>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,7 +98,7 @@ pub struct TaskCriterionWaiverCommit {
     pub at: String,
 }
 
-pub trait TaskEvidenceRepositoryPort: Send + Sync {
+pub trait TaskEvidenceRepositoryPort: TaskVerificationRepositoryPort + Send + Sync {
     fn load_current_snapshot(
         &self,
         workspace: &str,

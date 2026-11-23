@@ -364,6 +364,7 @@ fn work_order_task_authority_version_upgrade_never_authorizes_existing_task_chan
             scenario: "An unrelated criterion must not be changed by admission.".into(),
             channel: TaskAcceptanceChannel::Command,
             essential: true,
+            verification_recipe: None,
         }];
         document.tasks[0].acceptance_revision = 1;
         let rows = authority_rows(&workspace);
@@ -408,6 +409,7 @@ fn work_order_task_authority_version_historical_instructions_preserve_acceptance
         scenario: "The original reviewed criterion remains authoritative.".into(),
         channel: TaskAcceptanceChannel::Data,
         essential: true,
+        verification_recipe: None,
     }];
     historical.acceptance_revision = 7;
     commit_document(&workspace, Some(initial.planning_revision), &document);

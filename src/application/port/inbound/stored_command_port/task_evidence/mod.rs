@@ -20,6 +20,16 @@ pub struct PrepareTaskEvidenceRequest {
     pub expected_acceptance_revision: u64,
 }
 
+/// 짧은 예약만 접수한다. 실행 recipe와 실행 사실은 호스트가 결정한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestTaskVerificationRequest {
+    pub request_id: String,
+    pub task_id: String,
+    pub criterion_id: String,
+    pub scope_id: String,
+    pub expected_acceptance_revision: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordTaskEvidenceRequest {
     pub attempt_id: String,
@@ -38,6 +48,18 @@ pub struct WaiveTaskCriterionRequest {
 }
 
 impl PrepareTaskEvidenceRequest {
+    pub fn validate(&self) -> Result<()> {
+        validate_evidence_request_id(&self.request_id)?;
+        validate_scope_coordinates(
+            &self.task_id,
+            &self.criterion_id,
+            &self.scope_id,
+            self.expected_acceptance_revision,
+        )
+    }
+}
+
+impl RequestTaskVerificationRequest {
     pub fn validate(&self) -> Result<()> {
         validate_evidence_request_id(&self.request_id)?;
         validate_scope_coordinates(

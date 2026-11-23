@@ -130,6 +130,39 @@ test("stacked codex pull requests use their own base and the ordinary full CI ga
     node_surfaces: "failure", desktop_e2e: "success", portable_native: "success" }), [{ job: "node_surfaces", result: "failure" }]);
 });
 
+test("portable native selectors cover host verification through the actual Windows Bash path", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
+  const windows = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
+  const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
+  const windowsStep = workflow.match(/- name: Run Windows portable validation[\s\S]*?(?=\n      - name:)/)?.[0] || "";
+  assert.match(windowsStep, /shell: bash/);
+  assert.match(windowsStep, /run: bash scripts\/check_windows_portable\.sh/);
+  for (const filter of [
+    "task_evidence_artifact::tests::",
+    "sqlite_planning_authority_adapter::tests::task_evidence::",
+    "parallel_worker_commit::tree_snapshot::tests::",
+    "parallel_mode::tests::pool::lease::task_evidence::",
+    "worker_evidence::",
+    "domain::planning::verification::",
+    "domain::kernel_event::task_verification::",
+    "adapter::inbound::kernel_protocol::task_verification::",
+    "kernel_events::tests::task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload",
+    "task_evidence_outbox::tests::host_verification_",
+    "application::service::task_verification::tests::",
+    "application::service::task_evidence::tests::verification::",
+    "composition::native_client_runtime::task_verification_tests::",
+    "composition::kernel_command_execution::tests::task_verification::",
+    "trusted_executable::fingerprint::tests::",
+    "subprocess::controlled::tests::",
+    "adapter::outbound::git::task_verification::tests::",
+    "parallel_mode::tests::pool::lease::task_verification::",
+  ]) {
+    assert.ok(windows.includes(`run_contract '${filter}'`), `Windows Bash omits ${filter}`);
+    assert.ok(powershell.includes(`"${filter}"`), `PowerShell omits ${filter}`);
+    assert.ok(workflow.includes(`'${filter}'`), `macOS omits ${filter}`);
+  }
+});
+
 test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/native-pr-checks.yml", import.meta.url),

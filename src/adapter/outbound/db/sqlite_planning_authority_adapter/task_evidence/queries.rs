@@ -72,10 +72,16 @@ fn task_snapshot(connection: &Connection, task_id: &str) -> Result<TaskEvidenceT
     )?;
     let mut evidence = Vec::new();
     let mut waivers = Vec::new();
+    let mut host_verifications = Vec::new();
     if task.acceptance.len() > MAX_TASK_EVIDENCE_PAGE {
         return Err(TaskEvidenceError::Limit.into());
     }
     for criterion in &task.acceptance {
+        if let Some(record) =
+            verification::latest(connection, task_id, &criterion.id, &scope.scope_id)?
+        {
+            host_verifications.push(record);
+        }
         let record: Option<(String,u64)> = connection.query_row(
             "SELECT receipt_json,record_revision FROM task_evidence_attempts WHERE task_id=?1 AND criterion_id=?2 AND receipt_json IS NOT NULL
             ORDER BY (scope_id=?3) DESC,CASE WHEN scope_id=?3 THEN ordinal ELSE 0 END DESC,record_revision DESC LIMIT 1",
@@ -113,6 +119,7 @@ fn task_snapshot(connection: &Connection, task_id: &str) -> Result<TaskEvidenceT
         queue_records,
         evidence,
         waivers,
+        host_verifications,
     })
 }
 
@@ -198,6 +205,12 @@ pub(super) fn require_event(connection: &Connection, event_id: &str) -> Result<T
             let original = original
                 .map(|json| serde_json::from_str::<TaskCriterionWaiverReceipt>(&json))
                 .transpose()?;
+            if original.as_ref() != Some(receipt.as_ref()) {
+                return Err(TaskEvidenceError::Unavailable.into());
+            }
+        }
+        TaskEvidenceEvent::VerificationFinished { receipt } => {
+            let original = verification::original_receipt(connection, &receipt.attempt.attempt_id)?;
             if original.as_ref() != Some(receipt.as_ref()) {
                 return Err(TaskEvidenceError::Unavailable.into());
             }

@@ -258,6 +258,15 @@ grant is cached.
   optional first page in `planning` distinguish current, stale, waived and unavailable observations.
   A criterion waiver requires an exact native Desktop Human confirmation. These records do not
   attest independent test execution or change delivery permission. See [task evidence](task-evidence.md).
+- A user-owned command criterion can select `git_diff_check_v1`. The Runtime-only
+  `request_task_verification` command reserves an attempt with five scope/request fields; the host
+  runs its fixed Git diff check in a background worker and publishes a separate execution receipt.
+  `host_verification` keeps current host results apart from worker reports and retains stale or
+  unavailable facts without exposing raw output or private execution authority. A successful diff
+  check covers new whitespace errors and conflict markers, can pass an empty diff, and does not
+  attest a build or functional tests. Restart recovery records interruption instead of rerunning.
+  Existing completion, dispatch and delivery permissions remain unchanged. See
+  [host task verification](task-verification.md).
 - Hidden planning workers inherit the active app-server execution profile. Their developer
   contract remains planning-only, and the host validates and applies their structured commands.
 

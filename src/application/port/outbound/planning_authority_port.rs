@@ -1299,7 +1299,9 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
 pub struct NoopPlanningAuthorityPort {
     // Monotonic refresh counter keeps orchestration on the same path as real adapters.
     next_refresh_order: AtomicU64,
+    shared_work_permit_decision: Option<Arc<Mutex<PlanningWorkPermitDecision>>>,
     resolve_authority_location_error: Option<&'static str>,
+    canonical_repo_root: Option<String>,
     runtime_projection: Option<PlanningAuthorityRuntimeProjectionSnapshot>,
     shared_runtime_projection: Option<Arc<Mutex<PlanningAuthorityRuntimeProjectionSnapshot>>>,
     shared_runtime_dispatch_mutation_gate: Option<Arc<Mutex<()>>>,
@@ -1317,8 +1319,22 @@ pub struct NoopPlanningAuthorityPort {
 
 #[cfg(test)]
 impl NoopPlanningAuthorityPort {
+    pub fn with_shared_work_permit_decision(
+        mut self,
+        decision: Arc<Mutex<PlanningWorkPermitDecision>>,
+    ) -> Self {
+        self.shared_work_permit_decision = Some(decision);
+        self
+    }
+
     pub fn with_authority_location_error(mut self, message: &'static str) -> Self {
         self.resolve_authority_location_error = Some(message);
+        self
+    }
+
+    /// Test-only linked worktrees may share one repository while retaining their own workspace.
+    pub fn with_canonical_repo_root(mut self, canonical_repo_root: impl Into<String>) -> Self {
+        self.canonical_repo_root = Some(canonical_repo_root.into());
         self
     }
 
@@ -1431,6 +1447,12 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _stage: PlanningWorkPermitStage,
         _source_sha: Option<&str>,
     ) -> Result<PlanningWorkPermitDecision> {
+        if let Some(decision) = &self.shared_work_permit_decision {
+            return decision
+                .lock()
+                .map(|decision| decision.clone())
+                .map_err(|_| anyhow::anyhow!("fake work permit lock is poisoned"));
+        }
         Ok(PlanningWorkPermitDecision::Legacy)
     }
 
@@ -1442,7 +1464,8 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         true
     }
 
-    // Without a store, the supplied workspace is both workspace root and canonical root.
+    // By default the supplied workspace is also the canonical root. Tests may explicitly
+    // model linked worktrees without changing the production resolver or the fallback.
     fn resolve_authority_location(&self, workspace_dir: &str) -> Result<PlanningAuthorityLocation> {
         if let Some(message) = self.resolve_authority_location_error {
             anyhow::bail!(message);
@@ -1450,10 +1473,15 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         Ok(PlanningAuthorityLocation {
             // Caller-supplied path as the operational root.
             workspace_root: workspace_dir.to_string(),
-            // No repo-scoped normalization exists in the fallback.
-            canonical_repo_root: workspace_dir.to_string(),
-            // The fallback has no distinct Git common-dir identity.
-            repository_identity: workspace_dir.to_string(),
+            canonical_repo_root: self
+                .canonical_repo_root
+                .clone()
+                .unwrap_or_else(|| workspace_dir.to_string()),
+            // A configured test root models the one shared repository identity.
+            repository_identity: self
+                .canonical_repo_root
+                .clone()
+                .unwrap_or_else(|| workspace_dir.to_string()),
             // Runtime projections are not persisted.
             runtime_dir: String::new(),
             // Empty path represents absence of a SQLite authority store.

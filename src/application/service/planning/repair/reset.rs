@@ -1175,6 +1175,7 @@ mod tests {
             scenario: "The accepted result must remain available.".to_string(),
             channel: crate::domain::planning::TaskAcceptanceChannel::Data,
             essential: true,
+            verification_recipe: None,
         }];
         completed_task.acceptance_revision = 7;
         let mut task_authority = TaskAuthorityDocument {
