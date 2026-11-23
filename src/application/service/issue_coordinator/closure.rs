@@ -91,6 +91,7 @@ pub(super) fn reconcile(
     let id = close_decision_id(&work, &record, &basis)?;
     let text = |value: &str| IssueDecisionSharedText::new_shared(value);
     let definition = IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(issue.clone()),
         gate: IssueAutomationGate::Close,
         kind: IssueDecisionKind::CloseApproval,

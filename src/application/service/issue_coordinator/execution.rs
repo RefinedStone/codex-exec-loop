@@ -86,6 +86,16 @@ pub(super) fn track(
                 super::closure::reconcile(service, &item.issue, cancel, now_unix_ms, committed)
             })
             .and_then(|()| {
+                super::delivery::reconcile_pending(
+                    service,
+                    &item,
+                    cancel,
+                    now_unix_ms,
+                    execution_enabled,
+                    committed,
+                )
+            })
+            .and_then(|()| {
                 reconcile_timeout_start(
                     service,
                     &item,
@@ -375,9 +385,13 @@ fn fence_execution(service: &IssueCoordinatorService, work: &IssueWorkCheckpoint
     let limit = service
         .execution
         .execution_limit(&service.workspace, &work.order.work_order_id, 0);
-    let revoke = service
-        .execution
-        .revoke(&service.workspace, &work.order.work_order_id);
+    let revoke = if work.delivery_assessment.is_some() || work.delivery_granted {
+        service.invalidate_delivery(&mut work.clone(), IssueWorkBlockReason::ApprovalChanged)
+    } else {
+        service
+            .execution
+            .revoke(&service.workspace, &work.order.work_order_id)
+    };
     match (limit, revoke) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),

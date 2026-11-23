@@ -12,6 +12,7 @@ fn open_decision() -> IssueObserverCommittedFact {
 
     IssueObserverCommittedFact::Coordinated(IssueCoordinatorFact::Decision {
         fact: IssueDecisionFact {
+            delivery_review: None,
             decision_id: IssueDecisionId::new("new-short-deadline").unwrap(),
             subject: IssueDecisionSubject::Issue(IssueReference {
                 provider: IssueProvider::GitHub,
@@ -25,6 +26,7 @@ fn open_decision() -> IssueObserverCommittedFact {
             gate: IssueAutomationGate::Start,
             kind: IssueDecisionKind::StartApproval,
             basis: IssueDecisionBasis {
+                delivery: None,
                 authorization_epoch: 0,
                 policy_version: "a".repeat(64),
                 field_hash: None,

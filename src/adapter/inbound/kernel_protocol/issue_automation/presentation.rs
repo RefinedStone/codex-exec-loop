@@ -4,6 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::issue_automation::collection::IssueCollectionItem;
+use crate::domain::issue_automation::decision::{IssueDecisionKind, IssueDecisionState};
+use crate::domain::issue_automation::delivery::{
+    IssueDeliveryDiffVerdict, IssueDeliveryRiskReason,
+};
 use crate::domain::issue_automation::policy::{IssueAutomationGate, IssueAutomationGateAction};
 use crate::domain::issue_automation::source::{
     IssueRemoteState, IssueSourceContent, IssueSourceRead,
@@ -107,6 +111,9 @@ pub enum IssueListReasonCode {
     RemoteClosed,
     Workflow,
     Triage,
+    ProtectedPath,
+    DiffTooLarge,
+    BinaryDiff,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -169,8 +176,11 @@ impl IssueListGroup {
     }
 }
 
-/// 실행 중/종료된 워크플로의 위치는 판정으로 되돌리지 않는다.
+/// 실제 실행 상태는 보존하고, 현재 전달 결정을 기다릴 때만 사람의 차례로 표시한다.
 fn group_id(item: &IssueCollectionItem) -> IssueListGroupId {
+    if pending_delivery_review(item).is_some() {
+        return IssueListGroupId::MyTurn;
+    }
     if let Some(tracked) = &item.tracked {
         match tracked.state {
             IssueAutomationState::Running => return IssueListGroupId::Running,
@@ -274,6 +284,9 @@ fn current_fields(item: &IssueCollectionItem) -> (Option<u64>, Option<String>, O
 }
 
 fn status_code(item: &IssueCollectionItem) -> IssueListStatusCode {
+    if pending_delivery_review(item).is_some() {
+        return IssueListStatusCode::AwaitingDecision;
+    }
     if let Some(tracked) = &item.tracked
         && !matches!(
             tracked.state,
@@ -356,6 +369,22 @@ fn reason(item: &IssueCollectionItem) -> (IssueListReasonCode, &'static str) {
             "원격 이슈가 닫혀 있습니다.",
         );
     }
+    if let Some(review) = pending_delivery_review(item) {
+        return match review.reasons[0] {
+            IssueDeliveryRiskReason::ProtectedPath => (
+                IssueListReasonCode::ProtectedPath,
+                "보호 경로 변경으로 결과 제출 승인을 기다립니다.",
+            ),
+            IssueDeliveryRiskReason::DiffTooLarge => (
+                IssueListReasonCode::DiffTooLarge,
+                "변경량 한도 초과로 결과 제출 승인을 기다립니다.",
+            ),
+            IssueDeliveryRiskReason::BinaryDiff => (
+                IssueListReasonCode::BinaryDiff,
+                "바이너리 변경으로 결과 제출 승인을 기다립니다.",
+            ),
+        };
+    }
     if item.start_budget_wait.is_some() {
         return (
             IssueListReasonCode::Triage,
@@ -380,6 +409,42 @@ fn reason(item: &IssueCollectionItem) -> (IssueListReasonCode, &'static str) {
             "현재 이슈 정보를 확인했습니다.",
         ),
     }
+}
+
+fn pending_delivery_review(item: &IssueCollectionItem) -> Option<&IssueDeliveryDiffVerdict> {
+    if item.tracked.as_ref().is_some_and(|tracked| {
+        matches!(
+            tracked.state,
+            IssueAutomationState::Done | IssueAutomationState::Cancelled
+        ) || tracked.flags.held
+            || tracked.flags.stale
+            || tracked.flags.unknown
+    }) || item.triage.as_ref().is_some_and(|triage| triage.stale)
+    {
+        return None;
+    }
+    let Some(IssueSourceRead::Observed(observation)) = &item.current else {
+        return None;
+    };
+    if observation.remote_state != IssueRemoteState::Open
+        || !matches!(&observation.content, IssueSourceContent::Shared(_))
+    {
+        return None;
+    }
+    let work = item.work.as_ref().filter(|work| !work.delivery_granted)?;
+    item.open_decisions.iter().find_map(|stored| {
+        let request = &stored.request;
+        let definition = request.definition();
+        (request.state() == IssueDecisionState::Open
+            && request.issue() == &item.issue
+            && definition.kind == IssueDecisionKind::RiskException
+            && definition.gate == IssueAutomationGate::Delivery
+            && definition.basis.work_order_id.as_deref() == Some(work.work_order_id.as_str())
+            && definition.basis.delivery.is_some())
+        .then_some(definition.delivery_review.as_ref())
+        .flatten()
+        .filter(|review| review.requires_human())
+    })
 }
 
 fn workflow_summary(state: IssueAutomationState) -> &'static str {

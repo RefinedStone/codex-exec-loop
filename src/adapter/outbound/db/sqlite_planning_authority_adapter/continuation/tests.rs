@@ -90,6 +90,7 @@ impl Fixture {
         .unwrap();
         tx.commit().unwrap();
         let basis = PlanningWorkPermitBasis {
+            delivery_review: None,
             authorization_epoch: 0,
             policy_version: "policy-v1".into(),
             field_hash: "fixture-field-hash".into(),

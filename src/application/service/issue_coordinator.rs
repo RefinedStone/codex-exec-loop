@@ -6,6 +6,7 @@ use crate::application::port::outbound::issue_publish_intent_journal_port::Issue
 use crate::domain::issue_automation::feedback::IssueFeedbackEvent;
 
 mod closure;
+mod delivery;
 mod feedback;
 mod start;
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
@@ -651,13 +652,7 @@ impl IssueCoordinatorService {
             IssueCoordinatorAction::CancelWork => {
                 if let Some(mut work) = work {
                     cancel.commit_if_active(|| {
-                        self.execution
-                            .revoke(&self.workspace, &work.order.work_order_id)?;
-                        work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
-                        let (fence, _, assessment) = self.current(&item.issue, committed)?;
-                        self.store
-                            .save_issue_work(&self.workspace, fence, &assessment, &work)?;
-                        Ok(())
+                        self.invalidate_delivery(&mut work, IssueWorkBlockReason::ApprovalChanged)
                     })?;
                 }
             }
@@ -805,6 +800,10 @@ impl IssueCoordinatorService {
                 decision_id: authorization.decision_id().cloned(),
                 basis: basis.clone(),
             });
+            self.execution
+                .revoke(&self.workspace, &work.order.work_order_id)?;
+            work.delivery_assessment = None;
+            work.delivery_granted = false;
         }
         // 실행 baseline을 읽을 수 없어도 승인한 작업 등록은 보존한다. 허가만 보류한다.
         let execution = execution.ok();
@@ -911,6 +910,14 @@ impl IssueCoordinatorService {
             )?;
             work.blocked_reason = if source.is_none() {
                 Some(IssueWorkBlockReason::SourceUnavailable)
+            } else if delivery
+                && work
+                    .delivery_assessment
+                    .as_ref()
+                    .is_some_and(|review| review.verdict.requires_human())
+                && !work.delivery_granted
+            {
+                Some(IssueWorkBlockReason::AwaitingDeliveryApproval)
             } else if execution_enabled {
                 Some(IssueWorkBlockReason::AwaitingSource)
             } else {
@@ -922,6 +929,8 @@ impl IssueCoordinatorService {
             if !matches_approval(&current_item, &current, authorization, &current_basis) {
                 self.execution
                     .revoke(&self.workspace, &work.order.work_order_id)?;
+                work.delivery_assessment = None;
+                work.delivery_granted = false;
                 work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
                 self.store
                     .save_issue_work(&self.workspace, fence, &current, &work)?;
@@ -953,6 +962,25 @@ impl IssueCoordinatorService {
         let Some(source) = grant_source else {
             return Ok(());
         };
+        let delivery_review = if delivery {
+            let Some(review) = self.prepare_delivery(
+                &mut work,
+                &source,
+                prior_revision,
+                now_unix_ms,
+                cancel,
+                committed,
+            )?
+            else {
+                return Ok(());
+            };
+            Some(review)
+        } else {
+            None
+        };
+        let gate_revision = delivery_review
+            .as_ref()
+            .map_or(gate_revision, |review| review.gate_revision);
         if !self.prepare_feedback_for_grant(&work, cancel, committed)? {
             return Ok(());
         }
@@ -962,12 +990,20 @@ impl IssueCoordinatorService {
             if !matches_approval(&current_item, &current, authorization, &current_basis) {
                 self.execution
                     .revoke(&self.workspace, &work.order.work_order_id)?;
+                work.delivery_assessment = None;
+                work.delivery_granted = false;
                 work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
                 self.store
                     .save_issue_work(&self.workspace, fence, &current, &work)?;
                 return Ok(());
             }
-            self.execution.grant(
+            if let Some(review) = &delivery_review
+                && !self.delivery_review_current(&work, review, &current)?
+            {
+                self.invalidate_delivery(&mut work, IssueWorkBlockReason::ApprovalChanged)?;
+                return Ok(());
+            }
+            if let Err(error) = self.execution.grant(
                 &self.workspace,
                 &IssueWorkPermitRequest {
                     authorization_epoch: basis.authorization_epoch,
@@ -976,13 +1012,31 @@ impl IssueCoordinatorService {
                     source_sha: source.clone(),
                     gate_revision,
                     delivery,
+                    delivery_review: delivery_review.clone(),
                 },
-            )?;
+            ) {
+                if delivery
+                    && !self
+                        .delivery_grant_retryable(&work, committed)
+                        .unwrap_or(false)
+                {
+                    self.invalidate_delivery(&mut work, IssueWorkBlockReason::SourceUnavailable)?;
+                }
+                return Err(error);
+            }
             let (fence, current_item, current, current_basis) =
                 self.current_or_revoke(&work, committed)?;
-            if !matches_approval(&current_item, &current, authorization, &current_basis) {
+            if !matches_approval(&current_item, &current, authorization, &current_basis)
+                || delivery_review.as_ref().is_some_and(|review| {
+                    !self
+                        .delivery_review_current(&work, review, &current)
+                        .unwrap_or(false)
+                })
+            {
                 self.execution
                     .revoke(&self.workspace, &work.order.work_order_id)?;
+                work.delivery_assessment = None;
+                work.delivery_granted = false;
                 work.blocked_reason = Some(IssueWorkBlockReason::ApprovalChanged);
                 self.store
                     .save_issue_work(&self.workspace, fence, &current, &work)?;
@@ -1048,9 +1102,10 @@ impl IssueCoordinatorService {
             Ok(current) => Ok(current),
             Err(error) => {
                 if let Some(work) = work
-                    && let Err(revoke_error) = self
-                        .execution
-                        .revoke(&self.workspace, &work.order.work_order_id)
+                    && let Err(revoke_error) = self.invalidate_delivery(
+                        &mut work.clone(),
+                        IssueWorkBlockReason::ApprovalChanged,
+                    )
                 {
                     return Err(error.context(format!(
                         "existing issue work permits could not be revoked: {revoke_error}"
@@ -1066,17 +1121,10 @@ impl IssueCoordinatorService {
         work: &IssueWorkCheckpoint,
         reason: IssueWorkBlockReason,
         cancel: &IssueCollectionCancellation,
-        committed: &Reporter<'_>,
+        _committed: &Reporter<'_>,
     ) -> Result<()> {
         let mut candidate = work.clone();
-        candidate.blocked_reason = Some(reason);
-        let (fence, _, assessment) =
-            self.revoke_on_current_error(Some(work), self.current(&work.order.issue, committed))?;
-        cancel.commit_if_active(|| {
-            self.store
-                .save_issue_work(&self.workspace, fence, &assessment, &candidate)?;
-            Ok(())
-        })?;
+        cancel.commit_if_active(|| self.invalidate_delivery(&mut candidate, reason))?;
         Ok(())
     }
 
@@ -1253,6 +1301,8 @@ impl IssueCoordinatorService {
             permit_source: None,
             permit_revision: 0,
             delivery_granted: false,
+            delivery_assessment: None,
+            delivery_revision: 0,
             blocked_reason: None,
             revision: 0,
         })
@@ -1324,6 +1374,7 @@ fn start_definition(
         due_at: None,
         asked_by: "issue-coordinator".into(),
         evidence: Vec::new(),
+        delivery_review: None,
     })
 }
 

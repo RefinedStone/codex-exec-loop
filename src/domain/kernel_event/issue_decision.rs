@@ -7,6 +7,9 @@ use crate::domain::issue_automation::decision::{
     IssueDecisionAnswerBy, IssueDecisionBasis, IssueDecisionFact, IssueDecisionKind,
     IssueDecisionState, IssueDecisionSubject,
 };
+use crate::domain::issue_automation::delivery::{
+    IssueDeliveryDiffVerdict, IssueDeliveryRiskReason,
+};
 use crate::domain::issue_automation::policy::IssueAutomationGate;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -20,6 +23,8 @@ pub struct IssueDecisionFactRecord {
     pub state: IssueDecisionState,
     pub answer_by: Option<IssueDecisionAnswerBy>,
     pub option: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_review: Option<IssueDeliveryDiffVerdictRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +53,33 @@ pub struct IssueDecisionBasisRecord {
     pub gate_revision: u64,
     #[serde(default)]
     pub authorization_epoch: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<IssueDecisionDeliveryContextRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueDecisionDeliveryContextRecord {
+    pub base_commit_sha: String,
+    pub source_commit_sha: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueDeliveryDiffVerdictRecord {
+    pub changed_files: u64,
+    pub changed_lines: Option<u64>,
+    pub reasons: Vec<IssueDeliveryRiskReason>,
+}
+
+impl From<&IssueDeliveryDiffVerdict> for IssueDeliveryDiffVerdictRecord {
+    fn from(verdict: &IssueDeliveryDiffVerdict) -> Self {
+        Self {
+            changed_files: verdict.changed_files,
+            changed_lines: verdict.changed_lines,
+            reasons: verdict.reasons.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -68,6 +100,7 @@ impl From<&IssueDecisionFact> for IssueDecisionFactRecord {
             state: fact.state,
             answer_by: fact.answer_by,
             option: fact.option.clone(),
+            delivery_review: fact.delivery_review.as_ref().map(Into::into),
         }
     }
 }
@@ -109,6 +142,13 @@ impl From<&IssueDecisionBasis> for IssueDecisionBasisRecord {
             work_order_id: basis.work_order_id.clone(),
             gate_revision: basis.gate_revision,
             authorization_epoch: basis.authorization_epoch,
+            delivery: basis
+                .delivery
+                .as_ref()
+                .map(|range| IssueDecisionDeliveryContextRecord {
+                    base_commit_sha: range.base_commit_sha.clone(),
+                    source_commit_sha: range.source_commit_sha.clone(),
+                }),
         }
     }
 }

@@ -193,6 +193,7 @@ fn preupgrade_validation_keys_first_read_repairs_owned_queue_and_survives_reopen
     register_next(&workspace, "order-b", "foreign-source");
     let adapter = SqlitePlanningAuthorityAdapter::new();
     let basis = PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 0,
         policy_version: "original-policy".into(),
         field_hash: "original-field-hash".into(),
@@ -541,6 +542,7 @@ fn preupgrade_direct_recovery_checks_latest_source_after_backfill() {
     register_next(&workspace, "order-a", "owned-source");
     let adapter = SqlitePlanningAuthorityAdapter::new();
     let basis = PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 0,
         policy_version: "original-policy".into(),
         field_hash: "original-field".into(),

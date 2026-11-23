@@ -34,6 +34,7 @@ fn insert_decision(
     let request = IssueDecisionRequest::new(
         IssueDecisionId::new(id).unwrap(),
         IssueDecisionDefinition {
+            delivery_review: None,
             subject: IssueDecisionSubject::Issue(work.order.issue.clone()),
             gate: if kind == IssueDecisionKind::StartApproval {
                 IssueAutomationGate::Start

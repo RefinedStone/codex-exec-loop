@@ -10,13 +10,15 @@ use rand::RngCore;
 use crate::adapter::outbound::filesystem::secure_fs;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::parallel_mode_runtime_port::{
-    ParallelCommandOutput, ParallelPinnedDirectory, ParallelPoolMutationPermit,
-    ParallelWorkerCommitOutcome, ParallelWorkerCommitRequest,
+    ParallelCommandOutput, ParallelCommitDiffRequest, ParallelPinnedDirectory,
+    ParallelPoolMutationPermit, ParallelWorkerCommitOutcome, ParallelWorkerCommitRequest,
 };
 use crate::git_subprocess;
 use crate::subprocess;
 
-use super::{parallel_normalization_fs, parallel_pool_lock, parallel_worker_commit};
+use super::{
+    parallel_commit_diff, parallel_normalization_fs, parallel_pool_lock, parallel_worker_commit,
+};
 
 /*
  * GitParallelModeRuntimeAdapter는 parallel mode application service가 요청하는 낮은 수준의
@@ -418,6 +420,13 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         request: ParallelWorkerCommitRequest<'_>,
     ) -> Result<ParallelWorkerCommitOutcome, String> {
         parallel_worker_commit::prepare_parallel_worker_commit(request)
+    }
+
+    fn inspect_parallel_commit_diff(
+        &self,
+        request: ParallelCommitDiffRequest<'_>,
+    ) -> Result<crate::domain::issue_automation::delivery::IssueDeliveryDiff, String> {
+        parallel_commit_diff::inspect_parallel_commit_diff(request)
     }
 
     fn current_timestamp(&self) -> String {

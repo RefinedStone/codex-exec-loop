@@ -608,6 +608,7 @@ fn work_failure_recovery_requires_a_human_at_both_service_and_store_boundaries()
     );
     let text = |value: &str| IssueDecisionSharedText::new_shared(value).unwrap();
     let definition = IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(work.order.issue.clone()),
         gate: IssueAutomationGate::Start,
         kind: IssueDecisionKind::FailureRecovery,

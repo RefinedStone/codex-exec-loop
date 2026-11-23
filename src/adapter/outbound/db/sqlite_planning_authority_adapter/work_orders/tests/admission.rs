@@ -10,6 +10,7 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 
 fn basis(revision: u64) -> PlanningWorkPermitBasis {
     PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 0,
         policy_version: "policy".into(),
         field_hash: "field".into(),

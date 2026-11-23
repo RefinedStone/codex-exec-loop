@@ -48,7 +48,9 @@ fn request() -> IssueDecisionRequest {
                 field_hash: Some(IssueFieldHash::of_fields("source title", "source body")),
                 work_order_id: None,
                 gate_revision: 7,
+                delivery: None,
             },
+            delivery_review: None,
             on_timeout: IssueDecisionTimeout::Wait,
             due_at: None,
             asked_by: "agent-1".to_owned(),
@@ -337,6 +339,7 @@ fn decision_record_preserves_intervention_epoch_and_reads_legacy_zero_epoch() {
         work_order_id: Some("work-1".to_owned()),
         gate_revision: 3,
         authorization_epoch: 7,
+        delivery: None,
     };
     let record = IssueDecisionBasisRecord::from(&basis);
     let mut wire = serde_json::to_value(record).unwrap();
@@ -430,4 +433,108 @@ fn decision_history_omits_withheld_text_and_keeps_closed_requests_read_only() {
             assert!(!opaque.to_string().contains(forbidden), "{forbidden}");
         }
     }
+}
+
+fn delivery_request(source: char) -> IssueDecisionRequest {
+    let mut record = request().to_record();
+    record.definition.kind = IssueDecisionKind::RiskException;
+    record.definition.gate = IssueAutomationGate::Delivery;
+    record.definition.basis.work_order_id = Some("work-1".to_owned());
+    record.definition.basis.delivery = Some(IssueDecisionDeliveryContext {
+        base_commit_sha: "a".repeat(40),
+        source_commit_sha: source.to_string().repeat(40),
+    });
+    record.definition.delivery_review = Some(IssueDeliveryDiffVerdict {
+        changed_files: 2,
+        changed_lines: Some(14),
+        reasons: vec![IssueDeliveryRiskReason::ProtectedPath],
+    });
+    IssueDecisionRequest::hydrate(record).unwrap()
+}
+
+#[test]
+fn delivery_review_projects_the_frozen_decision_and_preserves_legacy_json() {
+    let legacy = serde_json::to_value(IssueDecisionRequestState::from(&StoredIssueDecision {
+        request: request(),
+        revision: 1,
+    }))
+    .unwrap();
+    assert!(legacy.get("delivery_review").is_none());
+    assert!(legacy["basis"].get("delivery").is_none());
+
+    let mut original = delivery_request('b').to_record();
+    original.state = IssueDecisionState::Superseded;
+    let original = IssueDecisionRequest::hydrate(original).unwrap();
+    let current = IssueDecisionRequestState::from(&StoredIssueDecision {
+        request: delivery_request('c'),
+        revision: 4,
+    });
+    let history = crate::domain::issue_automation::interaction::IssueDecisionHistory {
+        decision: original.fact(),
+        request: Some(StoredIssueDecision {
+            request: original,
+            revision: 3,
+        }),
+        resolution:
+            crate::domain::issue_automation::interaction::IssueDecisionResolutionCode::BasisChanged,
+    };
+    let history = serde_json::to_value(
+        crate::adapter::inbound::kernel_protocol::issue_interaction::IssueDecisionHistoryState::from(&history),
+    )
+    .unwrap();
+    let current = serde_json::to_value(current).unwrap();
+    assert_eq!(
+        current["basis"]["delivery"]["source_commit_sha"],
+        "c".repeat(40)
+    );
+    assert_eq!(
+        history["request"]["basis"]["delivery"]["source_commit_sha"],
+        "b".repeat(40)
+    );
+    assert_eq!(
+        history["request"]["basis"]["delivery"]["base_commit_sha"],
+        "a".repeat(40)
+    );
+    assert_eq!(
+        history["request"]["delivery_review"],
+        json!({
+            "changed_files": 2, "changed_lines": 14, "reasons": ["protected_path"]
+        })
+    );
+    assert_eq!(
+        history["decision"]["delivery_review"],
+        history["request"]["delivery_review"]
+    );
+    assert_eq!(history["request"]["state"], "superseded");
+    assert!(current.get("files").is_none());
+}
+
+#[test]
+fn native_confirmation_target_roundtrip_keeps_delivery_basis_and_exact_commit_ids() {
+    use crate::application::port::inbound::stored_command_port::issue_confirmation::IssueConfirmationTarget;
+    let target = IssueConfirmationTarget::Decision {
+        workspace: "/workspace".to_owned(),
+        decision_id: IssueDecisionId::new("delivery-1").unwrap(),
+        option: "continue".to_owned(),
+        basis: delivery_request('b').definition().basis.clone(),
+        decision_revision: 3,
+    };
+    target.validate().unwrap();
+    let mut wire = serde_json::to_value(&target).unwrap();
+    assert_eq!(wire["basis"]["delivery"]["baseCommitSha"], "a".repeat(40));
+    assert_eq!(
+        serde_json::from_value::<IssueConfirmationTarget>(wire.clone()).unwrap(),
+        target
+    );
+    wire["basis"]["delivery"]["sourceCommitSha"] = json!("c".repeat(40));
+    let changed: IssueConfirmationTarget = serde_json::from_value(wire.clone()).unwrap();
+    changed.validate().unwrap();
+    assert_ne!(changed, target);
+    wire["basis"]["delivery"]["sourceCommitSha"] = json!("main");
+    assert!(
+        serde_json::from_value::<IssueConfirmationTarget>(wire)
+            .unwrap()
+            .validate()
+            .is_err()
+    );
 }

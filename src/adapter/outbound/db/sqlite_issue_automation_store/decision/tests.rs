@@ -156,6 +156,7 @@ fn request(assessment: &IssueTriageAssessment, id: &str) -> IssueDecisionRequest
     IssueDecisionRequest::new(
         IssueDecisionId::new(id).unwrap(),
         IssueDecisionDefinition {
+            delivery_review: None,
             subject: IssueDecisionSubject::Issue(assessment.basis().issue.clone()),
             gate: IssueAutomationGate::Start,
             kind: IssueDecisionKind::StartApproval,

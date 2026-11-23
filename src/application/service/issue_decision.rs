@@ -86,11 +86,16 @@ impl IssueDecisionService {
         let question = shared_text(request.definition().question.as_str(), &policy)?;
         let label = shared_text(selected.label.as_str(), &policy)?;
         let effect = shared_text(selected.effect.as_str(), &policy)?;
+        let mut detail = format!("선택: {}\n효과: {}", label.as_str(), effect.as_str());
+        if let Some(review) = delivery_confirmation_detail(request.definition()) {
+            detail.push_str("\n\n");
+            detail.push_str(&review);
+        }
         Ok(IssueConfirmationPreview {
             target: confirmation_target(&self.workspace_dir, &snapshot.record, option),
             display: IssueConfirmationDisplay {
                 message: question.as_str().to_owned(),
-                detail: format!("선택: {}\n효과: {}", label.as_str(), effect.as_str()),
+                detail,
                 confirm_label: label.as_str().to_owned(),
             },
         })
@@ -208,6 +213,16 @@ impl IssueDecisionService {
             basis.authorization_epoch = self
                 .store
                 .issue_authorization_epoch(&self.workspace_dir, stored.request.issue())?;
+            if stored.request.definition().is_delivery_risk_exception()
+                && let Some(work) = self
+                    .store
+                    .get_issue_work(&self.workspace_dir, stored.request.issue())?
+                && let Some(delivery) = &work.delivery_assessment
+                && delivery.matches_work(&work)
+                && delivery.matches_triage(&current, basis.authorization_epoch)
+            {
+                basis = delivery.basis.clone();
+            }
             self.validate_work_subject(stored.request.definition())?;
             if !self.work_context_current(stored.request.definition())? {
                 let mut obsolete = stored.request.to_record();
@@ -259,7 +274,11 @@ impl IssueDecisionService {
                     == crate::domain::issue_automation::decision::IssueDecisionKind::FailureRecovery;
             let is_close_approval = stored.request.definition().kind
                 == crate::domain::issue_automation::decision::IssueDecisionKind::CloseApproval;
-            if is_worker_question || is_work_recovery || is_close_approval {
+            if is_worker_question
+                || is_work_recovery
+                || is_close_approval
+                || stored.request.definition().is_delivery_risk_exception()
+            {
                 gate_action =
                     crate::domain::issue_automation::policy::IssueAutomationGateAction::Human;
             }
@@ -334,12 +353,12 @@ impl IssueDecisionService {
             .get_issue_work(&self.workspace_dir, definition.subject.issue())?
             .ok_or_else(|| anyhow!("the work decision has no registered work"))?;
         if &work.order.work_order_id != id
-            || !matches!(
+            || !(matches!(
                 definition.kind,
                 IssueDecisionKind::AgentQuestion
                     | IssueDecisionKind::FailureRecovery
                     | IssueDecisionKind::CloseApproval
-            )
+            ) || definition.is_delivery_risk_exception())
         {
             bail!("the decision does not belong to a supported work context");
         }
@@ -357,13 +376,21 @@ impl IssueDecisionService {
         else {
             return Ok(false);
         };
+        if &work.order.work_order_id != id {
+            return Ok(false);
+        }
+        if definition.is_delivery_risk_exception() {
+            return Ok(work.delivery_assessment.as_ref().is_some_and(|delivery| {
+                delivery.matches_work(&work) && delivery.matches_decision(definition)
+            }));
+        }
         let Some(record) = self
             .store
             .get_issue_execution(&self.workspace_dir, definition.subject.issue())?
         else {
             return Ok(false);
         };
-        if &work.order.work_order_id != id || &record.work_order_id != id {
+        if &record.work_order_id != id {
             return Ok(false);
         }
         Ok(match definition.kind {
@@ -422,6 +449,34 @@ impl IssueDecisionService {
             }
         }
     }
+}
+
+fn delivery_confirmation_detail(definition: &IssueDecisionDefinition) -> Option<String> {
+    use crate::domain::issue_automation::delivery::IssueDeliveryRiskReason;
+
+    if !definition.is_delivery_risk_exception() {
+        return None;
+    }
+    let range = definition.basis.delivery.as_ref()?;
+    let review = definition.delivery_review.as_ref()?;
+    let lines = review
+        .changed_lines
+        .map(|lines| lines.to_string())
+        .unwrap_or_else(|| "바이너리 변경을 포함하여 확정할 수 없음".into());
+    let reasons = review
+        .reasons
+        .iter()
+        .map(|reason| match reason {
+            IssueDeliveryRiskReason::ProtectedPath => "보호 경로 변경",
+            IssueDeliveryRiskReason::DiffTooLarge => "자동 전달 크기 상한 초과",
+            IssueDeliveryRiskReason::BinaryDiff => "바이너리 변경",
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "기준 커밋: {}\n전달 커밋: {}\n변경 파일: {}\n변경 줄: {}\n검토 사유: {}",
+        range.base_commit_sha, range.source_commit_sha, review.changed_files, lines, reasons,
+    ))
 }
 
 fn confirmation_target(

@@ -29,6 +29,7 @@ pub enum IssueCoordinatorAction {
 pub enum IssueWorkBlockReason {
     ExecutionDisabled,
     AwaitingSource,
+    AwaitingDeliveryApproval,
     ApprovalChanged,
     SourceUnavailable,
     SubmissionUnavailable,
@@ -109,6 +110,11 @@ pub struct IssueWorkCheckpoint {
     pub permit_source: Option<String>,
     pub permit_revision: u64,
     pub delivery_granted: bool,
+    /// 판정을 지워도 이전 승인 판은 다시 사용하지 않는다. 실행 허가 발급 횟수와 별개다.
+    #[serde(default, skip_serializing_if = "initial_delivery_revision")]
+    pub delivery_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_assessment: Option<super::delivery::IssueDeliveryAssessment>,
     pub blocked_reason: Option<IssueWorkBlockReason>,
     pub revision: u64,
 }
@@ -120,6 +126,10 @@ pub struct IssueWorkAuthorization {
     pub start_authority: IssueWorkStartAuthority,
     pub decision_id: Option<IssueDecisionId>,
     pub basis: IssueDecisionBasis,
+}
+
+fn initial_delivery_revision(value: &u64) -> bool {
+    *value == 0
 }
 
 impl IssueWorkCheckpoint {
@@ -161,8 +171,10 @@ impl IssueWorkCheckpoint {
             || self.order.acceptance.is_empty()
             || self.approved_basis.field_hash.as_ref() != Some(&self.order.field_hash)
             || self.approved_basis.work_order_id.is_some()
+            || self.approved_basis.delivery.is_some()
             || self.revision > super::MAX_ISSUE_AUTOMATION_REVISION
             || self.permit_revision > super::MAX_ISSUE_AUTOMATION_REVISION
+            || self.delivery_revision > super::MAX_ISSUE_AUTOMATION_REVISION
             || (self.permit_source.is_some() != (self.permit_revision > 0))
             || (self.delivery_granted && self.permit_source.is_none())
             || self.task_ids.iter().any(|id| id.trim().is_empty())
@@ -180,8 +192,20 @@ impl IssueWorkCheckpoint {
             if authorization.basis.authorization_epoch < self.approved_basis.authorization_epoch
                 || authorization.basis.field_hash.as_ref() != Some(&self.order.field_hash)
                 || authorization.basis.work_order_id.is_some()
+                || authorization.basis.delivery.is_some()
             {
                 return Err("renewed work approval does not match the immutable work");
+            }
+        }
+        if let Some(delivery) = &self.delivery_assessment {
+            delivery.validate()?;
+            if delivery.basis.work_order_id.as_deref() != Some(&self.order.work_order_id)
+                || delivery.basis.gate_revision != self.delivery_revision
+                || delivery.basis.field_hash.as_ref() != Some(&self.order.field_hash)
+                || delivery.basis.authorization_epoch
+                    > self.current_authorization_basis().authorization_epoch
+            {
+                return Err("delivery assessment does not match the immutable work");
             }
         }
         Ok(())

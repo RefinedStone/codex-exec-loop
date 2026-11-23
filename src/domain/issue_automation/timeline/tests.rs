@@ -29,6 +29,7 @@ fn tracked(issue: &IssueReference, sequence: i64) -> RecordedKernelEvent {
 fn decision(issue: &IssueReference) -> KernelEvent {
     KernelEvent::IssueDecisionRequested {
         decision: IssueDecisionFactRecord {
+            delivery_review: None,
             decision_id: "decision-1".into(),
             subject: IssueDecisionSubjectRecord::Issue {
                 issue: issue.into(),
@@ -36,6 +37,7 @@ fn decision(issue: &IssueReference) -> KernelEvent {
             gate: IssueDecisionGateRecord::Close,
             kind: IssueDecisionKind::CloseApproval,
             basis: IssueDecisionBasisRecord {
+                delivery: None,
                 policy_version: "policy-1".into(),
                 field_hash: None,
                 work_order_id: Some("work-1".into()),

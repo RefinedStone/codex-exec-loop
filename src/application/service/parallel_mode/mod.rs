@@ -55,6 +55,7 @@ mod support;
 pub(crate) mod turn;
 mod work_link;
 mod worker_commit;
+mod worker_diff;
 pub(crate) use self::automation_guard::{
     ParallelDispatchWorkerActivity, ParallelModeAutomationEpochClosed, ParallelModeAutomationGuard,
     ParallelModeAutomationPermit,

@@ -91,6 +91,7 @@ pub(crate) fn seed_human_decision_for_gateway(workspace: &str) -> (String, Strin
     let id = "gateway-human-decision";
     let option = "accept";
     let definition = IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(reference),
         gate: IssueAutomationGate::Start,
         kind: IssueDecisionKind::AgentQuestion,

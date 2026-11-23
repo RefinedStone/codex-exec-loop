@@ -1,6 +1,7 @@
 //! 이슈 자동화와 작업 실행기를 잇는 중립 경계다. 런타임 객체를 공유하지 않는다.
 use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
 use crate::domain::issue_automation::decision::IssueDecisionBasis;
+use crate::domain::issue_automation::delivery::IssueDeliveryDiff;
 use crate::domain::issue_automation::execution::{
     IssueExecutionQuestion, IssueExecutionTerminalClass, IssueExecutionTerminalRecord,
 };
@@ -31,6 +32,8 @@ pub struct IssueWorkPermitRequest {
     pub source_sha: String,
     pub gate_revision: u64,
     pub delivery: bool,
+    /// Host가 실제 frozen 범위를 판정한 별도 Delivery 근거다.
+    pub delivery_review: Option<IssueDecisionBasis>,
 }
 
 /// 이미 공유 정책을 통과한 답변이다. worker 원문이나 외부 확인 증거를 받지 않는다.
@@ -237,6 +240,23 @@ pub trait IssueWorkExecutionPort: Send + Sync {
     }
 
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot>;
+    /// 로컬 queue에 이미 고정한 source만 읽는다. 원격 base fetch나 worker 시작은 없다.
+    fn frozen_delivery_source(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+    /// 현재 작업/lease에 속한 고정 base부터 source까지 빠짐없이 읽는다.
+    fn delivery_diff(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _expected_source_sha: &str,
+    ) -> Result<IssueDeliveryDiff> {
+        anyhow::bail!("work delivery diff inspection is unavailable")
+    }
     /// 기존 등록을 읽는다. 실제 adapter는 원격 fetch와 독립된 영속 조회를 구현한다.
     fn task_ids(&self, workspace: &str, work_order_id: &str) -> Result<Vec<String>> {
         Ok(self.snapshot(workspace, work_order_id)?.task_ids)

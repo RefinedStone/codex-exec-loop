@@ -258,6 +258,7 @@ fn definition(triage: &IssueTriageService, fixture: &Fixture) -> IssueDecisionDe
     let item = page(triage).items.pop().unwrap();
     let assessment = item.triage.unwrap().assessment;
     IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(fixture.reference("I_001")),
         gate: IssueAutomationGate::Start,
         kind: IssueDecisionKind::StartApproval,
@@ -859,4 +860,5 @@ fn an_agent_can_answer_a_current_nonhuman_gate_but_gets_no_human_confirmation() 
     assert_eq!(answer.confirmation, None);
 }
 
+mod delivery;
 pub(super) mod gateway_fixture;

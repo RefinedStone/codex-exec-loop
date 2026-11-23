@@ -35,6 +35,26 @@ impl PlanningWorkPermitStage {
     }
 }
 
+/// Host-reviewed frozen diff identity. This is absent in permits saved before diff review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningWorkDeliveryReview {
+    pub base_commit_sha: String,
+    pub source_commit_sha: String,
+    pub gate_revision: u64,
+}
+
+impl PlanningWorkDeliveryReview {
+    pub fn validate(&self) -> Result<()> {
+        if !full_git_object_id(&self.base_commit_sha)
+            || !full_git_object_id(&self.source_commit_sha)
+        {
+            bail!("delivery review commits must be full Git object ids");
+        }
+        Ok(())
+    }
+}
+
 /// Independently persisted current evidence. A grant cannot update its own comparison basis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanningWorkPermitBasis {
@@ -44,19 +64,31 @@ pub struct PlanningWorkPermitBasis {
     pub field_hash: String,
     pub gate_revision: u64,
     pub source_sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_review: Option<PlanningWorkDeliveryReview>,
 }
 
 impl PlanningWorkPermitBasis {
     pub fn validate(&self) -> Result<()> {
         validate_opaque_key(&self.policy_version, "permit policy version", 512)?;
         validate_opaque_key(&self.field_hash, "permit field hash", 512)?;
-        if !matches!(self.source_sha.len(), 40 | 64)
-            || !self.source_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
+        if !full_git_object_id(&self.source_sha) {
             bail!("permit source_sha must be a full Git object id");
+        }
+        if let Some(review) = &self.delivery_review {
+            review.validate()?;
+            if review.source_commit_sha != self.source_sha
+                || review.gate_revision != self.gate_revision
+            {
+                bail!("delivery review must match the current permit source and gate revision");
+            }
         }
         Ok(())
     }
+}
+
+fn full_git_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +181,12 @@ pub fn evaluate_work_order_permit(
         || (stage != PlanningWorkPermitStage::Dispatch && source_sha.is_none())
     {
         return PlanningWorkPermitDecision::Denied(PlanningWorkPermitBlockReason::Stale);
+    }
+    if work_order.origin == "issue_automation"
+        && stage != PlanningWorkPermitStage::Dispatch
+        && permit.basis.delivery_review.is_none()
+    {
+        return PlanningWorkPermitDecision::Denied(PlanningWorkPermitBlockReason::Missing);
     }
     PlanningWorkPermitDecision::Granted {
         requires_human_review: permit.requires_human_review,

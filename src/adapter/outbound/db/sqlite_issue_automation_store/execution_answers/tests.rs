@@ -137,6 +137,8 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
     let issue = tracked.reference().clone();
     let handoff = tracked.snapshot().shared_copy.clone();
     let work = IssueWorkCheckpoint {
+        delivery_assessment: None,
+        delivery_revision: 0,
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {
@@ -211,6 +213,7 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
         IssueExecutionSaveResult::Saved { .. }
     ));
     let definition = IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(issue.clone()),
         gate: IssueAutomationGate::Spec,
         kind: IssueDecisionKind::AgentQuestion,

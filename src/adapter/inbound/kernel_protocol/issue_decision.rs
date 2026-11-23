@@ -7,6 +7,9 @@ use crate::domain::issue_automation::decision::{
     MAX_ISSUE_DECISION_ID_BYTES, MAX_ISSUE_DECISION_NOTE_BYTES, MAX_ISSUE_DECISION_OPTION_BYTES,
     StoredIssueDecision,
 };
+use crate::domain::issue_automation::delivery::{
+    IssueDeliveryDiffVerdict, IssueDeliveryRiskReason,
+};
 use crate::domain::kernel_event::{
     IssueDecisionBasisRecord, IssueDecisionFactRecord, IssueDecisionGateRecord,
     IssueDecisionSubjectRecord,
@@ -26,6 +29,9 @@ pub struct IssueDecisionRequestState {
     pub options: Vec<IssueDecisionOptionState>,
     pub recommended: Option<String>,
     pub basis: IssueDecisionBasisRecord,
+    /// 이 결정에 고정된 실제 변경 범위의 판정이다. 최신 실행 상태로 덮어쓰지 않는다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_review: Option<IssueDeliveryReviewState>,
     pub on_timeout: IssueDecisionTimeout,
     pub due_at: Option<String>,
     pub state: IssueDecisionState,
@@ -38,6 +44,25 @@ pub struct IssueDecisionOptionState {
     pub id: String,
     pub label: String,
     pub effect: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueDeliveryReviewState {
+    pub changed_files: u64,
+    /// 바이너리가 포함된 변경의 전체 줄 수는 미확인이다.
+    pub changed_lines: Option<u64>,
+    pub reasons: Vec<IssueDeliveryRiskReason>,
+}
+
+impl From<&IssueDeliveryDiffVerdict> for IssueDeliveryReviewState {
+    fn from(review: &IssueDeliveryDiffVerdict) -> Self {
+        Self {
+            changed_files: review.changed_files,
+            changed_lines: review.changed_lines,
+            reasons: review.reasons.clone(),
+        }
+    }
 }
 
 impl From<&StoredIssueDecision> for IssueDecisionRequestState {
@@ -61,6 +86,7 @@ impl From<&StoredIssueDecision> for IssueDecisionRequestState {
                 .collect(),
             recommended: definition.recommended.clone(),
             basis: (&definition.basis).into(),
+            delivery_review: definition.delivery_review.as_ref().map(Into::into),
             on_timeout: definition.on_timeout,
             due_at: definition.due_at.clone(),
             state: request.state(),

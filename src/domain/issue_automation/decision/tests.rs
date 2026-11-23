@@ -5,6 +5,7 @@ use crate::domain::issue_validation::IssueRequirements;
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider};
 
 mod deadlines;
+mod delivery;
 
 fn shared(value: &str) -> IssueDecisionSharedText {
     IssueDecisionSharedText::new_shared(value).unwrap()
@@ -24,6 +25,7 @@ fn issue() -> IssueReference {
 
 fn basis() -> IssueDecisionBasis {
     IssueDecisionBasis {
+        delivery: None,
         authorization_epoch: 0,
         policy_version: "a".repeat(64),
         field_hash: Some(IssueFieldHash::of_fields("shared title", "shared body")),
@@ -34,6 +36,7 @@ fn basis() -> IssueDecisionBasis {
 
 fn definition() -> IssueDecisionDefinition {
     IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(issue()),
         gate: IssueAutomationGate::Start,
         kind: IssueDecisionKind::StartApproval,

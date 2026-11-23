@@ -347,6 +347,16 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
     {
         coordinator::save(self, workspace, expected, assessment, candidate)
     }
+    fn clear_issue_delivery(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+        expected_work_revision: u64,
+        reason: crate::domain::issue_automation::coordinator::IssueWorkBlockReason,
+    ) -> Result<crate::application::port::outbound::issue_automation_store_port::IssueWorkSaveResult>
+    {
+        coordinator::clear_delivery(self, workspace, issue, expected_work_revision, reason)
+    }
     fn apply_issue_resync(
         &self,
         workspace: &str,

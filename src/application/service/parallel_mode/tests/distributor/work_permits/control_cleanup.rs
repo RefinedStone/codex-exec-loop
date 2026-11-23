@@ -14,6 +14,7 @@ fn unstarted_fixture(
     let repo = TempGitRepo::new(prefix);
     register_delivery_work_order(&repo);
     let basis = PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 0,
         policy_version: "control-policy".to_string(),
         field_hash: "control-fields".to_string(),

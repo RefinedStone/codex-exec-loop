@@ -31,6 +31,7 @@ fn approve_close(fixture: &Fixture, issue: &IssueReference) {
     let request = IssueDecisionRequest::new(
         close_decision_id(work, execution, &basis).unwrap(),
         IssueDecisionDefinition {
+            delivery_review: None,
             subject: IssueDecisionSubject::Issue(issue.clone()),
             gate: IssueAutomationGate::Close,
             kind: IssueDecisionKind::CloseApproval,

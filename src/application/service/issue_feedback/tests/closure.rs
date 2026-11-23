@@ -75,6 +75,7 @@ fn approve(fixture: &Fixture) {
     let request = IssueDecisionRequest::new(
         close_decision_id(work, execution, &basis).unwrap(),
         IssueDecisionDefinition {
+            delivery_review: None,
             subject: IssueDecisionSubject::Issue(issue()),
             gate: IssueAutomationGate::Close,
             kind: IssueDecisionKind::CloseApproval,

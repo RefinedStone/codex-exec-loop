@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - prerelease
+      - 'codex/**'
   push:
     branches:
       - main

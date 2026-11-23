@@ -221,6 +221,11 @@ commit -> push -> PR targeting prerelease -> CI Gate -> rebase merge -> cleanup
 `CI Gate` check must pass, and history remains linear. GitHub auto-merge and branch deletion are
 enabled. Use rebase merge; do not push the integration checkout directly.
 
+Explicitly dependent PRs may target their parent `codex/**` branch. The pull-request workflow
+includes those target branches and compares the actual PR base/head SHAs with the same `CI Gate`.
+Keep the push workflow limited to `main` and `prerelease`; a stacked PR uses its normal open or
+head-update event. Verify a workflow change with the resulting PR run, not only local policy tests.
+
 The workflow also emits a measured `Fast Gate` from the selected policy checks, while long Rust
 tests and portable jobs continue in parallel and are aggregated by `CI Gate` and the push-only
 `Post-Merge Gate`. `CI Gate` remains the required Ruleset context unless the user explicitly

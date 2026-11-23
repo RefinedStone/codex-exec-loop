@@ -2,10 +2,10 @@
 use crate::application::port::outbound::issue_work_execution_port::*;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkInstruction,
-    PlanningWorkInstructionAdmission, PlanningWorkLinkReference, PlanningWorkOrderRepositoryPort,
-    PlanningWorkPermit, PlanningWorkPermitBasis, PlanningWorkPermitRepositoryPort,
-    PlanningWorkPermitStage,
+    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkDeliveryReview,
+    PlanningWorkInstruction, PlanningWorkInstructionAdmission, PlanningWorkLinkReference,
+    PlanningWorkOrderRepositoryPort, PlanningWorkPermit, PlanningWorkPermitBasis,
+    PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
 };
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
@@ -48,6 +48,23 @@ impl AkraIssueWorkExecutionAdapter {
 }
 
 impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
+    fn frozen_delivery_source(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Option<String>> {
+        source::frozen_delivery_source(self, workspace, work_order_id)
+    }
+
+    fn delivery_diff(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        expected_source_sha: &str,
+    ) -> Result<crate::domain::issue_automation::delivery::IssueDeliveryDiff> {
+        source::delivery_diff(self, workspace, work_order_id, expected_source_sha)
+    }
+
     fn recover_execution(
         &self,
         workspace: &str,
@@ -227,6 +244,7 @@ Work order: {}",
         request.approval.validate()?;
         if request.authorization_epoch != request.approval.authorization_epoch
             || request.gate_revision < request.approval.gate_revision
+            || request.approval.delivery.is_some()
         {
             bail!("the work permit does not match its approved authorization epoch");
         }
@@ -235,12 +253,50 @@ Work order: {}",
             .field_hash
             .as_ref()
             .ok_or_else(|| anyhow!("the work approval has no field hash"))?;
+        let delivery_review = if request.delivery {
+            let review = request
+                .delivery_review
+                .as_ref()
+                .ok_or_else(|| anyhow!("the delivery permit requires a host diff review"))?;
+            review.validate()?;
+            let range = review
+                .delivery
+                .as_ref()
+                .ok_or_else(|| anyhow!("the delivery review has no frozen commit range"))?;
+            if review.work_order_id.as_deref() != Some(request.work_order_id.as_str())
+                || review.authorization_epoch != request.authorization_epoch
+                || review.policy_version != request.approval.policy_version
+                || review.field_hash != request.approval.field_hash
+                || review.gate_revision != request.gate_revision
+                || range.source_commit_sha != request.source_sha
+            {
+                bail!("the delivery review does not match the work permit");
+            }
+            source::verify_delivery_context(
+                self,
+                workspace,
+                &request.work_order_id,
+                &range.base_commit_sha,
+                &range.source_commit_sha,
+            )?;
+            Some(PlanningWorkDeliveryReview {
+                base_commit_sha: range.base_commit_sha.clone(),
+                source_commit_sha: range.source_commit_sha.clone(),
+                gate_revision: review.gate_revision,
+            })
+        } else {
+            if request.delivery_review.is_some() {
+                bail!("dispatch cannot consume a delivery review");
+            }
+            None
+        };
         let basis = PlanningWorkPermitBasis {
             authorization_epoch: request.authorization_epoch,
             policy_version: request.approval.policy_version.clone(),
             field_hash: format!("v{}:{}", hash.version, hash.sha256),
             gate_revision: request.gate_revision,
             source_sha: request.source_sha.clone(),
+            delivery_review,
         };
         self.repository
             .set_work_order_permit_basis(workspace, &request.work_order_id, &basis)?;

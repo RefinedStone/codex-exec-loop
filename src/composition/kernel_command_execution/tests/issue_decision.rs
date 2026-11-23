@@ -72,6 +72,7 @@ fn seed_decision(kernel: &CommandOnlyKernel) -> IssueReference {
     let detail = collection.issue(&reference).unwrap();
     let assessment = detail.item.unwrap().triage.unwrap().assessment;
     let definition = IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(reference.clone()),
         gate: IssueAutomationGate::Start,
         kind: IssueDecisionKind::AgentQuestion,

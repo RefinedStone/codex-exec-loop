@@ -25,6 +25,8 @@ fn seed_with_tasks(fixture: &Fixture, task_ids: Vec<String>) -> IssueWorkCheckpo
     let field_hash = tracked.snapshot().basis.field_hash.clone();
     let handoff = tracked.snapshot().shared_copy.clone();
     let work = IssueWorkCheckpoint {
+        delivery_assessment: None,
+        delivery_revision: 0,
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {
@@ -46,6 +48,7 @@ fn seed_with_tasks(fixture: &Fixture, task_ids: Vec<String>) -> IssueWorkCheckpo
             crate::domain::issue_automation::coordinator::IssueWorkStartAuthority::Human,
         decision_id: Some(IssueDecisionId::new("fixture-start").unwrap()),
         approved_basis: IssueDecisionBasis {
+            delivery: None,
             authorization_epoch: 0,
             policy_version: "a".repeat(64),
             field_hash: Some(field_hash),

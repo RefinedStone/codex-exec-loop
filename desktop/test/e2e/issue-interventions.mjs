@@ -42,6 +42,7 @@ const requestDecision = (id = "decision-start") => ({
 let openDecisions = [requestDecision()];
 const fact = (request, state = request.state) => ({
   decision_id: request.id, kind: request.kind, subject: request.subject, gate: request.gate, basis: request.basis, state,
+  ...(request.delivery_review ? { delivery_review: request.delivery_review } : {}),
 });
 let history = [{ decision: fact(requestDecision("prior-withheld"), "superseded"), resolution_reason: { code: "basis_changed", summary: "판정 기준이 바뀌어 이전 결정을 종료했습니다." } }];
 const rank = (value) => ["off", "observe", "propose", "gated", "auto"].indexOf(value);
@@ -300,6 +301,7 @@ try {
   await panel.getByTestId("issues-title").click();
   const currentCard = () => panel.locator('[data-testid="issue-decision-card"][data-state="open"]').first();
   await currentCard().waitFor();
+  assert.equal(await currentCard().getByTestId("issue-delivery-review").count(), 0, "Start has no delivery review");
   assert.match(await currentCard().getByTestId("issue-decision-remaining").innerText(), /1일 남음.*조회 기준/s);
   assert.match(await currentCard().getByTestId("issue-decision-timeout").innerText(), /기한 후에도 사람의 답변을 기다립니다/);
 
@@ -693,6 +695,63 @@ try {
   await until(async () => requests.filter((entry) => entry.params.query?.type === "issue").length > beforeRepeatedNotificationReads
     && await panel.locator('[data-decision-id="background-decision"]').isVisible(), "the same notification to reopen and refresh detail from the report");
   assert.equal(await panel.getByTestId("issues-list-tab").getAttribute("aria-pressed"), "true");
+  const deliveryRequest = { ...requestDecision("decision-delivery"), kind: "risk_exception", gate: "delivery",
+    question: "보호 경로와 변경량을 확인한 뒤 이 결과를 제출할까요?", recommended: null,
+    basis: { ...requestDecision().basis, work_order_id: "work-delivery",
+      delivery: { base_commit_sha: "a".repeat(40), source_commit_sha: "b".repeat(40) } },
+    delivery_review: { changed_files: 51, changed_lines: 1_001, reasons: ["protected_path", "diff_too_large"] },
+    options: [{ id: "approve", label: "결과 제출 승인", effect: "이 커밋 범위의 결과 제출을 승인합니다." },
+      { id: "hold", label: "보류", effect: "결과를 제출하지 않고 기다립니다." }],
+  };
+  const deliveryCard = () => panel.locator('[data-testid="issue-decision-card"][data-decision-id="decision-delivery"][data-state="open"]');
+  const refreshDelivery = async (source) => {
+    const reads = requests.filter((entry) => entry.params.query?.type === "issue").length;
+    await panel.getByTestId("issue-execution-refresh").click();
+    await until(async () => requests.filter((entry) => entry.params.query?.type === "issue").length > reads
+      && await panel.getByTestId("issues-detail").getAttribute("aria-busy") === "false"
+      && await deliveryCard().getByTestId("issue-delivery-source").count() === 1
+      && await deliveryCard().getByTestId("issue-delivery-source").innerText() === source, "the frozen delivery review");
+  };
+  const beforeDeliveryCommands = commandRequests("answer_issue_decision").length;
+  const beforeDeliveryDialogs = await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length);
+  openDecisions = [deliveryRequest]; revision++;
+  await refreshDelivery("b".repeat(40));
+  assert.match(await deliveryCard().innerText(), /사람 승인 대기/);
+  assert.equal(await deliveryCard().getByTestId("issue-delivery-base").innerText(), "a".repeat(40));
+  assert.deepEqual(await deliveryCard().getByTestId("issue-delivery-reason").allTextContents(), ["보호 경로 변경", "변경량 한도 초과"]);
+  assert.equal(await deliveryCard().getByTestId("issue-delivery-files").innerText(), "51개");
+  assert.equal(await deliveryCard().getByTestId("issue-delivery-lines").innerText(), "1,001줄 (추가 + 삭제)");
+  await deliveryCard().locator('input[value="approve"]').check();
+  await deliveryCard().getByTestId("issue-decision-note").fill("검토 중인 변경의 메모");
+  queriedAt += 60_000; revision++;
+  await refreshDelivery("b".repeat(40));
+  assert.equal(await deliveryCard().locator('input[value="approve"]').isChecked(), true);
+  assert.equal(await deliveryCard().getByTestId("issue-decision-note").inputValue(), "검토 중인 변경의 메모");
+  const pastDelivery = { ...structuredClone(deliveryRequest), id: "delivery-history", state: "superseded" };
+  history.unshift({ decision: fact(pastDelivery), request: pastDelivery,
+    resolution_reason: { code: "basis_changed", summary: "제출 대상 커밋이 바뀌었습니다." } });
+  // 같은 decision revision이라도 표시 범위가 바뀌면 지난 선택을 새 source에 재사용하지 않는다.
+  openDecisions = [{ ...deliveryRequest, basis: { ...deliveryRequest.basis,
+    delivery: { ...deliveryRequest.basis.delivery, source_commit_sha: "c".repeat(40) } } }]; revision++;
+  await refreshDelivery("c".repeat(40));
+  assert.equal(await deliveryCard().locator('input[value="approve"]').isChecked(), false);
+  assert.equal(await deliveryCard().getByTestId("issue-decision-note").inputValue(), "");
+  assert.equal(await deliveryCard().getByTestId("issue-decision-answer").isDisabled(), true);
+  assert.equal(await panel.locator('[data-decision-id="delivery-history"]').getByTestId("issue-delivery-source").innerText(), "b".repeat(40));
+  await deliveryCard().locator('input[value="approve"]').check();
+  await deliveryCard().getByTestId("issue-decision-note").fill("새 범위를 검토하는 메모");
+  openDecisions = [{ ...openDecisions[0], basis: { ...openDecisions[0].basis,
+    delivery: { ...openDecisions[0].basis.delivery, base_commit_sha: "d".repeat(40) } },
+    delivery_review: { changed_files: 1, changed_lines: null, reasons: ["binary_diff"] } }]; revision++;
+  await refreshDelivery("c".repeat(40));
+  assert.equal(await deliveryCard().getByTestId("issue-delivery-base").innerText(), "d".repeat(40));
+  assert.equal(await deliveryCard().getByTestId("issue-delivery-lines").innerText(), "미확인 · 바이너리 포함");
+  assert.equal(await deliveryCard().locator('input[value="approve"]').isChecked(), false);
+  assert.equal(await deliveryCard().getByTestId("issue-decision-note").inputValue(), "");
+  assert.equal(commandRequests("answer_issue_decision").length, beforeDeliveryCommands);
+  assert.equal(await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length), beforeDeliveryDialogs);
+  await capture("delivery-review");
+  console.log("PASS frozen delivery reasons, size and commits; same-range drafts survive and changed ranges clear drafts");
   assert.equal(gateway.receivedMethods.includes("turn/start"), false);
   assert.equal(gateway.receivedMethods.includes("turn/steer"), false);
   assert.deepEqual(pageErrors, []);

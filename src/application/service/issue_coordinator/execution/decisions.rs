@@ -300,6 +300,7 @@ fn question_definition(
 ) -> Result<IssueDecisionDefinition> {
     let text = |value: &str| IssueDecisionSharedText::new_shared(value);
     Ok(IssueDecisionDefinition {
+        delivery_review: None,
         subject: IssueDecisionSubject::Issue(work.order.issue.clone()),
         gate: IssueAutomationGate::Spec,
         kind: IssueDecisionKind::AgentQuestion,

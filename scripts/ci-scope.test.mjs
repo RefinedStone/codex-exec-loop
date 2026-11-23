@@ -115,6 +115,21 @@ test("the workflow publishes one stable Post-Merge Gate for postmerge plans", ()
   assert.match(workflow, /github\.event_name == 'push' && github\.sha/);
 });
 
+test("stacked codex pull requests use their own base and the ordinary full CI gate", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
+  const pullRequest = workflow.match(/\n  pull_request:([\s\S]*?)\n  push:/)?.[1] || "";
+  const push = workflow.match(/\n  push:([\s\S]*?)\n  workflow_dispatch:/)?.[1] || "";
+  assert.match(pullRequest, /- 'codex\/\*\*'/);
+  assert.doesNotMatch(push, /codex/);
+  assert.match(workflow, /AKRA_CI_BASE_SHA:.*github\.event\.pull_request\.base\.sha/);
+  assert.match(workflow, /AKRA_CI_HEAD_SHA:.*github\.event\.pull_request\.head\.sha/);
+  assert.equal(resolveEffectiveScope("auto", "pull_request", "refs/pull/2665/merge"), "auto");
+  const plan = classifyChangedPaths([".github/workflows/native-pr-checks.yml"]);
+  assert.equal(plan.full, true);
+  assert.deepEqual(evaluateGate(plan, { scope: "success", rust_tests: "success", rust_lint: "success",
+    node_surfaces: "failure", portable_native: "success" }), [{ job: "node_surfaces", result: "failure" }]);
+});
+
 test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/native-pr-checks.yml", import.meta.url),

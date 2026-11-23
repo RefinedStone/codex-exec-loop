@@ -28,9 +28,44 @@ impl WorkPermitDeliveryFixture {
         github: FakeGithubAutomationPort,
         reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
     ) -> Self {
+        Self::with_origin_and_link_reference(
+            prefix,
+            github,
+            "synthetic-permit-regression",
+            reference,
+        )
+    }
+
+    fn with_origin_and_link_reference(
+        prefix: &str,
+        github: FakeGithubAutomationPort,
+        origin: &str,
+        reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
+    ) -> Self {
+        Self::with_result_builder(
+            prefix,
+            github,
+            origin,
+            reference,
+            blocked::enqueue_single_commit_ready_result,
+        )
+    }
+
+    fn with_result_builder(
+        prefix: &str,
+        github: FakeGithubAutomationPort,
+        origin: &str,
+        reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
+        build_result: impl FnOnce(
+            &ParallelModeService,
+            &TempGitRepo,
+            &str,
+        ) -> ParallelModeSlotLeaseSnapshot,
+    ) -> Self {
         let repo = TempGitRepo::new(prefix);
-        register_delivery_work_order_with_link(&repo, reference);
+        register_delivery_work_order_with_origin_and_link(&repo, origin, reference);
         let initial_basis = PlanningWorkPermitBasis {
+            delivery_review: None,
             authorization_epoch: 0,
             policy_version: "delivery-policy-v1".to_string(),
             field_hash: "delivery-fields-v1".to_string(),
@@ -44,7 +79,7 @@ impl WorkPermitDeliveryFixture {
             false,
         );
         let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github.clone()));
-        let lease = blocked::enqueue_single_commit_ready_result(&service, &repo, prefix);
+        let lease = build_result(&service, &repo, prefix);
         let source_sha = run_command(
             "git",
             ["-C", lease.worktree_path.as_str(), "rev-parse", "HEAD"],
@@ -159,6 +194,18 @@ fn register_delivery_work_order_with_link(
     repo: &TempGitRepo,
     reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
 ) {
+    register_delivery_work_order_with_origin_and_link(
+        repo,
+        "synthetic-permit-regression",
+        reference,
+    );
+}
+
+fn register_delivery_work_order_with_origin_and_link(
+    repo: &TempGitRepo,
+    origin: &str,
+    reference: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference>,
+) {
     let adapter = SqlitePlanningAuthorityAdapter::new();
     let workspace = repo.workspace_dir();
     let empty_projection = PriorityQueueProjection {
@@ -231,7 +278,7 @@ fn register_delivery_work_order_with_link(
             PlanningWorkOrderRegistration {
                 link_reference: reference,
                 work_order_id: WORK_ORDER_ID,
-                origin: "synthetic-permit-regression",
+                origin,
                 initial_task_id: TASK_ID,
                 observed_planning_revision: snapshot.planning_revision,
                 task_authority: &document,
@@ -904,6 +951,7 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
     let repo = TempGitRepo::new("work-permit-dispatch-capacity");
     register_delivery_work_order(&repo);
     let basis = PlanningWorkPermitBasis {
+        delivery_review: None,
         authorization_epoch: 0,
         policy_version: "delivery-policy-v1".to_string(),
         field_hash: "delivery-fields-v1".to_string(),
@@ -973,6 +1021,7 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
 }
 
 mod control_cleanup;
+mod delivery_review;
 mod link_reference;
 mod rearm_conflict;
 mod shared_integration;
