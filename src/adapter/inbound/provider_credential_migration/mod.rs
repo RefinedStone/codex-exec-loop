@@ -98,7 +98,7 @@ fn endpoint(profile_id: &str, runtime: &Path) -> anyhow::Result<String> {
     }
     #[cfg(unix)]
     {
-        let path = runtime.join("migration.sock");
+        let path = crate::private_ipc::provider_credential_socket_path(runtime);
         if path.as_os_str().len() > 103 {
             anyhow::bail!("provider migration endpoint is unavailable");
         }
