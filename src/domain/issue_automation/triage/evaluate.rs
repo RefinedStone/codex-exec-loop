@@ -5,7 +5,8 @@ use crate::domain::issue_automation::policy::{
 };
 use crate::domain::issue_automation::source::{
     IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
-    IssueSourceActorKind, IssueSourceContent, IssueSourceObservation, IssueSourceRead,
+    IssueRepositoryVisibility, IssueSourceActorKind, IssueSourceContent, IssueSourceObservation,
+    IssueSourceRead,
 };
 
 use super::readiness::{budget_exhausted, held_or_manual, label_cap};
@@ -26,6 +27,38 @@ pub(super) struct Evaluation {
 }
 
 pub(super) fn evaluate(input: &IssueTriageInput<'_>) -> Result<Evaluation, IssueTriageError> {
+    let mut result = evaluate_observation(input)?;
+    restrict_auto_repository(input.current, &mut result);
+    Ok(result)
+}
+
+fn restrict_auto_repository(current: Option<&IssueSourceRead>, result: &mut Evaluation) {
+    let allowed = matches!(current, Some(IssueSourceRead::Observed(observation))
+        if matches!(observation.repository_visibility,
+            IssueRepositoryVisibility::Private | IssueRepositoryVisibility::Internal)
+            && observation.repository_name_with_owner.is_some()
+            && observation.validate_repository_metadata().is_ok());
+    if allowed
+        || (result.effective_mode != IssueAutomationAutonomy::Auto
+            && result.assumed_mode != IssueAutomationAutonomy::Auto)
+    {
+        return;
+    }
+    // Preserve existing non-Auto execution modes. The counterfactual report must not imply
+    // public/unknown Auto, and it must never fall below the effective Gated mode.
+    if result.effective_mode == IssueAutomationAutonomy::Auto {
+        result.effective_mode = IssueAutomationAutonomy::Propose;
+    }
+    result.assumed_mode = result
+        .assumed_mode
+        .min(IssueAutomationAutonomy::Propose)
+        .max(result.effective_mode);
+    result
+        .reasons
+        .push(IssueTriageReasonCode::AutoRepositoryRestricted);
+}
+
+fn evaluate_observation(input: &IssueTriageInput<'_>) -> Result<Evaluation, IssueTriageError> {
     let mut result = Evaluation {
         eligibility: IssueTriageEligibility::Unknown,
         readiness: IssueTriageReadiness::Unknown,

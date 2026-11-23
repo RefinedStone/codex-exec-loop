@@ -126,6 +126,8 @@ mod tests {
     }
     fn baseline() -> IssueSourceObservation {
         IssueSourceObservation {
+            repository_visibility: Default::default(),
+            repository_name_with_owner: None,
             issue: IssueReference {
                 provider: IssueProvider::GitHub,
                 server_id: "github.com".into(),

@@ -4,6 +4,7 @@ use super::super::tests::Fixture;
 use super::*;
 use crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort;
 use crate::domain::issue_automation::autonomy::IssueAutonomyLevel;
+mod auto;
 
 fn intent(id: &str, level: IssueAutonomyLevel, revision: u64) -> IssueAutonomyIntent {
     IssueAutonomyIntent {

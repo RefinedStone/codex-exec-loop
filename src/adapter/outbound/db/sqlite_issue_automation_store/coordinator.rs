@@ -328,7 +328,7 @@ pub(super) fn validate_authorization(
             if !policy_start(assessment) {
                 bail!("the issue work requires a current automatic start gate");
             }
-            validate_gated_selection(tx, workspace, assessment)?;
+            validate_automatic_selection(tx, workspace, assessment)?;
         }
         IssueWorkStartAuthority::TimeoutDefault => {
             let decision = super::decision::read(
@@ -343,7 +343,7 @@ pub(super) fn validate_authorization(
             {
                 bail!("the issue work does not have a current default start decision");
             }
-            validate_gated_selection(tx, workspace, assessment)?;
+            validate_automatic_selection(tx, workspace, assessment)?;
         }
         IssueWorkStartAuthority::TimeoutArbiter => {
             let decision = super::decision::read(
@@ -359,24 +359,23 @@ pub(super) fn validate_authorization(
             {
                 bail!("the issue work does not have a current arbiter start decision");
             }
-            validate_gated_selection(tx, workspace, assessment)?;
+            validate_automatic_selection(tx, workspace, assessment)?;
         }
     }
     Ok(())
 }
 
-fn validate_gated_selection(
+fn validate_automatic_selection(
     tx: &Connection,
     workspace: &str,
     assessment: &IssueTriageAssessment,
 ) -> Result<()> {
     let selection = super::autonomy::read(tx, workspace)?;
-    if selection.requested_level
-        != Some(crate::domain::issue_automation::autonomy::IssueAutonomyLevel::Gated)
+    if !super::autonomy::matches_automatic_mode(&selection, assessment.effective_mode())
         || selection.pending.is_some()
         || selection.revision != assessment.basis().runtime_selection_revision
     {
-        bail!("the issue work requires an explicit current gated selection");
+        bail!("the issue work requires an explicit current automatic selection");
     }
     Ok(())
 }

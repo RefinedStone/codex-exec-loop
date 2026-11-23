@@ -14,7 +14,9 @@
 use serde::{Deserialize, Serialize};
 
 mod acceptance;
+mod delivery_authority;
 pub mod delivery_evidence;
+pub use delivery_authority::PlanningWorkDeliveryAuthority;
 pub(crate) mod direction_policy;
 pub mod evidence;
 pub(crate) mod mutation;

@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, de::IgnoredAny};
 
 pub(super) const ISSUE_FRAGMENT: &str = r#"
 fragment AkraSourceIssue on Issue {
-  __typename id number url title body state updatedAt repository { id nameWithOwner }
+  __typename id number url title body state updatedAt repository { id nameWithOwner visibility }
   author { __typename login ... on Node { id } }
   labels(first: 100) {
     nodes { id name }
@@ -148,6 +148,16 @@ pub(super) struct IssueNode {
 pub(super) struct RepositoryId {
     pub id: String,
     pub name_with_owner: String,
+    pub visibility: RepositoryVisibility,
+}
+
+/// GraphQL의 닫힌 enum이다. 누락·null·새 값은 과거 관찰의 Unknown과 구분해 응답을 거절한다.
+#[derive(Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(super) enum RepositoryVisibility {
+    Private,
+    Internal,
+    Public,
 }
 
 #[derive(Default)]

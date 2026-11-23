@@ -93,14 +93,25 @@ pub(crate) fn projection(
                 IssueAutonomyChoice {
                     level,
                     enabled: reason.is_none(),
-                    requires_confirmation: requested > mode
-                        || (level == IssueAutonomyLevel::Gated
-                            && selection.requested_level != Some(IssueAutonomyLevel::Gated)),
+                    requires_confirmation: requires_confirmation(
+                        level,
+                        mode,
+                        selection.requested_level,
+                    ),
                     reason,
                 }
             })
             .collect(),
     })
+}
+fn requires_confirmation(
+    level: IssueAutonomyLevel,
+    effective: IssueAutomationAutonomy,
+    requested: Option<IssueAutonomyLevel>,
+) -> bool {
+    IssueAutomationAutonomy::from(level) > effective
+        || (matches!(level, IssueAutonomyLevel::Gated | IssueAutonomyLevel::Auto)
+            && requested != Some(level))
 }
 pub struct IssueAutonomyService {
     workspace: String,
@@ -157,10 +168,14 @@ impl IssueAutonomyService {
         validate_command_id(command_id).map_err(|reason| anyhow!(reason))?;
         let current = self.current()?;
         self.validate_choice(level, &current)?;
-        let start_consent = if level == IssueAutonomyLevel::Gated {
-            "\nGated를 켜면 정책에서 자동 시작을 허용한 이슈를 매번 묻지 않고 등록합니다. 사용자 파일의 동시 작업·일일 시작·이슈별 시도 한도를 적용하며, 전달과 통합에는 사람 리뷰가 필요합니다. 실행은 별도로 켠 병렬 실행 설정을 따릅니다."
-        } else {
-            ""
+        let start_consent = match level {
+            IssueAutonomyLevel::Gated => {
+                "\nGated를 켜면 정책에서 자동 시작을 허용한 이슈를 매번 묻지 않고 등록합니다. 사용자 파일의 동시 작업·일일 시작·이슈별 시도 한도를 적용하며, 전달과 통합에는 사람 리뷰가 필요합니다. 실행은 별도로 켠 병렬 실행 설정을 따릅니다."
+            }
+            IssueAutonomyLevel::Auto => {
+                "\nAuto를 켜면 정책이 허용한 이슈를 자동으로 시작하고 조건을 충족한 변경을 전달합니다. 공개 저장소이거나 공개 범위를 확인할 수 없으면 제안 단계로 제한합니다. 검증을 강제하도록 설정하고 필수 기준을 충족해야 전달할 수 있으며, 정책이 정한 사람 승인도 유지합니다. 이번 실행에서 자동 통합을 따로 허용하지 않았다면 PR에 사람 승인이 필요합니다. Auto 선택만으로 자동 통합이 켜지지는 않습니다. 동시 작업·일일 시작·이슈별 시도 한도와 별도로 켠 병렬 실행 설정을 따릅니다."
+            }
+            _ => "",
         };
         Ok(IssueConfirmationPreview {
             target: self.target(command_id, level, &current),
@@ -220,10 +235,7 @@ impl IssueAutonomyService {
         if let Some(confirmation) = confirmation {
             confirmation.require_target(&self.target(&command_id, level, &current))?;
         }
-        if IssueAutomationAutonomy::from(level) > current.effective_level
-            || (level == IssueAutonomyLevel::Gated
-                && current.requested_level != Some(IssueAutonomyLevel::Gated))
-        {
+        if requires_confirmation(level, current.effective_level, current.requested_level) {
             confirmation.ok_or(IssueConfirmationError::Required)?;
         }
         let intent = IssueAutonomyIntent {

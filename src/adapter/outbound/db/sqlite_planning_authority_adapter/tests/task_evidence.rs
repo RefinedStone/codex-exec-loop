@@ -29,6 +29,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(label: &str) -> Self {
+        Self::with_before_lease(label, |_| {})
+    }
+
+    fn with_before_lease(label: &str, before_lease: impl FnOnce(&mut Self)) -> Self {
         let workspace = temp_workspace(label);
         let adapter = SqlitePlanningAuthorityAdapter::new();
         adapter
@@ -56,12 +60,13 @@ impl Fixture {
             Some(NOW.into()),
         )
         .with_lease_generation("a".repeat(64));
-        let fixture = Self {
+        let mut fixture = Self {
             workspace,
             adapter,
             lease,
         };
         fixture.save(vec![task]);
+        before_lease(&mut fixture);
         fixture
             .adapter
             .upsert_runtime_slot_lease(&fixture.workspace, &fixture.lease)

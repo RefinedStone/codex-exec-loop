@@ -6,6 +6,7 @@ use crate::application::port::outbound::issue_publish_intent_journal_port::Issue
 use crate::domain::issue_automation::feedback::IssueFeedbackEvent;
 
 mod arbiter;
+mod auto_delivery;
 mod closure;
 mod delivery;
 mod feedback;
@@ -1037,6 +1038,19 @@ impl IssueCoordinatorService {
                 self.invalidate_delivery(&mut work, IssueWorkBlockReason::ApprovalChanged)?;
                 return Ok(());
             }
+            let delivery_authority = match delivery_review
+                .as_ref()
+                .map(|review| {
+                    self.current_delivery_authority(&work, &current_item, &current, review)
+                })
+                .transpose()
+            {
+                Ok(authority) => authority,
+                Err(error) => {
+                    self.invalidate_delivery(&mut work, IssueWorkBlockReason::SourceUnavailable)?;
+                    return Err(error);
+                }
+            };
             if let Err(error) = self.execution.grant(
                 &self.workspace,
                 &IssueWorkPermitRequest {
@@ -1047,6 +1061,7 @@ impl IssueCoordinatorService {
                     gate_revision,
                     delivery,
                     delivery_review: delivery_review.clone(),
+                    delivery_authority: delivery_authority.clone(),
                 },
             ) {
                 if delivery
@@ -1065,6 +1080,11 @@ impl IssueCoordinatorService {
                     !self
                         .delivery_review_current(&work, review, &current)
                         .unwrap_or(false)
+                })
+                || delivery_review.as_ref().is_some_and(|review| {
+                    self.current_delivery_authority(&work, &current_item, &current, review)
+                        .ok()
+                        != delivery_authority
                 })
             {
                 self.execution

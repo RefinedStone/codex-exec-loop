@@ -338,11 +338,14 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     None
 }
 
-/// Propose stays human; Gated also admits automatic or timeout-default starts.
+/// Propose stays human; explicitly selected Gated/Auto also admit their current policy's
+/// automatic and timeout starts. Durable native selection is checked at admission.
 pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
     matches!(
         assessment.effective_mode(),
-        IssueAutomationAutonomy::Propose | IssueAutomationAutonomy::Gated
+        IssueAutomationAutonomy::Propose
+            | IssueAutomationAutonomy::Gated
+            | IssueAutomationAutonomy::Auto
     ) && assessment.eligibility() == IssueTriageEligibility::Eligible
         && assessment.readiness() == IssueTriageReadiness::Ready
         && assessment.gates().iter().any(|gate| {
@@ -351,18 +354,23 @@ pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
                 && (matches!(
                     gate.action,
                     IssueAutomationGateAction::Human | IssueAutomationGateAction::Auto
-                ) || (assessment.effective_mode() == IssueAutomationAutonomy::Gated
-                    && matches!(
-                        gate.action,
-                        IssueAutomationGateAction::TimeoutDefault
-                            | IssueAutomationGateAction::TimeoutArbiter
-                    )))
+                ) || (matches!(
+                    assessment.effective_mode(),
+                    IssueAutomationAutonomy::Gated | IssueAutomationAutonomy::Auto
+                ) && matches!(
+                    gate.action,
+                    IssueAutomationGateAction::TimeoutDefault
+                        | IssueAutomationGateAction::TimeoutArbiter
+                )))
         })
 }
 
 pub fn policy_start(assessment: &IssueTriageAssessment) -> bool {
     ready_for_start(assessment)
-        && assessment.effective_mode() == IssueAutomationAutonomy::Gated
+        && matches!(
+            assessment.effective_mode(),
+            IssueAutomationAutonomy::Gated | IssueAutomationAutonomy::Auto
+        )
         && assessment.gates().iter().any(|gate| {
             gate.gate == IssueAutomationGate::Start
                 && gate.enabled
@@ -381,7 +389,7 @@ pub fn human_start(decision: &IssueDecisionRequest) -> bool {
         })
 }
 
-/// Default 답은 현재 Gated 관문과 같은 판일 때만 시작의 근거다.
+/// Default 답은 현재 Gated/Auto 관문과 같은 판일 때만 시작의 근거다.
 /// authorization epoch의 현재값은 호출자가 장부와 비교한다.
 pub fn timeout_default_start(
     assessment: &IssueTriageAssessment,
@@ -402,7 +410,10 @@ pub fn timeout_default_start(
         return false;
     };
     ready_for_start(assessment)
-        && assessment.effective_mode() == IssueAutomationAutonomy::Gated
+        && matches!(
+            assessment.effective_mode(),
+            IssueAutomationAutonomy::Gated | IssueAutomationAutonomy::Auto
+        )
         && assessment.gates().iter().any(|gate| {
             gate.gate == IssueAutomationGate::Start
                 && gate.enabled

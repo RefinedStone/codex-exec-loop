@@ -1,5 +1,7 @@
 use std::fmt;
 
+pub use crate::domain::planning::PlanningWorkDeliveryAuthority;
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +44,8 @@ pub struct PlanningWorkDeliveryReview {
     pub base_commit_sha: String,
     pub source_commit_sha: String,
     pub gate_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<PlanningWorkDeliveryAuthority>,
 }
 
 impl PlanningWorkDeliveryReview {
@@ -50,6 +54,9 @@ impl PlanningWorkDeliveryReview {
             || !full_git_object_id(&self.source_commit_sha)
         {
             bail!("delivery review commits must be full Git object ids");
+        }
+        if let Some(authority) = &self.authority {
+            authority.validate().map_err(anyhow::Error::msg)?;
         }
         Ok(())
     }
@@ -103,7 +110,23 @@ pub struct PlanningWorkPermit {
 impl PlanningWorkPermit {
     pub fn validate(&self) -> Result<()> {
         validate_work_order_id(&self.work_order_id)?;
-        self.basis.validate()
+        self.basis.validate()?;
+        if self.requires_auto_delivery()
+            && (self.stage == PlanningWorkPermitStage::Dispatch || self.requires_human_review)
+        {
+            bail!("automatic delivery cannot be a dispatch or a Human-review grant");
+        }
+        Ok(())
+    }
+
+    pub fn requires_auto_delivery(&self) -> bool {
+        matches!(
+            self.basis
+                .delivery_review
+                .as_ref()
+                .and_then(|review| review.authority.as_ref()),
+            Some(PlanningWorkDeliveryAuthority::Auto { .. })
+        )
     }
 }
 
@@ -137,6 +160,8 @@ pub enum PlanningWorkPermitDecision {
     Granted {
         requires_human_review: bool,
     },
+    /// Explicit Auto authority still requires the current enforced evidence gate.
+    GrantedAuto,
     Denied(PlanningWorkPermitBlockReason),
 }
 
@@ -144,8 +169,12 @@ impl PlanningWorkPermitDecision {
     pub fn blocked_reason(self) -> Option<&'static str> {
         match self {
             Self::Denied(reason) => Some(reason.label()),
-            Self::Legacy | Self::Granted { .. } => None,
+            Self::Legacy | Self::Granted { .. } | Self::GrantedAuto => None,
         }
+    }
+
+    pub fn requires_auto_delivery(self) -> bool {
+        matches!(self, Self::GrantedAuto)
     }
 
     pub fn requires_human_review(self) -> bool {
@@ -188,8 +217,20 @@ pub fn evaluate_work_order_permit(
     {
         return PlanningWorkPermitDecision::Denied(PlanningWorkPermitBlockReason::Missing);
     }
-    PlanningWorkPermitDecision::Granted {
-        requires_human_review: permit.requires_human_review,
+    let auto = stage != PlanningWorkPermitStage::Dispatch && permit.requires_auto_delivery();
+    if work_order.origin == "issue_automation"
+        && stage == PlanningWorkPermitStage::Integrate
+        && !permit.requires_human_review
+        && !auto
+    {
+        return PlanningWorkPermitDecision::Denied(PlanningWorkPermitBlockReason::Missing);
+    }
+    if auto {
+        PlanningWorkPermitDecision::GrantedAuto
+    } else {
+        PlanningWorkPermitDecision::Granted {
+            requires_human_review: permit.requires_human_review,
+        }
     }
 }
 

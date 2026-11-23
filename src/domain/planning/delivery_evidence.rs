@@ -51,6 +51,8 @@ pub enum TaskDeliveryEvidenceReason {
     EvidenceStale,
     EvidenceUnavailable,
     IntegrationSourceMismatch,
+    AutoRequiresEnforce,
+    AutoRequiresMachineCriterion,
 }
 
 impl TaskDeliveryEvidenceReason {
@@ -62,6 +64,8 @@ impl TaskDeliveryEvidenceReason {
             Self::EvidenceStale => "evidence_stale",
             Self::EvidenceUnavailable => "evidence_unavailable",
             Self::IntegrationSourceMismatch => "integration_source_mismatch",
+            Self::AutoRequiresEnforce => "auto_requires_enforce",
+            Self::AutoRequiresMachineCriterion => "auto_requires_machine_criterion",
         }
     }
 }
@@ -136,7 +140,13 @@ impl TaskDeliveryEvidenceObservation {
     }
 
     pub fn allows_delivery(&self) -> bool {
-        self.mode == TaskEvidenceDeliveryMode::Observe || self.satisfied()
+        !self.reasons.iter().any(|reason| {
+            matches!(
+                reason,
+                TaskDeliveryEvidenceReason::AutoRequiresEnforce
+                    | TaskDeliveryEvidenceReason::AutoRequiresMachineCriterion
+            )
+        }) && (self.mode == TaskEvidenceDeliveryMode::Observe || self.satisfied())
     }
 
     /// Time is diagnostic. Re-reading unchanged evidence must not append another audit event.

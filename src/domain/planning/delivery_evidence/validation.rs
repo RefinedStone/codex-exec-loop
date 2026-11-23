@@ -54,7 +54,7 @@ impl TaskDeliveryEvidenceObservation {
     pub fn validate(&self) -> Result<(), TaskDeliveryEvidenceError> {
         if self.evidence_revision > MAX_TASK_EVIDENCE_REVISION
             || self.criteria.len() > MAX_TASK_EVIDENCE_PAGE
-            || self.reasons.len() > 6
+            || self.reasons.len() > 8
             || chrono::DateTime::parse_from_rfc3339(&self.observed_at).is_err()
         {
             return Err(TaskDeliveryEvidenceError::Invalid);

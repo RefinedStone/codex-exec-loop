@@ -1,7 +1,7 @@
 use super::*;
 use crate::application::port::outbound::task_verification_repository_port::*;
 
-fn host_passes(f: &DeliveryFixture) -> TaskDeliveryEvidenceObservation {
+pub(super) fn host_passes(f: &DeliveryFixture) -> TaskDeliveryEvidenceObservation {
     let owner = "e".repeat(64);
     f.base
         .adapter

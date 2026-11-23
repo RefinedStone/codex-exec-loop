@@ -363,6 +363,7 @@ fn validate_observation(
     binding: &IssueAutomationBinding,
     observation: &IssueSourceObservation,
 ) -> Result<()> {
+    observation.validate_repository_metadata()?;
     if let Some(web) = &observation.web {
         web.validate_for(&observation.issue)?;
     }

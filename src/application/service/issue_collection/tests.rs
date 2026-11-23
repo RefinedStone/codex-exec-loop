@@ -191,6 +191,8 @@ fn observation(
     disclosure: &IssueSourceDisclosure,
 ) -> IssueSourceObservation {
     IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         creation_provenance:
             crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue,

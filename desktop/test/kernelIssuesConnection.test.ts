@@ -1136,14 +1136,15 @@ describe("issue kernel connection", () => {
 
 
 function autonomyState(level: IssueAutonomyLevel = "observe", cap: IssueAutonomyLevel = "propose"): Extract<IssueAutonomyState, { status: "ready" }> {
+  const levels = ["off", "observe", "propose", "gated", "auto"] as const;
   return {
     status: "ready" as const, requested_level: level, effective_level: level, cap,
     revision: 1, policy_version: "runtime-policy-1", pending: false,
-    choices: (["off", "observe", "propose", "gated"] as const).map((choice) => ({
+    choices: levels.map((choice) => ({
       level: choice,
-      enabled: ["off", "observe", "propose", "gated"].indexOf(choice) <= ["off", "observe", "propose", "gated"].indexOf(cap),
-      requires_confirmation: ["off", "observe", "propose", "gated"].indexOf(choice) > ["off", "observe", "propose", "gated"].indexOf(level),
-      reason: ["off", "observe", "propose", "gated"].indexOf(choice) > ["off", "observe", "propose", "gated"].indexOf(cap) ? "현재 정책 상한입니다." : null,
+      enabled: levels.indexOf(choice) <= levels.indexOf(cap),
+      requires_confirmation: levels.indexOf(choice) > levels.indexOf(level),
+      reason: levels.indexOf(choice) > levels.indexOf(cap) ? "현재 정책 상한입니다." : null,
     })),
   };
 }
@@ -1235,28 +1236,28 @@ describe("issue decisions and interventions", () => {
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 
-  it("accepts legacy choices and routes Gated through native confirmation when the server enables it", async () => {
+  it.each(["gated", "auto"] as const)("accepts legacy choices and routes %s through native confirmation when the server enables it", async (level) => {
     const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueAutonomy"]>>(async () => ({ cancelled: true as const }));
     const h = harness({ confirmations: { confirmIssueAutonomy: confirmation } });
     const currentAutonomy = autonomyState();
     const legacy = {
-      ...currentAutonomy, choices: currentAutonomy.choices.filter((choice) => choice.level !== "gated"),
+      ...currentAutonomy, choices: currentAutonomy.choices.filter((choice) => choice.level !== "gated" && choice.level !== "auto"),
     };
     await h.openIssues(issuePage(), { ...automation(), autonomy: legacy });
     expect(h.view().issues.error).toBeNull();
-    await h.connection.setIssueAutonomy("gated");
+    await h.connection.setIssueAutonomy(level);
     expect(confirmation).not.toHaveBeenCalled();
 
-    h.connection.handleEvent({ event: { ...automation(), type: "issues", autonomy: autonomyState("observe", "gated") } });
-    await h.connection.setIssueAutonomy("gated");
+    h.connection.handleEvent({ event: { ...automation(), type: "issues", autonomy: autonomyState("observe", level) } });
+    await h.connection.setIssueAutonomy(level);
     expect(confirmation).toHaveBeenCalledOnce();
-    expect(confirmation.mock.calls[0]?.[0]).toMatchObject({ workspace: "/repo", level: "gated" });
+    expect(confirmation.mock.calls[0]?.[0]).toMatchObject({ workspace: "/repo", level });
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 
-  it("accepts a confirmed Gated projection without reissuing its command", async () => {
+  it.each(["gated", "auto"] as const)("accepts a confirmed %s projection without reissuing its command", async (level) => {
     const h = harness();
-    const state = { ...automation(), autonomy: autonomyState("gated", "gated") };
+    const state = { ...automation(), autonomy: autonomyState(level, level) };
     await h.openIssues(issuePage(), state);
     expect(h.view().issues.automation).toEqual(state);
     expect(h.view().issues.error).toBeNull();

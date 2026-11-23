@@ -26,7 +26,7 @@ mod validation_links;
 mod validation_recovery;
 pub(super) use control::{claim_work_order_launch, validate_cancelled_lineage};
 mod permits;
-pub(super) use permits::check_work_order_permit_in_transaction;
+pub(super) use permits::{check_work_order_permit_in_transaction, load_basis as load_permit_basis};
 
 // Keep schema version 19: older binaries ignore these additive tables. There is deliberately no
 // foreign key to planning_tasks, whose rows can be removed or replaced independently of lineage.

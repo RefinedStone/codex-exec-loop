@@ -253,6 +253,6 @@ fn arbiter_schema_eleven_migration_preserves_existing_decisions_without_creating
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, super::super::super::super::SCHEMA_VERSION);
     assert_eq!(count(&fixture, "issue_arbiter_attempts"), 0);
 }

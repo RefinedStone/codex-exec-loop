@@ -27,6 +27,8 @@ fn observation(fixture: &Fixture) -> IssueSourceObservation {
     let mut snapshot = snapshot("## 완료 기준\n- 변경 사항을 검증한다.\n");
     snapshot.policy_version = issue_policy_version(&IssuePolicy::builtin());
     IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         creation_provenance:
             crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: reference(fixture.cwd(), "I_triage"),
@@ -211,6 +213,41 @@ fn answered(
         .request
 }
 
+const HUMAN_CONFIRMATION_REFERENCE: &str = "desktop-confirmation:cccccccccccccccccccccccccccccccc";
+
+fn human_answered(
+    request: &IssueDecisionRequest,
+    current: &IssueTriageAssessment,
+    option: &str,
+) -> IssueDecisionRequest {
+    use crate::domain::issue_automation::policy::IssueAutomationGateAction;
+
+    let gate = current
+        .gates()
+        .iter()
+        .find(|gate| gate.gate == IssueAutomationGate::Start)
+        .unwrap();
+    assert_eq!(gate.action, IssueAutomationGateAction::Human);
+    let basis =
+        IssueDecisionBasis::from_assessment(current, IssueAutomationGate::Start, None).unwrap();
+    // This storage fixture supplies verified authorship; the native proof boundary has its own tests.
+    request
+        .answer_for_gate(
+            &basis,
+            gate.action,
+            IssueDecisionAgentAnswer {
+                option: option.into(),
+                note: Some(shared("공유된 판단")),
+                caller: Some("Desktop".into()),
+                channel: "native".into(),
+                at: "2026-11-20T20:00:00Z".into(),
+            },
+            Some(HUMAN_CONFIRMATION_REFERENCE),
+        )
+        .unwrap()
+        .request
+}
+
 fn commit(result: IssueDecisionSaveResult) -> IssueDecisionCommit {
     match result {
         IssueDecisionSaveResult::Saved(commit) => *commit,
@@ -235,7 +272,7 @@ fn two_connections_keep_only_the_first_answer_and_one_catalog_change() {
         let adapter = fixture.adapter();
         let workspace = fixture.cwd().to_string();
         let assessment = assessment.clone();
-        let candidate = answered(&request, &assessment, option);
+        let candidate = human_answered(&request, &assessment, option);
         threads.push(std::thread::spawn(move || {
             barrier.wait();
             commit(
@@ -271,9 +308,12 @@ fn two_connections_keep_only_the_first_answer_and_one_catalog_change() {
     assert_eq!(reopened, results[0].record);
     assert_eq!(
         reopened.request.answer().unwrap().by,
-        IssueDecisionAnswerBy::Agent
+        IssueDecisionAnswerBy::Human
     );
-    assert!(reopened.request.answer().unwrap().confirmation.is_none());
+    assert_eq!(
+        reopened.request.answer().unwrap().confirmation.as_deref(),
+        Some(HUMAN_CONFIRMATION_REFERENCE)
+    );
     assert!(subject(&fixture).1.open_decisions.is_empty());
 }
 
@@ -313,7 +353,7 @@ fn repeated_definition_with_another_id_reuses_the_first_request_and_never_reopen
                     decision_revision: 1,
                 },
                 &assessment,
-                &answered(&first, &assessment, "accept"),
+                &human_answered(&first, &assessment, "accept"),
             )
             .unwrap(),
     );
@@ -514,7 +554,7 @@ fn distinct_questions_on_the_same_basis_remain_independent_after_the_first_answe
                     decision_revision: initial.record.revision,
                 },
                 &assessment,
-                &answered(&first, &assessment, "accept"),
+                &human_answered(&first, &assessment, "accept"),
             )
             .unwrap(),
     );

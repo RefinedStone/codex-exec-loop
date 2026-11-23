@@ -67,4 +67,10 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'adapter::outbound::github::automation::tests::frozen_integration::' \n  'application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::' \n  'application::service::post_turn_evaluation::tests::automatic_verification::' \n  'application::service::parallel_mode::tests::automatic_verification::' \
   'application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::' \
   'application::service::post_turn_evaluation::tests::automatic_verification::' \
-  'application::service::parallel_mode::tests::automatic_verification::'
+  'application::service::parallel_mode::tests::automatic_verification::' \
+  'composition::kernel_host::simulation::issue_decision::human_confirmation::autonomy::' \
+  'sqlite_issue_automation_store::autonomy::tests::' \
+  'application::service::issue_coordinator::tests::auto_delivery::' \
+  'application::service::issue_coordinator::tests::autonomy::auto::' \
+  'adapter::inbound::kernel_protocol::issue_autonomy::' \
+  'sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_review::auto_delivery::'

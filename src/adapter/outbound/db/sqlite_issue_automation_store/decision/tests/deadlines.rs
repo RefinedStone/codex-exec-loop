@@ -186,7 +186,7 @@ fn overdue_answered_and_stale_decisions_do_not_generate_reminders() {
             .unwrap()
             .is_none()
     );
-    let answer = answered(&opened.record.request, &assessment, "accept");
+    let answer = human_answered(&opened.record.request, &assessment, "accept");
     commit(
         adapter
             .save_issue_decision(fixture.cwd(), expected, &assessment, &answer)

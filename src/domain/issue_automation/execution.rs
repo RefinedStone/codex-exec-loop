@@ -9,6 +9,16 @@ pub use detail::{
     IssueExecutionRecoveryReason, IssueExecutionUnavailableReason,
 };
 
+/// Delivery approval is separate from the Start basis and the host-reviewed frozen diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueWorkDeliveryAuthority {
+    HumanReview,
+    Auto {
+        merge_basis: super::decision::IssueDecisionBasis,
+        source_repository: String,
+    },
+}
+
 /// Execution facts, rather than provider-specific validation phases.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

@@ -23,6 +23,8 @@ fn observation(fixture: &Fixture) -> IssueSourceObservation {
     let mut snapshot = snapshot("## 완료 기준\n- 변경 사항을 검증한다.\n");
     snapshot.policy_version = issue_policy_version(&IssuePolicy::builtin());
     IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         creation_provenance:
             crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: reference(fixture.cwd(), "I_triage"),

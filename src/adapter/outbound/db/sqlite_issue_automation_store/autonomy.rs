@@ -1,8 +1,9 @@
 use super::{SqliteIssueAutomationStoreAdapter, next_revision, transaction};
-use crate::domain::issue_automation::MAX_ISSUE_AUTOMATION_REVISION;
 use crate::domain::issue_automation::autonomy::{
-    IssueAutonomyCommit, IssueAutonomyIntent, IssueAutonomySelection, StoredIssueAutonomyCommand,
+    IssueAutonomyCommit, IssueAutonomyIntent, IssueAutonomyLevel, IssueAutonomySelection,
+    StoredIssueAutonomyCommand,
 };
+use crate::domain::issue_automation::{IssueAutomationAutonomy, MAX_ISSUE_AUTOMATION_REVISION};
 use anyhow::{Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -39,10 +40,18 @@ CREATE TABLE issue_autonomy_selection (
     pending_command_id TEXT
 ) STRICT, WITHOUT ROWID
 "#;
-pub(super) const SCHEMA: &str = r#"
+pub(super) const GATED_SCHEMA: &str = r#"
 CREATE TABLE issue_autonomy_selection (
     workspace_dir TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
     requested_level TEXT CHECK (requested_level IS NULL OR requested_level IN ('off','observe','propose','gated')),
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    pending_command_id TEXT
+) STRICT, WITHOUT ROWID
+"#;
+pub(super) const SCHEMA: &str = r#"
+CREATE TABLE issue_autonomy_selection (
+    workspace_dir TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+    requested_level TEXT CHECK (requested_level IS NULL OR requested_level IN ('off','observe','propose','gated','auto')),
     revision INTEGER NOT NULL CHECK (revision >= 0),
     pending_command_id TEXT
 ) STRICT, WITHOUT ROWID
@@ -141,6 +150,23 @@ pub(super) fn permits_assessment(
 ) -> Result<bool> {
     let current = read(connection, workspace)?;
     Ok(current.pending.is_none() && current.revision == revision)
+}
+
+/// 현재 정책으로 이미 계산한 실행 수준과 명시적 선택만 비교한다. 판·pending 검사는 호출자가 유지한다.
+pub(super) fn matches_automatic_mode(
+    selection: &IssueAutonomySelection,
+    effective: IssueAutomationAutonomy,
+) -> bool {
+    match effective {
+        IssueAutomationAutonomy::Gated => matches!(
+            selection.requested_level,
+            Some(IssueAutonomyLevel::Gated | IssueAutonomyLevel::Auto)
+        ),
+        IssueAutomationAutonomy::Auto => {
+            selection.requested_level == Some(IssueAutonomyLevel::Auto)
+        }
+        _ => false,
+    }
 }
 pub(super) fn begin(
     adapter: &SqliteIssueAutomationStoreAdapter,

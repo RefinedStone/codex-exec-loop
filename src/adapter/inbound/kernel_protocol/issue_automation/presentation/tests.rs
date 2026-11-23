@@ -39,6 +39,8 @@ fn item(id: &str, state: Option<IssueAutomationState>) -> IssueCollectionItem {
         }),
         current: Some(IssueSourceRead::Observed(Box::new(
             IssueSourceObservation {
+                repository_visibility: Default::default(),
+                repository_name_with_owner: None,
                 creation_provenance:
                     crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
                 issue,

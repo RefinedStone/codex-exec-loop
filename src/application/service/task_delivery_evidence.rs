@@ -205,6 +205,19 @@ impl TaskDeliveryEvidenceGatePort for TaskDeliveryEvidenceService {
                 "evidence_stale: current task authority does not permit this delivery".into(),
             );
         }
+        snapshot.require_auto_authority().map_err(|_| {
+            "evidence_stale: automatic delivery authority does not match the frozen repository"
+                .to_owned()
+        })?;
+        if let TaskDeliveryEvidenceOperation::Effect {
+            preflight_permit, ..
+        } = operation
+            && *preflight_permit != snapshot.permit
+        {
+            return Err(
+                "evidence_stale: delivery authority changed after the final preflight check".into(),
+            );
+        }
         if stage == TaskEvidenceDeliveryStage::Integrate
             && matches!(operation, TaskDeliveryEvidenceOperation::Effect { .. })
             && integration.and_then(|value| value.preflight_requires_human_review)
@@ -212,7 +225,9 @@ impl TaskDeliveryEvidenceGatePort for TaskDeliveryEvidenceService {
         {
             return Err("evidence_stale: integration review requirements changed after the final pull request check".into());
         }
-        let observation = self.observe(&snapshot, stage, integration, mode);
+        let mut observation = self.observe(&snapshot, stage, integration, mode);
+        let policy_reasons = snapshot.auto_policy_reasons(mode);
+        observation.reasons.splice(0..0, policy_reasons);
         let committed = match self
             .dependencies
             .repository

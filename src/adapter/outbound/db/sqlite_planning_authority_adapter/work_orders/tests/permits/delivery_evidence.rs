@@ -71,9 +71,10 @@ fn delivery_evidence_final_transaction_obeys_current_work_control_and_never_audi
                 .commit_delivery_evidence_observation(
                     &workspace,
                     &TaskDeliveryEvidenceObservationCommit {
-                        expected,
+                        expected: expected.clone(),
                         operation: TaskDeliveryEvidenceOperation::Effect {
-                            owner_token: "delivery-owner".into()
+                            owner_token: "delivery-owner".into(),
+                            preflight_permit: expected.permit,
                         },
                         observation,
                     }

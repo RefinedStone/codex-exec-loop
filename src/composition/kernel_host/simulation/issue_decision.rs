@@ -327,6 +327,8 @@ impl Source {
     ) -> IssueSourceObservation {
         let body = self.body.lock().unwrap().clone();
         IssueSourceObservation {
+            repository_visibility: Default::default(),
+            repository_name_with_owner: None,
             creation_provenance: IssueCreationProvenance::Unattributed,
             issue,
             web: None,

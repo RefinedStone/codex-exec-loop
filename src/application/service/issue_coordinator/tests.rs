@@ -98,6 +98,8 @@ impl Fixture {
             body: "## 완료 기준\n- 기능이 요구한 결과를 반환한다.\n".into(),
         };
         IssueSourceObservation {
+            repository_visibility: Default::default(),
+            repository_name_with_owner: None,
             creation_provenance:
                 crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
             issue: self.reference(id),
@@ -1228,6 +1230,7 @@ mod closure;
 mod execution_detail;
 
 mod arbiter;
+mod auto_delivery;
 mod deadlines;
 mod delivery;
 mod gated;

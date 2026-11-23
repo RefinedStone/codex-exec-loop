@@ -22,11 +22,26 @@ pub(super) fn block_if_delivery_gates_denied(
         TaskEvidenceDeliveryStage::PullRequest => PlanningWorkPermitStage::PullRequest,
         TaskEvidenceDeliveryStage::Integrate => PlanningWorkPermitStage::Integrate,
     };
-    if let Some(notice) =
-        block_if_work_order_permit_denied(authority, runtime, resolution, record, permit_stage)?
-    {
-        return Ok(Some(notice));
-    }
+    let permit = match work_order_delivery_gate(
+        authority,
+        &resolution.context.repo_root,
+        record,
+        permit_stage,
+    ) {
+        Ok(permit) => permit,
+        Err(detail) => {
+            return block_distributor_queue_record(
+                authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                detail,
+            )
+            .map(Some);
+        }
+    };
     claim.renew("delivery evidence observation")?;
     let decision = gate.evaluate(
         &resolution.context.repo_root,
@@ -35,6 +50,7 @@ pub(super) fn block_if_delivery_gates_denied(
         integration,
         &TaskDeliveryEvidenceOperation::Effect {
             owner_token: claim.owner_token.clone(),
+            preflight_permit: permit,
         },
     )?;
     *record = decision.updated_queue;

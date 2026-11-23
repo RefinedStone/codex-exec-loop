@@ -263,7 +263,7 @@ describe("utility issue confirmation", () => {
 
 
 describe("utility issue autonomy confirmation", () => {
-  it.each(["propose", "gated"] as const)("submits the exact %s autonomy command once after native approval", async (level) => {
+  it.each(["propose", "gated", "auto"] as const)("submits the exact %s autonomy command once after native approval", async (level) => {
     const h = harness();
     const result = h.service.confirmAutonomy({ workspace: "/work/repo", level, commandId: "autonomy-1", key: "autonomy-key" });
     await h.untilDialog();
@@ -277,11 +277,36 @@ describe("utility issue autonomy confirmation", () => {
   });
 
   it.each([
-    { level: "auto" }, { level: "unknown" }, { commandId: "" }, { commandId: "bad id" }, { proof_id: "renderer-proof" },
+    { level: "automatic" }, { level: "unknown" }, { level: "auto\n" }, { commandId: "" }, { commandId: "bad id" }, { proof_id: "renderer-proof" },
   ])("rejects invalid autonomy input before opening a confirmation helper: %j", (extra) => {
     const h = harness();
     expect(() => h.service.confirmAutonomy({ workspace: "/work/repo", level: "propose", commandId: "autonomy-1", key: "key", ...extra })).toThrow();
     expect(h.createRpc).not.toHaveBeenCalled();
     expect(h.createHelper).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("preserves the exact Auto consent target and submits only with native approval=%s", async (approved) => {
+    const h = harness();
+    const intent = { ...INTENT, target: { kind: "autonomy", workspace: "/work/repo", command_id: "auto-1",
+      from: "gated", to: "auto", revision: 9, policy_version: "a".repeat(64), cap: "auto" } };
+    const original = h.rpc.request.getMockImplementation()!;
+    h.rpc.request.mockImplementation(async (method, params) => method === "akra/kernel/confirmation/prepare"
+      ? { intent, display: DISPLAY } : original(method, params));
+    const result = h.service.confirmAutonomy({ workspace: "/work/repo", level: "auto", commandId: "auto-1", key: REQUEST.key });
+    await h.untilDialog();
+    expect(h.helper.approve).not.toHaveBeenCalled();
+    h.native.resolve(approved);
+    if (approved) {
+      expect(await result).toEqual({ cancelled: false, response: { processed: true } });
+      expect(h.helper.approve).toHaveBeenCalledExactlyOnceWith(REGISTRATION.registration_id, intent);
+      expect(h.submitted()).toHaveLength(1);
+      expect(h.submitted()[0]?.[1]).toMatchObject({ confirmation: { intent } });
+    } else {
+      expect(await result).toEqual({ cancelled: true });
+      expect(h.helper.approve).not.toHaveBeenCalled();
+      expect(h.submitted()).toHaveLength(0);
+    }
+    expect(h.rpc.request.mock.calls.find(([method]) => method === "akra/kernel/confirmation/prepare")?.[1])
+      .toEqual({ request: { command: { type: "set_issue_autonomy", command_id: "auto-1", level: "auto" }, idempotency_key: REQUEST.key } });
   });
 });
