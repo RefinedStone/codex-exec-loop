@@ -27,3 +27,11 @@ describe("Markdown", () => {
     expect(html).not.toContain("<script");
   });
 });
+
+it("renders storage evidence as a validated internal action without navigating or interpreting raw commands", () => {
+  const html = render("[9 GiB](akra-storage:eyJub2RlIjoiMSJ9)");
+  expect(html).toContain("표에서 보기");
+  expect(html).toContain("<button");
+  expect(html).not.toContain('href="akra-storage:');
+  expect(render("[unsafe](javascript:alert(1))")).not.toContain('href="javascript:');
+});

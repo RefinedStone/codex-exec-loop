@@ -37,6 +37,7 @@ function listen<T extends unknown[]>(channel: string, listener: (...args: T) => 
 }
 
 const bridge: AkraBridge = {
+  revealStoragePath: (request) => ipcRenderer.invoke(IPC_CHANNELS.storageReveal, request),
   send(text: string): void {
     ipcRenderer.send(IPC_CHANNELS.send, text);
   },

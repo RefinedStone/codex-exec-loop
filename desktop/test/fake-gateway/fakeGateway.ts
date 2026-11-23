@@ -72,7 +72,7 @@ export interface FakeGateway {
   /** 서버를 유지한 채 접속만 끊어 재접속을 시험한다. */
   disconnectClients(): void;
   /** 붙어 있는 local 커널 연결에만 상태 이벤트를 보낸다. */
-  sendExtensionChange(kernel: string): void;
+  sendExtensionChange(kernel: string, change?: Record<string, unknown>): void;
   sendKernelEvent(event: unknown): void;
   close(): Promise<void>;
 }
@@ -265,6 +265,7 @@ export async function startFakeGateway(
   const server: Server = createServer();
   const sockets = new WebSocketServer({ server });
   const kernelClients = new Set<WebSocket>();
+  const extensionClients = new Set<WebSocket>();
   // app-server 처럼 서버 요청은 접속마다 따로 받고, 먼저 온 답만 쓴다 (Q-03 실측).
   const resolvedRequestIds = new Set<string>();
   /** 서버 요청 id → 그 요청을 받은 접속들과 스레드 id */
@@ -286,7 +287,7 @@ export async function startFakeGateway(
       return;
     }
     const remote = host !== "local";
-    socket.on("close", () => kernelClients.delete(socket));
+    socket.on("close", () => { kernelClients.delete(socket); extensionClients.delete(socket); });
     let kernelEventsSent = false;
     // 녹화 재생은 접속마다 따로 한다. 창 두 개가 같은 스레드를 열면 둘 다 같은 기록을 받는다.
     const used = new Set<ReplaySegment>();
@@ -397,6 +398,8 @@ export async function startFakeGateway(
           else kernelClients.delete(socket);
         }
         if (message.method === "akra/kernel/detach") kernelClients.delete(socket);
+        if (message.method === "akra/kernel/extensions/attach" && accepted) extensionClients.add(socket);
+        if (message.method === "akra/kernel/extensions/detach") extensionClients.delete(socket);
         if (message.method === "akra/kernel/command" && !kernelEventsSent) {
           kernelEventsSent = true;
           for (const event of options.kernel.eventsAfterAttach ?? []) {
@@ -493,9 +496,9 @@ export async function startFakeGateway(
     disconnectClients() {
       for (const client of sockets.clients) client.terminate();
     },
-    sendExtensionChange(kernel) {
-      for (const socket of kernelClients) {
-        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/extensions/changed", params: { kernel } }));
+    sendExtensionChange(kernel, change = {}) {
+      for (const socket of new Set([...kernelClients, ...extensionClients])) {
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/extensions/changed", params: { ...change, kernel } }));
       }
     },
     sendKernelEvent(event) {

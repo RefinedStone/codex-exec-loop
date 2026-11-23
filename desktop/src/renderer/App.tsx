@@ -2,12 +2,14 @@
 // 모양은 UX 블루프린트(`blueprint/`)를 따른다. 대화 상태는 `DesktopSession` 과 `desktopStore` 가 가진다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { extensionEvent, useRepositoryExtensions } from "./extensions/repositoryExtensions";
+import { extensionEvent, useRepositoryExtensions, useLocalUserExtensions, type ChangeSubscription, type ExtensionCall } from "./extensions/repositoryExtensions";
 import { useBlogActivity } from "./extensions/blogActivity";
 import { focusBlogArticle, viewingBlogArticle } from "./extensions/blogFocus";
 import { type BlogActivity, activityTitle, didStop } from "./extensions/techBlogStages";
 import { ExtensionPanel } from "./extensions/ExtensionPanel";
-import { extensionPanels, panelForExtension } from "./extensions/registry";
+import { panelForExtension, registeredPanel } from "./extensions/registry";
+import { panels as PANELS, isPanelId } from "./extensions/panelDefinitions";
+import { STORAGE_EVIDENCE_EVENT, isStorageReference, queueStorageEvidence, clearStorageEvidence } from "./storage/storageEvidence";
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
@@ -15,7 +17,7 @@ import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
 import { isTurnInProgress } from "./conversation/transcript";
 import { useWorkingTree, type WorkingTree, workingTreeCounts, WorkingTreePanel } from "./conversation/WorkingTreePanel";
-import { Icon, type IconName } from "./design/icons";
+import { Icon } from "./design/icons";
 import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { IssuePanel } from "./kernel/IssuePanel";
@@ -26,7 +28,6 @@ import { ATTENTION_TEXT, attentionEvents, isCurrentIssueDecisionAttention, issue
 import { type NavEntry, stepNav } from "./session/navHistory";
 import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, isDotDockVisible, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showHome, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
-import { SkillsPanel } from "./skills/SkillsPanel";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { ChatDock } from "./views/ChatDock";
@@ -56,18 +57,6 @@ import { changedCount, fetchThreadDocuments, markThreadDocumentRead, refreshThre
 
 export const CLIENT_VERSION = "0.0.0-development";
 
-const PANELS: { id: PanelId; label: string; icon: IconName; testId: string }[] = [
-  { id: "review", label: "변경", icon: "diff", testId: "review-toggle" },
-  { id: "graph", label: "그래프", icon: "branch", testId: "git-graph-toggle" },
-  { id: "kernel", label: "Akra", icon: "bolt", testId: "kernel-toggle" },
-  { id: "issues", label: "이슈", icon: "eye", testId: "issues-toggle" },
-  { id: "browser", label: "브라우저", icon: "globe", testId: "browser-toggle" },
-  { id: "delegation", label: "위임", icon: "message", testId: "delegation-toggle" },
-  { id: "work", label: "업무", icon: "briefcase", testId: "work-toggle" },
-  { id: "docs", label: "문서", icon: "book", testId: "documents-toggle" },
-  ...extensionPanels,
-  { id: "skills", label: "스킬", icon: "stack", testId: "skills-toggle" },
-];
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -170,6 +159,7 @@ function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegat
           </button>
         );
       })}
+      <button type="button" className="icon-button" title="확장 관리" data-testid="extensions-manage" onClick={() => useUiStore.setState({ overlay: "settings" })}><Icon name="sliders" /></button>
       <button type="button" className={terminalOpen ? "icon-button selected" : "icon-button"} title={`터미널 (${MOD_KEY}J)`} onClick={toggleTerminal} aria-pressed={terminalOpen} data-testid="terminal-toggle">
         <Icon name="terminal" />
       </button>
@@ -510,9 +500,11 @@ export function App() {
   const reviewPr = tree.branch.phase === "loaded" && tree.branch.summary.ok ? tree.branch.summary.pullRequest : null;
   const [issueAttentionTarget, setIssueAttentionTarget] = useState<IssueDecisionAttention | null>(null);
   const selectedExtension = panelForExtension(panel);
+  const selectedRegistered = registeredPanel(panel);
+  useEffect(() => { if (panel !== "akra.storage-analysis") clearStorageEvidence(); }, [panel]);
   const extensionWorkspace = view === "thread" ? openCwd : view === "home" ? homeCwd : null;
   const defaultWorkspace = view === "home" && homeCwd ? homeCwd : openCwd;
-  const kernelWorkspace = selectedExtension || overlay === "settings" ? extensionWorkspace
+  const kernelWorkspace = selectedExtension?.scope === "repository" || overlay === "settings" ? extensionWorkspace
     : panel === "issues" && issueAttentionTarget ? issueAttentionTarget.workspace
     : panel === "delegation" && delegationEnabled ? delegationWorkspace
     : panel === "review" && reviewPr ? tree.cwd : defaultWorkspace;
@@ -636,10 +628,18 @@ export function App() {
 
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const kernelId = useDesktopStore(s => s.kernel.kernel);
-  const subscribeExtension = useCallback((listener: (kernel: string) => void) =>
+  const subscribeExtension: ChangeSubscription = useCallback((listener) =>
     session.current?.onExtensionChanged(extensionEvent, listener) ?? (() => {}), []);
   const extensions = useRepositoryExtensions(gatewayRequest, subscribeExtension,
     connected && view !== "remote" && kernelPhase === "attached" && attachedWorkspace === kernelWorkspace ? kernelId : null);
+  const endpoint = useDesktopStore(state => state.connection?.endpoint ?? "");
+  const localExtensions = useLocalUserExtensions(gatewayRequest, subscribeExtension, connected, endpoint);
+  const selectedExtensions = selectedExtension?.scope === "local_user" ? localExtensions : extensions;
+  const enabledExtensions = view === "remote" ? [] : [...extensions.enabledIds, ...localExtensions.enabledIds];
+  const closeDisabledExtension = !!selectedExtension && (view === "remote" || selectedExtensions.ready && !selectedExtensions.enabledIds.includes(selectedExtension.id));
+  const registeredCall = useCallback<ExtensionCall>((action, input, key) => selectedExtension
+    ? selectedExtensions.invoke(selectedExtension.id, action, input, key)
+    : Promise.reject(new Error("이 화면에는 확장 명령이 없습니다.")), [selectedExtension?.id, selectedExtensions.invoke]);
   // 글이 끝나거나 멈추면 알린다 (plan 31 §7.8). 패널이 블로그를 보이고 있으면 화면이 바뀌므로 토스트는 띄우지 않는다.
   // OS 알림에는 글의 제목과 내용을 넣지 않는다: 잠금 화면과 알림 기록에 남는다.
   // 알림을 누를 때 다른 저장소를 보고 있으면 글이 속한 저장소로 옮긴 뒤 연다.
@@ -659,10 +659,26 @@ export function App() {
       openPanel("akra.tech-blog");
     }, `akra:blog:${article.id}`);
   }, []));
-  const closeDisabledBlog = extensions.ready && !!selectedExtension && !extensions.enabledIds.includes(selectedExtension.id);
   useEffect(() => {
-    if (closeDisabledBlog) useUiStore.setState({ panel: null, panelMaximized: false });
-  }, [closeDisabledBlog]);
+    if (closeDisabledExtension || panel && !isPanelId(panel)) {
+      useUiStore.setState({ panel: null, panelMaximized: false });
+      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="extensions-manage"]')?.focus());
+    }
+  }, [closeDisabledExtension, panel]);
+  useEffect(() => {
+    const show = (event: Event) => {
+      const reference = (event as CustomEvent<unknown>).detail;
+      const ui = useUiStore.getState(), state = useDesktopStore.getState();
+      if (!isStorageReference(reference)) return;
+      if (ui.view !== "thread" || !state.openThreadId || !localExtensions.enabledIds.includes("akra.storage-analysis")) {
+        toast("같은 로컬 대화에서 저장 공간 확장을 켠 뒤 근거를 열어 주세요."); return;
+      }
+      queueStorageEvidence(reference, state.openThreadId, ui.navigationRevision);
+      openPanel("akra.storage-analysis");
+    };
+    window.addEventListener(STORAGE_EVIDENCE_EVENT, show);
+    return () => window.removeEventListener(STORAGE_EVIDENCE_EVENT, show);
+  }, [localExtensions.enabledIds.join("|")]);
 
   // 스레드를 열 때와 턴이 끝날 때 그 스레드의 관련 문서를 읽는다 (plan 22). Gateway 가 이때 새 기록에서 문서를 찾아
   // 장부에 적는다. 패널이 닫혀 있어도 한다. 모델을 부르지 않는 조회이다.
@@ -741,7 +757,7 @@ export function App() {
     <div className="shell">
       {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} />}
       <div className="workspace">
-        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={extensions.enabledIds} blog={blog} />
+        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={enabledExtensions} blog={blog} />
         <SessionBanner />
         <div className={panelMaximized ? "workspace-body with-maximized-panel" : "workspace-body"}>
           <main className="main">
@@ -767,7 +783,7 @@ export function App() {
             <TerminalDock bridge={window.akra.terminal} />
           </main>
           {panel && (
-            <RightPanel panel={panel} maximized={panelMaximized} delegationEnabled={delegationEnabled} enabledExtensions={extensions.enabledIds}>
+            <RightPanel panel={panel} maximized={panelMaximized} delegationEnabled={delegationEnabled} enabledExtensions={enabledExtensions}>
               {panel === "delegation" && delegationEnabled && (
                 <DelegationPanel
                   key={delegationWorkspace}
@@ -785,7 +801,10 @@ export function App() {
                   )}
                 </WorkingTreePanel>
               )}
-              {selectedExtension && <ExtensionPanel key={extensions.kernel} extensions={extensions} id={selectedExtension.id} workspace={extensionWorkspace}/>}
+              {selectedRegistered && <ExtensionPanel key={`${selectedRegistered.id}:${selectedExtensions.kernel}:${endpoint}`} id={selectedRegistered.id}
+                call={registeredCall} epoch={selectedExtensions.epoch} scopeKey={`${endpoint}:${selectedExtensions.kernel}:${selectedExtension?.scope === "local_user" ? localExtensions.generation : "repository"}`}
+                workspace={extensionWorkspace} threadId={view === "thread" ? openThreadId : null} enabled={!selectedExtension || selectedExtensions.enabledIds.includes(selectedExtension.id)}
+                skills={{ cwd: openCwd ?? null, connected, skills: window.akra.skills, listCodexSkills, onSkillsChanged }} />}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
                 onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread} />}
@@ -819,7 +838,6 @@ export function App() {
               }} />}
               {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} onLinearHandOff={handOffLinear} />}
               {panel === "docs" && <DocumentsPanel state={documents} onRefresh={() => setDocumentsRefresh((count) => count + 1)} onOpenChanged={markDocumentRead} />}
-              {panel === "skills" && <SkillsPanel cwd={openCwd ?? null} connected={connected} skills={window.akra.skills} listCodexSkills={listCodexSkills} onSkillsChanged={onSkillsChanged} />}
             </RightPanel>
           )}
           {dotDock !== null && dotDockVisible && <DotDock host={dotDock.host} dotId={dotDock.dotId} request={dotGatewayRequest} visible={!panelMaximized} />}
@@ -828,7 +846,7 @@ export function App() {
       </div>
       {overlay === "palette" && <CommandPalette onOpenThread={openThread} />}
       {overlay === "shortcuts" && <ShortcutsDialog />}
-      {overlay === "settings" && <SettingsDialog extensions={extensions} chooseFolder={async () => {
+      {overlay === "settings" && <SettingsDialog extensions={extensions} localExtensions={localExtensions} chooseFolder={async () => {
         const path = await window.akra.chooseFolder();
         if (path) { showView("home"); useUiStore.setState({ homeCwd: path }); }
       }}/>}

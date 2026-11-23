@@ -1,11 +1,11 @@
 // 화면 틀의 상태이다: 어떤 보기와 패널이 열려 있는지. 대화 상태는 `desktopStore` 에 있다.
-import type { ExtensionPanelId } from "../extensions/registry";
+import { isPanelId, type PanelId } from "../extensions/panelDefinitions";
+export type { PanelId } from "../extensions/panelDefinitions";
 import { create } from "zustand";
 
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
 
 export type View = "home" | "thread" | "fleet" | "remote";
-export type PanelId = "review" | "graph" | "kernel" | "issues" | "browser" | "work" | "docs" | "skills" | "delegation" | ExtensionPanelId;
 export type Theme = "light" | "dark";
 export type Overlay = "palette" | "shortcuts" | "settings";
 
@@ -31,6 +31,8 @@ export interface UiState {
   findOpen: boolean;
   /** 이 창의 이동 기록이다 (plan 26 N1). */
   nav: NavHistory;
+  /** A → 홈 → A도 구별하는 사용자의 화면 이동 세대이다. */
+  navigationRevision: number;
   /** 확대 값을 바꾼 직후에 잠깐 보이는 배율이다. null 이면 보이지 않는다. */
   zoomNotice: number | null;
   /** 새 스레드 화면이 고른 작업 폴더이다. null 이면 보낼 때 폴더를 고르게 한다. */
@@ -91,6 +93,7 @@ export const useUiStore = create<UiState>(() => ({
   overlay: null,
   findOpen: false,
   nav: INITIAL_NAV,
+  navigationRevision: 0,
   zoomNotice: null,
   homeCwd: null,
   drafts: {},
@@ -120,13 +123,13 @@ function viewOf(entry: NavEntry): Partial<UiState> {
 
 /** 보기를 바꾸고 이동 기록에 적는다. 보기를 바꾸는 곳은 모두 이것을 쓴다. 스레드의 내용은 부르는 쪽이 연다. */
 export function visit(entry: NavEntry): void {
-  set((state) => ({ ...viewOf(entry), panelMaximized: false, overlay: null, findOpen: false, nav: pushNav(state.nav, entry) }));
+  set((state) => ({ ...viewOf(entry), panelMaximized: false, overlay: null, findOpen: false, nav: pushNav(state.nav, entry), navigationRevision: state.navigationRevision + 1 }));
 }
 
 /** 뒤로 가기와 앞으로 가기가 쓴다. 기록의 자리만 옮기고 새로 적지 않는다. */
 export function showNavEntry(nav: NavHistory): NavEntry | null {
   const entry = nav.entries[nav.index] ?? null;
-  if (entry) set({ ...viewOf(entry), panelMaximized: false, overlay: null, findOpen: false, nav });
+  if (entry) set(state => ({ ...viewOf(entry), panelMaximized: false, overlay: null, findOpen: false, nav, navigationRevision: state.navigationRevision + 1 }));
   return entry;
 }
 
@@ -197,6 +200,7 @@ export function fitSideColumns(): void {
 
 /** 오른쪽 패널을 연다. 패널을 여는 곳은 모두 이것을 쓴다: 좁은 창에서는 옆 칸을 닫아 자리를 만든다. */
 export function openPanel(panel: PanelId): void {
+  if (!isPanelId(panel)) { set({ panel: null, panelMaximized: false }); return; }
   set((state) => ({ panel, panelMaximized: false, overlay: null, dotDock: isNarrowWindow() ? null : state.dotDock, chatDock: isNarrowWindow() ? null : state.chatDock }));
 }
 
