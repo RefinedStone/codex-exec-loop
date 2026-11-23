@@ -1,6 +1,7 @@
 use super::autonomy::autonomy;
 use super::gated::{enable_gated, gated_policy};
 use super::*;
+use crate::application::port::outbound::issue_automation_store_port::IssueAutomationIssueSaveResult;
 use crate::domain::issue_automation::autonomy::IssueAutonomyLevel;
 
 const START: u64 = 123;
@@ -412,10 +413,22 @@ fn a_default_waiting_for_running_budget_starts_when_the_other_work_completes() {
     ] {
         let revision = first.revision();
         first.transition(transition).unwrap();
-        store
+        let IssueAutomationIssueSaveResult::Saved { record, .. } = store
             .save_issue(&h.fixture.workspace, revision, &first)
-            .unwrap();
+            .unwrap()
+        else {
+            panic!("the first work's terminal sequence must commit each state transition");
+        };
+        first = *record;
     }
+    assert_eq!(
+        store
+            .get_issue(&h.fixture.workspace, &h.fixture.reference("I_001"))
+            .unwrap()
+            .unwrap()
+            .state(),
+        IssueAutomationState::Done,
+    );
     // FakeExecution keeps a single active work cache; the completed slot is now available.
     {
         let mut state = h.execution.state.lock().unwrap();

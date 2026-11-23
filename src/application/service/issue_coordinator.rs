@@ -702,7 +702,7 @@ impl IssueCoordinatorService {
                     cancel.commit_if_active(|| self.ready(&item.issue))?;
                 }
             }
-            // 이 slice는 expiry timer, feedback, 완료 수명주기를 실행하지 않는다.
+            // 기한은 deadline 단계에서, 피드백과 완료 처리는 각 전용 경로에서 실행한다.
             IssueCoordinatorAction::Triage
             | IssueCoordinatorAction::PostFeedback
             | IssueCoordinatorAction::MarkDone => {}
