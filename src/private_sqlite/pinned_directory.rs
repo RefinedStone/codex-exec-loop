@@ -34,11 +34,10 @@ impl PinnedPrivateDirectory {
             let pinned = platform::open_directory(&anchor.path, true, false)?;
             // The newly pinned path cannot now be renamed. Confirm that it is still
             // the first handle's object before replacing that temporary reader handle.
-            crate::private_fs::validate_windows_path_identity_only(
-                &anchor.path,
-                &anchor.file,
-                true,
-            )?;
+            // A shared ancestor (for example the OS temp directory) can change its
+            // metadata while unrelated children are created. Reuse the bounded
+            // directory verification retry without relaxing identity or privacy.
+            platform::verify_directory(&anchor.path, &anchor.file, anchor.private)?;
             anchor.file = pinned;
         }
         #[cfg(not(windows))]
