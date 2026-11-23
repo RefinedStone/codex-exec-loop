@@ -519,3 +519,4 @@ fn competing_control_after_recovery_keeps_autonomy_pending_and_first_receipt_imm
 }
 
 mod fences;
+mod restart_registry;

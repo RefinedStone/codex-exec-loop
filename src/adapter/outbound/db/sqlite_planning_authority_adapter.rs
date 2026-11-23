@@ -2590,6 +2590,13 @@ impl SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityLocation> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        Self::prepare_resolved_private_runtime_directory(location)
+    }
+
+    /// Prepare only this already verified authority location; never resolve the workspace again.
+    pub(crate) fn prepare_resolved_private_runtime_directory(
+        location: PlanningAuthorityLocation,
+    ) -> Result<PlanningAuthorityLocation> {
         let _directory_anchors =
             prepare_private_authority_directory_tree(Path::new(&location.runtime_dir))?;
         Ok(location)

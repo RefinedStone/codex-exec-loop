@@ -350,3 +350,354 @@ fn rejects_existing_database_acl_without_repair() {
         assert!(crate::private_fs::validate_windows_private_owner_and_acl(&path, &file).is_err());
     }
 }
+
+#[test]
+fn existing_only_missing_paths_do_not_create_any_component() {
+    let fixture = RuntimeFixture::new();
+    let missing = fixture.0.join("absent").join("runtime");
+    assert!(
+        super::open_existing(&missing, FILES, Synchronous::Extra)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!fixture.0.join("absent").exists());
+    assert!(
+        super::open_existing(&fixture.0, FILES, Synchronous::Extra)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(std::fs::read_dir(&fixture.0).unwrap().count(), 0);
+}
+
+#[test]
+fn existing_only_rejects_orphan_sidecars_without_creating_database() {
+    for name in [FILES.rollback_journal, FILES.wal, FILES.shm] {
+        let fixture = RuntimeFixture::new();
+        std::fs::write(fixture.0.join(name), b"retained").unwrap();
+        assert!(super::open_existing(&fixture.0, FILES, Synchronous::Extra).is_err());
+        assert!(!fixture.0.join(FILES.database).exists());
+        assert_eq!(std::fs::read(fixture.0.join(name)).unwrap(), b"retained");
+    }
+}
+
+#[test]
+fn existing_only_reopens_committed_data_and_rejects_hardlinks() {
+    let fixture = RuntimeFixture::new();
+    {
+        let mut opened =
+            super::open_or_create_strict(&fixture.0, FILES, Synchronous::Extra).unwrap();
+        opened
+            .parts()
+            .0
+            .execute_batch("CREATE TABLE retained(value INTEGER); INSERT INTO retained VALUES(7);")
+            .unwrap();
+    }
+    let before = std::fs::read(fixture.0.join(FILES.database)).unwrap();
+    {
+        let mut opened = super::open_existing(&fixture.0, FILES, Synchronous::Extra)
+            .unwrap()
+            .unwrap();
+        let (connection, guard) = opened.parts();
+        assert_eq!(
+            connection
+                .query_row("SELECT value FROM retained", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        guard.verify_identity().unwrap();
+    }
+    assert_eq!(
+        std::fs::read(fixture.0.join(FILES.database)).unwrap(),
+        before
+    );
+    let retained = fixture.0.join("hardlink-target");
+    std::fs::hard_link(fixture.0.join(FILES.database), &retained).unwrap();
+    assert!(super::open_existing(&fixture.0, FILES, Synchronous::Extra).is_err());
+    assert_eq!(std::fs::read(retained).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn strict_existing_and_creation_do_not_repair_permissions_but_legacy_contract_is_preserved() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = RuntimeFixture::new();
+    drop(super::open_or_create_strict(&fixture.0, FILES, Synchronous::Extra).unwrap());
+    let database = fixture.0.join(FILES.database);
+    std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(super::open_existing(&fixture.0, FILES, Synchronous::Extra).is_err());
+    assert!(super::open_or_create_strict(&fixture.0, FILES, Synchronous::Extra).is_err());
+    assert_eq!(
+        std::fs::metadata(&database).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    drop(open(&fixture.0, FILES, Synchronous::Extra).unwrap());
+    assert_eq!(
+        std::fs::metadata(database).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_only_dangling_directory_and_database_symlinks_are_not_absence() {
+    use std::os::unix::fs::symlink;
+    let fixture = RuntimeFixture::new();
+    let link = fixture.0.join("redirect");
+    symlink(fixture.0.join("missing-target"), &link).unwrap();
+    assert!(super::open_existing(&link, FILES, Synchronous::Extra).is_err());
+    assert!(super::open_existing(&link.join("missing-child"), FILES, Synchronous::Extra).is_err());
+    std::fs::remove_file(&link).unwrap();
+    symlink(
+        fixture.0.join("missing-target"),
+        fixture.0.join(FILES.database),
+    )
+    .unwrap();
+    assert!(super::open_existing(&fixture.0, FILES, Synchronous::Extra).is_err());
+    assert!(!fixture.0.join("missing-target").exists());
+}
+
+#[cfg(unix)]
+const EXISTING_LOCK_PROBE: &str =
+    "private_sqlite::tests::existing_only_write_lock_subprocess_probe";
+#[cfg(unix)]
+const EXISTING_LOCK_DATABASE: &str = "AKRA_TEST_EXISTING_SQLITE_LOCK_DATABASE";
+#[cfg(unix)]
+const EXISTING_LOCK_EXPECTATION: &str = "AKRA_TEST_EXISTING_SQLITE_LOCK_EXPECTATION";
+
+#[cfg(unix)]
+fn probe_existing_lock(database: &std::path::Path, expectation: &str) {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", EXISTING_LOCK_PROBE, "--nocapture"])
+        .env(EXISTING_LOCK_DATABASE, database)
+        .env(EXISTING_LOCK_EXPECTATION, expectation)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = crate::subprocess::wait_with_output_timeout(
+        crate::subprocess::spawn(&mut command).unwrap(),
+        "existing-only SQLite lock probe",
+        std::time::Duration::from_secs(10),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("existing SQLite lock: {expectation}"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_existing_reader_keeps_another_connections_posix_write_lock() {
+    let fixture = RuntimeFixture::new();
+    let mut writer = open(&fixture.0, FILES, Synchronous::Extra).unwrap();
+    writer
+        .parts()
+        .0
+        .execute_batch("CREATE TABLE lock_probe(value INTEGER); BEGIN IMMEDIATE;")
+        .unwrap();
+    let reader = super::open_existing(&fixture.0, FILES, Synchronous::Extra)
+        .unwrap()
+        .unwrap();
+    drop(reader);
+    probe_existing_lock(&fixture.0.join(FILES.database), "blocked");
+    writer.parts().0.execute_batch("ROLLBACK;").unwrap();
+    probe_existing_lock(&fixture.0.join(FILES.database), "acquired");
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_only_write_lock_subprocess_probe() {
+    let Some(database) = std::env::var_os(EXISTING_LOCK_DATABASE) else {
+        return;
+    };
+    let expectation = std::env::var(EXISTING_LOCK_EXPECTATION).unwrap();
+    let connection = rusqlite::Connection::open_with_flags(
+        PathBuf::from(database),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .unwrap();
+    connection.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let result = connection.execute_batch("BEGIN IMMEDIATE;");
+    if expectation == "blocked" {
+        assert!(
+            matches!(&result, Err(rusqlite::Error::SqliteFailure(error, _)) if error.code == rusqlite::ErrorCode::DatabaseBusy)
+        );
+    } else {
+        assert_eq!(expectation, "acquired");
+        result.unwrap();
+        connection.execute_batch("ROLLBACK;").unwrap();
+    }
+    println!("existing SQLite lock: {expectation}");
+}
+
+#[cfg(windows)]
+#[test]
+fn existing_only_reader_pins_parents_until_connection_drop() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.0.join("runtime");
+    drop(super::open_or_create_strict(&runtime, FILES, Synchronous::Extra).unwrap());
+    let mut opened = super::open_existing(&runtime, FILES, Synchronous::Extra)
+        .unwrap()
+        .unwrap();
+    let renamed = fixture.0.join("renamed-runtime");
+    assert!(std::fs::rename(&runtime, &renamed).is_err());
+    opened.parts().1.verify_identity().unwrap();
+    drop(opened);
+    std::fs::rename(&runtime, &renamed).unwrap();
+    std::fs::rename(&renamed, &runtime).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn existing_only_rejects_junctions_even_when_the_target_or_descendant_is_missing() {
+    let fixture = RuntimeFixture::new();
+    let target = fixture.0.join("target");
+    std::fs::create_dir(&target).unwrap();
+    let link = fixture.0.join("redirect");
+    let link_text = link.to_string_lossy().replace('/', "\\");
+    let target_text = target.to_string_lossy().replace('/', "\\");
+    let mut command = std::process::Command::new("cmd");
+    command
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            link_text.strip_prefix(r"\\?\").unwrap_or(&link_text),
+            target_text.strip_prefix(r"\\?\").unwrap_or(&target_text),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = crate::subprocess::wait_with_output_timeout(
+        crate::subprocess::spawn(&mut command).unwrap(),
+        "existing-only SQLite junction fixture",
+        std::time::Duration::from_secs(10),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(super::open_existing(&link, FILES, Synchronous::Extra).is_err());
+    assert!(super::open_existing(&link.join("missing-child"), FILES, Synchronous::Extra).is_err());
+    std::fs::remove_dir(&target).unwrap();
+    assert!(super::open_existing(&link, FILES, Synchronous::Extra).is_err());
+    assert!(super::open_existing(&link.join("missing-child"), FILES, Synchronous::Extra).is_err());
+    std::fs::remove_dir(&link).unwrap();
+    assert!(!fixture.0.join("target").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn existing_only_rejects_inherited_acl_without_repair_or_creation() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.0.join("inherited");
+    std::fs::create_dir(&runtime).unwrap();
+    assert!(super::open_existing(&runtime, FILES, Synchronous::Extra).is_err());
+    assert!(!runtime.join(FILES.database).exists());
+    let database = fixture.0.join(FILES.database);
+    std::fs::write(&database, b"").unwrap();
+    assert!(super::open_existing(&fixture.0, FILES, Synchronous::Extra).is_err());
+    let file = std::fs::File::open(&database).unwrap();
+    assert!(crate::private_fs::validate_windows_private_owner_and_acl(&database, &file).is_err());
+}
+
+const EXISTING_HOT_JOURNAL_PROBE: &str =
+    "private_sqlite::tests::existing_only_hot_journal_subprocess_probe";
+const EXISTING_HOT_JOURNAL_DATABASE: &str = "AKRA_TEST_EXISTING_SQLITE_HOT_JOURNAL_DATABASE";
+
+#[test]
+fn existing_only_recovers_a_sqlite_generated_hot_journal_after_process_exit() {
+    let fixture = RuntimeFixture::new();
+    {
+        let mut opened =
+            super::open_or_create_strict(&fixture.0, FILES, Synchronous::Extra).unwrap();
+        opened
+            .parts()
+            .0
+            .execute_batch(
+                "CREATE TABLE recovery_probe(id INTEGER PRIMARY KEY, marker INTEGER NOT NULL);
+             INSERT INTO recovery_probe VALUES(1,7);
+             PRAGMA user_version=3;",
+            )
+            .unwrap();
+    }
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", EXISTING_HOT_JOURNAL_PROBE, "--nocapture"])
+        .env(
+            EXISTING_HOT_JOURNAL_DATABASE,
+            fixture.0.join(FILES.database),
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = crate::subprocess::wait_with_output_timeout(
+        crate::subprocess::spawn(&mut command).unwrap(),
+        "existing-only SQLite hot journal fixture",
+        std::time::Duration::from_secs(10),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("existing SQLite hot journal: flushed without commit")
+    );
+    assert!(fixture.0.join(FILES.rollback_journal).exists());
+    let mut reopened = super::open_existing(&fixture.0, FILES, Synchronous::Extra)
+        .unwrap()
+        .unwrap();
+    let (connection, guard) = reopened.parts();
+    assert_eq!(
+        connection
+            .query_row("SELECT marker FROM recovery_probe WHERE id=1", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        7
+    );
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    guard.verify_identity().unwrap();
+}
+
+#[test]
+fn existing_only_hot_journal_subprocess_probe() {
+    use std::io::Write;
+    let Some(database) = std::env::var_os(EXISTING_HOT_JOURNAL_DATABASE) else {
+        return;
+    };
+    let connection = rusqlite::Connection::open_with_flags(
+        PathBuf::from(database),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
+         BEGIN IMMEDIATE; PRAGMA user_version=29;
+         UPDATE recovery_probe SET marker=99 WHERE id=1;",
+        )
+        .unwrap();
+    connection.cache_flush().unwrap();
+    assert!(!connection.is_autocommit());
+    println!("existing SQLite hot journal: flushed without commit");
+    std::io::stdout().flush().unwrap();
+    std::process::exit(0);
+}

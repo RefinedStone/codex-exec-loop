@@ -6,6 +6,9 @@ use crate::application::port::inbound::stored_command_port::issue_confirmation::
 };
 use crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort;
 use crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionPort;
+use crate::application::port::outbound::{
+    IssueAutomationRestartEntry, IssueAutomationRestartRegistryPort,
+};
 use crate::domain::issue_automation::IssueAutomationAutonomy;
 use crate::domain::issue_automation::autonomy::{
     IssueAutonomyChange, IssueAutonomyChoice, IssueAutonomyIntent, IssueAutonomyLevel,
@@ -102,12 +105,21 @@ pub(crate) fn projection(
             .collect(),
     })
 }
+type RestartTargetResolver =
+    dyn Fn(&str) -> Result<Option<IssueAutomationRestartEntry>> + Send + Sync;
+
+struct RestartRegistryBinding {
+    registry: Arc<dyn IssueAutomationRestartRegistryPort>,
+    resolve_target: Arc<RestartTargetResolver>,
+}
+
 pub struct IssueAutonomyService {
     workspace: String,
     store: Arc<dyn IssueAutomationStorePort>,
     policy: IssueAutomationPolicyService,
     execution: Arc<dyn IssueWorkExecutionPort>,
     command_gate: Mutex<()>,
+    restart_registry: Option<RestartRegistryBinding>,
 }
 impl IssueAutonomyService {
     pub fn new(
@@ -122,8 +134,26 @@ impl IssueAutonomyService {
             policy,
             execution,
             command_gate: Mutex::new(()),
+            restart_registry: None,
         }
     }
+    /// Resolution is lazy: merely constructing a service or reading its state does not
+    /// discover a Git identity or create the restart registry.
+    pub fn with_restart_registry(
+        mut self,
+        registry: Arc<dyn IssueAutomationRestartRegistryPort>,
+        resolve_target: impl Fn(&str) -> Result<Option<IssueAutomationRestartEntry>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.restart_registry = Some(RestartRegistryBinding {
+            registry,
+            resolve_target: Arc::new(resolve_target),
+        });
+        self
+    }
+
     pub fn state(&self) -> IssueAutonomyProjection {
         projection(&self.workspace, self.store.as_ref(), &self.policy)
     }
@@ -198,7 +228,9 @@ impl IssueAutonomyService {
             .command_gate
             .lock()
             .map_err(|_| anyhow!("issue autonomy command gate is unavailable"))?;
-        self.recover_before_runtime()?;
+        // A discovery registry failure must not prevent a new lowering command from
+        // fencing old permits and committing the lower selection.
+        self.recover_pending_selection()?;
         if let Some(stored) = self
             .store
             .get_issue_autonomy_command(&self.workspace, &command_id)?
@@ -209,6 +241,9 @@ impl IssueAutonomyService {
             if stored.completed_revision.is_none() {
                 bail!("autonomy command remains pending");
             }
+            // An old command can be replayed after a newer selection. Reconcile the
+            // current durable selection, never the historical command's level.
+            self.reconcile_restart_registry()?;
             return Ok(IssueAutonomyChange {
                 command_id,
                 changed: false,
@@ -226,6 +261,10 @@ impl IssueAutonomyService {
         {
             confirmation.ok_or(IssueConfirmationError::Required)?;
         }
+        // Persist discovery before the pending selection: a crash immediately after
+        // begin must still leave a candidate that startup can find. A candidate alone
+        // is never authority; startup rechecks the durable selection under the repo lock.
+        self.register_restart_candidate(level)?;
         let intent = IssueAutonomyIntent {
             command_id: command_id.clone(),
             level,
@@ -238,6 +277,9 @@ impl IssueAutonomyService {
         } else {
             false
         };
+        // In particular, lowering removes discovery only after its fences and
+        // completed receipt are durable. A failure is reported without rolling them back.
+        self.reconcile_restart_registry()?;
         Ok(IssueAutonomyChange {
             command_id,
             changed,
@@ -246,6 +288,34 @@ impl IssueAutonomyService {
     }
     /// Composition calls this under the repository lock before constructing automatic runtimes.
     pub fn recover_before_runtime(&self) -> Result<()> {
+        let _guard = self
+            .command_gate
+            .lock()
+            .map_err(|_| anyhow!("issue autonomy command gate is unavailable"))?;
+        self.recover_pending_selection()?;
+        self.reconcile_restart_registry()
+    }
+
+    /// Manual attachment must remain available to lower a completed choice when only
+    /// discovery persistence is broken. Incomplete selection/fence recovery stays strict.
+    pub fn recover_before_manual_runtime(&self) -> Result<()> {
+        let _guard = self
+            .command_gate
+            .lock()
+            .map_err(|_| anyhow!("issue autonomy command gate is unavailable"))?;
+        self.recover_pending_selection()?;
+        // Authority read errors and a newly pending selection are not cache failures.
+        let level = self.completed_selection_level()?;
+        if let Err(error) = self.reconcile_restart_selection(level) {
+            tracing::warn!(
+                error = %error,
+                "completed issue autonomy selection could not reconcile restart discovery; manual attachment remains available"
+            );
+        }
+        Ok(())
+    }
+
+    fn recover_pending_selection(&self) -> Result<()> {
         if let Some(intent) = self
             .store
             .issue_autonomy_selection(&self.workspace)?
@@ -255,6 +325,52 @@ impl IssueAutonomyService {
         }
         Ok(())
     }
+    fn register_restart_candidate(&self, level: IssueAutonomyLevel) -> Result<()> {
+        if IssueAutomationAutonomy::from(level) < IssueAutomationAutonomy::Gated {
+            return Ok(());
+        }
+        if let Some(binding) = &self.restart_registry
+            && let Some(entry) = (binding.resolve_target)(&self.workspace)?
+        {
+            binding.registry.register(&entry)?;
+        }
+        Ok(())
+    }
+
+    fn completed_selection_level(&self) -> Result<Option<IssueAutonomyLevel>> {
+        let selection = self.store.issue_autonomy_selection(&self.workspace)?;
+        if selection.pending.is_some() {
+            bail!("issue autonomy change is pending");
+        }
+        Ok(selection.requested_level)
+    }
+
+    fn reconcile_restart_registry(&self) -> Result<()> {
+        self.reconcile_restart_selection(self.completed_selection_level()?)
+    }
+
+    fn reconcile_restart_selection(&self, level: Option<IssueAutonomyLevel>) -> Result<()> {
+        let Some(binding) = &self.restart_registry else {
+            return Ok(());
+        };
+        // Ordinary manual attachment without a runtime choice must not depend on a
+        // discovery cache. Gateway removes a known pre-begin orphan under its repo lock.
+        let Some(level) = level else {
+            return Ok(());
+        };
+        let Some(entry) = (binding.resolve_target)(&self.workspace)? else {
+            // Existing non-Git workspaces retain manual operation, without unattended restart.
+            return Ok(());
+        };
+        if IssueAutomationAutonomy::from(level) >= IssueAutomationAutonomy::Gated {
+            // Keep a requested automatic choice even when the current policy cap is lower.
+            // Only current policy and selection, checked during startup, authorize execution.
+            binding.registry.register(&entry)
+        } else {
+            binding.registry.unregister(&entry.repository_key)
+        }
+    }
+
     fn complete(&self, intent: &IssueAutonomyIntent) -> Result<bool> {
         // Pending selection and admission share one issue DB transaction fence. No new work
         // checkpoint can appear after this list; pre-existing intents are included before submit.
@@ -340,6 +456,9 @@ impl IssueAutonomyService {
                 }
             }
         }
+        // Recovery may be completing a pending intent written before this process.
+        // Confirm discovery again after fencing, before publishing automatic authority.
+        self.register_restart_candidate(intent.level)?;
         Ok(self
             .store
             .finish_issue_autonomy(&self.workspace, intent)?
