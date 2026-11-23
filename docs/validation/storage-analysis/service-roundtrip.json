@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-11-23T04:25:47.563Z",
+  "captured_at": "2026-11-23T06:35:12.749Z",
   "fixture": "one real SQLite index with test-only 12/9/2/1 GiB metadata seeded after enumerating three empty files",
   "boundary": "production Desktop Gateway adapter and production CLI verify_thread/request_over_socket -> test forwarding transport -> one registered host, native read adapter, and sharing service",
   "excluded": [
@@ -48,7 +48,7 @@
     "numerator_bytes": "9663676416",
     "denominator_bytes": "12884901888"
   },
-  "evidence_reference": "akra-storage:eyJ2ZXJzaW9uIjoxLCJob3N0X2lkIjoic3RvcmFnZS1kZXNrdG9wLWZpeHR1cmUtaG9zdCIsInRocmVhZF9pZCI6IjAxYTFhYmZiLThmMGEtNzU4MS1hOGU0LWMyOTUzMzQ3ZjQ3MCIsImdyYW50X2lkIjoiNzljMzNlMjhkYjFmMDlmMzI1NThlYzZjNWVmOGExNDkiLCJzbmFwc2hvdF9pZCI6ImRlc2t0b3Atc3FsaXRlLWZpeHR1cmUiLCJyZXZpc2lvbiI6MSwibm9kZV9pZCI6Im40In0",
+  "evidence_reference": "akra-storage:eyJ2ZXJzaW9uIjoxLCJob3N0X2lkIjoic3RvcmFnZS1kZXNrdG9wLWZpeHR1cmUtaG9zdCIsInRocmVhZF9pZCI6IjAxYTFhYmZiLThmMGEtNzU4MS1hOGU0LWMyOTUzMzQ3ZjQ3MCIsImdyYW50X2lkIjoiNDdmYzJhMmM5MzFjM2NjNDMyMmIwN2MxOWVlNGM2YjkiLCJzbmFwc2hvdF9pZCI6ImRlc2t0b3Atc3FsaXRlLWZpeHR1cmUiLCJyZXZpc2lvbiI6MSwibm9kZV9pZCI6Im40In0",
   "focused_node_id": "n4",
   "displayed_ratio": "75.0%",
   "scans_after_fixture_preparation": 0,
