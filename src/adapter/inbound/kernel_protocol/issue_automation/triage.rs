@@ -255,6 +255,10 @@ fn reason_parts(reason: IssueTriageReasonCode) -> (ReasonCode, &'static str) {
             ReasonCode::HumanSelectionRequired,
             "사람이 선택 라벨을 적용한 근거가 필요합니다.",
         ),
+        IssueTriageReasonCode::AutoRepositoryRestricted => (
+            ReasonCode::AutoRepositoryRestricted,
+            "공개 저장소이거나 저장소의 공개 범위와 출처를 확인할 수 없어 제안 단계로 제한합니다.",
+        ),
         IssueTriageReasonCode::BudgetExhausted => (
             ReasonCode::BudgetExhausted,
             "예산 상한이 0이어서 자동 시작할 수 없습니다.",
@@ -331,6 +335,9 @@ fn reason_next_summary(reason: IssueTriageReasonCode) -> &'static str {
         IssueTriageReasonCode::PolicyHumanRequired => "정책이 요구하는 사람의 확인을 기다리세요.",
         IssueTriageReasonCode::HumanSelectionRequired => {
             "신뢰하는 사람이 현재 이슈에 선택 라벨을 적용한 뒤 다시 동기화하세요."
+        }
+        IssueTriageReasonCode::AutoRepositoryRestricted => {
+            "원본 저장소의 현재 공개 범위와 연결을 확인하고 제안된 작업을 사람이 검토하세요."
         }
         IssueTriageReasonCode::BudgetExhausted => {
             "예산과 시도 한도를 확인하고 사람의 검토를 기다리세요."

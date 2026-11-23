@@ -45,6 +45,8 @@ fn list<T>() -> IssueMetadataList<T> {
 
 fn observation(id: &str) -> IssueSourceObservation {
     IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         issue: issue(id),
         web: None,
         remote_state: IssueRemoteState::Open,

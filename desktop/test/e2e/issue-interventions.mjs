@@ -49,7 +49,7 @@ const rank = (value) => ["off", "observe", "propose", "gated", "auto"].indexOf(v
 const autonomy = () => ({
   status: "ready", requested_level: level, effective_level: effectiveOverride ?? level, cap,
   revision, policy_version: "runtime-policy-" + revision, pending: false,
-  choices: ["off", "observe", "propose", "gated"].map((choice) => ({
+  choices: ["off", "observe", "propose", "gated", "auto"].map((choice) => ({
     level: choice, enabled: rank(choice) <= rank(cap), requires_confirmation: rank(choice) > rank(effectiveOverride ?? level),
     reason: rank(choice) > rank(cap) ? "서버 정책의 자율 수준 상한을 넘습니다." : null,
   })),
@@ -256,6 +256,7 @@ try {
   await page.getByTestId("issues-toggle").click();
   const panel = page.getByTestId("issues-panel");
   const select = panel.getByTestId("issues-autonomy-level");
+  const effectiveLevel = panel.getByTestId("issues-autonomy-effective").locator("strong");
   await until(async () => await select.isEnabled());
   assert.equal(await select.inputValue(), "observe");
   await select.selectOption("propose");
@@ -281,23 +282,49 @@ try {
   await until(async () => level === "gated" && await select.inputValue() === "gated" && await select.isEnabled());
   assert.equal(commandRequests("set_issue_autonomy").length, 2);
   assert.equal(commandRequests("set_issue_autonomy")[1].method, "akra/kernel/command_confirmed");
-  cap = "observe"; level = "observe"; revision++;
+  cap = "auto"; revision++;
+  gateway.sendKernelEvent(state("issues"));
+  await until(async () => !(await select.locator('option[value="auto"]').evaluate((option) => option.disabled)), "the enabled Auto choice");
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 1; });
+  const beforeAutoDialogs = await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length);
+  await select.selectOption("auto");
+  await until(async () => (await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length)) > beforeAutoDialogs && await select.isEnabled());
+  assert.equal(level, "gated");
+  assert.equal(await select.inputValue(), "gated");
+  assert.equal(commandRequests("set_issue_autonomy").length, 2);
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
+  await select.selectOption("auto");
+  await until(async () => level === "auto" && await select.inputValue() === "auto" && await select.isEnabled()
+    && await effectiveLevel.innerText() === "자동", "the confirmed Auto effective level");
+  assert.equal(commandRequests("set_issue_autonomy").length, 3);
+  assert.equal(commandRequests("set_issue_autonomy")[2].method, "akra/kernel/command_confirmed");
+  assert.equal(commandRequests("set_issue_autonomy")[2].request.command.level, "auto");
+  assert.match(await panel.getByTestId("issues-autonomy-auto-help").innerText(), /공개 저장소.*필수 검증.*사람 승인.*이번 실행.*PR에 사람 승인/s);
+  cap = "propose"; effectiveOverride = "propose"; revision++;
+  gateway.sendKernelEvent(state("issues"));
+  await until(async () => await effectiveLevel.innerText() === "제안", "the server-restricted Auto effective level");
+  assert.equal(await select.inputValue(), "auto", "a server restriction does not rewrite the requested choice");
+  assert.equal(commandRequests("set_issue_autonomy").length, 3, "an effective-level refresh does not submit another command");
+  cap = "observe"; level = "observe"; effectiveOverride = null; revision++;
   gateway.sendKernelEvent(state("issues"));
   await until(async () => await select.inputValue() === "observe" && await select.locator('option[value="propose"]').evaluate((option) => option.disabled), "the pushed lower autonomy cap");
   assert.equal(await select.locator('option[value="gated"]').evaluate((option) => option.disabled), true);
+  assert.equal(await select.locator('option[value="auto"]').evaluate((option) => option.disabled), true);
   assert.deepEqual(await panel.getByTestId("issues-autonomy-reason").allTextContents(), [
     "제안: 서버 정책의 자율 수준 상한을 넘습니다.",
     "단계별 승인: 서버 정책의 자율 수준 상한을 넘습니다.",
+    "자동: 서버 정책의 자율 수준 상한을 넘습니다.",
   ]);
-  cap = "auto"; level = null; effectiveOverride = "auto"; revision++;
+  cap = "auto"; level = null; effectiveOverride = "propose"; revision++;
   gateway.sendKernelEvent(state("issues"));
-  await until(async () => await select.inputValue() === "auto", "the policy-owned Auto level");
-  assert.match(await panel.getByTestId("issues-autonomy-effective").innerText(), /자동/);
+  await until(async () => await select.inputValue() === "propose" && await effectiveLevel.innerText() === "제안",
+    "the proposal ceiling without an explicit runtime choice");
+  assert.equal(commandRequests("set_issue_autonomy").length, 3, "file policy alone does not submit or grant an Auto choice");
   await capture("autonomy");
   cap = "propose"; level = "propose"; effectiveOverride = null; revision++;
   gateway.sendKernelEvent(state("issues"));
   await until(async () => await select.inputValue() === "propose");
-  console.log("PASS native autonomy confirmation, cap reasons and truthful policy Auto display");
+  console.log("PASS native Gated/Auto consent, cancellation, cap reasons, server-restricted Auto and the unconfirmed policy ceiling");
 
   await panel.getByTestId("issues-title").click();
   const currentCard = () => panel.locator('[data-testid="issue-decision-card"][data-state="open"]').first();

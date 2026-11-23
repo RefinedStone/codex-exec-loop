@@ -284,6 +284,7 @@ fn integration_checks_its_actual_result_tree_and_frozen_base() {
                 }),
                 &TaskDeliveryEvidenceOperation::Effect {
                     owner_token: "owner".into(),
+                    preflight_permit: crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitDecision::Legacy,
                 },
             )
             .unwrap();
@@ -291,3 +292,5 @@ fn integration_checks_its_actual_result_tree_and_frozen_base() {
         assert!(fixture.last().source.unwrap().integration.is_some());
     }
 }
+
+mod auto_delivery;

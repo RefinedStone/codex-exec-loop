@@ -63,6 +63,8 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
     let mut snapshot = tracked.snapshot().clone();
     snapshot.policy_version = issue_policy_version(&IssuePolicy::builtin());
     let source = IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         creation_provenance: IssueCreationProvenance::Unattributed,
         issue: tracked.reference().clone(),
         web: None,

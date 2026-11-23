@@ -1,4 +1,4 @@
-import type { CommandResponse, IssueAutomationModeRecord } from "./kernel-protocol/generated";
+import type { CommandResponse, IssueAutomationModeRecord, IssueAutonomyLevel } from "./kernel-protocol/generated";
 
 /** 사람 확인 요청에는 명령 입력만 있다. 이 IPC에는 확인 증거와 서버 intent를 담지 않는다. */
 export interface ConfirmIssueDecisionRequest {
@@ -18,7 +18,7 @@ export interface ConfirmIssueAutomationModeRequest {
 /** 자율 수준은 원격 수집 모드와 별도인 저장소 설정이다. */
 export interface ConfirmIssueAutonomyRequest {
   workspace: string;
-  level: "off" | "observe" | "propose" | "gated";
+  level: IssueAutonomyLevel;
   commandId: string;
   key: string;
 }

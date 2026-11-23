@@ -48,6 +48,9 @@ fn basis() -> IssueComparisonBasis {
 
 fn observed(issue: &IssueReference) -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        repository_visibility:
+            crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
+        repository_name_with_owner: Some("sample/widgets".into()),
         creation_provenance:
             crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: issue.clone(),
@@ -231,6 +234,18 @@ fn every_triage_reason_has_a_stable_code_summary_and_non_mutating_next_step() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn auto_repository_restriction_explains_proposals_without_offering_automatic_approval() {
+    let reason = IssueTriageReasonState::from(IssueTriageReasonCode::AutoRepositoryRestricted);
+    assert_eq!(
+        serde_json::to_value(reason.code).unwrap(),
+        json!("auto_repository_restricted")
+    );
+    assert!(reason.summary.contains("제안 단계"));
+    assert!(reason.next_summary.contains("사람이 검토"));
+    assert_eq!(reason.next, vec![NextStep::AskUser]);
 }
 
 #[test]

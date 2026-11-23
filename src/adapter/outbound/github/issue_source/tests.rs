@@ -5,6 +5,7 @@ use anyhow::anyhow;
 use serde_json::{Value, json};
 
 use super::*;
+mod visibility;
 use crate::domain::issue_automation::source::IssueDiscoverySelection;
 use crate::domain::issue_policy::{IssueDisclosurePolicy, IssueSensitiveSpanAction};
 use crate::domain::issue_work::IssueProjectScope;
@@ -101,7 +102,7 @@ fn issue(id: &str) -> Value {
         "__typename":"Issue","id":id,"number":17,"url":"https://github.com/sample/widgets/issues/17",
         "title":"작업 제목","body":"가릴 값이 없는 본문",
         "state":"OPEN","updatedAt":"2026-11-20T01:00:00Z",
-        "repository":{"id":"R_1","nameWithOwner":"sample/widgets"},
+        "repository":{"id":"R_1","nameWithOwner":"sample/widgets","visibility":"PRIVATE"},
         "author":{"__typename":"User","id":"U_writer","login":"writer"},
         "labels":metadata_json(vec![label_json("LA_1","akra:auto")]),
         "assignees":metadata_json(vec![json!({"__typename":"User","id":"U_assignee","login":"assignee"})]),
@@ -764,7 +765,7 @@ fn source_web_uses_current_repository_metadata_after_a_rename_without_changing_i
     for arguments in calls.lock().unwrap().iter() {
         let query = argument(arguments, "query").unwrap();
         assert!(query.contains("id number url"));
-        assert!(query.contains("repository { id nameWithOwner }"));
+        assert!(query.contains("repository { id nameWithOwner visibility }"));
     }
 }
 

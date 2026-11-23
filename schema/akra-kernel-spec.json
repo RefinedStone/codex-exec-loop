@@ -5466,6 +5466,15 @@
       ]
     },
     {
+      "name": "auto_repository_restricted",
+      "summary": "Auto is limited to proposals when the current source repository is public or its verified visibility and identity are unavailable.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
       "name": "budget_exhausted",
       "summary": "A zero static budget cap prevents an automatic start and requires a person to review the budget.",
       "next": [
@@ -7548,7 +7557,8 @@
         "off",
         "observe",
         "propose",
-        "gated"
+        "gated",
+        "auto"
       ],
       "type": "string"
     },
@@ -14500,6 +14510,7 @@
         "protected_path",
         "policy_human_required",
         "human_selection_required",
+        "auto_repository_restricted",
         "budget_exhausted",
         "mode_off",
         "observation_only",

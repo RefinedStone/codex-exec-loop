@@ -4,6 +4,7 @@ use crate::application::port::inbound::stored_command_port::issue_confirmation::
     IssueConfirmationTarget, VerifiedHumanConfirmation,
 };
 
+mod autonomy;
 mod delivery;
 
 const REFERENCE: &str = "desktop-confirmation:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

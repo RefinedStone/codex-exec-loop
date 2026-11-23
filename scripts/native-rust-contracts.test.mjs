@@ -103,11 +103,11 @@ test("runtime loader paths preserve caller directories and macOS fallback defaul
   assert.ok(mac.DYLD_FALLBACK_LIBRARY_PATH.endsWith("/Users/test/lib:/usr/local/lib:/usr/lib"));
 });
 
-test("Windows portable entrypoint retains the complete 62-filter inventory", () => {
+test("Windows portable entrypoint retains the complete 68-filter inventory", () => {
   const shell = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
   const filters = [...shell.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1]);
-  assert.equal(filters.length, 62);
-  assert.equal(new Set(filters).size, 62);
+  assert.equal(filters.length, 68);
+  assert.equal(new Set(filters).size, 68);
   assert.ok(filters.includes("process_liveness::tests::"));
   assert.ok(filters.includes("application::service::evidence_vault_unlock::"));
   assert.ok(filters.includes("host_owned_worker_commit_"));

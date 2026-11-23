@@ -518,5 +518,6 @@ fn competing_control_after_recovery_keeps_autonomy_pending_and_first_receipt_imm
     assert_eq!(selection.pending.unwrap().command_id, "race-new-control");
 }
 
+mod auto;
 mod fences;
 mod restart_registry;

@@ -45,6 +45,8 @@ fn seed(fixture: &Fixture, issue_id: &str) -> IssueReference {
     let mut shared = shared_snapshot("## 완료 기준\n- 결과를 검증한다.\n");
     shared.policy_version = issue_policy_version(&IssuePolicy::builtin());
     let observed = IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         issue: tracked.reference().clone(),
         web: None,
         remote_state: IssueRemoteState::Open,

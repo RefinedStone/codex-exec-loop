@@ -82,17 +82,17 @@ export function hasValidIssueAutonomy(value: ObjectValue): boolean {
   if (autonomy == null) return true;
   if (!record(autonomy)) return false;
   if (autonomy.status !== "ready") return named(autonomy.status, ["policy_blocked", "unavailable"]);
-  if ((autonomy.requested_level != null && !named(autonomy.requested_level, ["off", "observe", "propose", "gated"]))
+  if ((autonomy.requested_level != null && !named(autonomy.requested_level, levels))
     || !named(autonomy.effective_level, levels) || !named(autonomy.cap, levels) || !revision(autonomy.revision)
     || !text(autonomy.policy_version) || typeof autonomy.pending !== "boolean" || !Array.isArray(autonomy.choices)) return false;
   const seen = new Set<string>();
   return autonomy.choices.every((choice: unknown) => {
-    if (!record(choice) || !named(choice.level, ["off", "observe", "propose", "gated"]) || seen.has(choice.level as string)
+    if (!record(choice) || !named(choice.level, levels) || seen.has(choice.level as string)
       || typeof choice.enabled !== "boolean" || typeof choice.requires_confirmation !== "boolean" || !optionalText(choice.reason)) return false;
     seen.add(choice.level as string);
     return true;
   }) && ["off", "observe", "propose"].every((level) => seen.has(level))
-    && (autonomy.requested_level !== "gated" || seen.has("gated"));
+    && (autonomy.requested_level == null || seen.has(autonomy.requested_level as string));
 }
 
 /** 실행·게시·timeline은 서버가 정한 값의 모양만 확인하고 서로의 상태를 추론하지 않는다. */

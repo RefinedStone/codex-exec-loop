@@ -1,6 +1,5 @@
 use super::*;
 use crate::domain::issue_automation::IssueAutomationAutonomy;
-use crate::domain::issue_automation::autonomy::IssueAutonomyLevel;
 use crate::domain::issue_automation::source::{IssueSourceContent, IssueSourceRead};
 
 pub(super) fn current_allowed(
@@ -29,8 +28,13 @@ pub(super) fn current_allowed(
     let selection = super::super::autonomy::read(connection, workspace)?;
     if selection.pending.is_some()
         || selection.revision != current.basis().runtime_selection_revision
-        || (current.effective_mode() == IssueAutomationAutonomy::Gated
-            && selection.requested_level != Some(IssueAutonomyLevel::Gated))
+        || (matches!(
+            current.effective_mode(),
+            IssueAutomationAutonomy::Gated | IssueAutomationAutonomy::Auto
+        ) && !super::super::autonomy::matches_automatic_mode(
+            &selection,
+            current.effective_mode(),
+        ))
     {
         return Ok(false);
     }

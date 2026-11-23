@@ -22,6 +22,7 @@ fn issue_fixture(label: &str) -> (String, SqlitePlanningAuthorityAdapter) {
 fn reviewed_basis(revision: u64) -> PlanningWorkPermitBasis {
     let mut value = basis(revision);
     value.delivery_review = Some(PlanningWorkDeliveryReview {
+        authority: None,
         base_commit_sha: "b".repeat(40),
         source_commit_sha: value.source_sha.clone(),
         gate_revision: revision,
@@ -213,3 +214,5 @@ fn a_new_lineage_removes_review_before_advancing_the_permit_revision() {
             .contains("permit_missing")
     );
 }
+
+mod auto_delivery;

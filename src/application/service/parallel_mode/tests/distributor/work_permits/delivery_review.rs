@@ -211,6 +211,7 @@ fn review_the_complete_protected_range(
             base_commit_sha: complete.base_commit_sha,
             source_commit_sha: complete.source_commit_sha,
             gate_revision: revision,
+            authority: None,
         }),
         ..fixture.basis.clone()
     };

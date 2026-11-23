@@ -444,6 +444,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.portable == 'true'
     runs-on: ${{ matrix.runner }}
+    # Real Git delivery contracts on native runners can exceed the former 30-minute budget.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -582,6 +583,12 @@ jobs:
             'composition::production::delivery_evidence::tests::' \
             'domain::planning::delivery_evidence::' \
             'application::service::task_delivery_evidence::tests::' \
+            'composition::kernel_host::simulation::issue_decision::human_confirmation::autonomy::' \
+            'sqlite_issue_automation_store::autonomy::tests::' \
+            'application::service::issue_coordinator::tests::auto_delivery::' \
+            'application::service::issue_coordinator::tests::autonomy::auto::' \
+            'adapter::inbound::kernel_protocol::issue_autonomy::' \
+            'sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_review::auto_delivery::' \
             'sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_evidence::' \
             'application::service::parallel_mode::tests::distributor::evidence_gate::' \
             'application::service::parallel_mode::tests::distributor::work_permits::evidence_conditions::' \

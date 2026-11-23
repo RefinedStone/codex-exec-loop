@@ -380,7 +380,10 @@ pub(super) fn cleanup_stale_leased_startup_slots(
             ) {
                 Ok(PlanningWorkPermitDecision::Denied(_)) => true,
                 Ok(PlanningWorkPermitDecision::Granted { .. }) => false,
-                Ok(PlanningWorkPermitDecision::Legacy) | Err(_) => continue,
+                Ok(
+                    PlanningWorkPermitDecision::Legacy | PlanningWorkPermitDecision::GrantedAuto,
+                )
+                | Err(_) => continue,
             },
             Err(_) => continue,
         };

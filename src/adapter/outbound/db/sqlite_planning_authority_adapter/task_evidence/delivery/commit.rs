@@ -2,17 +2,24 @@ use super::*;
 
 fn require_operation(
     transaction: &Transaction<'_>,
-    queue: &PlanningAuthorityDistributorQueueRecord,
+    current: &StoredTaskDeliveryEvidence,
     stage: TaskEvidenceDeliveryStage,
     operation: &TaskDeliveryEvidenceOperation,
 ) -> Result<()> {
+    let queue = &current.queue;
     let owner: Option<(String, String)> = transaction.query_row(
         "SELECT owner_token,claimed_at FROM runtime_claims WHERE claim_kind=?1 AND scope_key=?2",
         params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue.queue_item_id],
         |row| Ok((row.get(0)?,row.get(1)?)),
     ).optional()?;
     match operation {
-        TaskDeliveryEvidenceOperation::Effect { owner_token } => {
+        TaskDeliveryEvidenceOperation::Effect {
+            owner_token,
+            preflight_permit,
+        } => {
+            if *preflight_permit != current.permit {
+                return Err(TaskDeliveryEvidenceError::Conflict.into());
+            }
             if owner_token.trim().is_empty()
                 || owner.as_ref().is_none_or(|(owner, at)| {
                     owner != owner_token || runtime_projection::claim_is_stale(at)
@@ -95,12 +102,21 @@ pub(super) fn commit(
     }
     require_operation(
         &transaction,
-        &current.queue,
+        &current,
         value.observation.stage,
         &value.operation,
     )?;
     require_control(&transaction, &current, value.observation.stage)?;
     proof::validate_observation(&current, &value.observation)?;
+    let policy_reasons = current.auto_policy_reasons(value.observation.mode);
+    for reason in [
+        TaskDeliveryEvidenceReason::AutoRequiresEnforce,
+        TaskDeliveryEvidenceReason::AutoRequiresMachineCriterion,
+    ] {
+        if value.observation.reasons.contains(&reason) != policy_reasons.contains(&reason) {
+            return Err(TaskDeliveryEvidenceError::Invalid.into());
+        }
+    }
 
     let mut queue = current.queue.clone();
     let previous = queue

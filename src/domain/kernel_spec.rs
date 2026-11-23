@@ -282,6 +282,8 @@ spec_names! {
             "An additional policy rule requires a person at the affected gates.";
         HumanSelectionRequired => "human_selection_required",
             "An agent-created or unresolved issue requires a trusted user account to apply a current selection label.";
+        AutoRepositoryRestricted => "auto_repository_restricted",
+            "Auto is limited to proposals when the current source repository is public or its verified visibility and identity are unavailable.";
         BudgetExhausted => "budget_exhausted",
             "A zero static budget cap prevents an automatic start and requires a person to review the budget.";
         ModeOff => "mode_off",
@@ -847,6 +849,7 @@ mod tests {
                 "protected_path",
                 "policy_human_required",
                 "human_selection_required",
+                "auto_repository_restricted",
                 "budget_exhausted",
                 "mode_off",
                 "observation_only",

@@ -163,6 +163,9 @@ impl SimIssueSource {
     ) -> IssueSourceObservation {
         let body = self.body.lock().expect("body").clone();
         IssueSourceObservation {
+            repository_visibility:
+                crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
+            repository_name_with_owner: Some("owner/repository".into()),
             creation_provenance:
                 crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
             issue,

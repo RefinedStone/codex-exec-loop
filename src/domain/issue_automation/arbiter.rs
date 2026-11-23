@@ -46,11 +46,16 @@ pub(crate) fn arbiter_gate_allowed(
     }
     let supported = match (definition.kind, definition.gate) {
         (IssueDecisionKind::StartApproval, IssueAutomationGate::Start) => {
-            current.effective_mode() == IssueAutomationAutonomy::Gated
+            matches!(
+                current.effective_mode(),
+                IssueAutomationAutonomy::Gated | IssueAutomationAutonomy::Auto
+            )
         }
         (IssueDecisionKind::PlanApproval, IssueAutomationGate::Plan) => matches!(
             current.effective_mode(),
-            IssueAutomationAutonomy::Propose | IssueAutomationAutonomy::Gated
+            IssueAutomationAutonomy::Propose
+                | IssueAutomationAutonomy::Gated
+                | IssueAutomationAutonomy::Auto
         ),
         _ => false,
     };

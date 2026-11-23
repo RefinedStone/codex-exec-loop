@@ -38,6 +38,21 @@ impl IssueSourceWeb {
     }
 }
 
+/// GitHub 공급자가 확인한 소문자 owner/name 좌표를 검증한다. URL이나 별칭을 정규화하지 않는다.
+pub fn validate_repository_name_with_owner(value: &str) -> Result<(), IssueSourceFailure> {
+    let Some((owner, name)) = value.split_once('/') else {
+        return Err(IssueSourceFailure::InvalidRequest);
+    };
+    if value.len() > 4096
+        || value.bytes().any(|byte| byte.is_ascii_uppercase())
+        || !valid_owner(owner)
+        || !valid_repository(name)
+    {
+        return Err(IssueSourceFailure::InvalidRequest);
+    }
+    Ok(())
+}
+
 fn valid_owner(value: &str) -> bool {
     !value.is_empty()
         && value
