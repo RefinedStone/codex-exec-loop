@@ -319,6 +319,39 @@ impl Fixture {
             .unwrap()
     }
 
+    fn install_pre_evidence_queue(&self) {
+        let queue = self.queue();
+        let mut payload = serde_json::to_value(&queue).unwrap();
+        let object = payload.as_object_mut().unwrap();
+        for field in [
+            "source_commit_sha",
+            "evidence_binding",
+            "evidence_observations",
+            "evidence_wait",
+        ] {
+            object.remove(field);
+        }
+        let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+            &self.repo.workspace_dir(),
+        )
+        .unwrap();
+        let connection = rusqlite::Connection::open(&location.authority_store_path).unwrap();
+        // A pre-upgrade persisted row has no evidence binding. A normal new enqueue
+        // intentionally captures the current scope and lease, even without criteria.
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE runtime_distributor_queue SET content=?1 WHERE queue_item_id=?2",
+                    rusqlite::params![
+                        serde_json::to_string(&payload).unwrap(),
+                        queue.queue_item_id
+                    ],
+                )
+                .unwrap(),
+            1
+        );
+    }
+
     fn process(&self) -> Vec<String> {
         self.service
             .process_distributor_queue(&self.repo.workspace_dir())

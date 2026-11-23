@@ -8,15 +8,19 @@ fn observe_audits_missing_criteria_and_legacy_raw_source_without_blocking_delive
         false,
     );
     fixture.enqueue();
-    let mut legacy = fixture.queue();
+    let current = fixture.queue();
+    assert!(current.evidence_binding.is_some());
+    let frozen = current.effective_source_commit_sha();
+    fixture.install_pre_evidence_queue();
+    let legacy = fixture.queue();
     assert!(legacy.evidence_binding.is_none());
-    let frozen = legacy.effective_source_commit_sha();
-    legacy.source_commit_sha.clear();
+    assert!(legacy.source_commit_sha.is_empty());
     SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
         &fixture.repo.workspace_dir(),
         &legacy,
     )
     .unwrap();
+    assert!(fixture.queue().evidence_binding.is_none());
     assert_eq!(fixture.queue().effective_source_commit_sha(), frozen);
 
     fixture.process();

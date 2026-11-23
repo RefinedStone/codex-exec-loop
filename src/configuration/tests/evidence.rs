@@ -1,5 +1,62 @@
 use super::*;
 
+#[cfg(windows)]
+mod windows_private_write;
+
+#[test]
+fn evidence_mode_unset_removes_inline_and_block_leaves_without_losing_siblings() {
+    for body in [
+        "# retained configuration note\nschema_version = 1\nparallel = { evidence_mode = 'enforce', integration_branch = 'prerelease' }\n",
+        "# retained configuration note\nschema_version = 1\n[parallel]\nevidence_mode = 'enforce'\nintegration_branch = 'prerelease'\n",
+    ] {
+        let mut document = body.parse::<DocumentMut>().unwrap();
+        let mut layer = toml::from_str::<AkraConfigLayer>(body).unwrap();
+        layer.unset_value(SettingKey::ParallelEvidenceMode);
+        sync_document_layer(&mut document, &layer);
+
+        let rewritten = document.to_string();
+        let parsed = toml::from_str::<AkraConfigLayer>(&rewritten).unwrap();
+        let parallel = parsed.parallel.unwrap();
+        assert_eq!(parallel.evidence_mode, None, "{rewritten}");
+        assert_eq!(
+            parallel.integration_branch.as_deref(),
+            Some("prerelease"),
+            "{rewritten}",
+        );
+        assert!(rewritten.contains("# retained configuration note"));
+
+        layer.unset_value(SettingKey::ParallelIntegrationBranch);
+        sync_document_layer(&mut document, &layer);
+        assert!(document.get("parallel").is_none(), "{document}");
+        assert_eq!(document["schema_version"].as_integer(), Some(1));
+    }
+}
+
+#[test]
+fn evidence_mode_unset_removes_a_newly_written_explicit_default_or_override() {
+    for mode in [
+        TaskEvidenceDeliveryMode::Observe,
+        TaskEvidenceDeliveryMode::Enforce,
+    ] {
+        let mut document = DocumentMut::new();
+        let mut layer = AkraConfigLayer::default();
+        layer.set_value(
+            SettingKey::ParallelEvidenceMode,
+            SettingValue::EvidenceMode(mode),
+        );
+        sync_document_layer(&mut document, &layer);
+        let written = toml::from_str::<AkraConfigLayer>(&document.to_string()).unwrap();
+        assert_eq!(written.parallel.unwrap().evidence_mode, Some(mode));
+
+        layer.unset_value(SettingKey::ParallelEvidenceMode);
+        sync_document_layer(&mut document, &layer);
+        let rewritten = document.to_string();
+        let parsed = toml::from_str::<AkraConfigLayer>(&rewritten).unwrap();
+        assert!(parsed.parallel.is_none(), "{rewritten}");
+        assert!(document.get("parallel").is_none(), "{document}");
+    }
+}
+
 #[test]
 fn evidence_mode_defaults_to_observe_and_preserves_layer_precedence() {
     let root = temporary_directory("evidence-mode-precedence");
@@ -19,6 +76,7 @@ fn evidence_mode_defaults_to_observe_and_preserves_layer_precedence() {
     fixture
         .set(&workspace, ConfigScope::Global, key, "enforce")
         .unwrap();
+    let global_before = fs::read(&fixture.global).unwrap();
     fixture
         .set(&workspace, ConfigScope::Project, key, "observe")
         .unwrap();
@@ -39,6 +97,12 @@ fn evidence_mode_defaults_to_observe_and_preserves_layer_precedence() {
     fixture
         .unset(&workspace, ConfigScope::Project, key)
         .unwrap();
+    let project_layer = fixture
+        .layer_for_scope(&workspace, ConfigScope::Project)
+        .unwrap()
+        .unwrap();
+    assert!(project_layer.value_for(key).is_none());
+    assert_eq!(fs::read(&fixture.global).unwrap(), global_before);
     let inherited = fixture.resolve_read_only(&workspace, &[]).unwrap();
     assert_eq!(
         inherited.config.parallel.evidence_mode,
