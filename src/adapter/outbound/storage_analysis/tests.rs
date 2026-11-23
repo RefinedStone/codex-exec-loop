@@ -76,6 +76,14 @@ fn storage_analysis_real_metadata_hardlinks_and_no_reenumeration() {
     let page = adapter.list_children(&query("fixture", "n1")).unwrap();
     let total: u64 = page.items.iter().map(StorageNode::known_bytes).sum();
     assert_eq!(root.known_bytes(), total);
+    assert_eq!(root.logical_bytes, "12288");
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|n| n.logical_bytes.parse::<u64>().unwrap())
+            .sum::<u64>(),
+        12288
+    );
     assert!(
         page.items
             .iter()
@@ -563,27 +571,68 @@ fn storage_analysis_git_observation_preserves_index_and_protection_reasons() {
         "-qm",
         "fixture",
     ]);
-    fs::write(f.source.join("tracked.txt"), "modified").unwrap();
+    fs::write(f.source.join("tracked.txt"), "staged").unwrap();
+    git(&["add", "tracked.txt"]);
+    let linked = f.source.join("linked");
+    git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "linked-fixture",
+        linked.to_str().unwrap(),
+    ]);
+    // A normal content-status check could execute these repository-local helpers.
+    git(&[
+        "config",
+        "filter.storageTrap.clean",
+        "echo filter-executed > ../filter-was-run; cat",
+    ]);
+    git(&[
+        "config",
+        "diff.storageTrap.command",
+        "echo diff-executed > ../diff-was-run",
+    ]);
+    git(&[
+        "config",
+        "diff.storageTrap.textconv",
+        "echo textconv-executed > ../textconv-was-run",
+    ]);
+    fs::write(
+        f.source.join(".gitattributes"),
+        "tracked.txt filter=storageTrap diff=storageTrap\n",
+    )
+    .unwrap();
+    fs::write(f.source.join("tracked.txt"), "modified again after staging").unwrap();
     fs::write(f.source.join("untracked.txt"), "local data").unwrap();
     fs::write(f.source.join("Cargo.toml"), "[package]\nname='fixture'\n").unwrap();
     fs::create_dir(f.source.join("target")).unwrap();
     fs::write(f.source.join("target/cache"), "cache").unwrap();
+    fs::create_dir(f.source.join("Library")).unwrap();
+    fs::create_dir(f.source.join("ProjectSettings")).unwrap();
     let before = fs::read(f.source.join(".git/index")).unwrap();
-    let adapter = f.adapter().with_runtime_probe(Arc::new(|_| {
-        vec![StorageEvidence {
-            code: "active_slot".into(),
-            detail: "fixture running slot".into(),
-            observed_at: "fixture".into(),
-        }]
-    }));
+    let adapter = f.adapter().with_runtime_probe(StorageRuntimeProbe {
+        observe: Arc::new(|_| {
+            vec![StorageEvidence {
+                code: "active_slot".into(),
+                detail: "fixture running slot".into(),
+                observed_at: "fixture".into(),
+            }]
+        }),
+        known_roots: Arc::new(|_| StorageRuntimeRoots {
+            paths: Vec::new(),
+            complete: true,
+        }),
+    });
     run(&adapter, "git-evidence");
     assert_eq!(before, fs::read(f.source.join(".git/index")).unwrap());
     let root = adapter.get_node("git-evidence", "n1", None).unwrap();
     for code in [
         "main_checkout",
         "active_slot",
-        "modified_files",
-        "untracked_files",
+        "index_changes",
+        "untracked_observed",
+        "status_unknown",
         "upstream_unknown",
     ] {
         assert!(
@@ -610,4 +659,212 @@ fn storage_analysis_git_observation_preserves_index_and_protection_reasons() {
             .unwrap()
             .contains("deletable")
     );
+    for name in ["filter-was-run", "diff-was-run", "textconv-was-run"] {
+        assert!(
+            !f.base.join(name).exists(),
+            "metadata queries must not execute content helpers"
+        );
+    }
+    let db = StorageIndex::open(&f.index.join("git-evidence")).unwrap();
+    let cached: u64 = db
+        .conn
+        .query_row("SELECT count(*) FROM git_worktree_cache", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        cached, 1,
+        "main and linked worktrees share one disk-backed common-directory observation"
+    );
+    let children = adapter.list_children(&query("git-evidence", "n1")).unwrap();
+    let linked = children.items.iter().find(|n| n.name == "linked").unwrap();
+    assert!(
+        linked
+            .protection
+            .iter()
+            .any(|e| e.code == "linked_worktree")
+    );
+    let library = children.items.iter().find(|n| n.name == "Library").unwrap();
+    assert!(
+        library
+            .classification
+            .iter()
+            .any(|c| c.kind == "candidate_library")
+    );
+}
+
+#[test]
+fn storage_analysis_priority_keeps_oldest_work_fair_and_never_redispatches() {
+    let f = Fixture::new();
+    let db = synthetic(&f, "priority");
+    db.visited(1).unwrap();
+    let ids = (0..12)
+        .map(|i| directory(&db, 1, &format!("d{i}")))
+        .collect::<Vec<_>>();
+    let state = std::sync::Mutex::new(super::live::ScanSchedulingState::default());
+    for id in ids.iter().rev().take(8) {
+        state.lock().unwrap().enqueue(*id).unwrap();
+    }
+    let first = super::live::select_batch(&db, &state, 4).unwrap();
+    assert_eq!(
+        first.iter().map(|x| x.0).collect::<Vec<_>>(),
+        vec![ids[11], ids[10], ids[9], ids[0]]
+    );
+    let second = super::live::select_batch(&db, &state, 4).unwrap();
+    assert_eq!(
+        second.iter().map(|x| x.0).collect::<Vec<_>>(),
+        vec![ids[8], ids[7], ids[6], ids[1]]
+    );
+    let all = first
+        .iter()
+        .chain(second.iter())
+        .map(|x| x.0)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(all.len(), 8);
+}
+
+#[test]
+fn storage_analysis_live_pages_use_indexes_and_are_separate_from_evidence() {
+    let f = Fixture::new();
+    let db = synthetic(&f, "live");
+    for i in 0..5 {
+        directory(&db, 1, &format!("d{i}"));
+    }
+    let mut query = StorageLiveQuery {
+        job_id: "live".into(),
+        node_id: "n1".into(),
+        cursor: None,
+        limit: 2,
+    };
+    let first = super::live::children(&f.index.join("live"), &query).unwrap();
+    assert_eq!(first.revision, 0);
+    assert_eq!(first.items.len(), 2);
+    assert!(!first.enumeration_complete);
+    assert!(first.total_count.is_none());
+    assert!(!serde_json::to_string(&first).unwrap().contains("allocated"));
+    query.cursor = first.next_cursor.clone();
+    let second = super::live::children(&f.index.join("live"), &query).unwrap();
+    assert_ne!(first.items[0].id, second.items[0].id);
+    query.node_id = first.items[0].id.clone();
+    assert!(super::live::children(&f.index.join("live"), &query).is_err());
+    let plan = db
+        .conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", super::live::CHILDREN_SQL))
+        .unwrap()
+        .query_map(rusqlite::params![1, 0, 101], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join(" ");
+    assert!(plan.contains("node_parent"), "{plan}");
+    assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+    // Mutable discovery metadata must never be returned by the frozen snapshot endpoint.
+    assert!(db.get_node("n1", None).is_err());
+}
+
+#[test]
+fn storage_analysis_live_browse_can_prioritize_during_real_scan() {
+    let f = Fixture::new();
+    for i in 0..24 {
+        let dir = f.source.join(format!("d{i:03}"));
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("data"), [1; 4096]).unwrap();
+    }
+    let adapter = f.adapter();
+    let observed = std::sync::Mutex::new(false);
+    let req = ScanRequest {
+        job_id: "live-real".into(),
+        volume_id: "fixture-volume".into(),
+        options: ScanOptions { concurrency: 1 },
+    };
+    let snapshot = adapter
+        .scan(&req, &AtomicBool::new(false), &|progress| {
+            if progress.files_scanned > 0
+                && progress.state == StorageState::Running
+                && !*observed.lock().unwrap()
+            {
+                let page = adapter
+                    .live_children(&StorageLiveQuery {
+                        job_id: "live-real".into(),
+                        node_id: "n1".into(),
+                        cursor: None,
+                        limit: 24,
+                    })
+                    .unwrap();
+                assert_eq!(page.revision, 0);
+                assert_eq!(page.items.len(), 24);
+                let target = page.items.last().unwrap();
+                assert!(adapter.prioritize("live-real", &target.id).unwrap().queued);
+                assert!(!adapter.prioritize("live-real", &target.id).unwrap().queued);
+                assert!(adapter.get_node("live-real", "n1", None).is_err());
+                *observed.lock().unwrap() = true;
+            }
+        })
+        .unwrap();
+    assert!(*observed.lock().unwrap());
+    assert_eq!(snapshot.state, StorageState::Complete);
+    assert!(adapter.prioritize("live-real", "n1").is_err());
+    assert_eq!(
+        adapter.get_node("live-real", "n1", None).unwrap().revision,
+        1
+    );
+}
+
+#[test]
+fn storage_analysis_unobserved_git_metadata_is_not_followed() {
+    let fixture = Fixture::new();
+    let outside = fixture.base.join("external-git");
+    fs::create_dir_all(outside.join("objects")).unwrap();
+    fs::create_dir(outside.join("refs")).unwrap();
+    fs::write(outside.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::write(fixture.source.join(".git"), "gitdir: ../external-git\n").unwrap();
+    let adapter = fixture.adapter();
+    run(&adapter, "unobserved-git");
+    let root = adapter.get_node("unobserved-git", "n1", None).unwrap();
+    assert!(
+        root.protection
+            .iter()
+            .any(|e| e.code == "git_metadata_unverified")
+    );
+    assert!(root.protection.iter().any(|e| e.code == "status_unknown"));
+    let db = StorageIndex::open(&fixture.index.join("unobserved-git")).unwrap();
+    let count: u64 = db
+        .conn
+        .query_row("SELECT count(*) FROM git_worktree_cache", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "unobserved Git directories must not reach a Git command"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn storage_analysis_reparse_git_metadata_is_not_followed() {
+    let fixture = Fixture::new();
+    let outside = fixture.base.join("external-git");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let junction = fixture.source.join(".git");
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let adapter = fixture.adapter();
+    let snapshot = run(&adapter, "reparse-git");
+    assert_eq!(snapshot.state, StorageState::Partial);
+    let root = adapter.get_node("reparse-git", "n1", None).unwrap();
+    assert!(
+        root.protection
+            .iter()
+            .any(|e| e.code == "git_metadata_unverified")
+    );
+    let db = StorageIndex::open(&fixture.index.join("reparse-git")).unwrap();
+    let count: u64 = db
+        .conn
+        .query_row("SELECT count(*) FROM git_worktree_cache", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+    fs::remove_dir(junction).unwrap();
 }

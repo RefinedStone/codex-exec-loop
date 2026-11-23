@@ -20,15 +20,25 @@ enum Event {
     Done(i64),
 }
 
+pub(super) struct ScanControl<'a> {
+    pub cancelled: &'a AtomicBool,
+    pub progress: &'a (dyn Fn(ScanProgress) + Sync),
+    pub runtime_probe: Option<&'a super::StorageRuntimeProbe>,
+    pub scheduling: &'a std::sync::Mutex<super::live::ScanSchedulingState>,
+}
 pub(super) fn scan(
     db: &mut StorageIndex,
     root: &Path,
     index_root: &Path,
     request: &ScanRequest,
-    cancelled: &AtomicBool,
-    progress: &(dyn Fn(ScanProgress) + Sync),
-    runtime_probe: Option<&(dyn Fn(&Path) -> Vec<StorageEvidence> + Send + Sync)>,
+    control: ScanControl<'_>,
 ) -> Result<()> {
+    let ScanControl {
+        cancelled,
+        progress,
+        runtime_probe,
+        scheduling,
+    } = control;
     let root = fs::canonicalize(root)?;
     let index_root = fs::canonicalize(index_root)?;
     let root_meta = native::metadata(&root, &root, None)?;
@@ -45,6 +55,7 @@ pub(super) fn scan(
     let mut last = Instant::now();
     let mut first_file_reported = false;
     progress(ScanProgress {
+        volume_id: request.volume_id.clone(),
         snapshot_id: snapshot.id.clone(),
         files_scanned: 0,
         directories_scanned: 0,
@@ -52,11 +63,12 @@ pub(super) fn scan(
         state: StorageState::Running,
     });
     while !cancelled.load(Ordering::Acquire) {
-        let batch = db.pending(request.options.concurrency)?;
+        db.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let batch = super::live::select_batch(db, scheduling, request.options.concurrency)?;
         if batch.is_empty() {
+            db.conn.execute_batch("COMMIT")?;
             break;
         }
-        db.conn.execute_batch("BEGIN IMMEDIATE")?;
         let outcome = std::thread::scope(|scope| -> Result<()> {
             let (tx, rx) = sync_channel::<Event>(128);
             for (id, path) in batch {
@@ -69,11 +81,23 @@ pub(super) fn scan(
                 let volume = &volume;
                 let abort = &abort;
                 scope.spawn(move || {
-                    enumerate(id, path, root, excluded, volume, cancelled, abort, tx)
+                    enumerate(
+                        id,
+                        path,
+                        EnumerationContext {
+                            root,
+                            excluded,
+                            volume,
+                            cancelled,
+                            abort,
+                        },
+                        tx,
+                    )
                 });
             }
             drop(tx);
             let mut failure = None;
+            let mut since_commit = 0_u32;
             for event in rx {
                 if failure.is_some() {
                     continue;
@@ -95,11 +119,25 @@ pub(super) fn scan(
                     abort.store(true, Ordering::Release);
                     failure = Some(error);
                 }
+                since_commit += 1;
+                if failure.is_none() && since_commit >= 128 {
+                    let commit = db.save_snapshot(&snapshot).and_then(|_| {
+                        db.conn
+                            .execute_batch("COMMIT; BEGIN IMMEDIATE")
+                            .map_err(Into::into)
+                    });
+                    if let Err(error) = commit {
+                        abort.store(true, Ordering::Release);
+                        failure = Some(error);
+                    }
+                    since_commit = 0;
+                }
                 if (!first_file_reported && snapshot.files_scanned > 0)
                     || last.elapsed() >= Duration::from_millis(200)
                 {
                     first_file_reported |= snapshot.files_scanned > 0;
                     progress(ScanProgress {
+                        volume_id: request.volume_id.clone(),
                         snapshot_id: snapshot.id.clone(),
                         files_scanned: snapshot.files_scanned,
                         directories_scanned: snapshot.directories_scanned,
@@ -149,6 +187,7 @@ pub(super) fn scan(
     }
     db.save_snapshot(&snapshot)?;
     progress(ScanProgress {
+        volume_id: request.volume_id.clone(),
         snapshot_id: snapshot.id.clone(),
         files_scanned: snapshot.files_scanned,
         directories_scanned: snapshot.directories_scanned,
@@ -160,16 +199,21 @@ pub(super) fn scan(
 fn stopped(cancelled: &AtomicBool, abort: &AtomicBool) -> bool {
     cancelled.load(Ordering::Acquire) || abort.load(Ordering::Acquire)
 }
-fn enumerate(
-    id: i64,
-    path: PathBuf,
-    root: &Path,
-    excluded: &Path,
-    volume: &str,
-    cancelled: &AtomicBool,
-    abort: &AtomicBool,
-    tx: SyncSender<Event>,
-) {
+struct EnumerationContext<'a> {
+    root: &'a Path,
+    excluded: &'a Path,
+    volume: &'a str,
+    cancelled: &'a AtomicBool,
+    abort: &'a AtomicBool,
+}
+fn enumerate(id: i64, path: PathBuf, context: EnumerationContext<'_>, tx: SyncSender<Event>) {
+    let EnumerationContext {
+        root,
+        excluded,
+        volume,
+        cancelled,
+        abort,
+    } = context;
     if stopped(cancelled, abort) {
         return;
     }

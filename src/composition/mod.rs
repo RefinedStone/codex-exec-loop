@@ -26,3 +26,5 @@ pub(crate) mod production;
 pub(crate) mod repository_extensions;
 pub(crate) mod repository_kernel;
 pub(crate) mod repository_observer;
+
+pub(crate) mod storage_extension;

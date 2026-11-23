@@ -7,6 +7,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+type IndexedNodeRow = (
+    Option<i64>,
+    String,
+    String,
+    String,
+    String,
+    bool,
+    String,
+    String,
+    String,
+    Option<String>,
+);
 pub(super) struct StorageIndex {
     pub conn: Connection,
     pub known_total: std::cell::Cell<u64>,
@@ -45,6 +57,7 @@ fn node_id(id: &str) -> Result<i64> {
 impl StorageIndex {
     pub fn create(dir: &Path, id: &str, volume: &StorageVolume) -> Result<Self> {
         let conn = Connection::open(dir.join("index.sqlite3"))?;
+        conn.busy_timeout(std::time::Duration::from_millis(250))?;
         conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;
         CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE nodes(id INTEGER PRIMARY KEY,parent INTEGER,name TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,
@@ -54,7 +67,7 @@ impl StorageIndex {
         CREATE INDEX node_parent ON nodes(parent,kind);
         CREATE INDEX pending_dirs ON nodes(pending,id);
         CREATE INDEX object_paths ON nodes(object_key);
-        CREATE TABLE objects(key TEXT PRIMARY KEY,owner INTEGER NOT NULL,allocated TEXT,links INTEGER NOT NULL);
+        CREATE TABLE objects(key TEXT PRIMARY KEY,owner INTEGER NOT NULL,allocated TEXT,logical TEXT NOT NULL,links INTEGER NOT NULL);
         CREATE INDEX object_owner ON objects(owner);
         ")?;
         let snapshot = StorageSnapshot {
@@ -102,6 +115,19 @@ impl StorageIndex {
                 })?;
         Ok(serde_json::from_str(&json)?)
     }
+    fn queryable_snapshot(&self) -> Result<StorageSnapshot> {
+        let snapshot = self.snapshot()?;
+        if snapshot.state == StorageState::Running {
+            bail!("storage_snapshot_interrupted");
+        }
+        if matches!(
+            snapshot.state,
+            StorageState::Failed | StorageState::Interrupted
+        ) {
+            bail!("storage_snapshot_unavailable");
+        }
+        Ok(snapshot)
+    }
     pub fn save_snapshot(&self, s: &StorageSnapshot) -> Result<()> {
         self.conn.execute(
             "UPDATE meta SET value=?1 WHERE key='snapshot'",
@@ -117,15 +143,6 @@ impl StorageIndex {
             s.issues.push(i);
         }
         self.save_snapshot(&s)
-    }
-    pub fn pending(&self, limit: usize) -> Result<Vec<(i64, PathBuf)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id,path FROM nodes WHERE pending=1 ORDER BY id LIMIT ?1")?;
-        let rows = stmt.query_map([limit as i64], |r| {
-            Ok((r.get(0)?, PathBuf::from(r.get::<_, String>(1)?)))
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
     pub fn visited(&self, id: i64) -> Result<()> {
         self.conn
@@ -163,19 +180,19 @@ impl StorageIndex {
             i64::from(o.directory && !unknown)])?;
         let id = self.conn.last_insert_rowid();
         if !o.directory {
-            let previous: Option<(i64, Option<String>, u64)> = self
+            let previous: Option<(i64, Option<String>, u64, String)> = self
                 .conn
                 .query_row(
-                    "SELECT owner,allocated,links FROM objects WHERE key=?1",
+                    "SELECT owner,allocated,links,logical FROM objects WHERE key=?1",
                     [&key],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .optional()?;
             let allocated = o.allocated.filter(|_| o.identity.is_some()).map(padded);
-            if let Some((owner, old, links)) = previous {
+            if let Some((owner, old, links, old_logical)) = previous {
                 let lca = self.lca(owner, o.parent)?;
                 // Conflicting observations of one identity are explicitly unknown.
-                let same = old == allocated;
+                let same = old == allocated && old_logical == padded(o.logical);
                 self.conn.execute(
                     "UPDATE objects SET owner=?1,links=?2,allocated=?3 WHERE key=?4",
                     params![lca, links + 1, if same { old.clone() } else { None }, key],
@@ -195,8 +212,8 @@ impl StorageIndex {
                 }
             } else {
                 self.conn.execute(
-                    "INSERT INTO objects(key,owner,allocated,links) VALUES(?1,?2,?3,1)",
-                    params![key, o.parent, allocated],
+                    "INSERT INTO objects(key,owner,allocated,logical,links) VALUES(?1,?2,?3,?4,1)",
+                    params![key, o.parent, allocated, padded(o.logical)],
                 )?;
                 if let Some(value) = allocated {
                     self.known_total.set(
@@ -232,12 +249,10 @@ impl StorageIndex {
         bail!("storage_disconnected_tree")
     }
     pub fn aggregate(&self) -> Result<()> {
-        // Reverse insertion order is post-order: every child is inserted after its parent.
         let mut dirs = self
             .conn
             .prepare("SELECT id FROM nodes WHERE kind='directory' ORDER BY id DESC")?;
-        let ids = dirs.query_map([], |r| r.get::<_, i64>(0))?;
-        for id in ids {
+        for id in dirs.query_map([], |r| r.get::<_, i64>(0))? {
             let id = id?;
             let mut known = 0_u64;
             let mut logical = 0_u64;
@@ -258,33 +273,28 @@ impl StorageIndex {
                 ))
             })? {
                 let (kind, l, k, u) = row?;
-                logical = logical
-                    .checked_add(number(&l)?)
-                    .ok_or_else(|| anyhow!("storage_size_overflow"))?;
                 if kind == "directory" {
-                    known = known
-                        .checked_add(number(&k)?)
-                        .ok_or_else(|| anyhow!("storage_size_overflow"))?;
+                    logical = add_bytes(logical, number(&l)?)?;
+                    known = add_bytes(known, number(&k)?)?;
                 }
                 unknown |= u;
             }
             for shared in [false, true] {
                 let mut own = 0_u64;
+                let mut own_logical = 0_u64;
                 let mut count = 0_u64;
                 let mut missing = false;
-                let mut stmt = self
-                    .conn
-                    .prepare("SELECT allocated FROM objects WHERE owner=?1 AND (links>1)=?2")?;
-                for value in
-                    stmt.query_map(params![id, shared], |r| r.get::<_, Option<String>>(0))?
-                {
+                let mut stmt = self.conn.prepare(
+                    "SELECT allocated,logical FROM objects WHERE owner=?1 AND (links>1)=?2",
+                )?;
+                for row in stmt.query_map(params![id, shared], |r| {
+                    Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
+                })? {
+                    let (allocated, object_logical) = row?;
                     count += 1;
-                    match value? {
-                        Some(v) => {
-                            own = own
-                                .checked_add(number(&v)?)
-                                .ok_or_else(|| anyhow!("storage_size_overflow"))?
-                        }
+                    own_logical = add_bytes(own_logical, number(&object_logical)?)?;
+                    match allocated {
+                        Some(value) => own = add_bytes(own, number(&value)?)?,
                         None => missing = true,
                     }
                 }
@@ -295,11 +305,10 @@ impl StorageIndex {
                         "direct_files"
                     };
                     self.conn.execute("INSERT INTO nodes(parent,name,path,kind,logical,known,unknown) SELECT ?1,?2,path,?3,?4,?5,?6 FROM nodes WHERE id=?1",
-                        params![id,if shared{"공유 파일"}else{"직속 파일"},kind,padded(0),padded(own),missing])?;
+                        params![id,if shared{"공유 파일"}else{"직속 파일"},kind,padded(own_logical),padded(own),missing])?;
                 }
-                known = known
-                    .checked_add(own)
-                    .ok_or_else(|| anyhow!("storage_size_overflow"))?;
+                known = add_bytes(known, own)?;
+                logical = add_bytes(logical, own_logical)?;
                 unknown |= missing;
             }
             self.conn.execute(
@@ -332,10 +341,10 @@ impl StorageIndex {
     }
     fn authorize(&self, node: &str, root: Option<&str>) -> Result<i64> {
         let id = node_id(node)?;
-        if let Some(root) = root {
-            if !self.is_descendant(node, root)? {
-                bail!("storage_not_found");
-            }
+        if let Some(root) = root
+            && !self.is_descendant(node, root)?
+        {
+            bail!("storage_not_found");
         }
         if self
             .conn
@@ -351,11 +360,8 @@ impl StorageIndex {
     }
     pub fn get_node(&self, node: &str, root: Option<&str>) -> Result<StorageNode> {
         let id = self.authorize(node, root)?;
-        let s = self.snapshot()?;
-        if s.state == StorageState::Running {
-            bail!("storage_snapshot_interrupted");
-        }
-        let (parent,name,kind,logical,known,unknown,issues,protection,classification,key):(Option<i64>,String,String,String,String,bool,String,String,String,Option<String>)=
+        let s = self.queryable_snapshot()?;
+        let (parent,name,kind,logical,known,unknown,issues,protection,classification,key):IndexedNodeRow=
             self.conn.query_row("SELECT parent,name,kind,logical,known,unknown,issues,protection,classification,object_key FROM nodes WHERE id=?1",[id],
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?)))?;
         let is_root = parent.is_none() || root == Some(node);
@@ -424,11 +430,11 @@ impl StorageIndex {
             classification: serde_json::from_str(&classification)?,
             allocation_owner_id,
         };
-        if let (Some(owner), Some(root)) = (&node.allocation_owner_id, root) {
-            if !self.is_descendant(owner, root)? {
-                node.allocation_owner_id = None;
-                node.ratio = StorageRatio::new(None, None, false, true);
-            }
+        if let (Some(owner), Some(root)) = (&node.allocation_owner_id, root)
+            && !self.is_descendant(owner, root)?
+        {
+            node.allocation_owner_id = None;
+            node.ratio = StorageRatio::new(None, None, false, true);
         }
         Ok(node)
     }
@@ -439,10 +445,10 @@ impl StorageIndex {
             [id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        if matches!(kind.as_str(), "direct_files" | "shared_files") {
-            if let Some(parent) = parent {
-                return self.identity(&format!("n{parent}"));
-            }
+        if matches!(kind.as_str(), "direct_files" | "shared_files")
+            && let Some(parent) = parent
+        {
+            return self.identity(&format!("n{parent}"));
         }
         Ok(identity.filter(|id| !id.starts_with("unknown:")))
     }
@@ -474,7 +480,7 @@ impl StorageIndex {
     pub fn page(&self, q: &StorageQuery, files: bool) -> Result<StoragePage<StorageNode>> {
         q.validate().map_err(|e| anyhow!(e))?;
         let parent = self.authorize(&q.node_id, q.scope_root_id.as_deref())?;
-        let s = self.snapshot()?;
+        let s = self.queryable_snapshot()?;
         let binding = binding(q, &s, if files { "files" } else { "children" }, None)?;
         let offset = read_cursor(q.cursor.as_deref(), &binding)?;
         let tree = if files && q.recursive {
@@ -548,7 +554,7 @@ impl StorageIndex {
         q.validate().map_err(|e| anyhow!(e))?;
         t.values().map_err(|e| anyhow!(e))?;
         let root = self.authorize(&q.node_id, q.scope_root_id.as_deref())?;
-        let s = self.snapshot()?;
+        let s = self.queryable_snapshot()?;
         let bind = binding(q, &s, "hotspots", Some(t))?;
         let offset = read_cursor(q.cursor.as_deref(), &bind)?;
         // Temporary work queues live in SQLite's file-backed temp store, not a renderer-sized vector.
@@ -670,4 +676,9 @@ fn write_cursor(binding: &str, offset: u64) -> Result<String> {
         binding: binding.into(),
         offset,
     })?))
+}
+
+fn add_bytes(a: u64, b: u64) -> Result<u64> {
+    a.checked_add(b)
+        .ok_or_else(|| anyhow!("storage_size_overflow"))
 }

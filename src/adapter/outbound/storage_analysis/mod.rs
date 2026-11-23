@@ -1,5 +1,8 @@
 //! Native metadata scanner and private, per-job SQLite indexes.
+#[cfg(test)]
+mod evidence_tests;
 mod index;
+mod live;
 mod native;
 mod scanner;
 mod worktree;
@@ -10,15 +13,43 @@ use anyhow::{Result, anyhow, bail};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
+    sync::{Arc, Mutex, RwLock, Weak, atomic::AtomicBool},
 };
 
-pub type StorageRuntimeProbe = Arc<dyn Fn(&Path) -> Vec<StorageEvidence> + Send + Sync>;
+pub type StorageRuntimeObserver = dyn Fn(&Path) -> Vec<StorageEvidence> + Send + Sync;
+pub type StorageKnownRootsObserver = dyn Fn(usize) -> StorageRuntimeRoots + Send + Sync;
+
+#[derive(Default)]
+pub struct StorageRuntimeRoots {
+    pub paths: Vec<PathBuf>,
+    pub complete: bool,
+}
+
+#[derive(Clone)]
+pub struct StorageRuntimeProbe {
+    pub observe: Arc<StorageRuntimeObserver>,
+    pub known_roots: Arc<StorageKnownRootsObserver>,
+}
+
+type ActiveScans = Mutex<HashMap<String, Arc<Mutex<live::ScanSchedulingState>>>>;
+struct ScanRegistration<'a> {
+    active: &'a ActiveScans,
+    id: String,
+}
+impl Drop for ScanRegistration<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&self.id);
+        }
+    }
+}
 
 pub struct NativeStorageAnalysisAdapter {
+    active: ActiveScans,
+    live_readers: RwLock<()>,
     runtime_probe: Option<StorageRuntimeProbe>,
     root: PathBuf,
-    leases: Mutex<HashMap<String, Arc<RwLock<()>>>>,
+    leases: Mutex<HashMap<String, Weak<RwLock<()>>>>,
     // Conservative host budget: concurrent jobs never multiply device I/O concurrency.
     device_budget: RwLock<()>,
     #[cfg(test)]
@@ -29,6 +60,8 @@ impl NativeStorageAnalysisAdapter {
         Self {
             root: index_root,
             runtime_probe: None,
+            active: Mutex::new(HashMap::new()),
+            live_readers: RwLock::new(()),
             leases: Mutex::new(HashMap::new()),
             device_budget: RwLock::new(()),
             #[cfg(test)]
@@ -41,13 +74,17 @@ impl NativeStorageAnalysisAdapter {
     }
     fn lease(&self, id: &str) -> Result<Arc<RwLock<()>>> {
         validate_id(id)?;
-        Ok(self
+        let mut leases = self
             .leases
             .lock()
-            .map_err(|_| anyhow!("storage_lock_poisoned"))?
-            .entry(id.into())
-            .or_insert_with(|| Arc::new(RwLock::new(())))
-            .clone())
+            .map_err(|_| anyhow!("storage_lock_poisoned"))?;
+        leases.retain(|_, lease| lease.strong_count() > 0);
+        if let Some(lease) = leases.get(id).and_then(Weak::upgrade) {
+            return Ok(lease);
+        }
+        let lease = Arc::new(RwLock::new(()));
+        leases.insert(id.into(), Arc::downgrade(&lease));
+        Ok(lease)
     }
     fn job_dir(&self, id: &str) -> Result<PathBuf> {
         validate_id(id)?;
@@ -78,6 +115,41 @@ impl NativeStorageAnalysisAdapter {
     }
 }
 impl StorageAnalysisPort for NativeStorageAnalysisAdapter {
+    fn live_children(&self, q: &StorageLiveQuery) -> Result<StorageLivePage> {
+        let _reader = self
+            .live_readers
+            .read()
+            .map_err(|_| anyhow!("storage_live_unavailable"))?;
+        live::children(&self.job_dir(&q.job_id)?, q)
+    }
+    fn prioritize(&self, job_id: &str, node_id: &str) -> Result<StoragePriorityResult> {
+        let _reader = self
+            .live_readers
+            .read()
+            .map_err(|_| anyhow!("storage_live_unavailable"))?;
+        validate_id(job_id)?;
+        let state = self
+            .active
+            .lock()
+            .map_err(|_| anyhow!("storage_priority_unavailable"))?
+            .get(job_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("storage_job_not_running"))?;
+        let pending = live::pending(&self.job_dir(job_id)?, node_id)?;
+        let mut state = state
+            .lock()
+            .map_err(|_| anyhow!("storage_priority_unavailable"))?;
+        let (queued, queue_length) = match pending {
+            Some(id) => state.enqueue(id)?,
+            None => (false, state.len()),
+        };
+        Ok(StoragePriorityResult {
+            job_id: job_id.into(),
+            node_id: node_id.into(),
+            queued,
+            queue_length,
+        })
+    }
     fn list_volumes(&self) -> Result<Vec<StorageVolume>> {
         #[cfg(test)]
         if let Some(path) = &self.fixture_root {
@@ -114,14 +186,26 @@ impl StorageAnalysisPort for NativeStorageAnalysisAdapter {
         reject_symlink(&self.root)?;
         std::fs::create_dir(&dir)?;
         let mut db = index::StorageIndex::create(&dir, &request.job_id, &volume)?;
+        let scheduling = Arc::new(Mutex::new(live::ScanSchedulingState::default()));
+        self.active
+            .lock()
+            .map_err(|_| anyhow!("storage_priority_unavailable"))?
+            .insert(request.job_id.clone(), scheduling.clone());
+        let _registration = ScanRegistration {
+            active: &self.active,
+            id: request.job_id.clone(),
+        };
         let result = scanner::scan(
             &mut db,
             &root,
             &self.root,
             request,
-            cancelled,
-            progress,
-            self.runtime_probe.as_deref(),
+            scanner::ScanControl {
+                cancelled,
+                progress,
+                runtime_probe: self.runtime_probe.as_ref(),
+                scheduling: &scheduling,
+            },
         );
         match result {
             Ok(()) => db.snapshot(),
@@ -193,6 +277,10 @@ impl StorageAnalysisPort for NativeStorageAnalysisAdapter {
         let _guard = lease
             .write()
             .map_err(|_| anyhow!("storage_lock_poisoned"))?;
+        let _live_readers = self
+            .live_readers
+            .write()
+            .map_err(|_| anyhow!("storage_live_unavailable"))?;
         let dir = self.job_dir(id)?;
         if !dir.exists() {
             return Ok(());
@@ -206,27 +294,39 @@ impl StorageAnalysisPort for NativeStorageAnalysisAdapter {
                 bail!("storage_owner_mismatch");
             }
         }
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            if !matches!(
-                name.to_str(),
-                Some(
-                    "index.sqlite3"
-                        | "index.sqlite3-journal"
-                        | "index.sqlite3-wal"
-                        | "index.sqlite3-shm"
-                )
-            ) {
-                bail!("storage_unowned_index_entry");
-            }
-        }
-        for entry in std::fs::read_dir(&dir)? {
-            std::fs::remove_file(entry?.path())?;
-        }
-        std::fs::remove_dir(dir)?;
-        Ok(())
+        validate_cleanup_entries(&dir)?;
+        remove_validated_index_files(&dir)
     }
+}
+const INDEX_FILES: [&str; 4] = [
+    "index.sqlite3",
+    "index.sqlite3-journal",
+    "index.sqlite3-wal",
+    "index.sqlite3-shm",
+];
+fn validate_cleanup_entries(dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let name = entry?.file_name();
+        if !name
+            .to_str()
+            .is_some_and(|name| INDEX_FILES.contains(&name))
+        {
+            bail!("storage_unowned_index_entry");
+        }
+    }
+    Ok(())
+}
+fn remove_validated_index_files(dir: &Path) -> Result<()> {
+    // Never delete a second enumeration: a new, foreign entry must survive the race.
+    for name in INDEX_FILES {
+        match std::fs::remove_file(dir.join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    std::fs::remove_dir(dir)?;
+    Ok(())
 }
 fn validate_id(id: &str) -> Result<()> {
     if id.is_empty()
@@ -255,3 +355,9 @@ fn reject_symlink(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lifetime_tests;
+
+#[cfg(test)]
+mod benchmark;

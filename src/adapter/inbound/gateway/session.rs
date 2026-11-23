@@ -172,6 +172,9 @@ where
             services.delegations.clone(),
         )
     });
+    let storage_conversation = kernel_requests
+        .as_ref()
+        .map(KernelRequests::conversation_context);
     let delegation_driver = is_local.then(|| services.delegations.connection(outbox.clone()));
     let provider_session = if is_local {
         services
@@ -219,6 +222,9 @@ where
                                 provider.answer(&id, text.as_str());
                             }
                             continue;
+                        }
+                        if let Some(context) = &storage_conversation {
+                            context.client_message(text.as_str());
                         }
                         record(RecordDirection::Client, text.as_str());
                         if upstream_sink.send(Message::Text(text)).await.is_err() {
@@ -415,6 +421,9 @@ where
                         {
                             continue;
                         }
+                        if let Some(context) = &storage_conversation {
+                            context.upstream_message(text.as_str());
+                        }
                         record(RecordDirection::Gateway, text.as_str());
                     }
                     if outbox.send(message).await.is_err() {
@@ -448,6 +457,9 @@ where
         end = upstream_to_client => end,
         end = upstream_restarted => end,
     };
+    if let Some(context) = &storage_conversation {
+        context.invalidate();
+    }
     drop(provider_session);
     drop(delegation_driver);
     // Kernel workers can hold additional outbox senders; stop them before flushing.
