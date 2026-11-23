@@ -27,14 +27,15 @@ const protectionReasons = [
   ["status_unknown","Working tree contents and ignore rules are not read; observed index/path evidence is not a complete or clean status"],
   ["future_protection_reason","추가로 확인한 보호 근거"],
 ].map(([code, detail]) => ({ code, detail, observed_at: "2026-11-23T00:00:00Z" }));
-const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 3 + snapshotRevision, directories_scanned: 4, issues: [] });
+const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 3 + snapshotRevision, directories_scanned: 6, issues: [] });
+const fixtureBytes = (id, amount) => id === "tiny" ? 1n : gib * BigInt(amount) - (id === "cache" || id === "cache-direct" ? 1n : 0n);
 const node = (id, amount, parent = "root", kind = "directory") => ({ snapshot_id: "scan-1", revision: snapshotRevision, id, parent_id: parent,
-  name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin", file2: "small-cache.bin", "target-direct": "target 직속 파일", cache: "cache", "cache-direct": "cache 직속 파일" })[id] ?? id,
-  kind, allocated_bytes: (gib * BigInt(amount)).toString(), known_allocated_bytes: (gib * BigInt(amount)).toString(), logical_bytes: (gib * BigInt(amount)).toString(),
-  ratio: { numerator_bytes: (gib * BigInt(amount)).toString(), denominator_bytes: parent ? (gib * BigInt(({ root: 12, target: 9, assets: 2, cache: 2 })[parent] ?? 12)).toString() : null, reason: parent ? null : "root", provisional: false },
+  name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin", file2: "small-cache.bin", "target-direct": "target 직속 파일", cache: "cache", tiny: "one-byte", zero: "zero-byte", "cache-direct": "cache 직속 파일" })[id] ?? id,
+  kind, allocated_bytes: fixtureBytes(id, amount).toString(), known_allocated_bytes: fixtureBytes(id, amount).toString(), logical_bytes: fixtureBytes(id, amount).toString(),
+  ratio: { numerator_bytes: fixtureBytes(id, amount).toString(), denominator_bytes: parent ? fixtureBytes(parent, ({ root: 12, target: 9, assets: 2, cache: 2 })[parent] ?? 12).toString() : null, reason: parent ? null : "root", provisional: false },
   state: "complete", issues: [], protection: id === "root" ? [{ code: "akra_known_repository", detail: "An existing kernel root matched an observed directory identity; no kernel was started", observed_at: "2026-11-23T00:00:00Z" }] : id === "target" ? protectionReasons : [], classification: [],
 });
-const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("target", 9), node("assets", 2), node("cache", 2, "assets"), node("cache-direct", 2, "cache", "direct_files"), node("target-direct", 9, "target", "direct_files"), node("direct", 1, "root", "direct_files"), node("file", 8, "target", "file"), node("file2", 1, "target", "file")].map(item => invalidAllocation && item.id === "root" ? { ...item, allocated_bytes: "invalid", known_allocated_bytes: "invalid" } : item);
+const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("target", 9), node("assets", 2), node("cache", 2, "assets"), node("tiny", 0, "assets"), node("zero", 0, "assets"), node("cache-direct", 2, "cache", "direct_files"), node("target-direct", 9, "target", "direct_files"), node("direct", 1, "root", "direct_files"), node("file", 8, "target", "file"), node("file2", 1, "target", "file")].map(item => invalidAllocation && item.id === "root" ? { ...item, allocated_bytes: "invalid", known_allocated_bytes: "invalid" } : item);
 const page = items => ({ snapshot_id: "scan-1", revision: snapshotRevision, items, total_count: items.length, next_cursor: null });
 const baseThread = structuredClone(fake.loadReplayTable(fake.INTERRUPTED_TURN_RECORDING).get("thread/resume").result);
 baseThread.thread.turns = [{ id: "storage-answer", status: "completed", itemsView: "full", startedAt: 1, completedAt: 2, durationMs: 1, error: null, items: [
@@ -87,7 +88,7 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
       const start = input.cursor === "files:1" ? 1 : 0;
       return { result: { ...page(matching.slice(start, start + 1)), total_count: matching.length, next_cursor: start + 1 < matching.length ? "files:1" : null } };
     }
-    if (params.action === "find_hotspots") return { result: page([{ node: node("target", 9), role: "folder", reason: "1 GiB 이상", included_bytes: (gib * 9n).toString(), provisional: false }, { node: node("cache", 2, "assets"), role: "folder", reason: "큰 자식", included_bytes: (gib * 2n).toString(), provisional: false }]) };
+    if (params.action === "find_hotspots") return { result: page([{ node: node("target", 9), role: "folder", reason: "1 GiB 이상", included_bytes: (gib * 9n).toString(), provisional: false }, { node: node("cache", 2, "assets"), role: "folder", reason: "큰 자식", included_bytes: (gib * 2n - 1n).toString(), provisional: false }]) };
     if (params.action === "ancestors") {
       const chain = [], all = nodes(); let current = all.find(item => item.id === input.node_id);
       while (current) { chain.unshift(current); current = all.find(item => item.id === current.parent_id); }
@@ -104,6 +105,7 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
     if (params.action === "share_revoke") { grants = 0; return { result: {} }; }
     if (params.action === "resolve_evidence") {
       enteredResolve?.();
+      if (!job?.result) return { error: { code: -32000, message: "storage_snapshot_unavailable: 분석 결과가 취소되었거나 만료되었습니다." } };
       if (!grants) return { error: { code: -32000, message: "공유가 해제되었습니다." }, replyAfter: resolveBarrier ?? undefined };
       const targetId = input.reference === assetsReference ? "assets" : "target";
       return { result: { snapshot_id: "scan-1", revision: 1, node_id: targetId, ancestors: [node("root", 12, null)], node: nodes().find(item => item.id === targetId) }, replyAfter: input.reference === reference ? resolveBarrier ?? undefined : undefined };
@@ -181,6 +183,24 @@ try {
   await view.waitForFunction(() => document.querySelector('[data-node-id="cache"]') === document.activeElement);
   assert.equal(await panel.locator('[data-node-id="assets"]').getAttribute("aria-expanded"), "true");
   await view.keyboard.press("ArrowLeft"); await view.keyboard.press("ArrowLeft"); await view.keyboard.press("ArrowLeft");
+  await panel.locator('[data-node-id="cache"]').waitFor({ state: "hidden" });
+  assert.equal(await panel.locator(".storage-treemap").getByRole("button", { name: /one-byte|zero-byte/ }).count(), 0, "subpixel and zero entries are not tiny click or Tab targets");
+  await view.keyboard.press("ArrowRight");
+  await panel.locator('[data-node-id="zero"]').waitFor();
+  await view.keyboard.press("ArrowDown"); await view.keyboard.press("ArrowDown");
+  assert.equal(await panel.locator('[data-node-id="tiny"]').evaluate(element => element === document.activeElement), true);
+  await view.keyboard.press("ArrowDown");
+  assert.equal(await panel.locator('[data-node-id="zero"]').evaluate(element => element === document.activeElement), true);
+  assert.match(await panel.locator('[data-node-id="zero"]').innerText(), /0 B/);
+  await panel.locator('[data-node-id="assets"]').click();
+  await panel.getByLabel("선택 폴더 트리맵 표시").uncheck();
+  await panel.getByRole("region", { name: "선택 폴더 트리맵", exact: true }).waitFor({ state: "hidden" });
+  await panel.locator('[data-node-id="tiny"]').waitFor();
+  await panel.getByLabel("선택 폴더 트리맵 표시").check();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1200, 900));
+  assert.equal(await panel.locator('[data-node-id="assets"]').getAttribute("aria-selected"), "true");
+  assert.equal(await panel.locator(".storage-treemap").getByRole("button", { name: /one-byte|zero-byte/ }).count(), 0);
+  await panel.locator('[data-node-id="assets"]').focus(); await view.keyboard.press("ArrowLeft");
   await panel.locator('[data-node-id="cache"]').waitFor({ state: "hidden" });
   await panel.getByRole("button", { name: "cache, 2.0 GiB, 표에서 선택", exact: true }).click();
   await view.waitForFunction(() => document.querySelector('[data-node-id="cache"]') === document.activeElement);
@@ -276,6 +296,17 @@ try {
   assert.match(await target.innerText(), /75.0%/);
   assert.equal(scans, 1, "panel failure and retry do not restart the shared scan");
 
+  for (const state of ["cancelled", "expired"]) {
+    job = state === "cancelled" ? { ...job, state: "cancelled", result: null } : null;
+    revision++; gateway.sendExtensionChange(localKernel, { extension, generation: "host-1", revision, sequence: revision });
+    await panel.getByRole("treegrid").waitFor({ state: "hidden" });
+    const reads = calls.filter(call => call.action === "resolve_evidence").length;
+    await view.getByRole("button", { name: "표에서 보기 · target 75%", exact: true }).click();
+    await panel.getByRole("alert").filter({ hasText: "분석 결과가 취소되었거나 만료되었습니다." }).waitFor();
+    assert.equal(calls.filter(call => call.action === "resolve_evidence").length, reads + 1);
+    assert.equal(await panel.getByRole("treegrid").count(), 0);
+    assert.equal(scans, 1, "a stale reference without a snapshot only explains the failure");
+  }
   enabled = false; revision++;
   gateway.sendExtensionChange(localKernel, { extension, generation: "host-1", revision, sequence: revision });
   await view.getByTestId("storage-toggle").waitFor({ state: "hidden" });

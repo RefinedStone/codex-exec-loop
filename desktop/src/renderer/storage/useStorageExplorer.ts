@@ -18,6 +18,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   const [volumeId, setVolumeId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const scope = useRef({ key: scopeKey, enabled, epoch: 0 });
   if (scope.current.key !== scopeKey || scope.current.enabled !== enabled) scope.current = { key: scopeKey, enabled, epoch: scope.current.epoch + 1 };
   const currentSnapshot = useRef(snapshot);
@@ -65,6 +66,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   const refresh = useCallback(async () => {
     const life = scope.current, sequence = ++refreshSequence.current;
     if (!enabled) return;
+    setLoading(true);
     try {
       const [listed, result] = await Promise.all([
         call<StorageVolume[] | { volumes: StorageVolume[] }>("volumes"),
@@ -114,10 +116,11 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       setExpanded(nextExpanded);
       for (const id of nextExpanded) void loadChildren(id);
     } catch (failure) { if (scope.current === life && sequence === refreshSequence.current) setError(String(failure)); }
+    finally { if (scope.current === life && sequence === refreshSequence.current) setLoading(false); }
   }, [call, enabled, loadChildren]);
 
   useEffect(() => {
-    setVolumes([]); setJobs([]); setSnapshot(null); currentSnapshot.current = null; currentJobId.current = null; setBusy(false);
+    setVolumes([]); setJobs([]); setSnapshot(null); currentSnapshot.current = null; currentJobId.current = null; setBusy(false); setLoading(true);
     setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]); setError("");
     interaction.current++;
   }, [scopeKey]);
@@ -153,7 +156,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
     });
   };
   return { call, scope, interaction, volumes, jobs, snapshot, nodes, pages, expanded, selectedId, volumeId,
-    setVolumeId, error, setError, busy, scan, cancel, refresh, loadChildren, select, toggle,
+    setVolumeId, error, setError, busy, loading, scan, cancel, refresh, loadChildren, select, toggle,
     setNodes, setPages, setExpanded, setSelectedId, revealedPath, setRevealedPath, currentSnapshot };
 }
 export type StorageExplorer = ReturnType<typeof useStorageExplorer>;
