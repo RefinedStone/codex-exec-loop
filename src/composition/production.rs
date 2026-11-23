@@ -104,6 +104,7 @@ use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::application::service::stored_command::StoredCommandService;
+use crate::application::service::task_verification::TaskVerificationHandle;
 use crate::application::service::work_context::WorkContextService;
 use crate::composition::native_client_runtime::{
     NativeClientRuntime, NativeTuiApplicationComposition,
@@ -857,7 +858,12 @@ fn native_tui_workspace_dir() -> String {
 }
 
 pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
-    build_native_application_for_workspace(&native_tui_workspace_dir(), None).application
+    build_native_application_for_workspace(
+        &native_tui_workspace_dir(),
+        None,
+        TaskVerificationHandle::default(),
+    )
+    .application
 }
 
 /// 커널의 판단 사건 기록이다 (plan 19 Q3-1). planning SQLite 의 `kernel_events` 표이다.
@@ -1001,7 +1007,14 @@ pub(crate) fn build_headless_kernel_runtime(
     app_server: Option<GatewayUpstreamSocket>,
     issues: Arc<crate::application::service::issue_collection::IssueCollectionService>,
 ) -> NativeClientRuntime {
-    let assembly = build_native_application_for_workspace(workspace_dir, app_server);
+    // All parallel and post-turn clones share this unbound handle. Only the
+    // successfully initialized live repository owner may bind its service.
+    let verification_handle = TaskVerificationHandle::default();
+    let assembly = build_native_application_for_workspace(
+        workspace_dir,
+        app_server,
+        verification_handle.clone(),
+    );
     let mut runtime = assembly.application.into_headless_client_runtime();
     let waker = runtime.host_waker();
     // A failed private-owner initialization leaves verification unavailable. It cannot
@@ -1011,7 +1024,7 @@ pub(crate) fn build_headless_kernel_runtime(
             .ok()
             .and_then(|service| {
                 runtime
-                    .attach_task_verification(service.clone())
+                    .attach_task_verification(service.clone(), &verification_handle)
                     .ok()
                     .map(|_| service)
             });
@@ -1040,6 +1053,7 @@ struct NativeApplicationAssembly {
 fn build_native_application_for_workspace(
     workspace_dir: &str,
     app_server: Option<GatewayUpstreamSocket>,
+    verification_handle: TaskVerificationHandle,
 ) -> NativeApplicationAssembly {
     let workspace_dir = workspace_dir.to_string();
     let capture_enabled = app_server_prompt_logging_enabled();
@@ -1068,15 +1082,20 @@ fn build_native_application_for_workspace(
         .with_review_center_read_service(review_center_read_service.clone());
     let planning = planning_services_from_ports(&ports);
     let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
-    let parallel_mode_control_plane = parallel_mode_control_plane_from_parts(
+    let parallel_mode_service = parallel_mode_service_from_parts(
         &workspace_dir,
-        planning,
         ports.planning_authority_port,
-        ports.parallel_agent_worker_port,
         parallel_agent_profile_service,
         Arc::new(GithubPrValidationAdapter::for_local_github_credentials(
             &workspace_dir,
         )),
+    )
+    .with_task_verification(verification_handle);
+    let parallel_mode_control_plane = parallel_mode_control_plane_from_service(
+        &workspace_dir,
+        planning,
+        ports.parallel_agent_worker_port,
+        parallel_mode_service,
     );
     let clipboard_image_probe_trigger = CompositionClipboardImageProbeTrigger::new_shared(
         Arc::new(PlatformClipboardImageAdapter::new()),

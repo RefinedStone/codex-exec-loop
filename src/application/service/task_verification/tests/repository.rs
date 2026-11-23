@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) type FailurePolicyHook = Arc<dyn Fn() + Send + Sync>;
+
 struct State {
     owner: Option<String>,
     claim: Option<TaskVerificationClaimCommit>,
@@ -13,6 +15,10 @@ pub(crate) struct Repository {
     pub recoveries: AtomicUsize,
     pub claims: AtomicUsize,
     pub reads: AtomicUsize,
+    pub verification_reads: AtomicUsize,
+    pub failure_limit_calls: AtomicUsize,
+    pub failure_limit_hook: Mutex<Option<FailurePolicyHook>>,
+    pub claim_hook: Mutex<Option<FailurePolicyHook>>,
     pub finish_calls: Mutex<Vec<TaskVerificationFinishCommit>>,
     pub fail_finish_once: AtomicBool,
     pub fail_ack_once: AtomicBool,
@@ -34,6 +40,10 @@ impl Repository {
             recoveries: AtomicUsize::new(0),
             claims: AtomicUsize::new(0),
             reads: AtomicUsize::new(0),
+            verification_reads: AtomicUsize::new(0),
+            failure_limit_calls: AtomicUsize::new(0),
+            failure_limit_hook: Mutex::new(None),
+            claim_hook: Mutex::new(None),
             finish_calls: Mutex::new(vec![]),
             fail_finish_once: AtomicBool::new(false),
             fail_ack_once: AtomicBool::new(false),
@@ -61,6 +71,10 @@ impl TaskVerificationRepositoryPort for Repository {
         commit: &TaskVerificationClaimCommit,
     ) -> Result<TaskVerificationClaimResult> {
         self.claims.fetch_add(1, Ordering::SeqCst);
+        let hook = self.claim_hook.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
         let mut state = self.state.lock().unwrap();
         if state.owner.as_deref() != Some(commit.owner_token.as_str()) {
             return Err(TaskEvidenceError::Conflict.into());
@@ -161,12 +175,31 @@ impl TaskVerificationRepositoryPort for Repository {
     }
 
     fn load_host_verification(&self, _: &str, id: &str) -> Result<Option<StoredTaskVerification>> {
+        self.verification_reads.fetch_add(1, Ordering::SeqCst);
         let state = self.state.lock().unwrap();
         Ok(state
             .claim
             .as_ref()
             .filter(|_| state.stored.attempt.attempt_id == id)
             .map(|_| state.stored.clone()))
+    }
+
+    fn apply_host_verification_failure_limit(
+        &self,
+        _: &str,
+        _: &TaskVerificationFailureLimitCommit,
+    ) -> Result<TaskVerificationFailureLimitResult> {
+        self.failure_limit_calls.fetch_add(1, Ordering::SeqCst);
+        let hook = self.failure_limit_hook.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(TaskVerificationFailureLimitResult {
+            outcome: TaskVerificationFailureLimitOutcome::NotFailed,
+            failure_count: 0,
+            planning_revision: None,
+            changed: false,
+        })
     }
 }
 

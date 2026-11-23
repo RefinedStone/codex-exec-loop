@@ -82,6 +82,7 @@ fn prepared(
         criterion_id: "C1".into(),
         scope_id: scope.scope_id,
         expected_acceptance_revision: scope.acceptance_revision,
+        expected_lease: None,
         owner_token: owner,
         at: NOW.into(),
     };
@@ -317,5 +318,127 @@ fn host_verification_claim_and_bind_require_dispatch_for_the_frozen_lease_base()
             assert_eq!(count(&workspace, "task_verification_runs"), 0);
         }
         assert!(adapter.pending_events(&workspace, 10).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn automatic_failure_limit_cannot_replace_a_newer_work_control_decision() {
+    for action in actions() {
+        let (workspace, adapter, original) = prepared(&format!("host-failure-control-{action:?}"));
+        let mut last = None;
+        for index in 0..3 {
+            let request = TaskVerificationClaimCommit {
+                request_id: format!("failure-before-control-{index}"),
+                ..original.clone()
+            };
+            let claim = adapter
+                .claim_host_verification(&workspace, &request)
+                .unwrap();
+            let execution = claim.execution.unwrap();
+            assert!(
+                adapter
+                    .bind_host_verification(
+                        &workspace,
+                        &TaskVerificationBindCommit {
+                            execution: execution.clone(),
+                            manifest: manifest(),
+                            at: NOW.into(),
+                        }
+                    )
+                    .unwrap()
+            );
+            if index == 2 {
+                adapter
+                    .apply_work_order_control(
+                        &workspace,
+                        "order-1",
+                        "control-before-failure-policy",
+                        action,
+                    )
+                    .unwrap();
+            }
+            let stream = || TaskVerificationStream {
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+                size_bytes: 0,
+                complete: true,
+            };
+            let receipt = adapter
+                .finish_host_verification(
+                    &workspace,
+                    &TaskVerificationFinishCommit {
+                        execution,
+                        result: TaskVerificationResult::Executed {
+                            observation: Box::new(TaskVerificationObservation {
+                                outcome: TaskVerificationExecutionOutcome::Exited { exit_code: 2 },
+                                started_at: NOW.into(),
+                                finished_at: NOW.into(),
+                                duration_ms: 1,
+                                stdout: stream(),
+                                stderr: stream(),
+                            }),
+                        },
+                        artifact: Some(TaskEvidenceArtifact {
+                            sha256: "f".repeat(64),
+                            size_bytes: 123,
+                        }),
+                        at: NOW.into(),
+                    },
+                )
+                .unwrap()
+                .value;
+            last = Some((claim.stored.lease, receipt));
+        }
+        let (expected_lease, receipt) = last.unwrap();
+        let before = adapter
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        let request = TaskVerificationFailureLimitCommit {
+            attempt_id: receipt.attempt.attempt_id.clone(),
+            expected_lease,
+            owner_token: original.owner_token,
+            at: NOW.into(),
+        };
+        let result = adapter
+            .apply_host_verification_failure_limit(&workspace, &request)
+            .unwrap();
+        assert_eq!(
+            result.outcome,
+            TaskVerificationFailureLimitOutcome::Superseded,
+            "{action:?}"
+        );
+        assert_eq!(result.failure_count, 3);
+        assert!(!result.changed);
+        assert_eq!(
+            adapter
+                .load_task_authority_snapshot(&workspace)
+                .unwrap()
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            adapter
+                .load_host_verification(&workspace, &receipt.attempt.attempt_id)
+                .unwrap()
+                .unwrap()
+                .receipt
+                .as_ref(),
+            Some(&receipt)
+        );
+        assert_eq!(
+            adapter
+                .apply_host_verification_failure_limit(&workspace, &request)
+                .unwrap(),
+            result
+        );
+        assert!(matches!(
+            check(
+                &adapter,
+                &workspace,
+                PlanningWorkPermitStage::Dispatch,
+                None
+            ),
+            PlanningWorkPermitDecision::Denied(_)
+        ));
     }
 }

@@ -351,8 +351,10 @@ impl OfficialCompletionRefreshOutcome {
 #[derive(Debug)]
 enum OfficialCompletionCapture {
     NotApplicable,
+    Cancelled,
     Captured(Box<ParallelModeOfficialCompletionReport>),
     Failed { detail: String },
+    AwaitingUser { detail: String },
 }
 #[derive(Debug, Clone)]
 struct PostTurnDecision {
@@ -476,26 +478,34 @@ impl PostTurnEvaluationExecutor {
                 .load_authority_snapshot(&request.workspace_directory)
                 .ok();
         }
-        let official_completion_capture = request
-            .continuation_permit
-            .with_current(|| self.begin_official_completion_if_needed(context, request))
-            .unwrap_or(OfficialCompletionCapture::NotApplicable);
-        let official_completion_capture_failed = matches!(
+        // Host verification may wait for durable completion. Only its later
+        // capture commit holds the continuation mutex, so Pause can cancel work.
+        let official_completion_capture =
+            self.begin_official_completion_if_needed(context, request);
+        let official_completion_capture_blocked = matches!(
             official_completion_capture,
-            OfficialCompletionCapture::Failed { .. }
+            OfficialCompletionCapture::Cancelled
+                | OfficialCompletionCapture::Failed { .. }
+                | OfficialCompletionCapture::AwaitingUser { .. }
         );
         let official_completion_report = match &official_completion_capture {
             OfficialCompletionCapture::Captured(report) => Some(report.as_ref()),
-            OfficialCompletionCapture::NotApplicable | OfficialCompletionCapture::Failed { .. } => {
-                None
-            }
+            OfficialCompletionCapture::NotApplicable
+            | OfficialCompletionCapture::Cancelled
+            | OfficialCompletionCapture::Failed { .. }
+            | OfficialCompletionCapture::AwaitingUser { .. } => None,
         };
         if let OfficialCompletionCapture::Failed { detail } = &official_completion_capture {
             runtime_notices.push(detail.clone());
             runtime_projection = PlanningRuntimeProjection::invalid(detail.clone());
+        } else if let OfficialCompletionCapture::AwaitingUser { detail } =
+            &official_completion_capture
+        {
+            runtime_notices.push(detail.clone());
+            runtime_projection = runtime_projection.with_auto_follow_pause_reason(detail);
         }
         if request.continuation_permit.is_current()
-            && !official_completion_capture_failed
+            && !official_completion_capture_blocked
             && (planning_settlement_enabled || official_completion_report.is_some())
             && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
         {
@@ -527,7 +537,7 @@ impl PostTurnEvaluationExecutor {
                 false
             };
         if !handled_parallel_completion
-            && !official_completion_capture_failed
+            && !official_completion_capture_blocked
             && planning_settlement_enabled
             && request.continuation_permit.is_current()
         {
@@ -535,14 +545,18 @@ impl PostTurnEvaluationExecutor {
                 self.run_planning_queue_refresh(context, request, runtime_projection.clone());
             runtime_projection = refresh_outcome.runtime_projection;
         }
-        let mut post_turn_decision = if !request.continuation_permit.is_current() {
+        let mut post_turn_decision = if !request.continuation_permit.is_current()
+            || matches!(
+                official_completion_capture,
+                OfficialCompletionCapture::Cancelled
+            ) {
             PostTurnDecision::from_action(
                 request.completed_turn_id.clone(),
                 PostTurnContinuationAction::SkipAutoFollow {
                     reason: PostTurnAutoFollowSkipReason::PostTurnContinuationPaused,
                 },
             )
-        } else if official_completion_capture_failed {
+        } else if official_completion_capture_blocked {
             PostTurnDecision::from_action(
                 request.completed_turn_id.clone(),
                 PostTurnContinuationAction::SkipAutoFollow {
@@ -1154,6 +1168,7 @@ pub(crate) fn post_turn_evaluation_failure_execution(
 }
 #[cfg(test)]
 mod tests {
+    mod automatic_verification;
     use super::*;
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;

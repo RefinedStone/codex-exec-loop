@@ -163,7 +163,11 @@ fn actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_r
 #[test]
 fn source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure() {
     let fixture = Fixture::new();
-    fs::write(fixture.root.join("README.md"), "concealed violation  \n").unwrap();
+    fs::write(
+        fixture.root.join("README.md"),
+        "concealed violation  \n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n",
+    )
+    .unwrap();
     fs::write(
         fixture.root.join(".gitattributes"),
         "* -whitespace binary conflict-marker-size=32\n",
@@ -185,14 +189,17 @@ fn source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure
     fixture.commit();
     let prepared = fixture.prepare(&fixture.source());
     let (observation, stdout, _) = executed(Box::new(prepared).run(&|| false));
-    assert!(
-        matches!(observation.outcome, TaskVerificationExecutionOutcome::Exited { exit_code } if exit_code != 0)
+    assert_eq!(
+        observation.outcome,
+        TaskVerificationExecutionOutcome::Exited { exit_code: 2 },
     );
+    let diagnostics = String::from_utf8(stdout).unwrap();
+    assert!(diagnostics.contains("trailing whitespace"), "{diagnostics}");
     assert!(
-        String::from_utf8(stdout)
-            .unwrap()
-            .contains("trailing whitespace")
+        diagnostics.contains("leftover conflict marker"),
+        "{diagnostics}"
     );
+    assert!(observation.stdout.complete && observation.stderr.complete);
 }
 
 #[test]
