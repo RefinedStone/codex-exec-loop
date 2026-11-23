@@ -18,12 +18,21 @@ const calls = [];
 let recursiveObserved;
 const reference = "akra-storage:" + Buffer.from(JSON.stringify({ grant_id: "grant-1", node_id: "target", snapshot_id: "scan-1" })).toString("base64url");
 const assetsReference = "akra-storage:" + Buffer.from(JSON.stringify({ grant_id: "grant-1", node_id: "assets", snapshot_id: "scan-1" })).toString("base64url");
+const protectionReasons = [
+  ["akra_known_repository","An existing kernel root matched an observed directory identity; no kernel was started"],
+  ["runtime_candidates_partial","The bounded existing-kernel root inventory was incomplete; absence does not mean inactive"],
+  ["untracked_observed","3 observed file paths are absent from the index; ignore rules were not read or applied"],
+  ["index_conflicts","2 index paths have unresolved stages"],
+  ["index_paths_unknown","Index path observation failed, exceeded a bound, or contained an unsupported path; no working tree status was inferred"],
+  ["status_unknown","Working tree contents and ignore rules are not read; observed index/path evidence is not a complete or clean status"],
+  ["future_protection_reason","추가로 확인한 보호 근거"],
+].map(([code, detail]) => ({ code, detail, observed_at: "2026-11-23T00:00:00Z" }));
 const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 3 + snapshotRevision, directories_scanned: 4, issues: [] });
 const node = (id, amount, parent = "root", kind = "directory") => ({ snapshot_id: "scan-1", revision: snapshotRevision, id, parent_id: parent,
   name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin", file2: "small-cache.bin", "target-direct": "target 직속 파일", cache: "cache", "cache-direct": "cache 직속 파일" })[id] ?? id,
   kind, allocated_bytes: (gib * BigInt(amount)).toString(), known_allocated_bytes: (gib * BigInt(amount)).toString(), logical_bytes: (gib * BigInt(amount)).toString(),
   ratio: { numerator_bytes: (gib * BigInt(amount)).toString(), denominator_bytes: parent ? (gib * BigInt(({ root: 12, target: 9, assets: 2, cache: 2 })[parent] ?? 12)).toString() : null, reason: parent ? null : "root", provisional: false },
-  state: "complete", issues: [], protection: id === "root" ? [{ code: "active", detail: "현재 작업 중인 저장소", observed_at: 1 }] : [], classification: [],
+  state: "complete", issues: [], protection: id === "root" ? [{ code: "akra_known_repository", detail: "An existing kernel root matched an observed directory identity; no kernel was started", observed_at: "2026-11-23T00:00:00Z" }] : id === "target" ? protectionReasons : [], classification: [],
 });
 const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("target", 9), node("assets", 2), node("cache", 2, "assets"), node("cache-direct", 2, "cache", "direct_files"), node("target-direct", 9, "target", "direct_files"), node("direct", 1, "root", "direct_files"), node("file", 8, "target", "file"), node("file2", 1, "target", "file")].map(item => invalidAllocation && item.id === "root" ? { ...item, allocated_bytes: "invalid", known_allocated_bytes: "invalid" } : item);
 const page = items => ({ snapshot_id: "scan-1", revision: snapshotRevision, items, total_count: items.length, next_cursor: null });
@@ -127,6 +136,18 @@ try {
   await panel.locator('[data-node-id="root"]').focus();
   await view.keyboard.press("ArrowDown");
   assert.equal(await target.getAttribute("aria-selected"), "true");
+  const detail = panel.getByRole("region", { name: "선택 항목 상세", exact: true });
+  for (const title of ["기존 Akra 커널의 저장소 관측", "기존 커널 목록 일부 미확인", "Git 인덱스에 없는 경로 관측", "Git 인덱스 충돌 관측", "Git 인덱스 경로 미확인", "작업 트리 상태 미확인"]) {
+    await detail.getByRole("note", { name: "검토 필요 · " + title, exact: true }).waitFor();
+  }
+  const untrackedNote = detail.getByRole("note", { name: "검토 필요 · Git 인덱스에 없는 경로 관측", exact: true });
+  assert.match(await untrackedNote.innerText(), /ignore 규칙을 읽거나 적용하지 않아/);
+  await untrackedNote.locator("summary").click();
+  assert.match(await untrackedNote.innerText(), /3 observed file paths/);
+  const unknownStatus = detail.getByRole("note", { name: "검토 필요 · 작업 트리 상태 미확인", exact: true });
+  assert.match(await unknownStatus.innerText(), /파일 본문과 ignore 규칙을 읽지 않았습니다/);
+  assert.match(await unknownStatus.innerText(), /변경 없음이나 삭제 가능 여부를 판단할 수 없습니다/);
+  assert.match(await detail.getByRole("note", { name: "검토 필요 · 추가 보호 사유", exact: true }).innerText(), /추가로 확인한 보호 근거/);
   await panel.getByRole("button", { name: "huge-cache.bin", exact: true }).waitFor();
   await panel.getByRole("button", { name: "파일 다음 항목", exact: true }).click();
   await panel.getByRole("button", { name: "small-cache.bin", exact: true }).waitFor();
@@ -220,7 +241,7 @@ try {
 
   if (process.env.AKRA_STORAGE_SCREENSHOT) {
     await view.getByRole("dialog").waitFor({ state: "hidden" });
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 1280));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 1440));
     await view.getByTestId("akra.storage-analysis-maximize").click();
     await panel.locator('[data-node-id="root"]').click();
     await panel.getByLabel("선택 폴더 트리맵 표시").check();
@@ -263,7 +284,7 @@ try {
   await view.getByTestId("extensions-manage").click();
   await setting.getByRole("button", { name: "켜기", exact: true }).waitFor();
   assert.ok(!gateway.receivedMethods.includes("turn/start"));
-  console.log("PASS storage: home enable, explicit scan, exact 75%, keyboard/tree/map, file paging/filters, reopen, shared preview, evidence and late-response guards, two-client synchronization, panel error isolation and retry, external disable; no model calls");
+  console.log("PASS storage: home enable, explicit scan, exact 75%, keyboard/tree/map, Korean review-needed evidence, file paging/filters, reopen, shared preview, evidence and late-response guards, two-client synchronization, panel error isolation and retry, external disable; no model calls");
 } finally {
   if (secondApp) await secondApp.close();
   if (app) await app.close();

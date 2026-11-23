@@ -9,6 +9,7 @@ import { sameSnapshot, useStorageExplorer } from "./useStorageExplorer";
 import { StorageTree } from "./StorageTree";
 import { StorageLiveTree } from "./StorageLiveTree";
 import { StorageTreemap } from "./StorageTreemap";
+import { StorageProtection } from "./StorageProtection";
 import { prepareStorageNavigation, type StorageNavigation } from "./storageNavigation";
 
 export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled }: RegisteredPanelProps) {
@@ -230,7 +231,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
           <dt>직속 부모 대비</dt><dd>{formatRatio(selected.ratio)}{selected.ratio.denominator_bytes !== null && ` (분모 ${selected.ratio.denominator_bytes} B)`}</dd>
           <dt>집계 상태</dt><dd>{completenessLabels[selected.state]}</dd></dl>
         {selected.issues.map(issue => <p key={issue.code}>{issue.message} · {issue.count}개</p>)}
-        {selected.protection.map((reason, index) => <p key={index} className="storage-protection">보호 · {reason.detail}</p>)}
+        {selected.protection.map((reason, index) => <StorageProtection key={index} reason={reason} />)}
         {selected.classification.map((item, index) => <p key={index} className="muted">{item.kind} · {item.evidence}</p>)}
         <div className="storage-controls">
           <button type="button" onClick={() => void reveal()} disabled={!enabled}>탐색기에서 보기</button>

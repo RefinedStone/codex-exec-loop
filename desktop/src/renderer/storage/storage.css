@@ -28,7 +28,7 @@
 .storage-details dl { display: grid; grid-template-columns: 95px 1fr; gap: 7px; font-size: var(--text-s); margin: 10px 0 14px; }
 .storage-details dt { color: var(--text-2); }
 .storage-details dd { margin: 0; overflow-wrap: anywhere; }
-.storage-protection { padding: 7px 9px; border-left: 3px solid var(--warn); background: var(--warn-bg); }
+.storage-protection { margin: 6px 0; padding: 7px 9px; border-left: 3px solid var(--warn); background: var(--warn-bg); }
 .storage-share { margin-top: 12px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius-m); }
 .storage-share pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); max-height: 240px; overflow: auto; }
 .storage-share button { margin: 8px 8px 0 0; }
@@ -52,3 +52,6 @@
 .storage-evidence-link { border: 1px solid var(--line-strong); border-radius: var(--radius-s); padding: 3px 8px; color: var(--accent); background: var(--accent-bg); cursor: pointer; font: inherit; }
 
 .storage-live-tree .storage-tree-header, .storage-live-tree .storage-tree-row { grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr); min-width: 350px; }
+
+.storage-protection details { margin-top: 6px; overflow-wrap: anywhere; }
+.storage-protection summary { cursor: pointer; font-size: var(--text-s); }
