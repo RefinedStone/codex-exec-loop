@@ -16,7 +16,7 @@ The generic host validates request size and schema, API compatibility, granted p
 
 ## State and background jobs
 
-`configure` requires `enabled` and `expected_revision`. The desired setting, actual lifecycle (`disabled`, `enabled`, `disabling`, `error`), revision and host generation are separate values. State changes are persisted before notifications. Disabling first rejects new work, requests cancellation, waits for worker termination, and invokes the job's cleanup callback before advertising `disabled`. Cleanup failures remain visible and prevent re-enabling until cleanup is retried.
+`configure` requires `enabled` and `expected_revision`. The desired setting, actual lifecycle (`disabled`, `enabled`, `disabling`, `error`), revision and host generation are separate values. State changes are persisted before notifications. Disabling first rejects new work, requests cancellation, waits for worker termination, and invokes the job's cleanup callback before advertising `disabled`. Cleanup failures remain visible and prevent re-enabling until cleanup is retried. Jobs use cooperative cancellation on in-process Rust threads: cancelling does not forcibly interrupt submitted OS I/O. A terminal job state describes worker termination; its separate cleanup field describes physical cleanup. Rust unwind panics become failed jobs. Native aborts and forced process termination require host restart, which restores interrupted status without rerunning the work.
 
 Job operations return a durable receipt immediately. The host bounds active jobs to eight. A request's optional idempotency key is bound to its complete action and input; reusing it for a different request is rejected. Equivalent in-flight work converges using the handler's normalized deduplication key. A new explicit request after completion creates a new job; retrying the old key returns the old receipt.
 
@@ -37,6 +37,8 @@ akra extensions call akra.example echo --input '{"text":"hello"}' --json
 akra extensions call akra.example count --input '{"steps":10,"delay_ms":10}' --idempotency-key example-run-1 --json
 ```
 
-Use the revision returned by the current catalog when activation already exists. For repository scope, add `--scope repository --workspace <checkout>`. CLI calls obtain the live catalog, validate the registered input schema, then invoke the same attached host as Desktop. They do not fall back to a second local host when the Gateway is unavailable. The example performs no model calls.
+Use the revision returned by the current catalog when activation already exists. For repository scope, add `--scope repository --workspace <checkout>`. CLI calls obtain the live catalog, validate the registered input schema, then invoke the same attached host as Desktop. They do not fall back to a second local host when the Gateway is unavailable. The example performs no model calls. CLI JSON retains the Gateway rejection code, message and optional data, including when catalog preflight also rejects. A server success that disagrees with its catalog is reported as a client contract error.
+
+Validation and environment limits are recorded in [kernel extension host validation](../validation/kernel-extension-host.md).
 
 The regression suite covers package isolation, schema namespace collisions, failed persistence, revision conflicts, compatibility/permission rejection, concurrent admission, idempotent retry versus rescan, disable/drain/cleanup, restart without rerun, expiry, stale host generations, output validation, native store locking, simultaneous local/repository attachments and the CLI transport.

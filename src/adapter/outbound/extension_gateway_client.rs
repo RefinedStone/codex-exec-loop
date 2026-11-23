@@ -1,5 +1,8 @@
 //! Extension CLI uses the same attached Gateway authority as Desktop. No local fallback.
+use crate::domain::kernel_extension::ExtensionCallRejection;
 use anyhow::{Context, Result, bail, ensure};
+#[cfg(test)]
+mod tests;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -62,9 +65,24 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
     let Some(mut call) = call else {
         return Ok(catalog);
     };
-    validate_catalog_call(&catalog, &call)?;
+    let preflight = validate_catalog_call(&catalog, &call);
     call["kernel"] = json!(kernel);
-    exchange(socket, 3, "akra/kernel/extensions/call", call).await
+    // The server owns rejection reasons even when this client's catalog check also rejects.
+    // It rechecks current schemas and authority before any handler is dispatched.
+    let answer = exchange(socket, 3, "akra/kernel/extensions/call", call).await?;
+    if let Err(error) = preflight {
+        return Err(ExtensionCallRejection {
+            code: -32603,
+            message: "extension catalog and call validation disagree".into(),
+            data: Some(json!({
+                "reason": "extension_catalog_mismatch",
+                "source": "client",
+                "validation": error.to_string()
+            })),
+        }
+        .into());
+    }
+    Ok(answer)
 }
 fn validate_catalog_call(catalog: &Value, call: &Value) -> Result<()> {
     let extension = call["extension"].as_str().context("missing extension ID")?;
@@ -112,7 +130,10 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
                     continue;
                 }
                 if !message["error"].is_null() {
-                    bail!("extension request rejected: {}", message["error"]);
+                    let rejection: ExtensionCallRejection =
+                        serde_json::from_value(message["error"].clone())
+                            .context("Gateway returned an invalid extension rejection")?;
+                    return Err(rejection.into());
                 }
                 return Ok(message["result"].clone());
             }
