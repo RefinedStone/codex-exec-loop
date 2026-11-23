@@ -1448,59 +1448,79 @@ pub(crate) fn spawn(command: &mut Command) -> io::Result<ManagedChild> {
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
-
-        let job = WindowsJob::new()?;
-        // `std::process::Command` does not expose STARTUPINFOEX or the primary thread handle needed
-        // for PROC_THREAD_ATTRIBUTE_JOB_LIST/ResumeThread. CREATE_SUSPENDED plus the process-wide
-        // NtResumeProcess operation preserves Command's quoting, environment, and stdio behavior
-        // while closing the spawn-before-Job-assignment execution race. This helper owns the
-        // creation-flags field (all current callers leave it unset); extending the API is required
-        // before a caller can request additional flags without losing this guarantee.
-        command.creation_flags(CREATE_SUSPENDED);
-        let mut child = command.spawn()?;
-        if let Err(error) = job.assign(&child) {
-            let kill_error = child
-                .kill()
-                .err()
-                .filter(|error| !process_is_already_gone(error));
-            let wait_error = child.wait().err();
-            let mut message =
-                format!("failed to contain spawned process in a Windows job: {error}");
-            if let Some(error) = kill_error {
-                message.push_str(&format!("; failed to kill suspended process: {error}"));
-            }
-            if let Some(error) = wait_error {
-                message.push_str(&format!("; failed to reap suspended process: {error}"));
-            }
-            return Err(io::Error::new(error.kind(), message));
-        }
-        if let Err(error) = job.resume(&child) {
-            let terminate_error = job.terminate().err();
-            let kill_error = child
-                .kill()
-                .err()
-                .filter(|error| !process_is_already_gone(error));
-            let wait_error = child.wait().err();
-            let mut message = format!("failed to resume Job-contained Windows process: {error}");
-            if let Some(error) = terminate_error {
-                message.push_str(&format!("; failed to terminate Job: {error}"));
-            }
-            if let Some(error) = kill_error {
-                message.push_str(&format!("; failed to kill suspended process: {error}"));
-            }
-            if let Some(error) = wait_error {
-                message.push_str(&format!("; failed to reap suspended process: {error}"));
-            }
-            return Err(io::Error::other(message));
-        }
-        Ok(ManagedChild {
-            child,
-            job: Some(job),
-            child_reaped: false,
-        })
+        spawn_windows(command, WindowsConsole::Inherit)
     }
+}
+
+/// A fixed no-console variant for native UI helpers. All existing spawn callers keep their behavior.
+#[cfg(windows)]
+pub(crate) fn spawn_without_console(command: &mut Command) -> io::Result<ManagedChild> {
+    spawn_windows(command, WindowsConsole::Hidden)
+}
+
+#[cfg(windows)]
+enum WindowsConsole {
+    Inherit,
+    Hidden,
+}
+
+#[cfg(windows)]
+fn spawn_windows(command: &mut Command, console: WindowsConsole) -> io::Result<ManagedChild> {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+
+    let job = WindowsJob::new()?;
+    // `std::process::Command` does not expose STARTUPINFOEX or the primary thread handle needed
+    // for PROC_THREAD_ATTRIBUTE_JOB_LIST/ResumeThread. CREATE_SUSPENDED plus the process-wide
+    // NtResumeProcess operation preserves Command's quoting, environment, and stdio behavior
+    // while closing the spawn-before-Job-assignment execution race. This helper owns the
+    // creation-flags field. The only extra choice is this fixed console policy; callers cannot
+    // supply arbitrary flags or remove the suspended-before-Job-assignment guarantee.
+    let flags = match console {
+        WindowsConsole::Inherit => CREATE_SUSPENDED,
+        WindowsConsole::Hidden => CREATE_SUSPENDED | CREATE_NO_WINDOW,
+    };
+    command.creation_flags(flags);
+    let mut child = command.spawn()?;
+    if let Err(error) = job.assign(&child) {
+        let kill_error = child
+            .kill()
+            .err()
+            .filter(|error| !process_is_already_gone(error));
+        let wait_error = child.wait().err();
+        let mut message = format!("failed to contain spawned process in a Windows job: {error}");
+        if let Some(error) = kill_error {
+            message.push_str(&format!("; failed to kill suspended process: {error}"));
+        }
+        if let Some(error) = wait_error {
+            message.push_str(&format!("; failed to reap suspended process: {error}"));
+        }
+        return Err(io::Error::new(error.kind(), message));
+    }
+    if let Err(error) = job.resume(&child) {
+        let terminate_error = job.terminate().err();
+        let kill_error = child
+            .kill()
+            .err()
+            .filter(|error| !process_is_already_gone(error));
+        let wait_error = child.wait().err();
+        let mut message = format!("failed to resume Job-contained Windows process: {error}");
+        if let Some(error) = terminate_error {
+            message.push_str(&format!("; failed to terminate Job: {error}"));
+        }
+        if let Some(error) = kill_error {
+            message.push_str(&format!("; failed to kill suspended process: {error}"));
+        }
+        if let Some(error) = wait_error {
+            message.push_str(&format!("; failed to reap suspended process: {error}"));
+        }
+        return Err(io::Error::other(message));
+    }
+    Ok(ManagedChild {
+        child,
+        job: Some(job),
+        child_reaped: false,
+    })
 }
 
 pub(crate) fn command_output(command: &mut Command, command_label: &str) -> io::Result<Output> {

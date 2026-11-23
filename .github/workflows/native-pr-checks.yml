@@ -580,6 +580,14 @@ jobs:
             'sqlite_issue_automation_store::private_store::tests::' \
             'adapter::outbound::vault_key_store::' \
             'application::service::evidence_vault_unlock::' \
+            'filesystem::evidence_vault_store::' \
+            'filesystem::evidence_vault_backup::' \
+            'filesystem::vault_restore_workspace::' \
+            'adapter::outbound::native_vault_confirmation::' \
+            'adapter::inbound::desktop_restore_bridge::' \
+            'application::service::evidence_vault_restore::' \
+            'application::service::evidence_vault_backup::' \
+            'composition::desktop_restore::' \
             'task_evidence_artifact::tests::' \
             'sqlite_planning_authority_adapter::tests::task_evidence::' \
             'parallel_worker_commit::tree_snapshot::tests::' \

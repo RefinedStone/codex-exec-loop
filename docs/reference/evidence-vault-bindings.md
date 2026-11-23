@@ -8,8 +8,9 @@ Desktop 전용 창은 #2656의 [별도 승인·세션 경계](../validation/desk
 ## 이슈별 저장 경계
 
 트랜잭션은 전체 이슈 좌표(프로젝트, 공급자, 서버, 저장소, 이슈)와 한 키에 고정됩니다.
-Unix의 private runtime lease가 같은 이슈의 참여 프로세스를 직렬화합니다. 게시 경로는
-publication lease를 먼저, binding lease를 나중에 획득합니다. 사용자 확인을 기다리는 동안
+Unix의 기존 private runtime lease와 Windows의 Vault 전용 파일 lease가 같은 이슈의
+참여 프로세스를 직렬화합니다. 게시 경로는 publication lease, binding lease 순서로 획득하고,
+개별 파일 변경은 그 안에서 root mutation lease를 사용합니다. 사용자 확인을 기다리는 동안
 이 잠금을 보유하지 않습니다.
 
 `snapshot`은 현재 포인터의 부재 또는 실제 암호문 지문을 담은 token과
@@ -46,7 +47,7 @@ binding commit을 거쳐야 합니다. 이전 형식 시험용 seed는 `cfg(test
 | `AlreadyCommitted` | 같은 요청의 같은 bundle이 이미 current입니다. 쓰지 않았습니다. |
 | `Conflict` | 기대 연결 또는 기존 immutable generation과 맞지 않습니다. |
 | pointer 이전 오류 | 이전 current와 도달 가능한 bundle은 보존됩니다. 참조되지 않은 staging이 남을 수 있습니다. |
-| `WriteOutcomeUnknown` | pointer 교체 뒤 동기화 또는 검증이 실패했습니다. 이전 상태로 되돌아갔다고 가정하지 않습니다. |
+| `WriteOutcomeUnknown` | pointer 교체 요청 이후 동기화·검증 실패 등으로 설치 결과를 확정할 수 없습니다. 이전 상태로 되돌아갔다고 가정하지 않습니다. |
 
 이 경계는 이슈 하나에 적용됩니다. 여러 이슈를 포함하는 백업 전체를 하나의 트랜잭션으로
 확정하지 않으며, 원격 공급자의 편집과 로컬 파일 저장을 분산 트랜잭션으로 만들지 않습니다.
@@ -97,10 +98,30 @@ pointer 이전에 중단된 같은 import는 동일 operation과 기대값으로
 Vault root는 기존 저장 계약대로 미리 준비된 사용자 전용 실제 디렉터리여야 합니다.
 가져오기에서 미존재 root를 자동 생성하거나 안전하지 않은 root의 권한을 변경하지 않습니다.
 
-파일 lease와 secure filesystem은 기존 Unix 지원 범위를 유지합니다. Windows의 실제 Vault
-파일 작업을 새로 지원하지 않습니다. Windows에서는 서비스·계약·portable 검증을 실행하고,
-실제 Unix 파일·프로세스 검증은 지원 환경에서 실행합니다.
+Vault 전용 `vault_fs`가 Unix에서는 기존 `secure_fs`와 private runtime lease에 위임하고,
+Windows에서는 드라이브 문자 경로로 지정한 로컬 NTFS의 파일·잠금 경계를 제공합니다. 읽기와 가져오기는 없는 root를
+생성하지 않습니다. 쓰기 조립에서 새 root를 만들 때만 private ACL을 설정하며, 기존의
+안전하지 않은 ACL을 자동으로 수리하지 않습니다.
+
+Windows는 기존 private 경로의 조상 handle을 고정하고 reparse point, 여러 hardlink,
+owner·ACL·파일 신원 불일치를 거절합니다. 지원 volume 확인은 새 디렉터리·lock·임시 파일을
+만들기 전에 수행합니다. ReFS와 네트워크 공유는 이번 지원 범위에 포함하지 않습니다.
+
+암호문은 같은 부모 안의 새 private 파일에 준비합니다. 부모 handle에서 조회한 Volume GUID
+절대 경로와 검증한 파일명으로 목적지를 구성하고, `RootDirectory = NULL`인
+`SetFileInformationByHandle(FileRenameInfo)`를 source handle에 한 번 호출합니다. 호출 중에도
+부모와 조상 handle의 삭제 공유를 금지한 고정을 유지합니다. 드라이브 문자나 현재 디렉터리를
+다시 해석하는 fallback은 없습니다. 불변 generation은 no-replace, 현재 pointer는 기대
+암호문 비교 후 교체하며, 설치 이후 flush와 신원·내용 확인이 필요합니다.
+`ReplaceIfExists` 자체가 암호문 CAS를 수행하는 것은 아닙니다.
+
+Windows의 write-through와 파일 flush는 NTFS의 문서화된 파일·메타데이터 처리에 의존합니다.
+디렉터리 handle 검증을 Unix의 directory fsync나 모든 저장장치의 전원 손실 보장으로
+해석하지 않습니다. Microsoft의 [rename 구조](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info),
+[handle 변경 API](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle),
+[CreateFileW 캐시·write-through 계약](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)을 따릅니다.
 
 실제 OS 사용자 확인, 실제 키 저장소 round trip, native UI 재연결, 실제 모델 turn은 이 저장
 변경의 검증 결과에 포함하지 않습니다. 실행 명령과 관측 결과는
-[검증 기록](../validation/vault-binding-transactions.md)에 분리합니다.
+[기존 검증 기록](../validation/vault-binding-transactions.md)과
+[Windows Vault 검증](../validation/windows-vault-restore.md)에 분리합니다.

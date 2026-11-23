@@ -5,6 +5,9 @@ use crate::application::port::outbound::vault_native_confirmation_port::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+#[cfg(windows)]
+pub(crate) mod windows;
+
 pub(crate) struct NativeVaultConfirmationAdapter;
 impl VaultNativeConfirmationPort for NativeVaultConfirmationAdapter {
     fn confirm(
@@ -27,7 +30,11 @@ impl VaultNativeConfirmationPort for NativeVaultConfirmationAdapter {
         {
             platform::confirm(request, cancelled, deadline)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            windows::confirm(request, cancelled, deadline)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             let _ = (request, request.purpose);
             Outcome::Unsupported

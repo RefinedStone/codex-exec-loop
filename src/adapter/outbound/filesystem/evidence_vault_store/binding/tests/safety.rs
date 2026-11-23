@@ -1,7 +1,9 @@
-use std::os::unix::fs::symlink;
+#[cfg(unix)]
+use std::os::unix::fs::{PermissionsExt, symlink};
 
 use super::*;
 
+#[cfg(unix)]
 #[test]
 fn unsafe_pointer_aliases_are_storage_failures_never_recovery_snapshots() {
     for alias in ["symlink", "hardlink", "fifo"] {
@@ -33,6 +35,7 @@ fn unsafe_pointer_aliases_are_storage_failures_never_recovery_snapshots() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn unsafe_lock_aliases_and_public_roots_cannot_start_a_binding_transaction() {
     for alias in ["symlink", "hardlink", "public-root"] {
@@ -63,6 +66,7 @@ fn unsafe_lock_aliases_and_public_roots_cannot_start_a_binding_transaction() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn replaced_lock_identity_cannot_read_or_commit_through_an_old_guard() {
     let fixture = Fixture::new("changed-lock");
@@ -85,6 +89,7 @@ fn replaced_lock_identity_cannot_read_or_commit_through_an_old_guard() {
     assert_eq!(all_records(&fixture.root), before);
 }
 
+#[cfg(unix)]
 #[test]
 fn replaced_root_identity_does_not_create_records_in_the_replacement_root() {
     let fixture = Fixture::new("changed-root");
@@ -154,4 +159,52 @@ fn invalid_scope_and_key_are_rejected_before_a_lease_or_record_is_created() {
         Err(VaultStoreError::InvalidKey)
     ));
     assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_hardlinked_pointer_is_a_storage_error_and_never_a_recovery_snapshot() {
+    let fixture = Fixture::new("pointer-hardlink");
+    let store = fixture.store();
+    seed_legacy(&store);
+    let pointer = pointer_path(&fixture.root);
+    let before = fs::read(&pointer).unwrap();
+    let alias = fixture.root.join("synthetic-pointer-alias");
+    fs::hard_link(&pointer, &alias).unwrap();
+    assert!(matches!(
+        store.begin_binding(load_request()),
+        Err(VaultStoreError::Storage(_))
+    ));
+    assert_eq!(fs::read(&pointer).unwrap(), before);
+    assert_eq!(fs::read(&alias).unwrap(), before);
+    fs::remove_file(alias).unwrap();
+    assert_eq!(current_fields(&store), old_fields());
+}
+
+#[cfg(windows)]
+#[test]
+fn an_active_binding_pins_the_root_and_lock_and_remains_readable() {
+    let fixture = Fixture::new("pinned-binding");
+    let store = fixture.store();
+    let expected = seed_legacy(&store);
+    let mut transaction = store.begin_binding(load_request()).unwrap();
+    let lock = fixture.root.join(binding_lock_name(&load_request().scope));
+    assert!(fs::rename(&lock, fixture.root.join("retired-lock")).is_err());
+    assert!(fs::rename(&fixture.root, fixture.root.with_extension("retired")).is_err());
+    assert_eq!(
+        transaction.load_version_fields(&base_version()).unwrap(),
+        old_fields()
+    );
+    let desired = desired_fields("after-denied-replacement");
+    assert!(matches!(
+        transaction
+            .commit(request(
+                expected,
+                "after-denied-replacement",
+                desired.clone()
+            ))
+            .unwrap(),
+        VaultBindingCommitResult::Committed(_)
+    ));
+    assert_eq!(current_fields(&store), desired);
 }

@@ -4,8 +4,8 @@ This page describes the shipped key handling of the Evidence Vault (#2422): wher
 how an issue is unlocked, what can be recovered after a key loss, and what the Vault does not
 protect against. Backup export and import with a user-held recovery key are in
 [evidence-vault-backup.md](./evidence-vault-backup.md). The Desktop restore window (#2427) connects
-existing records through a local native helper on macOS/Linux. Windows and unsupported execution
-profiles hold viewing; see [Desktop restore window](#desktop-restore-window).
+existing records through a local native helper on macOS/Linux and Windows with a local NTFS Vault.
+Unsupported execution profiles hold viewing; see [Desktop restore window](#desktop-restore-window).
 
 ## Key location: device-bound mode
 
@@ -117,13 +117,17 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
 - **Local native source.** `vaultRestoreSource.ts` launches `akra-gateway desktop-restore-bridge`
   over inherited stdin/stdout. Protocol v2 binds one viewing and optional reconnect session to the
   URL, stable issue coordinates, and canonical primary checkout. It reads existing records on
-  macOS/Linux and updates a binding only after a separate native write confirmation. Windows
-  returns `platform_unsupported` before provider, key, or Vault access. The channel does not create
-  keys or Vault roots and does not restore a remote Gateway host's Vault.
+  macOS/Linux and Windows, and updates a binding only after a separate native write confirmation.
+  Windows file operations require local NTFS and verified private ownership and ACLs; unsupported
+  filesystems and unsafe existing paths are rejected. The channel does not create keys or Vault roots
+  and does not restore a remote Gateway host's Vault.
 - **User confirmation.** The helper itself shows a native OS dialog with cancel as the default.
   Viewing and `RewriteBinding` use separate confirmations. No request field can supply an approval
   result or replace the helper-owned original review. macOS uses the trusted system `osascript`;
-  Linux requires a trusted system `zenity`. Missing native support holds viewing. Main checks the
+  Linux requires a trusted system `zenity`. Windows runs the trusted Gateway executable in a separate
+  process and a native OK/Cancel dialog with Cancel selected by default. Its target and
+  purpose travel over inherited private pipes, and the parent owns the child's lifetime. Missing
+  native support holds viewing. Main checks the
   execution profile and session generation before preparation, after confirmation, and before
   displaying a restored response. After each lock a new confirmation is necessary.
 - **Execution profile.** Main holds viewing when it cannot enforce the boundary: the app runs with
@@ -155,5 +159,6 @@ Akra Desktop has one dedicated window for the local restored copy of one issue (
   [Protection limits](#protection-limits) apply.
 
 The [original native read validation](../validation/desktop-vault-native-restore.md) and
-[native reconnect validation](../validation/desktop-vault-native-reconnect.md) distinguish synthetic
-protocol/UI tests from the unperformed real OS-dialog plus key-store round trip.
+[native reconnect validation](../validation/desktop-vault-native-reconnect.md), together with the
+[Windows Vault validation](../validation/windows-vault-restore.md), distinguish synthetic protocol/UI
+and real filesystem/process tests from the unperformed real OS-dialog plus key-store round trip.

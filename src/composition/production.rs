@@ -581,7 +581,8 @@ fn build_issue_drafts()
 
     let akra_home = crate::configuration::akra_home_dir()?;
     let vault_root = akra_home.join("evidence-vault");
-    let _ = crate::private_directory::ensure_private_directory(&vault_root);
+    // Existing Windows Vault permissions must be validated, never repaired during startup.
+    let _ = crate::adapter::outbound::filesystem::vault_fs::prepare_writer_root(&vault_root);
     let vault = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root));
     let snapshot = Arc::new(GithubIssueSnapshotAdapter::new(akra_home.clone()));
     let journal = build_issue_publish_journal();

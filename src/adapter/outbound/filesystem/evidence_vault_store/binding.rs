@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use super::super::private_runtime_lease::PrivateRuntimeLease;
+use super::super::vault_fs::VaultBindingLease;
 use super::{
     FilesystemEvidenceVaultStoreAdapter, aead_key, open_record, record_relative_path, scope_bytes,
-    seal_record, secure_fs, storage_error,
+    seal_record, storage_error, vault_fs,
 };
 use crate::application::port::outbound::evidence_vault_port::{
     VaultBindingCommitPolicy, VaultBindingCommitRequest, VaultBindingCommitResult,
@@ -35,7 +35,7 @@ pub(super) fn begin(
     }
     // A malformed caller key is not a recoverable damaged pointer.
     aead_key(request.key.key.expose())?;
-    let lease = PrivateRuntimeLease::acquire(
+    let lease = VaultBindingLease::acquire(
         store.vault_root.clone(),
         binding_lock_name(&request.scope),
         BINDING_LOCK_TIMEOUT,
@@ -59,7 +59,7 @@ fn read_snapshot(
 ) -> Result<(Option<String>, VaultBindingSnapshot), VaultStoreError> {
     let scope_data = scope_bytes(scope);
     // Filesystem safety/read failures must not become permission to recover an unreadable pointer.
-    let raw = secure_fs::read_optional_file(&store.vault_root, &record_relative_path(&scope_data))
+    let raw = vault_fs::read_optional_file(&store.vault_root, &record_relative_path(&scope_data))
         .map_err(storage_error)?;
     let token = VaultBindingToken::observed(
         scope.clone(),
@@ -83,7 +83,7 @@ fn read_snapshot(
 
 struct FilesystemBinding<'a> {
     store: &'a FilesystemEvidenceVaultStoreAdapter,
-    lease: PrivateRuntimeLease,
+    lease: VaultBindingLease,
     scope: VaultRecordScope,
     key: VaultRecordKey,
     snapshot: VaultBindingSnapshot,
@@ -104,7 +104,7 @@ impl FilesystemBinding<'_> {
         field: VaultRecordField,
     ) -> Result<Option<VaultPlaintext>, VaultStoreError> {
         let scope = scope_bytes(&self.field_scope(version, field));
-        secure_fs::read_optional_file(&self.store.vault_root, &record_relative_path(&scope))
+        vault_fs::read_optional_file(&self.store.vault_root, &record_relative_path(&scope))
             .map_err(storage_error)?
             .map(|body| open_record(&body, &self.key, &scope))
             .transpose()
@@ -122,18 +122,18 @@ impl FilesystemBinding<'_> {
         let sealed = std::str::from_utf8(&sealed).map_err(storage_error)?;
         // Even a non-cooperating writer must not cause an immutable generation to be overwritten.
         // Staging uncertainty is Storage: CurrentVersion still points at the previous bundle.
-        let inserted = secure_fs::compare_and_swap_optional_file(
+        let inserted = vault_fs::compare_and_swap_file(
             &self.store.vault_root,
             &record_relative_path(&scope),
             None,
-            Some(sealed),
+            sealed,
         )
         .map_err(storage_error)?;
         self.lease.verify_identity().map_err(storage_error)?;
         if !inserted && self.read_field(version, field)?.as_ref() != Some(plaintext) {
             return Ok(false);
         }
-        #[cfg(all(test, unix))]
+        #[cfg(all(test, any(unix, windows)))]
         test_hooks::after_field(field);
         Ok(true)
     }
@@ -227,20 +227,20 @@ impl VaultBindingTransaction for FilesystemBinding<'_> {
             return Ok(VaultBindingCommitResult::Conflict);
         }
 
-        #[cfg(all(test, unix))]
+        #[cfg(all(test, any(unix, windows)))]
         test_hooks::before_pointer();
         self.lease.verify_identity().map_err(storage_error)?;
         let scope = scope_bytes(&self.scope);
         let sealed = seal_record(&self.key, &scope, &VaultPlaintext::new(version.clone()))?;
         let sealed = std::str::from_utf8(&sealed).map_err(storage_error)?;
-        let replaced = secure_fs::compare_and_swap_optional_file(
+        let replaced = vault_fs::compare_and_swap_file(
             &self.store.vault_root,
             &record_relative_path(&scope),
             observed.as_deref(),
-            Some(sealed),
+            sealed,
         )
         .map_err(|error| {
-            if secure_fs::atomic_replacement_completed(&error) {
+            if vault_fs::write_outcome_unknown(&error) {
                 VaultStoreError::WriteOutcomeUnknown
             } else {
                 storage_error(error)
@@ -256,7 +256,7 @@ impl VaultBindingTransaction for FilesystemBinding<'_> {
             .verify_identity()
             .map_err(|_| VaultStoreError::WriteOutcomeUnknown)?;
         let persisted =
-            secure_fs::read_optional_file(&self.store.vault_root, &record_relative_path(&scope))
+            vault_fs::read_optional_file(&self.store.vault_root, &record_relative_path(&scope))
                 .map_err(|_| VaultStoreError::WriteOutcomeUnknown)?;
         if persisted.as_deref() != Some(sealed) {
             return Err(VaultStoreError::WriteOutcomeUnknown);
@@ -274,7 +274,7 @@ impl VaultBindingTransaction for FilesystemBinding<'_> {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod test_hooks {
     use std::cell::RefCell;
 
@@ -309,5 +309,5 @@ mod test_hooks {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests;

@@ -21,7 +21,7 @@ fn canonical_workspace(workspace: &str) -> Result<String> {
     if !canonical.is_dir() {
         bail!("invalid restore workspace");
     }
-    let Some(primary) = SqlitePlanningAuthorityAdapter::resolve_primary_checkout_root(
+    let Some(primary) = SqlitePlanningAuthorityAdapter::resolve_primary_checkout_root_for_read(
         canonical
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("invalid restore workspace"))?,
@@ -38,3 +38,6 @@ fn canonical_workspace(workspace: &str) -> Result<String> {
         .map(str::to_string)
         .ok_or_else(|| anyhow::anyhow!("invalid restore workspace"))
 }
+
+#[cfg(test)]
+mod tests;

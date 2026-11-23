@@ -20,3 +20,6 @@ pub mod tui;
 pub(crate) mod provider_credential_prompt;
 
 pub(crate) mod provider_credential_migration;
+
+#[cfg(windows)]
+pub mod vault_native_confirmation;

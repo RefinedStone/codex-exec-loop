@@ -35,7 +35,7 @@ fn build_in(home: std::path::PathBuf) -> Result<Arc<dyn VaultRestoreSessionPort>
     ));
     Ok(Arc::new(DesktopVaultRestoreService::new(
         DesktopVaultRestoreDependencies {
-            supported: cfg!(any(target_os = "linux", target_os = "macos")),
+            supported: cfg!(any(target_os = "linux", target_os = "macos", windows)),
             snapshots,
             unlock,
             restore,
@@ -60,3 +60,13 @@ mod tests {
         assert!(!absent_home.exists());
     }
 }
+
+#[cfg(windows)]
+pub(crate) fn native_confirmation_dialog(
+    request: &crate::application::port::outbound::vault_native_confirmation_port::VaultNativeConfirmationRequest,
+) -> crate::application::port::outbound::vault_native_confirmation_port::VaultNativeConfirmationOutcome{
+    crate::adapter::outbound::native_vault_confirmation::windows::show_dialog(request)
+}
+
+#[cfg(all(windows, test))]
+mod windows_tests;

@@ -382,7 +382,7 @@ fn a_later_empty_archive_pointer_is_rejected_before_any_local_filesystem_write()
         ),
         encrypted(VaultRecordScope::current_version(second), ""),
     ]);
-    let root = std::env::temp_dir().join(format!(
+    let root = crate::test_utils::platform_safe_temp_dir().join(format!(
         "akra-vault-malformed-archive-{}-{:032x}",
         std::process::id(),
         rand::random::<u128>(),
@@ -406,16 +406,16 @@ fn a_later_empty_archive_pointer_is_rejected_before_any_local_filesystem_write()
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn repeated_scope_selection_exports_one_record_per_scope_and_imports_successfully() {
-    let root = std::env::temp_dir().join(format!(
+    let root = crate::test_utils::platform_safe_temp_dir().join(format!(
         "akra-vault-repeated-export-{}-{:032x}",
         std::process::id(),
         rand::random::<u128>(),
     ));
-    crate::private_directory::ensure_private_directory(&root.join("source")).unwrap();
-    crate::private_directory::ensure_private_directory(&root.join("local")).unwrap();
+    vault_fs::prepare_writer_root(&root.join("source")).unwrap();
+    vault_fs::prepare_writer_root(&root.join("local")).unwrap();
     let root = std::fs::canonicalize(root).unwrap();
     let source_root = root.join("source");
     let local_root = root.join("local");
@@ -501,7 +501,7 @@ fn an_archive_without_approved_projects_does_not_initialize_a_vault() {
         VaultRecordScope::current_version(source.clone()),
         &version(),
     )]);
-    let root = std::env::temp_dir().join(format!(
+    let root = crate::test_utils::platform_safe_temp_dir().join(format!(
         "akra-vault-unapproved-archive-{}-{:032x}",
         std::process::id(),
         rand::random::<u128>(),
@@ -529,7 +529,7 @@ fn a_valid_approved_archive_does_not_create_a_missing_vault_root() {
         VaultRecordScope::current_version(source.clone()),
         &version(),
     )]);
-    let root = std::env::temp_dir().join(format!(
+    let root = crate::test_utils::platform_safe_temp_dir().join(format!(
         "akra-vault-missing-root-{}-{:032x}",
         std::process::id(),
         rand::random::<u128>(),
@@ -554,4 +554,97 @@ fn a_valid_approved_archive_does_not_create_a_missing_vault_root() {
         untouched,
         "the host must prepare a private Vault root before an import"
     );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn real_filesystem_import_preserves_readable_bindings_and_requires_explicit_pointer_recovery() {
+    let source = issue("I_recovery");
+    let (archive, recovery_key) = authenticated_archive(vec![
+        encrypted(
+            VaultRecordScope::current_version(source.clone()),
+            &version(),
+        ),
+        encrypted(
+            VaultRecordScope {
+                issue: source.clone(),
+                field: VaultRecordField::Body,
+                binding: VaultRecordBinding::ConfirmedVersion(version()),
+            },
+            "synthetic-original-from-backup",
+        ),
+    ]);
+    let root = crate::test_utils::platform_safe_temp_dir().join(format!(
+        "akra-vault-recovery-{}-{:032x}",
+        std::process::id(),
+        rand::random::<u128>(),
+    ));
+    vault_fs::prepare_writer_root(&root).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
+    let adapter = FilesystemEvidenceVaultBackupAdapter::new(root.clone());
+    let project = approval(&source);
+    let mut local = source;
+    local.project_scope = project.local.clone();
+    let request = |recovery_mode| VaultBackupImportRequest {
+        archive: archive.clone(),
+        recovery_key: recovery_key.clone(),
+        local_key: key(2),
+        projects: vec![project.clone()],
+        recovery_mode,
+    };
+
+    let report = adapter
+        .import(request(VaultBackupRecoveryMode::PreserveLocal))
+        .unwrap();
+    assert_eq!(report.imported, [local.clone()]);
+    let pointer_scope = VaultRecordScope::current_version(local.clone());
+    let pointer = record_relative_path(&scope_bytes(&pointer_scope));
+    let installed = std::fs::read(root.join(&pointer)).unwrap();
+    let report = adapter
+        .import(request(VaultBackupRecoveryMode::RecoverUnreadable))
+        .unwrap();
+    assert_eq!(report.kept_local, [local.clone()]);
+    assert!(report.imported.is_empty());
+    assert!(report.recovered.is_empty());
+    assert_eq!(std::fs::read(root.join(&pointer)).unwrap(), installed);
+
+    let damaged = b"synthetic-damaged-pointer";
+    vault_fs::write_file_atomic(&root, &pointer, damaged).unwrap();
+    assert_eq!(
+        adapter.import(request(VaultBackupRecoveryMode::PreserveLocal)),
+        Err(VaultBackupError::LocalRecoveryRequired)
+    );
+    assert_eq!(std::fs::read(root.join(&pointer)).unwrap(), damaged);
+    let report = adapter
+        .import(request(VaultBackupRecoveryMode::RecoverUnreadable))
+        .unwrap();
+    assert_eq!(report.imported, [local.clone()]);
+    assert_eq!(report.recovered, [local.clone()]);
+
+    let store = FilesystemEvidenceVaultStoreAdapter::new(root.clone());
+    let mut transaction = store
+        .begin_binding(VaultRecordLoadRequest {
+            scope: pointer_scope,
+            key: key(2),
+        })
+        .unwrap();
+    let VaultBindingState::Readable { version } = transaction.snapshot().state.clone() else {
+        panic!("explicit recovery must install a readable generation")
+    };
+    let fields = transaction.load_version_fields(&version).unwrap();
+    assert!(fields.title.is_none());
+    assert_eq!(
+        fields.body.unwrap().expose(),
+        "synthetic-original-from-backup"
+    );
+    drop(transaction);
+
+    let recovered = std::fs::read(root.join(&pointer)).unwrap();
+    let report = adapter
+        .import(request(VaultBackupRecoveryMode::RecoverUnreadable))
+        .unwrap();
+    assert_eq!(report.kept_local, [local]);
+    assert!(report.recovered.is_empty());
+    assert_eq!(std::fs::read(root.join(&pointer)).unwrap(), recovered);
+    std::fs::remove_dir_all(root).unwrap();
 }

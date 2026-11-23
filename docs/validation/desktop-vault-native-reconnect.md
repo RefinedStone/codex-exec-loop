@@ -1,5 +1,8 @@
 # Desktop native 표식 재연결 검증 (#2656)
 
+> 이 문서의 실행 결과는 당시 구현 기준입니다. #2688의 Windows Vault 지원과 후속 검증은
+> [Windows Vault 원문 복원·재연결](windows-vault-restore.md)에 별도로 기록합니다.
+
 상위: #2414. 저장 경계는 #2654 / #2655의 [binding transaction](../reference/evidence-vault-bindings.md)을 사용합니다.
 기존 읽기 경로의 검증은 [#2650 기록](desktop-vault-native-restore.md)에 남깁니다.
 선행 PR #2655의 실제 merge 기준은 `3239038a04049ec905f22845a8f00377bd171cb1`입니다.

@@ -14,6 +14,12 @@ async fn main() -> std::process::ExitCode {
             Err(_) => std::process::ExitCode::FAILURE,
         };
     }
+    #[cfg(windows)]
+    if let Some(exit) =
+        codex_exec_loop_native::adapter::inbound::vault_native_confirmation::run_if_requested()
+    {
+        return exit;
+    }
     let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
     #[cfg(windows)]
     attach_windowless_console();

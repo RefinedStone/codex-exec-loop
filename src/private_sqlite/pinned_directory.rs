@@ -5,7 +5,7 @@ use super::{DirectoryAnchor, platform, validate_runtime_path};
 #[cfg(unix)]
 use anyhow::Context;
 use anyhow::{Result, bail};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 
@@ -75,7 +75,7 @@ impl PinnedPrivateDirectory {
             .path
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn handle(&self) -> &File {
         &self
             .directories
