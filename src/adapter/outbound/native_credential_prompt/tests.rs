@@ -115,6 +115,26 @@ fn echo_command() -> std::process::Command {
         .stderr(std::process::Stdio::null());
     command
 }
+// Error-path fixtures keep their leader alive after stdin closes or cat gets SIGPIPE.
+// This makes the test exercise forced cleanup rather than racing natural process exit.
+fn live_owner_echo_command() -> std::process::Command {
+    #[cfg(unix)]
+    {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "/bin/cat; exec /bin/sleep 30"]);
+        child::safe_environment(&mut command, |name| std::env::var_os(name));
+        command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        command
+    }
+    #[cfg(windows)]
+    {
+        echo_command()
+    }
+}
+
 #[test]
 fn synthetic_child_echo_is_private_bounded_and_requires_normal_exit() {
     let cancelled = AtomicBool::new(false);
@@ -141,7 +161,7 @@ fn synthetic_child_echo_is_private_bounded_and_requires_normal_exit() {
     )
     .unwrap();
     assert_eq!(output.as_slice(), input);
-    let mut command = echo_command();
+    let mut command = live_owner_echo_command();
     assert_eq!(
         child::capture(
             &mut command,
@@ -158,7 +178,7 @@ fn synthetic_child_echo_is_private_bounded_and_requires_normal_exit() {
 #[test]
 fn synthetic_child_timeout_kills_and_reaps_an_open_input_owner() {
     let cancelled = AtomicBool::new(false);
-    let mut command = echo_command();
+    let mut command = live_owner_echo_command();
     assert_eq!(
         child::capture(
             &mut command,
