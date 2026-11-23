@@ -2,7 +2,7 @@
 
 이 문서는 저장 공간 분석기의 구현 계약, 이슈 댓글 반영, 재현 가능한 시험 범위와 남은 검증을 구분합니다. 사용자용 API·상태·공유 설명은 [저장 공간 분석기](../reference/storage-analysis.md), 공통 확장 호스트의 별도 검증은 [커널 확장 호스트](kernel-extension-host.md)를 참고하세요.
 
-**현재 상태: 최종 제품 소스의 backend 회귀 74개, 확장 필터 49개, Windows Full과 아래 V3 native 측정을 통과했습니다. 아키텍처 경계 144개도 통합 검증에서 통과했습니다.** 아래의 중간 성공 이력을 최종 커밋 전체의 통과로 계산하지 않습니다. 실제 모델 턴은 검증의 전제 조건에 포함하지 않습니다.
+**현재 상태: 최종 제품 소스의 backend 회귀 75개, 확장 필터 49개, Windows Full과 아래 V3 native 측정을 통과했습니다. 아키텍처 경계 144개도 통합 검증에서 통과했습니다.** 아래의 중간 성공 이력을 최종 커밋 전체의 통과로 계산하지 않습니다. 실제 모델 턴은 검증의 전제 조건에 포함하지 않습니다.
 
 ## 1. 기록 원칙과 최종 결과
 
@@ -18,10 +18,10 @@
 
 | 항목 | 기록 |
 | --- | --- |
-| 제품·측정 source commit | `792a00aa4896bfd0f49debb28e78d557f22923a0`. 이후 검증 문서·측정 JSON 커밋은 제품 소스를 변경하지 않습니다. |
+| 제품·측정 source commit | `c690571b778a51e90dae8cef16c9d8a6ce5170fc`. 이후 검증 문서·측정 JSON 커밋은 제품 소스를 변경하지 않습니다. |
 | Windows/파일 시스템/장치 식별 | Windows 11 Pro 10.0.26200, NTFS, SHPP41-2000GM NVMe SSD. 2026-11-23 측정. |
-| backend 집중 검사 | `cargo test --locked --lib storage_`: 74 passed, 0 failed, 2 ignored. ignored 두 개는 별도 실행용 benchmark입니다. |
-| 공통 확장 호스트 검사 | `cargo test --locked --lib extension`: 49 passed. 아키텍처 144개는 통합 소스 `1270bb7`에서 통과했고 이후 제품 차이는 Windows 전용 import의 cfg 분리 1건입니다. K의 프로토콜 32개·시뮬레이션 24개는 [호스트 검증 기록](kernel-extension-host.md) 참고. |
+| backend 집중 검사 | `cargo test --locked --lib storage_`: 75 passed, 0 failed, 2 ignored. ignored 두 개는 별도 실행용 benchmark입니다. |
+| 공통 확장 호스트 검사 | `cargo test --locked --lib extension`: 49 passed. 아키텍처 144개는 통합 소스 `1270bb7`에서 통과했고 이후 Windows import 분리와 일반 드라이브 표기의 런타임 보호 회귀를 추가했습니다. 최종 소스의 전체 CI 결과는 PR에 연결합니다. K의 프로토콜 32개·시뮬레이션 24개는 [호스트 검증 기록](kernel-extension-host.md) 참고. |
 | Windows Full | `powershell -File scripts/check_native_pr.ps1 -Mode Full`: exit 0. Node/Admin, Windows 계약, fmt·Clippy, Desktop 타입 검사·빌드·1,064개 테스트 통과(7 skip). |
 | Desktop 확장 UI·실제 공통 서비스 왕복 | 후속 Desktop PR과 [별도 검증 기록](https://github.com/RefinedStone/codex-exec-loop/blob/codex/storage-desktop/docs/validation/storage-analysis/README.md)에 기록합니다. 이 행은 위 기존 Desktop gate와 구분합니다. |
 | 원격 전체 CI | [PR #2669](https://github.com/RefinedStone/codex-exec-loop/pull/2669)에 제품 소스 SHA와 Full CI 결과를 연결합니다. |
@@ -105,6 +105,7 @@
 - 실제 메타데이터·하드링크와 directory junction을 테스트 전용 임시 트리에 생성합니다. 사용자 데이터 트리에 장애를 만들지 않습니다.
 - 원본 트리를 fixture가 명시적으로 제거한 후에도 완료 색인 조회가 같은 결과를 반환하는지 확인합니다. 이 제거는 “원본을 재열거하지 않음”을 검증하기 위한 테스트 동작이며 분석기 동작이 아닙니다.
 - 최초 루트 핸들의 volume GUID를 선택한 ID와 대조합니다. 불일치 시 첫 progress·루트 파일 ID 기록·열거 전에 거절하며, fixture 문자열로 production 검사를 우회하지 못하는지 확인합니다. [볼륨 바인딩 회귀](../../src/adapter/outbound/storage_analysis/volume_tests.rs)를 실제 장치 교체 시험과 구분합니다.
+- 일반 드라이브 표기로 저장한 SQLite 루트와 Windows 최종 경로를 함께 검증합니다. Git metadata가 없어도 알려진 root와 child 두 곳에 활성 세션·기존 저장소 보호 근거가 붙는지 확인하며, 수정 전에는 두 조회가 모두 누락되는 실패를 재현했습니다.
 - reveal 시 같은 경로가 다른 파일 ID로 교체되면 거절합니다.
 - cleanup 경로에 분석기가 소유하지 않은 항목이 있으면 보존하고 오류를 반환합니다.
 - Git index의 분석 전후 바이트를 비교합니다. clean filter·external diff·textconv trap이 실행되지 않는지, main/linked가 common-dir 캐시 한 행을 사용하는지 검사합니다.
@@ -173,26 +174,26 @@ ignored benchmark는 일반 단위 시험 성공 개수에 포함하지 않습�
 
 ### 측정 수치 — 2026-11-23 NVMe SSD
 
-측정 소스: `792a00aa4896bfd0f49debb28e78d557f22923a0`. 전체 benchmark는 1 passed/0 failed, native process exit 0입니다. 해당 시험 동안 이 작업의 다른 로컬 빌드·E2E는 실행하지 않았습니다.
+측정 소스: `c690571b778a51e90dae8cef16c9d8a6ce5170fc`. 전체 benchmark는 1 passed/0 failed, native process exit 0입니다. 해당 시험 동안 이 작업의 다른 로컬 빌드·E2E는 실행하지 않았습니다.
 
 | case | concurrency 1: 3회 / 중앙값 (ms) | concurrency 4: 3회 / 중앙값 (ms) | 취소→terminal (ms) |
 | --- | --- | --- | ---: |
-| `small_many` | 665.271, 618.034, 616.888 / **618.034** | 408.423, 423.909, 408.859 / **408.859** | 57.891 |
-| `large_few` | 44.487, 43.724, 45.626 / **44.487** | 37.770, 37.941, 37.640 / **37.770** | 16.861 |
-| `flat_many` | 167.365, 172.471, 167.485 / **167.485** | 168.313, 168.785, 169.651 / **168.785** | 6.636 |
+| `small_many` | 619.779, 602.355, 604.454 / **604.454** | 408.516, 400.338, 407.383 / **407.383** | 57.729 |
+| `large_few` | 45.215, 68.715, 125.917 / **68.715** | 37.831, 37.441, 36.549 / **37.441** | 16.764 |
+| `flat_many` | 165.607, 167.750, 169.690 / **167.750** | 166.631, 174.065, 170.256 / **170.256** | 6.212 |
 
 | case / concurrency | 최초 progress 중앙값 (ms) | 최초 파일 관측 중앙값 (ms) | 10행 조회 중앙값 (ms) | 필터 중앙값 (ms) | 색인 크기 범위 (B) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| small_many / 1 | 16.242 | 22.092 | 6.825 | 6.232 | 2818048–2818048 |
-| small_many / 4 | 16.826 | 22.217 | 8.219 | 7.558 | 2818048–2834432 |
-| large_few / 1 | 16.776 | 19.872 | 2.921 | 2.831 | 61440–61440 |
-| large_few / 4 | 16.624 | 19.768 | 3.071 | 2.875 | 61440–61440 |
-| flat_many / 1 | 16.591 | 17.427 | 4.808 | 4.303 | 1376256–1376256 |
-| flat_many / 4 | 16.586 | 17.470 | 4.769 | 4.225 | 1376256–1376256 |
+| small_many / 1 | 17.060 | 22.603 | 6.954 | 6.429 | 2818048–2818048 |
+| small_many / 4 | 17.039 | 22.957 | 8.144 | 7.614 | 2813952–2822144 |
+| large_few / 1 | 17.128 | 20.112 | 3.212 | 2.811 | 61440–61440 |
+| large_few / 4 | 16.269 | 19.491 | 2.843 | 2.807 | 61440–61440 |
+| flat_many / 1 | 16.663 | 17.496 | 4.710 | 4.374 | 1372160–1372160 |
+| flat_many / 4 | 16.567 | 17.574 | 4.722 | 4.313 | 1372160–1372160 |
 
 각 case의 6회에서 파일·디렉터리 수, 논리 바이트, 할당 바이트가 동일했고 상태는 complete, issue 수는 0이었습니다. 확인 할당량은 small_many 16,777,216 B, large_few 33,554,432 B, flat_many 8,388,608 B입니다. SQLite 삽입 순서와 저장 경로 길이에 따라 색인 파일 크기는 달라질 수 있으며, 이를 집계 정확도 변화로 계산하지 않습니다.
 
-테스트 프로세스 peak working set은 **22,339,584 B (21.30 MiB)**였습니다. .NET System.Diagnostics.Process.PeakWorkingSet64를 요청 간격 20ms로 178회 수집했습니다. fixture 생성, native worker, SQLite와 시험 harness를 포함하며 전체 Gateway나 Desktop의 메모리는 포함하지 않습니다. debug/test 비최적화 빌드입니다.
+테스트 프로세스 peak working set은 **22,204,416 B (21.18 MiB)**였습니다. .NET System.Diagnostics.Process.PeakWorkingSet64를 요청 간격 20ms로 173회 수집했습니다. fixture 생성, native worker, SQLite와 시험 harness를 포함하며 전체 Gateway나 Desktop의 메모리는 포함하지 않습니다. debug/test 비최적화 빌드입니다.
 
 파일 분포에 따라 동시 수별 결과가 달라지며, 평면 폴더는 나눌 하위 디렉터리가 없습니다. 작은 반복 수와 캐시 미통제 조건이므로 SSD 일반 최적값으로 확정하지 않고 기본 동시 수 1을 유지합니다. 느린 회차의 원인은 별도 프로파일링으로 확정하지 않았습니다. 원시 회차와 종료 코드는 [JSON 기록](storage-analysis-native-metrics.json)에 있습니다.
 
@@ -205,7 +206,7 @@ ignored benchmark는 일반 단위 시험 성공 개수에 포함하지 않습�
 | 실제 HDD | 미측정. 장치가 회전식인지 확인하지 않은 디스크를 HDD 결과로 기록하지 않습니다. |
 | 통제한 cold cache | 미측정. 생성 직후 첫 실행을 cold run으로 부르지 않습니다. |
 | 실제 native scan 부하 중 Desktop 대화 입력·렌더링 | 미측정. 모형 이벤트 E2E의 응답성을 실제 디스크 부하 측정으로 대체하지 않습니다. |
-| 최대 메모리 | native 시험 프로세스 peak working set 21.30 MiB. worker·SQLite·fixture harness 포함, 전체 Gateway·renderer 제외. |
+| 최대 메모리 | native 시험 프로세스 peak working set 21.18 MiB. worker·SQLite·fixture harness 포함, 전체 Gateway·renderer 제외. |
 | 취소 입력→새 배정 중지 시각 | 별도 계측 없음. terminal까지의 시간은 상한 자료입니다. |
 | 느린 장치·분리 중 취소 | 미측정. 모든 장치에서 종료 1초 이내를 보장하지 않습니다. |
 | concurrency 기본값 | 1. host-global scan 직렬화와 job 내부 1~4 상한을 사용합니다. SSD 4/HDD 1의 자동 최적값을 확정하지 않았습니다. |
