@@ -17,7 +17,8 @@ let enabled = false, revision = 0, scans = 0, grants = 0, job = null, snapshotRe
 const calls = [];
 let recursiveObserved;
 const reference = "akra-storage:" + Buffer.from(JSON.stringify({ grant_id: "grant-1", node_id: "target", snapshot_id: "scan-1" })).toString("base64url");
-const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 4, directories_scanned: 3, issues: [] });
+const assetsReference = "akra-storage:" + Buffer.from(JSON.stringify({ grant_id: "grant-1", node_id: "assets", snapshot_id: "scan-1" })).toString("base64url");
+const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 3 + snapshotRevision, directories_scanned: 3, issues: [] });
 const node = (id, amount, parent = "root", kind = "directory") => ({ snapshot_id: "scan-1", revision: snapshotRevision, id, parent_id: parent,
   name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin", file2: "small-cache.bin" })[id] ?? id,
   kind, allocated_bytes: (gib * BigInt(amount)).toString(), known_allocated_bytes: (gib * BigInt(amount)).toString(), logical_bytes: (gib * BigInt(amount)).toString(),
@@ -28,7 +29,7 @@ const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("targe
 const page = items => ({ snapshot_id: "scan-1", revision: snapshotRevision, items, total_count: items.length, next_cursor: null });
 const baseThread = structuredClone(fake.loadReplayTable(fake.INTERRUPTED_TURN_RECORDING).get("thread/resume").result);
 baseThread.thread.turns = [{ id: "storage-answer", status: "completed", itemsView: "full", startedAt: 1, completedAt: 2, durationMs: 1, error: null, items: [
-  { type: "agentMessage", id: "storage-evidence-answer", text: `target은 9 GiB로 worktree 12 GiB의 75%입니다. [target 75%](${reference})`, phase: "final_answer", memoryCitation: null, delivery: null, questions: null },
+  { type: "agentMessage", id: "storage-evidence-answer", text: `target은 9 GiB로 worktree 12 GiB의 75%입니다. [target 75%](${reference}) [assets](${assetsReference})`, phase: "final_answer", memoryCitation: null, delivery: null, questions: null },
 ]}];
 const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   readThread: () => structuredClone(baseThread),
@@ -78,7 +79,7 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
       return { result: { ...page(matching.slice(start, start + 1)), total_count: matching.length, next_cursor: start + 1 < matching.length ? "files:1" : null } };
     }
     if (params.action === "find_hotspots") return { result: page([{ node: node("target", 9), role: "folder", reason: "1 GiB 이상", included_bytes: (gib * 9n).toString(), provisional: false }]) };
-    if (params.action === "ancestors") return { result: { snapshot_id: "scan-1", node_id: input.node_id, ancestors: [node("root", 12, null), node("target", 9)] } };
+    if (params.action === "ancestors") return { result: { snapshot_id: "scan-1", node_id: input.node_id, ancestors: [node("root", 12, null), nodes().find(item => item.id === input.node_id)] } };
     if (params.action === "share_preview") {
       assert.equal(input.thread_id, threadId);
       return { result: { id: "preview-1", snapshot_id: "scan-1", revision: snapshotRevision, node_id: input.node_id, thread_id: threadId, root: node("root", 12, null), shared_fields: ["상대 이름", "할당 바이트", "논리 바이트", "집계 상태", "보호 사유"], expires_at_ms: Date.now() + 60000 } };
@@ -91,7 +92,8 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
     if (params.action === "resolve_evidence") {
       enteredResolve?.();
       if (!grants) return { error: { code: -32000, message: "공유가 해제되었습니다." }, replyAfter: resolveBarrier ?? undefined };
-      return { result: { snapshot_id: "scan-1", revision: 1, node_id: "target", ancestors: [node("root", 12, null)], node: node("target", 9) }, replyAfter: resolveBarrier ?? undefined };
+      const targetId = input.reference === assetsReference ? "assets" : "target";
+      return { result: { snapshot_id: "scan-1", revision: 1, node_id: targetId, ancestors: [node("root", 12, null)], node: nodes().find(item => item.id === targetId) }, replyAfter: input.reference === reference ? resolveBarrier ?? undefined : undefined };
     }
     if (params.action === "cancel") return { result: job };
     return { error: { code: -32602, message: "unknown fixture action " + params.action } };
@@ -171,6 +173,27 @@ try {
   await view.getByTestId("extensions-manage").click();
   await view.getByTestId("settings-row-akra.storage-analysis").getByRole("button", { name: "열기", exact: true }).click();
   assert.equal(await panel.locator('[data-node-id="assets"]').getAttribute("aria-selected"), "true", "late evidence must preserve the newer selection");
+
+
+  const secondEntered = new Promise(resolve => { enteredResolve = resolve; });
+  resolveBarrier = new Promise(resolve => { release = resolve; });
+  await view.getByRole("button", { name: "표에서 보기 · target 75%", exact: true }).click();
+  await secondEntered;
+  await view.getByRole("button", { name: "표에서 보기 · assets", exact: true }).click();
+  await view.waitForFunction(() => document.querySelector('[data-node-id="assets"]') === document.activeElement);
+  release(); resolveBarrier = null; enteredResolve = null;
+  await view.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  assert.equal(await panel.locator('[data-node-id="assets"]').getAttribute("aria-selected"), "true", "an older reference response cannot overtake a later reference click");
+
+  const filter = panel.getByLabel("파일 이름 필터");
+  await filter.fill("keep-focus");
+  snapshotRevision++; revision++;
+  gateway.sendExtensionChange(localKernel, { extension, generation: "host-1", revision, sequence: revision });
+  await panel.getByRole("status").filter({ hasText: "파일 5개" }).waitFor();
+  await target.waitFor();
+  await view.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await filter.evaluate(element => element === document.activeElement), true, "later page/revision updates do not repeat an already-applied evidence focus request");
+  await filter.fill("");
 
   if (process.env.AKRA_STORAGE_SCREENSHOT) {
     await view.getByRole("dialog").waitFor({ state: "hidden" });
