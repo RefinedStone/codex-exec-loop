@@ -16,7 +16,6 @@ impl Fixture {
             rand::random::<u64>(),
         ));
         crate::private_directory::ensure_private_directory(&root).unwrap();
-        let root = fs::canonicalize(root).unwrap();
         git(&root, &["init", "-q", "-b", "main"]);
         git(&root, &["config", "user.name", "Evidence Tree Fixture"]);
         git(&root, &["config", "user.email", "fixture@example.invalid"]);
@@ -98,6 +97,38 @@ fn baseline_clean_tree_is_valid_and_leaves_the_real_index_head_and_refs_unchange
     assert_eq!(fs::read(fixture.index_path()).unwrap(), index);
     assert_eq!(git(&fixture.root, &["rev-parse", "HEAD"]), fixture.base);
     assert_eq!(git(&fixture.root, &["show-ref"]), refs);
+}
+
+#[cfg(windows)]
+#[test]
+fn canonical_windows_workspace_and_private_index_keep_identity_at_the_git_boundary() {
+    let fixture = Fixture::new();
+    let canonical = fs::canonicalize(&fixture.root).unwrap();
+    assert!(canonical.as_os_str().to_string_lossy().starts_with(r"\\?\"));
+    let command = safe_git_command(&canonical).unwrap();
+    let arguments = command.get_args().collect::<Vec<_>>();
+    for name in ["--work-tree", "-C"] {
+        let index = arguments
+            .iter()
+            .position(|argument| *argument == OsStr::new(name))
+            .unwrap();
+        let path = Path::new(arguments[index + 1]);
+        assert!(!path.as_os_str().to_string_lossy().starts_with(r"\\?\"));
+        assert_eq!(fs::canonicalize(path).unwrap(), canonical);
+    }
+
+    let original_index = fs::read(fixture.index_path()).unwrap();
+    let snapshot = snapshot_parallel_worker_tree(ParallelWorkerTreeRequest {
+        workspace_directory: canonical.to_str().unwrap(),
+        ..fixture.request()
+    })
+    .unwrap();
+    assert!(snapshot.worktree_clean);
+    assert_eq!(
+        snapshot.tree_sha,
+        git(&fixture.root, &["rev-parse", "HEAD^{tree}"])
+    );
+    assert_eq!(fs::read(fixture.index_path()).unwrap(), original_index);
 }
 
 #[test]

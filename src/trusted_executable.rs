@@ -358,7 +358,7 @@ fn resolve_codex_command(
 }
 
 #[cfg(windows)]
-fn windows_process_argument_path(path: &Path) -> Result<OsString> {
+pub(crate) fn windows_process_argument_path(path: &Path) -> Result<OsString> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
     const EXTENDED_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];

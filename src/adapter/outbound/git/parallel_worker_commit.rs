@@ -1189,7 +1189,7 @@ where
         // This path is allocated and pinned by the host. Never inherit a caller's
         // index override or create shared-index files in the actual repository.
         command.args(["-c", "core.splitIndex=false"]);
-        command.env("GIT_INDEX_FILE", index);
+        command.env("GIT_INDEX_FILE", git_path_argument(index)?);
     }
     command.args(args);
     if let Some(timestamp) = commit_timestamp {
@@ -1211,6 +1211,18 @@ where
     .map_err(|error| format!("host-owned parallel worker Git command failed: {error}"))
 }
 
+fn git_path_argument(path: &Path) -> Result<PathBuf, String> {
+    // Preserve canonical paths and pinned handles at the filesystem boundary. Only
+    // the spelling passed to Git changes: Git for Windows cannot consume every
+    // Win32 verbatim form in argv or GIT_INDEX_FILE.
+    #[cfg(windows)]
+    return crate::trusted_executable::windows_process_argument_path(path)
+        .map(PathBuf::from)
+        .map_err(|error| format!("host Git path cannot be passed to the process: {error}"));
+    #[cfg(not(windows))]
+    Ok(path.to_path_buf())
+}
+
 fn safe_git_command(workspace: &Path) -> Result<Command, String> {
     let canonical_workspace = std::fs::canonicalize(workspace)
         .map_err(|error| format!("host Git workspace could not be canonicalized: {error}"))?;
@@ -1220,7 +1232,7 @@ fn safe_git_command(workspace: &Path) -> Result<Command, String> {
         // Pin the worktree as a global option so a submodule-local core.worktree cannot redirect
         // any status, index, or commit operation after its raw value has been audited.
         .arg("--work-tree")
-        .arg(&canonical_workspace);
+        .arg(git_path_argument(&canonical_workspace)?);
     #[cfg(windows)]
     command.args([
         "-c",
@@ -1231,7 +1243,7 @@ fn safe_git_command(workspace: &Path) -> Result<Command, String> {
         .args(["-c", "user.name=Akra Parallel Worker"])
         .args(["-c", "user.email=akra@localhost.invalid"])
         .arg("-C")
-        .arg(workspace)
+        .arg(git_path_argument(workspace)?)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GIT_CONFIG_GLOBAL", null_device());
@@ -1243,7 +1255,7 @@ fn windows_host_autocrlf_policy(workspace: &Path) -> Result<&'static str, String
     let mut command = git_subprocess::command(std::iter::empty::<&str>());
     command
         .arg("-C")
-        .arg(workspace)
+        .arg(git_path_argument(workspace)?)
         .args(["config", "--includes", "--get", "core.autocrlf"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

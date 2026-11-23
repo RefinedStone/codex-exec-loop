@@ -9,8 +9,8 @@ const identifier = (value: unknown): value is string => text(value) && value.len
 const boundedId = (value: unknown): value is string => identifier(value) && value.length <= 128 && !/\p{Cc}/u.test(value);
 const revision = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const positive = (value: unknown): value is number => revision(value) && value > 0;
-const token = (value: unknown): value is string => text(value) && /^[a-f0-9]{64}$/.test(value);
-const oid = (value: unknown): boolean => text(value) && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
+const token = (value: unknown): value is string => text(value) && value.length === 64 && /^[a-f0-9]{64}$/.test(value);
+const oid = (value: unknown): boolean => text(value) && (value.length === 40 || value.length === 64) && !/[^a-f0-9]/.test(value);
 const named = (value: unknown, names: readonly string[]) => text(value) && names.includes(value);
 const timestamp = (value: unknown) => text(value) && Number.isFinite(Date.parse(value));
 const errors = ["invalid", "missing", "artifact_missing", "stale", "scope_changed", "lease_changed", "conflict", "unavailable", "limit", "human_confirmation_required"];
