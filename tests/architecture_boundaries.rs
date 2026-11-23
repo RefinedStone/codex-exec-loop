@@ -11534,20 +11534,28 @@ fn repository_kernel_assembly_stays_free_of_transports() {
 #[test]
 fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
     // plan 18 K3-4: the lock comes first. Building the kernel starts the PR validation scheduler,
-    // so a second TUI for the repository must stop before that.
+    // so a second TUI for the repository must stop before that. The exact owner also reaches
+    // issue admission; an unowned manual fallback cannot create an open issue automation graph.
+    let compact_production_source = |source: &str| {
+        production_lines(source)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<String>()
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+            .replace(",)", ")")
+    };
     let shell_entrypoint = fs::read_to_string("src/adapter/inbound/tui/app/shell_entrypoint.rs")
         .expect("native shell entrypoint should load");
-    let production_source = production_lines(&shell_entrypoint)
-        .into_iter()
-        .map(|line| line.text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let production_source =
+        compact_production_source(&top_level_function_source(&shell_entrypoint, "run"));
     let lock = production_source
-        .find("production::acquire_native_tui_kernel_lock()?")
+        .find("letkernel_lock=production::acquire_native_tui_kernel_lock()?;")
         .expect("TUI startup must take the repository kernel lock and stop when it is held");
     let build = production_source
-        .find("production::build_native_tui_application()")
-        .expect("TUI startup must build the native application");
+        .find("production::build_native_tui_application(kernel_lock.as_ref())")
+        .expect("TUI startup must pass its exact optional kernel owner to the native application");
     assert!(
         lock < build,
         "TUI startup must take the kernel lock before it builds the kernel"
@@ -11555,14 +11563,15 @@ fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
 
     let kernel = fs::read_to_string("src/composition/repository_kernel.rs")
         .expect("repository kernel source should load");
+    let kernel = compact_production_source(&kernel);
     let lock = kernel
         .find("RepositoryKernelLockAdapter::acquire_for_owner(")
         .expect("the repository kernel must take the lock");
     let build = kernel
         .find(
-            "production::build_headless_kernel_runtime(workspace_dir, app_server, issues.clone())",
+            "production::build_headless_kernel_runtime(workspace_dir,app_server,issues.clone(),admission)",
         )
-        .expect("the repository kernel must build its runtime");
+        .expect("the repository kernel must build its runtime with the shared issue admission");
     assert!(
         lock < build,
         "the repository kernel must take the lock before it builds the runtime"

@@ -4,7 +4,9 @@ use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationStorePort, IssueTriageFence, IssueTriageSaveResult, IssueWorkAdmissionResult,
     IssueWorkSaveResult,
 };
+#[cfg(test)]
 use crate::application::service::issue_automation_policy::resolve_issue_automation_policy;
+#[cfg(test)]
 use crate::application::service::issue_policy::issue_policy_version;
 use crate::domain::issue_automation::autonomy::{IssueAutonomyIntent, IssueAutonomyLevel};
 use crate::domain::issue_automation::collection::IssueCollectionItem;
