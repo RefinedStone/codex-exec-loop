@@ -158,6 +158,26 @@ fn stale_or_legacy_lease_identity_never_prepares_an_incoming_directory() {
 }
 
 #[test]
+fn a_lease_from_another_canonical_repository_cannot_prepare_worker_evidence() {
+    let repo = TempGitRepo::new("worker-evidence-canonical-source");
+    let other = TempGitRepo::new("worker-evidence-canonical-other");
+    let workspace = repo.workspace_dir();
+    let other_workspace = other.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    seed_accepted_task(&workspace, &authority, "evidence-worker");
+    seed_accepted_task(&other_workspace, &authority, "evidence-worker");
+    let artifacts = Arc::new(CountingArtifacts::default());
+    let service = test_parallel_mode_service().with_task_evidence(authority, artifacts.clone());
+    let lease = acquire_running_worker_lease(&service, &repo, "evidence-worker");
+    assert!(
+        service
+            .prepare_worker_evidence_incoming(&other_workspace, &lease)
+            .is_err()
+    );
+    assert_eq!(artifacts.prepares.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn an_artifact_preparation_failure_preserves_the_running_lease() {
     let repo = TempGitRepo::new("worker-evidence-unavailable");
     let workspace = repo.workspace_dir();

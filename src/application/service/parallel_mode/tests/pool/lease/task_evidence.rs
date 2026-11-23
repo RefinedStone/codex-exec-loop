@@ -106,6 +106,17 @@ fn task_evidence_real_running_worker_git_sqlite_capture_and_current_tree_project
     seed_accepted_task(&workspace, authority.as_ref(), "task-evidence-running");
     let parallel = test_parallel_mode_service();
     let lease = acquire_running_worker_lease(&parallel, &repo, "task-evidence-running");
+    let resolution = crate::application::service::parallel_mode::pool::resolve_workspace_slot_lease_with_runtime(
+        &test_parallel_runtime(), authority.as_ref(), &lease.worktree_path,
+    ).unwrap().unwrap();
+    assert_eq!(
+        resolution.context.canonical_repo_root,
+        repo.canonical_repo_root()
+    );
+    assert_ne!(
+        Path::new(&resolution.context.repo_root),
+        resolution.context.canonical_repo_root.as_path()
+    );
     let head = resolve_workspace_head_sha(Path::new(&lease.worktree_path)).unwrap();
     let base_tree = run_command(
         "git",

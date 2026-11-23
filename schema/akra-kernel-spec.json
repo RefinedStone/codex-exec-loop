@@ -11533,61 +11533,6 @@
     "KernelQueryAnswer": {
       "oneOf": [
         {
-          "additionalProperties": false,
-          "properties": {
-            "evidence_revision": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "next_task_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "planning_revision": {
-              "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "tasks": {
-              "items": {
-                "$ref": "#/$defs/TaskEvidenceTaskState"
-              },
-              "type": "array"
-            },
-            "truncated": {
-              "type": "boolean"
-            },
-            "type": {
-              "const": "task_evidence",
-              "type": "string"
-            },
-            "unavailable": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TaskEvidenceError"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "type",
-            "tasks",
-            "truncated"
-          ],
-          "type": "object"
-        },
-        {
           "properties": {
             "delegations": {
               "items": {
@@ -11795,6 +11740,61 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "next_task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "planning_revision": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/$defs/TaskEvidenceTaskState"
+              },
+              "type": "array"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "task_evidence",
+              "type": "string"
+            },
+            "unavailable": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TaskEvidenceError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "tasks",
+            "truncated"
           ],
           "type": "object"
         },
@@ -12882,58 +12882,6 @@
             "event_id": {
               "type": "string"
             },
-            "evidence": {
-              "$ref": "#/$defs/TaskCriterionEvidenceRecord"
-            },
-            "evidence_revision": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "kind": {
-              "const": "criterion_evidence_recorded",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "event_id",
-            "evidence_revision",
-            "evidence"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "event_id": {
-              "type": "string"
-            },
-            "evidence_revision": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "kind": {
-              "const": "criterion_waived",
-              "type": "string"
-            },
-            "waiver": {
-              "$ref": "#/$defs/TaskCriterionWaiverRecord"
-            }
-          },
-          "required": [
-            "kind",
-            "event_id",
-            "evidence_revision",
-            "waiver"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "event_id": {
-              "type": "string"
-            },
             "issue": {
               "$ref": "#/$defs/IssueEventReference"
             },
@@ -13313,6 +13261,58 @@
             "epoch",
             "revision",
             "by"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "evidence": {
+              "$ref": "#/$defs/TaskCriterionEvidenceRecord"
+            },
+            "evidence_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "criterion_evidence_recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "evidence_revision",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "evidence_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "criterion_waived",
+              "type": "string"
+            },
+            "waiver": {
+              "$ref": "#/$defs/TaskCriterionWaiverRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "evidence_revision",
+            "waiver"
           ],
           "type": "object"
         }

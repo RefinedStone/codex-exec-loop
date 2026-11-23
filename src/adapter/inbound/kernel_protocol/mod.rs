@@ -1977,7 +1977,6 @@ spec_names! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KernelQueryAnswer {
-    TaskEvidence(TaskEvidenceState),
     Delegations {
         delegations: Vec<crate::domain::delegation::Delegation>,
     },
@@ -2009,6 +2008,7 @@ pub enum KernelQueryAnswer {
         threads: Vec<ThreadActivity>,
     },
     Planning(PlanningState),
+    TaskEvidence(TaskEvidenceState),
     Parallel(ParallelState),
     /// 사건 하나는 `sequence`, `recorded_at`, `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).
     History(KernelEventPage),

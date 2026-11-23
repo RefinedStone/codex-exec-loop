@@ -1889,19 +1889,49 @@ pub(super) fn schema_errors(
         {
             errors.push(format!("{path}: the length {length} is out of range"));
         }
-        // 이 프로토콜의 정규 규칙은 "공백이 아닌 글자가 있다" 하나이다. 다른 규칙이 생기면 아래 시험이 알린다.
-        if schema.get("pattern").is_some() && text.trim().is_empty() {
-            errors.push(format!("{path}: the text is blank"));
+        if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+            match pattern {
+                r"\S" if text.trim().is_empty() => {
+                    errors.push(format!("{path}: the text is blank"));
+                }
+                r"\S" => {}
+                "^[a-f0-9]{64}$" => {
+                    if text.len() != 64
+                        || !text
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    {
+                        errors.push(format!(
+                            "{path}: expected 64 lowercase hexadecimal characters"
+                        ));
+                    }
+                }
+                _ => errors.push(format!("{path}: unsupported schema pattern {pattern}")),
+            }
         }
     }
-    if let (Some(items), Some(elements)) = (schema.get("items"), value.as_array()) {
-        for (index, element) in elements.iter().enumerate() {
-            errors.extend(schema_errors(
-                items,
-                element,
-                definitions,
-                &format!("{path}[{index}]"),
-            ));
+    if let Some(elements) = value.as_array() {
+        let length = elements.len() as u64;
+        if schema
+            .get("minItems")
+            .and_then(Value::as_u64)
+            .is_some_and(|minimum| length < minimum)
+            || schema
+                .get("maxItems")
+                .and_then(Value::as_u64)
+                .is_some_and(|maximum| length > maximum)
+        {
+            errors.push(format!("{path}: the array length {length} is out of range"));
+        }
+        if let Some(items) = schema.get("items") {
+            for (index, element) in elements.iter().enumerate() {
+                errors.extend(schema_errors(
+                    items,
+                    element,
+                    definitions,
+                    &format!("{path}[{index}]"),
+                ));
+            }
         }
     }
     errors
@@ -2082,7 +2112,9 @@ fn the_test_checker_knows_every_schema_keyword_of_the_spec() {
         "enum",
         "format",
         "items",
+        "maxItems",
         "maxLength",
+        "minItems",
         "minLength",
         "minimum",
         "maximum",
@@ -2097,13 +2129,68 @@ fn the_test_checker_knows_every_schema_keyword_of_the_spec() {
         .filter(|keyword| !known.contains(&keyword.as_str()))
         .collect::<Vec<_>>();
     assert!(unknown.is_empty(), "the checker does not know {unknown:?}");
-    // `format` names numeric representations; minimum/maximum also bound issue page sizes. `additionalProperties` is always `false`,
-    // and the only pattern is the non-blank rule.
+    // `format` names numeric representations; minimum/maximum bound page sizes and minItems/maxItems
+    // bound list lengths. Every pattern is checked above, including exact evidence identity tokens.
     let text = serde_json::to_string(&spec).expect("the spec should serialize");
     assert!(!text.contains("\"additionalProperties\":{"));
     assert_eq!(
         text.matches("\"pattern\":").count(),
         text.matches("\"pattern\":\"\\\\S\"").count()
+            + text.matches("\"pattern\":\"^[a-f0-9]{64}$\"").count()
+    );
+}
+
+#[test]
+fn the_test_checker_enforces_evidence_tokens_and_array_bounds() {
+    let spec = spec_json();
+    let prepare = spec["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "prepare_evidence")
+        .unwrap();
+    let token = &prepare["input"]["properties"]["scope_id"];
+    for (candidate, accepted) in [
+        ("a".repeat(64), true),
+        ("A".repeat(64), false),
+        ("g".repeat(64), false),
+        ("a".repeat(63), false),
+        ("a".repeat(65), false),
+        (format!("{}\n", "a".repeat(64)), false),
+    ] {
+        assert_eq!(
+            schema_errors(token, &json!(candidate), &spec["$defs"], "scope_id").is_empty(),
+            accepted
+        );
+    }
+    let query = spec["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "task_evidence")
+        .unwrap();
+    let ids = &query["input"]["properties"]["task_ids"];
+    for (length, accepted) in [(0, false), (1, true), (256, true), (257, false)] {
+        let value = json!(
+            (0..length)
+                .map(|index| format!("task-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            schema_errors(ids, &value, &spec["$defs"], "task_ids").is_empty(),
+            accepted,
+            "task_ids length {length}"
+        );
+    }
+    assert!(!schema_errors(ids, &json!([1]), &spec["$defs"], "task_ids").is_empty());
+    assert!(
+        !schema_errors(
+            &json!({ "pattern": "unknown" }),
+            &json!("anything"),
+            &spec["$defs"],
+            "text"
+        )
+        .is_empty()
     );
 }
 
