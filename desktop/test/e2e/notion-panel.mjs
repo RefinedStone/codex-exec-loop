@@ -57,6 +57,11 @@ const check = (name, ok) => {
 
 const app = await electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env });
 try {
+  await app.evaluate(({ ipcMain }) => {
+    for (const channel of ["akra:github-summary", "akra:github-repository"]) ipcMain.removeHandler(channel);
+    ipcMain.handle("akra:github-summary", () => ({ login: "fixture", myPullRequests: [], reviewRequests: [] }));
+    ipcMain.handle("akra:github-repository", () => null);
+  });
   const page = await app.firstWindow();
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
   // 넘기기는 새 스레드 화면의 입력창을 채운다. 열린 스레드의 폴더를 고른 상태가 되도록 스레드를 먼저 연다.

@@ -121,14 +121,14 @@ function errorMessage(error: unknown): string {
 }
 
 /** 패널이 직접 부를 수 있는 Gateway 메서드이다. app-server 메서드와 커널 명령은 이 길로 보내지 않는다. */
-const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/", "akra/git/", "akra/issue/"];
+const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/", "akra/dots/", "akra/git/", "akra/issue/", "akra/providerCredentials/", "akra/providers/"];
 /** 원격 호스트의 dot 목록이다 (D-19). dots 가 꺼진 Gateway 는 모르는 method 로 답한다. */
 const DOTS_LIST_METHOD = "akra/dots/list";
 /** 방의 실시간 상태를 보기 시작한다. 그 뒤 `akra/dots/live` 알림이 온다. */
 const DOTS_WATCH_METHOD = "akra/dots/watch";
 const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
-export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira" | "confirmIssueAutomationMode" | "confirmIssueDecision" | "confirmIssueAutonomy">> & {
+export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "confirmIssueAutomationMode" | "confirmIssueDecision" | "confirmIssueAutonomy">> & {
   readonly chatHistory?: true;
 };
 
@@ -169,9 +169,7 @@ export class DesktopSession {
   /** initialize 가 thread/list 를 읽는 동안 받은 진행 상태 변경이다 (스레드 id → 진행 중). */
   private statusChangesWhileListing: Map<string, boolean> | null = null;
   private connected = false;
-  private providerGeneration = 0;
-  private providerReady = false;
-  private providerRegistered = false;
+  private providerVersionScope = "";
   /**
    * 원격 세션에서 사용자가 보내기를 허락했는지이다 (plan 25 G2, "세션 한 번 허용", D-19). 허락 전에는 읽기만
    * 한다. 허락하면 열린 스레드를 thread/resume 으로 다시 구독해 실시간으로 받고, 턴을 보낼 수 있다.
@@ -214,20 +212,11 @@ export class DesktopSession {
   }
 
   start(): void {
-    if (!this.readOnly && this.bridge.jira) {
-      this.unsubscribers.push(this.bridge.jira.onChanged(() => {
-        this.providerGeneration++;
-        this.providerRegistered = false;
-        if (this.providerReady) void this.refreshJiraProvider();
-      }));
-    }
     this.unsubscribers.push(this.bridge.onMessage((text) => this.client.handleText(text)));
     this.unsubscribers.push(this.client.onNotification((method, params) => this.handleNotification(method, params)));
     this.unsubscribers.push(
       this.bridge.onConnectionState((state) => {
-        this.providerGeneration++;
-        this.providerReady = false;
-        this.providerRegistered = false;
+        this.providerVersionScope = "";
         this.store.setConnection(state);
         this.connected = state.phase === "connected";
         if (this.connected) {
@@ -247,12 +236,7 @@ export class DesktopSession {
   }
 
   stop(): void {
-    if (this.providerReady && this.providerRegistered) {
-      void this.client.request("akra/resourceVersion/unregister", { kind: "jira" }).catch(() => undefined);
-    }
-    this.providerGeneration++;
-    this.providerReady = false;
-    this.providerRegistered = false;
+    this.providerVersionScope = "";
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
@@ -362,6 +346,9 @@ export class DesktopSession {
   }
 
   requestGatewayService<T>(method: string, params: unknown): Promise<T> {
+    if (this.readOnly && (method.startsWith("akra/providerCredentials/") || method.startsWith("akra/providers/"))) {
+      return Promise.reject(new Error("원격 호스트에서는 로컬 업무 계정에 접근할 수 없습니다."));
+    }
     if (!["akra/kernel/extensions/list", "akra/kernel/extensions/call", "akra/kernel/extensions/attach", "akra/kernel/extensions/detach"].includes(method) && !GATEWAY_SERVICE_PREFIXES.some((prefix) => method.startsWith(prefix))) {
       return Promise.reject(new Error(`${method} 는 패널이 쓸 수 있는 Gateway 요청이 아닙니다.`));
     }
@@ -491,30 +478,6 @@ export class DesktopSession {
     }
   }
 
-  private async refreshJiraProvider(): Promise<void> {
-    const jira = this.bridge.jira;
-    if (this.readOnly || !jira || !this.providerReady) return;
-    const generation = this.providerGeneration;
-    try {
-      const status = await jira.status();
-      if (generation !== this.providerGeneration || !this.providerReady) return;
-      this.providerRegistered = status.connected;
-      await this.client.request(
-        status.connected ? "akra/resourceVersion/register" : "akra/resourceVersion/unregister",
-        status.connected ? { kind: "jira", siteUrl: status.siteUrl } : { kind: "jira" },
-      );
-      if (generation === this.providerGeneration && this.providerReady && status.connected) {
-        for (const listener of this.versionProviderListeners) listener();
-      }
-    } catch (error) {
-      if (generation === this.providerGeneration) {
-        this.providerRegistered = false;
-        if (error instanceof JsonRpcError && error.code === -32601) return;
-        this.store.setSessionError(errorMessage(error));
-      }
-    }
-  }
-
   private assertSubscribed(threadId: string | null): void {
     if (threadId !== null && threadId === this.writerElsewhereThreadId) {
       throw new Error(WRITER_ELSEWHERE_SEND_ERROR);
@@ -530,24 +493,6 @@ export class DesktopSession {
   }
 
   private handleServerRequest(method: string, params: unknown, id: JsonRpcId): Promise<unknown> {
-    if (method === "akra/resourceVersion/current") {
-      const jira = this.bridge.jira;
-      if (this.readOnly || !jira || !this.providerReady || !this.providerRegistered) {
-        return Promise.reject(new JsonRpcError(-32601, "Jira version provider is not registered."));
-      }
-      if (!params || typeof params !== "object" || !("kind" in params) || params.kind !== "jira" ||
-          !("key" in params) || typeof params.key !== "string" || !("url" in params) || typeof params.url !== "string") {
-        return Promise.reject(new JsonRpcError(-32602, "Invalid Jira version request."));
-      }
-      const generation = this.providerGeneration;
-      return jira.currentVersion({ key: params.key, url: params.url }).then(
-        (result) => generation === this.providerGeneration ? result : NO_RESPONSE,
-        (error: unknown) => {
-          if (generation !== this.providerGeneration) return NO_RESPONSE;
-          throw error;
-        },
-      );
-    }
     const approval = this.canSend() ? toPendingApproval(method, params, id) : null;
     if (!approval) {
       return Promise.reject(new JsonRpcError(-32601, `Akra Desktop does not handle ${method} yet`));
@@ -593,8 +538,6 @@ export class DesktopSession {
     try {
       await this.client.request("initialize", initializeParams(this.clientVersion));
       this.client.notify("initialized");
-      this.providerReady = !this.readOnly && !!this.bridge.jira;
-      void this.refreshJiraProvider();
       const gateway = await this.client.request<GatewayInfo>("akra/gateway/info");
       // 목록을 읽는 동안 온 상태 변경은 목록의 상태보다 새롭다. 따로 모았다가 목록 결과 위에 덮는다.
       const statusChanges = new Map<string, boolean>();
@@ -821,6 +764,19 @@ export class DesktopSession {
   }
 
   private handleNotification(method: string, params: unknown): void {
+    if (method === "akra/providerCredentials/changed") {
+      if (!this.readOnly && params && typeof params === "object") {
+        const change = params as { provider?: unknown; profileId?: unknown; revision?: unknown; lagged?: unknown };
+        if (change.provider === "jira" && typeof change.profileId === "string" && Number.isSafeInteger(change.revision)) {
+          const scope = change.profileId + ":" + String(change.revision);
+          if (scope !== this.providerVersionScope || change.lagged === true) {
+            this.providerVersionScope = scope;
+            for (const listener of this.versionProviderListeners) listener();
+          }
+        }
+      }
+      return;
+    }
     if (method === KERNEL_METHOD.event) {
       this.kernel.handleEvent(params);
       return;

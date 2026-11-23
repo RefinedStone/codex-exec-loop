@@ -2,6 +2,13 @@
 
 use anyhow::{Context, Result};
 
+pub(crate) mod credential_frames;
+pub(crate) mod credential_prompt;
+mod owner;
+#[cfg(test)]
+pub(crate) use owner::PrivateIpcClientConnection;
+pub(crate) use owner::{connect_owner_checked, require_inherited_pipes, verify_client_owner};
+
 #[cfg(unix)]
 pub(crate) type ClientConnection = tokio::net::UnixStream;
 #[cfg(windows)]

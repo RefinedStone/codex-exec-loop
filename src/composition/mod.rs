@@ -31,3 +31,4 @@ pub(crate) mod task_delivery_evidence;
 pub(crate) mod task_evidence;
 mod task_evidence_outbox;
 pub(crate) mod task_verification;
+pub(crate) mod provider_credentials;

@@ -50,6 +50,7 @@ import { type IssueCreationTarget, issueCreationTarget } from "./work/issueCreat
 import { findFolderForRepository, readIssueHandoffPrompt } from "./work/githubProjects";
 import { JiraPanel } from "./work/JiraPanel";
 import { LinearPanel } from "./work/LinearPanel";
+import { createProviderGateway } from "./work/providerGateway";
 import type { GatewayRequest } from "./work/notionHub";
 import { NotionPanel } from "./work/NotionPanel";
 import { GitGraphPanel } from "./git/GitGraphPanel";
@@ -280,6 +281,16 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
   onHandOff(text: string): Promise<void>;
   onLinearHandOff(text: string): Promise<void>;
 }) {
+  const providers = useMemo(() => createProviderGateway(request, window.akra.providerCredentials, {
+    onChanged: listener => window.akra.onMessage(text => {
+      try {
+        const message = JSON.parse(text) as { method?: unknown; params?: unknown };
+        if (message.method === "akra/providerCredentials/changed") listener(message.params);
+      } catch { /* not a credential notification */ }
+    }),
+    onConnectionChanged: listener => window.akra.onConnectionState(() => listener()),
+  }), [request]);
+  useEffect(() => { providers.start(); return () => providers.dispose(); }, [providers]);
   const [source, setSource] = useState<WorkSource>("GitHub");
   const currentRepository = useGitHubRepository(useDesktopStore(openThreadCwd));
   // 고치는 중인 이슈이다 (#2426). 그 글은 이 패널에만 있고 대화 입력창으로 가지 않는다.
@@ -328,9 +339,9 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
           }}
         />
       )}
-      {source === "Jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => onHandOff(await window.akra.jira.issuePrompt(issue.key))} />}
+      {source === "Jira" && <JiraPanel jira={providers.jira} onHandOff={async (issue) => onHandOff(await providers.jira.issuePrompt(issue.key))} />}
       {source === "Notion" && <NotionPanel request={request} notion={window.akra.notion} onHandOff={onHandOff} />}
-      {source === "Linear" && <LinearPanel linear={window.akra.linear} onHandOff={async (issue) => onLinearHandOff(await window.akra.linear.issuePrompt(issue.id))} />}
+      {source === "Linear" && <LinearPanel linear={providers.linear} onHandOff={async (issue) => onLinearHandOff(await providers.linear.issuePrompt(issue.id))} />}
     </div>
   );
 }

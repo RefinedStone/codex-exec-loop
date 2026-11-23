@@ -74,6 +74,7 @@ export interface FakeGateway {
   /** 붙어 있는 local 커널 연결에만 상태 이벤트를 보낸다. */
   sendExtensionChange(kernel: string, change?: Record<string, unknown>): void;
   sendKernelEvent(event: unknown): void;
+  sendProviderChange(change: unknown): void;
   close(): Promise<void>;
 }
 
@@ -211,6 +212,8 @@ export async function startFakeGateway(
   options: {
     kernel?: FakeKernel;
     onRequest?(method: string, params: Record<string, unknown>): void;
+    /** Synthetic native-owner provider responses; never calls a real provider or credential store. */
+    providerServices?(method: string, params: Record<string, unknown>): FakeKernelReply | Promise<FakeKernelReply>;
     /** 화면의 정확한 대화 이동을 시험하는 읽기 응답이다. 생략하면 기존 녹화를 사용한다. */
     readThread?(params: Record<string, unknown>): unknown;
     mcpHub?: FakeMcpHub;
@@ -265,6 +268,7 @@ export async function startFakeGateway(
   const server: Server = createServer();
   const sockets = new WebSocketServer({ server });
   const kernelClients = new Set<WebSocket>();
+  const localClients = new Set<WebSocket>();
   const extensionClients = new Set<WebSocket>();
   // app-server 처럼 서버 요청은 접속마다 따로 받고, 먼저 온 답만 쓴다 (Q-03 실측).
   const resolvedRequestIds = new Set<string>();
@@ -287,7 +291,8 @@ export async function startFakeGateway(
       return;
     }
     const remote = host !== "local";
-    socket.on("close", () => { kernelClients.delete(socket); extensionClients.delete(socket); });
+    if (!remote) localClients.add(socket);
+    socket.on("close", () => { kernelClients.delete(socket); extensionClients.delete(socket); localClients.delete(socket); });
     let kernelEventsSent = false;
     // 녹화 재생은 접속마다 따로 한다. 창 두 개가 같은 스레드를 열면 둘 다 같은 기록을 받는다.
     const used = new Set<ReplaySegment>();
@@ -340,6 +345,20 @@ export async function startFakeGateway(
       (remote ? remoteReceivedMethods : receivedMethods).push(message.method);
       options.onRequest?.(message.method, message.params ?? {});
       const hasId = message.id !== undefined && message.id !== null;
+      if (hasId && (message.method.startsWith("akra/providerCredentials/") || message.method.startsWith("akra/providers/"))) {
+        if (remote || !options.providerServices) {
+          socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "provider fixture unsupported" } }));
+        } else {
+          void Promise.resolve().then(() => options.providerServices!(message.method!, message.params ?? {})).then(reply => {
+            if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id,
+              ...(reply.error ? { error: reply.error } : { result: reply.result }) }));
+          }, () => {
+            if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id,
+              error: { code: -32000, message: "synthetic provider fixture failed" } }));
+          });
+        }
+        return;
+      }
       if (remote && hasId && message.method.startsWith("akra/kernel/")) {
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "kernel methods are local only" } }));
         return;
@@ -499,6 +518,11 @@ export async function startFakeGateway(
     sendExtensionChange(kernel, change = {}) {
       for (const socket of new Set([...kernelClients, ...extensionClients])) {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/extensions/changed", params: { ...change, kernel } }));
+      }
+    },
+    sendProviderChange(change) {
+      for (const socket of localClients) if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/providerCredentials/changed", params: change }));
       }
     },
     sendKernelEvent(event) {
