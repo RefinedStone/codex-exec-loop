@@ -25,7 +25,7 @@ pub(super) fn commit_tree(
             deadline,
             cancelled,
         )
-        .map_err(|_| Reason::Unavailable)?;
+        .map_err(|error| super::preparation_unavailable("inspect_commit_identity", error))?;
     if text_line(&exact.stdout).map_err(|_| Reason::InvalidInput)? != commit {
         return Err(Reason::InvalidInput);
     }
@@ -37,7 +37,7 @@ pub(super) fn commit_tree(
             deadline,
             cancelled,
         )
-        .map_err(|_| Reason::Unavailable)?;
+        .map_err(|error| super::preparation_unavailable("inspect_commit_tree", error))?;
     let tree = text_line(&tree.stdout).map_err(|_| Reason::InvalidInput)?;
     if !valid_oid(&tree) || tree.len() != commit.len() {
         return Err(Reason::InvalidInput);
@@ -61,7 +61,7 @@ pub(super) fn inspect_changed_inputs(
             deadline,
             cancelled,
         )
-        .map_err(|_| Reason::Unavailable)?;
+        .map_err(|error| super::preparation_unavailable("inspect_source_tree_kind", error))?;
     if text_line(&kind.stdout).map_err(|_| Reason::InvalidInput)? != "tree" {
         return Err(Reason::InvalidInput);
     }
@@ -86,13 +86,13 @@ pub(super) fn inspect_changed_inputs(
             deadline,
             cancelled,
         )
-        .map_err(|_| Reason::Unavailable)?;
+        .map_err(|error| super::preparation_unavailable("inspect_changed_tree_entries", error))?;
     let blobs = parse_changed_blobs(&diff.stdout, source.len())?;
     let mut total = 0_u64;
     for oid in blobs {
         let size = context
             .output(binary, &["cat-file", "-s", &oid], 128, deadline, cancelled)
-            .map_err(|_| Reason::Unavailable)?;
+            .map_err(|error| super::preparation_unavailable("inspect_blob_size", error))?;
         let size = text_line(&size.stdout).map_err(|_| Reason::InvalidInput)?;
         let size: u64 = size.parse().map_err(|_| Reason::InvalidInput)?;
         total = total.checked_add(size).ok_or(Reason::InvalidInput)?;
@@ -107,7 +107,7 @@ pub(super) fn inspect_changed_inputs(
                 deadline,
                 cancelled,
             )
-            .map_err(|_| Reason::Unavailable)?;
+            .map_err(|error| super::preparation_unavailable("inspect_blob_bytes", error))?;
         if output.stdout.len() as u64 != size
             || output.stdout.contains(&0)
             || std::str::from_utf8(&output.stdout).is_err()

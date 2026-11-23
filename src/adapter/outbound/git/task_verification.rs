@@ -17,6 +17,8 @@ use crate::subprocess::controlled::{ControlledTermination, wait_with_output_cont
 use crate::trusted_executable::PinnedNativeExecutable;
 
 mod context;
+#[cfg(test)]
+mod diagnostics;
 mod environment;
 mod input;
 #[cfg(test)]
@@ -89,8 +91,9 @@ fn prepare(
         return Err(Reason::InvalidInput);
     }
     let binary = environment::resolve_binary(Path::new(request.workspace_directory))
-        .map_err(|_| Reason::Unavailable)?;
-    let current = HostEnvironment::read().map_err(|_| Reason::Unavailable)?;
+        .map_err(|error| preparation_unavailable("pin_native_binary", error))?;
+    let current = HostEnvironment::read()
+        .map_err(|error| preparation_unavailable("read_platform_environment", error))?;
     let mut context = PrivateGitContext::new(
         Path::new(request.workspace_directory),
         request.source.tree_sha.len(),
@@ -99,7 +102,7 @@ fn prepare(
         deadline,
         cancelled,
     )
-    .map_err(|_| Reason::Unavailable)?;
+    .map_err(|error| preparation_unavailable("create_private_context", error))?;
     if context.source_head != request.source.head_commit_sha {
         return Err(Reason::Stale);
     }
@@ -139,12 +142,12 @@ fn prepare(
             &base_tree,
             &request.source.tree_sha,
         )
-        .map_err(|_| Reason::Unavailable)?,
+        .map_err(|error| preparation_unavailable("command_fingerprint", error))?,
         environment_sha256: context
             .environment_fingerprint(&binary, request.source.tree_sha.len())
-            .map_err(|_| Reason::Unavailable)?,
+            .map_err(|error| preparation_unavailable("environment_fingerprint", error))?,
         configuration_sha256: environment::configuration_fingerprint(request.source.tree_sha.len())
-            .map_err(|_| Reason::Unavailable)?,
+            .map_err(|error| preparation_unavailable("configuration_fingerprint", error))?,
     };
     manifest.validate().map_err(|_| Reason::InvalidInput)?;
     binary.verify().map_err(|_| Reason::ConfigurationChanged)?;
@@ -158,6 +161,14 @@ fn prepare(
         manifest,
         deadline,
     })
+}
+
+fn preparation_unavailable(stage: &'static str, error: anyhow::Error) -> Reason {
+    #[cfg(test)]
+    diagnostics::report(stage, &error);
+    #[cfg(not(test))]
+    let _ = (stage, error);
+    Reason::Unavailable
 }
 
 impl PreparedTaskVerification for PreparedVerification {

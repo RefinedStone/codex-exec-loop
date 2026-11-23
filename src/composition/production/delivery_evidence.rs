@@ -196,16 +196,22 @@ mod tests {
 
     impl ConfigFile {
         fn new() -> Self {
-            let nonce = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let root = std::env::temp_dir().join(format!(
-                "akra-delivery-policy-{}-{nonce}",
-                std::process::id(),
-            ));
-            std::fs::create_dir_all(&root).unwrap();
-            Self(root)
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+            for _ in 0..32 {
+                let nonce = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+                let root = std::env::temp_dir().join(format!(
+                    "akra-delivery-policy-{}-{nonce}",
+                    std::process::id(),
+                ));
+                match std::fs::create_dir(&root) {
+                    Ok(()) => return Self(root),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("could not create delivery policy fixture: {error}"),
+                }
+            }
+            panic!("could not allocate an exclusive delivery policy fixture");
         }
 
         fn authority(&self) -> NoopPlanningAuthorityPort {
