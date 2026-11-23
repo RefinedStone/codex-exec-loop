@@ -608,6 +608,9 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
 
 ### 13.1 Gateway 자격 증명 소유권 (IA7-1, #2562)
 
+Unix 이관 소켓은 검증된 authority home 아래의 전용 `credentials/ipc` 경로를 사용한다.
+기존 Gateway 소켓보다 짧은 접미사로 macOS 103바이트 제한에서 허용 홈 길이를 줄이지 않는다.
+
 Q-IA2는 **(a) Gateway의 OS 키 저장소**로 정한다. Jira·Linear 업무 패널도 같은 Gateway 연결을 사용한다.
 이 조각은 연결·읽기·기존 연결 이전을 맡는다. 자동 수집·재동기화·피드백 adapter와 OAuth는
 #2563·#2564의 후속 범위이다. 업무 패널의 "작업하기"는 첫 메시지 초안만 만들며 모델 턴을 시작하지 않는다.
@@ -620,7 +623,7 @@ Q-IA2는 **(a) Gateway의 OS 키 저장소**로 정한다. Jira·Linear 업무 �
 - Gateway 설정 홈과 별개로 이 프로필 runtime의 비밀 없는 `owner.db`에 배타 transaction을 잡은 뒤 복구한다.
   원장 접근마다 owner의 경로 정체성을 다시 확인한다. Unix의 이전 migration socket도 독점 owner가
   현재 사용자·socket 유형·파일 정체성과 비활성 상태를 확인한 경우에만 정리한다.
-- `provider-credentials/runtime/provider-credentials.db`에는 연결 메타데이터, revision, 작업 영수증, 이전할 암호문의
+- `credentials/provider-credentials.db`에는 연결 메타데이터, revision, 작업 영수증, 이전할 암호문의
   snapshot ID, 각 부분의 저장 상태만 둔다. 토큰과 토큰 해시는 이 DB에 없다. 기존 private SQLite 검증을
   재사용하며, 읽기가 잘못된 기존 권한이나 스키마를 고쳐서 받아들이지 않는다.
 - 토큰은 Windows Credential Manager, macOS Keychain, Linux Secret Service의 항목으로 저장한다.
