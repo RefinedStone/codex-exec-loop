@@ -15,6 +15,9 @@ import { prepareStorageNavigation, type StorageNavigation } from "./storageNavig
 export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled }: RegisteredPanelProps) {
   const model = useStorageExplorer(call, epoch, scopeKey, enabled);
   const selected = model.selectedId ? model.nodes.get(model.selectedId) ?? null : null;
+  const aggregate = selected?.kind === "direct_files" || selected?.kind === "shared_files";
+  const aggregateOwner = aggregate && selected?.parent_id ? model.nodes.get(selected.parent_id) : undefined;
+  const scanVolumeAvailable = model.volumes.some(volume => volume.id === model.volumeId && volume.supported);
   const job = model.jobs[0] ?? null;
   const progress = job?.progress && typeof job.progress === "object" ? job.progress as { files_scanned?: number; directories_scanned?: number; volume_id?: string } : null;
   const [mode, setMode] = useState<"tree" | "summary">("tree");
@@ -45,7 +48,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
   useEffect(() => { setPreview(null); setSharing(false); }, [scopeKey, threadId, model.selectedId, snapshotKey, navigationRevision]);
   useEffect(() => { setGrant(null); }, [scopeKey, threadId]);
   useEffect(() => {
-    if (!selected || !model.snapshot || selected.kind === "file") { setFiles(null); return; }
+    if (!selected || !model.snapshot || selected.kind !== "directory") { setFiles(null); return; }
     const sequence = ++fileSequence.current, basis = model.snapshot, life = model.scope.current;
     setFiles(null);
     void call<StoragePage>("list_files", { snapshot_id: basis.id, node_id: selected.id, limit: 100, sort: "allocated_desc", name_filter: nameFilter || null, extension_filter: extensionFilter || null, recursive }).then(page => {
@@ -54,7 +57,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     return () => { fileSequence.current++; };
   }, [call, model.snapshot, selected?.id, nameFilter, extensionFilter, recursive]);
   useEffect(() => {
-    if (selected && selected.kind !== "file" && !model.pages.has(selected.id)) void model.loadChildren(selected.id);
+    if (selected?.kind === "directory" && !model.pages.has(selected.id)) void model.loadChildren(selected.id);
   }, [selected?.id, model.snapshot, model.loadChildren]);
   useEffect(() => {
     if (mode !== "summary" || !model.snapshot) return;
@@ -102,7 +105,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       return next;
     });
     model.setRevealedPath(chain.map(node => node.id));
-    model.setExpanded(previous => new Set([...previous, ...chain.filter(node => node.kind !== "file").map(node => node.id)]));
+    model.setExpanded(previous => new Set([...previous, ...chain.filter(node => node.kind === "directory").map(node => node.id)]));
     model.setSelectedId(chain.at(-1)!.id);
     setMode("tree"); setFocusRequest(value => value + 1); model.setError("");
   };
@@ -196,11 +199,12 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     {!enabled && <p role="status">확장이 꺼졌거나 끄는 중입니다. 설정에서 현재 상태를 확인하세요.</p>}
     {model.error && <div className="storage-error" role="alert">{model.error}<button type="button" onClick={() => { model.setError(""); void model.refresh(); }}>상태 다시 확인</button></div>}
     <div className="storage-controls">
-      <label>드라이브<select aria-label="분석할 드라이브" value={model.volumeId} onChange={event => model.setVolumeId(event.target.value)} disabled={!enabled || model.busy || isActiveJob(job)}>
+      <label>드라이브<select aria-label="분석할 드라이브" value={model.volumeId} onChange={event => { model.interaction.current++; model.setVolumeId(event.target.value); }} disabled={!enabled || model.busy || isActiveJob(job)}>
         {!model.volumes.length && <option value="">드라이브 확인 중</option>}
+        {model.volumeId && !model.volumes.some(volume => volume.id === model.volumeId) && <option value={model.volumeId} disabled>선택한 드라이브 · 현재 목록에 없음</option>}
         {model.volumes.map(volume => <option key={volume.id} value={volume.id} disabled={!volume.supported}>{volume.label} · {volume.root_path}{!volume.supported ? " · 지원 안 함" : ""}</option>)}
       </select></label>
-      <button type="button" onClick={() => void model.scan()} disabled={!enabled || model.busy || !model.volumeId || isActiveJob(job)}>{model.busy ? "확인 중…" : model.snapshot ? "다시 분석" : "분석"}</button>
+      <button type="button" onClick={() => void model.scan()} disabled={!enabled || model.busy || !scanVolumeAvailable || isActiveJob(job)}>{model.busy ? "확인 중…" : model.snapshot ? "다시 분석" : "분석"}</button>
       {isActiveJob(job) && <button type="button" disabled={model.busy || job?.state === "cancelling"} onClick={() => void model.cancel()}>공유 분석 취소</button>}
     </div>
     <div className="storage-progress" aria-live="polite" role="status">
@@ -234,12 +238,19 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
         {selected.issues.map(issue => <p key={issue.code}>{issue.message} · {issue.count}개</p>)}
         {selected.protection.map((reason, index) => <StorageProtection key={index} reason={reason} />)}
         {selected.classification.map((item, index) => <p key={index} className="muted">{item.kind} · {item.evidence}</p>)}
-        <div className="storage-controls">
+        {aggregate && <div role="note" aria-label="파일 집계 행">
+          <p>{selected.kind === "direct_files" ? "이 폴더에서 단일 경로로 관측한 파일의 합계입니다." : "여러 경로에서 관측한 같은 파일 객체의 할당량을 공통 상위 폴더에 한 번 귀속한 합계입니다."}</p>
+          <p>파일 탐색과 공유는 집계 소유 폴더에서 계속할 수 있습니다.</p>
+          {aggregateOwner?.kind === "directory"
+            ? <button type="button" onClick={() => void selectNode(aggregateOwner)}>집계 소유 폴더로 이동</button>
+            : <p className="muted">집계 소유 폴더의 경로를 확인할 수 없습니다.</p>}
+        </div>}
+        {!aggregate && <div className="storage-controls">
           <button type="button" onClick={() => void reveal()} disabled={!enabled}>탐색기에서 보기</button>
           <button type="button" onClick={() => void previewShare()} disabled={!enabled || !threadId || sharing || selected.kind === "file"}>이 폴더를 AI에 묻기</button>
-        </div>
-        {!threadId && <p className="muted">대화를 연 뒤 선택한 폴더를 공유할 수 있습니다.</p>}
-        {preview && <section className="storage-share" aria-label="폴더 공유 미리보기">
+        </div>}
+        {!aggregate && !threadId && <p className="muted">대화를 연 뒤 선택한 폴더를 공유할 수 있습니다.</p>}
+        {!aggregate && preview && <section className="storage-share" aria-label="폴더 공유 미리보기">
           <h4>선택한 대화에 공유</h4><p>대화: {preview.thread_id}</p><p>{preview.root.name} 아래의 이름과 아래 항목을 공유합니다. 상위 경로와 파일 본문은 보내지 않습니다.</p>
           <ul>{preview.shared_fields.map(field => <li key={field}>{field}</li>)}</ul>
           <details><summary>전송할 폴더 정보 전체 확인</summary><pre>{JSON.stringify(preview.root, null, 2)}</pre></details>
@@ -248,7 +259,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
           <button type="button" disabled={sharing} onClick={() => setPreview(null)}>취소</button>
         </section>}
         {grant && <p role="status">대화 입력창에 공유 참조를 넣었습니다. <button type="button" disabled={sharing} onClick={() => void revokeShare()}>공유 해제</button></p>}
-        {selected.kind !== "file" && <>
+        {selected.kind === "directory" && <>
           <label className="storage-map-toggle"><input type="checkbox" checked={showMap} onChange={event => setShowMap(event.target.checked)} />선택 폴더 트리맵 표시</label>
           {showMap && <StorageTreemap parent={selected} nodes={model.pages.get(selected.id)?.items ?? []} selectedId={model.selectedId} onSelect={node => void selectNode(node)} />}
           <h4>파일</h4><div className="storage-filters">

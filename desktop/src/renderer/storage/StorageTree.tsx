@@ -25,10 +25,10 @@ export function StorageTree({ model, focusRequest }: { model: StorageExplorer; f
     if (event.key === "Home" && rows[0]) focus(rows[0].node.id);
     if (event.key === "End" && rows.at(-1)) focus(rows.at(-1)!.node.id);
     if (event.key === "ArrowLeft") {
-      if (model.expanded.has(node.id)) model.toggle(node.id);
+      if (node.kind === "directory" && model.expanded.has(node.id)) model.toggle(node.id);
       else if (node.parent_id && elements.current.has(node.parent_id)) focus(node.parent_id);
     }
-    if (event.key === "ArrowRight" && node.kind !== "file") {
+    if (event.key === "ArrowRight" && node.kind === "directory") {
       if (!model.expanded.has(node.id)) model.toggle(node.id);
       else if (rows[index + 1]?.depth === rows[index]!.depth + 1) focus(rows[index + 1]!.node.id);
     }
@@ -36,7 +36,7 @@ export function StorageTree({ model, focusRequest }: { model: StorageExplorer; f
   return <><div className="storage-tree" role="treegrid" aria-label="폴더 점유율 표" aria-colcount={4}>
     <div role="row" className="storage-tree-header"><span role="columnheader">이름</span><span role="columnheader">할당량</span><span role="columnheader">부모 대비</span><span role="columnheader">상태</span></div>
     {rows.map(({ node, depth, detailOnly }, index) => {
-      const width = ratioWidth(node.ratio), canExpand = node.kind !== "file";
+      const width = ratioWidth(node.ratio), canExpand = node.kind === "directory";
       return <div key={node.id} role="row" aria-level={depth} aria-selected={model.selectedId === node.id}
         aria-expanded={canExpand ? model.expanded.has(node.id) : undefined}
         tabIndex={tabStop === node.id ? 0 : -1} data-node-id={node.id}

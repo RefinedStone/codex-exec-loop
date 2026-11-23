@@ -75,7 +75,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       if (scope.current !== life || sequence !== refreshSequence.current) return;
       const available = Array.isArray(listed) ? listed : listed.volumes;
       setVolumes(available);
-      setVolumeId(previous => available.some(item => item.id === previous) ? previous : available.find(item => item.supported)?.id ?? "");
+      setVolumeId(previous => previous || available.find(item => item.supported)?.id || "");
       const currentJobs = result.jobs.filter(job => job.extension === STORAGE_EXTENSION && job.action === "scan").sort((a, b) => b.created_at_ms - a.created_at_ms || b.sequence - a.sequence);
       setJobs(currentJobs);
       if (!currentJobs.length) {
@@ -84,7 +84,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       }
       const latest = currentJobs[0]!;
       const progress = latest.progress && typeof latest.progress === "object" ? latest.progress as { volume_id?: unknown } : null;
-      if (isActiveJob(latest) && typeof progress?.volume_id === "string" && available.some(volume => volume.id === progress.volume_id)) setVolumeId(progress.volume_id);
+      if (isActiveJob(latest) && typeof progress?.volume_id === "string" && progress.volume_id) setVolumeId(progress.volume_id);
       if (currentJobId.current !== latest.id) {
         currentJobId.current = latest.id; currentSnapshot.current = null; interaction.current++;
         setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]);
@@ -107,6 +107,8 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
           ? call<StorageNode>("get_node", { snapshot_id: next.id, node_id: previousSelection }).catch(() => null) : Promise.resolve(null),
       ]);
       if (scope.current !== life || sequence !== refreshSequence.current || !sameSnapshot(root, next)) return;
+      // Bind the initial/restored result once. Later refreshes keep the user's next-scan choice.
+      if (old?.id !== next.id) setVolumeId(next.volume_id);
       currentSnapshot.current = next;
       setSnapshot(next);
       const nextNodes = new Map([[root.id, root]]);
@@ -120,7 +122,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   }, [call, enabled, loadChildren]);
 
   useEffect(() => {
-    setVolumes([]); setJobs([]); setSnapshot(null); currentSnapshot.current = null; currentJobId.current = null; setBusy(false); setLoading(true);
+    setVolumes([]); setVolumeId(""); setJobs([]); setSnapshot(null); currentSnapshot.current = null; currentJobId.current = null; setBusy(false); setLoading(true);
     setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]); setError("");
     interaction.current++;
   }, [scopeKey]);
