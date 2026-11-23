@@ -425,7 +425,7 @@ impl IssueCoordinatorService {
             Some(context),
             proposal
                 .map(IssueArbiterResult::Proposal)
-                .unwrap_or_else(|reason| IssueArbiterResult::Waiting(reason)),
+                .unwrap_or_else(IssueArbiterResult::Waiting),
         )
     }
 

@@ -23,6 +23,7 @@ fn legacy_schema(connection: &Connection) -> Vec<(String, String)> {
          WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'issue_feedback_%'
          AND name NOT LIKE 'issue_work_admissions%' AND name <> 'issue_start_budget_waits'
          AND name NOT LIKE 'issue_decision_reminders%'
+         AND name NOT LIKE 'issue_arbiter_%'
          AND name <> 'issue_autonomy_selection'
          ORDER BY name",
         )
@@ -39,7 +40,8 @@ fn legacy_rows(connection: &Connection) -> Vec<(String, Vec<Vec<Value>>)> {
             "SELECT name FROM sqlite_master WHERE type='table'
          AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'issue_feedback_%'
          AND name NOT LIKE 'issue_work_admissions%' AND name <> 'issue_start_budget_waits'
-         AND name NOT LIKE 'issue_decision_reminders%' ORDER BY name",
+         AND name NOT LIKE 'issue_decision_reminders%'
+         AND name NOT LIKE 'issue_arbiter_%' ORDER BY name",
         )
         .unwrap()
         .query_map([], |row| row.get::<_, String>(0))
@@ -122,6 +124,9 @@ fn feedback_version_eight_migration_preserves_all_existing_rows_and_only_seeds_g
         "issue_feedback_state",
         "issue_feedback_intents",
         "issue_feedback_outbox",
+        "issue_arbiter_attempts",
+        "issue_arbiter_finished_events",
+        "issue_arbiter_budget_clock",
     ] {
         assert_eq!(count(&fixture, table), 0, "{table}");
     }

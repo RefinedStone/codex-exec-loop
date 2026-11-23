@@ -443,11 +443,32 @@ fn execution_bearing_repository_configuration_is_rejected_before_any_evidence_re
     let fixture = Fixture::new();
     command(
         &fixture.root,
-        &["config", "core.fsmonitor", "fixture-command-must-not-run"],
+        &[
+            "config",
+            "filter.fixture.clean",
+            "fixture-command-must-not-run",
+        ],
     );
     assert_eq!(
         fixture.read(&fixture.base, &["README.md"]),
         Err(Error::Unavailable)
+    );
+}
+
+#[test]
+fn hardened_fsmonitor_is_disabled_and_does_not_block_exact_commit_evidence() {
+    let fixture = Fixture::new();
+    let expected = fixture.read(&fixture.base, &["README.md"]).unwrap();
+    command(
+        &fixture.root,
+        &["config", "core.fsmonitor", "fixture-command-must-not-run"],
+    );
+    // Host Git overrides this repository setting; the guard intentionally permits it.
+    let effective = git(&fixture.root, &["config", "--get", "core.fsmonitor"], 128).unwrap();
+    assert_eq!(std::str::from_utf8(&effective).unwrap().trim(), "false");
+    assert_eq!(
+        fixture.read(&fixture.base, &["README.md"]).unwrap(),
+        expected
     );
 }
 
