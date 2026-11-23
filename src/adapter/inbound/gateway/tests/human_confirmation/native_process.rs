@@ -195,6 +195,7 @@ async fn native_process_round_trip() {
     )
     .await;
     assert_eq!(initial["result"]["result"]["mode"], "off", "{initial}");
+    let initial_operation = initial["result"]["operation"]["op_id"].as_i64().unwrap();
 
     let registration = helper
         .request(json!({"id":"register","command":"prepare"}))
@@ -278,6 +279,26 @@ async fn native_process_round_trip() {
     )
     .await;
     assert_eq!(state["result"]["mode"], "off", "{state}");
+    let history = kernel_request(
+        &mut client,
+        "history",
+        "akra/kernel/query",
+        json!({"query":{"type":"history","after":initial_operation}}),
+    )
+    .await;
+    let changes = history["result"]["records"]
+        .as_array()
+        .expect("history should include committed and pending records")
+        .iter()
+        .filter(|record| {
+            record["event"]["kind"] == "issue_automation_mode_changed"
+                && record["event"]["mode"] == "observe"
+        })
+        .count();
+    assert_eq!(
+        changes, 1,
+        "confirmed retries must change the mode only once"
+    );
     detach(&mut client).await;
     kernels.shutdown();
 }
