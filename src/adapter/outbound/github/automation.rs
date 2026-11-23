@@ -1251,7 +1251,7 @@ fn run_github_script_command_in_network_context(
     let bash = network_context.executables.require_helper_dependencies()?;
     let mut command = Command::new(bash);
     command.env_clear();
-    network_context.configure_command(&mut command);
+    network_context.configure_command(&mut command)?;
     network_context
         .executables
         .configure_minimal_environment(&mut command);
@@ -1333,7 +1333,10 @@ impl IsolatedGithubNetworkContext {
         }
 
         let common_objects = validated_source_common_objects(source_repo_root)?;
-        let common_objects_label = common_objects.to_string_lossy();
+        let common_objects_argument = git_process_path(&common_objects)?;
+        let common_objects_label = common_objects_argument
+            .to_str()
+            .context("source repository object directory is not valid UTF-8")?;
         if common_objects_label.chars().any(char::is_control) {
             bail!("source repository object directory is not safe for an isolated Git context");
         }
@@ -1364,7 +1367,7 @@ impl IsolatedGithubNetworkContext {
         })
     }
 
-    fn configure_command(&self, command: &mut Command) {
+    fn configure_command(&self, command: &mut Command) -> Result<()> {
         command
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
@@ -1372,7 +1375,10 @@ impl IsolatedGithubNetworkContext {
             .env("TMPDIR", &self.temp)
             .env("TMP", &self.temp)
             .env("TEMP", &self.temp)
-            .env("GIT_OBJECT_DIRECTORY", &self.common_objects)
+            .env(
+                "GIT_OBJECT_DIRECTORY",
+                git_process_path(&self.common_objects)?,
+            )
             .env_remove("AKRA_GITHUB_LOGIN")
             .env_remove("AKRA_GITHUB_TOKEN")
             .env_remove("GH_REPO")
@@ -1396,6 +1402,20 @@ impl IsolatedGithubNetworkContext {
                 .env(FROZEN_GITHUB_LOGIN_ENV_VAR, login);
         }
         self.network_environment.configure_command(command);
+        Ok(())
+    }
+}
+
+fn git_process_path(path: &Path) -> Result<OsString> {
+    // Keep the validated canonical path for filesystem identity. Git for Windows and its
+    // pack/transport children need the ordinary drive or UNC spelling in env and alternates.
+    #[cfg(windows)]
+    {
+        crate::trusted_executable::windows_process_argument_path(path)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(path.as_os_str().to_os_string())
     }
 }
 
@@ -2172,7 +2192,7 @@ fn run_git_command_in_network_context(
         args.iter().copied(),
     );
     command.env_clear();
-    network_context.configure_command(&mut command);
+    network_context.configure_command(&mut command)?;
     network_context
         .executables
         .configure_minimal_environment(&mut command);
@@ -2832,7 +2852,9 @@ printf '%s\n' 'trusted-helper-executed'
             .env("GH_REPO", "attacker/redirected")
             .env("GH_HOST", "enterprise.invalid")
             .env("GH_CONFIG_DIR", marker.as_os_str());
-        context.configure_command(&mut routed_command);
+        context
+            .configure_command(&mut routed_command)
+            .expect("isolated command paths should be valid");
         let routed_environment = routed_command
             .get_envs()
             .map(|(key, value)| {
