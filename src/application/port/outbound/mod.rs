@@ -10,6 +10,7 @@ pub mod conversation_thread_turn_options_port;
 // kernel event log port 는 커널의 판단 사건을 저장소별 추가 전용 기록에 쓰고 읽는다 (plan 19 Q3).
 pub mod kernel_event_log_port;
 pub mod kernel_gateway_port;
+pub mod task_delivery_evidence_repository_port;
 pub mod task_evidence_repository_port;
 pub mod task_verification_repository_port;
 // planning reset route port 는 입구의 planning 초기화를 저장소 커널의 명령으로 보낸다 (plan 18 K4-9a).

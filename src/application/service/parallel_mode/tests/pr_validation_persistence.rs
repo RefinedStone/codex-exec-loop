@@ -249,6 +249,9 @@ fn distributor_attestation() -> IntegrationAttestation {
 
 fn distributor_queue_record(key: &str) -> PlanningAuthorityDistributorQueueRecord {
     PlanningAuthorityDistributorQueueRecord {
+        evidence_binding: None,
+        evidence_observations: Vec::new(),
+        evidence_wait: None,
         link_reference: None,
         queue_item_id: key.to_string(),
         queue_order_key: 1,

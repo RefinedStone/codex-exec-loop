@@ -52,7 +52,10 @@ fn selected_ids(
     Ok((found, false))
 }
 
-fn task_snapshot(connection: &Connection, task_id: &str) -> Result<TaskEvidenceTaskSnapshot> {
+pub(super) fn task_snapshot(
+    connection: &Connection,
+    task_id: &str,
+) -> Result<TaskEvidenceTaskSnapshot> {
     let task = current_task(connection, task_id)?;
     let scope = read_scope(connection, task_id)?.ok_or(TaskEvidenceError::ScopeChanged)?;
     if scope.acceptance_revision != task.acceptance_revision

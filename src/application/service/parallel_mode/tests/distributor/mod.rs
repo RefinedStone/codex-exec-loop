@@ -1886,6 +1886,7 @@ fn build_supervisor_snapshot_populates_idle_orchestrator_without_session_detail(
 // 별도 파일로 둔다. 이 상위 모듈은 성공 경로와 supervisor projection의 공통
 // distributor 계약만 남긴다.
 mod blocked;
+mod evidence_gate;
 mod rebase;
 mod recovery;
 

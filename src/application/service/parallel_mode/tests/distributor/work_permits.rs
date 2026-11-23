@@ -1022,6 +1022,7 @@ fn work_order_dispatch_plan_uses_its_last_idle_slot_for_the_next_permitted_task(
 
 mod control_cleanup;
 mod delivery_review;
+mod evidence_conditions;
 mod link_reference;
 mod rearm_conflict;
 mod shared_integration;

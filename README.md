@@ -106,6 +106,10 @@ group commands also require an allowed sender.
   separate opt-in and remains body-redacted.
 - GitHub writes require the configured login to match the API credential and repository target;
   verify with `bash scripts/gh-akra.sh auth write-status`.
+- Task delivery evidence defaults to `parallel.evidence_mode = "observe"`, which records assessments.
+  Explicit `enforce` holds publication until essential criteria have current host verification or an
+  exact Human waiver. `GitDiffCheckV1` checks whitespace/conflict markers and can pass an empty diff;
+  it does not prove a build or functional tests. See the [delivery evidence contract](docs/reference/task-delivery-evidence.md).
 
 Security and persistence details belong in
 [Runtime Architecture](docs/reference/architecture.md), not in duplicated command documentation.

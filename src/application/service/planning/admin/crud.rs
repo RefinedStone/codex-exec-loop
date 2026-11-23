@@ -1884,6 +1884,9 @@ mod tests {
         queue_state: ParallelModeQueueItemState,
     ) -> PlanningAuthorityDistributorQueueRecord {
         PlanningAuthorityDistributorQueueRecord {
+            evidence_binding: None,
+            evidence_observations: Vec::new(),
+            evidence_wait: None,
             link_reference: None,
             queue_item_id: queue_item_id.to_string(),
             queue_order_key: 1,

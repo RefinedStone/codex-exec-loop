@@ -167,7 +167,7 @@ pub(super) fn retire_task_runtime_projections(
     Ok(())
 }
 
-fn ensure_task_not_retired(
+pub(super) fn ensure_task_not_retired(
     transaction: &Transaction<'_>,
     task_id: &str,
     projection_kind: &str,
@@ -3459,6 +3459,7 @@ impl SqlitePlanningAuthorityAdapter {
             &replacement.task_id,
             "distributor queue rearm",
         )?;
+        let replacement = &super::task_evidence::protect_queue_evidence(&transaction, replacement)?;
         clear_stale_runtime_claim(
             &transaction,
             DISTRIBUTOR_QUEUE_CLAIM_KIND,
@@ -3523,15 +3524,14 @@ impl SqlitePlanningAuthorityAdapter {
         // row upsert와 event append를 하나의 트랜잭션으로 묶기 위해 mutable connection을 연다.
         let mut connection = open_authority_connection(&location)?;
 
-        // content에는 queue record 전체를 저장하고, 주요 조회 필드만 별도 column으로 중복 저장한다.
-        // 이 중복은 schema가 projection 조회를 빠르게 하면서도 원본 port 타입을 잃지 않게 하는 절충이다.
-        let payload_json = serde_json::to_string(record)
-            .context("failed to serialize runtime distributor queue projection")?;
         // 이 트랜잭션 안에서 current queue row와 event log가 같은 record를 기준으로 갱신된다.
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime distributor queue transaction")?;
         ensure_task_not_retired(&transaction, &record.task_id, "distributor queue record")?;
+        let record = &super::task_evidence::protect_queue_evidence(&transaction, record)?;
+        let payload_json = serde_json::to_string(record)
+            .context("failed to serialize runtime distributor queue projection")?;
         super::work_orders::link_validation_source_in_transaction(
             &transaction,
             &record.queue_item_id,
@@ -4282,7 +4282,7 @@ fn load_runtime_claim(
 
 // 오래된 runtime claim을 발견하면 지워서 다른 worker가 다시 소유권을 잡을 수 있게 한다.
 // 반환 bool은 실제 삭제가 있었는지 알려줘 caller가 metadata heartbeat를 추가로 갱신할지 결정하게 한다.
-fn clear_stale_runtime_claim(
+pub(super) fn clear_stale_runtime_claim(
     // stale 확인과 삭제는 acquire 트랜잭션 안에서 실행되어 경합 창을 줄인다.
     transaction: &rusqlite::Transaction<'_>,
     // 지울 후보의 클레임 분류이다.
@@ -4346,7 +4346,7 @@ fn official_refresh_owner_is_alive(owner_token: &str) -> bool {
 
 // claimed_at 문자열이 stale 임계값을 넘었는지 판단한다.
 // 파싱할 수 없는 timestamp는 안전하게 stale로 취급해 영구히 회수되지 않는 클레임을 만들지 않는다.
-fn claim_is_stale(claimed_at: &str) -> bool {
+pub(super) fn claim_is_stale(claimed_at: &str) -> bool {
     // DB에는 RFC3339 문자열로 저장했으므로 먼저 timezone이 포함된 DateTime으로 파싱한다.
     chrono::DateTime::parse_from_rfc3339(claimed_at)
         // 파싱에 성공하면 UTC 기준 현재 시각과 claimed_at의 차이를 초 단위로 계산한다.

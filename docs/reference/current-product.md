@@ -265,8 +265,16 @@ grant is cached.
   unavailable facts without exposing raw output or private execution authority. A successful diff
   check covers new whitespace errors and conflict markers, can pass an empty diff, and does not
   attest a build or functional tests. Restart recovery records interruption instead of rerunning.
-  Existing completion, dispatch and delivery permissions remain unchanged. See
+  The receipt itself grants no completion, dispatch or delivery permission. See
   [host task verification](task-verification.md).
+- Task delivery checks essential criteria before source push, PR creation and integration push,
+  including ordinary Tasks without WorkOrder lineage. `parallel.evidence_mode = "observe"` is
+  the default and records assessments; explicit `enforce` requires current host verification or
+  an exact Human criterion waiver. Reported Pass and stale/missing host results do not qualify.
+  The canonical repository's effective policy or configuration error is pinned until process
+  restart. Frozen source, integration base/result tree and exact push OID remain bound to the
+  assessment. Done, dispatch, PR human review, Spec approval and Auto authority are unchanged.
+  See [delivery evidence](task-delivery-evidence.md).
 - Hidden planning workers inherit the active app-server execution profile. Their developer
   contract remains planning-only, and the host validates and applies their structured commands.
 

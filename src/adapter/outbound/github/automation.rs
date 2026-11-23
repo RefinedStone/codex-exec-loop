@@ -757,10 +757,30 @@ impl GithubAutomationPort for GithubAutomationAdapter {
     fn push_integration_branch_to_delivery_target(
         &self,
         repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+    ) -> Result<()> {
+        let result_commit_sha = run_git_stdout(repo_root, &["rev-parse", "HEAD^{commit}"])?;
+        self.push_frozen_integration_commit_to_delivery_target(
+            repo_root,
+            push_remote,
+            credential_redacted_push_url,
+            branch_name,
+            expected_old_commit_sha,
+            &result_commit_sha,
+        )
+    }
+
+    fn push_frozen_integration_commit_to_delivery_target(
+        &self,
+        repo_root: &str,
         _push_remote: &str,
         credential_redacted_push_url: &str,
         branch_name: &str,
         expected_old_commit_sha: &str,
+        result_commit_sha: &str,
     ) -> Result<()> {
         /*
         integration branch는 이미 distributor worktree에서 합성된 결과다.
@@ -774,15 +794,25 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         {
             bail!("integration push expected-old OID is invalid");
         }
+        if result_commit_sha.len() != expected_old_commit_sha.len()
+            || !result_commit_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("integration push verified result OID is invalid");
+        }
         run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
         let local_result_commit_sha = run_git_stdout(repo_root, &["rev-parse", "HEAD^{commit}"])?;
+        if local_result_commit_sha != result_commit_sha {
+            bail!("local integration result changed after host verification");
+        }
         if run_git(
             repo_root,
             &[
                 "merge-base",
                 "--is-ancestor",
                 expected_old_commit_sha,
-                local_result_commit_sha.as_str(),
+                result_commit_sha,
             ],
         )
         .is_err()
@@ -791,7 +821,7 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         }
         let target_ref = format!("refs/heads/{branch_name}");
         let force_with_lease = format!("--force-with-lease={target_ref}:{expected_old_commit_sha}");
-        let target_refspec = format!("{local_result_commit_sha}:{target_ref}");
+        let target_refspec = format!("{result_commit_sha}:{target_ref}");
         run_git_to_delivery_target(
             repo_root,
             credential_redacted_push_url,
@@ -2387,6 +2417,8 @@ fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    mod frozen_integration;
+
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;

@@ -16,6 +16,9 @@ use super::{
     run_command_with_runtime, short_sha, transition_slot_lease,
     try_parallel_mode_integration_branch_for_repo_with_runtime, try_push_remote_name_with_runtime,
 };
+use crate::application::port::inbound::task_delivery_evidence_port::{
+    TaskDeliveryEvidenceGatePort, UnavailableTaskDeliveryEvidenceGate,
+};
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationPort, GithubAutomationPullRequest, GithubRepositoryVisibility,
 };
@@ -47,7 +50,10 @@ const DISTRIBUTOR_ENQUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
 const DISTRIBUTOR_ENQUEUE_LOCK_RETRY: Duration = Duration::from_millis(25);
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
 mod delivery;
+mod evidence;
 mod work_permits;
+
+use self::evidence::{is_evidence_wait, recheck_evidence_wait};
 
 #[cfg(test)]
 pub(super) use self::delivery::install_before_distributor_cleanup_lock_hook;
@@ -64,12 +70,12 @@ use self::queue_keys::distributor_claim_owner_token;
 use self::snapshot::{
     build_distributor_snapshot_from_context, build_placeholder_distributor_snapshot,
 };
-#[cfg(test)]
-pub(super) use self::store::load_distributor_queue_records;
 use self::store::{
     block_distributor_queue_record, distributor_queue_item_id, queue_order_key_from_timestamp,
     write_distributor_queue_record,
 };
+#[cfg(test)]
+pub(super) use self::store::{install_before_evidence_mirror_hook, load_distributor_queue_records};
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 
 #[cfg(test)]
@@ -648,6 +654,7 @@ pub(super) struct ParallelModeDistributorService {
     github_automation: Arc<dyn GithubAutomationPort>,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
     parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
+    delivery_evidence: Arc<dyn TaskDeliveryEvidenceGatePort>,
     pub(super) delivery_safety_policy: ParallelModeDeliverySafetyPolicy,
 }
 
@@ -736,8 +743,17 @@ impl ParallelModeDistributorService {
             github_automation,
             planning_authority,
             parallel_runtime,
+            delivery_evidence: Arc::new(UnavailableTaskDeliveryEvidenceGate),
             delivery_safety_policy,
         }
+    }
+
+    pub(super) fn with_delivery_evidence(
+        mut self,
+        gate: Arc<dyn TaskDeliveryEvidenceGatePort>,
+    ) -> Self {
+        self.delivery_evidence = gate;
+        self
     }
 
     /*
@@ -1004,6 +1020,9 @@ impl ParallelModeDistributorService {
             updated_at,
             retry_attempts: 0,
             retry_not_before: None,
+            evidence_binding: None,
+            evidence_observations: Vec::new(),
+            evidence_wait: None,
         };
         Ok(Some(DistributorEnqueuePreparation::Ready(Box::new(
             DistributorEnqueuePreflight {
@@ -1227,7 +1246,9 @@ impl ParallelModeDistributorService {
         let Some(preflight_head_index) = select_permitted_queue_head(
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
+            self.delivery_evidence.as_ref(),
             &mut preflight_context,
+            true,
         )?
         else {
             return Ok(Vec::new());
@@ -1311,7 +1332,9 @@ impl ParallelModeDistributorService {
         let Some(head_index) = select_permitted_queue_head(
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
+            self.delivery_evidence.as_ref(),
             &mut context,
+            false,
         )?
         else {
             return Ok(Vec::new());
@@ -1319,9 +1342,9 @@ impl ParallelModeDistributorService {
         let mut records = context.distributor_queue_records.clone();
         let head = &mut records[head_index];
         /*
-        Done records stay in the durable trace. Only a task waiting for its own
-        work-order permit yields to other tasks; operator and cleanup blocks
-        preserve the existing queue ordering.
+        Done records stay in the durable trace. A task waiting for its own
+        work-order permit or evidence yields to other tasks; operator and cleanup
+        blocks preserve the existing queue ordering.
         */
         if matches!(
             head.queue_state,
@@ -1356,6 +1379,7 @@ impl ParallelModeDistributorService {
             &context.pool_root,
             head,
             self.github_automation.as_ref(),
+            self.delivery_evidence.as_ref(),
             permit,
             &claim_permit,
             &integration_target.commit_sha,
@@ -1580,6 +1604,40 @@ impl ParallelModeDistributorService {
                 )?;
                 context.distributor_queue_records[index] = record;
                 continue;
+            }
+            if is_evidence_wait(&record) {
+                // A verified past remote effect only needs cleanup. Do not require new
+                // evidence to acknowledge it after a crash or an external recovery push.
+                if queue_record_is_integrated_or_patch_equivalent(
+                    self.parallel_runtime.as_ref(),
+                    &context,
+                    &record,
+                    integration_target,
+                ) {
+                    recover_integrated_queue_record(
+                        self.planning_authority.as_ref(),
+                        self.parallel_runtime.as_ref(),
+                        &context,
+                        matching_lease.as_ref(),
+                        &mut record,
+                    )?;
+                    context.distributor_queue_records[index] = record;
+                    continue;
+                }
+                match recheck_evidence_wait(
+                    self.parallel_runtime.as_ref(),
+                    self.delivery_evidence.as_ref(),
+                    &context.repo_root,
+                    &context.pool_root,
+                    &mut record,
+                )? {
+                    WorkOrderPermitWaitRecheck::NotWaiting => {}
+                    WorkOrderPermitWaitRecheck::Waiting => {
+                        context.distributor_queue_records[index] = record;
+                        continue;
+                    }
+                    WorkOrderPermitWaitRecheck::Retry(detail) => return Err(detail),
+                }
             }
             match recheck_work_order_permit_wait(
                 self.planning_authority.as_ref(),
@@ -2103,6 +2161,9 @@ fn recover_retryable_blocked_queue_record(
     matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
     record: &mut ParallelModeDistributorQueueRecord,
 ) -> Result<(), String> {
+    if is_evidence_wait(record) {
+        return Ok(());
+    }
     let Some(lease) = matching_lease else {
         return Ok(());
     };

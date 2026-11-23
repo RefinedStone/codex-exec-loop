@@ -5,6 +5,7 @@ use super::super::{
     inspect_slot_git_status_with_runtime, integration_worktree_head, short_sha,
 };
 use super::delivery::work_order_integration_path;
+use super::evidence::is_evidence_wait;
 use super::work_permits::{is_work_order_permit_wait, work_order_permit_decision};
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
@@ -172,14 +173,16 @@ fn build_orchestrator_status(
                 .filter(|note| !note.trim().is_empty())
         }),
         conflict_files: queue_head.conflict_files.clone(),
-        held_queue_count: if is_work_order_permit_wait(queue_head) {
+        held_queue_count: if is_work_order_permit_wait(queue_head) || is_evidence_wait(queue_head) {
             0
         } else {
             context
                 .distributor_queue_records
                 .iter()
                 .filter(|record| {
-                    record.queue_state.is_active() && !is_work_order_permit_wait(record)
+                    record.queue_state.is_active()
+                        && !is_work_order_permit_wait(record)
+                        && !is_evidence_wait(record)
                 })
                 .count()
                 .saturating_sub(1)
@@ -215,6 +218,9 @@ fn orchestrator_barrier_state(
     */
     if is_work_order_permit_wait(queue_head) {
         return "permit wait".to_string();
+    }
+    if is_evidence_wait(queue_head) {
+        return "evidence wait".to_string();
     }
     match queue_head.queue_state {
         ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed => {
@@ -344,7 +350,11 @@ fn active_distributor_queue_head(
 ) -> Option<&ParallelModeDistributorQueueRecord> {
     queue_records
         .iter()
-        .find(|record| record.queue_state.is_active() && !is_work_order_permit_wait(record))
+        .find(|record| {
+            record.queue_state.is_active()
+                && !is_work_order_permit_wait(record)
+                && !is_evidence_wait(record)
+        })
         .or_else(|| {
             queue_records
                 .iter()

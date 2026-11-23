@@ -30,7 +30,7 @@ The first generated global file contains these canonical built-ins. Project file
 | conversation | model = "gpt-5.6-sol"; reasoning_effort = "medium" | yes |
 | tui | show_startup_visual = true; planning_worker_visibility = "normal" | yes |
 | github | auto_discover_pull_request = true; review_poll_interval_secs = 60; push_remote = "origin"; pull_request_mode = "required" | yes |
-| parallel | integration_branch = "prerelease" | yes |
+| parallel | integration_branch = "prerelease"; evidence_mode = "observe" | yes |
 | app_server | response_timeout_secs = 15; prompt_log = false | timeout only |
 | subprocess | timeout_secs = 30 | yes |
 | diagnostics | trace = "off"; spans = "none"; max_files = 7; max_file_bytes = 16777216; max_total_bytes = 67108864; tokio_console = false | no |
@@ -55,6 +55,18 @@ Without a scope, list and get display effective values with their origin. set an
 -c/--config may repeat and is process-only. For example:
 
     akra -c conversation.model=gpt-5.6-terra -c conversation.reasoning_effort=max
+
+## Task delivery evidence
+
+`parallel.evidence_mode` accepts exactly `observe` or `enforce`. The built-in `observe`
+records delivery assessments without holding delivery solely for missing evidence. `enforce`
+requires current host verification or an exact Human criterion waiver before publication.
+`akra config set --project parallel.evidence_mode enforce` opts in for the canonical checkout.
+Each repository's effective policy, including a configuration error, is pinned for the process;
+service reconstruction and linked worker/integration worktrees do not reload it. Changes apply on
+the next repository kernel/process start. An unreadable or malformed layer holds delivery instead
+of falling back to `observe`. See [the delivery evidence contract](task-delivery-evidence.md),
+including the limited meaning of a successful `git_diff_check_v1` recipe.
 
 ## Environment and legacy compatibility
 

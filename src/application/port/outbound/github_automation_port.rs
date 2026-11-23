@@ -505,6 +505,21 @@ pub trait GithubAutomationPort: Send + Sync {
         anyhow::bail!("exact frozen-target integration push is unavailable")
     }
 
+    /// Publish only the result OID that passed the host delivery gate. Implementations must
+    /// verify the local result still matches it and use that OID directly in the refspec.
+    /// Falling back to a freshly read HEAD would substitute unreviewed bytes after the gate.
+    fn push_frozen_integration_commit_to_delivery_target(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        _branch_name: &str,
+        _expected_old_commit_sha: &str,
+        _result_commit_sha: &str,
+    ) -> Result<()> {
+        anyhow::bail!("exact verified integration result push is unavailable")
+    }
+
     // 더 이상 필요 없는 PR을 닫는다. 통합 완료나 recovery cleanup에서 중복 PR을 정리할 때 쓰인다.
     fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> Result<()>;
 

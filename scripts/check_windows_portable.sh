@@ -55,4 +55,13 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'admin_json_mutations_require_header_csrf_and_share_reset_guard' \
   'application::service::parallel_mode::pool::paths::tests::' \
   'reconcile_provisions_missing_slots_into_idle_baselines' \
-  'host_owned_worker_commit_'
+  'host_owned_worker_commit_' \
+  'configuration::tests::evidence::' \
+  'adapter::inbound::cli::tests::config_evidence_mode_' \
+  'composition::production::delivery_evidence::tests::' \
+  'domain::planning::delivery_evidence::' \
+  'application::service::task_delivery_evidence::tests::' \
+  'sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_evidence::' \
+  'application::service::parallel_mode::tests::distributor::evidence_gate::' \
+  'application::service::parallel_mode::tests::distributor::work_permits::evidence_conditions::' \
+  'adapter::outbound::github::automation::tests::frozen_integration::'

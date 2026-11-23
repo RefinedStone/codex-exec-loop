@@ -1806,6 +1806,41 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
     ) -> anyhow::Result<()> {
         self.push_integration_branch(repo_root, branch_name, expected_old_commit_sha)
     }
+    fn push_frozen_integration_commit_to_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+        result_commit_sha: &str,
+    ) -> anyhow::Result<()> {
+        if run_command("git", ["-C", repo_root, "rev-parse", "HEAD"], None).as_deref()
+            != Some(result_commit_sha)
+        {
+            anyhow::bail!("local integration result changed after host verification");
+        }
+        self.operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .push(format!("push-integration:{branch_name}"));
+        if let Some(error) = self
+            .integration_push_error
+            .lock()
+            .expect("fake github integration-push error mutex poisoned")
+            .clone()
+        {
+            anyhow::bail!(error);
+        }
+        let lease =
+            format!("--force-with-lease=refs/heads/{branch_name}:{expected_old_commit_sha}");
+        let target_refspec = format!("{result_commit_sha}:refs/heads/{branch_name}");
+        run_git_result(
+            Path::new(repo_root),
+            &["push", &lease, DEFAULT_PUSH_REMOTE_NAME, &target_refspec],
+        )?;
+        Ok(())
+    }
     fn close_pull_request(&self, _repo_root: &str, pr_number: u64) -> anyhow::Result<()> {
         self.operations
             .lock()
@@ -2173,6 +2208,33 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
     ) -> anyhow::Result<()> {
         self.push_integration_branch(repo_root, branch_name, expected_old_commit_sha)
     }
+    fn push_frozen_integration_commit_to_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+        result_commit_sha: &str,
+    ) -> anyhow::Result<()> {
+        if run_command("git", ["-C", repo_root, "rev-parse", "HEAD"], None).as_deref()
+            != Some(result_commit_sha)
+        {
+            anyhow::bail!("local integration result changed after host verification");
+        }
+        self.operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
+            .push(format!("push-integration:{branch_name}"));
+        let lease =
+            format!("--force-with-lease=refs/heads/{branch_name}:{expected_old_commit_sha}");
+        let target_refspec = format!("{result_commit_sha}:refs/heads/{branch_name}");
+        run_git_result(
+            Path::new(repo_root),
+            &["push", &lease, DEFAULT_PUSH_REMOTE_NAME, &target_refspec],
+        )?;
+        Ok(())
+    }
     fn close_pull_request(&self, _repo_root: &str, pr_number: u64) -> anyhow::Result<()> {
         self.operations
             .lock()
@@ -2262,6 +2324,9 @@ fn test_parallel_mode_service() -> ParallelModeService {
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
     .with_test_delivery_safety_policy(false, false)
+    .with_delivery_evidence(Arc::new(
+        crate::application::port::inbound::task_delivery_evidence_port::ObserveTaskDeliveryEvidenceGate,
+    ))
 }
 fn test_parallel_mode_service_with_github(
     github: Arc<dyn GithubAutomationPort>,
@@ -2272,6 +2337,9 @@ fn test_parallel_mode_service_with_github(
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
     .with_test_delivery_safety_policy(false, false)
+    .with_delivery_evidence(Arc::new(
+        crate::application::port::inbound::task_delivery_evidence_port::ObserveTaskDeliveryEvidenceGate,
+    ))
 }
 fn test_parallel_mode_service_with_autonomous_github(
     github: Arc<dyn GithubAutomationPort>,
@@ -2282,6 +2350,9 @@ fn test_parallel_mode_service_with_autonomous_github(
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
     .with_test_delivery_safety_policy(false, true)
+    .with_delivery_evidence(Arc::new(
+        crate::application::port::inbound::task_delivery_evidence_port::ObserveTaskDeliveryEvidenceGate,
+    ))
 }
 
 fn test_parallel_runtime() -> GitParallelModeRuntimeAdapter {
