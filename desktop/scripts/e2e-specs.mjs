@@ -4,6 +4,7 @@
 export const MANUAL_E2E_SPECS = new Map([
   ["browserAutomation.mjs", "opens a visible Electron window (show: true)"],
   ["browserBridge.mjs", "needs AKRA_GATEWAY_BIN to point to a built native gateway"],
+  ["storage-service-roundtrip.mjs", "needs AKRA_STORAGE_FIXTURE_BIN to point to a compiled Rust library test executable"],
 ]);
 
 /** e2e 폴더의 파일 이름에서 기본 gate 가 실행할 시험을 이름 순서로 돌려준다. */
