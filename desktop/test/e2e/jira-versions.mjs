@@ -85,8 +85,21 @@ try {
     }
   });
   const page = await app.firstWindow();
-  const capture = async name => writeFile(join(evidence, name + ".png"), Buffer.from(await app.evaluate(async ({ BrowserWindow }) =>
-    (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64")), "base64"));
+  const capture = async (name, expectedTestId) => {
+    await page.getByTestId("documents-group").filter({ hasText: "Jira (1)" }).waitFor({ timeout: 5_000 });
+    await page.getByTestId(expectedTestId).first().waitFor({ timeout: 5_000 });
+    await page.evaluate(label => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Screenshot paint timed out: " + label)), 5_000);
+      document.fonts.ready.then(() => {
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+          clearTimeout(timer);
+          resolve();
+        }, 0)));
+      }, error => { clearTimeout(timer); reject(error); });
+    }), name);
+    await writeFile(join(evidence, name + ".png"), Buffer.from(await app.evaluate(async ({ BrowserWindow }) =>
+      (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64")), "base64"));
+  };
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
   await page.getByTestId("thread-entry").first().click();
   await page.getByTestId("documents-toggle").filter({ hasText: "문서 1" }).waitFor();
@@ -113,14 +126,14 @@ try {
   for (const width of [1440, 900]) {
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 900), width);
     await page.waitForFunction(width => innerWidth === width, width);
-    await capture("changed-" + width);
+    await capture("changed-" + width, "documents-changed");
   }
   await page.evaluate(() => document.addEventListener("click", event => {
     if (event.target instanceof Element && event.target.closest("a")) event.preventDefault();
   }, true));
   await page.getByTestId("documents-item").getByRole("link").click();
   await page.getByTestId("documents-changed").waitFor({ state: "detached", timeout: 10_000 });
-  await capture("read-900");
+  await capture("read-900", "documents-item");
   assert.ok(!gateway.receivedMethods.some(method => ["turn/start", "turn/steer"].includes(method)));
   assert.equal(requests.some(request => JSON.stringify(request.params).includes("token")), false);
   assert.equal(JSON.stringify(await app.evaluate(() => globalThis.jiraOwnerFixture.ipc)).includes("token"), false);
