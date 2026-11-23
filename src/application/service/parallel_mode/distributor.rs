@@ -313,6 +313,8 @@ fn resolve_linear_distributor_source_range(
         return Err("frozen source base is not an ancestor of the source tip".to_string());
     }
 
+    // These are revisions only. Without `--`, Git also stats the range as a path:
+    // long Windows worktrees can exceed MAX_PATH even when both object ids resolve.
     let range = format!("{source_base}..{source_tip}");
     let merge_count = run_command_with_runtime(
         runtime,
@@ -324,6 +326,7 @@ fn resolve_linear_distributor_source_range(
             "--count",
             "--min-parents=2",
             range.as_str(),
+            "--",
         ],
         None,
     )
@@ -339,7 +342,7 @@ fn resolve_linear_distributor_source_range(
     let count = run_command_with_runtime(
         runtime,
         "git",
-        ["-C", repo_root, "rev-list", "--count", range.as_str()],
+        ["-C", repo_root, "rev-list", "--count", range.as_str(), "--"],
         None,
     )
     .and_then(|value| value.parse::<usize>().ok())
@@ -360,6 +363,7 @@ fn resolve_linear_distributor_source_range(
             "--reverse",
             "--topo-order",
             range.as_str(),
+            "--",
         ],
         None,
     )
