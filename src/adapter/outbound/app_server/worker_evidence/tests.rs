@@ -114,3 +114,66 @@ fn missing_truncated_or_broader_applied_roots_do_not_satisfy_the_requested_capab
         assert_eq!(root.verify_applied(&envelope, cwd).is_ok(), valid);
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_worker_evidence_root_keeps_authority_available_while_pinned() {
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::domain::conversation::ConversationTurnOptions;
+
+    let fixture = Fixture::new();
+    let workspace = fixture.0.to_str().unwrap();
+    let location =
+        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace).unwrap();
+    let runtime = Path::new(&location.runtime_dir);
+    let path = PinnedPrivateDirectory::open(runtime, false)
+        .unwrap()
+        .child("evidence", true)
+        .unwrap()
+        .child("incoming", true)
+        .unwrap()
+        .child(&"d".repeat(64), true)
+        .unwrap()
+        .path()
+        .to_path_buf();
+    let root = WorkerEvidenceRoot::prepare(Some(&path), SandboxModeValue::WorkspaceWrite)
+        .unwrap()
+        .unwrap();
+
+    // The same guard lives across thread/start or thread/resume and the full worker
+    // turn. Real authority initialization, reads and writes must still work then.
+    let reopened =
+        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace).unwrap();
+    assert_eq!(reopened.runtime_dir, location.runtime_dir);
+    let thread_id = "worker-evidence-pin-regression";
+    assert!(
+        SqlitePlanningAuthorityAdapter::load_conversation_thread_turn_options(workspace, thread_id)
+            .unwrap()
+            .is_none()
+    );
+    let options = ConversationTurnOptions {
+        model: Some("gpt-5.4".into()),
+        reasoning_effort: None,
+    };
+    SqlitePlanningAuthorityAdapter::upsert_conversation_thread_turn_options(
+        workspace, thread_id, &options,
+    )
+    .unwrap();
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_conversation_thread_turn_options(workspace, thread_id)
+            .unwrap(),
+        Some(options)
+    );
+    root.verify().unwrap();
+
+    let moved = runtime.with_extension("moved");
+    assert!(
+        std::fs::rename(runtime, &moved).is_err(),
+        "authority reuse must not weaken the live worker's directory pin"
+    );
+    root.verify().unwrap();
+    drop(root);
+    std::fs::rename(runtime, &moved).unwrap();
+    std::fs::rename(&moved, runtime).unwrap();
+    std::fs::remove_dir_all(runtime).unwrap();
+}
