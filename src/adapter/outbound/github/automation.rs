@@ -46,6 +46,9 @@ const REQUIRED_GITHUB_HELPER_TOOLS: &[&str] = &[
 thread_local! {
     static TEST_GITHUB_HELPER_SOURCE: std::cell::RefCell<Option<&'static [u8]>> =
         const { std::cell::RefCell::new(None) };
+    // Failure injection only: no test can use this hook to trust another executable.
+    static TEST_GITHUB_UNAVAILABLE_EXECUTABLE: std::cell::RefCell<Option<&'static str>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 impl Default for GithubAutomationAdapter {
@@ -1040,33 +1043,54 @@ fn parse_frozen_remote_branch_names(output: &str, branch_prefix: &str) -> Result
 }
 
 struct TrustedGithubExecutables {
-    bash: PathBuf,
     git: PathBuf,
     gh: Option<PathBuf>,
     path: OsString,
+    source_repo_root: PathBuf,
 }
 
 impl TrustedGithubExecutables {
     fn resolve(repo_root: &str) -> Result<Self> {
+        let executables = Self::resolve_for_git(repo_root)?;
+        executables.require_helper_dependencies()?;
+        Ok(executables)
+    }
+
+    fn resolve_for_git(repo_root: &str) -> Result<Self> {
         let directories = trusted_executable_directories(repo_root)?;
-        for tool in REQUIRED_GITHUB_HELPER_TOOLS {
-            resolve_trusted_executable(&directories, tool, repo_root).with_context(|| {
-                format!("trusted GitHub helper dependency `{tool}` is unavailable")
-            })?;
-        }
-        let bash = resolve_trusted_executable(&directories, "bash", repo_root)
-            .context("trusted bash interpreter is unavailable")?;
+        // The isolated Git credential helper still uses this trusted shell. Python, curl and
+        // the REST helper utilities are required only when the embedded helper is executed.
+        resolve_trusted_executable(&directories, "sh", repo_root)
+            .context("trusted Git credential helper shell is unavailable")?;
         let git = resolve_trusted_executable(&directories, "git", repo_root)
             .context("trusted git executable is unavailable")?;
         let gh = resolve_trusted_executable(&directories, "gh", repo_root).ok();
         let path = std::env::join_paths(&directories)
             .context("trusted GitHub executable PATH could not be constructed")?;
         Ok(Self {
-            bash,
             git,
             gh,
             path,
+            source_repo_root: PathBuf::from(repo_root),
         })
+    }
+
+    fn require_helper_dependencies(&self) -> Result<PathBuf> {
+        let directories = std::env::split_paths(&self.path).collect::<Vec<_>>();
+        let repo_root = self
+            .source_repo_root
+            .to_str()
+            .context("trusted GitHub helper source repository is not valid UTF-8")?;
+        // Preserve the original source-root exclusion and every absolute/native/owner check.
+        // A Git-only context is never itself proof that the embedded helper is available.
+        let bash = resolve_trusted_executable(&directories, "bash", repo_root)
+            .context("trusted bash interpreter is unavailable")?;
+        for tool in REQUIRED_GITHUB_HELPER_TOOLS {
+            resolve_trusted_executable(&directories, tool, repo_root).with_context(|| {
+                format!("trusted GitHub helper dependency `{tool}` is unavailable")
+            })?;
+        }
+        Ok(bash)
     }
 
     fn configure_minimal_environment(&self, command: &mut Command) {
@@ -1139,6 +1163,10 @@ fn resolve_trusted_executable(
     name: &str,
     repo_root: &str,
 ) -> Result<PathBuf> {
+    #[cfg(test)]
+    if TEST_GITHUB_UNAVAILABLE_EXECUTABLE.with(|tool| *tool.borrow() == Some(name)) {
+        bail!("trusted executable `{name}` is unavailable in this fixture");
+    }
     #[cfg(windows)]
     let names = [name.to_string(), format!("{name}.exe")];
     #[cfg(not(windows))]
@@ -1220,7 +1248,8 @@ fn run_github_script_command_in_network_context(
     args: &[&str],
     command_label: &str,
 ) -> Result<String> {
-    let mut command = Command::new(&network_context.executables.bash);
+    let bash = network_context.executables.require_helper_dependencies()?;
+    let mut command = Command::new(bash);
     command.env_clear();
     network_context.configure_command(&mut command);
     network_context
@@ -1261,6 +1290,20 @@ impl IsolatedGithubNetworkContext {
     fn new(source_repo_root: &str, credential_redacted_push_url: &str) -> Result<Self> {
         validate_credential_redacted_push_url(credential_redacted_push_url)?;
         let executables = TrustedGithubExecutables::resolve(source_repo_root)?;
+        Self::with_executables(source_repo_root, credential_redacted_push_url, executables)
+    }
+
+    fn for_git(source_repo_root: &str, credential_redacted_push_url: &str) -> Result<Self> {
+        validate_credential_redacted_push_url(credential_redacted_push_url)?;
+        let executables = TrustedGithubExecutables::resolve_for_git(source_repo_root)?;
+        Self::with_executables(source_repo_root, credential_redacted_push_url, executables)
+    }
+
+    fn with_executables(
+        source_repo_root: &str,
+        credential_redacted_push_url: &str,
+        executables: TrustedGithubExecutables,
+    ) -> Result<Self> {
         let network_environment = TrustedGithubNetworkEnvironment::resolve(source_repo_root)?;
         let credentials = GithubNetworkCredentials::resolve(source_repo_root, &executables);
         let root = create_private_temp_directory("akra-github-network")?;
@@ -2077,7 +2120,7 @@ fn run_git_to_delivery_target(
     args: &[&str],
 ) -> Result<()> {
     let network_context =
-        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+        IsolatedGithubNetworkContext::for_git(repo_root, credential_redacted_push_url)?;
     #[cfg(test)]
     let allow_test_local = is_test_local_push_url(credential_redacted_push_url);
     #[cfg(not(test))]
@@ -2116,7 +2159,7 @@ fn run_git_network_command(
     args: &[&str],
 ) -> Result<Output> {
     let network_context =
-        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+        IsolatedGithubNetworkContext::for_git(repo_root, credential_redacted_push_url)?;
     run_git_command_in_network_context(&network_context, args)
 }
 
@@ -2149,7 +2192,7 @@ fn fetch_branch_to_tracking_ref_isolated(
     run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
     run_git(repo_root, &["check-ref-format", tracking_ref])?;
     let network_context =
-        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+        IsolatedGithubNetworkContext::for_git(repo_root, credential_redacted_push_url)?;
     let fetched_ref = "refs/heads/akra-frozen-fetch-result";
     let fetch_refspec = format!("+refs/heads/{branch_name}:{fetched_ref}");
     let output = run_git_command_in_network_context(
