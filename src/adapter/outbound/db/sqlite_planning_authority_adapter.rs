@@ -2952,6 +2952,23 @@ fn open_and_secure_private_directory(path: &Path) -> Result<File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
 
+        // A worker can keep this runtime pinned without FILE_SHARE_DELETE for its
+        // entire turn. Reopening an already-private directory must not request DELETE
+        // through MAXIMUM_ALLOWED or rewrite the DACL underneath that live pin.
+        if let Ok(directory) = OpenOptions::new()
+            .read(true)
+            .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+            .share_mode(WINDOWS_FILE_SHARE_ALL)
+            .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+        {
+            validate_windows_path_identity(path, &directory, true)?;
+            if validate_windows_private_owner_and_acl(path, &directory).is_ok() {
+                validate_windows_path_identity(path, &directory, true)?;
+                return Ok(directory);
+            }
+        }
+
         let directory = OpenOptions::new()
             .read(true)
             // SetSecurityInfo skips child DACL propagation for a MAXIMUM_ALLOWED handle. This
