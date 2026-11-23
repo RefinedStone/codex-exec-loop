@@ -207,6 +207,8 @@ pub struct PlanningCriterionEvidenceState {
     pub evidence: Option<TaskEvidenceReceiptState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiver: Option<TaskCriterionWaiverReceiptState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_verification: Option<super::TaskVerificationState>,
 }
 
 impl From<projection::TaskCriterionEvidenceProjection> for PlanningCriterionEvidenceState {
@@ -214,6 +216,7 @@ impl From<projection::TaskCriterionEvidenceProjection> for PlanningCriterionEvid
         Self {
             criterion: criterion.criterion.into(),
             state: criterion.state,
+            host_verification: criterion.host_verification.map(Into::into),
             evidence: criterion.evidence.map(|receipt| TaskEvidenceReceiptState {
                 event_id: receipt.event_id,
                 evidence_revision: receipt.evidence_revision,

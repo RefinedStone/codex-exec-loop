@@ -25,6 +25,7 @@ use crate::domain::planning::{
  * 저장 명령은 저장된 저장소 데이터만 바꾼다. 도는 커널의 상태가 필요 없다. 그래서 저장소 잠금을 쥔 쪽이 이
  * 실행기를 부른다: Gateway 의 커널 런타임, 명령 전용 조립, 또는 TUI 가 커널을 쥔 저장소의 직접 경로이다. 실행은
  * 동기이고, 돌아올 때 변경은 저장되어 있다. 커널 시뮬레이션은 가짜 실행기를 끼운다.
+ * RequestTaskVerification은 짧은 예약만 이 경계를 쓴다. 실행 수명을 소유할 runtime이 필수다.
  *
  * 뜻은 사용자(operator)의 변경이다: 고치기는 작업의 필드 전체를 바꾸고, 출처는 사용자이고, 변경 guard 를 잡는다.
  * worker 의 부분 고치기는 이 실행기를 쓰지 않는다.
@@ -85,6 +86,9 @@ pub struct StoredDirectionFields {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
+    RequestTaskVerification {
+        request: task_evidence::RequestTaskVerificationRequest,
+    },
     PrepareEvidence {
         request: task_evidence::PrepareTaskEvidenceRequest,
     },
@@ -140,6 +144,7 @@ impl StoredCommand {
     /// 이 저장 명령의 스펙 항목이다.
     pub const fn kind(&self) -> KernelCommandKind {
         match self {
+            Self::RequestTaskVerification { .. } => KernelCommandKind::RequestTaskVerification,
             Self::PrepareEvidence { .. } => KernelCommandKind::PrepareEvidence,
             Self::RecordEvidence { .. } => KernelCommandKind::RecordEvidence,
             Self::WaiveCriterion { .. } => KernelCommandKind::WaiveCriterion,
@@ -169,6 +174,8 @@ impl StoredCommand {
 /// 성공한 저장 명령의 결과이다. 명령의 답에 실린다. 기록에는 싣지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommandResult {
+    /// 예약 완료이며 검증 실행 성공을 뜻하지 않는다.
+    TaskVerificationRequested { attempt_id: String, changed: bool },
     EvidencePrepared {
         preparation: Box<TaskEvidencePrepared>,
     },

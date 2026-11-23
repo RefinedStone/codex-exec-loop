@@ -10,6 +10,7 @@ fn criterion(id: &str, scenario: &str) -> TaskAcceptanceCriterion {
         scenario: scenario.into(),
         channel: TaskAcceptanceChannel::Command,
         essential: true,
+        verification_recipe: None,
     }
 }
 fn create_input(acceptance: Option<Vec<TaskAcceptanceCriterion>>) -> PlanningTaskCreateInput {

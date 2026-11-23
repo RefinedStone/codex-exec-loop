@@ -881,6 +881,7 @@ mod tests {
             scenario: scenario.into(),
             channel: crate::domain::planning::TaskAcceptanceChannel::Command,
             essential: true,
+            verification_recipe: None,
         }
     }
 

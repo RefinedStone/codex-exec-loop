@@ -3,6 +3,8 @@ use crate::domain::planning::evidence::TaskEvidenceScope;
 use std::fs;
 use std::path::Path;
 
+mod host_capture;
+
 struct Fixture {
     root: PathBuf,
     adapter: FilesystemTaskEvidenceArtifactAdapter,

@@ -1,4 +1,5 @@
 //! 사용자가 합의한 완료 기준의 저장 계약과 의미 비교다. 실행 또는 통과 판정을 포함하지 않는다.
+use super::verification::TaskVerificationRecipe;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
@@ -10,6 +11,8 @@ pub struct TaskAcceptanceCriterion {
     pub scenario: String,
     pub channel: TaskAcceptanceChannel,
     pub essential: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_recipe: Option<TaskVerificationRecipe>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +31,7 @@ impl TaskAcceptanceCriterion {
             scenario: self.scenario.trim().to_string(),
             channel: self.channel,
             essential: self.essential,
+            verification_recipe: self.verification_recipe,
         }
     }
 }
@@ -38,6 +42,7 @@ pub enum TaskAcceptanceError {
     BlankScenario,
     DuplicateId(String),
     MissingRevision,
+    InvalidVerificationRecipe,
 }
 
 impl Display for TaskAcceptanceError {
@@ -50,6 +55,9 @@ impl Display for TaskAcceptanceError {
             Self::DuplicateId(id) => write!(formatter, "duplicate task acceptance id: {id}"),
             Self::MissingRevision => {
                 formatter.write_str("non-empty task acceptance requires a positive host revision")
+            }
+            Self::InvalidVerificationRecipe => {
+                formatter.write_str("host verification recipes require a command criterion")
             }
         }
     }
@@ -68,6 +76,11 @@ pub fn normalize_task_acceptance(
         }
         if criterion.scenario.is_empty() {
             return Err(TaskAcceptanceError::BlankScenario);
+        }
+        if criterion.verification_recipe.is_some()
+            && criterion.channel != TaskAcceptanceChannel::Command
+        {
+            return Err(TaskAcceptanceError::InvalidVerificationRecipe);
         }
         if !ids.insert(criterion.id.clone()) {
             return Err(TaskAcceptanceError::DuplicateId(criterion.id));

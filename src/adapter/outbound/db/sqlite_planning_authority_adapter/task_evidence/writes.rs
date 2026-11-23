@@ -1,6 +1,6 @@
 use super::*;
 
-fn reserve_entry(transaction: &Transaction<'_>, artifact: bool) -> Result<()> {
+pub(super) fn reserve_entry(transaction: &Transaction<'_>, artifact: bool) -> Result<()> {
     let (entries, bytes, reserved): (u64,u64,u64) = transaction.query_row(
         "SELECT entry_count,artifact_bytes,reserved_bytes FROM task_evidence_state WHERE singleton=1", [],
         |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
@@ -28,7 +28,10 @@ fn reserve_entry(transaction: &Transaction<'_>, artifact: bool) -> Result<()> {
     Ok(())
 }
 
-fn settle_artifact(transaction: &Transaction<'_>, artifact: &TaskEvidenceArtifact) -> Result<()> {
+pub(super) fn settle_artifact(
+    transaction: &Transaction<'_>,
+    artifact: &TaskEvidenceArtifact,
+) -> Result<()> {
     artifact.validate()?;
     let (bytes, reserved): (u64, u64) = transaction.query_row(
         "SELECT artifact_bytes,reserved_bytes FROM task_evidence_state WHERE singleton=1",
@@ -50,6 +53,22 @@ fn settle_artifact(transaction: &Transaction<'_>, artifact: &TaskEvidenceArtifac
     transaction.execute(
         "UPDATE task_evidence_state SET artifact_bytes=?1,reserved_bytes=?2 WHERE singleton=1",
         params![bytes as i64, reserved as i64],
+    )?;
+    Ok(())
+}
+
+pub(super) fn release_artifact_reservation(transaction: &Transaction<'_>) -> Result<()> {
+    let reserved: u64 = transaction.query_row(
+        "SELECT reserved_bytes FROM task_evidence_state WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )?;
+    let reserved = reserved
+        .checked_sub(MAX_TASK_EVIDENCE_ARTIFACT_BYTES)
+        .ok_or(TaskEvidenceError::Unavailable)?;
+    transaction.execute(
+        "UPDATE task_evidence_state SET reserved_bytes=?1 WHERE singleton=1",
+        [reserved as i64],
     )?;
     Ok(())
 }
@@ -91,13 +110,8 @@ pub(super) fn prepare(
             changed: false,
         });
     }
-    let ordinal: u32 = transaction.query_row(
-        "SELECT COALESCE(MAX(ordinal),0) FROM task_evidence_attempts WHERE scope_id=?1 AND criterion_id=?2",
-        params![commit.scope.scope_id,commit.criterion_id], |row| row.get(0))?;
-    let ordinal = ordinal
-        .checked_add(1)
-        .filter(|value| *value <= MAX_TASK_EVIDENCE_ATTEMPTS_PER_CRITERION)
-        .ok_or(TaskEvidenceError::Limit)?;
+    let ordinal =
+        verification::next_ordinal(&transaction, &commit.scope.scope_id, &commit.criterion_id)?;
     let attempt = TaskEvidenceAttempt {
         attempt_id: random_token()?,
         request_id: commit.request_id.clone(),

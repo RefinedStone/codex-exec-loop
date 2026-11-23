@@ -898,6 +898,19 @@ pub(crate) fn stored_command_port_with_issues(
         dyn crate::application::port::outbound::issue_work_steering_port::IssueWorkSteeringPort,
     >,
 ) -> Arc<dyn StoredCommandPort> {
+    stored_command_port_with_verification(workspace_dir, issues, steering, None)
+}
+
+fn stored_command_port_with_verification(
+    workspace_dir: &str,
+    issues: Arc<crate::application::service::issue_collection::IssueCollectionService>,
+    steering: Arc<
+        dyn crate::application::port::outbound::issue_work_steering_port::IssueWorkSteeringPort,
+    >,
+    verification: Option<
+        Arc<crate::application::service::task_verification::TaskVerificationService>,
+    >,
+) -> Arc<dyn StoredCommandPort> {
     struct NoPlanningWorker;
     impl PlanningWorkerPort for NoPlanningWorker {
         fn run_planning_session(
@@ -909,7 +922,7 @@ pub(crate) fn stored_command_port_with_issues(
         }
     }
     let (planning, workspace, store) = store_planning_services(Arc::new(NoPlanningWorker));
-    Arc::new(
+    let mut service =
         StoredCommandService::new(PlanningAdminFacadeService::from_planning_with_authority(
             workspace_dir,
             planning,
@@ -923,8 +936,11 @@ pub(crate) fn stored_command_port_with_issues(
         .with_issue_interventions(super::issue_collection::build_interventions(
             workspace_dir,
             steering,
-        )),
-    )
+        ));
+    if let Some(verification) = verification {
+        service = service.with_task_verification(verification);
+    }
+    Arc::new(service)
 }
 
 /// 저장소와 파일만 쓰는 planning 서비스이다. app-server 를 시작하지 않는다.
@@ -983,10 +999,27 @@ pub(crate) fn build_headless_kernel_runtime(
 ) -> NativeClientRuntime {
     let assembly = build_native_application_for_workspace(workspace_dir, app_server);
     let mut runtime = assembly.application.into_headless_client_runtime();
+    let waker = runtime.host_waker();
+    // A failed private-owner initialization leaves verification unavailable. It cannot
+    // turn this ordinary runtime into a command-only execution/recovery path.
+    let verification =
+        super::task_verification::build(workspace_dir, Arc::new(move || waker.wake()))
+            .ok()
+            .and_then(|service| {
+                runtime
+                    .attach_task_verification(service.clone())
+                    .ok()
+                    .map(|_| service)
+            });
     // 실행 중인 app-server의 제어 권한은 조립 안에서 저장 명령에 주입한다.
     // 클라이언트 facade에는 별도 제어 접근자를 남기지 않는다.
     runtime.attach_stored_commands(
-        stored_command_port_with_issues(workspace_dir, issues, assembly.issue_work_steering),
+        stored_command_port_with_verification(
+            workspace_dir,
+            issues,
+            assembly.issue_work_steering,
+            verification,
+        ),
         workspace_dir,
     );
     runtime.attach_task_evidence(super::task_evidence::build(workspace_dir));

@@ -12,7 +12,8 @@
 
 이 계약은 기준의 내용과 변경 이력을 저장한다. channel을 지정해도 명령이나 브라우저를 실행하지
 않고, 기준을 저장했다는 사실을 pass로 판정하지 않는다. 증거 기록과 기준별 수동 면제는
-[Task 증거 계약](task-evidence.md)에 정의한다. 독립 검증 실행과 enforce 전달 게이트는 후속 범위다.
+[Task 증거 계약](task-evidence.md)에 정의한다. `command` 기준은 선택적인 고정 recipe로
+[호스트 검증](task-verification.md)을 요청할 수 있다. enforce 전달 게이트는 후속 범위다.
 기준이 없는 기존 task도 계속 실행할 수 있다.
 
 Desktop의 일반 Kernel `planning` 조회는 큐 요약과 선택적인 증거 metadata를 제공한다. Desktop 기준
@@ -26,9 +27,12 @@ Desktop의 일반 Kernel `planning` 조회는 큐 요약과 선택적인 증거 
 | `scenario` | 확인할 동작과 기대 결과를 설명하는 비어 있지 않은 문자열 |
 | `channel` | `command`, `data`, `http`, `screen` 중 하나 |
 | `essential` | 후속 증거 정책에서 필수 기준인지 구분하는 boolean |
+| `verification_recipe` | 선택적 `git_diff_check_v1`; `command` 기준에만 허용 |
 | task의 `acceptance_revision` | 호스트가 관리하는 unsigned 64-bit 기준 버전 |
 
-기준의 네 필드는 모두 필수다. 알 수 없는 필드, channel, 빈 id/scenario와 중복 id는 거절한다.
+`id`, `scenario`, `channel`, `essential`은 필수다. 알 수 없는 필드, channel, recipe,
+빈 id/scenario와 중복 id는 거절한다. recipe 생략 또는 `null`은 미설정이며 이전 JSON·기준 hash를
+유지한다. recipe 선택·변경도 사용자 기준 변경으로 처리하며 저장 자체로 검증을 시작하지 않는다.
 id와 scenario의 앞뒤 공백을 제거하고 id 순서로 정규화한다. 기준 순서만 바뀐 요청은 내용 변경으로
 세지 않는다. 이 검사는 시나리오가 요구사항을 충분히 설명하는지 판정하지 않는다.
 

@@ -46,6 +46,12 @@ where
     } else {
         Ok(PathBuf::from(program))
     };
+    // Keep trust validation canonical; Git for Windows needs ordinary drive/UNC spelling when
+    // locating its own installation configuration from the executable path.
+    #[cfg(windows)]
+    let resolved_program = resolved_program.and_then(|program| {
+        crate::trusted_executable::windows_process_argument_path(&program).map(PathBuf::from)
+    });
     let mut command = match resolved_program {
         Ok(program) => Command::new(program),
         Err(error) => {

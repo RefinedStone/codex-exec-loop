@@ -12,4 +12,5 @@ mod parallel_normalization_fs;
 mod parallel_pool_lock;
 mod parallel_worker_commit;
 pub(crate) mod repository_state;
+pub mod task_verification;
 pub(crate) mod workspace;

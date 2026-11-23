@@ -3,7 +3,8 @@
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
 use crate::application::port::inbound::stored_command_port::task_evidence::{
-    PrepareTaskEvidenceRequest, RecordTaskEvidenceRequest, WaiveTaskCriterionRequest,
+    PrepareTaskEvidenceRequest, RecordTaskEvidenceRequest, RequestTaskVerificationRequest,
+    WaiveTaskCriterionRequest,
 };
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandOutcome, StoredCommandResult, StoredDirectionFields,
@@ -60,6 +61,8 @@ pub use task_evidence::{
     TaskEvidenceReceiptState, TaskEvidenceSourceKind, TaskEvidenceSourceState, TaskEvidenceState,
     TaskEvidenceTaskState,
 };
+mod task_verification;
+pub use task_verification::{TaskVerificationReceiptState, TaskVerificationState};
 
 mod confirmation;
 mod issue_automation;
@@ -314,6 +317,7 @@ impl CommandRequest {
             | KernelCommand::PauseAutoFollow {}
             | KernelCommand::ResetPlanning { .. }
             | KernelCommand::RefreshPlanning {}
+            | KernelCommand::RequestTaskVerification { .. }
             | KernelCommand::PrepareEvidence { .. }
             | KernelCommand::RecordEvidence { .. }
             | KernelCommand::WaiveCriterion { .. }
@@ -448,6 +452,10 @@ pub struct CommandResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandResult {
+    TaskVerificationRequested {
+        attempt_id: String,
+        changed: bool,
+    },
     EvidencePrepared {
         preparation: Box<TaskEvidencePreparedState>,
     },
@@ -529,6 +537,13 @@ pub enum CommandResult {
 impl CommandResult {
     fn from_stored(result: StoredCommandResult) -> Self {
         match result {
+            StoredCommandResult::TaskVerificationRequested {
+                attempt_id,
+                changed,
+            } => Self::TaskVerificationRequested {
+                attempt_id,
+                changed,
+            },
             StoredCommandResult::EvidencePrepared { preparation } => Self::EvidencePrepared {
                 preparation: Box::new((*preparation).into()),
             },
@@ -631,6 +646,7 @@ impl CommandResult {
     /// `result` 스키마를 고른다.
     pub(crate) const fn name_for(kind: KernelCommandKind) -> Option<&'static str> {
         match kind {
+            KernelCommandKind::RequestTaskVerification => Some("task_verification_requested"),
             KernelCommandKind::PrepareEvidence => Some("evidence_prepared"),
             KernelCommandKind::RecordEvidence => Some("criterion_evidence_recorded"),
             KernelCommandKind::WaiveCriterion => Some("criterion_waived"),
@@ -871,6 +887,19 @@ pub enum KernelCommand {
     },
     /// planning 큐를 다시 읽는다. 결과는 `planning` 이벤트로 온다.
     RefreshPlanning {},
+    /// 5개 기준 좌표로 짧은 예약만 한다. 실행 입력과 결과는 호스트가 소유한다.
+    RequestTaskVerification {
+        #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
+        request_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        task_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        criterion_id: String,
+        #[schemars(regex(pattern = "^[a-f0-9]{64}$"))]
+        scope_id: String,
+        #[schemars(range(min = 1, max = 9007199254740991u64))]
+        expected_acceptance_revision: u64,
+    },
     /// host가 정한 artifact 경로와 현재 기준·lease·source에 결속된 시도를 준비한다.
     PrepareEvidence {
         #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
@@ -1239,6 +1268,7 @@ impl KernelCommand {
             Self::PauseAutoFollow {} => KernelCommandKind::PauseAutoFollow,
             Self::ResetPlanning { .. } => KernelCommandKind::ResetPlanning,
             Self::RefreshPlanning {} => KernelCommandKind::RefreshPlanning,
+            Self::RequestTaskVerification { .. } => KernelCommandKind::RequestTaskVerification,
             Self::PrepareEvidence { .. } => KernelCommandKind::PrepareEvidence,
             Self::RecordEvidence { .. } => KernelCommandKind::RecordEvidence,
             Self::WaiveCriterion { .. } => KernelCommandKind::WaiveCriterion,
@@ -1277,6 +1307,7 @@ impl KernelCommand {
             | Self::DeleteDirection { confirm, .. }
             | Self::CancelIssueWork { confirm, .. } => *confirm,
             Self::CreateTask { .. }
+            | Self::RequestTaskVerification { .. }
             | Self::PrepareEvidence { .. }
             | Self::RecordEvidence { .. }
             | Self::WaiveCriterion { .. }
@@ -1319,6 +1350,13 @@ impl KernelCommand {
      */
     pub fn from_stored(command: StoredCommand) -> Self {
         match command {
+            StoredCommand::RequestTaskVerification { request } => Self::RequestTaskVerification {
+                request_id: request.request_id,
+                task_id: request.task_id,
+                criterion_id: request.criterion_id,
+                scope_id: request.scope_id,
+                expected_acceptance_revision: request.expected_acceptance_revision,
+            },
             StoredCommand::PrepareEvidence { request } => Self::PrepareEvidence {
                 request_id: request.request_id,
                 task_id: request.task_id,
@@ -1409,6 +1447,25 @@ impl KernelCommand {
         workspace_directory: &str,
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
+            Self::RequestTaskVerification {
+                request_id,
+                task_id,
+                criterion_id,
+                scope_id,
+                expected_acceptance_revision,
+            } => {
+                let request = RequestTaskVerificationRequest {
+                    request_id,
+                    task_id,
+                    criterion_id,
+                    scope_id,
+                    expected_acceptance_revision,
+                };
+                request
+                    .validate()
+                    .map_err(|error| KernelProtocolError::invalid_params(error.to_string()))?;
+                StoredCommand::RequestTaskVerification { request }
+            }
             Self::PrepareEvidence {
                 request_id,
                 task_id,
@@ -1695,6 +1752,7 @@ impl KernelCommand {
             },
             Self::EnableParallel {}
             | Self::DisableParallel {}
+            | Self::RequestTaskVerification { .. }
             | Self::PrepareEvidence { .. }
             | Self::RecordEvidence { .. }
             | Self::WaiveCriterion { .. }

@@ -14,8 +14,9 @@ use crate::domain::planning::evidence::*;
 
 use super::*;
 
-mod fixtures;
+pub(crate) mod fixtures;
 use fixtures::*;
+mod verification;
 
 #[test]
 fn unstarted_criteria_are_pending_without_observing_git_or_creating_artifacts() {

@@ -12,6 +12,7 @@ fn criterion(id: &str, scenario: &str) -> TaskAcceptanceCriterion {
         scenario: scenario.into(),
         channel: TaskAcceptanceChannel::Command,
         essential: true,
+        verification_recipe: None,
     }
 }
 fn legacy() -> TaskAuthorityDocument {

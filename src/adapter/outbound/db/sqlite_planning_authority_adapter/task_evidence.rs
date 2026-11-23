@@ -24,11 +24,13 @@ use super::{
 
 mod queries;
 mod schema;
+mod verification;
 mod writes;
 pub(super) use schema::{retire_all_scopes, retire_task_scope, sync_task_scope};
 
 pub(super) fn ensure_tables(connection: &mut Connection) -> Result<()> {
-    schema::ensure(connection)
+    schema::ensure(connection)?;
+    verification::ensure(connection)
 }
 
 fn connection(workspace: &str) -> Result<Connection> {

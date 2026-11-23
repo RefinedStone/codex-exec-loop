@@ -37,6 +37,7 @@ impl Fixture {
                     queue_records: vec![],
                     evidence: vec![],
                     waivers: vec![],
+                    host_verifications: vec![],
                 }],
                 truncated: false,
                 next_task_id: None,
@@ -170,6 +171,8 @@ pub(super) struct Repository {
     reads: AtomicUsize,
     pub change_on_second_read: AtomicBool,
 }
+
+impl crate::application::port::outbound::task_verification_repository_port::TaskVerificationRepositoryPort for Repository {}
 
 impl TaskEvidenceRepositoryPort for Repository {
     fn load_current_snapshot(
@@ -338,4 +341,12 @@ impl ParallelModeRuntimePort for Git {
     fn remove_runtime_mirror_file(&self, _: &Path, _: &Path) -> std::io::Result<()> {
         panic!("query must not delete mirrors")
     }
+}
+
+pub(crate) fn inert_verification_ports() -> (
+    Arc<dyn TaskEvidenceArtifactPort>,
+    Arc<dyn ParallelModeRuntimePort>,
+) {
+    let fixture = Fixture::new();
+    (fixture.artifacts, fixture.git)
 }

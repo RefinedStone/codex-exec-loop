@@ -18,6 +18,8 @@ use std::sync::{Arc, Barrier};
 
 const NOW: &str = "2026-11-23T12:00:00Z";
 
+mod verification;
+
 struct Fixture {
     workspace: String,
     adapter: SqlitePlanningAuthorityAdapter,
@@ -149,6 +151,7 @@ fn criterion(id: &str) -> TaskAcceptanceCriterion {
         scenario: "The result is observable".into(),
         channel: TaskAcceptanceChannel::Command,
         essential: true,
+        verification_recipe: None,
     }
 }
 

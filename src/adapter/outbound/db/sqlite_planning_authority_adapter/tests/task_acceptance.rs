@@ -91,6 +91,7 @@ fn legacy_db_acceptance_round_trips_through_user_mutation_worker_update_and_list
         scenario: "The fixture command exits successfully.".to_string(),
         channel: TaskAcceptanceChannel::Command,
         essential: true,
+        verification_recipe: None,
     };
     let mut update = update_input(&task.id);
     update.acceptance = Some(vec![criterion.clone()]);

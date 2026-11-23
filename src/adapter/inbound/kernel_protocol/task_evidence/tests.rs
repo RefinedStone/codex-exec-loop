@@ -114,6 +114,9 @@ fn public_receipts_preserve_original_facts_and_never_expose_private_contents() {
                 receipt,
                 changed: false,
             },
+            TaskEvidenceEvent::VerificationFinished { .. } => {
+                panic!("this fixture contains only worker evidence and human waivers")
+            }
         };
         let encoded = serde_json::to_value(CommandResult::from_stored(result)).unwrap();
         assert_eq!(encoded["receipt"]["event_id"], event.event_id());
@@ -242,6 +245,7 @@ fn planning_evidence_is_optional_and_keeps_old_receipt_scope_when_stale() {
                     scenario: "Observable result".into(),
                     channel: crate::domain::planning::TaskAcceptanceChannel::Command,
                     essential: true,
+                    verification_recipe: None,
                 },
                 state: Some(TaskCriterionEvidenceState::Stale),
                 evidence: Some(projection::TaskEvidenceRecordProjection {
@@ -258,6 +262,7 @@ fn planning_evidence_is_optional_and_keeps_old_receipt_scope_when_stale() {
                     by: evidence.by,
                 }),
                 waiver: None,
+                host_verification: None,
             }],
         }],
         truncated: true,

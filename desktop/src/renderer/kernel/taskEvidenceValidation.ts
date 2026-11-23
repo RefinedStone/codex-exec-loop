@@ -1,4 +1,4 @@
-/** E2 읽기 metadata만 검증한다. 상태의 판정과 native Human 권한은 서버가 소유한다. */
+/** 읽기 metadata만 검증한다. 작업자 보고와 호스트 실행을 분리하며 현재 판정은 서버가 소유한다. */
 import type { TaskEvidenceState } from "./protocol";
 
 type ObjectValue = Record<string, unknown>;
@@ -53,13 +53,118 @@ function waiverReceipt(value: unknown): value is ObjectValue & { waiver: ObjectV
     && token(waiver.reason_digest) && waiver.by === "human" && timestamp(waiver.recorded_at);
 }
 
+type VerificationAttempt = ObjectValue & { scope: ObjectValue };
+type VerificationFact = ObjectValue & { attempt: VerificationAttempt; result: ObjectValue };
+
+function verificationAttempt(value: unknown): value is VerificationAttempt {
+  return record(value) && keys(value, ["attempt_id", "scope", "criterion_id", "recipe", "attempt", "requested_at"])
+    && token(value.attempt_id) && scope(value.scope) && positive(value.scope.acceptance_revision)
+    && identifier(value.criterion_id) && value.recipe === "git_diff_check_v1"
+    && positive(value.attempt) && value.attempt <= 64 && timestamp(value.requested_at);
+}
+
+function sameVerificationAttempt(left: VerificationAttempt, right: VerificationAttempt): boolean {
+  return sameScope(left.scope, right.scope)
+    && ["attempt_id", "criterion_id", "recipe", "attempt", "requested_at"].every((key) => left[key] === right[key]);
+}
+
+function verificationManifest(value: unknown): value is ObjectValue & { source: ObjectValue } {
+  if (!record(value) || !keys(value, ["recipe", "base_commit_sha", "base_tree_sha", "source", "git_binary_sha256", "command_sha256", "environment_sha256", "configuration_sha256"])
+    || value.recipe !== "git_diff_check_v1" || !oid(value.base_commit_sha) || !oid(value.base_tree_sha)
+    || !record(value.source) || !tree(value.source)
+    || ![value.git_binary_sha256, value.command_sha256, value.environment_sha256, value.configuration_sha256].every(token)) return false;
+  const width = (value.base_commit_sha as string).length;
+  return [value.base_tree_sha, value.source.head_commit_sha, value.source.tree_sha].every((value) => text(value) && value.length === width);
+}
+
+function verificationStream(value: unknown): boolean {
+  return record(value) && keys(value, ["sha256", "size_bytes", "complete"])
+    && token(value.sha256) && revision(value.size_bytes) && value.size_bytes <= 1024 * 1024
+    && (value.size_bytes !== 0 || value.sha256 === "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    && typeof value.complete === "boolean";
+}
+
+function verificationResult(value: unknown): value is ObjectValue {
+  if (!record(value)) return false;
+  if (value.kind === "interrupted") return keys(value, ["kind"]);
+  if (value.kind === "not_run") return keys(value, ["kind", "reason"])
+    && named(value.reason, ["unavailable", "invalid_input", "stale", "scope_changed", "lease_changed", "configuration_changed", "spawn_failed", "cancelled"]);
+  if (value.kind !== "executed" || !keys(value, ["kind", "observation"]) || !record(value.observation)) return false;
+  const observation = value.observation;
+  if (!keys(observation, ["outcome", "started_at", "finished_at", "duration_ms", "stdout", "stderr"])
+    || !timestamp(observation.started_at) || !timestamp(observation.finished_at) || !revision(observation.duration_ms)
+    || !verificationStream(observation.stdout) || !verificationStream(observation.stderr) || !record(observation.outcome)) return false;
+  // UTC는 역행할 수 있다. duration은 호스트가 monotonic clock으로 관측한 별도 값이다.
+  const outcome = observation.outcome;
+  return outcome.kind === "exited"
+    ? keys(outcome, ["kind", "exit_code"]) && typeof outcome.exit_code === "number"
+      && Number.isInteger(outcome.exit_code) && outcome.exit_code >= -2147483648 && outcome.exit_code <= 2147483647
+    : keys(outcome, ["kind"]) && named(outcome.kind, ["timed_out", "cancelled", "output_limit", "signalled", "io_failure"]);
+}
+
+function hostArtifact(value: unknown): boolean {
+  return record(value) && keys(value, ["sha256", "size_bytes"]) && token(value.sha256)
+    && positive(value.size_bytes) && value.size_bytes <= 8 * 1024 * 1024;
+}
+
+function verificationReceipt(value: unknown, evidenceRevision: number): value is ObjectValue & { verification: VerificationFact } {
+  if (!record(value) || !keys(value, ["event_id", "evidence_revision", "verification"])
+    || !positive(value.evidence_revision) || value.evidence_revision > evidenceRevision || !record(value.verification)) return false;
+  const verification = value.verification;
+  if (!keys(verification, ["attempt", "manifest", "result", "artifact", "finished_at"])
+    || !verificationAttempt(verification.attempt) || value.event_id !== `task-verification-finished:${verification.attempt.attempt_id}`
+    || !verificationResult(verification.result) || !timestamp(verification.finished_at)
+    || (verification.artifact != null && !hostArtifact(verification.artifact))) return false;
+  if (verification.manifest != null && (!verificationManifest(verification.manifest)
+    || verification.manifest.recipe !== verification.attempt.recipe)) return false;
+  return verification.result.kind === "executed"
+    ? verificationManifest(verification.manifest)
+    : verification.artifact == null;
+}
+
+function executionPassed(result: ObjectValue): boolean {
+  return result.kind === "executed" && record(result.observation) && record(result.observation.outcome)
+    && result.observation.outcome.kind === "exited" && result.observation.outcome.exit_code === 0
+    && record(result.observation.stdout) && result.observation.stdout.complete === true
+    && record(result.observation.stderr) && result.observation.stderr.complete === true;
+}
+
+function hostVerification(value: unknown, task: ObjectValue & { scope: ObjectValue }, criterion: ObjectValue, evidenceRevision: number): boolean {
+  if (!record(value) || !keys(value, ["attempt", "phase", "receipt", "state", "unavailable"])
+    || !named(value.phase, ["pending", "running", "finished"])
+    || !named(value.state, ["pending", "running", "passed", "failed", "not_run", "stale", "unavailable"])
+    || !optionalError(value.unavailable)) return false;
+  if (value.attempt == null) return criterion.verification_recipe === "git_diff_check_v1" && criterion.channel === "command"
+    && value.phase === "pending" && value.state === "pending" && value.receipt == null && value.unavailable == null;
+  if (!verificationAttempt(value.attempt) || value.attempt.scope.task_id !== task.scope.task_id
+    || value.attempt.criterion_id !== criterion.id) return false;
+  if (value.receipt != null && (!verificationReceipt(value.receipt, evidenceRevision)
+    || !sameVerificationAttempt(value.attempt, value.receipt.verification.attempt))) return false;
+  if ((value.phase === "finished") !== (value.receipt != null)) return false;
+  if (value.state === "unavailable") return value.unavailable != null;
+  if (value.state === "stale") return true;
+  if (task.unavailable != null && named(value.state, ["passed", "failed", "running"])) return false;
+  if (value.unavailable != null || !sameScope(value.attempt.scope, task.scope)
+    || value.attempt.recipe !== criterion.verification_recipe) return false;
+  if (value.state === "pending" || value.state === "running") return value.phase === value.state && value.receipt == null;
+  if (!verificationReceipt(value.receipt, evidenceRevision)) return false;
+  const fact = value.receipt.verification;
+  if (value.state === "not_run") return fact.result.kind === "not_run" || fact.result.kind === "interrupted";
+  if (fact.result.kind !== "executed" || !hostArtifact(fact.artifact) || !verificationManifest(fact.manifest)
+    || !record(task.source) || !record(task.source.tree) || fact.manifest.source.tree_sha !== task.source.tree.tree_sha) return false;
+  return value.state === "passed" ? executionPassed(fact.result) : !executionPassed(fact.result);
+}
+
 function criterion(value: unknown, task: ObjectValue & { scope: ObjectValue }, evidenceRevision: number): boolean {
-  if (!record(value) || !keys(value, ["criterion", "state", "evidence", "waiver"])
-    || !record(value.criterion) || !keys(value.criterion, ["id", "scenario", "channel", "essential"])
+  if (!record(value) || !keys(value, ["criterion", "state", "evidence", "waiver", "host_verification"])
+    || !record(value.criterion) || !keys(value.criterion, ["id", "scenario", "channel", "essential", "verification_recipe"])
     || !identifier(value.criterion.id) || !text(value.criterion.scenario) || !value.criterion.scenario.trim()
     || !named(value.criterion.channel, ["command", "data", "http", "screen"])
     || typeof value.criterion.essential !== "boolean"
     || (value.state != null && !named(value.state, ["pending", "pass", "fail", "blocked", "stale", "waived"]))) return false;
+  if (value.criterion.verification_recipe != null
+    && (value.criterion.verification_recipe !== "git_diff_check_v1" || value.criterion.channel !== "command")) return false;
+  if (value.host_verification != null && !hostVerification(value.host_verification, task, value.criterion, evidenceRevision)) return false;
   if (value.evidence != null && (!evidenceReceipt(value.evidence)
     || (value.evidence.evidence_revision as number) > evidenceRevision
     || value.evidence.evidence.criterion_id !== value.criterion.id

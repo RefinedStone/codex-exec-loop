@@ -8,6 +8,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+mod fingerprint;
+pub(crate) use fingerprint::PinnedNativeExecutable;
+
 #[cfg(unix)]
 const MAX_CODEX_SHEBANG_BYTES: usize = 4 * 1024;
 #[cfg(any(windows, test))]

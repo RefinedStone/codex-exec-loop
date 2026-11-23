@@ -88,6 +88,48 @@ describe("kernel protocol generation", () => {
     expect(compile('const limit: IssuePageLimit = "100";', protocol).status).toBe(1);
   });
 
+  it("generates host reservation and execution metadata without caller execution inputs or private fields", () => {
+    const result = compile(`
+      const request: KernelCommand = {
+        type: "request_task_verification", request_id: "request-1", task_id: "task-1",
+        criterion_id: "whitespace", scope_id: "a".repeat(64), expected_acceptance_revision: 3,
+      };
+      const accepted: CommandResult = { type: "task_verification_requested", attempt_id: "b".repeat(64), changed: true };
+      const legacy: TaskAcceptanceCriterion = { id: "a", scenario: "Result", channel: "command", essential: true };
+      const selected: TaskAcceptanceCriterion = { ...legacy, verification_recipe: "git_diff_check_v1" };
+      const noRecipe: TaskAcceptanceCriterion = { ...legacy, verification_recipe: null };
+      const pending: TaskVerificationState = { phase: "pending", state: "pending" };
+      const attempt: TaskVerificationAttemptRecord = {
+        attempt_id: "b".repeat(64), scope: { task_id: "task-1", scope_id: "a".repeat(64), acceptance_revision: 3, criteria_sha256: "c".repeat(64) },
+        criterion_id: "whitespace", recipe: "git_diff_check_v1", attempt: 1, requested_at: "2026-11-23T00:00:00Z",
+      };
+      const record: TaskVerificationRecord = { attempt, result: { kind: "interrupted" }, finished_at: "2026-11-23T00:00:01Z" };
+      const event: KernelRecord = { kind: "task_verification_finished", event_id: "task-verification-finished:" + attempt.attempt_id, evidence_revision: 1, verification: record };
+      const criterion: PlanningCriterionEvidenceState = { criterion: selected, state: "fail", host_verification: pending };
+
+      // Each expected diagnostic must remain present when the Rust schema changes.
+      // @ts-expect-error execution arguments are host-owned
+      const callerArgv: KernelCommand = { ...request, argv: ["git", "diff"] };
+      // @ts-expect-error the caller cannot choose an execution result
+      const callerStatus: KernelCommand = { ...request, status: "pass" };
+      // @ts-expect-error the existing acceptance editor chooses the recipe
+      const callerRecipe: KernelCommand = { ...request, recipe: "git_diff_check_v1" };
+      // @ts-expect-error private session authority is not a public attempt field
+      const privateSession: TaskVerificationAttemptRecord = { ...attempt, session_key: "private" };
+      // @ts-expect-error worker lease authority is not a public attempt field
+      const privateLease: TaskVerificationAttemptRecord = { ...attempt, lease_generation: "private" };
+      // @ts-expect-error worker slot identity is not a public attempt field
+      const privateSlot: TaskVerificationAttemptRecord = { ...attempt, slot_id: "slot-private" };
+      // @ts-expect-error capture paths are never public receipt metadata
+      const privatePath: TaskVerificationRecord = { ...record, artifact_path: "/private/capture" };
+      // @ts-expect-error process output is never public receipt metadata
+      const rawOutput: TaskVerificationRecord = { ...record, stdout: "private process output" };
+      // @ts-expect-error unsupported recipes must remain closed
+      const unknownRecipe: TaskAcceptanceCriterion = { ...legacy, verification_recipe: "worker_command" };
+    `);
+    expect(result).toEqual({ status: 0, output: "" });
+  });
+
   it("supports nullable bounded arrays while preserving their element type", () => {
     const changed: KernelSpec = {
       ...spec,

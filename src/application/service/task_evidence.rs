@@ -29,7 +29,8 @@ use super::parallel_mode::evidence::{snapshot_worker_tree, with_running_worker};
 
 mod query;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+mod verification;
 
 pub struct TaskEvidenceService {
     workspace: String,
@@ -37,6 +38,7 @@ pub struct TaskEvidenceService {
     artifacts: Arc<dyn TaskEvidenceArtifactPort>,
     runtime: Arc<dyn ParallelModeRuntimePort>,
     authority: Arc<dyn PlanningAuthorityPort>,
+    verification_runner: Option<Arc<dyn crate::application::port::outbound::task_verification_runner_port::TaskVerificationRunnerPort>>,
 }
 
 impl TaskEvidenceService {
@@ -53,7 +55,16 @@ impl TaskEvidenceService {
             artifacts,
             runtime,
             authority,
+            verification_runner: None,
         }
+    }
+
+    pub fn with_verification_runner(
+        mut self,
+        runner: Arc<dyn crate::application::port::outbound::task_verification_runner_port::TaskVerificationRunnerPort>,
+    ) -> Self {
+        self.verification_runner = Some(runner);
+        self
     }
 
     pub fn prepare_evidence(

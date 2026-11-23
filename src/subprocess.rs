@@ -4,6 +4,8 @@ use std::process::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) mod controlled;
+
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
@@ -1215,7 +1217,12 @@ impl BoundedPipeReader {
             Ok(read) => {
                 let next_len = self.retained.len().saturating_add(read);
                 if next_len > self.max_bytes {
-                    self.retained.resize(self.max_bytes.saturating_add(1), 0);
+                    let remaining = self
+                        .max_bytes
+                        .saturating_add(1)
+                        .saturating_sub(self.retained.len());
+                    self.retained
+                        .extend_from_slice(&buffer[..read.min(remaining)]);
                 } else {
                     self.retained.extend_from_slice(&buffer[..read]);
                 }

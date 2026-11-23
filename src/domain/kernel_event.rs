@@ -30,6 +30,10 @@ pub(crate) use task_evidence::sample_task_evidence_events;
 pub use task_evidence::{
     TaskCriterionEvidenceRecord, TaskCriterionWaiverActor, TaskCriterionWaiverRecord,
 };
+mod task_verification;
+#[cfg(test)]
+pub(crate) use task_verification::sample_task_verification_event;
+pub use task_verification::{TaskVerificationAttemptRecord, TaskVerificationRecord};
 
 /*
  * 준비가 끝났지만 제출이 거절된 thread 지정 프롬프트이다 (plan 19 Q2-3). 준비가 만든 작업은 이미 큐에 있다. 커널이
@@ -550,6 +554,11 @@ pub enum KernelEvent {
         evidence_revision: u64,
         waiver: TaskCriterionWaiverRecord,
     },
+    TaskVerificationFinished {
+        event_id: String,
+        evidence_revision: u64,
+        verification: Box<TaskVerificationRecord>,
+    },
 }
 
 /// 작업 공간의 git 상태이다. 커밋이 하나도 없는 저장소와 저장소가 아닌 폴더는 상태가 없다.
@@ -860,6 +869,7 @@ impl KernelEvent {
             Self::IssueHeld { .. } => KernelRecordKind::IssueHeld,
             Self::CriterionEvidenceRecorded { .. } => KernelRecordKind::CriterionEvidenceRecorded,
             Self::CriterionWaived { .. } => KernelRecordKind::CriterionWaived,
+            Self::TaskVerificationFinished { .. } => KernelRecordKind::TaskVerificationFinished,
             Self::IssueReleased { .. } => KernelRecordKind::IssueReleased,
             Self::IssueWorkPermitRevoked { .. } => KernelRecordKind::IssueWorkPermitRevoked,
             Self::IssueTracked { .. } => KernelRecordKind::IssueTracked,
@@ -898,6 +908,7 @@ impl KernelEvent {
     pub fn thread_id(&self) -> &str {
         match self {
             Self::RepositoryChanged { .. }
+            | Self::TaskVerificationFinished { .. }
             | Self::CriterionEvidenceRecorded { .. }
             | Self::CriterionWaived { .. }
             | Self::AutoFollowConfigured { .. }
@@ -946,6 +957,7 @@ impl KernelEvent {
             | Self::TurnStarted { op_id, .. }
             | Self::TurnEnded { op_id, .. } => *op_id,
             Self::ThreadPromptRejected { .. }
+            | Self::TaskVerificationFinished { .. }
             | Self::CriterionEvidenceRecorded { .. }
             | Self::CriterionWaived { .. }
             | Self::AutoFollowConfigured { .. }
@@ -1008,6 +1020,7 @@ impl KernelEvent {
                 OperationEnd::Lost => OperationState::Lost,
             },
             Self::ThreadPromptRejected { .. }
+            | Self::TaskVerificationFinished { .. }
             | Self::CriterionEvidenceRecorded { .. }
             | Self::CriterionWaived { .. }
             | Self::AutoFollowConfigured { .. }
@@ -2192,6 +2205,7 @@ mod tests {
             ),
             KernelEvent::task_evidence(&sample_task_evidence_events()[0]),
             KernelEvent::task_evidence(&sample_task_evidence_events()[1]),
+            KernelEvent::task_evidence(&sample_task_verification_event()),
         ];
         // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.
         assert_eq!(

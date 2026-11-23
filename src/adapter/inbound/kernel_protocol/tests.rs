@@ -43,6 +43,13 @@ fn sample_commands() -> Vec<KernelCommand> {
             confirm: true,
         },
         KernelCommand::RefreshPlanning {},
+        KernelCommand::RequestTaskVerification {
+            request_id: "host-verification-1".into(),
+            task_id: "task-1".into(),
+            criterion_id: "criterion-1".into(),
+            scope_id: "a".repeat(64),
+            expected_acceptance_revision: 3,
+        },
         KernelCommand::PrepareEvidence {
             request_id: "prepare-1".into(),
             task_id: "task-1".into(),
@@ -2491,6 +2498,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         ),
         Record::task_evidence(&crate::domain::kernel_event::sample_task_evidence_events()[0]),
         Record::task_evidence(&crate::domain::kernel_event::sample_task_evidence_events()[1]),
+        Record::task_evidence(&crate::domain::kernel_event::sample_task_verification_event()),
     ]
 }
 
