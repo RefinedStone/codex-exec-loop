@@ -25,7 +25,7 @@ use zeroize::Zeroize;
 use super::evidence_vault_store::{
     FilesystemEvidenceVaultStoreAdapter, open_record, push_part, record_relative_path, scope_bytes,
 };
-use super::secure_fs;
+use super::vault_fs;
 use crate::application::port::outbound::evidence_vault_backup_port::{
     EvidenceVaultBackupPort, VaultBackupError, VaultBackupExportRequest, VaultBackupImportReport,
     VaultBackupImportRequest, VaultBackupProjectApproval, VaultBackupRecoveryMode,
@@ -46,7 +46,7 @@ const WRAP_ASSOCIATED_DATA_DOMAIN: &str = "akra-evidence-vault-backup";
 const WRAP_KEY_INFO: &[u8] = b"akra-evidence-vault-backup-wrap-key-v1";
 const BACKUP_ID_LEN: usize = 16;
 /// 밖에서 온 파일이 메모리와 디스크를 다 쓰지 못하게 하는 상한이다.
-const MAX_ARCHIVE_BYTES: usize = secure_fs::MAX_FILE_BYTES;
+const MAX_ARCHIVE_BYTES: usize = vault_fs::MAX_FILE_BYTES;
 const MAX_ARCHIVE_RECORDS: usize = 4_096;
 
 /// 보관 파일의 내용이다. 복구 키와 평문은 없다.
@@ -191,7 +191,7 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
                     continue;
                 }
                 let scope_bytes = scope_bytes(scope);
-                let Some(record) = secure_fs::read_optional_file(
+                let Some(record) = vault_fs::read_optional_file(
                     &self.vault_root,
                     &record_relative_path(&scope_bytes),
                 )

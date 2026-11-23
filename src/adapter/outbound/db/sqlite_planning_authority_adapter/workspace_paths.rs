@@ -234,6 +234,28 @@ impl SqlitePlanningAuthorityAdapter {
         })
     }
 
+    /// Resolve the same primary checkout without creating a repository marker, lock, or store.
+    /// Vault inspection must not initialize planning authority before native confirmation.
+    pub(crate) fn resolve_primary_checkout_root_for_read(
+        workspace_dir: &str,
+    ) -> Result<Option<PathBuf>> {
+        let workspace = Path::new(workspace_dir);
+        let canonical =
+            fs::canonicalize(workspace).context("read-only workspace could not be resolved")?;
+        if !workspace.is_absolute() || !canonical.is_dir() {
+            bail!("read-only workspace is not an absolute directory");
+        }
+        let Some(_) = git_stdout(workspace_dir, &["rev-parse", "--show-toplevel"]) else {
+            return Ok(Some(canonical));
+        };
+        let common_dir = git_stdout(workspace_dir, &["rev-parse", "--git-common-dir"])
+            .context("Git repository common directory could not be resolved")?;
+        let common_dir = fs::canonicalize(absolutize_path(workspace, Path::new(&common_dir)))
+            .context("Git repository common directory could not be resolved")?;
+        validate_repository_metadata_directory(&common_dir)?;
+        Ok(resolve_primary_checkout_root(workspace_dir, &common_dir))
+    }
+
     pub(crate) fn resolve_active_workspace_root(workspace_dir: &str) -> PathBuf {
         Self::resolve_authority_location_from_workspace(workspace_dir)
             .map(|location| PathBuf::from(location.canonical_repo_root))

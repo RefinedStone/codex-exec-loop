@@ -150,7 +150,7 @@ fn binding_process_worker() {
     fs::write(marker(&root, &label, "attempted"), b"ready").unwrap();
 
     if mode == "probe" {
-        let result = PrivateRuntimeLease::acquire(
+        let result = VaultBindingLease::acquire(
             root.clone(),
             binding_lock_name(&load.scope),
             Duration::ZERO,

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,6 +10,7 @@ use crate::application::port::outbound::evidence_vault_port::{
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
 
 mod processes;
+mod publication;
 mod safety;
 
 struct Fixture {
@@ -23,12 +23,11 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
             "akra-binding-{label}-{}-{unique}",
             std::process::id()
         ));
-        fs::create_dir_all(&root).unwrap();
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        vault_fs::prepare_writer_root(&root).unwrap();
         Self {
             root: fs::canonicalize(root).unwrap(),
         }
@@ -302,7 +301,7 @@ fn staging_sync_failures_keep_the_old_pointer_and_retry_completes_partial_genera
             );
         }
         let before_pointer = fs::read(pointer_path(&fixture.root)).unwrap();
-        secure_fs::install_after_atomic_replace_error_hook("synthetic staged record sync failure");
+        vault_fs::install_after_atomic_replace_error_hook("synthetic staged record sync failure");
         let result = store
             .begin_binding(load_request())
             .unwrap()
@@ -335,7 +334,7 @@ fn pointer_sync_failure_is_unknown_and_the_original_attempt_is_retryable() {
     let expected = seed_legacy(&store);
     let operation = request(expected, "pointer-retry", desired_fields("next"));
     test_hooks::install_before_pointer(|| {
-        secure_fs::install_after_atomic_replace_error_hook("synthetic pointer sync failure");
+        vault_fs::install_after_atomic_replace_error_hook("synthetic pointer sync failure");
     });
     assert_eq!(
         store
@@ -374,7 +373,7 @@ fn ciphertext_cas_keeps_a_noncooperating_pointer_change() {
     let path = pointer_path(&fixture.root);
     let external_copy = external.clone();
     test_hooks::install_before_pointer(move || {
-        secure_fs::install_before_atomic_replace_hook(move || {
+        vault_fs::install_before_atomic_replace_hook(move || {
             fs::write(&path, &external_copy).unwrap();
         });
     });

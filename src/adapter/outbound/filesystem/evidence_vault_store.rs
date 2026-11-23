@@ -5,7 +5,7 @@
  * 키 식별자, 레코드의 범위(로컬 프로젝트, 이슈, 필드, 게시 의도 또는 확인된 판)는 연관 데이터로 암호문에 묶는다.
  * 그래서 머리말이나 암호문을 바꾼 레코드, 다른 범위의 자리로 복사한 레코드는 인증에 실패한다.
  *
- * 파일은 `secure_fs` 로 원자적으로 바꾼다. 교체 후 검증 실패는 결과 불확실로 구분한다.
+ * 파일은 `vault_fs` 로 원자적으로 바꾼다. 교체 후 검증 실패는 결과 불확실로 구분한다.
  */
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-use super::secure_fs;
+use super::vault_fs;
 
 mod binding;
 use crate::application::port::outbound::evidence_vault_port::{
@@ -57,7 +57,7 @@ impl FilesystemEvidenceVaultStoreAdapter {
     }
 
     /// 기존 v1 레코드의 읽기 호환 시험에만 쓰는 seed 경로이다. 생산 저장 계약을 우회하지 않는다.
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, any(unix, windows)))]
     pub(crate) fn seed_record_for_test(
         &self,
         request: VaultRecordSaveRequest,
@@ -68,14 +68,15 @@ impl FilesystemEvidenceVaultStoreAdapter {
     fn save_record(&self, request: VaultRecordSaveRequest) -> Result<(), VaultStoreError> {
         let scope = scope_bytes(&request.scope);
         let body = seal_record(&request.key, &scope, &request.plaintext)?;
-        secure_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body)
-            .map_err(|error| {
-                if secure_fs::atomic_replacement_completed(&error) {
+        vault_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body).map_err(
+            |error| {
+                if vault_fs::write_outcome_unknown(&error) {
                     VaultStoreError::WriteOutcomeUnknown
                 } else {
                     storage_error(error)
                 }
-            })
+            },
+        )
     }
 }
 
@@ -90,14 +91,15 @@ impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
     fn save_creation(&self, request: VaultCreationSaveRequest) -> Result<(), VaultStoreError> {
         let scope = creation_scope_bytes(&request.scope);
         let body = seal_record(&request.key, &scope, &request.plaintext)?;
-        secure_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body)
-            .map_err(|error| {
-                if secure_fs::atomic_replacement_completed(&error) {
+        vault_fs::write_file_atomic(&self.vault_root, &record_relative_path(&scope), &body).map_err(
+            |error| {
+                if vault_fs::write_outcome_unknown(&error) {
                     VaultStoreError::WriteOutcomeUnknown
                 } else {
                     storage_error(error)
                 }
-            })
+            },
+        )
     }
 
     fn load_creation(
@@ -105,7 +107,7 @@ impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
         request: VaultCreationLoadRequest,
     ) -> Result<VaultPlaintext, VaultStoreError> {
         let scope = creation_scope_bytes(&request.scope);
-        let body = secure_fs::read_optional_file(&self.vault_root, &record_relative_path(&scope))
+        let body = vault_fs::read_optional_file(&self.vault_root, &record_relative_path(&scope))
             .map_err(storage_error)?
             .ok_or(VaultStoreError::RecordNotFound)?;
         open_record(&body, &request.key, &scope)
@@ -122,7 +124,7 @@ impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
 
     fn load(&self, request: VaultRecordLoadRequest) -> Result<VaultPlaintext, VaultStoreError> {
         let scope = scope_bytes(&request.scope);
-        let body = secure_fs::read_optional_file(&self.vault_root, &record_relative_path(&scope))
+        let body = vault_fs::read_optional_file(&self.vault_root, &record_relative_path(&scope))
             .map_err(storage_error)?
             .ok_or(VaultStoreError::RecordNotFound)?;
         open_record(&body, &request.key, &scope)
@@ -321,8 +323,11 @@ pub(super) fn record_relative_path(scope: &[u8]) -> PathBuf {
     Path::new("records").join(format!("{name}.json"))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
+    mod compatibility;
+    mod restore;
+
     use std::cell::RefCell;
     use std::fs;
     use std::rc::Rc;
@@ -344,12 +349,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let path = crate::test_utils::platform_safe_temp_dir().join(format!(
             "akra-evidence-vault-{label}-{}-{unique}",
             std::process::id()
         ));
-        fs::create_dir_all(&path).expect("temp directory");
-        path
+        vault_fs::prepare_writer_root(&path).expect("private temp directory");
+        fs::canonicalize(path).expect("physical temp directory")
     }
 
     fn scope(workspace_dir: &str) -> VaultRecordScope {
@@ -410,6 +415,21 @@ mod tests {
 
     fn write_record(vault_root: &Path, scope: &VaultRecordScope, record: &serde_json::Value) {
         fs::write(record_path(vault_root, scope), record.to_string()).expect("record fixture");
+    }
+
+    fn copy_ciphertext_fixture(vault_root: &Path, source: &Path, destination: &Path) {
+        // AEAD 범위 결속을 검사하므로 암호문은 바꾸지 않고 파일 보안 경계만 갖춘다.
+        // fs::copy로 만든 Windows 파일에는 필요한 private ACL이 보장되지 않는다.
+        let ciphertext = fs::read(source).expect("source ciphertext");
+        let relative = destination
+            .strip_prefix(vault_root)
+            .expect("destination is inside the fixture Vault");
+        vault_fs::write_file_atomic(vault_root, relative, &ciphertext)
+            .expect("private copied ciphertext fixture");
+        assert_eq!(
+            fs::read(destination).expect("copied ciphertext"),
+            ciphertext
+        );
     }
 
     fn seeded(label: &str) -> (PathBuf, FilesystemEvidenceVaultStoreAdapter) {
@@ -506,11 +526,11 @@ mod tests {
                 load(&adapter, other.clone()),
                 Err(VaultStoreError::RecordNotFound)
             );
-            fs::copy(
-                record_path(&vault_root, &project_scope()),
-                record_path(&vault_root, &other),
-            )
-            .expect("copy record");
+            copy_ciphertext_fixture(
+                &vault_root,
+                &record_path(&vault_root, &project_scope()),
+                &record_path(&vault_root, &other),
+            );
 
             assert_eq!(
                 load(&adapter, other),
@@ -598,7 +618,7 @@ mod tests {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let seen_in_hook = Rc::clone(&seen);
         let hook_path = path.clone();
-        secure_fs::install_before_atomic_replace_hook(move || {
+        vault_fs::install_before_atomic_replace_hook(move || {
             *seen_in_hook.borrow_mut() = fs::read(hook_path).expect("record before replace");
         });
         save(&adapter, project_scope(), "synthetic-second-segment");
@@ -622,7 +642,7 @@ mod tests {
     #[test]
     fn failure_after_replacement_reports_an_unknown_outcome() {
         let (_vault_root, adapter) = seeded("post-replace-failure");
-        secure_fs::install_after_atomic_replace_error_hook("synthetic directory sync failure");
+        vault_fs::install_after_atomic_replace_error_hook("synthetic directory sync failure");
         let result = adapter.save(VaultRecordSaveRequest {
             scope: project_scope(),
             key: key(KEY_ID, &KEY),
@@ -737,11 +757,11 @@ mod tests {
                 load_creation(&adapter, other.clone()),
                 Err(VaultStoreError::RecordNotFound)
             );
-            fs::copy(
-                creation_path(&root, &original),
-                creation_path(&root, &other),
-            )
-            .unwrap();
+            copy_ciphertext_fixture(
+                &root,
+                &creation_path(&root, &original),
+                &creation_path(&root, &other),
+            );
             assert_eq!(
                 load_creation(&adapter, other),
                 Err(VaultStoreError::IntegrityFailure)
@@ -756,11 +776,11 @@ mod tests {
         let original = creation_scope();
         save_creation(&adapter, original.clone());
         let actual_issue = project_scope();
-        fs::copy(
-            creation_path(&root, &original),
-            record_path(&root, &actual_issue),
-        )
-        .unwrap();
+        copy_ciphertext_fixture(
+            &root,
+            &creation_path(&root, &original),
+            &record_path(&root, &actual_issue),
+        );
         assert_eq!(
             load(&adapter, actual_issue.clone()),
             Err(VaultStoreError::IntegrityFailure)
@@ -781,7 +801,7 @@ mod tests {
         let root = temp_vault("creation-post-replace");
         let adapter = FilesystemEvidenceVaultStoreAdapter::new(root);
         let scope = creation_scope();
-        secure_fs::install_after_atomic_replace_error_hook(
+        vault_fs::install_after_atomic_replace_error_hook(
             "synthetic creation directory sync failure",
         );
         let result = adapter.save_creation(VaultCreationSaveRequest {

@@ -173,9 +173,10 @@ impl DesktopVaultRestoreService {
         );
         self.ensure_live()?;
         match outcome {
-            #[cfg(any(target_os = "linux", target_os = "macos", test))]
+            #[cfg(any(target_os = "linux", target_os = "macos", windows, test))]
             VaultNativeConfirmationOutcome::Confirmed => Ok(()),
             VaultNativeConfirmationOutcome::Cancelled => Err(Hold::ConfirmationCancelled),
+            #[cfg(any(not(windows), test))]
             VaultNativeConfirmationOutcome::Unsupported => Err(Hold::PlatformUnsupported),
             VaultNativeConfirmationOutcome::Unavailable => Err(Hold::SourceUnavailable),
         }

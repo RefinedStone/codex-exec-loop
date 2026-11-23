@@ -3,17 +3,21 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 /// The destination was replaced, but a later durability or identity check failed.
+#[cfg(unix)]
 #[derive(Debug)]
 struct AtomicReplacementCompleted(String);
 
+#[cfg(unix)]
 impl std::fmt::Display for AtomicReplacementCompleted {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0)
     }
 }
 
+#[cfg(unix)]
 impl std::error::Error for AtomicReplacementCompleted {}
 
+#[cfg(unix)]
 pub(crate) fn atomic_replacement_completed(error: &anyhow::Error) -> bool {
     error.downcast_ref::<AtomicReplacementCompleted>().is_some()
 }

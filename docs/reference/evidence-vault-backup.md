@@ -111,9 +111,10 @@ restore is held and the user reconnects on that issue (see [architecture](./arch
 - The exporting device and the importing device do not synchronize. An import is a one-time copy.
 - Import does not check that an issue still exists on the provider. A deleted or transferred issue
   stays imported and its restore is held by the restore service.
-- Platform: the vault record files use `secure_fs`, which is implemented for Unix only (macOS and
-  Linux). The backup code builds on Windows, but the file operations fail there and the tests run
-  on Unix only.
+- Platform: record access uses the Vault-specific file boundary. It retains the Unix implementation
+  and supports Windows local NTFS with verified private ownership, ACLs, and pinned paths. ReFS and
+  network shares are not supported. Import requires an existing safe Vault root and does not repair
+  an unsafe root or create a missing one. See [Windows validation](../validation/windows-vault-restore.md).
 - Concurrent import, publish finalization, and service reconnect use the same per-issue binding
   lease. This does not make the entire multi-issue archive atomic or add a distributed transaction
   with the provider. Native Desktop reconnect uses the same transaction behind its

@@ -1,5 +1,8 @@
 # Desktop 원문 보기의 native 연결 (#2414)
 
+> 이 문서의 실행 결과는 당시 구현 기준입니다. #2688의 Windows Vault 지원과 후속 검증은
+> [Windows Vault 원문 복원·재연결](windows-vault-restore.md)에 별도로 기록합니다.
+
 이 문서는 #2650의 최초 읽기 전용 연결과 당시 검증 결과를 기록합니다. 이후의 native 재연결은
 [#2656 검증 기록](desktop-vault-native-reconnect.md)에서 별도로 다룹니다.
 

@@ -35,5 +35,7 @@ pub use self::task_evidence_artifact::FilesystemTaskEvidenceArtifactAdapter;
 pub mod issue_creation_journal;
 pub use self::issue_creation_journal::IssueCreationJournalAdapter;
 
+#[cfg(not(windows))]
 pub(crate) mod private_runtime_lease;
+pub(crate) mod vault_fs;
 pub(crate) mod vault_restore_workspace;
