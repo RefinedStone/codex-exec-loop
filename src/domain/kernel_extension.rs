@@ -14,6 +14,8 @@ pub(crate) struct ExtensionContext {
     pub repository_key: Option<String>,
     /// Only the transport's verified server thread may populate this field.
     pub verified_thread: Option<String>,
+    /// Captured at transport admission; a late conversation switch invalidates scoped reads.
+    pub conversation_generation: Option<(u64, std::sync::Arc<std::sync::atomic::AtomicU64>)>,
     pub activation_revision: u64,
 }
 
