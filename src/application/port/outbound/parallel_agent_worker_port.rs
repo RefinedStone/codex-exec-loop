@@ -43,6 +43,10 @@ impl std::fmt::Debug for ParallelAgentWorkerResumeRequest<'_> {
 /// Revalidate the application-owned claim after reattachment and immediately before turn/start.
 pub trait ParallelAgentWorkerStartAuthorization: Send + Sync {
     fn validate(&self) -> Result<()>;
+    fn acquire(&self) -> Result<Box<dyn crate::application::port::agent_action::AgentActionGuard>> {
+        self.validate()?;
+        Ok(Box::new(()))
+    }
 }
 
 impl<F> ParallelAgentWorkerStartAuthorization for F
@@ -64,6 +68,19 @@ where
 // distributor가 나중에 담당한다. port를 분리하면 adapter는 같은 app-server transport를 쓰더라도
 // "사용자 대화 turn"과 "고립된 작업자 실행"의 계약을 혼동하지 않는다.
 pub trait ParallelAgentWorkerPort: Send + Sync {
+    /// Production adapters acquire inside the actual turn/start boundary. The compatibility
+    /// adapter retains admission through its entire call and never retries without the guard.
+    fn run_authorized_isolated_new_thread_stream(
+        &self,
+        request: ParallelAgentWorkerStreamRequest<'_>,
+        event_sender: ConversationStreamSender,
+        start_authorization: &dyn ParallelAgentWorkerStartAuthorization,
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        let guard = start_authorization.acquire()?;
+        guard.validate()?;
+        self.run_isolated_new_thread_stream(request, event_sender)
+    }
+
     /// Read/resume the exact existing thread and start one answer turn. No thread/start fallback.
     fn run_isolated_resumed_thread_stream(
         &self,

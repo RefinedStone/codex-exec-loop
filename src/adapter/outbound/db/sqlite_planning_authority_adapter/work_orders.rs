@@ -19,8 +19,12 @@ use super::{
     runtime_projection, table_exists,
 };
 
+mod action;
 mod admission;
 mod control;
+pub(super) use action::{
+    identity as worker_action_identity, validate_launch as validate_worker_launch,
+};
 mod execution;
 mod validation_links;
 mod validation_recovery;

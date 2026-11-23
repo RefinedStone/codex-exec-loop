@@ -99,6 +99,7 @@ pub(super) fn select_permitted_queue_head(
     authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
+    issue_binding: Option<&super::super::binding_action::IssueBindingActionConfiguration>,
     context: &mut PoolRuntimeContext,
     allow_cleanup_probe: bool,
 ) -> Result<Option<usize>, String> {
@@ -108,6 +109,18 @@ pub(super) fn select_permitted_queue_head(
             continue;
         }
         let mut record = context.distributor_queue_records[index].clone();
+        // A binding pause is independent of queue ordering for unrelated work. Do not
+        // rewrite operator/conflict waits or manufacture a new permit when it resumes.
+        if super::super::binding_action::paused(
+            authority,
+            issue_binding,
+            &context.repo_root,
+            &record.task_id,
+        )
+        .map_err(|error| error.to_string())?
+        {
+            continue;
+        }
         if allow_cleanup_probe && super::evidence::can_probe_evidence_wait_cleanup(&record) {
             return Ok(Some(index));
         }

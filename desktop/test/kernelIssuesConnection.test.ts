@@ -2208,3 +2208,53 @@ describe("issue execution snapshot fencing", () => {
     expect(h.view().issues.page).toMatchObject({ revision: 1 });
   });
 });
+
+function bindingAutomation(paused: boolean, revision: number, pending: { command_id: string; paused: boolean } | null = null): Extract<IssueAutomationAnswer, { status: "ready" }> {
+  return { ...automation(), binding_id: "binding-1", binding_pause: { status: "ready", binding_id: "binding-1", revision, paused, pending } };
+}
+
+describe("binding pause command and completion", () => {
+  it("sends pause without native confirmation, shows acceptance pending, and cannot send a second transition while pending", async () => {
+    const confirm = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueBindingResume"]>>(async () => ({ cancelled: true }));
+    const h = harness({ confirmations: { confirmIssueBindingResume: confirm } });
+    await h.openIssues(issuePage(), bindingAutomation(false, 3));
+    const before = h.queries("issues").length;
+    const pending = h.connection.setIssueBindingPaused(true);
+    const request = h.requests("akra/kernel/command").at(-1)!;
+    const command = request.params.command!;
+    expect(command).toMatchObject({ type: "set_issue_binding_paused", binding_id: "binding-1", expected_revision: 3, paused: true });
+    h.reply(request, { processed: true, result: { type: "issue_binding_pause_requested", command: {
+      command_id: command.command_id, binding_id: "binding-1", requested_paused: true, accepted_revision: 4, receipt: null,
+    } } });
+    await completeInteractionRefresh(h, before, bindingAutomation(false, 4, { command_id: command.command_id as string, paused: true }));
+    await pending;
+    expect(h.view().issues.notice).toContain("접수");
+    expect(h.view().issues.automation).toMatchObject({ binding_pause: { paused: false, pending: { paused: true } } });
+    await h.connection.setIssueBindingPaused(false);
+    expect(h.requests("akra/kernel/command")).toHaveLength(1);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("resumes only through native confirmation and ignores duplicate or older completion as current authority", async () => {
+    const confirm = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueBindingResume"]>>(async () => ({ cancelled: true }));
+    const h = harness({ confirmations: { confirmIssueBindingResume: confirm } });
+    await h.openIssues(issuePage(), bindingAutomation(true, 4));
+    await h.connection.setIssueBindingPaused(false);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0]?.[0]).toMatchObject({ workspace: "/repo", bindingId: "binding-1", expectedRevision: 4 });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+    h.connection.handleEvent({ event: { ...bindingAutomation(false, 5), type: "issues" } });
+    const event = { event: { type: "recorded", sequence: 40, recorded_at: "now", event: {
+      kind: "issue_binding_pause_completed", event_id: "pause-old", receipt: { command_id: "pause", binding_id: "binding-1", revision: 4, paused: true, outcome: "paused", changed: true },
+    } } };
+    const before = h.queries("issues").length;
+    h.connection.handleEvent(event);
+    h.connection.handleEvent(event);
+    await completeInteractionRefresh(h, before, bindingAutomation(false, 5));
+    expect(h.queries("issues")).toHaveLength(before + 1);
+    expect(h.view().issues.automation).toMatchObject({ binding_pause: { revision: 5, paused: false } });
+    h.connection.handleEvent({ event: { ...bindingAutomation(true, 4), type: "issues" } });
+    expect(h.view().issues.automation).toMatchObject({ binding_pause: { revision: 5, paused: false } });
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+});

@@ -142,6 +142,7 @@ fn feedback_unconfirmed_resync_preserves_human_approval_and_gate_until_confirmed
     let assessment = assess(&after_read, Some(&human_policy()));
     assert_eq!(assessment, original_assessment);
     let expected = IssueTriageFence {
+        binding_run_revision: 0,
         collection_epoch: control.epoch,
         observation_revision: after_read.observation_revision,
         tracked_revision: after_read.tracked_revision,

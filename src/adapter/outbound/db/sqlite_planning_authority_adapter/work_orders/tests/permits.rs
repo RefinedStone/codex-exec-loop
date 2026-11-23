@@ -11,6 +11,7 @@ use super::{
     SqlitePlanningAuthorityAdapter, connection, count, register_next, seed, stored, task, workspace,
 };
 
+mod action;
 mod delivery_evidence;
 
 fn basis(revision: u64) -> PlanningWorkPermitBasis {

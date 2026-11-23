@@ -186,6 +186,8 @@ fn issue_detail_distinguishes_not_found_from_unavailable_and_keeps_global_report
 fn issue_detail_unknown_has_no_content_fallback_and_uses_the_catalog_revision() {
     let issue = reference();
     let item = IssueCollectionItem {
+        binding_run_revision: 0,
+        binding_run_blocked: false,
         start_budget_wait: None,
         work: None,
         open_decisions: Vec::new(),
@@ -219,6 +221,8 @@ fn issue_detail_unknown_has_no_content_fallback_and_uses_the_catalog_revision() 
 #[test]
 fn issue_detail_query_time_preserves_the_snapshot_and_legacy_wire_contract() {
     let snapshot = detail(Some(IssueCollectionItem {
+        binding_run_revision: 0,
+        binding_run_blocked: false,
         start_budget_wait: None,
         work: None,
         open_decisions: Vec::new(),
@@ -261,6 +265,8 @@ fn issue_detail_exposes_server_actions_and_only_the_selected_safe_conversation_t
     use crate::domain::issue_work::IssueSharedCopy;
 
     let item = IssueCollectionItem {
+        binding_run_revision: 0,
+        binding_run_blocked: false,
         start_budget_wait: None,
         issue: reference(),
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),
@@ -344,6 +350,8 @@ fn issue_detail_exposes_server_actions_and_only_the_selected_safe_conversation_t
 #[test]
 fn issue_detail_feedback_projects_only_persisted_metadata_and_keeps_legacy_compatible() {
     let item = IssueCollectionItem {
+        binding_run_revision: 0,
+        binding_run_blocked: false,
         start_budget_wait: None,
         issue: reference(),
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),

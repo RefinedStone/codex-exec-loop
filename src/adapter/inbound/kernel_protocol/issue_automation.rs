@@ -48,6 +48,8 @@ pub enum IssueAutomationState {
 pub struct IssueAutomationReadyState {
     #[serde(default)]
     pub autonomy: IssueAutonomyState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_pause: Option<super::IssueBindingPauseState>,
     pub mode: IssueAutomationMode,
     pub epoch: u64,
     /// 목록과 같은 catalog 판이다. 수집 control의 CAS 판과는 별개다.
@@ -96,6 +98,7 @@ impl IssueAutomationState {
         let state = &projection.state;
         Self::Ready(Box::new(IssueAutomationReadyState {
             autonomy: IssueAutonomyState::default(),
+            binding_pause: None,
             mode: state.config.mode.into(),
             epoch: state.epoch,
             revision: projection.catalog_revision,
@@ -108,6 +111,19 @@ impl IssueAutomationState {
             collecting: None,
             next_poll_after_ms: None,
         }))
+    }
+
+    pub fn with_binding_pause(
+        mut self,
+        pause: Option<&crate::domain::issue_automation::binding_pause::IssueBindingPauseState>,
+    ) -> Self {
+        if let Self::Ready(state) = &mut self {
+            state.binding_pause = state
+                .binding_id
+                .as_deref()
+                .map(|id| super::IssueBindingPauseState::from_current(id, pause));
+        }
+        self
     }
 
     pub fn with_autonomy(mut self, projection: &IssueAutonomyProjection) -> Self {

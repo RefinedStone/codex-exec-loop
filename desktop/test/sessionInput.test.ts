@@ -44,6 +44,7 @@ function harness(readOnly = false) {
     confirmIssueDecision: async () => ({ cancelled: true }),
     confirmIssueAutomationMode: async () => ({ cancelled: true }),
     confirmIssueAutonomy: async () => ({ cancelled: true }),
+    confirmIssueBindingResume: async () => ({ cancelled: true }),
     gitBranchSummary: async () => ({ ok: false as const, message: "" }),
     gitCommitDiff: async () => ({ text: "", truncated: false }),
     gitPush: async () => ({ ok: true as const, url: null }),

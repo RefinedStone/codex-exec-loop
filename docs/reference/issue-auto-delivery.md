@@ -80,8 +80,11 @@ Task·scope·작업 control·permit 전체·queue claim·source·증거 revision
 보존하며 Auto 선택을 허용한다. 현재 선택 revision을 확인하므로 파일 정책만 바꾸거나 오래된
 확인 명령을 재사용해 자동 실행을 승인할 수 없다.
 
-바인딩 전체의 일시 정지는 별도 후속 PR이다. 여기의 기존 작업별 Hold·Cancel·Takeover를
-바인딩 전체 Pause로 설명하지 않는다. client 없이 Gateway를 다시 켜는 복구는 #2561 범위다.
+[바인딩별 Pause / Resume](issue-binding-pause.md)는 수집 설정과 선택한 자율 수준을 유지한 채
+그 바인딩의 새 자동 행동을 닫는다. 요청 수락과 완료 영수증을 구분하며, 현재 정책에 결속된
+Native Resume 확인 뒤에도 이전 generation이나 permit은 재사용하지 않는다. 기존 작업별
+Hold·Cancel·Takeover는 별도 상태로 보존한다. client 없이 Gateway를 다시 켜는 복구는
+#2561 범위다.
 
 회귀는 실제 SQLite 재오픈, 현재 출처 변경, permit 발급·재조회와 최종 transaction,
 기존 distributor의 실제 임시 Git, fake GitHub 효과 횟수, Native 확인 및 Desktop 선택을 다룬다.

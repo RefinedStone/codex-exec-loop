@@ -69,6 +69,8 @@ pub(super) fn claim(
             }
             if record.revision != request.fence.decision_revision
                 || request.input_basis.decision_revision != record.revision
+                || request.input_basis.binding_run_revision
+                    != request.fence.triage.binding_run_revision
                 || request.input_basis.decision_basis != record.request.definition().basis
             {
                 return Ok(IssueArbiterClaimResult::Conflict);
@@ -201,6 +203,7 @@ fn finish_outcome(
         request.now_unix_ms,
     )? || current.input_basis.decision_basis != record.request.definition().basis
         || current.input_basis.decision_revision != record.revision
+        || current.input_basis.binding_run_revision != current.fence.triage.binding_run_revision
     {
         return waiting(IssueArbiterWaitReason::ContextUnavailable);
     }

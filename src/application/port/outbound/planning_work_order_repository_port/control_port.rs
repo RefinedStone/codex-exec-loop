@@ -2,6 +2,14 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
+/// Immutable lineage and the execution epoch captured before delayed worker preparation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningWorkerActionIdentity {
+    pub work_order_id: String,
+    pub origin: String,
+    pub authorization_epoch: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlanningWorkControl {

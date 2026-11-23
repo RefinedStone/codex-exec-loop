@@ -862,6 +862,8 @@ enum FakeGithubAutomationBoundary {
     SourcePushed,
     PullRequestEnsured,
     IntegrationPushReadiness,
+    PullRequestCloseReadiness,
+    PullRequestClosed,
 }
 
 #[derive(Clone)]
@@ -1604,6 +1606,9 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         if pre_push_inspection {
             self.run_boundary_hook(FakeGithubAutomationBoundary::IntegrationPushReadiness);
         }
+        if closing_inspection {
+            self.run_boundary_hook(FakeGithubAutomationBoundary::PullRequestCloseReadiness);
+        }
         let pre_push_overrides = pre_push_inspection
             .then(|| {
                 self.pre_push_inspect_overrides
@@ -1854,6 +1859,7 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         {
             anyhow::bail!(error);
         }
+        self.run_boundary_hook(FakeGithubAutomationBoundary::PullRequestClosed);
         Ok(())
     }
     fn close_pull_request_for_delivery_target(

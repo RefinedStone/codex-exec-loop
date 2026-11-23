@@ -85,6 +85,7 @@ fn subject(fixture: &Fixture) -> (IssueTriageFence, IssueCollectionItem) {
         .unwrap();
     let item = batch.items.pop().unwrap();
     let expected = IssueTriageFence {
+        binding_run_revision: 0,
         collection_epoch: batch.collection.unwrap().epoch,
         observation_revision: item.observation_revision,
         tracked_revision: item.tracked_revision,

@@ -1079,6 +1079,8 @@ fn distributor_integrate_branch(
                 return Ok(notice);
             }
             claim_permit.renew("pull request close")?;
+            claim_permit.validate_binding_authority()?;
+            claim_permit.validate_binding_memory()?;
             if let Err(error) = github_automation.close_pull_request_for_delivery_target(
                 &repo_root,
                 &target.push_remote,
@@ -1126,6 +1128,8 @@ fn distributor_integrate_branch(
             return Ok(notice);
         }
         claim_permit.renew("conditional remote source branch cleanup")?;
+        claim_permit.validate_binding_authority()?;
+        claim_permit.validate_binding_memory()?;
         match github_automation.delete_branch_if_unchanged_for_delivery_target(
             &repo_root,
             &target.push_remote,

@@ -127,6 +127,7 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
         .save_triage(
             fixture.cwd(),
             IssueTriageFence {
+                binding_run_revision: 0,
                 collection_epoch: batch.collection.unwrap().epoch,
                 observation_revision: item.observation_revision,
                 tracked_revision: item.tracked_revision,

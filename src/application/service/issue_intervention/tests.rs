@@ -1073,13 +1073,22 @@ fn issue_intervention_rejected_guidance_after_takeover_does_not_block_cancellati
 }
 
 #[test]
-fn issue_intervention_reserves_internal_autonomy_command_ids() {
+fn issue_intervention_reserves_internal_autonomy_and_binding_pause_command_ids() {
     let fixture = Fixture::new();
-    for action in [
-        IssueInterventionAction::Retriage,
-        IssueInterventionAction::Hold,
-    ] {
-        let request = fixture.request("autonomy-reserved-fixture", action);
+    for (id, action) in [
+        "autonomy-reserved-fixture",
+        "binding-pause-reserved-fixture",
+    ]
+    .into_iter()
+    .flat_map(|id| {
+        [
+            IssueInterventionAction::Retriage,
+            IssueInterventionAction::Hold,
+        ]
+        .into_iter()
+        .map(move |action| (id, action))
+    }) {
+        let request = fixture.request(id, action);
         assert!(
             fixture
                 .service()

@@ -33,11 +33,12 @@ use crate::adapter::outbound::filesystem::{
 use crate::application::port::outbound::{
     IssueAutomationRestartEntry, IssueAutomationRestartRegistryPort,
 };
+use crate::application::service::issue_binding_admission::IssueBindingAdmission;
 use crate::application::service::issue_collection::IssueCollectionService;
-#[cfg(not(test))]
-use crate::composition::issue_collection::build as build_issue_collection;
 #[cfg(test)]
-use crate::composition::issue_collection::build_for_kernel_test as build_issue_collection;
+use crate::composition::issue_collection::build_for_kernel_test_with_admission as build_issue_collection;
+#[cfg(not(test))]
+use crate::composition::issue_collection::build_with_admission as build_issue_collection;
 use crate::composition::kernel_host::{KernelCallError, KernelClientHandle, KernelHost};
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::production;
@@ -154,8 +155,15 @@ fn verify_restart_identity(
 }
 
 #[cfg(test)]
-type RestartRuntimeFactory =
-    Arc<dyn Fn(&str, Arc<IssueCollectionService>) -> Result<NativeClientRuntime> + Send + Sync>;
+type RestartRuntimeFactory = Arc<
+    dyn Fn(
+            &str,
+            Arc<IssueCollectionService>,
+            Arc<IssueBindingAdmission>,
+        ) -> Result<NativeClientRuntime>
+        + Send
+        + Sync,
+>;
 
 /// 저장소별 커널 목록이다. Gateway 가 비동기 접속 사이에서 함께 쓴다.
 #[derive(Default)]
@@ -189,12 +197,12 @@ impl RepositoryKernelRegistry {
         candidate: &IssueAutomationRestartEntry,
         registry: &dyn IssueAutomationRestartRegistryPort,
     ) -> Result<RepositoryRestartOutcome> {
-        self.restore_registered_with(candidate, registry, |workspace| {
+        self.restore_registered_with(candidate, registry, |workspace, admission| {
             production::recover_pending_issue_interventions_for_restart(
                 workspace,
                 &candidate.repository_key,
             )?;
-            Ok(build_issue_collection(workspace))
+            Ok(build_issue_collection(workspace, admission))
         })
     }
 
@@ -204,7 +212,7 @@ impl RepositoryKernelRegistry {
         &self,
         candidate: &IssueAutomationRestartEntry,
         registry: &dyn IssueAutomationRestartRegistryPort,
-        recover: impl FnOnce(&str) -> Result<Arc<IssueCollectionService>>,
+        recover: impl FnOnce(&str, Arc<IssueBindingAdmission>) -> Result<Arc<IssueCollectionService>>,
     ) -> Result<RepositoryRestartOutcome> {
         self.ensure_running()?;
         let target = match production::issue_automation_restart_target(&candidate.workspace_root) {
@@ -249,7 +257,7 @@ impl RepositoryKernelRegistry {
         target: IssueAutomationRestartEntry,
         location: crate::domain::planning::PlanningAuthorityLocation,
         registry: &dyn IssueAutomationRestartRegistryPort,
-        recover: impl FnOnce(&str) -> Result<Arc<IssueCollectionService>>,
+        recover: impl FnOnce(&str, Arc<IssueBindingAdmission>) -> Result<Arc<IssueCollectionService>>,
     ) -> Result<RepositoryRestartOutcome> {
         if location.repository_identity != target.repository_key
             || location.canonical_repo_root != target.workspace_root
@@ -283,7 +291,8 @@ impl RepositoryKernelRegistry {
         )?;
         verify_restart_identity(candidate, &target, &lock)?;
         self.ensure_running()?;
-        let issues = recover(&target.workspace_root)?;
+        let admission = Arc::new(IssueBindingAdmission::new());
+        let issues = recover(&target.workspace_root, admission.clone())?;
         verify_restart_identity(candidate, &target, &lock)?;
         match issues.autonomy_state() {
             IssueAutonomyProjection::Ready(state)
@@ -303,7 +312,8 @@ impl RepositoryKernelRegistry {
             _ => return Ok(RepositoryRestartOutcome::Ineligible),
         }
         self.ensure_running()?;
-        let built = self.assemble_restart_kernel(lock, &target.workspace_root, issues)?;
+        let built =
+            self.assemble_restart_kernel(lock, &target.workspace_root, issues, admission)?;
         self.ensure_running()?;
         self.install_idle_notification(&built);
         *kernel = Some(built);
@@ -315,12 +325,15 @@ impl RepositoryKernelRegistry {
         lock: RepositoryKernelLock,
         workspace: &str,
         issues: Arc<IssueCollectionService>,
+        admission: Arc<IssueBindingAdmission>,
     ) -> Result<RepositoryKernel> {
         #[cfg(test)]
         if let Some(factory) = &self.restart_runtime {
-            return start_repository_kernel(lock, factory(workspace, issues)?, workspace);
+            return assemble_recovered_kernel_with_runtime(lock, workspace, issues.clone(), || {
+                factory(workspace, issues, admission)
+            });
         }
-        assemble_recovered_kernel(lock, workspace, self.app_server.clone(), issues)
+        assemble_recovered_kernel(lock, workspace, self.app_server.clone(), issues, admission)
     }
 
     pub(crate) fn is_stopping(&self) -> bool {
@@ -547,8 +560,9 @@ pub(crate) fn build_kernel_for_workspace(
     production::recover_pending_issue_interventions(workspace_dir)?;
     // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
     // 저장 명령과 관찰자가 같은 서비스의 모드/읽기 epoch 경계를 공유한다.
-    let issues = build_issue_collection(workspace_dir);
-    assemble_recovered_kernel(lock, workspace_dir, app_server, issues)
+    let admission = Arc::new(IssueBindingAdmission::new());
+    let issues = build_issue_collection(workspace_dir, admission.clone());
+    assemble_recovered_kernel(lock, workspace_dir, app_server, issues, admission)
 }
 
 fn assemble_recovered_kernel(
@@ -556,14 +570,41 @@ fn assemble_recovered_kernel(
     workspace_dir: &str,
     app_server: Option<GatewayUpstreamSocket>,
     issues: Arc<IssueCollectionService>,
+    admission: Arc<IssueBindingAdmission>,
 ) -> Result<RepositoryKernel> {
-    let mut runtime =
-        production::build_headless_kernel_runtime(workspace_dir, app_server, issues.clone());
-    // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
+    let runtime_issues = issues.clone();
+    assemble_recovered_kernel_with_runtime(lock, workspace_dir, issues, || {
+        Ok(production::build_headless_kernel_runtime(
+            workspace_dir,
+            app_server,
+            runtime_issues,
+            admission,
+        ))
+    })
+}
+
+fn assemble_recovered_kernel_with_runtime(
+    lock: RepositoryKernelLock,
+    workspace_dir: &str,
+    issues: Arc<IssueCollectionService>,
+    build_runtime: impl FnOnce() -> Result<NativeClientRuntime>,
+) -> Result<RepositoryKernel> {
+    // Every production and test runtime uses this same recovery and attachment boundary.
+    recover_issue_binding_pause(&issues)?;
+    let mut runtime = build_runtime()?;
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     runtime.attach_repository_observer(production::repository_state_port());
     runtime.attach_issue_collection(issues)?;
     start_repository_kernel(lock, runtime, workspace_dir)
+}
+
+fn recover_issue_binding_pause(issues: &IssueCollectionService) -> Result<()> {
+    // The collection/coordinator graph and the native worker/Host graph share the
+    // same admission. Paused and pending bindings are closed before either runs.
+    issues
+        .binding_pause_service()
+        .ok_or_else(|| anyhow::anyhow!("binding pause service is unavailable"))?
+        .recover_before_runtime()
 }
 
 fn start_repository_kernel(

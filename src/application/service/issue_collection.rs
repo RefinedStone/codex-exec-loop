@@ -127,6 +127,7 @@ pub struct IssueCollectionService {
     coordinator: Option<Arc<super::issue_coordinator::IssueCoordinatorService>>,
     autonomy: Option<Arc<super::issue_autonomy::IssueAutonomyService>>,
     interactions: Option<Arc<super::issue_interactions::IssueInteractionsService>>,
+    binding_pause: Option<Arc<super::issue_binding_pause::IssueBindingPauseService>>,
 }
 
 impl IssueCollectionService {
@@ -148,6 +149,7 @@ impl IssueCollectionService {
             coordinator: None,
             autonomy: None,
             interactions: None,
+            binding_pause: None,
         }
     }
 
@@ -166,6 +168,24 @@ impl IssueCollectionService {
     ) -> Self {
         self.autonomy = Some(autonomy);
         self
+    }
+
+    pub fn with_binding_pause(
+        mut self,
+        service: Arc<super::issue_binding_pause::IssueBindingPauseService>,
+    ) -> Self {
+        self.binding_pause = Some(service);
+        self
+    }
+
+    pub(crate) fn automation_store(&self) -> Arc<dyn IssueAutomationStorePort> {
+        self.store.clone()
+    }
+
+    pub fn binding_pause_service(
+        &self,
+    ) -> Option<Arc<super::issue_binding_pause::IssueBindingPauseService>> {
+        self.binding_pause.clone()
     }
 
     pub fn autonomy_service(&self) -> Option<Arc<super::issue_autonomy::IssueAutonomyService>> {

@@ -41,6 +41,9 @@ const commands = {
   },
   set_issue_automation_mode: { type: "set_issue_automation_mode", mode: "observe" },
   set_issue_autonomy: { type: "set_issue_autonomy", command_id: "autonomy-1", level: "propose" },
+  set_issue_binding_paused: {
+    type: "set_issue_binding_paused", command_id: "pause-1", binding_id: "binding-1", paused: true, expected_revision: 3,
+  },
   sync_issues: { type: "sync_issues" },
   answer_issue_decision: { type: "answer_issue_decision", decision_id: "decision-1", option: "continue", note: "Shared note" },
   hold_issue: { type: "hold_issue", issue, command_id: "hold-1" },

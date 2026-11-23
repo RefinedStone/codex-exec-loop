@@ -255,10 +255,11 @@ pub(super) fn validate_current(
     };
     // Automatic starts have no human decision whose insertion could supply this fence.
     // Require the exact durable assessment for every start authority.
-    Ok(item
-        .triage
-        .as_ref()
-        .is_some_and(|triage| triage.assessment == *assessment)
+    Ok(!item.binding_run_blocked
+        && item
+            .triage
+            .as_ref()
+            .is_some_and(|triage| triage.assessment == *assessment)
         && !super::intervention::has_pending(tx, workspace, &candidate.order.issue)?
         && super::intervention::is_tracked(tx, workspace, &candidate.order.issue)?)
 }

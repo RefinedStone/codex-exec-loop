@@ -1,4 +1,5 @@
 use crate::domain::issue_automation::autonomy::IssueAutonomySelection;
+use crate::domain::issue_automation::binding_pause::IssueBindingPauseState;
 use crate::domain::issue_automation::collection::{IssueCollectionItem, StoredIssueCollection};
 use crate::domain::issue_automation::coordinator::IssueWorkCheckpoint;
 use crate::domain::issue_automation::execution::IssueExecutionRecord;
@@ -12,6 +13,7 @@ use anyhow::Result;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IssueFeedbackFence {
     pub collection_epoch: u64,
+    pub binding_run_revision: u64,
     pub observation_revision: Option<u64>,
     pub tracked_revision: Option<u64>,
     pub work_revision: Option<u64>,
@@ -24,6 +26,7 @@ pub struct IssueFeedbackFence {
 pub struct IssueFeedbackSnapshot {
     pub collection: StoredIssueCollection,
     pub item: IssueCollectionItem,
+    pub binding_pause: IssueBindingPauseState,
     pub work: Option<IssueWorkCheckpoint>,
     pub execution: Option<IssueExecutionRecord>,
     pub autonomy: IssueAutonomySelection,
@@ -63,6 +66,7 @@ impl IssueFeedbackSnapshot {
     pub fn fence(&self) -> IssueFeedbackFence {
         IssueFeedbackFence {
             collection_epoch: self.collection.epoch,
+            binding_run_revision: self.binding_pause.revision,
             observation_revision: self.item.observation_revision,
             tracked_revision: self.item.tracked_revision,
             work_revision: self.work.as_ref().map(|w| w.revision),

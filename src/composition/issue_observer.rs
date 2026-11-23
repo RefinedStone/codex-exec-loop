@@ -46,6 +46,8 @@ type TestCommittedCollect = dyn Fn(&IssueCollectionCancellation, u64, &Reporter)
 pub(crate) struct IssueCollectionHostView {
     pub(crate) projection: IssueCollectionProjection,
     pub(crate) autonomy: IssueAutonomyProjection,
+    pub(crate) binding_pause:
+        Option<crate::domain::issue_automation::binding_pause::IssueBindingPauseState>,
     pub(crate) collecting: bool,
     pub(crate) next_poll_after_ms: Option<u64>,
 }
@@ -242,6 +244,7 @@ impl IssueObserver {
         IssueCollectionHostView {
             projection: self.projection.clone(),
             autonomy: IssueAutonomyProjection::Unavailable,
+            binding_pause: None,
             collecting: self.in_flight.as_ref().is_some_and(|flight| {
                 !flight.cancel.is_cancelled() && flight.epoch == self.projection.state.epoch
             }),

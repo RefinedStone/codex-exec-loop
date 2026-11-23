@@ -119,6 +119,8 @@ impl IssueArbiterSettings {
 pub struct IssueArbiterInputBasis {
     pub decision_basis: IssueDecisionBasis,
     pub decision_revision: u64,
+    #[serde(default, skip_serializing_if = "arbiter_zero_revision")]
+    pub binding_run_revision: u64,
     pub repository_commit_sha: String,
     pub evidence_sha256: String,
     pub model_route_revision: String,
@@ -132,6 +134,7 @@ impl IssueArbiterInputBasis {
             .map_err(|_| "invalid arbiter decision basis")?;
         if self.decision_revision == 0
             || self.decision_revision > MAX_ISSUE_AUTOMATION_REVISION
+            || self.binding_run_revision > MAX_ISSUE_AUTOMATION_REVISION
             || !matches!(self.repository_commit_sha.len(), 40 | 64)
             || !self
                 .repository_commit_sha
@@ -145,6 +148,10 @@ impl IssueArbiterInputBasis {
         }
         Ok(())
     }
+}
+
+fn arbiter_zero_revision(revision: &u64) -> bool {
+    *revision == 0
 }
 
 /// 이 JSON은 메모리에서만 검증한다. reasons/blockers 원문을 장부에 쓰지 않는다.

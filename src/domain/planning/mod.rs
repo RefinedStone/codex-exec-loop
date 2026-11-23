@@ -53,10 +53,10 @@ pub use runtime_contracts::{
     canonical_active_planning_file_path,
 };
 pub(crate) use runtime_contracts::{
-    ExecutionSnapshot, MainSessionHandoff, ManualPlanningBootstrapFailureKind,
-    ManualPlanningBootstrapReview, ManualPromptCorrelation, ManualPromptIntakeOutcome,
-    ManualPromptIntakeRequest, ManualPromptMainSessionHandoff, ManualPromptOutcome,
-    ManualPromptRequest, ParallelTurnHandoff, PlanningQueueMutationKind,
+    ExecutionSnapshot, IssueBindingActionCapture, MainSessionHandoff,
+    ManualPlanningBootstrapFailureKind, ManualPlanningBootstrapReview, ManualPromptCorrelation,
+    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptMainSessionHandoff,
+    ManualPromptOutcome, ManualPromptRequest, ParallelTurnHandoff, PlanningQueueMutationKind,
     PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry, PlanningRepairRequestSnapshot,
     PlanningWorkerPanelState, PlanningWorkerStatus, PostTurnAutoFollowSkipReason, PostTurnContext,
     PostTurnContinuationAction, PostTurnContinuationGate, PostTurnContinuationPermit,

@@ -12,6 +12,9 @@ impl IssueFeedbackService {
         if cancel.is_cancelled() || self.blocked_by_unresolved(&intent.issue)? {
             return Ok(None);
         }
+        // Keep the originally observed binding generation through Sent, remote ACK/Unknown
+        // and receipt settlement. Pause completion must not overtake an admitted write.
+        let action_guard = self.acquire_feedback_action(snapshot)?;
         lease.verify_identity()?;
         let Some(result) =
             cancel.commit_if_active(|| self.store.record(snapshot.fence(), &intent))?
@@ -64,6 +67,9 @@ impl IssueFeedbackService {
             return self.unconfirmed(&sent, false, None);
         }
         // Sent is durable before this sole mutation. Cancellation gates never hold during remote I/O.
+        if action_guard.validate().is_err() {
+            return self.unconfirmed(&sent, false, None);
+        }
         let answer = self
             .provider
             .write(&intent)

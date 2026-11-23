@@ -109,6 +109,8 @@ spec_names! {
             "Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit.";
         SetIssueAutonomy => "set_issue_autonomy",
             "Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result.";
+        SetIssueBindingPaused => "set_issue_binding_paused",
+            "Request a durable pause or resume for one issue binding. The response confirms acceptance; only a completed receipt confirms that in-flight effects have drained. Resuming requires an exact current Desktop human confirmation. Requires a running kernel; other bindings and ordinary tasks continue.";
         AnswerIssueDecision => "answer_issue_decision",
             "Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
         HoldIssue => "hold_issue",
@@ -412,6 +414,7 @@ impl KernelCommandKind {
             | Self::DeleteDirection
             | Self::SetIssueAutomationMode
             | Self::SetIssueAutonomy
+            | Self::SetIssueBindingPaused
             | Self::AnswerIssueDecision
             | Self::HoldIssue
             | Self::ReleaseIssue
@@ -499,7 +502,7 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::HumanConfirmationRequired],
             ),
-            Self::SetIssueAutonomy | Self::AnswerIssueDecision => (
+            Self::SetIssueAutonomy | Self::SetIssueBindingPaused | Self::AnswerIssueDecision => (
                 CommandScope::Issue,
                 Write,
                 Keyed,
@@ -612,6 +615,7 @@ impl KernelCommandKind {
                 | Self::PauseAutoFollow
                 | Self::RefreshPlanning
                 | Self::RequestTaskVerification
+                | Self::SetIssueBindingPaused
                 | Self::SyncIssues
                 | Self::SubmitDelegation
                 | Self::CancelDelegation
@@ -705,6 +709,8 @@ spec_names! {
             "A verified human exemption was committed for one task criterion and acceptance scope. Its durable event ID deduplicates replay; raw reason text and confirmation capability are excluded. It does not approve delivery or integration.";
         TaskVerificationFinished => "task_verification_finished",
             "An immutable host verification outcome was committed for the agreed fixed recipe. Execution outcome, input and environment fingerprints, and bounded artifact metadata remain separate from worker-reported evidence. Current validity comes from task_evidence; no delivery or integration authority is implied.";
+        IssueBindingPauseCompleted => "issue_binding_pause_completed",
+            "One binding pause or resume request finished after its in-flight automatic effects drained. The immutable receipt is deduplicated by event ID; read issue_automation for current state. Other bindings and ordinary tasks are unaffected.";
     }
 }
 

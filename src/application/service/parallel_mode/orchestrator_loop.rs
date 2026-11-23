@@ -504,6 +504,16 @@ fn dispatch_parallel_queue_pool(
                 &handoff.task.task_title,
             )
         };
+        let worker_turn_service = match context
+            .turn_service
+            .for_task_action(workspace_directory, &handoff.task.task_id)
+        {
+            Ok(service) => service,
+            Err(error) => {
+                blocked_details.push(format!("{}: {error}", handoff.task.task_id));
+                continue;
+            }
+        };
         match service.acquire_slot_lease(workspace_directory, lease_request) {
             Ok(lease) => {
                 if !context
@@ -551,7 +561,7 @@ fn dispatch_parallel_queue_pool(
                 spawn_parallel_dispatch_worker(
                     worker_request,
                     context.worker_port.clone(),
-                    context.turn_service.clone(),
+                    worker_turn_service,
                     context.planning.clone(),
                     context.event_sender.clone(),
                 );
@@ -886,6 +896,14 @@ fn run_parallel_dispatch_worker(
     turn_service: ParallelModeTurnService,
     planning: PlanningServices,
 ) -> ParallelDispatchWorkerRunResult {
+    let turn_service = match turn_service.for_task_action(
+        &request.planning_workspace_directory,
+        &request.handoff_task.task_id,
+    ) {
+        Ok(service) => service,
+        Err(error) => return ParallelDispatchWorkerRunResult::launch_failed(vec![error]),
+    };
+
     // 배분한 뒤 epoch 가 닫혔으면(병렬 모드 끔, 커널 종료) 턴을 시작하지 않고 slot 을 돌려준다.
     // shortcut: 이 확인과 턴 시작 사이의 아주 짧은 틈은 남는다. 턴 시작을 epoch commit 안에 넣으려면 worker port 가
     // 시작 확인 callback 을 받아야 한다. 그 틈에서 시작한 턴은 끝난 뒤 epoch 확인에서 큐를 바꾸지 않는다.
@@ -963,21 +981,14 @@ fn run_parallel_dispatch_worker(
          * is still running, then joins to capture transport-level errors.
          */
         catch_redacted_worker_unwind(|| {
+            let start_authorization = super::worker_action::WorkerStartAuthorization {
+                turn: launch_turn_service,
+                workspace: service_request.planning_workspace_directory.clone(),
+                epoch: service_request.automation_epoch_id,
+                lease: service_request.expected_lease.clone(),
+                continuation: service_request.continuation.clone(),
+            };
             if let Some(claim) = service_request.continuation.as_deref() {
-                let start_authorization = || {
-                    if !launch_turn_service.automation_epoch_is_active(
-                        &service_request.planning_workspace_directory,
-                        service_request.automation_epoch_id,
-                    ) {
-                        anyhow::bail!("parallel automation closed before answer turn/start");
-                    }
-                    launch_turn_service
-                        .validate_worker_continuation_start(
-                            &service_request.planning_workspace_directory,
-                            claim,
-                        )
-                        .map_err(anyhow::Error::msg)
-                };
                 stream_worker_port.run_isolated_resumed_thread_stream(
                     ParallelAgentWorkerResumeRequest {
                         cwd: &service_request.worktree_directory,
@@ -990,7 +1001,7 @@ fn run_parallel_dispatch_worker(
                     &start_authorization,
                 )
             } else {
-                stream_worker_port.run_isolated_new_thread_stream(
+                stream_worker_port.run_authorized_isolated_new_thread_stream(
                     ParallelAgentWorkerStreamRequest {
                         cwd: &service_request.worktree_directory,
                         evidence_incoming_root: evidence_incoming_root.as_deref(),
@@ -999,6 +1010,7 @@ fn run_parallel_dispatch_worker(
                         service_name: &service_request.service_name,
                     },
                     event_tx,
+                    &start_authorization,
                 )
             }
         })
@@ -1242,6 +1254,16 @@ fn run_parallel_dispatch_worker(
         // terminal turn does not archive the thread or reserve official refresh.
         ParallelDispatchWorkerRunResult::completed(notices)
     } else if official_completion.official_completion_refresh_succeeded {
+        let archive_guard = turn_service.acquire_completion_action(
+            &request.planning_workspace_directory,
+            &request.expected_lease,
+        );
+        let Ok(archive_guard) = archive_guard else {
+            return ParallelDispatchWorkerRunResult::completed(notices);
+        };
+        if archive_guard.validate().is_err() {
+            return ParallelDispatchWorkerRunResult::completed(notices);
+        }
         if let Err(_error) = worker_port.archive_completed_isolated_thread(
             &request.worktree_directory,
             &turn_completed.receipt.thread_id,
@@ -1485,6 +1507,18 @@ fn run_parallel_dispatch_official_completion(
     latest_main_reply: Option<&str>,
 ) -> ParallelDispatchOfficialCompletionOutcome {
     let mut notices = Vec::new();
+    let completion_guard = match turn_service.acquire_completion_action(
+        &request.planning_workspace_directory,
+        &request.expected_lease,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => {
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![error.to_string()]);
+        }
+    };
+    if let Err(error) = completion_guard.validate() {
+        return ParallelDispatchOfficialCompletionOutcome::failed(vec![error.to_string()]);
+    }
     if !turn_completed.receipt.is_completed_and_confirmed() {
         turn_service.mark_official_completion_failed_for_lease(
             &request.expected_lease,

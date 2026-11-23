@@ -59,6 +59,20 @@ pub trait IssueAssessmentModelPort: Send + Sync {
     /// Pending never waits for model completion; repeating observation spends no new call.
     fn dispatch(&self, request: IssueAssessmentModelRequest) -> Result<IssueAssessmentModelStatus>;
 
+    /// Deferred production backends must move this authorization into their actual RPC.
+    /// The compatibility path fails closed before ever calling an unguarded backend.
+    fn dispatch_authorized(
+        &self,
+        request: IssueAssessmentModelRequest,
+        authorization: std::sync::Arc<
+            dyn crate::application::port::agent_action::AgentActionAuthorization,
+        >,
+    ) -> Result<IssueAssessmentModelStatus> {
+        let guard = authorization.acquire()?;
+        guard.validate()?;
+        self.dispatch(request)
+    }
+
     /// An unknown attempt after restart is Unusable(Uncertain), never a redispatch request.
     fn observe(&self, attempt_id: &str) -> Result<IssueAssessmentModelStatus>;
 

@@ -5,6 +5,7 @@ mod binding;
 // Observe 수집 설정과 현재 관찰 투영이다 (#2538).
 pub mod arbiter;
 pub mod autonomy;
+pub mod binding_pause;
 pub mod closure;
 pub mod collection;
 pub mod coordinator;

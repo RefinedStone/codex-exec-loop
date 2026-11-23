@@ -24,6 +24,7 @@ use crate::domain::issue_validation::IssueRequirements;
 use rusqlite::{Connection, params};
 
 mod admission;
+mod binding_pause;
 mod closure;
 mod migration;
 mod receipts;
@@ -114,6 +115,7 @@ fn refresh_assessment(fixture: &Fixture, issue: &IssueReference) {
             .save_triage(
                 fixture.cwd(),
                 IssueTriageFence {
+                    binding_run_revision: item.binding_run_revision,
                     collection_epoch: batch.collection.unwrap().epoch,
                     observation_revision: item.observation_revision,
                     tracked_revision: item.tracked_revision,

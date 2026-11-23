@@ -1,7 +1,7 @@
 // 같은 Gateway 접속에서 저장소 커널에 한 번 붙고, 열린 패널의 관심 영역만 읽는다.
 // 개요와 이슈 목록은 서로 다른 조회 계약을 쓰며, 이슈를 읽는 동안 모델 턴을 만들지 않는다.
 import { JsonRpcError, type JsonRpcClient } from "../rpc/jsonRpcClient";
-import type { ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
+import type { ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "./issueInteractions";
 import {
   type AttachResponse,
@@ -27,13 +27,14 @@ import {
 import { sendKernelCommand } from "./sendKernelCommand";
 import { hasValidIssueAutonomy, hasValidIssueExecutionTracking, hasValidIssueInteractions } from "./issuePresentationValidation";
 import { currentIssueArbiterNotice, isIssueArbiterWaitReason, type IssueArbiterFinishedRecord } from "./issueArbiter";
+import { hasValidBindingPause, isBindingPauseReceipt, bindingPauseRequestNotice, preserveNewerBindingPause } from "./issueBindingPause";
 import { hasValidPlanningEvidence } from "./taskEvidenceValidation";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
 export type KernelInterest = "overview" | "issues" | "delegation" | "issue_attention";
 /** 마지막으로 수락한 planning 조회의 현재성이다. 증거의 의미는 커널이 판정한다. */
 export type PlanningEvidenceFreshness = "current" | "refreshing" | "stale";
-export type IssueCommandPending = "mode" | "sync" | "autonomy" | "decision" | "intervention";
+export type IssueCommandPending = "binding_pause" | "mode" | "sync" | "autonomy" | "decision" | "intervention";
 
 export interface IssueDecisionAttention {
   workspace: string;
@@ -47,6 +48,7 @@ export interface IssueDecisionAttention {
 export interface IssueConfirmationBridge {
   confirmIssueDecision?(request: ConfirmIssueDecisionRequest): Promise<IssueConfirmationResponse>;
   confirmIssueAutonomy?(request: ConfirmIssueAutonomyRequest): Promise<IssueConfirmationResponse>;
+  confirmIssueBindingResume?(request: ConfirmIssueBindingResumeRequest): Promise<IssueConfirmationResponse>;
 }
 
 export interface KernelIssuesView {
@@ -297,6 +299,7 @@ export class KernelConnection {
   private readonly eventCounts = new Map<string, number>();
   private readonly decisionRevisions = new Map<string, number>();
   private readonly decisionReminders = new Set<string>();
+  private readonly bindingPauseEvents = new Set<string>();
   private readonly resolvedDecisions = new Set<string>();
   private readonly arbiterEvents = new Set<string>();
   private readonly pendingArbiterEvents = new Map<string, symbol>();
@@ -357,6 +360,7 @@ export class KernelConnection {
       this.generation += 1;
       this.decisionRevisions.clear();
       this.decisionReminders.clear();
+      this.bindingPauseEvents.clear();
       this.resolvedDecisions.clear();
       this.arbiterEvents.clear();
       this.pendingArbiterEvents.clear();
@@ -545,6 +549,14 @@ export class KernelConnection {
     await this.runIssueCommand({ type: "sync_issues" }, "sync");
   }
 
+  async setIssueBindingPaused(paused: boolean): Promise<void> {
+    const automation = this.store.getKernel().issues.automation;
+    const current = automation?.status === "ready" ? automation.binding_pause : null;
+    if (current?.status !== "ready" || current.pending || current.paused === paused) return;
+    await this.runIssueCommand({ type: "set_issue_binding_paused", command_id: crypto.randomUUID(), binding_id: current.binding_id,
+      paused, expected_revision: current.revision }, "binding_pause");
+  }
+
   async setIssueAutonomy(level: IssueAutonomyLevel): Promise<void> {
     const automation = this.store.getKernel().issues.automation;
     const autonomy = automation?.status === "ready" ? automation.autonomy : null;
@@ -601,6 +613,15 @@ export class KernelConnection {
     }
     if (event.type === "recorded") {
       const record = event.event;
+      if (record.kind === "issue_binding_pause_completed") {
+        if (typeof record.event_id !== "string" || !record.event_id || !isBindingPauseReceipt(record.receipt)
+          || this.bindingPauseEvents.has(record.event_id)) return;
+        this.bindingPauseEvents.add(record.event_id);
+        if (this.bindingPauseEvents.size > 1_024) this.bindingPauseEvents.delete(this.bindingPauseEvents.values().next().value!);
+        const current = this.store.getKernel().issues.automation;
+        if (current?.status === "ready" && current.binding_id === record.receipt.binding_id) this.scheduleIssueRefresh();
+        return;
+      }
       if (record.kind === "criterion_evidence_recorded" || record.kind === "criterion_waived") {
         this.schedulePlanningEvidenceRead();
       } else if (record.kind === "issue_decision_requested" || record.kind === "issue_decision_resolved") {
@@ -962,7 +983,7 @@ export class KernelConnection {
   }
 
   private applyIssueAutomation(automation: IssueAutomationAnswer): void {
-    if (!isRecord(automation) || !hasValidIssueAutonomy(automation)) {
+    if (!isRecord(automation) || !hasValidIssueAutonomy(automation) || !hasValidBindingPause(automation)) {
       this.issueStateError = "자율 수준 표시 계약을 읽을 수 없습니다. Gateway를 업데이트하거나 다시 시작해 주세요.";
       this.updateIssues({ automation: null });
       return;
@@ -971,6 +992,7 @@ export class KernelConnection {
     if (automation.status === "ready" && issues.automation?.status === "ready" && automation.revision < issues.automation.revision) return;
     this.issueStateError = null;
     if (automation.status === "ready") this.noteIssueRevision(automation.revision);
+    automation = preserveNewerBindingPause(automation, issues.automation);
     this.updateIssues({ automation });
     if (automation.status !== "ready") return;
     this.invalidateDetailAtRevision(automation.revision);
@@ -1145,6 +1167,10 @@ export class KernelConnection {
       if (command.type === "answer_issue_decision") {
         if (!this.confirmations.confirmIssueDecision || !this.wanted) throw new Error("이 창에서는 시스템 확인을 열 수 없습니다.");
         confirmation = await this.confirmations.confirmIssueDecision({ workspace: this.wanted, decisionId: command.decision_id, option: command.option, note: command.note, key: crypto.randomUUID() });
+      } else if (command.type === "set_issue_binding_paused" && !command.paused) {
+        if (!this.confirmations.confirmIssueBindingResume || !this.wanted) throw new Error("이 창에서는 시스템 확인을 열 수 없습니다.");
+        confirmation = await this.confirmations.confirmIssueBindingResume({ workspace: this.wanted, commandId: command.command_id,
+          bindingId: command.binding_id, expectedRevision: command.expected_revision, key: crypto.randomUUID() });
       } else if (command.type === "set_issue_autonomy") {
         const autonomy = automation?.status === "ready" ? automation.autonomy : null;
         const choice = autonomy?.status === "ready" ? autonomy.choices.find((item) => item.level === command.level && item.enabled) : null;
@@ -1210,7 +1236,9 @@ export class KernelConnection {
         || receipt.delivery === "unknown"
         || (command.type === "steer_issue" && receipt.delivery !== "queued" && receipt.delivery !== "sent")
       );
-      const notice = unknownIntervention
+      const pauseNotice = command.type === "set_issue_binding_paused"
+        ? bindingPauseRequestNotice(response.result?.type === "issue_binding_pause_requested" ? response.result.command : undefined, command) : null;
+      const notice = pauseNotice?.notice ?? (unknownIntervention
         ? command.type === "steer_issue"
           ? "추가 지시의 전달 결과를 확인하지 못했습니다. 같은 지시를 자동으로 다시 보내지 않습니다. 작업 상태를 확인해 주세요."
           : "요청의 처리 결과를 확인하지 못했습니다. 같은 요청을 자동으로 다시 보내지 않습니다. 현재 상태를 확인해 주세요."
@@ -1218,16 +1246,16 @@ export class KernelConnection {
           : receipt?.delivery === "sent" ? "실행 중인 작업자에게 추가 지시를 전달했습니다."
             : response.result?.type === "issue_decision_resolved" && response.result.outcome === "superseded"
               ? "판정 기준이 바뀌어 이전 결정에 답하지 않았습니다. 현재 결정을 확인해 주세요."
-              : "요청을 처리했습니다.";
-      if (unknownIntervention) this.rememberUncertainIssueOutcome(notice);
+              : "요청을 처리했습니다.");
+      if (unknownIntervention || pauseNotice?.known === false) this.rememberUncertainIssueOutcome(notice);
       await this.refreshIssues();
       if (!this.issueCurrent(token, this.issueCommandRequest)) return "unavailable";
       this.updateIssues({ notice });
-      return unknownIntervention ? "unknown" : "succeeded";
+      return unknownIntervention || pauseNotice?.known === false ? "unknown" : "succeeded";
     } catch (error) {
       if (this.issueCurrent(token, this.issueCommandRequest)) {
         // 정책·결정·control이 확인 창 동안 바뀌었을 수 있다. 읽기만 다시 하고 명령은 재전송하지 않는다.
-        const refresh = pending === "autonomy" || pending === "decision" || pending === "intervention"
+        const refresh = pending === "binding_pause" || pending === "autonomy" || pending === "decision" || pending === "intervention"
           ? this.refreshIssues() : Promise.resolve();
         this.issueCommandError = `이슈 요청을 완료하지 못했습니다: ${failureMessage(error)}`;
         this.updateIssues({});
