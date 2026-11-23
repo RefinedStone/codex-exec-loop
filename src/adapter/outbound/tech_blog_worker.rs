@@ -15,12 +15,12 @@ pub(crate) async fn invoke(
     let program = if cfg!(windows) { "python" } else { "python3" };
     let python = resolve_blog_program(program, workspace)
         .context("기술 블로그 확장에 Python 3가 필요합니다.")?;
-    let git = if matches!(action, "create" | "execute") {
+    let git = if matches!(action, "targets" | "generate" | "execute") {
         Some(resolve_blog_program("git", workspace)?)
     } else {
         None
     };
-    let model_command = if action == "execute" {
+    let model_command = if matches!(action, "targets" | "execute") {
         std::env::var_os("PATH")
             .and_then(|path| resolve_codex_command_from_path(&path, workspace).ok())
             .filter(|cmd| {

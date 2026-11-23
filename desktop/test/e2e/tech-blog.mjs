@@ -13,39 +13,54 @@ const kernel = "blog-test-repository";
 const endpoint = fake.uniqueTestEndpoint();
 let enabled = false;
 let article;
-let writes = 0;
+let fail = true;
+const commits = [1, 2, 3].map(n => ({sha: String(n).repeat(40), time: Math.floor(Date.now() / 1000) - n * 3600, subject: `feat: 작업 ${n}`}));
+const STAGES = ["collect", "write", "review"];
+// 단계 하나씩 커널의 변경 알림을 보낸다. 첫 실행은 초안 쓰기에서 실패하고, 이어서 하기는 그 단계부터 다시 한다.
+function advance() {
+  setTimeout(() => {
+    if (!article.job) return;
+    if (article.stage === "write" && fail) {
+      fail = false;
+      Object.assign(article, {state: "stopped", job: null, stopped: {reason: "failed", code: "model_timeout", message: "모델의 답이 10분을 넘었습니다."}});
+    } else if (article.stage === "review") {
+      Object.assign(article, {state: "reviewed", stage: null, job: null, calls: 2, review: {state: "reviewed", findings: []}});
+    } else {
+      if (article.stage === "write") Object.assign(article, {title: "리뷰를 글로 옮기기", draft: "# 리뷰를 글로 옮기기\n\n자동으로 쓴 **본문**", calls: 1});
+      if (article.stage === "collect") article.evidence = {commits: commits.slice(0, 2).map((c, i) => ({id: `s${i + 1}`, sha: c.sha, subject: c.subject})), files: 4, summarized: 1};
+      article.stage = STAGES[STAGES.indexOf(article.stage) + 1];
+      advance();
+    }
+    article.revision++;
+    gateway.sendExtensionChange(kernel);
+  }, 150);
+}
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   kernel: {kernel, queries: {}, onRequest(method, params) {
-    if (method === "akra/kernel/extensions/list") return {result:[{id:"akra.tech-blog",version:1,scope:"repository",enabled}]};
+    if (method === "akra/kernel/extensions/list") return {result:[{id:"akra.tech-blog",version:2,scope:"repository",enabled}]};
     if (method !== "akra/kernel/extensions/call") return;
     assert.equal(params.kernel,kernel);
     assert.equal(params.extension,"akra.tech-blog");
+    assert.equal(params.version,2);
     const data = params.input;
     if (params.action === "catalog") return {result:{enabled}};
     if (params.action === "configure") { enabled = data.enabled; return {result:{enabled}}; }
     assert.ok(enabled);
-    if (params.action === "list") return {result:article ? [{id:article.id,topic:article.topic}] : []};
-    if (params.action === "create") {
-      article = {id:"one",topic:data.topic,revision:1,commit:"a".repeat(40),sources:[],draft:"",figures:[],messages:[],job:null};
-    } else if (params.action === "write" || params.action === "review") {
+    if (params.action === "targets") return {result:{commits, fresh: 2, selected: commits.slice(0, 2).map(c => c.sha), first: false, limit: 30, codex: true}};
+    if (params.action === "list") return {result:article ? [{id:article.id,title:article.title,state:article.state,stage:article.stage,attempt:0,updated:article.updated}] : []};
+    if (params.action === "generate") {
+      assert.deepEqual(data.commits, commits.slice(0, 2).map(c => c.sha));
+      assert.equal(data.topic, "");
+      const now = Math.floor(Date.now() / 1000);
+      article = {id:"one",version:2,title:"",topic:"",commits:data.commits,state:"running",stage:"collect",attempt:0,calls:0,
+        evidence:null,draft:"",claims:[],figures:[],review:null,stopped:null,messages:[],revision:1,created:now,updated:now,job:{id:"job",started:now}};
+      advance();
+    } else if (params.action === "resume") {
       assert.equal(data.revision,article.revision);
-      const phase = params.action;
-      article.job = {id:"job",action:phase};
+      Object.assign(article, {state:"running", stopped:null, job:{id:"job2",started:Math.floor(Date.now() / 1000)}});
       article.revision++;
-      setTimeout(() => {
-        if (phase === "write") {
-          writes++;
-          article.proposal = {draft:`AI 원고 ${writes}`,reply:data.instruction};
-          article.messages.push({role:"assistant",text:data.instruction});
-        } else article.review = {state:"needs_evidence",findings:[{code:"figure_required"}]};
-        article.job = null; article.revision++;
-        gateway.sendExtensionChange(kernel);
-      },150);
-    } else if (params.action === "accept") {
-      article.draft = article.proposal.draft; article.proposal = null; article.revision++;
-    } else if (params.action === "save") {
-      article.draft = data.draft; article.revision++;
-    }
+      advance();
+    } else if (params.action !== "open") throw new Error(`unexpected action ${params.action}`);
     return {result:article};
   }},
 });
@@ -63,26 +78,24 @@ try {
   await row.getByRole("button",{name:"켜기"}).click();
   await row.getByRole("button",{name:"열기"}).click();
   const panel = page.getByRole("region",{name:"기술 블로그"});
-  await panel.getByLabel("글 주제").fill("리뷰를 글로 옮기기");
+  await assert.rejects(panel.getByLabel("모델 ID").waitFor({timeout: 500}));
+  await panel.getByText("2개 중 2개 고름").waitFor();
   await panel.getByRole("button",{name:"글 만들기"}).click();
-  await panel.getByLabel("모델 ID").fill("test-model");
-  await panel.getByRole("button",{name:"AI에 초안 요청"}).click();
-  await panel.getByText("AI 원고 1",{exact:true}).waitFor();
-  await panel.getByRole("button",{name:"제안을 원고에 적용"}).click();
-  await panel.getByLabel("원고",{exact:true}).fill("내가 수정한 문단");
-  await panel.getByRole("button",{name:"수정 저장"}).click();
-  await panel.getByLabel("편집 요청").fill("사례를 추가해 주세요.");
-  await panel.getByRole("button",{name:"AI에 수정 요청"}).click();
-  await panel.getByText("AI 원고 2",{exact:true}).waitFor();
-  assert.equal(await panel.getByLabel("원고",{exact:true}).inputValue(),"내가 수정한 문단");
-  await panel.getByRole("button",{name:"독립 검수"}).click();
-  await panel.getByText("자료 보완",{exact:true}).waitFor();
+  await panel.getByText("요약만 넣은 파일 1개").waitFor();
+  await panel.getByText("모델의 답이 10분을 넘었습니다.").waitFor();
+  await panel.getByRole("button",{name:"이어서 하기"}).click();
+  await panel.getByTestId("blog-result").waitFor();
+  await panel.getByText("검수 통과").waitFor();
+  await panel.getByText("모델 호출 2회", {exact: false}).waitFor();
+  assert.equal(await panel.locator(".blog-preview strong").textContent(), "본문");
+  await panel.getByRole("button",{name:"원문"}).click();
+  assert.match(await panel.locator(".blog-preview pre").textContent(), /\*\*본문\*\*/);
+  await panel.getByRole("button",{name:"← 글 목록"}).click();
   await page.getByTestId("tech-blog-toggle").click();
   await page.getByTestId("tech-blog-toggle").click();
-  await panel.getByLabel("글 선택").selectOption("one");
-  await panel.getByText("AI 원고 2",{exact:true}).waitFor();
-  assert.equal(await panel.getByLabel("원고",{exact:true}).inputValue(),"내가 수정한 문단");
-  console.log("PASS repository plugin enable, draft, edit, feedback, review and reopen");
+  await panel.getByRole("button",{name:/리뷰를 글로 옮기기/}).click();
+  await panel.getByTestId("blog-result").waitFor();
+  console.log("PASS one-press blog generation, failure, resume, preview and reopen");
 } finally {
   if (app) await app.close();
   await gateway.close();

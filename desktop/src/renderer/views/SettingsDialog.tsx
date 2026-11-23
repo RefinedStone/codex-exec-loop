@@ -151,7 +151,7 @@ export function SettingsDialog({ extensions, chooseFolder }: { extensions?: Repo
   if (extensions) for (const item of items) {
     const panel = panelForExtension(item.id);
     entries.push({ id: item.id, section: "확장", label: panel?.label ?? item.id,
-    hint: extensionError || extensions.error || "현재 저장소의 글을 작성하고 AI와 함께 편집합니다.",
+    hint: extensionError || extensions.error || "이 저장소의 작업으로 기술 블로그 글을 자동으로 만듭니다. 모델 사용량을 씁니다.",
     control: extensions.kernel ? <div className="segmented">
       <button disabled={!extensions.ready || changing} aria-pressed={item.enabled} onClick={async () => {
         setChanging(true); setExtensionError("");

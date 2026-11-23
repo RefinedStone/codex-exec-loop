@@ -505,7 +505,7 @@ OS 알림은 알림 설정(plan 26 A2)을 따른다. 같은 글의 알림은 1�
 
 ## 11. 조각
 
-조각 1개가 PR 1개다. 순서대로 한다. 검증은 모델 턴 없이 한다: `tech_blog.py` 의 `MODEL_COMMAND` 대체 경로와 가짜
+조각 1개가 PR 1개다. 순서대로 한다. 진행: B1 구현 중 (V1 홈, V2 진행, V3 결과의 미리보기와 복사). 검증은 모델 턴 없이 한다: `tech_blog.py` 의 `MODEL_COMMAND` 대체 경로와 가짜
 Gateway (`desktop/test/e2e/tech-blog.mjs`) 를 쓴다.
 
 | 조각 | 범위 | 완료 기준 |
