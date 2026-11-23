@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { extensionEvent, useRepositoryExtensions } from "./extensions/repositoryExtensions";
+import { useBlogActivity } from "./extensions/blogActivity";
+import { focusBlogArticle, viewingBlogArticle } from "./extensions/blogFocus";
+import { type BlogActivity, activityTitle, didStop } from "./extensions/techBlogStages";
 import { ExtensionPanel } from "./extensions/ExtensionPanel";
 import { extensionPanels, panelForExtension } from "./extensions/registry";
 import { BrowserPanel } from "./browser/BrowserPanel";
@@ -82,7 +85,7 @@ function navEntryExists(entry: NavEntry): boolean {
   return true;
 }
 
-function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegationEnabled, enabledExtensions }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void; enabledExtensions: string[]; delegationEnabled: boolean }) {
+function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegationEnabled, enabledExtensions, blog }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void; enabledExtensions: string[]; delegationEnabled: boolean; blog: BlogActivity }) {
   // 스레드 목록이 바뀌면 갈 수 있는 곳도 바뀐다.
   useDesktopStore((state) => state.folders);
   const canGoBack = useUiStore((state) => stepNav(state.nav, -1, navEntryExists) !== null);
@@ -144,6 +147,20 @@ function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegat
             <button key={item.id} type="button" className={selected ? "chip-button selected" : "chip-button"} title={item.label} onClick={() => togglePanel(item.id)} aria-pressed={selected} data-testid={item.testId}>
               문서 {documentCount}
               {changedDocumentCount ? ` · 바뀜 ${changedDocumentCount}` : ""}
+            </button>
+          );
+        }
+        if (item.id === "akra.tech-blog") {
+          const title = activityTitle(blog);
+          return (
+            <button key={item.id} type="button" className={selected ? "icon-button selected blog-activity" : "icon-button blog-activity"} title={title} aria-label={title} onClick={() => {
+              // 읽지 않은 결과가 있으면 그 글을 연다 (plan 31 §6.5).
+              if (!selected && blog.next) focusBlogArticle(blog.next);
+              togglePanel(item.id);
+            }} aria-pressed={selected} data-testid={item.testId}>
+              <Icon name={item.icon} />
+              {blog.running ? <span className="status-mark-running" data-testid="blog-activity-running" />
+                : blog.unread ? <span className={blog.stopped ? "blog-dot stopped" : "blog-dot"} data-testid="blog-activity-unread" /> : null}
             </button>
           );
         }
@@ -621,6 +638,14 @@ export function App() {
     session.current?.onExtensionChanged(extensionEvent, listener) ?? (() => {}), []);
   const extensions = useRepositoryExtensions(gatewayRequest, subscribeExtension,
     connected && view !== "remote" && kernelPhase === "attached" && attachedWorkspace === kernelWorkspace ? kernelId : null);
+  // 글이 끝나거나 멈추면 알린다 (plan 31 §7.8). 패널이 블로그를 보이고 있으면 화면이 바뀌므로 토스트는 띄우지 않는다.
+  // OS 알림에는 글의 제목과 내용을 넣지 않는다: 잠금 화면과 알림 기록에 남는다.
+  const blog = useBlogActivity(extensions, useCallback((article) => {
+    const text = didStop(article) ? "블로그 글 만들기가 멈췄습니다." : "블로그 글이 준비됐습니다.";
+    const shown = useUiStore.getState().panel === "akra.tech-blog" && viewingBlogArticle() === article.id;
+    if (!shown) toast(text);
+    notifyOs("Akra", text, () => { focusBlogArticle(article.id); openPanel("akra.tech-blog"); }, `akra:blog:${article.id}`);
+  }, []));
   const closeDisabledBlog = extensions.ready && !!selectedExtension && !extensions.enabledIds.includes(selectedExtension.id);
   useEffect(() => {
     if (closeDisabledBlog) useUiStore.setState({ panel: null, panelMaximized: false });
@@ -703,7 +728,7 @@ export function App() {
     <div className="shell">
       {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} />}
       <div className="workspace">
-        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={extensions.enabledIds} />
+        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={extensions.enabledIds} blog={blog} />
         <SessionBanner />
         <div className={panelMaximized ? "workspace-body with-maximized-panel" : "workspace-body"}>
           <main className="main">

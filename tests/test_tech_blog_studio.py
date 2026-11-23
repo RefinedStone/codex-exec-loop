@@ -158,6 +158,19 @@ class StudioTest(unittest.TestCase):
         self.assertEqual("worker_failed", stopped["stopped"]["code"])
         self.assertIn("broken", stopped["stopped"]["message"])
 
+    def test_finished_and_stopped_articles_are_unread_until_seen(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        self.assertTrue(a["unread"])
+        self.assertTrue(self.host.request("list", {})[0]["unread"])
+        self.assertFalse(self.host.request("seen", {"id": a["id"]})["unread"])
+        job = self.host.request("review", {"id": a["id"], "revision": self.host.request("open", {"id": a["id"]})["revision"]})
+        self.assertFalse(job["unread"])
+        self.assertFalse(self.host.request("cancel", {"id": a["id"]})["unread"])
+        b = self.host.request("generate", {"commits": [self.host.request("targets", {})["commits"][0]["sha"]]})
+        stopped = self.run_all(b, FakeModel(fail_on="write"))
+        self.assertTrue(stopped["unread"])
+        self.assertTrue(next(r for r in self.host.request("list", {}) if r["id"] == b["id"])["failed"])
+
     def test_large_changes_are_summarized_within_limits(self):
         big = self.commit("big", ("x" * 60 + "\n") * 2000)
         small = self.git("rev-parse", "HEAD~1")
@@ -180,7 +193,7 @@ class StudioTest(unittest.TestCase):
         shown = self.host.request("open", {"id": "v1"})
         self.assertEqual((1, "예전 글", "reviewed"), (shown["version"], shown["title"], shown["state"]))
         self.assertIn({"id": "v1", "title": "예전 글", "state": "reviewed", "stage": None, "task": None,
-                       "updated": None}, self.host.request("list", {}))
+                       "updated": None, "unread": False, "failed": False}, self.host.request("list", {}))
         self.host.request("delete", {"id": a["id"]})
         with self.assertRaisesRegex(ValueError, "찾을 수 없"):
             self.host.request("open", {"id": a["id"]})

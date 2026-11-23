@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { stageMarks, stateLabel, taskMarks, taskStages } from "./techBlogStages";
+import { activityTitle, blogActivity, finishedArticles, stageMarks, stateLabel, taskMarks, taskStages } from "./techBlogStages";
 
 describe("stageMarks", () => {
   it("marks earlier stages done and waits on the optional rewrite", () => {
@@ -29,5 +29,22 @@ describe("taskMarks", () => {
   });
   it("shows one step for a manual review", () => {
     expect(taskMarks("review", "review", 1, false)).toEqual(["active"]);
+  });
+});
+
+describe("blog activity", () => {
+  const row = (id: string, state: "running" | "reviewed" | "stopped", unread = false) =>
+    ({ id, title: id, state, stage: null, task: "generate" as const, updated: 1, unread });
+  it("counts running and unread articles for the top bar", () => {
+    const activity = blogActivity([row("a", "running"), row("b", "reviewed", true), row("c", "stopped", true)]);
+    expect(activity).toEqual({ running: 1, unread: 2, stopped: 1, next: "b" });
+    expect(blogActivity([{ ...row("d", "reviewed", true), failed: true }]).stopped).toBe(1);
+    expect(activityTitle(activity)).toBe("기술 블로그 · 글을 만드는 중");
+    expect(activityTitle({ running: 0, unread: 1, stopped: 0 })).toBe("기술 블로그 · 새 글 1개");
+  });
+  it("reports only articles that finished since the last list and are unread", () => {
+    const before = [row("a", "running"), row("b", "running"), row("c", "reviewed", true)];
+    const after = [row("a", "reviewed", true), row("b", "stopped"), row("c", "reviewed", true)];
+    expect(finishedArticles(before, after).map(a => a.id)).toEqual(["a"]);
   });
 });

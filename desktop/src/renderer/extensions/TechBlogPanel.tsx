@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Markdown } from "../conversation/Markdown";
+import { onBlogFocus, setViewingBlogArticle, takeBlogFocus } from "./blogFocus";
 import { copyText } from "../conversation/copyText";
 import { relativeAge } from "../sidebar/threadStatus";
 import type { ExtensionCall } from "./repositoryExtensions";
@@ -24,7 +25,8 @@ function StateBadge({ state, findings = 0 }: { state: State; findings?: number }
 }
 
 export default function TechBlogPanel({ call, epoch, workspace }: { call: ExtensionCall; epoch: number; workspace: string | null }) {
-  const [selected, select] = useState("");
+  const [selected, select] = useState(() => takeBlogFocus() ?? "");
+  useEffect(() => onBlogFocus(() => { const id = takeBlogFocus(); if (id) select(id); }), []);
   return <section className="blog-studio" aria-label="기술 블로그">
     {selected ? <ArticleView key={selected} id={selected} call={call} epoch={epoch} workspace={workspace} onBack={() => select("")} />
       : <Home call={call} epoch={epoch} onOpen={select} />}
@@ -111,7 +113,7 @@ function Home({ call, epoch, onOpen }: { call: ExtensionCall; epoch: number; onO
     {articles?.length === 0 && <p className="muted">아직 글이 없습니다. 위에서 작업을 고르고 "글 만들기"를 누르세요.</p>}
     <ul className="blog-articles">
       {articles?.map(a => <li key={a.id}><button type="button" onClick={() => onOpen(a.id)}>
-        <span className="blog-subject">{a.title || "(제목 없음)"}</span>
+        <span className={a.unread ? "blog-subject blog-unread" : "blog-subject"}>{a.title || "(제목 없음)"}</span>
         {a.state === "running" && a.stage
           ? <span className="muted">{STAGES.find(s => s.id === a.stage)?.label} · {taskStages(a.task).findIndex(s => s.id === a.stage) + 1}/{taskStages(a.task).length}</span>
           : <StateBadge state={a.state} />}
@@ -143,6 +145,12 @@ function ArticleView({ id, call, epoch, workspace, onBack }: { id: string; call:
       return true;
     } catch (e) { setError(errorText(e)); return false; } finally { setWorking(false); }
   };
+  useEffect(() => { setViewingBlogArticle(id); return () => setViewingBlogArticle(null); }, [id]);
+  const unread = !!article?.unread && article.state !== "running";
+  useEffect(() => {
+    // 결과를 보였으므로 읽음으로 적는다. 읽지 않은 결과일 때만 부른다: 부를 때마다 변경 알림이 간다.
+    if (unread) call("seen", { id }).catch(() => {});
+  }, [unread, call, id]);
   const back = <button type="button" className="ghost blog-back" onClick={onBack}>← 글 목록</button>;
   if (!article) return <div className="blog-view">{back}<p role={error ? "alert" : "status"}>{error || "글을 읽는 중…"}</p></div>;
   const errorLine = error && <p role="alert">{error}</p>;

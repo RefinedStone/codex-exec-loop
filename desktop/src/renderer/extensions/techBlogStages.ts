@@ -4,7 +4,7 @@ export type Stage = "collect" | "write" | "review" | "revise";
 export type Commit = { sha: string; time: number; subject: string };
 export type Targets = { commits: Commit[]; fresh: number; selected: string[]; first: boolean; limit: number; codex: boolean };
 export type Task = "generate" | "revise" | "review";
-export type Summary = { id: string; title: string; state: State; stage: Stage | null; task: Task | null; updated: number | null };
+export type Summary = { id: string; title: string; state: State; stage: Stage | null; task: Task | null; updated: number | null; unread?: boolean; failed?: boolean };
 export type Finding = { code: string; id?: string; reason?: string; sources?: string[]; figure?: string };
 export type Article = Summary & {
   version: number; revision: number; calls: number; created?: number; draft: string; attempt?: number;
@@ -53,4 +53,33 @@ export function stageMarks(stage: Stage | null, attempt: number, stopped: boolea
     if (attempt >= 1 && (id === "revise" || order(id) < order("review"))) return "done";
     return order(id) < order(stage) ? "done" : "wait";
   });
+}
+
+/** 위쪽 띠의 책 아이콘이 보이는 값이다 (plan 31 §7.7). */
+export type BlogActivity = { running: number; unread: number; stopped: number; next: string | null };
+
+/** 마지막 작업이 멈췄다. 다시 쓰기·검수가 멈춘 글은 상태가 앞의 값이므로 `failed` 로 안다. */
+export const didStop = (a: Summary) => a.state === "stopped" || !!a.failed;
+
+export function blogActivity(articles: Summary[]): BlogActivity {
+  const unread = articles.filter(a => a.unread && a.state !== "running");
+  return {
+    running: articles.filter(a => a.state === "running").length,
+    unread: unread.length,
+    stopped: unread.filter(didStop).length,
+    next: unread[0]?.id ?? null,
+  };
+}
+
+export function activityTitle({ running, unread, stopped }: Omit<BlogActivity, "next">): string {
+  if (running) return "기술 블로그 · 글을 만드는 중";
+  if (stopped) return `기술 블로그 · 멈춘 글 ${stopped}개`;
+  if (unread) return `기술 블로그 · 새 글 ${unread}개`;
+  return "기술 블로그";
+}
+
+/** 앞의 목록에서 만드는 중이던 글 가운데, 지금 끝나서 읽지 않은 결과가 된 글이다. 사람이 취소한 글은 빠진다. */
+export function finishedArticles(previous: Summary[], next: Summary[]): Summary[] {
+  const wasRunning = new Set(previous.filter(a => a.state === "running").map(a => a.id));
+  return next.filter(a => wasRunning.has(a.id) && a.state !== "running" && a.unread);
 }

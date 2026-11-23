@@ -36,3 +36,9 @@
 .blog-menu button { padding: 6px 8px; border-radius: 4px; text-align: start; color: inherit; }
 .blog-menu button:hover { background: var(--bg-hover); }
 .blog-setup { display: grid; gap: 8px; justify-items: start; }
+.blog-unread { font-weight: 600; }
+.blog-activity { position: relative; }
+.blog-activity > .status-mark-running, .blog-activity > .blog-dot { position: absolute; top: 2px; inset-inline-end: 2px; }
+.blog-activity > .status-mark-running { width: 7px; height: 7px; border-width: 1.4px; }
+.blog-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.blog-dot.stopped { background: var(--bad); }
