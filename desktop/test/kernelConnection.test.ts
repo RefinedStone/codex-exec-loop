@@ -40,9 +40,10 @@ function harness() {
     changed();
   });
   let view: KernelView = EMPTY_KERNEL_VIEW;
+  const views: KernelView[] = [];
   const connection = new KernelConnection(client, {
     getKernel: () => view,
-    setKernel: (next) => { view = next; changed(); },
+    setKernel: (next) => { view = next; views.push(next); changed(); },
   });
   const when = (condition: () => boolean) => {
     if (condition()) return Promise.resolve();
@@ -70,18 +71,19 @@ function harness() {
   };
   const requests = (method: string) => sent.filter((message) => message.method === method);
   const query = (type: string) => requests("akra/kernel/query").findLast((message) => message.params.query?.type === type);
-  const attachAndAnswer = async () => {
+  const attachAndAnswer = async (planning: unknown = PLANNING) => {
     const before = requests("akra/kernel/query").length;
     const commands = requests("akra/kernel/command").length;
     const queried = when(() => requests("akra/kernel/query").length === before + 4);
     reply(requests("akra/kernel/attach").at(-1), { client_id: "1", protocol_version: 1, kernel: "codex-exec-loop-abc" });
     await queried;
     const refreshed = when(() => requests("akra/kernel/command").length === commands + 1);
-    for (const request of requests("akra/kernel/query").slice(before)) reply(request, defaultAnswer(request.params.query?.type ?? ""));
+    for (const request of requests("akra/kernel/query").slice(before)) reply(request,
+      request.params.query?.type === "planning" ? planning : defaultAnswer(request.params.query?.type ?? ""));
     await refreshed;
     reply(requests("akra/kernel/command").at(-1), { processed: true });
   };
-  return { connection, reply, fail, requests, query, attachAndAnswer, when, view: () => view };
+  return { connection, reply, fail, requests, query, attachAndAnswer, when, views, view: () => view };
 }
 
 describe("kernel connection", () => {
@@ -98,8 +100,6 @@ describe("kernel connection", () => {
     h.connection.handleEvent({ event: { ...PLANNING, revision: 7, task_evidence: malformed } });
     expect(h.view().planning?.task_evidence).toEqual({ unavailable: "invalid", tasks: [], truncated: false });
     expect(h.view().planning?.queue_summary).toBe("1 task");
-    h.connection.handleEvent({ event: PLANNING });
-    expect(h.view().planning).not.toHaveProperty("task_evidence");
   });
 
   it("attaches and reads the view without keying the read command", async () => {
@@ -240,6 +240,371 @@ describe("kernel connection", () => {
     await attached;
     expect(h.view()).toMatchObject({ phase: "attached", kernel: "second" });
   });
+});
+
+
+function planningWithEvidence(state: "pass" | "fail" = "pass", evidenceRevision = 4) {
+  const evidence = taskEvidenceFixture();
+  evidence.evidence_revision = evidenceRevision;
+  const criterion = evidence.tasks[0]?.criteria[0];
+  if (!criterion) throw new Error("Task evidence fixture must include a criterion");
+  criterion.state = state;
+  criterion.evidence.event_id = `criterion-evidence:fixture-${evidenceRevision}`;
+  criterion.evidence.evidence_revision = evidenceRevision;
+  criterion.evidence.evidence.status = state;
+  return { ...PLANNING, revision: evidence.planning_revision, task_evidence: evidence };
+}
+
+function criterionRecorded(kind: "criterion_evidence_recorded" | "criterion_waived") {
+  const receipt = planningWithEvidence("fail", 5).task_evidence.tasks[0]?.criteria[0]?.evidence;
+  if (!receipt) throw new Error("Task evidence fixture must include an evidence receipt");
+  const record = kind === "criterion_evidence_recorded"
+    ? { kind, ...receipt }
+    : {
+      kind, event_id: "criterion-waiver:fixture-5", evidence_revision: 5,
+      waiver: {
+        scope: receipt.evidence.scope, criterion_id: receipt.evidence.criterion_id,
+        reason_digest: "a".repeat(64), by: "human", recorded_at: "2026-11-23T00:00:02Z",
+      },
+    };
+  return { event: { type: "recorded", event: record } };
+}
+
+async function evidenceHarness() {
+  const h = harness();
+  h.connection.connectionChanged(true);
+  const attached = h.connection.show("/repo");
+  await h.attachAndAnswer(planningWithEvidence());
+  await attached;
+  return h;
+}
+
+describe("planning evidence freshness", () => {
+  it("is stale before attach and current only after the planning query is accepted", async () => {
+    const h = harness();
+    expect(h.view().planningEvidenceFreshness).toBe("stale");
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    expect(h.view().planningEvidenceFreshness).toBe("stale");
+    h.reply(h.requests("akra/kernel/attach")[0], { client_id: "1", protocol_version: 1, kernel: "repo" });
+    await h.when(() => h.requests("akra/kernel/query").length === 4);
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+    for (const type of ["thread_activity", "auto_follow", "parallel"]) h.reply(h.query(type), defaultAnswer(type));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+    h.reply(h.query("planning"), planningWithEvidence());
+    await h.when(() => h.view().planningEvidenceFreshness === "current");
+    expect(h.view().planning?.task_evidence?.evidence_revision).toBe(4);
+    await h.when(() => h.requests("akra/kernel/command").length === 1);
+    h.reply(h.requests("akra/kernel/command")[0], { processed: true });
+    await attached;
+  });
+
+
+  it.each(["omitted", "null"] as const)(
+    "restores criterion cards from a passive query after a native planning notification with %s evidence",
+    async (shape) => {
+      const h = await evidenceHarness();
+      const snapshot = h.view().planning;
+      const commands = h.requests("akra/kernel/command").length;
+      h.connection.handleEvent({ event: { type: "resync" } });
+      const before = h.requests("akra/kernel/query").length;
+      h.reply(h.query("planning"), { ...planningWithEvidence(), queue_summary: "outdated Pass" });
+      const changes = h.views.length;
+      const notification = { ...PLANNING, revision: 8, queue_summary: "updated queue" };
+      h.connection.handleEvent({ event: shape === "null" ? { ...notification, task_evidence: null } : notification });
+      expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+      expect(h.view().planning).toBe(snapshot);
+      await h.when(() => h.requests("akra/kernel/query").length === before + 4);
+      expect(h.view().planning).toBe(snapshot);
+      expect(h.views.slice(changes).every((view) => view.planningEvidenceFreshness !== "current")).toBe(true);
+      const latest = planningWithEvidence("fail", 5);
+      latest.revision = 8;
+      latest.queue_summary = "updated queue";
+      latest.task_evidence.planning_revision = 8;
+      for (const request of h.requests("akra/kernel/query").slice(before)) h.reply(request,
+        request.params.query?.type === "planning" ? latest : defaultAnswer(request.params.query?.type ?? ""));
+      await h.when(() => h.view().planningEvidenceFreshness === "current");
+      expect(h.view().planning).toMatchObject({
+        revision: 8, queue_summary: "updated queue",
+        task_evidence: { planning_revision: 8, evidence_revision: 5, tasks: [{ criteria: [{ state: "fail" }] }] },
+      });
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(h.requests("akra/kernel/command")).toHaveLength(commands);
+      expect(h.requests("akra/kernel/query")).toHaveLength(before + 4);
+    },
+  );
+
+  it("accepts an old Gateway query without evidence as unsupported without another read", async () => {
+    const h = await evidenceHarness();
+    const before = h.requests("akra/kernel/query").length;
+    h.connection.handleEvent({ event: { type: "resync" } });
+    for (const request of h.requests("akra/kernel/query").slice(before)) h.reply(request,
+      defaultAnswer(request.params.query?.type ?? ""));
+    await h.when(() => h.view().planningEvidenceFreshness === "current");
+    expect(h.view().planning).not.toHaveProperty("task_evidence");
+    expect(h.view().planning?.queue_summary).toBe("1 task");
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(h.requests("akra/kernel/query")).toHaveLength(before + 4);
+  });
+
+  it("reads evidence after refresh_planning's native notification without sending another command", async () => {
+    const h = await evidenceHarness();
+    const before = h.requests("akra/kernel/query").length;
+    const commands = h.requests("akra/kernel/command").length;
+    const refreshed = h.connection.refresh();
+    for (const request of h.requests("akra/kernel/query").slice(before)) h.reply(request,
+      request.params.query?.type === "planning" ? planningWithEvidence() : defaultAnswer(request.params.query?.type ?? ""));
+    await h.when(() => h.requests("akra/kernel/command").length === commands + 1);
+    h.connection.handleEvent({ event: { ...PLANNING, revision: 7 } });
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+    expect(h.view().planning?.task_evidence?.tasks[0]?.criteria[0]?.state).toBe("pass");
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    await refreshed;
+    await h.when(() => h.requests("akra/kernel/query").length === before + 8);
+    for (const request of h.requests("akra/kernel/query").slice(before + 4)) h.reply(request,
+      request.params.query?.type === "planning" ? planningWithEvidence("fail", 5) : defaultAnswer(request.params.query?.type ?? ""));
+    await h.when(() => h.view().planningEvidenceFreshness === "current");
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(h.view().planning?.task_evidence?.evidence_revision).toBe(5);
+    expect(h.requests("akra/kernel/command")).toHaveLength(commands + 1);
+    expect(h.requests("akra/kernel/command").at(-1)?.params).toEqual({ command: { type: "refresh_planning" } });
+  });
+
+  it.each([
+    ["rejected", "success"], ["rejected", "failure"], ["accepted", "success"], ["accepted", "failure"],
+  ] as const)(
+    "settles a pending evidence query after a parallel command is %s: %s",
+    async (commandOutcome, planningOutcome) => {
+      const h = await evidenceHarness();
+      const before = h.requests("akra/kernel/query").length;
+      h.connection.handleEvent(criterionRecorded("criterion_evidence_recorded"));
+      await h.when(() => h.requests("akra/kernel/query").length === before + 4);
+      const planningRead = h.query("planning");
+      const started = h.connection.setParallelEnabled(true);
+      const command = h.requests("akra/kernel/command").at(-1);
+      if (commandOutcome === "rejected") h.fail(command, -32012, "parallel command rejected");
+      else {
+        h.reply(command, { processed: true });
+        await h.when(() => h.requests("akra/kernel/query").length === before + 5);
+        h.reply(h.query("parallel"), { type: "parallel", enabled: true });
+      }
+      await started;
+      expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+      if (planningOutcome === "success") {
+        h.reply(planningRead, planningWithEvidence("fail", 5));
+        await h.when(() => h.view().planningEvidenceFreshness === "current");
+        expect(h.view().planning?.task_evidence?.evidence_revision).toBe(5);
+      } else {
+        h.fail(planningRead, -32012, "evidence query unavailable");
+        await h.when(() => h.view().planningEvidenceFreshness === "stale");
+        expect(h.view().planning?.task_evidence?.evidence_revision).toBe(4);
+        expect(h.view().message).toContain("evidence query unavailable");
+      }
+      expect(h.requests("akra/kernel/command")).toHaveLength(2);
+    },
+  );
+
+  it("marks the retained snapshot stale when its latest planning query fails", async () => {
+    const h = await evidenceHarness();
+    const snapshot = h.view().planning;
+    h.connection.handleEvent({ event: { type: "resync" } });
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+    expect(h.view().planning).toBe(snapshot);
+    h.fail(h.query("planning"), -32012, "evidence snapshot unavailable");
+    await h.when(() => h.view().planningEvidenceFreshness === "stale");
+    expect(h.view().planning).toBe(snapshot);
+    expect(h.view().message).toContain("evidence snapshot unavailable");
+    h.connection.handleEvent({ event: planningWithEvidence("fail", 5) });
+    expect(h.view().planningEvidenceFreshness).toBe("current");
+    expect(h.view().planning?.task_evidence?.evidence_revision).toBe(5);
+  });
+
+  it.each(["thread_activity", "auto_follow", "parallel"])(
+    "keeps accepted planning current when the %s query fails",
+    async (failedType) => {
+      const h = await evidenceHarness();
+      h.connection.handleEvent({ event: { type: "resync" } });
+      h.reply(h.query("planning"), planningWithEvidence("fail", 5));
+      await h.when(() => h.view().planning?.task_evidence?.evidence_revision === 5);
+      h.fail(h.query(failedType), -32012, `${failedType} unavailable`);
+      await h.when(() => h.view().message?.includes(`${failedType} unavailable`) === true);
+      expect(h.view().planningEvidenceFreshness).toBe("current");
+      expect(h.view().planning?.task_evidence?.tasks[0]?.criteria[0]?.state).toBe("fail");
+    },
+  );
+
+  it("still marks a planning failure stale after another query already failed", async () => {
+    const h = await evidenceHarness();
+    h.connection.handleEvent({ event: { type: "resync" } });
+    h.fail(h.query("thread_activity"), -32012, "threads unavailable first");
+    await h.when(() => h.view().message?.includes("threads unavailable first") === true);
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+    h.fail(h.query("planning"), -32012, "planning unavailable later");
+    await h.when(() => h.view().planningEvidenceFreshness === "stale");
+    expect(h.view().message).toContain("planning unavailable later");
+  });
+
+  it.each(["criterion_evidence_recorded", "criterion_waived"] as const)(
+    "invalidates an already-resolved planning query synchronously on %s and coalesces reads",
+    async (kind) => {
+      const h = await evidenceHarness();
+      const original = h.view().planning;
+      const commands = h.requests("akra/kernel/command").length;
+      h.connection.handleEvent({ event: { type: "resync" } });
+      const before = h.requests("akra/kernel/query").length;
+      // Resolve first: its continuation is queued before the receipt's refresh microtask.
+      h.reply(h.query("planning"), { ...planningWithEvidence(), queue_summary: "outdated Pass" });
+      const changes = h.views.length;
+      h.connection.handleEvent(criterionRecorded(kind));
+      h.connection.handleEvent(criterionRecorded("criterion_evidence_recorded"));
+      h.connection.handleEvent(criterionRecorded("criterion_waived"));
+      expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+      expect(h.view().planning).toBe(original);
+      expect(h.requests("akra/kernel/query")).toHaveLength(before);
+      await h.when(() => h.requests("akra/kernel/query").length === before + 4);
+      expect(h.view().planning).toBe(original);
+      expect(h.views.slice(changes).every((view) => view.planningEvidenceFreshness !== "current")).toBe(true);
+      const read = h.requests("akra/kernel/query").slice(before);
+      for (const request of read) h.reply(request, request.params.query?.type === "planning"
+        ? planningWithEvidence("fail", 5) : defaultAnswer(request.params.query?.type ?? ""));
+      await h.when(() => h.view().planningEvidenceFreshness === "current");
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(h.view().planning?.task_evidence?.tasks[0]?.criteria[0]?.state).toBe("fail");
+      expect(h.requests("akra/kernel/query")).toHaveLength(before + 4);
+      expect(h.requests("akra/kernel/command")).toHaveLength(commands);
+      expect(h.requests("turn/start")).toHaveLength(0);
+      expect(h.requests("turn/steer")).toHaveLength(0);
+    },
+  );
+
+  it("ignores a planning failure queued before a recorded receipt and its refresh microtask", async () => {
+    const h = await evidenceHarness();
+    h.connection.handleEvent({ event: { type: "resync" } });
+    const before = h.requests("akra/kernel/query").length;
+    h.fail(h.query("planning"), -32012, "outdated planning failure");
+    h.connection.handleEvent(criterionRecorded("criterion_evidence_recorded"));
+    const changes = h.views.length;
+    await h.when(() => h.requests("akra/kernel/query").length === before + 4);
+    expect(h.views.slice(changes).every((view) => view.planningEvidenceFreshness !== "stale")).toBe(true);
+    expect(h.view().message).toBeNull();
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+  });
+
+  it.each([
+    ["event", "success"], ["event", "failure"], ["query", "success"], ["query", "failure"],
+  ] as const)("keeps a newer planning %s when an older query returns %s", async (source, outcome) => {
+    const h = await evidenceHarness();
+    h.connection.handleEvent({ event: { type: "resync" } });
+    const oldRead = h.query("planning");
+    if (source === "event") {
+      h.connection.handleEvent({ event: planningWithEvidence("fail", 5) });
+    } else {
+      h.connection.handleEvent({ event: { type: "resync" } });
+      h.reply(h.query("planning"), planningWithEvidence("fail", 5));
+      await h.when(() => h.view().planning?.task_evidence?.evidence_revision === 5);
+    }
+    const current = h.view().planning;
+    if (outcome === "success") h.reply(oldRead, planningWithEvidence());
+    else h.fail(oldRead, -32012, "outdated planning failure");
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(h.view().planning).toBe(current);
+    expect(h.view().planningEvidenceFreshness).toBe("current");
+    expect(h.view().message).toBeNull();
+  });
+
+  it.each(["success", "failure"] as const)(
+    "rejects an old planning %s after overview interest closes and reopens",
+    async (outcome) => {
+      const h = await evidenceHarness();
+      h.connection.handleEvent({ event: { type: "resync" } });
+      const oldRead = h.query("planning");
+      await h.connection.show("/repo", ["delegation"]);
+      expect(h.view().planningEvidenceFreshness).toBe("stale");
+      const before = h.requests("akra/kernel/query").length;
+      h.connection.handleEvent(criterionRecorded("criterion_evidence_recorded"));
+      h.connection.handleEvent({ event: planningWithEvidence("fail", 5) });
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(h.requests("akra/kernel/query")).toHaveLength(before);
+      expect(h.view().planningEvidenceFreshness).toBe("stale");
+      expect(h.view().planning?.task_evidence?.evidence_revision).toBe(4);
+      const reopened = h.connection.show("/repo", ["overview"]);
+      expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+      if (outcome === "success") h.reply(oldRead, planningWithEvidence());
+      else h.fail(oldRead, -32012, "closed overview failure");
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+      expect(h.view().message).toBeNull();
+      const commands = h.requests("akra/kernel/command").length;
+      for (const request of h.requests("akra/kernel/query").slice(before)) h.reply(request,
+        request.params.query?.type === "planning" ? planningWithEvidence("fail", 5) : defaultAnswer(request.params.query?.type ?? ""));
+      await h.when(() => h.requests("akra/kernel/command").length === commands + 1);
+      h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+      await reopened;
+      expect(h.view().planningEvidenceFreshness).toBe("current");
+      expect(h.view().planning?.task_evidence?.evidence_revision).toBe(5);
+    },
+  );
+
+  it.each([
+    ["repository", "success"], ["repository", "failure"], ["reconnect", "success"], ["reconnect", "failure"],
+  ] as const)("rejects a late planning response after %s: %s", async (transition, outcome) => {
+    const h = await evidenceHarness();
+    h.connection.handleEvent({ event: { type: "resync" } });
+    const oldRead = h.query("planning");
+    if (transition === "repository") {
+      void h.connection.show("/other");
+    } else {
+      h.connection.connectionChanged(false);
+      expect(h.view().planningEvidenceFreshness).toBe("stale");
+      h.connection.connectionChanged(true);
+    }
+    expect(h.view().planningEvidenceFreshness).toBe("stale");
+    expect(h.view().phase).toBe("attaching");
+    const before = h.requests("akra/kernel/query").length;
+    const commands = h.requests("akra/kernel/command").length;
+    h.reply(h.requests("akra/kernel/attach").at(-1), {
+      client_id: "2", protocol_version: 1, kernel: transition === "repository" ? "other-kernel" : "codex-exec-loop-abc",
+    });
+    await h.when(() => h.requests("akra/kernel/query").length === before + 4);
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+    for (const request of h.requests("akra/kernel/query").slice(before)) h.reply(request,
+      request.params.query?.type === "planning" ? planningWithEvidence("fail", 5) : defaultAnswer(request.params.query?.type ?? ""));
+    await h.when(() => h.requests("akra/kernel/command").length === commands + 1);
+    h.reply(h.requests("akra/kernel/command").at(-1), { processed: true });
+    const current = h.view().planning;
+    if (outcome === "success") h.reply(oldRead, planningWithEvidence());
+    else h.fail(oldRead, -32012, "previous connection failure");
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(h.view().planning).toBe(current);
+    expect(h.view().planningEvidenceFreshness).toBe("current");
+    expect(h.view().message).toBeNull();
+    expect(h.view().workspace).toBe(transition === "repository" ? "/other" : "/repo");
+  });
+
+  it.each(["interest", "panel", "repository", "disconnect"] as const)(
+    "cancels a queued receipt read when the %s changes",
+    async (transition) => {
+      const h = await evidenceHarness();
+      const before = h.requests("akra/kernel/query").length;
+      const commands = h.requests("akra/kernel/command").length;
+      h.connection.handleEvent(criterionRecorded("criterion_waived"));
+      expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+      if (transition === "interest") await h.connection.show("/repo", ["delegation"]);
+      else if (transition === "panel") {
+        const closed = h.connection.show(null);
+        h.reply(h.requests("akra/kernel/detach").at(-1), { detached: true });
+        await closed;
+      } else if (transition === "repository") void h.connection.show("/other");
+      else h.connection.connectionChanged(false);
+      h.connection.handleEvent(criterionRecorded("criterion_evidence_recorded"));
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(h.requests("akra/kernel/query")).toHaveLength(before);
+      expect(h.requests("akra/kernel/command")).toHaveLength(commands);
+      expect(h.view().planningEvidenceFreshness).toBe("stale");
+      if (transition === "panel") expect(h.view()).toEqual(EMPTY_KERNEL_VIEW);
+    },
+  );
 });
 
 describe("explicit parallel execution control", () => {
