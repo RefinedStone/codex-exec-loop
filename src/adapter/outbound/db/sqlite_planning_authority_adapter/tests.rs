@@ -9596,3 +9596,4 @@ fn issue_work_event_receipts_survive_ack_loss_and_event_retention() {
 }
 
 mod task_acceptance;
+mod task_evidence;

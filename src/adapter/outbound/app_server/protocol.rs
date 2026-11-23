@@ -379,19 +379,24 @@ impl SandboxModeValue {
          */
         match self {
             Self::ReadOnly => SandboxPolicyValue::ReadOnly,
-            Self::WorkspaceWrite => SandboxPolicyValue::WorkspaceWrite,
+            Self::WorkspaceWrite => SandboxPolicyValue::WorkspaceWrite {
+                writable_roots: None,
+            },
             Self::DangerFullAccess => SandboxPolicyValue::DangerFullAccess,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type")]
 pub(super) enum SandboxPolicyValue {
     #[serde(rename = "readOnly")]
     ReadOnly,
     #[serde(rename = "workspaceWrite")]
-    WorkspaceWrite,
+    WorkspaceWrite {
+        #[serde(rename = "writableRoots", skip_serializing_if = "Option::is_none")]
+        writable_roots: Option<Vec<String>>,
+    },
     #[serde(rename = "dangerFullAccess")]
     DangerFullAccess,
 }

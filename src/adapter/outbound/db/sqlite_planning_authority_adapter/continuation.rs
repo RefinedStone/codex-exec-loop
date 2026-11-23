@@ -564,7 +564,7 @@ pub(super) fn task_preserved(workspace: &str, task_id: &str) -> Result<bool> {
     task_preserved_in_connection(&connection, task_id)
 }
 
-fn task_preserved_in_connection(connection: &Connection, task_id: &str) -> Result<bool> {
+pub(super) fn task_preserved_in_connection(connection: &Connection, task_id: &str) -> Result<bool> {
     let pending: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_worker_continuations
         WHERE task_id=?1 AND delivery_state IN ('queued','unknown'))",

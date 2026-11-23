@@ -2,6 +2,7 @@
 //! 쓰기가 실패해도 커널은 멈추지 않는다. 기록기를 버리면 남은 사건을 모두 쓴 뒤에 끝난다.
 //! 밀린 기록에는 바이트 한도가 있다 (#2301). 쓰지 못한 사건은 `history` 조회의 `recorder` 로 보인다 (#2300).
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -18,6 +19,7 @@ pub(crate) struct KernelEventRecorder {
     writer: Option<JoinHandle<()>>,
     health: Arc<Mutex<KernelRecorderHealth>>,
     max_pending_bytes: u64,
+    pending_batches: Arc<AtomicUsize>,
 }
 
 impl KernelEventRecorder {
@@ -33,9 +35,12 @@ impl KernelEventRecorder {
         max_pending_bytes: u64,
     ) -> Self {
         let health = Arc::new(Mutex::new(KernelRecorderHealth::default()));
+        let pending_batches = Arc::new(AtomicUsize::new(0));
         let (batches, received) = mpsc::channel::<(Vec<RecordedKernelEvent>, u64)>();
         let writer_health = health.clone();
         let panic_health = health.clone();
+        let writer_pending = pending_batches.clone();
+        let panic_pending = pending_batches.clone();
         let writer = spawn_worker_with_panic_fallback(
             move || {
                 for (batch, bytes) in received {
@@ -49,10 +54,15 @@ impl KernelEventRecorder {
                     if health.pending_bytes == 0 {
                         health.saturated = false;
                     }
+                    // 이 감소는 append가 끝난 뒤다. 단독 kernel enqueue와 함께 직접 outbox append의
+                    // 앞선 sequence가 뒤늦게 history에 나타나지 않도록 비차단 barrier를 제공한다.
+                    finish_batch(&writer_pending);
                 }
             },
             move || {
                 locked(&panic_health).degraded = true;
+                // receiver가 unwind되면 남은 batch도 더는 쓰지 않는다.
+                panic_pending.store(0, Ordering::Release);
                 tracing::warn!("kernel event recorder stopped after a panic");
             },
         );
@@ -61,6 +71,7 @@ impl KernelEventRecorder {
             writer: Some(writer),
             health,
             max_pending_bytes,
+            pending_batches,
         }
     }
 
@@ -87,16 +98,30 @@ impl KernelEventRecorder {
             // An accepted batch ends the dropping, even while the writer still has a backlog.
             health.saturated = false;
         }
+        self.pending_batches.fetch_add(1, Ordering::AcqRel);
         if batches.send((records, bytes)).is_err() {
             let mut health = locked(&self.health);
             health.pending_bytes = health.pending_bytes.saturating_sub(bytes);
             drop_events(&mut health, events);
+            finish_batch(&self.pending_batches);
         }
     }
 
     pub(crate) fn health(&self) -> KernelRecorderHealth {
         locked(&self.health).clone()
     }
+
+    /// 새 writer나 blocking flush 없이 앞서 받은 batch가 모두 종료됐는지 확인한다.
+    pub(crate) fn is_caught_up(&self) -> bool {
+        self.pending_batches.load(Ordering::Acquire) == 0
+    }
+}
+
+fn finish_batch(pending: &AtomicUsize) {
+    // writer panic과 send 실패가 겹쳐도 카운터를 되감지 않는다.
+    let _ = pending.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+        Some(count.saturating_sub(1))
+    });
 }
 
 fn drop_events(health: &mut KernelRecorderHealth, events: u64) {

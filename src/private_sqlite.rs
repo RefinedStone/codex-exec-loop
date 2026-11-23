@@ -9,6 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OpenFlags};
 
+mod pinned_directory;
+pub(crate) use pinned_directory::PinnedPrivateDirectory;
+
 /// File names owned by one rollback-journal database, all relative to its private runtime.
 #[derive(Clone, Copy)]
 pub(crate) struct DatabaseFiles {
@@ -431,6 +434,14 @@ mod platform {
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
     pub(super) fn open_runtime(runtime: &Path, create: bool) -> Result<Vec<DirectoryAnchor>> {
+        open_runtime_with_privacy(runtime, create, true)
+    }
+
+    pub(super) fn open_runtime_with_privacy(
+        runtime: &Path,
+        create: bool,
+        private_final: bool,
+    ) -> Result<Vec<DirectoryAnchor>> {
         let components = runtime.components().collect::<Vec<_>>();
         let root = fs::OpenOptions::new()
             .read(true)
@@ -439,7 +450,7 @@ mod platform {
         let mut anchors = vec![DirectoryAnchor {
             path: PathBuf::from("/"),
             file: root,
-            private: components.len() == 1,
+            private: private_final && components.len() == 1,
         }];
         let mut path = PathBuf::from("/");
         for (index, component) in components.iter().enumerate() {
@@ -476,7 +487,7 @@ mod platform {
                     let anchor = DirectoryAnchor {
                         path: path.clone(),
                         file: directory,
-                        private: created || index + 1 == components.len(),
+                        private: created || (private_final && index + 1 == components.len()),
                     };
                     if create {
                         anchor.verify()?;
@@ -684,6 +695,14 @@ mod platform {
     use super::*;
 
     pub(super) fn open_runtime(runtime: &Path, create: bool) -> Result<Vec<DirectoryAnchor>> {
+        open_runtime_with_privacy(runtime, create, true)
+    }
+
+    pub(super) fn open_runtime_with_privacy(
+        runtime: &Path,
+        create: bool,
+        private_final: bool,
+    ) -> Result<Vec<DirectoryAnchor>> {
         let components = runtime.components().collect::<Vec<_>>();
         let mut path = PathBuf::new();
         let mut anchors: Vec<DirectoryAnchor> = Vec::new();
@@ -723,7 +742,7 @@ mod platform {
             let anchor = DirectoryAnchor {
                 path: path.clone(),
                 file: directory,
-                private: created || index + 1 == components.len(),
+                private: created || (private_final && index + 1 == components.len()),
             };
             if create {
                 anchor.verify()?;
@@ -739,7 +758,7 @@ mod platform {
         Ok(anchors)
     }
 
-    fn open_directory(path: &Path, pin: bool, write_acl: bool) -> std::io::Result<File> {
+    pub(super) fn open_directory(path: &Path, pin: bool, write_acl: bool) -> std::io::Result<File> {
         use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 
         fs::OpenOptions::new()
@@ -883,6 +902,14 @@ mod platform {
 
     pub(super) fn open_runtime(_: &Path, _: bool) -> Result<Vec<DirectoryAnchor>> {
         bail!("private SQLite databases are unsupported on this platform")
+    }
+
+    pub(super) fn open_runtime_with_privacy(
+        _: &Path,
+        _: bool,
+        _: bool,
+    ) -> Result<Vec<DirectoryAnchor>> {
+        bail!("private directory pinning is unsupported on this platform")
     }
 
     pub(super) fn open_database(_: &Path, _: &File) -> Result<Arc<DatabaseAnchor>> {

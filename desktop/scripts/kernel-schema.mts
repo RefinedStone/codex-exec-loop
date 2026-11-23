@@ -13,6 +13,8 @@ type Schema = boolean | {
   readonly additionalProperties?: boolean;
   readonly minimum?: number;
   readonly maximum?: number;
+  readonly minItems?: number;
+  readonly maxItems?: number;
 };
 
 export interface KernelSpec {
@@ -25,7 +27,7 @@ export interface KernelSpec {
 
 const SUPPORTED_KEYS = new Set([
   "$ref", "type", "const", "enum", "oneOf", "anyOf", "properties", "required", "items",
-  "additionalProperties", "format", "minimum", "maximum", "minLength", "maxLength", "pattern", "default",
+  "additionalProperties", "format", "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems", "pattern", "default",
 ]);
 
 export class KernelSchemaError extends Error {
@@ -88,6 +90,8 @@ function schemaType(schema: Schema, definitions: Readonly<Record<string, Schema>
       }
       case "array":
         if (schema.items === undefined) throw new KernelSchemaError(location, "array needs items");
+        // Like numeric and string bounds, array length is checked by the kernel at runtime.
+        // Preserve the element type; length constraints do not widen it to unknown.
         parts.push(`Array<${schemaType(schema.items, definitions, `${location}/items`)}>`);
         break;
       case "string":

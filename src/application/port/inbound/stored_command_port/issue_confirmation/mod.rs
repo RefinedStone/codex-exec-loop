@@ -9,10 +9,20 @@ use crate::domain::issue_automation::decision::{
     validate_issue_decision_confirmation_reference,
 };
 use crate::domain::issue_automation::{IssueAutomationAutonomy, MAX_ISSUE_AUTOMATION_REVISION};
+use crate::domain::planning::evidence::{validate_evidence_identifier, validate_evidence_token};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IssueConfirmationTarget {
+    /// 현재 완료 기준 판의 한 기준만 면제한다. 전달·명세·통합 승인은 포함하지 않는다.
+    CriterionWaiver {
+        workspace: String,
+        task_id: String,
+        criterion_id: String,
+        scope_id: String,
+        acceptance_revision: u64,
+        reason_digest: String,
+    },
     Decision {
         workspace: String,
         decision_id: IssueDecisionId,
@@ -41,7 +51,8 @@ pub enum IssueConfirmationTarget {
 impl IssueConfirmationTarget {
     pub fn workspace(&self) -> &str {
         match self {
-            Self::Decision { workspace, .. }
+            Self::CriterionWaiver { workspace, .. }
+            | Self::Decision { workspace, .. }
             | Self::Mode { workspace, .. }
             | Self::Autonomy { workspace, .. } => workspace,
         }
@@ -57,6 +68,24 @@ impl IssueConfirmationTarget {
             return Err(IssueConfirmationError::Invalid);
         }
         match self {
+            Self::CriterionWaiver {
+                task_id,
+                criterion_id,
+                scope_id,
+                acceptance_revision,
+                reason_digest,
+                ..
+            } => {
+                // E1의 기준 ID는 내부 공백을 허용한다. native 대상은 정규화된 원본 ID를 보존한다.
+                if validate_evidence_identifier(task_id).is_err()
+                    || validate_evidence_identifier(criterion_id).is_err()
+                    || validate_evidence_token(scope_id).is_err()
+                    || !valid_revision(*acceptance_revision)
+                    || validate_evidence_token(reason_digest).is_err()
+                {
+                    return Err(IssueConfirmationError::Invalid);
+                }
+            }
             Self::Decision {
                 option,
                 basis,

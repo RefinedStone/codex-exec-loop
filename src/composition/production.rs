@@ -917,6 +917,7 @@ pub(crate) fn stored_command_port_with_issues(
             store.clone(),
             store,
         ))
+        .with_task_evidence(super::task_evidence::build(workspace_dir))
         .with_issue_collection(issues)
         .with_issue_decisions(super::issue_collection::build_decisions(workspace_dir))
         .with_issue_interventions(super::issue_collection::build_interventions(
@@ -988,6 +989,7 @@ pub(crate) fn build_headless_kernel_runtime(
         stored_command_port_with_issues(workspace_dir, issues, assembly.issue_work_steering),
         workspace_dir,
     );
+    runtime.attach_task_evidence(super::task_evidence::build(workspace_dir));
     runtime
 }
 
@@ -1342,6 +1344,10 @@ fn parallel_mode_service_from_parts(
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
     .with_pr_validation_observation(pr_validation_observation)
+    .with_task_evidence(
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        super::task_evidence::artifacts(),
+    )
     .with_parallel_agent_profile_service(parallel_agent_profile_service)
 }
 

@@ -26,6 +26,15 @@ const commands = {
   retry_delegation: { type: "retry_delegation", id: "delegation-1" },
   load_sessions: { type: "load_sessions" },
   refresh_planning: { type: "refresh_planning" },
+  prepare_evidence: {
+    type: "prepare_evidence", request_id: "prepare-1", task_id: "task-1", criterion_id: "criterion-1",
+    scope_id: "a".repeat(64), expected_acceptance_revision: 1,
+  },
+  record_evidence: { type: "record_evidence", attempt_id: "b".repeat(64), status: "pass" },
+  waive_criterion: {
+    type: "waive_criterion", request_id: "waiver-1", task_id: "task-1", criterion_id: "criterion-1",
+    scope_id: "a".repeat(64), expected_acceptance_revision: 1, reason: "Explicitly exempt this criterion.",
+  },
   set_issue_automation_mode: { type: "set_issue_automation_mode", mode: "observe" },
   set_issue_autonomy: { type: "set_issue_autonomy", command_id: "autonomy-1", level: "propose" },
   sync_issues: { type: "sync_issues" },

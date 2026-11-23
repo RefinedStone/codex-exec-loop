@@ -4,6 +4,7 @@ pub mod parallel_agent_profile;
 pub mod planning_workspace;
 pub mod pr_validation_rollout_evidence;
 pub(crate) mod secure_fs;
+pub mod task_evidence_artifact;
 // kernel_lock 은 저장소당 커널 하나를 지키는 OS 파일 잠금이다 (plan 18 K3-4).
 pub(crate) mod kernel_lock;
 // git_operation_journal 은 저장소마다 하나인 git 작업 일지 파일이다 (plan 27 G3).
@@ -29,6 +30,7 @@ pub(crate) use self::kernel_lock::{
 pub use self::parallel_agent_profile::FilesystemParallelAgentProfileRepositoryAdapter;
 pub use self::planning_workspace::FilesystemPlanningWorkspaceAdapter;
 pub use self::pr_validation_rollout_evidence::FilesystemPrValidationRolloutEvidenceAdapter;
+pub use self::task_evidence_artifact::FilesystemTaskEvidenceArtifactAdapter;
 
 pub mod issue_creation_journal;
 pub use self::issue_creation_journal::IssueCreationJournalAdapter;

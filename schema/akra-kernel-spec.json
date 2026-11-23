@@ -724,6 +724,227 @@
       }
     },
     {
+      "name": "prepare_evidence",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Reserve one evidence attempt for the current task, acceptance scope and running lease. The host chooses the artifact path and observes the source tree. Reuse request_id to recover the same reservation; client-supplied paths, hashes and actor claims are not accepted.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "criterion_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "expected_acceptance_revision": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "scope_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "task_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "prepare_evidence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "request_id",
+          "task_id",
+          "criterion_id",
+          "scope_id",
+          "expected_acceptance_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "preparation": {
+            "$ref": "#/$defs/TaskEvidencePreparedState"
+          },
+          "type": {
+            "const": "evidence_prepared",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "preparation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "record_evidence",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Record pass, fail or blocked for one reserved evidence attempt after the host verifies the fixed artifact and unchanged source. The immutable receipt does not grant delivery or integration authority; read planning for current evidence status.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "note": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/TaskEvidenceStatus"
+          },
+          "type": {
+            "const": "record_evidence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "attempt_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "receipt": {
+            "$ref": "#/$defs/TaskEvidenceReceiptState"
+          },
+          "type": {
+            "const": "criterion_evidence_recorded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt",
+          "changed"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "waive_criterion",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Exempt one criterion in the exact current acceptance scope after a verified Desktop human confirmation. Code changes alone do not revoke this exemption; an acceptance scope change does. This does not approve Spec, Delivery or Integrate. Reuse request_id to recover the same receipt.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "human_confirmation_required"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "criterion_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "expected_acceptance_revision": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "scope_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "task_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "waive_criterion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "request_id",
+          "task_id",
+          "criterion_id",
+          "scope_id",
+          "expected_acceptance_revision",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "receipt": {
+            "$ref": "#/$defs/TaskCriterionWaiverReceiptState"
+          },
+          "type": {
+            "const": "criterion_waived",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt",
+          "changed"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "create_task",
       "scope": "planning",
       "state": "store",
@@ -2442,7 +2663,7 @@
     },
     {
       "name": "planning",
-      "summary": "The planning queue.",
+      "summary": "The planning queue and the first bounded page of current task evidence when available. Follow task_evidence.next_task_id with the task_evidence query to read later tasks.",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -2466,6 +2687,107 @@
         },
         "required": [
           "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_evidence",
+      "summary": "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "after_task_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint",
+            "maximum": 256,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "task_evidence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "planning_revision": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/$defs/TaskEvidenceTaskState"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "type": {
+            "const": "task_evidence",
+            "type": "string"
+          },
+          "unavailable": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskEvidenceError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "tasks",
+          "truncated"
         ],
         "type": "object"
       }
@@ -4521,6 +4843,66 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "criterion_evidence_recorded",
+      "summary": "An immutable task criterion evidence receipt was committed after host artifact and source observation. Its durable event ID deduplicates replay; raw paths, evidence content and notes are excluded. Current validity comes from the planning query.",
+      "payload": {
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/$defs/TaskCriterionEvidenceRecord"
+          },
+          "evidence_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "criterion_evidence_recorded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "evidence_revision",
+          "evidence"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "criterion_waived",
+      "summary": "A verified human exemption was committed for one task criterion and acceptance scope. Its durable event ID deduplicates replay; raw reason text and confirmation capability are excluded. It does not approve delivery or integration.",
+      "payload": {
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "evidence_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "criterion_waived",
+            "type": "string"
+          },
+          "waiver": {
+            "$ref": "#/$defs/TaskCriterionWaiverRecord"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "evidence_revision",
+          "waiver"
+        ],
+        "type": "object"
+      }
     }
   ],
   "reasons": [
@@ -5579,6 +5961,62 @@
     },
     "CommandResult": {
       "oneOf": [
+        {
+          "properties": {
+            "preparation": {
+              "$ref": "#/$defs/TaskEvidencePreparedState"
+            },
+            "type": {
+              "const": "evidence_prepared",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "preparation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "$ref": "#/$defs/TaskEvidenceReceiptState"
+            },
+            "type": {
+              "const": "criterion_evidence_recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "$ref": "#/$defs/TaskCriterionWaiverReceiptState"
+            },
+            "type": {
+              "const": "criterion_waived",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt",
+            "changed"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "delegation": {
@@ -7253,6 +7691,45 @@
     },
     "IssueConfirmationTarget": {
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "criterion_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "criterion_waiver",
+              "type": "string"
+            },
+            "reason_digest": {
+              "type": "string"
+            },
+            "scope_id": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace",
+            "task_id",
+            "criterion_id",
+            "scope_id",
+            "acceptance_revision",
+            "reason_digest"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -9747,6 +10224,130 @@
         {
           "additionalProperties": false,
           "properties": {
+            "criterion_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "expected_acceptance_revision": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "request_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "scope_id": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "task_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "prepare_evidence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "task_id",
+            "criterion_id",
+            "scope_id",
+            "expected_acceptance_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "note": {
+              "maxLength": 4096,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/TaskEvidenceStatus"
+            },
+            "type": {
+              "const": "record_evidence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attempt_id",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "criterion_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "expected_acceptance_revision": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "reason": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "request_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "scope_id": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "task_id": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "waive_criterion",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "task_id",
+            "criterion_id",
+            "scope_id",
+            "expected_acceptance_revision",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "task": {
               "$ref": "#/$defs/TaskFields"
             },
@@ -10754,6 +11355,48 @@
         {
           "additionalProperties": false,
           "properties": {
+            "after_task_id": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "format": "uint",
+              "maximum": 256,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "task_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "task_evidence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "type": {
               "const": "parallel",
               "type": "string"
@@ -10889,6 +11532,61 @@
     },
     "KernelQueryAnswer": {
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "next_task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "planning_revision": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/$defs/TaskEvidenceTaskState"
+              },
+              "type": "array"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "task_evidence",
+              "type": "string"
+            },
+            "unavailable": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TaskEvidenceError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "tasks",
+            "truncated"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "delegations": {
@@ -12184,6 +12882,58 @@
             "event_id": {
               "type": "string"
             },
+            "evidence": {
+              "$ref": "#/$defs/TaskCriterionEvidenceRecord"
+            },
+            "evidence_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "criterion_evidence_recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "evidence_revision",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "evidence_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "criterion_waived",
+              "type": "string"
+            },
+            "waiver": {
+              "$ref": "#/$defs/TaskCriterionWaiverRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "evidence_revision",
+            "waiver"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
             "issue": {
               "$ref": "#/$defs/IssueEventReference"
             },
@@ -13181,6 +13931,48 @@
       ],
       "type": "string"
     },
+    "PlanningCriterionEvidenceState": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion": {
+          "$ref": "#/$defs/TaskAcceptanceCriterion"
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceReceiptState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskCriterionEvidenceState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waiver": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskCriterionWaiverReceiptState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "criterion"
+      ],
+      "type": "object"
+    },
     "PlanningDirectionState": {
       "enum": [
         "active",
@@ -13246,6 +14038,16 @@
         },
         "status": {
           "$ref": "#/$defs/PlanningStatus"
+        },
+        "task_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceState"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -13806,6 +14608,384 @@
         "scenario",
         "channel",
         "essential"
+      ],
+      "type": "object"
+    },
+    "TaskCriterionEvidenceRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/TaskEvidenceArtifact"
+        },
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "criterion_id": {
+          "type": "string"
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "recorded_tree": {
+          "$ref": "#/$defs/TaskEvidenceTree"
+        },
+        "scope": {
+          "$ref": "#/$defs/TaskEvidenceScope"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskEvidenceStatus"
+        }
+      },
+      "required": [
+        "scope",
+        "criterion_id",
+        "attempt_id",
+        "attempt",
+        "status",
+        "artifact",
+        "recorded_tree",
+        "by",
+        "recorded_at"
+      ],
+      "type": "object"
+    },
+    "TaskCriterionEvidenceState": {
+      "enum": [
+        "pending",
+        "pass",
+        "fail",
+        "blocked",
+        "stale",
+        "waived"
+      ],
+      "type": "string"
+    },
+    "TaskCriterionWaiverActor": {
+      "enum": [
+        "human"
+      ],
+      "type": "string"
+    },
+    "TaskCriterionWaiverReceiptState": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "type": "string"
+        },
+        "evidence_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "waiver": {
+          "$ref": "#/$defs/TaskCriterionWaiverRecord"
+        }
+      },
+      "required": [
+        "event_id",
+        "evidence_revision",
+        "waiver"
+      ],
+      "type": "object"
+    },
+    "TaskCriterionWaiverRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/TaskCriterionWaiverActor"
+        },
+        "criterion_id": {
+          "type": "string"
+        },
+        "reason_digest": {
+          "type": "string"
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/TaskEvidenceScope"
+        }
+      },
+      "required": [
+        "scope",
+        "criterion_id",
+        "reason_digest",
+        "by",
+        "recorded_at"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sha256",
+        "size_bytes"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceError": {
+      "enum": [
+        "invalid",
+        "missing",
+        "artifact_missing",
+        "stale",
+        "scope_changed",
+        "lease_changed",
+        "conflict",
+        "unavailable",
+        "limit",
+        "human_confirmation_required"
+      ],
+      "type": "string"
+    },
+    "TaskEvidencePreparedState": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "artifact_path": {
+          "type": "string"
+        },
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "type": "string"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "criterion_id": {
+          "type": "string"
+        },
+        "scope_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "task_id",
+        "criterion_id",
+        "scope_id",
+        "acceptance_revision",
+        "attempt",
+        "artifact_path",
+        "changed"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceReceiptState": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/TaskCriterionEvidenceRecord"
+        },
+        "evidence_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "evidence_revision",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceScope": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "criteria_sha256": {
+          "type": "string"
+        },
+        "scope_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "scope_id",
+        "acceptance_revision",
+        "criteria_sha256"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceSourceKind": {
+      "enum": [
+        "running_lease",
+        "queued_source"
+      ],
+      "type": "string"
+    },
+    "TaskEvidenceSourceState": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/TaskEvidenceSourceKind"
+        },
+        "tree": {
+          "$ref": "#/$defs/TaskEvidenceTree"
+        }
+      },
+      "required": [
+        "kind",
+        "tree"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceState": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "next_task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "planning_revision": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskEvidenceTaskState"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "unavailable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "tasks",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceStatus": {
+      "enum": [
+        "pass",
+        "fail",
+        "blocked"
+      ],
+      "type": "string"
+    },
+    "TaskEvidenceTaskState": {
+      "additionalProperties": false,
+      "properties": {
+        "criteria": {
+          "items": {
+            "$ref": "#/$defs/PlanningCriterionEvidenceState"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/TaskEvidenceScope"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceSourceState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "criteria"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceTree": {
+      "additionalProperties": false,
+      "properties": {
+        "head_commit_sha": {
+          "type": "string"
+        },
+        "tree_sha": {
+          "type": "string"
+        },
+        "worktree_clean": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "head_commit_sha",
+        "tree_sha",
+        "worktree_clean"
       ],
       "type": "object"
     },

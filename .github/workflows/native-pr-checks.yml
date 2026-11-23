@@ -269,7 +269,7 @@ jobs:
           cargo test --locked --all-features --lib --target "${{ matrix.target }}"
           trusted_executable::tests::native_ -- --nocapture
 
-      - name: Test native Vault key initialization and private storage
+      - name: Test native Vault keys, private storage and task evidence
         if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: |
@@ -279,7 +279,12 @@ jobs:
             'stable_user_data_root::tests::' \
             'sqlite_issue_automation_store::private_store::tests::' \
             'adapter::outbound::vault_key_store::' \
-            'application::service::evidence_vault_unlock::'
+            'application::service::evidence_vault_unlock::' \
+            'task_evidence_artifact::tests::' \
+            'sqlite_planning_authority_adapter::tests::task_evidence::' \
+            'parallel_worker_commit::tree_snapshot::tests::' \
+            'parallel_mode::tests::pool::lease::task_evidence::' \
+            'worker_evidence::'
           do
             cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
               "${filter}" -- --nocapture

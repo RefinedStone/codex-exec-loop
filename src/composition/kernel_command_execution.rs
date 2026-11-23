@@ -144,6 +144,26 @@ impl CommandOnlyKernel {
             records.extend(page.records);
         }
     }
+
+    fn drain_task_evidence_outbox(&self, log: &dyn KernelEventLogPort, last_sequence: &mut i64) {
+        let service = super::task_evidence::build(&self.workspace);
+        // command-only에는 host cycle이 없다. 내구 원장의 총 receipt 상한만큼만 복구하고,
+        // 실패한 사건은 ACK하지 않아 다음 명령이나 live kernel 부착에서 다시 읽는다.
+        let max_batches = crate::domain::planning::evidence::MAX_TASK_EVIDENCE_RECEIPTS as usize
+            / super::task_evidence_outbox::TASK_EVIDENCE_OUTBOX_BATCH
+            + 1;
+        for _ in 0..max_batches {
+            let result =
+                super::task_evidence_outbox::drain(&service, log, &self.workspace, last_sequence);
+            if result.retry {
+                tracing::warn!("task evidence remains in the command-only durable outbox");
+                break;
+            }
+            if !result.more {
+                break;
+            }
+        }
+    }
 }
 
 /// 실패의 원인 글이다. 오류의 사슬 전체를 싣는다: 맨 위의 글만으로는 원인을 알 수 없다.
@@ -294,10 +314,13 @@ impl KernelCommandPort for CommandOnlyKernel {
                     StoredCommand::AnswerIssueDecision { .. }
                         | StoredCommand::InterveneIssue { .. }
                         | StoredCommand::SetIssueAutonomy { .. }
+                        | StoredCommand::PrepareEvidence { .. }
+                        | StoredCommand::RecordEvidence { .. }
+                        | StoredCommand::WaiveCriterion { .. }
                 )
             {
                 return unreachable_answer(
-                    "The repository kernel owns this workspace. Send this issue command through that kernel.",
+                    "The repository kernel owns this workspace. Send this stored command through that kernel.",
                 );
             }
             return work_answer(self.run(work), is_reset, None);
@@ -305,6 +328,8 @@ impl KernelCommandPort for CommandOnlyKernel {
         let mut descriptor = descriptor.context("stored mutation must have a descriptor")?;
         descriptor.caller = Some(self.caller.to_string());
         let log = super::production::kernel_event_log_port();
+        let mut last_sequence = log.last_kernel_event_sequence(&self.workspace)?;
+        self.drain_task_evidence_outbox(log.as_ref(), &mut last_sequence);
         let memory =
             CommandMemory::from_events(log.load_kernel_events(&self.workspace, &COMMAND_KINDS)?);
         if let Some(key) = &descriptor.idempotency_key {
@@ -318,8 +343,7 @@ impl KernelCommandPort for CommandOnlyKernel {
                 CommandRecall::Unknown => {}
             }
         }
-        let op_id = log
-            .last_kernel_event_sequence(&self.workspace)?
+        let op_id = last_sequence
             .checked_add(1)
             .context("kernel event sequence exhausted")?;
         let completed_sequence = op_id
@@ -414,6 +438,17 @@ impl KernelCommandPort for CommandOnlyKernel {
             }
         }
         log.append_kernel_events(&self.workspace, &completed)?;
+        last_sequence = completed
+            .last()
+            .map_or(completed_sequence, |record| record.sequence);
+        if matches!(
+            kind,
+            KernelCommandKind::PrepareEvidence
+                | KernelCommandKind::RecordEvidence
+                | KernelCommandKind::WaiveCriterion
+        ) {
+            self.drain_task_evidence_outbox(log.as_ref(), &mut last_sequence);
+        }
         work_answer(end, is_reset, Some(op_id))
     }
 
@@ -432,6 +467,11 @@ impl CommandOnlyKernel {
         inspect: impl FnOnce(&str) -> Option<IssueAutomationPolicyInspection>,
     ) -> Result<Value> {
         let query: KernelQuery = serde_json::from_value(input)?;
+        if let Some(evidence_query) = query.task_evidence_request().map_err(protocol_error)? {
+            return Ok(serde_json::to_value(KernelQueryAnswer::TaskEvidence(
+                super::task_evidence::query(&self.workspace, &evidence_query)?,
+            ))?);
+        }
         match query {
             KernelQuery::FeatureBindings {} => {
                 return Ok(serde_json::to_value(super::production::query_pr_review(
@@ -550,9 +590,14 @@ impl CommandOnlyKernel {
                         .with_autonomy(&service.autonomy_state()),
                 )
             }
-            KernelQuery::Planning {} => KernelQueryAnswer::Planning(PlanningState::from_core(
-                &super::production::stored_planning_projection(&self.workspace),
-            )),
+            KernelQuery::Planning {} => {
+                KernelQueryAnswer::Planning(super::task_evidence::enrich_planning(
+                    &self.workspace,
+                    PlanningState::from_core(&super::production::stored_planning_projection(
+                        &self.workspace,
+                    )),
+                ))
+            }
             _ => bail!("{UNREACHABLE_QUERY}: it cannot read live kernel state"),
         };
         Ok(serde_json::to_value(answer)?)
@@ -1183,6 +1228,81 @@ mod tests {
         kernel.query(json!({"type":"planning"}), false).unwrap()["revision"]
             .as_i64()
             .expect("the planning query answers the revision from the store")
+    }
+
+    #[test]
+    fn command_only_boot_drains_evidence_before_allocating_the_next_operation_sequence() {
+        use crate::application::port::inbound::stored_command_port::issue_confirmation::VerifiedHumanConfirmation;
+        use crate::application::port::inbound::stored_command_port::task_evidence::WaiveTaskCriterionRequest;
+        let (_directory, kernel) = fixture();
+        let created = stored(
+            &kernel,
+            KernelCommandKind::CreateTask,
+            json!({
+                "type":"create_task", "task":{"title":"Evidence scope", "acceptance":[{
+                    "id":"criterion with spaces", "scenario":"Observable result", "channel":"command", "essential":true
+                }]}
+            }),
+        );
+        let task_id = created["result"]["task_id"].as_str().unwrap().to_owned();
+        let snapshot = kernel
+            .query(json!({"type":"task_evidence","task_ids":[task_id]}), false)
+            .unwrap();
+        let scope = &snapshot["tasks"][0]["scope"];
+        let request = WaiveTaskCriterionRequest {
+            request_id: "waiver-during-crash".into(),
+            task_id,
+            criterion_id: "criterion with spaces".into(),
+            scope_id: scope["scope_id"].as_str().unwrap().into(),
+            expected_acceptance_revision: scope["acceptance_revision"].as_u64().unwrap(),
+            reason: "A human approved this acceptance exemption.".into(),
+        };
+        let service = crate::composition::task_evidence::build(&kernel.workspace);
+        let preview = service.prepare_waiver(&request).unwrap();
+        let context = StoredCommandContext {
+            human_confirmation: Some(
+                VerifiedHumanConfirmation::from_verified(
+                    preview.target,
+                    format!("desktop-confirmation:{}", "a".repeat(32)),
+                )
+                .unwrap(),
+            ),
+            caller: Some("fixture-desktop".into()),
+            channel: "test".into(),
+            at: "2026-11-23T00:00:00Z".into(),
+        };
+        let receipt = service.waive_criterion(request, &context).unwrap().value;
+        assert_eq!(service.pending_events(64).unwrap().len(), 1);
+        let log = crate::composition::production::kernel_event_log_port();
+        let before = log.last_kernel_event_sequence(&kernel.workspace).unwrap();
+        let created = stored(
+            &kernel,
+            KernelCommandKind::CreateTask,
+            json!({"type":"create_task","task":{"title":"Next operation"}}),
+        );
+        assert_eq!(
+            created["operation"]["op_id"],
+            before + 2,
+            "the outbox fact and operation share one allocator"
+        );
+        assert!(service.pending_events(64).unwrap().is_empty());
+        let records = kernel.records(log.as_ref()).unwrap();
+        let facts = records
+            .iter()
+            .filter(|record| {
+                record.event.task_evidence_event_id() == Some(receipt.event_id.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].sequence, before + 1);
+        let mut sequences = records
+            .iter()
+            .map(|record| record.sequence)
+            .collect::<Vec<_>>();
+        let count = sequences.len();
+        sequences.sort_unstable();
+        sequences.dedup();
+        assert_eq!(sequences.len(), count);
     }
 
     #[test]

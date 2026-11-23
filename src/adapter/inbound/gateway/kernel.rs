@@ -605,6 +605,14 @@ impl KernelSession {
     async fn query(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
         let attached = self.attached()?;
         let request: QueryRequest = parse_params(params)?;
+        if let Some(query) = request.query.task_evidence_request()? {
+            let workspace = attached.issue_workspace.clone();
+            let evidence =
+                blocking(move || crate::composition::task_evidence::query(&workspace, &query))
+                    .await?
+                    .map_err(|_| unavailable("task evidence is unavailable".into()))?;
+            return to_result(KernelQueryAnswer::TaskEvidence(evidence));
+        }
         match request.query {
             KernelQuery::FeatureBindings {} | KernelQuery::PrReviewResult { .. } => {
                 let number = match request.query {
@@ -730,13 +738,25 @@ impl KernelSession {
                 KernelCallError::Stopped => unavailable(error.to_string()),
                 KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
             })?;
-        to_result(request.query.answer(
+        let answer = request.query.answer(
             &view.snapshot,
             &view.thread_activity,
             parallel_source(&view.parallel),
             history,
             operation,
-        ))
+        );
+        let answer = if let KernelQueryAnswer::Planning(planning) = answer {
+            let workspace = attached.issue_workspace.clone();
+            KernelQueryAnswer::Planning(
+                blocking(move || {
+                    crate::composition::task_evidence::enrich_planning(&workspace, planning)
+                })
+                .await?,
+            )
+        } else {
+            answer
+        };
+        to_result(answer)
     }
 
     /// 커널에서 떨어지고, 이벤트 스레드가 끝날 때까지 기다린다. 그 뒤에는 이 접속에 커널 이벤트가 가지 않는다.
@@ -913,6 +933,7 @@ fn confirmation_command(
     match input {
         KernelCommandInput::Stored(
             command @ (StoredCommand::AnswerIssueDecision { .. }
+            | StoredCommand::WaiveCriterion { .. }
             | StoredCommand::SetIssueAutomationMode { .. }
             | StoredCommand::SetIssueAutonomy { .. }),
         ) => Ok((command, descriptor)),
@@ -928,6 +949,24 @@ fn target_matches_command(
         return false;
     }
     match (target, command) {
+        (
+            IssueConfirmationTarget::CriterionWaiver {
+                task_id,
+                criterion_id,
+                scope_id,
+                acceptance_revision,
+                reason_digest,
+                ..
+            },
+            StoredCommand::WaiveCriterion { request },
+        ) => {
+            request.validate().is_ok()
+                && task_id == &request.task_id
+                && criterion_id == &request.criterion_id
+                && scope_id == &request.scope_id
+                && *acceptance_revision == request.expected_acceptance_revision
+                && reason_digest == &request.reason_digest()
+        }
         (
             IssueConfirmationTarget::Decision {
                 decision_id,
@@ -1031,11 +1070,94 @@ fn timed_out(call: &str, timeout: Duration) -> KernelProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::port::inbound::stored_command_port::task_evidence::{
+        PrepareTaskEvidenceRequest, WaiveTaskCriterionRequest,
+    };
     use crate::composition::kernel_host::KernelHost;
     use crate::composition::native_client_runtime::tests::recording_runtime_for_test;
     use crate::domain::issue_automation::IssueAutomationBindingId;
     use crate::domain::issue_automation::collection::{IssueCollectionItem, IssueCollectionPage};
     use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
+
+    fn waiver_request() -> WaiveTaskCriterionRequest {
+        WaiveTaskCriterionRequest {
+            request_id: "waiver-request".into(),
+            task_id: "task-1".into(),
+            criterion_id: "criterion with spaces".into(),
+            scope_id: "a".repeat(64),
+            expected_acceptance_revision: 7,
+            reason: "The agreed criterion is explicitly exempted.".into(),
+        }
+    }
+
+    #[test]
+    fn waiver_confirmation_whitelist_and_target_keep_the_exact_native_action() {
+        let request = waiver_request();
+        let command = StoredCommand::WaiveCriterion {
+            request: request.clone(),
+        };
+        let envelope = CommandRequest {
+            command: KernelCommand::from_stored(command.clone()),
+            idempotency_key: Some("waiver-key".into()),
+        };
+        assert!(confirmation_command(&envelope, "/main").is_ok());
+        assert!(
+            !envelope.command.confirmed(),
+            "a confirm bool is not Human proof"
+        );
+        let target = IssueConfirmationTarget::CriterionWaiver {
+            workspace: "/main".into(),
+            task_id: request.task_id.clone(),
+            criterion_id: request.criterion_id.clone(),
+            scope_id: request.scope_id.clone(),
+            acceptance_revision: request.expected_acceptance_revision,
+            reason_digest: request.reason_digest(),
+        };
+        assert!(target_matches_command(&target, &command, "/main"));
+        assert!(!target_matches_command(&target, &command, "/other"));
+        for (field, value) in [
+            ("task_id", serde_json::json!("another-task")),
+            ("criterion_id", serde_json::json!("another criterion")),
+            ("scope_id", serde_json::json!("b".repeat(64))),
+            ("acceptance_revision", serde_json::json!(8)),
+            ("reason_digest", serde_json::json!("c".repeat(64))),
+        ] {
+            let mut changed = serde_json::to_value(&target).unwrap();
+            changed[field] = value;
+            let changed: IssueConfirmationTarget = serde_json::from_value(changed).unwrap();
+            assert!(
+                !target_matches_command(&changed, &command, "/main"),
+                "{field}"
+            );
+        }
+        let mut changed_reason = request.clone();
+        changed_reason
+            .reason
+            .push_str(" Changed scope justification.");
+        assert!(!target_matches_command(
+            &target,
+            &StoredCommand::WaiveCriterion {
+                request: changed_reason
+            },
+            "/main"
+        ));
+        let mut missing_key = envelope.clone();
+        missing_key.idempotency_key = None;
+        assert!(confirmation_command(&missing_key, "/main").is_err());
+        let prepare = CommandRequest {
+            command: KernelCommand::from_stored(StoredCommand::PrepareEvidence {
+                request: PrepareTaskEvidenceRequest {
+                    request_id: "prepare-request".into(),
+                    task_id: request.task_id,
+                    criterion_id: request.criterion_id,
+                    scope_id: request.scope_id,
+                    expected_acceptance_revision: request.expected_acceptance_revision,
+                },
+            }),
+            idempotency_key: Some("prepare-key".into()),
+        };
+        assert!(confirmation_command(&prepare, "/main").is_err());
+    }
 
     fn issue(workspace: &str, id: &str) -> IssueReference {
         IssueReference {

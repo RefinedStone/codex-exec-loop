@@ -253,6 +253,11 @@ grant is cached.
   Kernel/admin mutation path applies planning revision CAS; worker task tools read criteria but cannot
   edit them. Legacy task documents remain readable. See [the acceptance contract](task-acceptance.md).
   Criteria storage does not execute validation or change the existing delivery gates.
+- `prepare_evidence` / `record_evidence` bind worker-reported results to the current acceptance scope,
+  running lease, host-observed Git tree and a bounded private artifact. `task_evidence` and the
+  optional first page in `planning` distinguish current, stale, waived and unavailable observations.
+  A criterion waiver requires an exact native Desktop Human confirmation. These records do not
+  attest independent test execution or change delivery permission. See [task evidence](task-evidence.md).
 - Hidden planning workers inherit the active app-server execution profile. Their developer
   contract remains planning-only, and the host validates and applies their structured commands.
 

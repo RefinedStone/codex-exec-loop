@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
+import { taskEvidenceFixture } from "./fixtures/taskEvidence";
 
 interface Sent {
   id: number;
@@ -84,6 +85,23 @@ function harness() {
 }
 
 describe("kernel connection", () => {
+  it("replaces malformed evidence with unavailable instead of retaining an earlier Pass", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer();
+    await attached;
+    h.connection.handleEvent({ event: { ...PLANNING, revision: 7, task_evidence: taskEvidenceFixture() } });
+    expect(h.view().planning?.task_evidence?.tasks[0]?.criteria[0]?.state).toBe("pass");
+    const malformed = taskEvidenceFixture();
+    malformed.evidence_revision = Number.MAX_SAFE_INTEGER + 1;
+    h.connection.handleEvent({ event: { ...PLANNING, revision: 7, task_evidence: malformed } });
+    expect(h.view().planning?.task_evidence).toEqual({ unavailable: "invalid", tasks: [], truncated: false });
+    expect(h.view().planning?.queue_summary).toBe("1 task");
+    h.connection.handleEvent({ event: PLANNING });
+    expect(h.view().planning).not.toHaveProperty("task_evidence");
+  });
+
   it("attaches and reads the view without keying the read command", async () => {
     const h = harness();
     h.connection.connectionChanged(true);

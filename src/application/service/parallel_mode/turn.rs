@@ -360,6 +360,15 @@ impl ParallelModeTurnService {
         }
     }
 
+    pub(crate) fn prepare_worker_evidence_incoming(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<Option<std::path::PathBuf>, String> {
+        self.parallel_mode_service
+            .prepare_worker_evidence_incoming(workspace, expected)
+    }
+
     pub(crate) fn with_automation_guard(
         mut self,
         automation_guard: super::ParallelModeAutomationGuard,

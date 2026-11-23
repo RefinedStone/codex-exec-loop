@@ -145,6 +145,7 @@ fn delete_stale_task_rows(
     drop(statement);
 
     for task_id in stale_task_ids {
+        super::task_evidence::retire_task_scope(transaction, task_id.trim())?;
         /*
         Stale IDs are trimmed at deletion time to match the normalized IDs used during
         insert/upsert. This keeps a previously sloppy row from surviving just because
@@ -243,6 +244,7 @@ fn upsert_task_row(
             ],
         )
         .with_context(|| format!("failed to persist planning task `{task_id}`"))?;
+    super::task_evidence::sync_task_scope(transaction, task)?;
     Ok(())
 }
 
@@ -395,6 +397,7 @@ edge는 task 사이의 관계 행이며, planning_tasks는 중심 본문이다. 
 projection이 잠깐이라도 고아 데이터처럼 남을 수 있으므로 주변 projection/edge를 먼저 비운다.
 */
 fn clear_task_authority_rows(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    super::task_evidence::retire_all_scopes(transaction)?;
     clear_queue_projection_rows(transaction)?;
     transaction
         .execute("DELETE FROM planning_task_edges", [])

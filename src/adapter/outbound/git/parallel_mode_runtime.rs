@@ -12,6 +12,7 @@ use crate::application::port::outbound::parallel_mode_runtime_port::ParallelMode
 use crate::application::port::outbound::parallel_mode_runtime_port::{
     ParallelCommandOutput, ParallelCommitDiffRequest, ParallelPinnedDirectory,
     ParallelPoolMutationPermit, ParallelWorkerCommitOutcome, ParallelWorkerCommitRequest,
+    ParallelWorkerTreeRequest, ParallelWorkerTreeSnapshot,
 };
 use crate::git_subprocess;
 use crate::subprocess;
@@ -420,6 +421,21 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         request: ParallelWorkerCommitRequest<'_>,
     ) -> Result<ParallelWorkerCommitOutcome, String> {
         parallel_worker_commit::prepare_parallel_worker_commit(request)
+    }
+
+    fn snapshot_parallel_worker_tree(
+        &self,
+        request: ParallelWorkerTreeRequest<'_>,
+    ) -> Result<ParallelWorkerTreeSnapshot, String> {
+        parallel_worker_commit::snapshot_parallel_worker_tree(request)
+    }
+
+    fn read_commit_tree(
+        &self,
+        workspace_directory: &str,
+        commit_sha: &str,
+    ) -> Result<String, String> {
+        parallel_worker_commit::read_commit_tree(workspace_directory, commit_sha)
     }
 
     fn inspect_parallel_commit_diff(

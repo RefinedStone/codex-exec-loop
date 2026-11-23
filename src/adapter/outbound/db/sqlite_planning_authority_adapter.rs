@@ -75,6 +75,7 @@ mod pr_validation_rollout_evidence_store;
 mod store;
 // task authority 문서와 queue projection을 정규화된 task table로 펼치는 모듈이다.
 mod task_authority_rows;
+mod task_evidence;
 // Immutable work-order identity and task lineage share task authority transactions.
 mod work_orders;
 // Telegram control-plane polling cursor와 update idempotency inbox를 영속화한다.
@@ -2215,6 +2216,7 @@ fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Con
     configure_private_authority_connection(&connection)?;
     let _current_sidecar_anchors = prepare_private_authority_sidecar_files(authority_store_path)?;
     ensure_schema(&mut connection, location)?;
+    task_evidence::ensure_tables(&mut connection)?;
     validate_authority_store_path_identity(authority_store_path, &store_anchor)?;
     let _final_sidecar_anchors = prepare_private_authority_sidecar_files(authority_store_path)?;
     Ok(connection)

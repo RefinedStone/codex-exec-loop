@@ -15,6 +15,7 @@ use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskUpdateInput,
 };
+use crate::application::service::task_evidence::TaskEvidenceService;
 use crate::domain::kernel_spec::ReasonCode;
 use crate::domain::planning::PlanningMutationRefusal;
 
@@ -27,6 +28,7 @@ pub struct StoredCommandService {
     issues: Option<Arc<IssueCollectionService>>,
     decisions: Option<Arc<IssueDecisionService>>,
     interventions: Option<Arc<dyn IssueInterventionPort>>,
+    task_evidence: Option<Arc<TaskEvidenceService>>,
 }
 
 impl StoredCommandService {
@@ -36,6 +38,7 @@ impl StoredCommandService {
             issues: None,
             decisions: None,
             interventions: None,
+            task_evidence: None,
         }
     }
 
@@ -46,6 +49,11 @@ impl StoredCommandService {
 
     pub fn with_issue_decisions(mut self, decisions: Arc<IssueDecisionService>) -> Self {
         self.decisions = Some(decisions);
+        self
+    }
+
+    pub fn with_task_evidence(mut self, evidence: Arc<TaskEvidenceService>) -> Self {
+        self.task_evidence = Some(evidence);
         self
     }
 
@@ -63,6 +71,43 @@ impl StoredCommandService {
         context: Option<&StoredCommandContext>,
     ) -> Result<StoredCommandResult> {
         match command {
+            StoredCommand::PrepareEvidence { request } => {
+                let context = context
+                    .ok_or_else(|| anyhow::anyhow!("task evidence requires server context"))?;
+                let preparation = self
+                    .task_evidence
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("task evidence is unavailable"))?
+                    .prepare_evidence(request, context)?;
+                Ok(StoredCommandResult::EvidencePrepared {
+                    preparation: Box::new(preparation),
+                })
+            }
+            StoredCommand::RecordEvidence { request } => {
+                let context = context
+                    .ok_or_else(|| anyhow::anyhow!("task evidence requires server context"))?;
+                let result = self
+                    .task_evidence
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("task evidence is unavailable"))?
+                    .record_evidence(request, context)?;
+                Ok(StoredCommandResult::CriterionEvidenceRecorded {
+                    receipt: Box::new(result.value),
+                    changed: result.changed,
+                })
+            }
+            StoredCommand::WaiveCriterion { request } => {
+                let context = context.ok_or(IssueConfirmationError::Required)?;
+                let result = self
+                    .task_evidence
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("task evidence is unavailable"))?
+                    .waive_criterion(request, context)?;
+                Ok(StoredCommandResult::CriterionWaived {
+                    receipt: Box::new(result.value),
+                    changed: result.changed,
+                })
+            }
             StoredCommand::InterveneIssue { request } => {
                 let context = context
                     .ok_or_else(|| anyhow::anyhow!("issue interventions require server context"))?;
@@ -215,6 +260,15 @@ impl StoredCommandService {
             Ok(result) => Ok(StoredCommandOutcome::Done(result)),
             // 낡은 revision 과 잡힌 guard 는 실패가 아니라 거절이다. 아무것도 바뀌지 않았다.
             Err(error) => {
+                if error.downcast_ref::<crate::domain::planning::evidence::TaskEvidenceError>()
+                    == Some(&crate::domain::planning::evidence::TaskEvidenceError::HumanConfirmationRequired)
+                {
+                    return Ok(StoredCommandOutcome::Rejected(StoredCommandRejection {
+                        reason: ReasonCode::HumanConfirmationRequired,
+                        message: IssueConfirmationError::Required.to_string(),
+                        planning_revision: None,
+                    }));
+                }
                 if let Some(reason) = error.downcast_ref::<IssueConfirmationError>() {
                     return Ok(StoredCommandOutcome::Rejected(StoredCommandRejection {
                         reason: ReasonCode::HumanConfirmationRequired,

@@ -2,6 +2,9 @@
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
+use crate::application::port::inbound::stored_command_port::task_evidence::{
+    PrepareTaskEvidenceRequest, RecordTaskEvidenceRequest, WaiveTaskCriterionRequest,
+};
 use crate::application::port::inbound::stored_command_port::{
     StoredCommand, StoredCommandOutcome, StoredCommandResult, StoredDirectionFields,
     StoredTaskFields,
@@ -16,6 +19,7 @@ use crate::domain::kernel_event::{
 };
 pub use crate::domain::kernel_spec::OperationState;
 use crate::domain::kernel_spec::{KernelCommandKind, spec_names};
+use crate::domain::planning::evidence::TaskEvidenceStatus;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +54,12 @@ pub use spec::{KernelSpec, describe};
 
 mod task_acceptance;
 pub use task_acceptance::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
+mod task_evidence;
+pub use task_evidence::{
+    PlanningCriterionEvidenceState, TaskCriterionWaiverReceiptState, TaskEvidencePreparedState,
+    TaskEvidenceReceiptState, TaskEvidenceSourceKind, TaskEvidenceSourceState, TaskEvidenceState,
+    TaskEvidenceTaskState,
+};
 
 mod confirmation;
 mod issue_automation;
@@ -304,6 +314,9 @@ impl CommandRequest {
             | KernelCommand::PauseAutoFollow {}
             | KernelCommand::ResetPlanning { .. }
             | KernelCommand::RefreshPlanning {}
+            | KernelCommand::PrepareEvidence { .. }
+            | KernelCommand::RecordEvidence { .. }
+            | KernelCommand::WaiveCriterion { .. }
             | KernelCommand::CreateTask { .. }
             | KernelCommand::UpdateTask { .. }
             | KernelCommand::DeleteTask { .. }
@@ -435,6 +448,17 @@ pub struct CommandResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandResult {
+    EvidencePrepared {
+        preparation: Box<TaskEvidencePreparedState>,
+    },
+    CriterionEvidenceRecorded {
+        receipt: Box<TaskEvidenceReceiptState>,
+        changed: bool,
+    },
+    CriterionWaived {
+        receipt: Box<TaskCriterionWaiverReceiptState>,
+        changed: bool,
+    },
     DelegationSubmitted {
         delegation: crate::domain::delegation::Delegation,
     },
@@ -505,6 +529,19 @@ pub enum CommandResult {
 impl CommandResult {
     fn from_stored(result: StoredCommandResult) -> Self {
         match result {
+            StoredCommandResult::EvidencePrepared { preparation } => Self::EvidencePrepared {
+                preparation: Box::new((*preparation).into()),
+            },
+            StoredCommandResult::CriterionEvidenceRecorded { receipt, changed } => {
+                Self::CriterionEvidenceRecorded {
+                    receipt: Box::new(receipt.as_ref().into()),
+                    changed,
+                }
+            }
+            StoredCommandResult::CriterionWaived { receipt, changed } => Self::CriterionWaived {
+                receipt: Box::new(receipt.as_ref().into()),
+                changed,
+            },
             StoredCommandResult::IssueIntervened { receipt } => Self::IssueIntervened {
                 receipt: Box::new((*receipt).into()),
             },
@@ -594,6 +631,9 @@ impl CommandResult {
     /// `result` 스키마를 고른다.
     pub(crate) const fn name_for(kind: KernelCommandKind) -> Option<&'static str> {
         match kind {
+            KernelCommandKind::PrepareEvidence => Some("evidence_prepared"),
+            KernelCommandKind::RecordEvidence => Some("criterion_evidence_recorded"),
+            KernelCommandKind::WaiveCriterion => Some("criterion_waived"),
             KernelCommandKind::CreateTask => Some("task_created"),
             KernelCommandKind::UpdateTask => Some("task_updated"),
             KernelCommandKind::DeleteTask => Some("task_deleted"),
@@ -831,6 +871,43 @@ pub enum KernelCommand {
     },
     /// planning 큐를 다시 읽는다. 결과는 `planning` 이벤트로 온다.
     RefreshPlanning {},
+    /// host가 정한 artifact 경로와 현재 기준·lease·source에 결속된 시도를 준비한다.
+    PrepareEvidence {
+        #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
+        request_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        task_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        criterion_id: String,
+        #[schemars(regex(pattern = "^[a-f0-9]{64}$"))]
+        scope_id: String,
+        #[schemars(range(min = 1, max = 9007199254740991u64))]
+        expected_acceptance_revision: u64,
+    },
+    /// 예약한 고정 경로의 artifact를 host가 관측한 뒤 불변 영수증을 기록한다.
+    RecordEvidence {
+        #[schemars(regex(pattern = "^[a-f0-9]{64}$"))]
+        attempt_id: String,
+        status: TaskEvidenceStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(max = 4096))]
+        note: Option<String>,
+    },
+    /// 완료 기준의 정확한 판에 대한 면제다. 별도 검증된 native Human 확인이 필수다.
+    WaiveCriterion {
+        #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
+        request_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        task_id: String,
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        criterion_id: String,
+        #[schemars(regex(pattern = "^[a-f0-9]{64}$"))]
+        scope_id: String,
+        #[schemars(range(min = 1, max = 9007199254740991u64))]
+        expected_acceptance_revision: u64,
+        #[schemars(length(min = 1, max = 4096), regex(pattern = NON_BLANK))]
+        reason: String,
+    },
     /// 사용자의 작업 만들기이다 (plan 18 K4-9d). 저장 명령이다: 커널이 떠 있지 않아도 실행된다.
     CreateTask {
         task: TaskFields,
@@ -1162,6 +1239,9 @@ impl KernelCommand {
             Self::PauseAutoFollow {} => KernelCommandKind::PauseAutoFollow,
             Self::ResetPlanning { .. } => KernelCommandKind::ResetPlanning,
             Self::RefreshPlanning {} => KernelCommandKind::RefreshPlanning,
+            Self::PrepareEvidence { .. } => KernelCommandKind::PrepareEvidence,
+            Self::RecordEvidence { .. } => KernelCommandKind::RecordEvidence,
+            Self::WaiveCriterion { .. } => KernelCommandKind::WaiveCriterion,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
             Self::DeleteTask { .. } => KernelCommandKind::DeleteTask,
@@ -1197,6 +1277,9 @@ impl KernelCommand {
             | Self::DeleteDirection { confirm, .. }
             | Self::CancelIssueWork { confirm, .. } => *confirm,
             Self::CreateTask { .. }
+            | Self::PrepareEvidence { .. }
+            | Self::RecordEvidence { .. }
+            | Self::WaiveCriterion { .. }
             | Self::UpdateTask { .. }
             | Self::CreateDirection { .. }
             | Self::UpdateDirection { .. }
@@ -1236,6 +1319,26 @@ impl KernelCommand {
      */
     pub fn from_stored(command: StoredCommand) -> Self {
         match command {
+            StoredCommand::PrepareEvidence { request } => Self::PrepareEvidence {
+                request_id: request.request_id,
+                task_id: request.task_id,
+                criterion_id: request.criterion_id,
+                scope_id: request.scope_id,
+                expected_acceptance_revision: request.expected_acceptance_revision,
+            },
+            StoredCommand::RecordEvidence { request } => Self::RecordEvidence {
+                attempt_id: request.attempt_id,
+                status: request.status,
+                note: request.note,
+            },
+            StoredCommand::WaiveCriterion { request } => Self::WaiveCriterion {
+                request_id: request.request_id,
+                task_id: request.task_id,
+                criterion_id: request.criterion_id,
+                scope_id: request.scope_id,
+                expected_acceptance_revision: request.expected_acceptance_revision,
+                reason: request.reason,
+            },
             StoredCommand::InterveneIssue { request } => {
                 issue_intervention::command_from_request(request)
             }
@@ -1306,6 +1409,61 @@ impl KernelCommand {
         workspace_directory: &str,
     ) -> Result<KernelCommandInput, KernelProtocolError> {
         let stored = match self {
+            Self::PrepareEvidence {
+                request_id,
+                task_id,
+                criterion_id,
+                scope_id,
+                expected_acceptance_revision,
+            } => {
+                let request = PrepareTaskEvidenceRequest {
+                    request_id,
+                    task_id,
+                    criterion_id,
+                    scope_id,
+                    expected_acceptance_revision,
+                };
+                request
+                    .validate()
+                    .map_err(|error| KernelProtocolError::invalid_params(error.to_string()))?;
+                StoredCommand::PrepareEvidence { request }
+            }
+            Self::RecordEvidence {
+                attempt_id,
+                status,
+                note,
+            } => {
+                let request = RecordTaskEvidenceRequest {
+                    attempt_id,
+                    status,
+                    note,
+                };
+                request
+                    .validate()
+                    .map_err(|error| KernelProtocolError::invalid_params(error.to_string()))?;
+                StoredCommand::RecordEvidence { request }
+            }
+            Self::WaiveCriterion {
+                request_id,
+                task_id,
+                criterion_id,
+                scope_id,
+                expected_acceptance_revision,
+                reason,
+            } => {
+                let request = WaiveTaskCriterionRequest {
+                    request_id,
+                    task_id,
+                    criterion_id,
+                    scope_id,
+                    expected_acceptance_revision,
+                    reason,
+                };
+                request
+                    .validate()
+                    .map_err(|error| KernelProtocolError::invalid_params(error.to_string()))?;
+                StoredCommand::WaiveCriterion { request }
+            }
             Self::EnableParallel {} => {
                 return Ok(KernelCommandInput::Parallel {
                     workspace_directory: workspace_directory.to_string(),
@@ -1537,6 +1695,9 @@ impl KernelCommand {
             },
             Self::EnableParallel {}
             | Self::DisableParallel {}
+            | Self::PrepareEvidence { .. }
+            | Self::RecordEvidence { .. }
+            | Self::WaiveCriterion { .. }
             | Self::CreateTask { .. }
             | Self::UpdateTask { .. }
             | Self::DeleteTask { .. }
@@ -1601,6 +1762,17 @@ pub enum KernelQuery {
     AutoFollow {},
     ThreadActivity {},
     Planning {},
+    TaskEvidence {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 256))]
+        task_ids: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 4096), regex(pattern = NON_BLANK))]
+        after_task_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(range(min = 1, max = 256))]
+        limit: Option<usize>,
+    },
     Parallel {},
     /*
      * 판단 사건 기록이다 (plan 19 Q3-3). `after` 보다 뒤의 사건을 기록 순서대로 최대 `limit` 개 준다. 처음에는
@@ -1647,6 +1819,27 @@ pub struct QueryRequest {
 }
 
 impl KernelQuery {
+    pub fn task_evidence_request(
+        &self,
+    ) -> Result<
+        Option<
+            crate::application::port::inbound::task_evidence_query_port::TaskEvidenceSnapshotQuery,
+        >,
+        KernelProtocolError,
+    > {
+        match self {
+            Self::TaskEvidence {
+                task_ids,
+                after_task_id,
+                limit,
+            } => {
+                task_evidence::query_request(task_ids.as_deref(), after_task_id.as_deref(), *limit)
+                    .map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// 기록 조회이면 읽을 cursor 와 개수이다. 기록은 스냅샷이 아니라 커널의 사건 기록에서 읽는다.
     pub fn history_range(&self) -> Option<(i64, usize)> {
         match self {
@@ -1689,6 +1882,9 @@ impl KernelQuery {
             Self::Planning {} => KernelQueryAnswer::Planning(PlanningState::from_core(
                 &snapshot.planning_parallel.planning_runtime,
             )),
+            Self::TaskEvidence { .. } => {
+                KernelQueryAnswer::TaskEvidence(TaskEvidenceState::unavailable())
+            }
             Self::Parallel {} => KernelQueryAnswer::Parallel(ParallelState::from_core(parallel)),
             Self::History { after, .. } => {
                 KernelQueryAnswer::History(history.unwrap_or_else(|| KernelEventPage {
@@ -1754,7 +1950,9 @@ spec_names! {
         ThreadActivity => "thread_activity",
             "The threads that still have work: a running turn, a pending approval, or automatic follow-up.";
         Planning => "planning",
-            "The planning queue.";
+            "The planning queue and the first bounded page of current task evidence when available. Follow task_evidence.next_task_id with the task_evidence query to read later tasks.";
+        TaskEvidence => "task_evidence",
+            "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.";
         Parallel => "parallel",
             "The parallel mode state: pool, agents, merge queue, and pull request validation.";
         History => "history",
@@ -1779,6 +1977,7 @@ spec_names! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KernelQueryAnswer {
+    TaskEvidence(TaskEvidenceState),
     Delegations {
         delegations: Vec<crate::domain::delegation::Delegation>,
     },
@@ -2187,6 +2386,8 @@ impl PromptSubmissionState {
  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanningState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_evidence: Option<TaskEvidenceState>,
     pub status: PlanningStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<i64>,
@@ -2287,6 +2488,11 @@ impl PlanningTask {
 }
 
 impl PlanningState {
+    pub fn with_task_evidence(mut self, evidence: TaskEvidenceState) -> Self {
+        self.task_evidence = Some(evidence);
+        self
+    }
+
     pub fn from_core(projection: &RuntimeProjection) -> Self {
         let queue = projection.queue_projection();
         let tasks = |pick: fn(
@@ -2297,6 +2503,7 @@ impl PlanningState {
                 .unwrap_or_default()
         };
         Self {
+            task_evidence: None,
             status: match projection.workspace_status() {
                 RuntimeWorkspaceStatus::Uninitialized => PlanningStatus::Uninitialized,
                 RuntimeWorkspaceStatus::Invalid => PlanningStatus::Invalid,

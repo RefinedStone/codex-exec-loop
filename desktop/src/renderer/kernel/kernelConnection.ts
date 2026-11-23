@@ -27,6 +27,7 @@ import {
 import { sendKernelCommand } from "./sendKernelCommand";
 import { hasValidIssueAutonomy, hasValidIssueExecutionTracking, hasValidIssueInteractions } from "./issuePresentationValidation";
 import { currentIssueArbiterNotice, isIssueArbiterWaitReason, type IssueArbiterFinishedRecord } from "./issueArbiter";
+import { hasValidPlanningEvidence } from "./taskEvidenceValidation";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
 export type KernelInterest = "overview" | "issues" | "delegation" | "issue_attention";
@@ -1190,6 +1191,9 @@ export class KernelConnection {
         break;
       case "planning": {
         const { type: _type, ...planning } = event;
+        if (!hasValidPlanningEvidence(planning)) {
+          planning.task_evidence = { unavailable: "invalid", tasks: [], truncated: false };
+        }
         this.store.setKernel({ ...view, planning });
         break;
       }

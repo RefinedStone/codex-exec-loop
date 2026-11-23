@@ -2,6 +2,7 @@
 // bootstrap에 닿는 outbound 작업이다. 실패는 정책 오류가 아니라 실행 환경의 정상적인 결과일 수
 // 있으므로 port는 `anyhow::Result`로 adapter 실패를 그대로 올린다.
 use anyhow::Result;
+use std::path::Path;
 
 // parallel worker도 일반 conversation stream과 같은 `ConversationStreamEvent` 계약을 쓴다.
 // 이 공유 vocabulary 덕분에 dispatch worker는 worker 전용 protocol을 새로 만들지 않고도
@@ -14,6 +15,8 @@ use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 // adapter는 thread metadata와 turn prompt를 재조립하지 않고 app-server protocol로만 매핑한다.
 pub struct ParallelAgentWorkerStreamRequest<'a> {
     pub cwd: &'a str,
+    /// Optional host-prepared generation root; never a caller-selected arbitrary directory.
+    pub evidence_incoming_root: Option<&'a Path>,
     pub prompt: &'a str,
     pub developer_instructions: &'a str,
     pub service_name: &'a str,
@@ -22,6 +25,7 @@ pub struct ParallelAgentWorkerStreamRequest<'a> {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ParallelAgentWorkerResumeRequest<'a> {
     pub cwd: &'a str,
+    pub evidence_incoming_root: Option<&'a Path>,
     pub thread_id: &'a str,
     pub prompt: &'a str,
     pub service_name: &'a str,
@@ -123,6 +127,7 @@ mod tests {
             .run_isolated_new_thread_stream(
                 ParallelAgentWorkerStreamRequest {
                     cwd: "/tmp/workspace",
+                    evidence_incoming_root: None,
                     prompt: "run",
                     developer_instructions: "",
                     service_name: "test",
