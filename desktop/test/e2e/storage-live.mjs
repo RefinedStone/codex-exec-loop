@@ -23,9 +23,10 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
     assert.equal(params.kernel, kernel);
     assert.equal(params.extension, extension);
     const input = params.input ?? {}; actions.push(params.action);
-    if (params.action === "volumes") return { result: { volumes: [{ id: "stable-volume", label: "진행 테스트 드라이브", root_path: "C:\\", kind: "ssd", supported: true }] } };
+    if (params.action === "volumes") return { result: { volumes: [{ id: "other-volume", label: "다른 드라이브", root_path: "D:\\", kind: "ssd", supported: true }, { id: "stable-volume", label: "진행 테스트 드라이브", root_path: "C:\\", kind: "ssd", supported: true }] } };
     if (params.action === "jobs") return { result: { jobs: job ? [job] : [] } };
     if (params.action === "scan") {
+      assert.equal(input.volume_id, "stable-volume");
       scans++;
       job = { id: "running-job-" + scans, extension, action: "scan", state: "running", generation: "live-host", revision: 1, sequence: 1,
         progress: { files_scanned: 1, directories_scanned: 2, volume_id: "stable-volume" }, result: null, error: null, cleanup: "pending", created_at_ms: 1, updated_at_ms: 1 };
@@ -61,6 +62,7 @@ try {
   await view.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor();
   await view.getByTestId("storage-toggle").click();
   const panel = view.getByRole("region", { name: "저장 공간 분석기", exact: true });
+  await panel.getByLabel("분석할 드라이브").selectOption("stable-volume");
   await panel.getByRole("button", { name: "분석", exact: true }).click();
   const live = panel.getByRole("region", { name: "분석 중 폴더 탐색", exact: true });
   await live.locator('[data-live-node-id="n2"]').waitFor();
@@ -152,6 +154,7 @@ try {
   await view.getByTestId("storage-toggle").click();
   await live.locator('[data-live-node-id="n2"]').waitFor();
   assert.equal(scans, 1, "reopen reads the existing running job");
+  assert.equal(await panel.getByLabel("분석할 드라이브").inputValue(), "stable-volume", "reopen selects the running job volume by stable id");
   await panel.getByRole("button", { name: "공유 분석 취소", exact: true }).click();
   await live.waitFor({ state: "hidden" });
   assert.match(await panel.innerText(), /취소됨/);

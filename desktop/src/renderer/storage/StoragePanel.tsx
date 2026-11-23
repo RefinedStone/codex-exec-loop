@@ -14,7 +14,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
   const model = useStorageExplorer(call, epoch, scopeKey, enabled);
   const selected = model.selectedId ? model.nodes.get(model.selectedId) ?? null : null;
   const job = model.jobs[0] ?? null;
-  const progress = job?.progress && typeof job.progress === "object" ? job.progress as { files_scanned?: number; directories_scanned?: number } : null;
+  const progress = job?.progress && typeof job.progress === "object" ? job.progress as { files_scanned?: number; directories_scanned?: number; volume_id?: string } : null;
   const [mode, setMode] = useState<"tree" | "summary">("tree");
   const [showMap, setShowMap] = useState(false);
   const [files, setFiles] = useState<StoragePage | null>(null);
@@ -200,7 +200,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       {model.snapshot?.issues.map(issue => <p key={issue.code} className="muted">{issue.message} · {issue.count}개</p>)}
     </div>
     {!model.snapshot && job && isActiveJob(job) && <StorageLiveTree key={scopeKey + ":" + job.id} call={call} epoch={epoch} jobId={job.id}
-      rootName="분석 중인 드라이브" />}
+      rootName={model.volumes.find(volume => volume.id === progress?.volume_id)?.label ?? "분석 중인 드라이브"} />}
     {model.snapshot && <>
       <nav className="segmented" aria-label="저장 공간 보기">
         <button type="button" aria-pressed={mode === "tree"} onClick={() => { model.interaction.current++; setMode("tree"); }}>폴더 점유율 표</button>
