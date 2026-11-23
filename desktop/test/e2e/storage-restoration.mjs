@@ -10,9 +10,22 @@ import * as fake from "../fake-gateway/fakeGateway.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const G = 1024n ** 3n;
+function holdRoot(state) {
+  let release;
+  state.rootBarrier = new Promise(resolve => { release = resolve; });
+  return () => { state.rootBarrier = null; release(); };
+}
+async function waitForRootRequest(state) {
+  const deadline = Date.now() + 15_000;
+  while (!state.calls.some(call => call.action === "get_node" && call.input.snapshot_id === "scan-" + state.serial)) {
+    if (Date.now() > deadline) throw new Error("restored root request was not observed");
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
 async function withPanel(volumeId, run) {
   const local = "storage-restoration-fixture", generation = "host-1";
-  const state = { volumeId, serial: 1, includeD: true, calls: [], scans: [] };
+  const state = { volumeId, serial: 1, includeD: true, calls: [], scans: [], rootBarrier: null };
+  const releaseInitial = volumeId === "D" ? holdRoot(state) : null;
   const snapshot = () => ({ schema_version: 1, id: "scan-" + state.serial, revision: 1,
     volume_id: state.volumeId, root_node_id: "root", state: "complete", started_at: "2026-11-23T00:00:00Z",
     finished_at: "2026-11-23T00:01:00Z", files_scanned: 2, directories_scanned: 1, issues: [] });
@@ -52,7 +65,7 @@ async function withPanel(volumeId, run) {
       if (params.action === "jobs") return { result: { jobs: [job()] } };
       if (params.action === "scan") { state.scans.push(input.volume_id); state.volumeId = input.volume_id; state.serial++; return { result: job() }; }
       if (params.action === "snapshot") return { result: snapshot() };
-      if (params.action === "get_node") return { result: nodes().find(item => item.id === input.node_id) };
+      if (params.action === "get_node") return { result: nodes().find(item => item.id === input.node_id), replyAfter: state.rootBarrier ?? undefined };
       if (params.action === "list_children") return { result: page(nodes().filter(item => item.parent_id === input.node_id && item.kind !== "file")) };
       // Native index files belong to their actual directory, never to a virtual aggregate row.
       if (params.action === "list_files") return { result: page(nodes().filter(item => item.parent_id === input.node_id && item.kind === "file")) };
@@ -74,10 +87,20 @@ async function withPanel(volumeId, run) {
     await view.getByTestId("storage-toggle").click();
     const panel = view.getByRole("region", { name: "저장 공간 분석기", exact: true });
     const waitRoot = () => panel.getByRole("row").filter({ hasText: state.volumeId + " 결과 " + state.serial }).waitFor();
+    if (releaseInitial) {
+      await waitForRootRequest(state);
+      const drive = panel.getByLabel("분석할 드라이브");
+      await drive.locator('option[value="D"]').waitFor({ state: "attached" });
+      assert.equal(await drive.isDisabled(), true, "the restored result must settle before choosing the next scan target");
+      assert.equal(await panel.getByRole("button", { name: /^(분석|확인 중…)$/ }).isDisabled(), true, "pending restoration cannot submit a scan of the default volume");
+      assert.equal(state.scans.length, 0);
+      releaseInitial();
+    }
     await waitRoot();
     await run({ state, gateway, local, view, panel, waitRoot });
     assert.ok(!gateway.receivedMethods.includes("turn/start") && !gateway.receivedMethods.includes("turn/steer"));
   } finally {
+    releaseInitial?.();
     if (app) await app.close();
     await gateway.close();
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
@@ -108,7 +131,14 @@ for (const [name, initialVolume, run] of [
     await panel.getByRole("row").filter({ hasText: "C 결과 3" }).waitFor();
     assert.deepEqual(state.scans, ["D", "C"]);
     state.volumeId = "D"; state.serial++;
-    gateway.sendExtensionChange(local); await waitRoot();
+    const releaseReplacement = holdRoot(state);
+    try {
+      gateway.sendExtensionChange(local); await waitForRootRequest(state);
+      await panel.getByRole("treegrid").waitFor({ state: "detached" });
+      assert.equal(await drive.isDisabled(), true, "a different job also settles before accepting another target");
+      assert.equal(await panel.getByRole("button", { name: /^(분석|확인 중…)$/ }).isDisabled(), true);
+    } finally { releaseReplacement(); }
+    await waitRoot();
     assert.equal(await drive.inputValue(), "D", "displaying a different completed job restores that job's volume");
     state.includeD = false; gateway.sendExtensionChange(local);
     await drive.locator('option[value="D"]').filter({ hasText: "현재 목록에 없음" }).waitFor({ state: "attached" });

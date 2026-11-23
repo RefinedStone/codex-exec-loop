@@ -199,12 +199,12 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     {!enabled && <p role="status">확장이 꺼졌거나 끄는 중입니다. 설정에서 현재 상태를 확인하세요.</p>}
     {model.error && <div className="storage-error" role="alert">{model.error}<button type="button" onClick={() => { model.setError(""); void model.refresh(); }}>상태 다시 확인</button></div>}
     <div className="storage-controls">
-      <label>드라이브<select aria-label="분석할 드라이브" value={model.volumeId} onChange={event => { model.interaction.current++; model.setVolumeId(event.target.value); }} disabled={!enabled || model.busy || isActiveJob(job)}>
+      <label>드라이브<select aria-label="분석할 드라이브" value={model.volumeId} onChange={event => { model.interaction.current++; model.setVolumeId(event.target.value); }} disabled={!enabled || model.busy || model.restoring || isActiveJob(job)}>
         {!model.volumes.length && <option value="">드라이브 확인 중</option>}
         {model.volumeId && !model.volumes.some(volume => volume.id === model.volumeId) && <option value={model.volumeId} disabled>선택한 드라이브 · 현재 목록에 없음</option>}
         {model.volumes.map(volume => <option key={volume.id} value={volume.id} disabled={!volume.supported}>{volume.label} · {volume.root_path}{!volume.supported ? " · 지원 안 함" : ""}</option>)}
       </select></label>
-      <button type="button" onClick={() => void model.scan()} disabled={!enabled || model.busy || !scanVolumeAvailable || isActiveJob(job)}>{model.busy ? "확인 중…" : model.snapshot ? "다시 분석" : "분석"}</button>
+      <button type="button" onClick={() => void model.scan()} disabled={!enabled || model.busy || model.restoring || !scanVolumeAvailable || isActiveJob(job)}>{model.busy || model.restoring ? "확인 중…" : model.snapshot ? "다시 분석" : "분석"}</button>
       {isActiveJob(job) && <button type="button" disabled={model.busy || job?.state === "cancelling"} onClick={() => void model.cancel()}>공유 분석 취소</button>}
     </div>
     <div className="storage-progress" aria-live="polite" role="status">
