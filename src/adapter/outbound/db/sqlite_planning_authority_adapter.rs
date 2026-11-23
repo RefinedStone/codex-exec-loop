@@ -1391,6 +1391,23 @@ impl ParallelModeRuntimeEventLogPort for SqlitePlanningAuthorityAdapter {
 }
 
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
+    fn worker_action_identity_for_task(
+        &self,
+        workspace: &str,
+        task_id: &str,
+    ) -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity>>{
+        work_orders::worker_action_identity(workspace, task_id)
+    }
+
+    fn validate_work_order_launch_start(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+        identity: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity>,
+    ) -> Result<()> {
+        work_orders::validate_worker_launch(workspace, expected, identity)
+    }
+
     fn enqueue_worker_continuation(
         &self,
         workspace: &str,

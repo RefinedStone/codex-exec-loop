@@ -47,6 +47,9 @@ fn reassemble(
         IssuePolicyService::new(Arc::new(ValidationPolicy)),
         h.execution.clone(),
     )
+    .with_issue_binding_admission(Arc::new(
+        crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+    ))
     .with_arbiter(model, a.evidence.clone())
     .with_arbiter_clock(Arc::new(move || *clock.lock().unwrap()))
 }

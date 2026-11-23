@@ -9,8 +9,13 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const WORK: &str = "work-order:auto-delivery";
 const SOURCE_REPOSITORY: &str = "refinedstone/codex-exec-loop";
+
+mod binding_pause;
+
+fn work_id(workspace: &str) -> String {
+    binding_support::work_id(workspace, "I_auto_delivery")
+}
 
 struct AutoFixture {
     inner: Fixture,
@@ -121,6 +126,7 @@ impl AutoFixture {
 
 fn seed_issue_task(repo: &TempGitRepo, store: &SqlitePlanningAuthorityAdapter) {
     let workspace = repo.workspace_dir();
+    let work = binding_support::seed(&workspace, "I_auto_delivery", TASK);
     seed_task_with_commit(
         &workspace,
         store,
@@ -154,7 +160,7 @@ fn seed_issue_task(repo: &TempGitRepo, store: &SqlitePlanningAuthorityAdapter) {
                 .register_work_order(
                     &workspace,
                     PlanningWorkOrderRegistration {
-                        work_order_id: WORK,
+                        work_order_id: &work,
                         origin: "issue_automation",
                         link_reference: Some(&reference),
                         initial_task_id: TASK,
@@ -191,15 +197,16 @@ fn seed_issue_task(repo: &TempGitRepo, store: &SqlitePlanningAuthorityAdapter) {
 
 fn grant(workspace: &str, basis: &PlanningWorkPermitBasis, stages: &[PlanningWorkPermitStage]) {
     let store = SqlitePlanningAuthorityAdapter::new();
+    let work = work_id(workspace);
     store
-        .set_work_order_permit_basis(workspace, WORK, basis)
+        .set_work_order_permit_basis(workspace, &work, basis)
         .unwrap();
     for &stage in stages {
         store
             .grant_work_order_permit(
                 workspace,
                 &PlanningWorkPermit {
-                    work_order_id: WORK.into(),
+                    work_order_id: work.clone(),
                     stage,
                     basis: basis.clone(),
                     requires_human_review: false,
@@ -441,15 +448,35 @@ impl TaskDeliveryEvidenceGatePort for ChangedAuthorityGate {
             && !self.changed.swap(true, Ordering::SeqCst)
         {
             assert_eq!(*preflight_permit, PlanningWorkPermitDecision::GrantedAuto);
-            let mut basis = SqlitePlanningAuthorityAdapter::new()
-                .load_work_order_permit_basis(workspace, WORK)
+            let store = SqlitePlanningAuthorityAdapter::new();
+            // Gate callbacks can use the linked worktree path. The full issue work ID is
+            // already bound to the primary workspace and must come from task membership.
+            let identity = crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort::worker_action_identity_for_task(
+                &store, workspace, &record.task_id,
+            ).unwrap().expect("the queued task has real issue work-order membership");
+            assert_eq!(identity.origin, "issue_automation");
+            let mut basis = store
+                .load_work_order_permit_basis(workspace, &identity.work_order_id)
                 .unwrap()
                 .unwrap();
             basis.gate_revision += 1;
             let review = basis.delivery_review.as_mut().unwrap();
             review.gate_revision = basis.gate_revision;
             review.authority = Some(PlanningWorkDeliveryAuthority::HumanReview);
-            grant(workspace, &basis, &[PlanningWorkPermitStage::Push]);
+            store
+                .set_work_order_permit_basis(workspace, &identity.work_order_id, &basis)
+                .unwrap();
+            store
+                .grant_work_order_permit(
+                    workspace,
+                    &PlanningWorkPermit {
+                        work_order_id: identity.work_order_id,
+                        stage: PlanningWorkPermitStage::Push,
+                        basis,
+                        requires_human_review: false,
+                    },
+                )
+                .unwrap();
         }
         self.inner
             .evaluate(workspace, record, stage, integration, operation)

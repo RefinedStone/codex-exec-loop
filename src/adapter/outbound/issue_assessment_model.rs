@@ -54,6 +54,7 @@ pub(crate) struct CodexIssueAssessmentModelAdapter {
     // Production owns this driver exclusively. Dropping it cancels all live attempts
     // before the runtime is detached; no blocking model turn is awaited on host shutdown.
     driver: Option<Arc<dyn AgentBackendPort>>,
+    authorized_driver: Option<Arc<CodexThreadDriver>>,
     runtime: Option<tokio::runtime::Runtime>,
     configuration: Arc<ConfigurationReader>,
     attempts: Mutex<BTreeMap<String, String>>,
@@ -61,7 +62,10 @@ pub(crate) struct CodexIssueAssessmentModelAdapter {
 
 impl CodexIssueAssessmentModelAdapter {
     pub(crate) fn new(configuration: Arc<ConfigurationReader>) -> Result<Self> {
-        Self::build(Arc::new(CodexThreadDriver::default()), configuration)
+        let driver = Arc::new(CodexThreadDriver::default());
+        let mut adapter = Self::build(driver.clone(), configuration)?;
+        adapter.authorized_driver = Some(driver);
+        Ok(adapter)
     }
 
     fn build(
@@ -76,6 +80,7 @@ impl CodexIssueAssessmentModelAdapter {
             .map_err(|_| anyhow!("the issue assessment runtime is unavailable"))?;
         Ok(Self {
             driver: Some(driver),
+            authorized_driver: None,
             runtime: Some(runtime),
             configuration,
             attempts: Mutex::new(BTreeMap::new()),
@@ -131,18 +136,14 @@ impl CodexIssueAssessmentModelAdapter {
     }
 }
 
-impl IssueAssessmentModelPort for CodexIssueAssessmentModelAdapter {
-    fn configuration(&self) -> Result<IssueAssessmentModelConfiguration> {
-        let configuration = (self.configuration)()
-            .map_err(|_| anyhow!("the issue assessment configuration is unavailable"))?;
-        ensure!(
-            valid_configuration(&configuration),
-            "the issue assessment configuration is invalid"
-        );
-        Ok(configuration)
-    }
-
-    fn dispatch(&self, request: IssueAssessmentModelRequest) -> Result<Status> {
+impl CodexIssueAssessmentModelAdapter {
+    fn dispatch_with_authorization(
+        &self,
+        request: IssueAssessmentModelRequest,
+        authorization: Option<
+            Arc<dyn crate::application::port::agent_action::AgentActionAuthorization>,
+        >,
+    ) -> Result<Status> {
         let configuration = match self.configuration() {
             Ok(configuration) => configuration,
             Err(_) => return Ok(Status::Unusable(Failure::Unavailable)),
@@ -186,7 +187,7 @@ impl IssueAssessmentModelPort for CodexIssueAssessmentModelAdapter {
         let runtime = self.runtime()?;
         // The durable claim already exists. A lost dispatch response is never retried.
         attempts.insert(request.attempt_id.clone(), fingerprint);
-        let observation = runtime.block_on(self.driver().dispatch(Dispatch {
+        let dispatch = Dispatch {
             attempt_id: &request.attempt_id,
             job_id: &request.attempt_id,
             instruction: &request.input_json,
@@ -200,12 +201,47 @@ impl IssueAssessmentModelPort for CodexIssueAssessmentModelAdapter {
                 accepts_reply: valid_reply_shape,
             }),
             timeout: request.timeout,
-        }));
+        };
+        let observation = if let Some(driver) = &self.authorized_driver {
+            runtime.block_on(driver.dispatch_with_authorization(dispatch, authorization))
+        } else {
+            let guard = authorization
+                .map(|authorization| authorization.acquire())
+                .transpose()?;
+            if let Some(guard) = &guard {
+                guard.validate()?;
+            }
+            runtime.block_on(self.driver().dispatch(dispatch))
+        };
         drop(attempts);
         match observation {
             Ok(observation) => self.status(&request.attempt_id, observation),
             Err(_) => Ok(Status::Unusable(Failure::Uncertain)),
         }
+    }
+}
+
+impl IssueAssessmentModelPort for CodexIssueAssessmentModelAdapter {
+    fn configuration(&self) -> Result<IssueAssessmentModelConfiguration> {
+        let configuration = (self.configuration)()
+            .map_err(|_| anyhow!("the issue assessment configuration is unavailable"))?;
+        ensure!(
+            valid_configuration(&configuration),
+            "the issue assessment configuration is invalid"
+        );
+        Ok(configuration)
+    }
+
+    fn dispatch(&self, request: IssueAssessmentModelRequest) -> Result<Status> {
+        self.dispatch_with_authorization(request, None)
+    }
+
+    fn dispatch_authorized(
+        &self,
+        request: IssueAssessmentModelRequest,
+        authorization: Arc<dyn crate::application::port::agent_action::AgentActionAuthorization>,
+    ) -> Result<Status> {
+        self.dispatch_with_authorization(request, Some(authorization))
     }
 
     fn observe(&self, attempt_id: &str) -> Result<Status> {
@@ -242,6 +278,7 @@ impl IssueAssessmentModelPort for CodexIssueAssessmentModelAdapter {
 
 impl Drop for CodexIssueAssessmentModelAdapter {
     fn drop(&mut self) {
+        drop(self.authorized_driver.take());
         drop(self.driver.take());
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_background();

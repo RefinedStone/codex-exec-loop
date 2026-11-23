@@ -435,6 +435,7 @@ impl IssueDecisionService {
             for item in batch.items {
                 if item.issue == *reference {
                     let fence = IssueTriageFence {
+                        binding_run_revision: item.binding_run_revision,
                         collection_epoch: collection.epoch,
                         observation_revision: item.observation_revision,
                         tracked_revision: item.tracked_revision,

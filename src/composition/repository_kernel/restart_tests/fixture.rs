@@ -17,6 +17,7 @@ use crate::application::port::outbound::issue_work_execution_port::*;
 use crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering;
 use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
 use crate::application::service::issue_autonomy::IssueAutonomyService;
+use crate::application::service::issue_binding_pause::IssueBindingPauseService;
 use crate::application::service::issue_coordinator::IssueCoordinatorService;
 use crate::application::service::issue_decision::IssueDecisionService;
 use crate::application::service::issue_intervention::IssueInterventionService;
@@ -288,6 +289,8 @@ impl Fixture {
                 },
             },
             creation_provenance: IssueCreationProvenance::Unattributed,
+            repository_visibility: IssueRepositoryVisibility::Private,
+            repository_name_with_owner: Some("restart-fixture/repository".into()),
             web: None,
             remote_state: IssueRemoteState::Open,
             labels: complete(Vec::new()),
@@ -373,7 +376,10 @@ impl Fixture {
         autonomy.set(command, level, proof.as_ref()).unwrap();
     }
 
-    pub(super) fn service(&self) -> Arc<IssueCollectionService> {
+    pub(super) fn service(
+        &self,
+        admission: Arc<IssueBindingAdmission>,
+    ) -> Arc<IssueCollectionService> {
         let triage = Arc::new(IssueTriageService::new(
             self.workspace.clone(),
             self.store.clone(),
@@ -386,14 +392,24 @@ impl Fixture {
             triage.clone(),
             IssuePolicyService::new(Arc::new(Disclosure)),
         ));
-        let coordinator = Arc::new(IssueCoordinatorService::new(
+        let coordinator = Arc::new(
+            IssueCoordinatorService::new(
+                self.workspace.clone(),
+                self.store.clone(),
+                self.source.clone(),
+                triage.clone(),
+                decisions,
+                IssuePolicyService::new(Arc::new(Disclosure)),
+                self.execution.clone(),
+            )
+            .with_issue_binding_admission(admission.clone()),
+        );
+        let binding_pause = Arc::new(IssueBindingPauseService::new(
             self.workspace.clone(),
             self.store.clone(),
-            self.source.clone(),
-            triage.clone(),
-            decisions,
-            IssuePolicyService::new(Arc::new(Disclosure)),
+            IssueAutomationPolicyService::new(self.policy.clone()),
             self.execution.clone(),
+            admission,
         ));
         Arc::new(
             IssueCollectionService::new(
@@ -405,11 +421,15 @@ impl Fixture {
             )
             .with_triage(triage)
             .with_autonomy(self.autonomy())
+            .with_binding_pause(binding_pause)
             .with_coordinator(coordinator),
         )
     }
 
-    pub(super) fn recover(&self) -> Result<Arc<IssueCollectionService>> {
+    pub(super) fn recover(
+        &self,
+        admission: Arc<IssueBindingAdmission>,
+    ) -> Result<Arc<IssueCollectionService>> {
         IssueInterventionService::new(
             self.workspace.clone(),
             self.store.clone(),
@@ -418,19 +438,35 @@ impl Fixture {
         )
         .recover_before_runtime()?;
         self.autonomy().recover_before_runtime()?;
-        Ok(self.service())
+        Ok(self.service(admission))
     }
 
     pub(super) fn kernels(&self) -> RepositoryKernelRegistry {
+        self.kernels_with_runtime_hook(|_, _| Ok(()))
+    }
+
+    pub(super) fn kernels_with_runtime_hook(
+        &self,
+        hook: impl Fn(&mut NativeClientRuntime, &Arc<IssueBindingAdmission>) -> Result<()>
+        + Send
+        + Sync
+        + 'static,
+    ) -> RepositoryKernelRegistry {
         let turns = self.turns.clone();
         let builds = self.builds.clone();
         RepositoryKernelRegistry {
-            restart_runtime: Some(Arc::new(move |workspace, issues| {
+            restart_runtime: Some(Arc::new(move |_workspace, issues, admission| {
                 builds.fetch_add(1, Ordering::SeqCst);
                 let (mut runtime, recorded) = recording_runtime_for_test();
                 turns.lock().unwrap().push(recorded);
-                runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace);
-                runtime.attach_issue_collection(issues)?;
+                hook(&mut runtime, &admission)?;
+                runtime.attach_issue_binding_pause(
+                    issues
+                        .binding_pause_service()
+                        .expect("fixture binding pause"),
+                    admission,
+                )?;
+
                 Ok(runtime)
             })),
             ..RepositoryKernelRegistry::default()
@@ -441,10 +477,14 @@ impl Fixture {
         &self,
         kernels: &RepositoryKernelRegistry,
     ) -> Result<RepositoryRestartOutcome> {
-        kernels.restore_registered_with(&self.candidate, self.registry.as_ref(), |workspace| {
-            assert_eq!(workspace, self.workspace);
-            self.recover()
-        })
+        kernels.restore_registered_with(
+            &self.candidate,
+            self.registry.as_ref(),
+            |workspace, admission| {
+                assert_eq!(workspace, self.workspace);
+                self.recover(admission)
+            },
+        )
     }
 
     pub(super) fn work(&self) -> Option<IssueWorkCheckpoint> {

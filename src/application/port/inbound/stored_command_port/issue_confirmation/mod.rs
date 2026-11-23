@@ -3,17 +3,29 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::issue_automation::autonomy::{IssueAutonomyLevel, validate_command_id};
+use crate::domain::issue_automation::binding_pause::{
+    IssueBindingResumeBasis, validate_binding_pause_id,
+};
 use crate::domain::issue_automation::collection::IssueCollectionMode;
 use crate::domain::issue_automation::decision::{
     IssueDecisionBasis, IssueDecisionId, MAX_ISSUE_DECISION_OPTION_BYTES,
     validate_issue_decision_confirmation_reference,
 };
-use crate::domain::issue_automation::{IssueAutomationAutonomy, MAX_ISSUE_AUTOMATION_REVISION};
+use crate::domain::issue_automation::{
+    IssueAutomationAutonomy, IssueAutomationBindingId, MAX_ISSUE_AUTOMATION_REVISION,
+};
 use crate::domain::planning::evidence::{validate_evidence_identifier, validate_evidence_token};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IssueConfirmationTarget {
+    BindingResume {
+        workspace: String,
+        command_id: String,
+        binding_id: String,
+        expected_revision: u64,
+        resume_basis: IssueBindingResumeBasis,
+    },
     /// 현재 완료 기준 판의 한 기준만 면제한다. 전달·명세·통합 승인은 포함하지 않는다.
     CriterionWaiver {
         workspace: String,
@@ -51,7 +63,8 @@ pub enum IssueConfirmationTarget {
 impl IssueConfirmationTarget {
     pub fn workspace(&self) -> &str {
         match self {
-            Self::CriterionWaiver { workspace, .. }
+            Self::BindingResume { workspace, .. }
+            | Self::CriterionWaiver { workspace, .. }
             | Self::Decision { workspace, .. }
             | Self::Mode { workspace, .. }
             | Self::Autonomy { workspace, .. } => workspace,
@@ -68,6 +81,23 @@ impl IssueConfirmationTarget {
             return Err(IssueConfirmationError::Invalid);
         }
         match self {
+            Self::BindingResume {
+                command_id,
+                binding_id,
+                expected_revision,
+                resume_basis,
+                ..
+            } => {
+                let binding_id = IssueAutomationBindingId::new(binding_id.clone())
+                    .map_err(|_| IssueConfirmationError::Invalid)?;
+                if validate_command_id(command_id).is_err()
+                    || validate_binding_pause_id(&binding_id).is_err()
+                    || *expected_revision >= MAX_ISSUE_AUTOMATION_REVISION
+                    || resume_basis.validate().is_err()
+                {
+                    return Err(IssueConfirmationError::Invalid);
+                }
+            }
             Self::CriterionWaiver {
                 task_id,
                 criterion_id,

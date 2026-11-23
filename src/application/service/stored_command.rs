@@ -31,6 +31,7 @@ pub struct StoredCommandService {
     interventions: Option<Arc<dyn IssueInterventionPort>>,
     task_evidence: Option<Arc<TaskEvidenceService>>,
     task_verification: Option<Arc<TaskVerificationService>>,
+    binding_pause: Option<Arc<super::issue_binding_pause::IssueBindingPauseService>>,
 }
 
 impl StoredCommandService {
@@ -42,7 +43,16 @@ impl StoredCommandService {
             interventions: None,
             task_evidence: None,
             task_verification: None,
+            binding_pause: None,
         }
+    }
+
+    pub fn with_binding_pause(
+        mut self,
+        service: Arc<super::issue_binding_pause::IssueBindingPauseService>,
+    ) -> Self {
+        self.binding_pause = Some(service);
+        self
     }
 
     pub fn with_issue_collection(mut self, issues: Arc<IssueCollectionService>) -> Self {
@@ -79,6 +89,32 @@ impl StoredCommandService {
         context: Option<&StoredCommandContext>,
     ) -> Result<StoredCommandResult> {
         match command {
+            StoredCommand::SetIssueBindingPaused {
+                command_id,
+                binding_id,
+                paused,
+                expected_revision,
+            } => {
+                let binding_id =
+                    crate::domain::issue_automation::IssueAutomationBindingId::new(binding_id)
+                        .map_err(anyhow::Error::msg)?;
+                let command = self
+                    .binding_pause
+                    .as_ref()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("binding pause requires the running repository kernel")
+                    })?
+                    .set(
+                        command_id,
+                        binding_id,
+                        paused,
+                        expected_revision,
+                        context.and_then(|value| value.human_confirmation.as_ref()),
+                    )?;
+                Ok(StoredCommandResult::IssueBindingPauseRequested {
+                    command: Box::new(command),
+                })
+            }
             StoredCommand::RequestTaskVerification { request } => {
                 let context = context
                     .ok_or_else(|| anyhow::anyhow!("host verification requires server context"))?;

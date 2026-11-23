@@ -40,6 +40,11 @@ export class IssueConfirmationService {
     return this.enqueue(request.workspace, request.command);
   }
 
+  confirmBindingResume(input: unknown): Promise<IssueConfirmationResponse> {
+    const request = bindingResumeRequest(input);
+    return this.enqueue(request.workspace, request.command);
+  }
+
   invalidate(): void {
     this.generation++;
     this.active?.abort();
@@ -158,6 +163,17 @@ function autonomyRequest(value: unknown): { workspace: string; command: CommandR
       idempotency_key: value.key,
     },
   };
+}
+
+function bindingResumeRequest(value: unknown): { workspace: string; command: CommandRequest } {
+  if (!isRecord(value) || !onlyFields(value, ["workspace", "commandId", "bindingId", "expectedRevision", "key"])
+    || !workspace(value.workspace) || !token(value.key, 128) || !token(value.commandId, 128)
+    || !boundedText(value.bindingId, 512) || value.bindingId.trim() !== value.bindingId || /[\p{Cc}]/u.test(value.bindingId)
+    || typeof value.expectedRevision !== "number" || !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0) throw failure();
+  return { workspace: value.workspace, command: {
+    command: { type: "set_issue_binding_paused", command_id: value.commandId, binding_id: value.bindingId, paused: false, expected_revision: value.expectedRevision },
+    idempotency_key: value.key,
+  } };
 }
 
 function workspace(value: unknown): value is string {

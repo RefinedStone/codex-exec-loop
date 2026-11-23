@@ -27,6 +27,32 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
+        Self::configured("/repo", None)
+    }
+
+    pub(super) fn with_issue_binding(
+        workspace: &str,
+        admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+        store: Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>,
+        work_order_id: &str,
+    ) -> Self {
+        Self::configured(workspace, Some((
+            super::super::super::parallel_mode::binding_action::IssueBindingActionConfiguration { admission, store },
+            crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity {
+                work_order_id: work_order_id.to_owned(),
+                origin: "issue_automation".into(),
+                authorization_epoch: 0,
+            },
+        )))
+    }
+
+    fn configured(
+        workspace: &str,
+        binding: Option<(
+            crate::application::service::parallel_mode::binding_action::IssueBindingActionConfiguration,
+            crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity,
+        )>,
+    ) -> Self {
         let repository = Arc::new(Repository::new());
         let jobs = Arc::new(Mutex::new(Vec::new()));
         let spawn_calls = Arc::new(AtomicUsize::new(0));
@@ -60,30 +86,37 @@ impl Fixture {
             })
         };
         let authority = Arc::new(
-            NoopPlanningAuthorityPort::default().with_shared_work_permit_decision(permit.clone()),
+            NoopPlanningAuthorityPort::default()
+                .with_shared_work_permit_decision(permit.clone())
+                .with_confirmed_worker_action_identity(
+                    binding.as_ref().map(|(_, identity)| identity.clone()),
+                ),
         );
         let evidence = Arc::new(
             crate::application::service::task_evidence::TaskEvidenceService::new(
-                "/repo".into(),
+                workspace.into(),
                 repository.clone(),
                 artifacts.clone(),
                 runtime.clone(),
                 authority.clone(),
             ),
         );
-        let service = Arc::new(
-            TaskVerificationService::new(TaskVerificationDependencies {
-                workspace: "/repo".into(),
-                repository: repository.clone(),
-                artifacts,
-                runtime,
-                authority,
-                runner: runner.clone(),
-                spawn,
-                wake,
-            })
-            .unwrap(),
-        );
+        let mut service = TaskVerificationService::new(TaskVerificationDependencies {
+            workspace: workspace.into(),
+            repository: repository.clone(),
+            artifacts,
+            runtime,
+            authority,
+            runner: runner.clone(),
+            spawn,
+            wake,
+        })
+        .unwrap();
+        if let Some((configuration, _)) = binding {
+            service =
+                service.with_issue_binding_admission(configuration.admission, configuration.store);
+        }
+        let service = Arc::new(service);
         Self {
             service,
             evidence,

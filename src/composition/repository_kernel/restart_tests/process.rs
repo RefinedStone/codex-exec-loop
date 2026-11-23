@@ -170,8 +170,11 @@ fn killed_pending_selection_restarts_without_clients_and_creates_one_durable_wor
     let kernels = reopened.kernels();
     assert_eq!(
         kernels
-            .restore_registered_with(&candidates[0], reopened.registry.as_ref(), |_| reopened
-                .recover())
+            .restore_registered_with(
+                &candidates[0],
+                reopened.registry.as_ref(),
+                |_, admission| reopened.recover(admission)
+            )
             .unwrap(),
         RepositoryRestartOutcome::Started,
     );

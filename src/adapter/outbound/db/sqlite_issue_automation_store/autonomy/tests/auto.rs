@@ -98,9 +98,9 @@ fn version_twelve_migration_preserves_selection_pending_and_receipts_before_auto
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        13
+        super::super::super::SCHEMA_VERSION
     );
-    super::super::super::validate_schema_version(&connection, 13).unwrap();
+    super::super::super::validate_schema(&connection).unwrap();
     assert!(
         connection
             .execute(

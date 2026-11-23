@@ -206,6 +206,8 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
         execution: None,
         feedback: None,
         item: Some(IssueCollectionItem {
+            binding_run_revision: 0,
+            binding_run_blocked: false,
             start_budget_wait: None,
             issue: reference(),
             binding_id: IssueAutomationBindingId::new("binding").unwrap(),
@@ -569,6 +571,8 @@ fn arbiter_wait_is_projected_only_for_the_exact_open_decision_without_changing_i
         execution: None,
         feedback: None,
         item: Some(IssueCollectionItem {
+            binding_run_revision: 0,
+            binding_run_blocked: false,
             start_budget_wait: None,
             issue: reference(),
             binding_id: IssueAutomationBindingId::new("binding").unwrap(),

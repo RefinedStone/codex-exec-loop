@@ -100,9 +100,12 @@ pub(in super::super) fn item(
     );
     let start_budget_wait =
         super::super::admission::projection(connection, workspace, reference, triage.as_ref())?;
+    let binding_run = super::super::binding_pause::read_state(connection, workspace, &binding_id)?;
     Ok(Some(IssueCollectionItem {
         issue: reference.clone(),
         binding_id,
+        binding_run_revision: binding_run.revision,
+        binding_run_blocked: !binding_run.allows_automation(),
         // Untracking hides workflow state, not the persisted identity, binding, or CAS revision.
         tracked: if super::super::intervention::is_tracked(connection, workspace, reference)? {
             tracked.map(|issue| IssueTrackedSummary {

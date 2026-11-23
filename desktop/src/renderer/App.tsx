@@ -834,6 +834,7 @@ export function App() {
                   onSetMode={async (mode) => session.current?.setIssueAutomationMode(mode)}
                   onSync={async () => session.current?.syncIssues()}
                   onSetAutonomy={async (level) => session.current?.setIssueAutonomy(level)}
+                  onSetBindingPaused={async (paused) => session.current?.setIssueBindingPaused(paused)}
                   onAnswerDecision={async (decisionId, option, note) => session.current?.answerIssueDecision(decisionId, option, note)}
                   onIntervene={async (action, message, confirm) => session.current?.interveneIssue(action, message, confirm) ?? "unavailable"}
                   onOpenConversation={openIssueConversation}

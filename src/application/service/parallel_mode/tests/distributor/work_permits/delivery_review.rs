@@ -9,7 +9,7 @@ use crate::domain::issue_automation::policy::IssueAutomationPolicy;
 
 fn install_legacy_delivery_grants(fixture: &WorkPermitDeliveryFixture) {
     let grants = PlanningWorkPermitStage::ALL.map(|stage| PlanningWorkPermit {
-        work_order_id: WORK_ORDER_ID.into(),
+        work_order_id: fixture.work_order_id.clone(),
         stage,
         basis: fixture.basis.clone(),
         requires_human_review: stage == PlanningWorkPermitStage::Integrate,
@@ -31,7 +31,10 @@ fn install_legacy_delivery_grants(fixture: &WorkPermitDeliveryFixture) {
     connection
         .execute(
             "UPDATE planning_work_orders SET permits_json=?2 WHERE work_order_id=?1",
-            rusqlite::params![WORK_ORDER_ID, serde_json::to_string(&old_payload).unwrap()],
+            rusqlite::params![
+                &fixture.work_order_id,
+                serde_json::to_string(&old_payload).unwrap()
+            ],
         )
         .unwrap();
 }
@@ -47,7 +50,7 @@ fn legacy_issue_permits_cannot_push_or_create_a_pr_before_coordinator_diff_reass
     install_legacy_delivery_grants(&fixture);
     let authority = SqlitePlanningAuthorityAdapter::new();
     let before = authority
-        .load_work_order(&fixture.repo.workspace_dir(), WORK_ORDER_ID)
+        .load_work_order(&fixture.repo.workspace_dir(), &fixture.work_order_id)
         .unwrap()
         .unwrap();
     assert_eq!(before.permits.len(), 4);
@@ -79,7 +82,8 @@ fn legacy_issue_permits_cannot_push_or_create_a_pr_before_coordinator_diff_reass
     assert_eq!(remote_heads(&fixture.repo), remote_before);
 
     let restarted =
-        test_parallel_mode_service_with_autonomous_github(Arc::new(fixture.github.clone()));
+        test_parallel_mode_service_with_autonomous_github(Arc::new(fixture.github.clone()))
+            .with_issue_binding_admission(fixture.admission.clone(), fixture.issue_store.clone());
     restarted
         .process_distributor_queue(&fixture.repo.workspace_dir())
         .unwrap();
@@ -87,7 +91,7 @@ fn legacy_issue_permits_cannot_push_or_create_a_pr_before_coordinator_diff_reass
     assert_eq!(remote_heads(&fixture.repo), remote_before);
     assert_eq!(
         authority
-            .load_work_order(&fixture.repo.workspace_dir(), WORK_ORDER_ID)
+            .load_work_order(&fixture.repo.workspace_dir(), &fixture.work_order_id)
             .unwrap()
             .unwrap(),
         before

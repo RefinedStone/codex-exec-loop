@@ -25,6 +25,10 @@ use crate::domain::issue_work::{
 use crate::application::port::outbound::issue_source_port::{
     IssueDiscoveryPage, IssueDiscoveryRequest,
 };
+use crate::domain::issue_automation::binding_pause::{
+    IssueBindingPauseCompletion, IssueBindingPauseEvent, IssueBindingPauseIntent,
+    IssueBindingPauseState, StoredIssueBindingPauseCommand,
+};
 use crate::domain::issue_automation::collection::{
     IssueCollectionFailure, IssueCollectionFence, IssueCollectionItem, IssueCollectionMode,
     IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery, IssueResyncBatch,
@@ -41,6 +45,7 @@ use crate::domain::issue_automation::triage::IssueTriageAssessment;
 mod admission;
 mod arbiter;
 mod autonomy;
+mod binding_pause;
 mod collection;
 mod coordinator;
 mod decision;
@@ -51,6 +56,8 @@ mod execution_answers;
 mod feedback;
 mod intervention;
 mod private_store;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod triage;
 
 #[cfg(test)]
@@ -59,7 +66,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -147,6 +154,93 @@ impl SqliteIssueAutomationStoreAdapter {
 }
 
 impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
+    fn issue_binding_pause_state(
+        &self,
+        workspace: &str,
+        binding_id: &IssueAutomationBindingId,
+    ) -> Result<IssueBindingPauseState> {
+        self.with_connection(workspace, |connection, _| {
+            binding_pause::read_state(connection, workspace, binding_id)
+        })
+    }
+    fn list_issue_binding_pause_states(
+        &self,
+        workspace: &str,
+        after: Option<&IssueAutomationBindingId>,
+        limit: usize,
+    ) -> Result<Vec<IssueBindingPauseState>> {
+        binding_pause::list_states(self, workspace, after, limit)
+    }
+    fn get_issue_binding_pause_command(
+        &self,
+        workspace: &str,
+        command_id: &str,
+    ) -> Result<Option<StoredIssueBindingPauseCommand>> {
+        self.with_connection(workspace, |connection, _| {
+            binding_pause::read_command(connection, workspace, command_id)
+        })
+    }
+    fn begin_issue_binding_pause(
+        &self,
+        workspace: &str,
+        intent: &IssueBindingPauseIntent,
+    ) -> Result<StoredIssueBindingPauseCommand> {
+        binding_pause::begin(self, workspace, intent)
+    }
+    fn pending_issue_binding_pause_commands(
+        &self,
+        workspace: &str,
+        after: Option<&IssueAutomationBindingId>,
+        limit: usize,
+    ) -> Result<Vec<StoredIssueBindingPauseCommand>> {
+        binding_pause::pending_commands(self, workspace, after, limit)
+    }
+    fn pending_issue_binding_pause_work(
+        &self,
+        workspace: &str,
+        intent: &IssueBindingPauseIntent,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>> {
+        binding_pause::pending_work(self, workspace, intent, after, limit)
+    }
+    fn claim_issue_binding_pause_fence(
+        &self,
+        workspace: &str,
+        intent: &IssueBindingPauseIntent,
+        work: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+    ) -> Result<crate::domain::issue_automation::intervention::StoredIssueIntervention> {
+        binding_pause::claim_fence(self, workspace, intent, work)
+    }
+    fn finish_issue_binding_pause(
+        &self,
+        workspace: &str,
+        intent: &IssueBindingPauseIntent,
+        completion: IssueBindingPauseCompletion,
+    ) -> Result<StoredIssueBindingPauseCommand> {
+        binding_pause::finish(self, workspace, intent, completion)
+    }
+    fn pending_issue_binding_pause_events(
+        &self,
+        workspace: &str,
+        limit: usize,
+    ) -> Result<Vec<IssueBindingPauseEvent>> {
+        binding_pause::pending_events(self, workspace, limit)
+    }
+    fn acknowledge_issue_binding_pause_event(
+        &self,
+        workspace: &str,
+        event: &IssueBindingPauseEvent,
+    ) -> Result<()> {
+        binding_pause::acknowledge(self, workspace, event)
+    }
+    fn resolve_issue_work_binding(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Option<IssueAutomationBindingId>> {
+        binding_pause::resolve_work(self, workspace, work_order_id)
+    }
     fn claim_issue_arbiter(
         &self,
         workspace: &str,
@@ -449,6 +543,7 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
                         enum_name(&record.autonomy)?,
                     ],
                 )?;
+                binding_pause::initialize_binding(transaction, workspace_dir, binding.id())?;
                 triage::bump_catalog(transaction, workspace_dir)?;
                 Ok(IssueAutomationBindingInsertResult {
                     binding: StoredIssueAutomationBinding {
@@ -919,7 +1014,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=12) => {
+            (APPLICATION_ID, version @ 1..=13) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -947,7 +1042,7 @@ fn ensure_schema(
                     transaction.execute_batch(autonomy::SCHEMA)?;
                     transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
                     transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
-                } else {
+                } else if version < 13 {
                     autonomy::migrate_selection(transaction)?;
                 }
                 if version < 8 {
@@ -968,6 +1063,7 @@ fn ensure_schema(
                 if version < 12 {
                     arbiter::create_schema(transaction)?;
                 }
+                binding_pause::create_schema(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -1001,6 +1097,7 @@ fn ensure_schema(
                 admission::create_schema(transaction)?;
                 decision_deadlines::create_schema(transaction)?;
                 arbiter::create_schema(transaction)?;
+                binding_pause::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -1086,6 +1183,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 12 {
         expected.extend(arbiter::schema_objects());
+    }
+    if version >= 14 {
+        expected.extend(binding_pause::schema_objects());
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

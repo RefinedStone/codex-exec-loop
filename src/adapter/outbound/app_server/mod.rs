@@ -25,6 +25,7 @@ mod execution_policy;
 mod kernel_skill;
 mod worker_continuation;
 mod worker_evidence;
+mod worker_launch;
 // gateway_upstream.rs: akra-gateway 용 upstream app-server(--listen) 감시와 세션별 proxy 자식 프로세스.
 pub(crate) mod gateway_upstream;
 mod planning_worker;
@@ -1062,6 +1063,7 @@ impl CodexAppServerAdapter {
                 self.execution_policy.approvals_reviewer,
                 self.execution_policy.sandbox_mode,
                 None,
+                None,
             )
         });
         match &result {
@@ -1292,6 +1294,7 @@ impl CodexAppServerAdapter {
         event_sender: &ConversationStreamSender,
         prompt_trace_context: AppServerPromptTraceContext,
         evidence_root: Option<&worker_evidence::WorkerEvidenceRoot>,
+        start_authorization: Option<&dyn crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerStartAuthorization>,
     ) -> Result<ConversationTurnTerminalReceipt> {
         self.start_turn_and_wait_for_stream_with_policy(
             connection,
@@ -1306,6 +1309,7 @@ impl CodexAppServerAdapter {
             self.execution_policy.approvals_reviewer,
             self.execution_policy.sandbox_mode,
             evidence_root,
+            start_authorization,
         )
     }
 
@@ -1336,6 +1340,7 @@ impl CodexAppServerAdapter {
             self.execution_policy.approvals_reviewer,
             self.execution_policy.sandbox_mode,
             None,
+            None,
         )
     }
 
@@ -1348,7 +1353,8 @@ impl CodexAppServerAdapter {
             event_sender,
             prompt_trace_context,
             interrupt_signal,
-            evidence_root
+            evidence_root,
+            start_authorization
         )
     )]
     #[allow(clippy::too_many_arguments)]
@@ -1366,6 +1372,7 @@ impl CodexAppServerAdapter {
         approvals_reviewer: Option<ApprovalsReviewerValue>,
         sandbox_mode: SandboxModeValue,
         evidence_root: Option<&worker_evidence::WorkerEvidenceRoot>,
+        start_authorization: Option<&dyn crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerStartAuthorization>,
     ) -> Result<ConversationTurnTerminalReceipt> {
         /*
          * The interrupt generation is sampled before turn/start so a stale stop from a
@@ -1396,6 +1403,13 @@ impl CodexAppServerAdapter {
             } else {
                 anyhow::bail!("worker evidence root cannot change the execution policy");
             }
+        }
+        // Admission is retained through ACK or the complete unknown/error response path.
+        let action_guard = start_authorization
+            .map(|authorization| authorization.acquire())
+            .transpose()?;
+        if let Some(guard) = &action_guard {
+            guard.validate()?;
         }
         let turn_response = match connection.start_turn_with_event_sender(
             TurnStartParams {
@@ -1478,6 +1492,7 @@ impl CodexAppServerAdapter {
             return Err(error);
         }
 
+        drop(action_guard);
         if !prompt_logging_enabled {
             return match turn_steer_binding {
                 Some(binding) => connection.wait_for_turn_stream_with_steering(
@@ -1968,96 +1983,21 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
         worker_continuation::archive(self, cwd, thread_id)
     }
 
-    #[tracing::instrument(level = "trace", skip(self, request, event_sender))]
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: ConversationStreamSender,
     ) -> Result<ConversationTurnTerminalReceipt> {
-        // Parallel worker sessions use isolated processes but persist app-server threads so `:peek` can read them later.
-        let result = self.with_isolated_streaming_runtime(|connection| {
-            let mut workspace = protected_thread_workspace(request.cwd)?;
-            let evidence_root = worker_evidence::WorkerEvidenceRoot::prepare(
-                request.evidence_incoming_root,
-                self.execution_policy.sandbox_mode,
-            )?;
-            if let Some(root) = &evidence_root {
-                root.apply_config(&mut workspace)?;
-            }
-            let requested_cwd = workspace.cwd.clone();
-            let mut thread_request = runtime_configuration_request(
-                None,
-                None,
-                Some(&requested_cwd),
-                Some(self.execution_policy.approval_policy),
-                self.execution_policy.approvals_reviewer,
-                Some(self.execution_policy.sandbox_mode),
-            );
-            if let Some(root) = &evidence_root {
-                root.record_request(&mut thread_request);
-            }
-            let thread_response = connection.start_thread(ThreadStartParams {
-                cwd: Some(workspace.cwd),
-                approval_policy: Some(self.execution_policy.approval_policy),
-                approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(self.execution_policy.sandbox_mode),
-                config: Some(workspace.config),
-                model: None,
-                developer_instructions: Some(request.developer_instructions.to_string()),
-                service_name: Some(request.service_name.to_string()),
-                ephemeral: Some(false),
-            })?;
-            let thread_id = thread_response.thread.id.clone();
-            if thread_id.is_empty() {
-                anyhow::bail!("thread/start response omitted a nonempty thread id");
-            }
-            let runtime_envelope = to_runtime_envelope(
-                thread_request,
-                &thread_response.runtime_envelope_fields,
-                &thread_response.thread,
-                self.connection_config.runtime_launch_environment(),
-            )?;
-            connection.discard_notifications_before_turn_binding();
-            let applied_cwd =
-                exact_applied_workspace_cwd(&runtime_envelope, &requested_cwd, "thread/start")?;
-            if let Some(root) = &evidence_root {
-                root.verify_applied(&runtime_envelope, &requested_cwd)?;
-            }
-            send_required_app_server_event(
-                &event_sender,
-                ConversationStreamEvent::codex_app_server_launch_attachment(),
-                "attachment/launch",
-            )?;
-            send_required_app_server_event(
-                &event_sender,
-                ConversationStreamEvent::ThreadPrepared {
-                    thread_id: thread_id.clone(),
-                    title: thread_title(&thread_response.thread),
-                    cwd: applied_cwd,
-                    runtime_envelope: Box::new(runtime_envelope),
-                },
-                "thread/prepared",
-            )?;
+        worker_launch::run(self, request, event_sender, None)
+    }
 
-            let stream_result = self.start_worker_turn_and_wait_for_stream(
-                connection,
-                request.prompt,
-                &event_sender,
-                AppServerPromptTraceContext {
-                    workspace_dir: request.cwd.to_string(),
-                    session_kind: "parallel-worker".to_string(),
-                    operation: "isolated_parallel_thread".to_string(),
-                    service_name: Some(request.service_name.to_string()),
-                    developer_instructions: Some(request.developer_instructions.to_string()),
-                    thread_id: thread_id.clone(),
-                },
-                evidence_root.as_ref(),
-            );
-            // The application owns completion and may still need this thread for AwaitingUser.
-            stream_result
-        });
-
-        finish_stream_result(result, &event_sender)
+    fn run_authorized_isolated_new_thread_stream(
+        &self,
+        request: ParallelAgentWorkerStreamRequest<'_>,
+        event_sender: ConversationStreamSender,
+        start_authorization: &dyn crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerStartAuthorization,
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        worker_launch::run(self, request, event_sender, Some(start_authorization))
     }
 }
 
@@ -2288,6 +2228,8 @@ pub(super) fn persisted_error_summary(error: &anyhow::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    mod binding_admission;
     #[cfg(unix)]
     mod worker_evidence;
     #[cfg(unix)]

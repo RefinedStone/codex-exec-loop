@@ -43,6 +43,9 @@ fn arbiter_services(
             IssuePolicyService::new(Arc::new(DisclosurePolicy)),
             Arc::new(NoExecution::default()),
         )
+        .with_issue_binding_admission(Arc::new(
+            crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+        ))
         .with_arbiter(model, evidence)
         .with_arbiter_clock(Arc::new(move || monotonic)),
     );

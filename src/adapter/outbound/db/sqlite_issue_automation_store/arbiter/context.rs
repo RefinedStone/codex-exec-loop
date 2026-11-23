@@ -43,7 +43,9 @@ pub(super) fn current_allowed(
     else {
         return Ok(false);
     };
-    if item.observation_revision != fence.triage.observation_revision
+    if item.binding_run_blocked
+        || item.binding_run_revision != fence.triage.binding_run_revision
+        || item.observation_revision != fence.triage.observation_revision
         || item.tracked_revision != fence.triage.tracked_revision
         || item.triage.as_ref().map(|triage| triage.revision) != fence.triage.assessment_revision
         || item

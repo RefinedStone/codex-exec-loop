@@ -16,6 +16,9 @@ struct WorkPermitDeliveryFixture {
     github: FakeGithubAutomationPort,
     lease: ParallelModeSlotLeaseSnapshot,
     basis: PlanningWorkPermitBasis,
+    work_order_id: String,
+    issue_store: Arc<crate::adapter::outbound::db::SqliteIssueAutomationStoreAdapter>,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
 }
 
 impl WorkPermitDeliveryFixture {
@@ -64,6 +67,11 @@ impl WorkPermitDeliveryFixture {
     ) -> Self {
         let repo = TempGitRepo::new(prefix);
         register_delivery_work_order_with_origin_and_link(&repo, origin, reference);
+        let work_order_id = registered_work_id(&repo.workspace_dir());
+        let issue_store = binding_support::store();
+        let admission = Arc::new(
+            crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+        );
         let initial_basis = PlanningWorkPermitBasis {
             delivery_review: None,
             authorization_epoch: 0,
@@ -78,7 +86,8 @@ impl WorkPermitDeliveryFixture {
             &[PlanningWorkPermitStage::Dispatch],
             false,
         );
-        let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github.clone()));
+        let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github.clone()))
+            .with_issue_binding_admission(admission.clone(), issue_store.clone());
         let lease = build_result(&service, &repo, prefix);
         let source_sha = run_command(
             "git",
@@ -92,7 +101,7 @@ impl WorkPermitDeliveryFixture {
             ..initial_basis
         };
         SqlitePlanningAuthorityAdapter::new()
-            .set_work_order_permit_basis(&repo.workspace_dir(), WORK_ORDER_ID, &basis)
+            .set_work_order_permit_basis(&repo.workspace_dir(), &work_order_id, &basis)
             .expect("delivery evidence should replace the dispatch evidence");
         Self {
             repo,
@@ -100,6 +109,9 @@ impl WorkPermitDeliveryFixture {
             github,
             lease,
             basis,
+            work_order_id,
+            issue_store,
+            admission,
         }
     }
 
@@ -169,12 +181,13 @@ impl WorkPermitDeliveryFixture {
 
     fn revoke_at(&self, boundary: FakeGithubAutomationBoundary, stage: PlanningWorkPermitStage) {
         let workspace = self.repo.workspace_dir();
+        let work_order_id = self.work_order_id.clone();
         self.github.set_boundary_hook(boundary, move || {
             assert_eq!(
                 SqlitePlanningAuthorityAdapter::new()
                     .revoke_work_order_permits(
                         &workspace,
-                        WORK_ORDER_ID,
+                        &work_order_id,
                         &[stage],
                         "reviewer revoked permission during delivery preflight",
                     )
@@ -208,6 +221,11 @@ fn register_delivery_work_order_with_origin_and_link(
 ) {
     let adapter = SqlitePlanningAuthorityAdapter::new();
     let workspace = repo.workspace_dir();
+    let work_order_id = if origin == "issue_automation" {
+        binding_support::seed(&workspace, "I_delivery_review", TASK_ID)
+    } else {
+        WORK_ORDER_ID.to_owned()
+    };
     let empty_projection = PriorityQueueProjection {
         next_task: None,
         active_tasks: Vec::new(),
@@ -277,7 +295,7 @@ fn register_delivery_work_order_with_origin_and_link(
             &workspace,
             PlanningWorkOrderRegistration {
                 link_reference: reference,
-                work_order_id: WORK_ORDER_ID,
+                work_order_id: &work_order_id,
                 origin,
                 initial_task_id: TASK_ID,
                 observed_planning_revision: snapshot.planning_revision,
@@ -304,15 +322,16 @@ fn set_basis_and_grant(
     requires_human_review: bool,
 ) {
     let adapter = SqlitePlanningAuthorityAdapter::new();
+    let work_order_id = registered_work_id(workspace);
     adapter
-        .set_work_order_permit_basis(workspace, WORK_ORDER_ID, basis)
+        .set_work_order_permit_basis(workspace, &work_order_id, basis)
         .expect("current permit evidence should persist");
     for &stage in stages {
         adapter
             .grant_work_order_permit(
                 workspace,
                 &PlanningWorkPermit {
-                    work_order_id: WORK_ORDER_ID.to_string(),
+                    work_order_id: work_order_id.clone(),
                     stage,
                     basis: basis.clone(),
                     requires_human_review,
@@ -320,6 +339,14 @@ fn set_basis_and_grant(
             )
             .expect("stage permit should match the independently stored basis");
     }
+}
+
+fn registered_work_id(workspace: &str) -> String {
+    SqlitePlanningAuthorityAdapter::new()
+        .load_work_order_for_task(workspace, TASK_ID)
+        .unwrap()
+        .unwrap()
+        .work_order_id
 }
 
 fn remote_heads(repo: &TempGitRepo) -> String {

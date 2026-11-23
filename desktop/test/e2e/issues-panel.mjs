@@ -34,6 +34,7 @@ const automation = {
   epoch: 1,
   revision: 7,
   binding_id: binding.id,
+  binding_pause: { status: "ready", binding_id: binding.id, revision: 0, paused: false, pending: null },
   binding,
   last_attempt_at_ms: LAST_SUCCESS,
   last_success_at_ms: LAST_SUCCESS,
@@ -274,6 +275,16 @@ const kernel = {
       const command = (method === "akra/kernel/command_confirmed" ? confirmedRequest(params) : params).command;
       if (command?.type === "set_issue_automation_mode" && command.mode === "observe" && method !== "akra/kernel/command_confirmed") {
         return { error: { code: -32602, message: "상향에는 main 확인이 필요합니다." } };
+      }
+      if (command?.type === "set_issue_binding_paused") {
+        if (command.binding_id !== binding.id || command.expected_revision !== automation.binding_pause.revision
+          || (!command.paused && method !== "akra/kernel/command_confirmed")) return { error: { code: -32602, message: "현재 연결과 native 재개 확인이 필요합니다." } };
+        automation.binding_pause.revision++;
+        automation.binding_pause.pending = { command_id: command.command_id, paused: command.paused };
+        return { result: { processed: true, result: { type: "issue_binding_pause_requested", command: {
+          command_id: command.command_id, binding_id: binding.id, requested_paused: command.paused,
+          accepted_revision: automation.binding_pause.revision, receipt: null,
+        } } }, events: [stateEvent()] };
       }
       if (command?.type === "set_issue_automation_mode") {
         const previous = automation.mode;
@@ -600,6 +611,28 @@ try {
   check("a reconnect does not replay mode or sync commands", kernelCommands("set_issue_automation_mode").length === 1 && kernelCommands("sync_issues").length === 1);
   check("the main process rejected every malicious URL", JSON.stringify(await app.evaluate(() => globalThis.issuesFixture.opened)) === JSON.stringify([expectedRows[0].url]));
 
+  const pauseToggle = panel.getByTestId("issues-binding-pause-toggle");
+  await pauseToggle.click();
+  check("Pause is accepted without a native confirmation and remains pending until completion", await until(async () =>
+    kernelCommands("set_issue_binding_paused").length === 1 && await pauseToggle.isDisabled()
+      && (await panel.getByTestId("issues-binding-pause").innerText()).includes("일시정지 처리 중")));
+  const pauseRequest = kernelCommands("set_issue_binding_paused")[0];
+  check("Pause carries only the current binding transition", pauseRequest?.method === "akra/kernel/command"
+    && pauseRequest.params.command.binding_id === binding.id && pauseRequest.params.command.expected_revision === 0);
+  automation.binding_pause.paused = true;
+  automation.binding_pause.pending = null;
+  gateway.sendKernelEvent(stateEvent());
+  check("completed Pause offers Resume", await until(async () => await pauseToggle.isEnabled() && (await pauseToggle.innerText()).includes("재개")));
+  await pauseToggle.click();
+  check("Resume uses the exact native confirmation path and remains pending", await until(async () => kernelCommands("set_issue_binding_paused").length === 2 && await pauseToggle.isDisabled()));
+  const resumeRequest = kernelCommands("set_issue_binding_paused")[1];
+  check("Resume binds the completed pause revision", resumeRequest?.method === "akra/kernel/command_confirmed"
+    && resumeRequest.params.command.paused === false && resumeRequest.params.command.expected_revision === 1);
+  automation.binding_pause.paused = false;
+  automation.binding_pause.pending = null;
+  gateway.sendKernelEvent(stateEvent());
+  check("resume completion leaves collection mode intact", await until(async () => await pauseToggle.isEnabled() && (await mode.inputValue()) === "observe"));
+
   console.log("--- issues panel text ---");
   console.log(await panel.innerText());
   console.log("-------------------------");
@@ -608,8 +641,8 @@ try {
   await panel.waitFor({ state: "detached", timeout: 10_000 });
   check("closing the issue panel retains the metadata-only decision subscription", countRequests("akra/kernel/detach") === detaches);
   check("the issues tab sends no planning commands or planning queries", requests.every((request) => {
-    if (request.method === "akra/kernel/command") return ["set_issue_automation_mode", "sync_issues"].includes(request.params.command?.type);
-    if (request.method === "akra/kernel/command_confirmed") return request.params.request?.command?.type === "set_issue_automation_mode";
+    if (request.method === "akra/kernel/command") return ["set_issue_automation_mode", "set_issue_binding_paused", "sync_issues"].includes(request.params.command?.type);
+    if (request.method === "akra/kernel/command_confirmed") return ["set_issue_automation_mode", "set_issue_binding_paused"].includes(request.params.request?.command?.type);
     if (request.method === "akra/kernel/query") return !["planning", "parallel"].includes(request.params.query?.type);
     return true;
   }));

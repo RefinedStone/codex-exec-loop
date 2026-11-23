@@ -13,10 +13,12 @@ use crate::application::service::task_verification::{
 pub(crate) fn build(
     workspace: &str,
     wake: VerificationWake,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+    issues: Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>,
 ) -> Result<Arc<TaskVerificationService>> {
     let store = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    Ok(Arc::new(TaskVerificationService::new(
-        TaskVerificationDependencies {
+    Ok(Arc::new(
+        TaskVerificationService::new(TaskVerificationDependencies {
             workspace: workspace.to_owned(),
             repository: store.clone(),
             artifacts: super::task_evidence::artifacts(),
@@ -28,6 +30,7 @@ pub(crate) fn build(
                     .map(|_| ())
             }),
             wake,
-        },
-    )?))
+        })?
+        .with_issue_binding_admission(admission, issues),
+    ))
 }

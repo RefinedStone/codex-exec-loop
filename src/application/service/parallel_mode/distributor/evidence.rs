@@ -42,6 +42,9 @@ pub(super) fn block_if_delivery_gates_denied(
             .map(Some);
         }
     };
+    // Persist the existing permit-denied wait before a takeover's captured-epoch check
+    // returns. A still-valid permit must also pass the original binding/epoch identity.
+    claim.validate_binding_authority()?;
     claim.renew("delivery evidence observation")?;
     let decision = gate.evaluate(
         &resolution.context.repo_root,
@@ -89,6 +92,7 @@ pub(super) fn block_if_delivery_gates_denied(
     )? {
         return Ok(Some(notice));
     }
+    claim.validate_binding_memory()?;
     // The caller's ordinary durable state write mirrors the returned audit after the effect.
     Ok(None)
 }

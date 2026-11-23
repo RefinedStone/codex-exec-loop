@@ -15,6 +15,11 @@ use crate::domain::kernel_spec::{
 };
 use crate::domain::planning::ManualPromptMainSessionHandoff;
 
+mod issue_binding_pause;
+pub use issue_binding_pause::IssueBindingPauseReceiptRecord;
+#[cfg(test)]
+pub(crate) use issue_binding_pause::sample_issue_binding_pause_event;
+
 mod issue_feedback;
 pub use issue_feedback::{IssueClosureRecordOrigin, IssueFeedbackRecordAction};
 
@@ -559,6 +564,11 @@ pub enum KernelEvent {
         evidence_revision: u64,
         verification: Box<TaskVerificationRecord>,
     },
+    /// 바인딩 정지·재개의 불변 완료 기록이다. 현재 상태는 별도 조회한다.
+    IssueBindingPauseCompleted {
+        event_id: String,
+        receipt: IssueBindingPauseReceiptRecord,
+    },
 }
 
 /// 작업 공간의 git 상태이다. 커밋이 하나도 없는 저장소와 저장소가 아닌 폴더는 상태가 없다.
@@ -866,6 +876,7 @@ impl KernelEvent {
     /// 이 사건의 종류이다. 종류의 이름과 설명은 `KernelRecordKind` 가 가진다 (plan 18 K4-1).
     pub fn record_kind(&self) -> KernelRecordKind {
         match self {
+            Self::IssueBindingPauseCompleted { .. } => KernelRecordKind::IssueBindingPauseCompleted,
             Self::IssueHeld { .. } => KernelRecordKind::IssueHeld,
             Self::CriterionEvidenceRecorded { .. } => KernelRecordKind::CriterionEvidenceRecorded,
             Self::CriterionWaived { .. } => KernelRecordKind::CriterionWaived,
@@ -924,6 +935,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
+            | Self::IssueBindingPauseCompleted { .. }
             | Self::IssueDecisionReminded { .. }
             | Self::IssueDecisionArbiterFinished { .. }
             | Self::IssueDecisionResolved { .. }
@@ -977,6 +989,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
+            | Self::IssueBindingPauseCompleted { .. }
             | Self::IssueDecisionReminded { .. }
             | Self::IssueDecisionArbiterFinished { .. }
             | Self::IssueDecisionResolved { .. }
@@ -1040,6 +1053,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
+            | Self::IssueBindingPauseCompleted { .. }
             | Self::IssueDecisionReminded { .. }
             | Self::IssueDecisionArbiterFinished { .. }
             | Self::IssueDecisionResolved { .. }
@@ -2206,6 +2220,7 @@ mod tests {
             KernelEvent::task_evidence(&sample_task_evidence_events()[0]),
             KernelEvent::task_evidence(&sample_task_evidence_events()[1]),
             KernelEvent::task_evidence(&sample_task_verification_event()),
+            sample_issue_binding_pause_event(),
         ];
         // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.
         assert_eq!(

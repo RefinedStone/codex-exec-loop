@@ -149,8 +149,11 @@ fn no_client_boot_collects_and_coordinates_once_across_restart_without_model_tur
     let second = reopened.kernels();
     assert_eq!(
         second
-            .restore_registered_with(&candidates[0], reopened.registry.as_ref(), |_| reopened
-                .recover())
+            .restore_registered_with(
+                &candidates[0],
+                reopened.registry.as_ref(),
+                |_, admission| reopened.recover(admission)
+            )
             .unwrap(),
         RepositoryRestartOutcome::Started,
     );
@@ -228,7 +231,7 @@ fn unreadable_policy_and_failed_durable_recovery_do_not_start_any_runtime() {
         f.restore(&kernels).unwrap(),
         RepositoryRestartOutcome::Ineligible
     );
-    let result = kernels.restore_registered_with(&f.candidate, f.registry.as_ref(), |_| {
+    let result = kernels.restore_registered_with(&f.candidate, f.registry.as_ref(), |_, _| {
         bail!("synthetic unfinished authority fence")
     });
     assert!(result.is_err());
@@ -248,9 +251,9 @@ fn tui_owned_lock_refuses_restore_before_recovery_or_runtime_assembly() {
     let kernels = f.kernels();
     let recovery_calls = AtomicUsize::new(0);
     let error = kernels
-        .restore_registered_with(&f.candidate, f.registry.as_ref(), |_| {
+        .restore_registered_with(&f.candidate, f.registry.as_ref(), |_, admission| {
             recovery_calls.fetch_add(1, Ordering::SeqCst);
-            f.recover()
+            f.recover(admission)
         })
         .unwrap_err();
     assert!(error.downcast_ref::<RepositoryKernelLockHeld>().is_some());
@@ -280,9 +283,9 @@ fn replacing_checkout_between_discovery_and_lock_never_initializes_the_new_clone
                 f.candidate.clone(),
                 location,
                 f.registry.as_ref(),
-                |_| {
+                |_, admission| {
                     recovery_calls.fetch_add(1, Ordering::SeqCst);
-                    f.recover()
+                    f.recover(admission)
                 },
             )
             .is_err()
@@ -315,17 +318,21 @@ fn strict_recovery_refuses_a_checkout_replaced_at_the_recovery_boundary_without_
     let runtime = std::path::PathBuf::from(location.runtime_dir);
     let kernels = f.kernels();
     let recovery_calls = AtomicUsize::new(0);
-    let result = kernels.restore_registered_with(&f.candidate, f.registry.as_ref(), |workspace| {
-        recovery_calls.fetch_add(1, Ordering::SeqCst);
-        std::fs::rename(workspace, f.root.join("original")).unwrap();
-        crate::private_directory::ensure_private_directory(Path::new(workspace)).unwrap();
-        initialize_git(Path::new(workspace));
-        production::recover_pending_issue_interventions_for_restart(
-            workspace,
-            &f.candidate.repository_key,
-        )?;
-        f.recover()
-    });
+    let result = kernels.restore_registered_with(
+        &f.candidate,
+        f.registry.as_ref(),
+        |workspace, admission| {
+            recovery_calls.fetch_add(1, Ordering::SeqCst);
+            std::fs::rename(workspace, f.root.join("original")).unwrap();
+            crate::private_directory::ensure_private_directory(Path::new(workspace)).unwrap();
+            initialize_git(Path::new(workspace));
+            production::recover_pending_issue_interventions_for_restart(
+                workspace,
+                &f.candidate.repository_key,
+            )?;
+            f.recover(admission)
+        },
+    );
     assert!(result.is_err());
     assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
     assert_eq!(f.builds.load(Ordering::SeqCst), 0);
@@ -370,9 +377,9 @@ fn linked_worktree_candidates_share_one_primary_kernel() {
     };
     assert_eq!(
         kernels
-            .restore_registered_with(&candidate, f.registry.as_ref(), |workspace| {
+            .restore_registered_with(&candidate, f.registry.as_ref(), |workspace, admission| {
                 assert_eq!(workspace, f.workspace);
-                f.recover()
+                f.recover(admission)
             })
             .unwrap(),
         RepositoryRestartOutcome::Started
@@ -417,8 +424,8 @@ fn pending_hold_recovers_before_runtime_and_collection_off_stays_off() {
     let discoveries = f.source.discoveries.load(Ordering::SeqCst);
     let second = f.kernels();
     second
-        .restore_registered_with(&f.candidate, f.registry.as_ref(), |_| {
-            let service = f.recover()?;
+        .restore_registered_with(&f.candidate, f.registry.as_ref(), |_, admission| {
+            let service = f.recover(admission)?;
             assert!(f.execution.0.lock().unwrap().control.held);
             assert!(
                 f.store
@@ -494,11 +501,15 @@ fn concurrent_attach_reuses_the_clientless_kernel_instead_of_building_another() 
     let restoring = kernels.clone();
     let fixture = f.clone();
     let restore = std::thread::spawn(move || {
-        restoring.restore_registered_with(&fixture.candidate, fixture.registry.as_ref(), |_| {
-            entered.send(()).unwrap();
-            released.recv_timeout(Duration::from_secs(10)).unwrap();
-            fixture.recover()
-        })
+        restoring.restore_registered_with(
+            &fixture.candidate,
+            fixture.registry.as_ref(),
+            |_, admission| {
+                entered.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(10)).unwrap();
+                fixture.recover(admission)
+            },
+        )
     });
     entry.recv_timeout(Duration::from_secs(10)).unwrap();
     let attaching = kernels.clone();

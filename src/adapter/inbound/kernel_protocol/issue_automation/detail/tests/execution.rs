@@ -6,6 +6,8 @@ fn execution_detail() -> (IssueCollectionDetail, IssueExecutionRecord) {
     let issue = reference();
     let id = issue_work_order_id(&issue);
     let item = IssueCollectionItem {
+        binding_run_revision: 0,
+        binding_run_blocked: false,
         start_budget_wait: None,
         issue,
         binding_id: IssueAutomationBindingId::new("binding").unwrap(),

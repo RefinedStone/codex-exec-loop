@@ -135,7 +135,6 @@ pub(super) fn resume(
             },
             "thread/prepared",
         )?;
-        start_authorization.validate()?;
         // This is the only turn/start call in the continuation path. Neither transport failure
         // nor missing ACK is retried; the planning authority already owns an Unknown receipt.
         adapter.start_worker_turn_and_wait_for_stream(
@@ -151,6 +150,7 @@ pub(super) fn resume(
                 thread_id: request.thread_id.into(),
             },
             evidence_root.as_ref(),
+            Some(start_authorization),
         )
     });
     finish_stream_result(result, &event_sender)

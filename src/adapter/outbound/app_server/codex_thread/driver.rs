@@ -47,36 +47,14 @@ impl CodexThreadDriver {
     }
 }
 
-impl AgentBackendPort for CodexThreadDriver {
-    fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities {
-            // The profile sets a read-only sandbox and checks the applied policy.
-            // Stock Codex still exposes local read tools.
-            defensive_isolation: false,
-        }
-    }
-
-    fn health(&self) -> BoxFuture<'_, BackendHealth> {
-        Box::pin(async move {
-            let backend = self.backend.clone();
-            let readiness = tokio::task::spawn_blocking(move || backend.readiness())
-                .await
-                .unwrap_or(Err(UNAVAILABLE));
-            BackendHealth {
-                status: BackendStatus {
-                    state: if readiness.is_ok() {
-                        BackendState::Ready
-                    } else {
-                        BackendState::Unavailable
-                    },
-                    reason: readiness.err().map(str::to_owned),
-                },
-                retry_at: None,
-            }
-        })
-    }
-
-    fn dispatch<'a>(&'a self, request: Dispatch<'a>) -> BoxFuture<'a, Result<Observation>> {
+impl CodexThreadDriver {
+    pub(crate) fn dispatch_with_authorization<'a>(
+        &'a self,
+        request: Dispatch<'a>,
+        authorization: Option<
+            Arc<dyn crate::application::port::agent_action::AgentActionAuthorization>,
+        >,
+    ) -> BoxFuture<'a, Result<Observation>> {
         Box::pin(async move {
             {
                 let mut attempts = self.attempts.lock().unwrap();
@@ -108,9 +86,15 @@ impl AgentBackendPort for CodexThreadDriver {
                             text: &text,
                             output_schema: None,
                         };
-                        let mut outcome = backend.run(request, &state.cancelled, timeout, || {
-                            state.started.store(true, Ordering::Release);
-                        });
+                        let mut outcome = backend.run_authorized(
+                            request,
+                            &state.cancelled,
+                            timeout,
+                            authorization.as_deref(),
+                            || {
+                                state.started.store(true, Ordering::Release);
+                            },
+                        );
                         if let Some(profile) = profile
                             && let CodexThreadOutcome::Complete(reply) = &outcome
                             && !(profile.accepts_reply)(reply)
@@ -126,6 +110,40 @@ impl AgentBackendPort for CodexThreadDriver {
             }
             self.observe(request.attempt_id).await
         })
+    }
+}
+
+impl AgentBackendPort for CodexThreadDriver {
+    fn capabilities(&self) -> BackendCapabilities {
+        BackendCapabilities {
+            // The profile sets a read-only sandbox and checks the applied policy.
+            // Stock Codex still exposes local read tools.
+            defensive_isolation: false,
+        }
+    }
+
+    fn health(&self) -> BoxFuture<'_, BackendHealth> {
+        Box::pin(async move {
+            let backend = self.backend.clone();
+            let readiness = tokio::task::spawn_blocking(move || backend.readiness())
+                .await
+                .unwrap_or(Err(UNAVAILABLE));
+            BackendHealth {
+                status: BackendStatus {
+                    state: if readiness.is_ok() {
+                        BackendState::Ready
+                    } else {
+                        BackendState::Unavailable
+                    },
+                    reason: readiness.err().map(str::to_owned),
+                },
+                retry_at: None,
+            }
+        })
+    }
+
+    fn dispatch<'a>(&'a self, request: Dispatch<'a>) -> BoxFuture<'a, Result<Observation>> {
+        self.dispatch_with_authorization(request, None)
     }
 
     fn observe<'a>(&'a self, attempt_id: &'a str) -> BoxFuture<'a, Result<Observation>> {

@@ -32,6 +32,27 @@ pub trait KernelEventLogPort: Send + Sync {
         Ok(false)
     }
 
+    /// 바인딩 실행 상태의 완료 사실은 별도 ID 공간과 전체 payload로 중복을 확인한다.
+    fn has_issue_binding_pause_event(
+        &self,
+        workspace_dir: &str,
+        expected: &KernelEvent,
+    ) -> Result<bool> {
+        let id = expected
+            .issue_binding_pause_event_id()
+            .ok_or_else(|| anyhow::anyhow!("expected a binding pause event"))?;
+        for event in self.load_kernel_events(workspace_dir, &["issue_binding_pause_completed"])? {
+            if event.issue_binding_pause_event_id() == Some(id) {
+                anyhow::ensure!(
+                    event == *expected,
+                    "a binding pause event identity cannot change"
+                );
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// outbox ack 전 crash를 복구할 때 쓰는 영속 dedupe 조회다.
     fn has_issue_work_event(&self, workspace_dir: &str, event_id: &str) -> Result<bool> {
         Ok(self

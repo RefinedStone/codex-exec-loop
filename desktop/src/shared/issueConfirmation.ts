@@ -23,6 +23,15 @@ export interface ConfirmIssueAutonomyRequest {
   key: string;
 }
 
+/** 재개는 현재 바인딩 판과 서버가 준비한 정책 기준에 대한 native 확인을 요구한다. */
+export interface ConfirmIssueBindingResumeRequest {
+  workspace: string;
+  commandId: string;
+  bindingId: string;
+  expectedRevision: number;
+  key: string;
+}
+
 export type IssueConfirmationResponse =
   | { cancelled: true }
   | { cancelled: false; response: CommandResponse }

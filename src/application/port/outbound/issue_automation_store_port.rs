@@ -8,6 +8,10 @@ use crate::domain::issue_automation::arbiter::{
     IssueArbiterAttempt, IssueArbiterFinishedEvent, IssueArbiterInputBasis, IssueArbiterResult,
     IssueArbiterSettings, IssueArbiterWaitReason,
 };
+use crate::domain::issue_automation::binding_pause::{
+    IssueBindingPauseCompletion, IssueBindingPauseEvent, IssueBindingPauseIntent,
+    IssueBindingPauseState, StoredIssueBindingPauseCommand,
+};
 use crate::domain::issue_automation::collection::{
     IssueCollectionFailure, IssueCollectionFence, IssueCollectionItem, IssueCollectionMode,
     IssueCollectionPage, IssueCollectionProjection, IssueCollectionQuery, IssueResyncBatch,
@@ -164,6 +168,7 @@ pub enum IssueCollectionApplyResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IssueTriageFence {
     pub collection_epoch: u64,
+    pub binding_run_revision: u64,
     pub observation_revision: Option<u64>,
     pub tracked_revision: Option<u64>,
     pub assessment_revision: Option<u64>,
@@ -213,6 +218,91 @@ pub enum IssueDecisionSaveResult {
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
 /// 같은 안정 ID의 재삽입은 기존 내용을 보존한다. 갱신은 revision CAS로만 한다.
 pub trait IssueAutomationStorePort: Send + Sync {
+    fn issue_binding_pause_state(
+        &self,
+        _workspace: &str,
+        _binding_id: &IssueAutomationBindingId,
+    ) -> Result<IssueBindingPauseState> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn list_issue_binding_pause_states(
+        &self,
+        _workspace: &str,
+        _after_binding: Option<&IssueAutomationBindingId>,
+        _limit: usize,
+    ) -> Result<Vec<IssueBindingPauseState>> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn get_issue_binding_pause_command(
+        &self,
+        _workspace: &str,
+        _command_id: &str,
+    ) -> Result<Option<StoredIssueBindingPauseCommand>> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn begin_issue_binding_pause(
+        &self,
+        _workspace: &str,
+        _intent: &IssueBindingPauseIntent,
+    ) -> Result<StoredIssueBindingPauseCommand> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn pending_issue_binding_pause_commands(
+        &self,
+        _workspace: &str,
+        _after_binding: Option<&IssueAutomationBindingId>,
+        _limit: usize,
+    ) -> Result<Vec<StoredIssueBindingPauseCommand>> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn pending_issue_binding_pause_work(
+        &self,
+        _workspace: &str,
+        _intent: &IssueBindingPauseIntent,
+        _after_work: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<crate::domain::issue_automation::coordinator::IssueWorkCheckpoint>> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn claim_issue_binding_pause_fence(
+        &self,
+        _workspace: &str,
+        _intent: &IssueBindingPauseIntent,
+        _work: &crate::domain::issue_automation::coordinator::IssueWorkCheckpoint,
+    ) -> Result<crate::domain::issue_automation::intervention::StoredIssueIntervention> {
+        anyhow::bail!("owned issue binding pause fences are unavailable")
+    }
+    /// The live service calls this only while its binding admission is closed and drained.
+    fn finish_issue_binding_pause(
+        &self,
+        _workspace: &str,
+        _intent: &IssueBindingPauseIntent,
+        _completion: IssueBindingPauseCompletion,
+    ) -> Result<StoredIssueBindingPauseCommand> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn pending_issue_binding_pause_events(
+        &self,
+        _workspace: &str,
+        _limit: usize,
+    ) -> Result<Vec<IssueBindingPauseEvent>> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    fn acknowledge_issue_binding_pause_event(
+        &self,
+        _workspace: &str,
+        _event: &IssueBindingPauseEvent,
+    ) -> Result<()> {
+        anyhow::bail!("issue binding pause persistence is unavailable")
+    }
+    /// None means no issue checkpoint. Callers already knowing an issue origin must reject it.
+    fn resolve_issue_work_binding(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+    ) -> Result<Option<IssueAutomationBindingId>> {
+        anyhow::bail!("issue work binding persistence is unavailable")
+    }
     fn claim_issue_arbiter(
         &self,
         _workspace: &str,

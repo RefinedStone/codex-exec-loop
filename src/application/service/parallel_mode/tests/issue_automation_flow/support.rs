@@ -193,8 +193,12 @@ impl FlowFixture {
     ) -> FlowServices {
         let workspace = self.workspace();
         let store = issue_store();
+        let admission = Arc::new(
+            crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+        );
         let planning = Arc::new(SqlitePlanningAuthorityAdapter::new());
-        let parallel = test_parallel_mode_service_with_autonomous_github(self.github.clone());
+        let parallel = test_parallel_mode_service_with_autonomous_github(self.github.clone())
+            .with_issue_binding_admission(admission.clone(), store.clone());
         let real: Arc<dyn IssueWorkExecutionPort> = Arc::new(AkraIssueWorkExecutionAdapter::new(
             planning.clone(),
             planning.clone(),
@@ -226,14 +230,17 @@ impl FlowFixture {
             .with_policy(disclosure()),
         );
         let publication = Arc::new(IssuePublishIntentJournalAdapter::new(runtime_directory));
-        let feedback = Arc::new(IssueFeedbackService::new(
-            workspace.clone(),
-            store.clone(),
-            self.provider.clone(),
-            publication.clone(),
-            automation(),
-            disclosure(),
-        ));
+        let feedback = Arc::new(
+            IssueFeedbackService::new(
+                workspace.clone(),
+                store.clone(),
+                self.provider.clone(),
+                publication.clone(),
+                automation(),
+                disclosure(),
+            )
+            .with_issue_binding_admission(admission.clone()),
+        );
         let coordinator = Arc::new(
             IssueCoordinatorService::new(
                 workspace.clone(),
@@ -244,6 +251,7 @@ impl FlowFixture {
                 disclosure(),
                 execution.clone(),
             )
+            .with_issue_binding_admission(admission)
             .with_feedback(feedback.clone())
             .with_publication_journal(publication.clone()),
         );

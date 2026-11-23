@@ -38,6 +38,7 @@ fn open_delivery(
     let item = &batch.items[0];
     let assessment = &item.triage.as_ref().unwrap().assessment;
     let fence = IssueTriageFence {
+        binding_run_revision: 0,
         collection_epoch: batch.collection.as_ref().unwrap().epoch,
         observation_revision: item.observation_revision,
         tracked_revision: item.tracked_revision,

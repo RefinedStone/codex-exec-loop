@@ -191,6 +191,65 @@ test("portable native selectors cover immutable evidence policy and the delivery
   }
 });
 
+test("portable native selectors cover binding pause without rerunning inherited host and delivery groups", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
+  const windows = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
+  const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
+  const macosStep = workflow.match(/node scripts\/run_native_rust_contracts\.mjs[\s\S]*?(?=\n      - name:)/)?.[0] || "";
+  const powershellStep = powershell.match(/function Invoke-WindowsPortableChecks[\s\S]*?(?=\nPush-Location)/)?.[0] || "";
+  const selectors = [
+    ["Windows Bash", [...windows.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1])],
+    ["PowerShell", [...powershellStep.matchAll(/^\s+"([^"\r\n]+::[^"\r\n]*)",?\r?$/gm)].map((match) => match[1])],
+    ["macOS", [...macosStep.matchAll(/'([^'\r\n]+::[^'\r\n]*)'/g)].map((match) => match[1])],
+  ];
+  for (const filter of [
+    "domain::issue_automation::arbiter::tests::arbiter_input_fingerprints_reject_missing_or_unbounded_provenance",
+    "domain::issue_automation::arbiter::tests::arbiter_legacy_input_json_keeps_its_bytes_until_a_binding_generation_exists",
+    "application::service::issue_binding_admission::tests::",
+    "sqlite_issue_automation_store::binding_pause::tests::",
+    "sqlite_issue_automation_store::admission::tests::binding_pause::",
+    "sqlite_issue_automation_store::admission::tests::arbiter::binding_pause::",
+    "sqlite_issue_automation_store::feedback::tests::binding_pause::",
+    "application::service::issue_feedback::tests::binding_pause::",
+    "application::service::issue_coordinator::tests::binding_pause::",
+    "application::service::issue_intervention::tests::issue_intervention_reserves_internal_autonomy_and_binding_pause_command_ids",
+    "sqlite_planning_authority_adapter::work_orders::tests::permits::action::",
+    "adapter::outbound::issue_assessment_model::tests::denied_actual_dispatch_never_falls_back_to_an_unguarded_backend",
+    "adapter::inbound::kernel_protocol::issue_binding_pause::",
+    "composition::native_client_runtime::tests::binding_pause::",
+    "composition::kernel_host::simulation::issue_decision::human_confirmation::binding_pause::",
+    "kernel_events::tests::binding_pause_receipt_deduplicates_after_retention_and_rejects_changed_payload",
+  ]) {
+    for (const [platform, filters] of selectors) {
+      assert.equal(filters.filter((value) => value === filter).length, 1,
+        `${platform} must select ${filter} once`);
+    }
+  }
+  // These Pause regressions already belong to required host/command/delivery groups.
+  for (const testPath of [
+    "application::service::task_verification::tests::binding_pause::",
+    "composition::kernel_command_execution::tests::task_verification::binding_pause_requires_a_live_owner_without_creating_workspace_or_receipt",
+    "application::service::parallel_mode::tests::distributor::evidence_gate::auto_delivery::binding_pause::",
+  ]) {
+    for (const [platform, filters] of selectors) {
+      assert.equal(filters.filter((filter) => testPath.includes(filter)).length, 1,
+        `${platform} must cover ${testPath} through exactly one existing group`);
+    }
+  }
+  // The process fixtures use Unix executables; selecting them on Windows would run zero tests.
+  for (const filter of [
+    "adapter::outbound::app_server::tests::binding_admission::",
+    "adapter::outbound::app_server::codex_thread::tests::binding_admission::",
+  ]) {
+    assert.equal(selectors[2][1].filter((value) => value === filter).length, 1);
+    assert.ok(!selectors[0][1].includes(filter), "Windows Bash must not select a Unix-only process fixture");
+    assert.ok(!selectors[1][1].includes(filter), "PowerShell must not select a Unix-only process fixture");
+  }
+  const linuxTests = workflow.match(/\n  rust_tests:[\s\S]*?(?=\n  rust_lint:)/)?.[0] || "";
+  assert.match(linuxTests, /runs-on: ubuntu-latest/);
+  assert.match(linuxTests, /run: (?:node scripts\/ci-performance\.mjs run rust-tests -- )?cargo test --locked(?: --timings)?\s*\n/);
+});
+
 test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/native-pr-checks.yml", import.meta.url),

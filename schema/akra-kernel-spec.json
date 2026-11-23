@@ -1537,6 +1537,74 @@
       }
     },
     {
+      "name": "set_issue_binding_paused",
+      "scope": "issue",
+      "state": "runtime",
+      "summary": "Request a durable pause or resume for one issue binding. The response confirms acceptance; only a completed receipt confirms that in-flight effects have drained. Resuming requires an exact current Desktop human confirmation. Requires a running kernel; other bindings and ordinary tasks continue.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "human_confirmation_required"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "binding_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "command_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "type": {
+            "const": "set_issue_binding_paused",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "command_id",
+          "binding_id",
+          "paused",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "command": {
+            "$ref": "#/$defs/IssueBindingPauseRequestedState"
+          },
+          "type": {
+            "const": "issue_binding_pause_requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "command"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "answer_issue_decision",
       "scope": "issue",
       "state": "store",
@@ -3037,6 +3105,16 @@
                   "null"
                 ]
               },
+              "binding_pause": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueBindingPauseState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "collecting": {
                 "type": [
                   "boolean",
@@ -3699,6 +3777,16 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "binding_pause": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IssueBindingPauseState"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "collecting": {
@@ -5009,6 +5097,30 @@
           "event_id",
           "evidence_revision",
           "verification"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_binding_pause_completed",
+      "summary": "One binding pause or resume request finished after its in-flight automatic effects drained. The immutable receipt is deduplicated by event ID; read issue_automation for current state. Other bindings and ordinary tasks are unaffected.",
+      "payload": {
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "issue_binding_pause_completed",
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/$defs/IssueBindingPauseReceiptRecord"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "receipt"
         ],
         "type": "object"
       }
@@ -6453,6 +6565,22 @@
         },
         {
           "properties": {
+            "command": {
+              "$ref": "#/$defs/IssueBindingPauseRequestedState"
+            },
+            "type": {
+              "const": "issue_binding_pause_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "command"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "changed": {
               "type": "boolean"
             },
@@ -7660,6 +7788,187 @@
       ],
       "type": "object"
     },
+    "IssueBindingPauseOutcome": {
+      "enum": [
+        "paused",
+        "resumed",
+        "unchanged",
+        "resume_superseded"
+      ],
+      "type": "string"
+    },
+    "IssueBindingPausePendingState": {
+      "additionalProperties": false,
+      "properties": {
+        "command_id": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "command_id",
+        "paused"
+      ],
+      "type": "object"
+    },
+    "IssueBindingPauseReceiptRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_id": {
+          "type": "string"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/IssueBindingPauseOutcome"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command_id",
+        "binding_id",
+        "revision",
+        "paused",
+        "outcome",
+        "changed"
+      ],
+      "type": "object"
+    },
+    "IssueBindingPauseRequestedState": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding_id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueBindingPauseReceiptRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested_paused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "command_id",
+        "binding_id",
+        "requested_paused",
+        "accepted_revision"
+      ],
+      "type": "object"
+    },
+    "IssueBindingPauseState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binding_id": {
+              "type": "string"
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "pending": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IssueBindingPausePendingState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "const": "ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "binding_id",
+            "revision",
+            "paused"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binding_id": {
+              "type": "string"
+            },
+            "status": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "binding_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IssueBindingResumeBasis": {
+      "additionalProperties": false,
+      "properties": {
+        "autonomy_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "effective_level": {
+          "$ref": "#/$defs/IssueAutomationAutonomy"
+        },
+        "policy_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding_revision",
+        "autonomy_revision",
+        "policy_version",
+        "effective_level"
+      ],
+      "type": "object"
+    },
     "IssueBindingState": {
       "additionalProperties": false,
       "properties": {
@@ -7830,6 +8139,41 @@
     },
     "IssueConfirmationTarget": {
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binding_id": {
+              "type": "string"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "expected_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "binding_resume",
+              "type": "string"
+            },
+            "resume_basis": {
+              "$ref": "#/$defs/IssueBindingResumeBasis"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace",
+            "command_id",
+            "binding_id",
+            "expected_revision",
+            "resume_basis"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -10718,6 +11062,43 @@
         {
           "additionalProperties": false,
           "properties": {
+            "binding_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "command_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "expected_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "set_issue_binding_paused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "command_id",
+            "binding_id",
+            "paused",
+            "expected_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "decision_id": {
               "maxLength": 128,
               "minLength": 1,
@@ -11225,6 +11606,16 @@
                   "type": [
                     "string",
                     "null"
+                  ]
+                },
+                "binding_pause": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueBindingPauseState"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "collecting": {
@@ -12056,6 +12447,16 @@
                   "type": [
                     "string",
                     "null"
+                  ]
+                },
+                "binding_pause": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/IssueBindingPauseState"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "collecting": {
@@ -13522,6 +13923,26 @@
             "event_id",
             "evidence_revision",
             "verification"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "issue_binding_pause_completed",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/IssueBindingPauseReceiptRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "receipt"
           ],
           "type": "object"
         }

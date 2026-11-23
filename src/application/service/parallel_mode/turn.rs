@@ -239,6 +239,7 @@ impl ParallelTurnStreamLifecycle {
 pub struct ParallelModeTurnService {
     parallel_mode_service: ParallelModeService,
     automation_guard: Option<super::ParallelModeAutomationGuard>,
+    pub(super) captured_action: Option<super::binding_action::CapturedTaskAction>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,6 +360,7 @@ impl ParallelModeTurnService {
         Self {
             parallel_mode_service,
             automation_guard: None,
+            captured_action: None,
         }
     }
 
@@ -369,6 +371,122 @@ impl ParallelModeTurnService {
     ) -> Result<Option<std::path::PathBuf>, String> {
         self.parallel_mode_service
             .prepare_worker_evidence_incoming(workspace, expected)
+    }
+
+    pub(crate) fn for_task_action(&self, workspace: &str, task_id: &str) -> Result<Self, String> {
+        let mut service = self.clone();
+        if service.captured_action.is_none() {
+            service.captured_action = Some(
+                self.parallel_mode_service
+                    .capture_task_action(workspace, task_id)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        service
+            .validate_captured_worker_action(workspace, task_id)
+            .map_err(|error| error.to_string())?;
+        Ok(service)
+    }
+
+    /// A manual turn still runs if capture fails; only its automatic completion is closed.
+    pub(crate) fn capture_issue_completion_action(
+        &self,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> anyhow::Result<Option<crate::domain::planning::IssueBindingActionCapture>> {
+        let resolution = super::pool::resolve_workspace_slot_lease_with_runtime(
+            self.parallel_mode_service.parallel_runtime.as_ref(),
+            self.parallel_mode_service.planning_authority.as_ref(),
+            &expected.worktree_path,
+        )
+        .map_err(anyhow::Error::msg)?
+        .ok_or_else(|| anyhow::anyhow!("completion launch lease is unavailable"))?;
+        if !resolution.lease.same_generation_as(expected)
+            || resolution.lease.delivery_target != expected.delivery_target
+        {
+            anyhow::bail!("completion launch lease changed before capture");
+        }
+        // The Git root is the slot worktree. Issue references are scoped to the primary
+        // authority workspace, so capture must use the same canonical root as the ledger.
+        let workspace = resolution
+            .context
+            .canonical_repo_root
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("completion authority workspace is not UTF-8"))?;
+        Ok(self
+            .parallel_mode_service
+            .capture_task_action(workspace, &expected.task_id)?
+            .issue_capture())
+    }
+
+    pub(crate) fn for_completion_capture(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+        capture: Option<&crate::domain::planning::IssueBindingActionCapture>,
+    ) -> anyhow::Result<Self> {
+        let mut service = self.clone();
+        if let Some(capture) = capture {
+            service.captured_action = Some(super::binding_action::restore_issue_capture(
+                self.parallel_mode_service.planning_authority.as_ref(),
+                self.parallel_mode_service.issue_binding.as_ref(),
+                workspace,
+                &expected.task_id,
+                capture,
+            )?);
+        }
+        // Missing capture is not permission to adopt today's generation. The caller's
+        // acquire_completion_action performs the ordinary/issue lineage check next.
+        Ok(service)
+    }
+
+    pub(super) fn validate_captured_worker_action(
+        &self,
+        workspace: &str,
+        task_id: &str,
+    ) -> anyhow::Result<()> {
+        let action = self
+            .captured_action
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("worker action was not captured"))?;
+        super::binding_action::validate(
+            self.parallel_mode_service.planning_authority.as_ref(),
+            self.parallel_mode_service.issue_binding.as_ref(),
+            workspace,
+            task_id,
+            action,
+        )
+    }
+
+    pub(super) fn validate_claimed_worker_launch(
+        &self,
+        workspace: &str,
+        lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> anyhow::Result<()> {
+        let action = self
+            .captured_action
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("worker action was not captured"))?;
+        if action.identity.is_none() {
+            return self
+                .parallel_mode_service
+                .planning_authority
+                .validate_work_order_launch_start(workspace, lease, None);
+        }
+        let resolution = super::pool::resolve_workspace_slot_lease_with_runtime(
+            self.parallel_mode_service.parallel_runtime.as_ref(),
+            self.parallel_mode_service.planning_authority.as_ref(),
+            &lease.worktree_path,
+        )
+        .map_err(anyhow::Error::msg)?
+        .ok_or_else(|| anyhow::anyhow!("worker launch lease is unavailable"))?;
+        if !resolution.lease.same_generation_as(lease)
+            || resolution.lease.delivery_target != lease.delivery_target
+        {
+            anyhow::bail!("worker launch lease changed before turn/start");
+        }
+        self.parallel_mode_service
+            .planning_authority
+            .validate_work_order_launch_start(workspace, lease, action.identity.as_ref())
     }
 
     pub(crate) fn with_automation_guard(
@@ -995,7 +1113,7 @@ impl ParallelModeTurnService {
         continuation: Option<PostTurnContinuationPermit>,
     ) -> Arc<dyn TaskVerificationContinuation> {
         use super::automatic_verification::AutomaticCompletionContinuation;
-        Arc::new(match (&self.automation_guard, epoch_id) {
+        let continuation = match (&self.automation_guard, epoch_id) {
             (Some(guard), Some(epoch)) => {
                 let permit = guard.permit(workspace, epoch);
                 AutomaticCompletionContinuation::Epoch(match continuation {
@@ -1008,7 +1126,34 @@ impl ParallelModeTurnService {
                 Some(continuation) => AutomaticCompletionContinuation::PostTurn(continuation),
                 None => AutomaticCompletionContinuation::Unrestricted,
             },
+        };
+        Arc::new(match &self.captured_action {
+            Some(action) => {
+                AutomaticCompletionContinuation::Binding(Box::new(continuation), action.clone())
+            }
+            None => continuation,
         })
+    }
+
+    /// A callback without its launch identity cannot adopt a new issue generation after Resume.
+    pub(crate) fn acquire_completion_action(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> anyhow::Result<Box<dyn crate::application::port::agent_action::AgentActionGuard>> {
+        if let Some(action) = &self.captured_action {
+            self.validate_captured_worker_action(workspace, &expected.task_id)?;
+            return action.acquire();
+        }
+        if self
+            .parallel_mode_service
+            .planning_authority
+            .worker_action_identity_for_task(workspace, &expected.task_id)?
+            .is_some_and(|identity| identity.origin == "issue_automation")
+        {
+            anyhow::bail!("issue completion has no captured launch generation");
+        }
+        Ok(Box::new(()))
     }
 
     pub(crate) fn prepare_automatic_verification_for_official_completion(

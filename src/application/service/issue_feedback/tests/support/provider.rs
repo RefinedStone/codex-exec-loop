@@ -25,6 +25,7 @@ pub(crate) struct FakeProvider {
     pub write_behavior: Mutex<WriteBehavior>,
     pub read_behavior: Mutex<ReadBehavior>,
     pub after_actor: Hook,
+    pub before_write: Hook,
     pub actor: Mutex<String>,
     store: Arc<FakeStore>,
     journal: Arc<FakePublication>,
@@ -54,6 +55,7 @@ impl FakeProvider {
             write_behavior: Mutex::new(WriteBehavior::Ack),
             read_behavior: Mutex::new(ReadBehavior::Confirm),
             after_actor: Mutex::new(None),
+            before_write: Mutex::new(None),
             actor: Mutex::new(ACTOR.into()),
             store,
             journal,
@@ -92,6 +94,9 @@ impl IssueFeedbackPort for FakeProvider {
             "the exact intent must be durable before mutation"
         );
         assert_eq!(stored.state, IssueFeedbackIntentState::Sent);
+        if let Some(hook) = self.before_write.lock().unwrap().take() {
+            hook();
+        }
         let mut writes = self.writes.lock().unwrap();
         writes.push(intent.clone());
         let event_id = format!("LE_{}", writes.len());

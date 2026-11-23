@@ -310,3 +310,27 @@ describe("utility issue autonomy confirmation", () => {
       .toEqual({ request: { command: { type: "set_issue_autonomy", command_id: "auto-1", level: "auto" }, idempotency_key: REQUEST.key } });
   });
 });
+
+it("keeps the exact server resume basis inside native confirmation and forwards only the four command fields", async () => {
+  const h = harness();
+  const request = { workspace: REQUEST.workspace, commandId: "resume-1", bindingId: "binding-1", expectedRevision: 8, key: REQUEST.key };
+  const target = { kind: "binding_resume", workspace: request.workspace, command_id: request.commandId,
+    binding_id: request.bindingId, expected_revision: request.expectedRevision,
+    resume_basis: { binding_revision: 3, autonomy_revision: 7, policy_version: "a".repeat(64), effective_level: "auto" } };
+  h.rpc.request.mockImplementation(async (method) => method === "akra/kernel/attach" ? {} : method === "akra/kernel/confirmation/register"
+    ? { binding: BINDING } : method === "akra/kernel/confirmation/prepare" ? { intent: { ...INTENT, target }, display: DISPLAY } : { processed: true });
+  const pending = h.service.confirmBindingResume(request);
+  await h.untilDialog();
+  h.native.resolve(true);
+  expect(await pending).toEqual({ cancelled: false, response: { processed: true } });
+  expect(h.helper.approve).toHaveBeenCalledWith(REGISTRATION.registration_id, { ...INTENT, target });
+  expect(h.submitted()[0]?.[1]).toMatchObject({ request: { command: {
+    type: "set_issue_binding_paused", command_id: "resume-1", binding_id: "binding-1", paused: false, expected_revision: 8,
+  }, idempotency_key: REQUEST.key } });
+});
+
+it.each([{ paused: true }, { resume_basis: {} }, { proof_id: "forged" }, { expectedRevision: -1 }, { bindingId: "binding\n" }])("rejects untrusted resume fields before helper creation: %j", (extra) => {
+  const h = harness();
+  expect(() => h.service.confirmBindingResume({ workspace: REQUEST.workspace, commandId: "resume-1", bindingId: "binding-1", expectedRevision: 8, key: REQUEST.key, ...extra })).toThrow();
+  expect(h.createHelper).not.toHaveBeenCalled();
+});

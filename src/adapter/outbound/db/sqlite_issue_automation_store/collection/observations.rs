@@ -158,6 +158,7 @@ pub(super) fn resolve_binding(
             enum_name(&binding.autonomy())?,
         ],
     )?;
+    super::super::binding_pause::initialize_binding(transaction, workspace, binding.id())?;
     Ok(binding)
 }
 

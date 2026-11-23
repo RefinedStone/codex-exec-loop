@@ -141,6 +141,7 @@ fn arbiter_threshold_and_blockers_never_relax_the_safe_default() {
 #[test]
 fn arbiter_input_fingerprints_reject_missing_or_unbounded_provenance() {
     let input = IssueArbiterInputBasis {
+        binding_run_revision: 0,
         decision_basis: request().definition().basis.clone(),
         decision_revision: 1,
         repository_commit_sha: "b".repeat(40),
@@ -149,10 +150,18 @@ fn arbiter_input_fingerprints_reject_missing_or_unbounded_provenance() {
         input_sha256: "d".repeat(64),
     };
     input.validate().unwrap();
-    for field in ["revision", "commit", "evidence", "input", "route"] {
+    for field in [
+        "revision",
+        "binding_revision",
+        "commit",
+        "evidence",
+        "input",
+        "route",
+    ] {
         let mut invalid = input.clone();
         match field {
             "revision" => invalid.decision_revision = 0,
+            "binding_revision" => invalid.binding_run_revision = MAX_ISSUE_AUTOMATION_REVISION + 1,
             "commit" => invalid.repository_commit_sha = "HEAD".into(),
             "evidence" => invalid.evidence_sha256 = "c".repeat(63),
             "input" => invalid.input_sha256 = "private source body".into(),
@@ -161,6 +170,33 @@ fn arbiter_input_fingerprints_reject_missing_or_unbounded_provenance() {
         }
         assert!(invalid.validate().is_err(), "{field}");
     }
+}
+
+#[test]
+fn arbiter_legacy_input_json_keeps_its_bytes_until_a_binding_generation_exists() {
+    let mut input = IssueArbiterInputBasis {
+        decision_basis: request().definition().basis.clone(),
+        decision_revision: 1,
+        binding_run_revision: 0,
+        repository_commit_sha: "b".repeat(40),
+        evidence_sha256: "c".repeat(64),
+        model_route_revision: "route:1".into(),
+        input_sha256: "d".repeat(64),
+    };
+    let original = serde_json::to_string(&input).unwrap();
+    assert!(!original.contains("bindingRunRevision"));
+    assert_eq!(
+        serde_json::from_str::<IssueArbiterInputBasis>(&original).unwrap(),
+        input
+    );
+    input.binding_run_revision = 2;
+    let newer = serde_json::to_string(&input).unwrap();
+    assert!(newer.contains("\"bindingRunRevision\":2"));
+    assert_ne!(newer, original);
+    assert_eq!(
+        serde_json::from_str::<IssueArbiterInputBasis>(&newer).unwrap(),
+        input
+    );
 }
 
 #[test]

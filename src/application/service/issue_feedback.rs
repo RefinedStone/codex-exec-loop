@@ -45,6 +45,7 @@ pub struct IssueFeedbackService {
     automation: IssueAutomationPolicyService,
     disclosure: IssuePolicyService,
     gate: Mutex<()>,
+    issue_binding_admission: Option<Arc<super::issue_binding_admission::IssueBindingAdmission>>,
 }
 impl IssueFeedbackService {
     pub fn new(
@@ -63,10 +64,19 @@ impl IssueFeedbackService {
             automation,
             disclosure,
             gate: Mutex::new(()),
+            issue_binding_admission: None,
         }
     }
 
     /// Off·정책 읽기 실패·보류와 무관하게 이미 보낸 의도를 읽기로만 확인한다.
+    pub fn with_issue_binding_admission(
+        mut self,
+        admission: Arc<super::issue_binding_admission::IssueBindingAdmission>,
+    ) -> Self {
+        self.issue_binding_admission = Some(admission);
+        self
+    }
+
     pub fn reconcile_pending(&self, cancel: &IssueCollectionCancellation) -> Result<()> {
         let _gate = self.lock()?;
         let lease = self
@@ -122,6 +132,7 @@ impl IssueFeedbackService {
         let Some(initial) = self.current(issue)? else {
             return Ok(());
         };
+        let _sync_admission = self.acquire_feedback_action(&initial)?;
         let Some((initial_policy, initial_disclosure)) = self.write_context(&initial)? else {
             return Ok(());
         };
@@ -224,6 +235,21 @@ impl IssueFeedbackService {
     pub fn snapshot(&self, issue: &IssueReference) -> Result<Option<IssueFeedbackSnapshot>> {
         self.check_scope(issue)?;
         self.current(issue)
+    }
+
+    fn acquire_feedback_action(
+        &self,
+        snapshot: &IssueFeedbackSnapshot,
+    ) -> Result<super::issue_binding_admission::IssueBindingActionGuard> {
+        let admission = self
+            .issue_binding_admission
+            .as_ref()
+            .ok_or_else(|| anyhow!("issue binding admission is unavailable"))?;
+        admission.register_if_absent(&snapshot.binding_pause)?;
+        admission.acquire(
+            &snapshot.item.binding_id,
+            snapshot.fence().binding_run_revision,
+        )
     }
     pub fn unresolved(&self, issue: &IssueReference) -> Result<Vec<IssueFeedbackIntentRecord>> {
         self.check_scope(issue)?;

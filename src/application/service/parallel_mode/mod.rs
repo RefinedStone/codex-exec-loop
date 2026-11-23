@@ -37,6 +37,7 @@ mod automatic_verification;
 #[cfg(test)]
 pub(crate) use automatic_verification::set_before_automatic_completion_commit_hook;
 mod automation_guard;
+pub(crate) mod binding_action;
 mod branch_names;
 mod completion;
 pub mod control_plane;
@@ -58,6 +59,7 @@ pub(crate) mod supervisor;
 mod support;
 pub(crate) mod turn;
 mod work_link;
+mod worker_action;
 mod worker_commit;
 mod worker_diff;
 mod worker_evidence;
@@ -433,6 +435,7 @@ pub struct ParallelModeService {
     parallel_agent_profile_service: Option<ParallelAgentProfileService>,
     task_evidence: Option<worker_evidence::WorkerEvidenceConfiguration>,
     task_verification: crate::application::service::task_verification::TaskVerificationHandle,
+    issue_binding: Option<binding_action::IssueBindingActionConfiguration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,6 +477,7 @@ impl ParallelModeService {
             parallel_agent_profile_service: None,
             task_evidence: None,
             task_verification: Default::default(),
+            issue_binding: None,
         }
     }
 
@@ -502,6 +506,17 @@ impl ParallelModeService {
         verification: crate::application::service::task_verification::TaskVerificationHandle,
     ) -> Self {
         self.task_verification = verification;
+        self
+    }
+
+    pub fn with_issue_binding_admission(
+        mut self,
+        admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+        store: Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>,
+    ) -> Self {
+        let configuration = binding_action::IssueBindingActionConfiguration { admission, store };
+        self.distributor_service.issue_binding = Some(configuration.clone());
+        self.issue_binding = Some(configuration);
         self
     }
 

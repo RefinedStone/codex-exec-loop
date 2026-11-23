@@ -82,7 +82,10 @@ pub(super) fn track(
                 };
                 track_one(
                     service,
-                    &work,
+                    TrackedWork {
+                        checkpoint: &work,
+                        binding_run_blocked: item.binding_run_blocked,
+                    },
                     budget.as_ref().ok().copied(),
                     cancel,
                     now_unix_ms,
@@ -91,9 +94,15 @@ pub(super) fn track(
                 )
             })()
             .and_then(|()| {
+                if item.binding_run_blocked {
+                    return Ok(());
+                }
                 super::closure::reconcile(service, &item.issue, cancel, now_unix_ms, committed)
             })
             .and_then(|()| {
+                if item.binding_run_blocked {
+                    return Ok(());
+                }
                 super::delivery::reconcile_pending(
                     service,
                     &item,
@@ -104,6 +113,9 @@ pub(super) fn track(
                 )
             })
             .and_then(|()| {
+                if item.binding_run_blocked {
+                    return Ok(());
+                }
                 reconcile_timeout_start(
                     service,
                     &item,
@@ -117,8 +129,9 @@ pub(super) fn track(
                 failed_work_orders.insert(issue_work_order_id(&item.issue));
                 first_error.get_or_insert(error);
             }
-            if let Err(error) =
-                service.sync_issue_feedback(&item.issue, now_unix_ms, cancel, committed)
+            if !item.binding_run_blocked
+                && let Err(error) =
+                    service.sync_issue_feedback(&item.issue, now_unix_ms, cancel, committed)
             {
                 first_error.get_or_insert(error);
             }
@@ -145,7 +158,7 @@ fn reconcile_timeout_start(
     execution_enabled: bool,
     committed: &Reporter<'_>,
 ) -> Result<()> {
-    if cancel.is_cancelled() {
+    if item.binding_run_blocked || cancel.is_cancelled() {
         return Ok(());
     }
     let observing = service
@@ -200,15 +213,24 @@ fn reconcile_timeout_start(
     Ok(())
 }
 
+struct TrackedWork<'a> {
+    checkpoint: &'a IssueWorkCheckpoint,
+    binding_run_blocked: bool,
+}
+
 fn track_one(
     service: &IssueCoordinatorService,
-    work: &IssueWorkCheckpoint,
+    tracked: TrackedWork<'_>,
     max_attempts: Option<u32>,
     cancel: &IssueCollectionCancellation,
     now_unix_ms: u64,
     execution_enabled: bool,
     committed: &Reporter<'_>,
 ) -> Result<()> {
+    let TrackedWork {
+        checkpoint: work,
+        binding_run_blocked,
+    } = tracked;
     let mut first_error = None;
     let mut fenced = false;
     if max_attempts.is_none() {
@@ -270,7 +292,7 @@ fn track_one(
         }
         fenced = true;
     }
-    if !fenced {
+    if !fenced && !binding_run_blocked {
         if let Err(error) = service.execution.execution_limit(
             &service.workspace,
             &work.order.work_order_id,
@@ -328,6 +350,11 @@ fn track_one(
         first_error.get_or_insert(error);
     }
     service.report_pending(committed)?;
+    if binding_run_blocked {
+        // Preserve terminal/Unknown observations and existing human answer reconciliation,
+        // but do not create new decisions, recovery, or execution permissions during Pause.
+        return first_error.map_or(Ok(()), Err);
+    }
     let Some(current_work) = service
         .store
         .get_issue_work(&service.workspace, &work.order.issue)?
@@ -432,6 +459,7 @@ pub(super) fn current_assessment(
             if let Some(mut item) = batch.items.into_iter().find(|item| item.issue == *issue) {
                 let assessment = service.triage.assess_current(&item)?;
                 let fence = IssueTriageFence {
+                    binding_run_revision: item.binding_run_revision,
                     collection_epoch: control.epoch,
                     observation_revision: item.observation_revision,
                     tracked_revision: item.tracked_revision,

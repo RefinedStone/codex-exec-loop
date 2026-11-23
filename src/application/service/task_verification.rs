@@ -23,6 +23,7 @@ use crate::domain::planning::verification::{TaskVerificationNotRunReason, TaskVe
 
 mod authority;
 mod automatic;
+mod binding;
 mod continuation;
 mod execution;
 mod handle;
@@ -55,6 +56,7 @@ pub struct TaskVerificationService {
     initialized: AtomicBool,
     closed: Arc<AtomicBool>,
     flight: Mutex<Option<InFlight>>,
+    issue_binding: Option<super::parallel_mode::binding_action::IssueBindingActionConfiguration>,
 }
 
 struct InFlight {
@@ -64,6 +66,8 @@ struct InFlight {
     receiver: mpsc::Receiver<TaskVerificationFinishCommit>,
     completion: Option<TaskVerificationFinishCommit>,
     next_check: Instant,
+    binding: Option<binding::BindingVerification>,
+    _binding_guard: Option<Box<dyn crate::application::port::agent_action::AgentActionGuard>>,
 }
 
 impl TaskVerificationService {
@@ -80,6 +84,7 @@ impl TaskVerificationService {
             initialized: AtomicBool::new(false),
             closed: Arc::new(AtomicBool::new(false)),
             flight: Mutex::new(None),
+            issue_binding: None,
         })
     }
 
@@ -143,6 +148,9 @@ impl TaskVerificationService {
         {
             return Ok(None);
         }
+        // Capture before reserving so a delayed request cannot adopt a resumed generation.
+        // Preserve ordinary receipt replay even when its old binding can no longer execute.
+        let binding = self.capture_binding(&request.task_id);
         let commit = TaskVerificationClaimCommit {
             request_id: request.request_id,
             task_id: request.task_id,
@@ -173,6 +181,11 @@ impl TaskVerificationService {
         let Some(execution) = claimed.execution.clone() else {
             return Ok(Some(claimed));
         };
+        let binding = binding.and_then(|binding| binding.acquire().map(|guard| (binding, guard)));
+        let (binding, binding_guard, binding_denied) = match binding {
+            Ok((binding, guard)) => (Some(binding), Some(guard), false),
+            Err(_) => (None, None, true),
+        };
         let cancelled = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::channel();
         let dependencies = self.dependencies.clone();
@@ -184,14 +197,26 @@ impl TaskVerificationService {
         let worker_wake = dependencies.wake.clone();
         let recovery_execution = execution.clone();
         let recovery_wake = dependencies.wake.clone();
+        let worker_binding = binding.clone();
         *flight = Some(InFlight {
             stored: claimed.stored.clone(),
             execution,
             cancelled,
             receiver,
-            completion: None,
+            completion: binding_denied.then(|| {
+                not_run(
+                    worker_execution.clone(),
+                    TaskVerificationNotRunReason::Unavailable,
+                )
+            }),
             next_check: Instant::now(),
+            binding,
+            _binding_guard: binding_guard,
         });
+        if binding_denied {
+            (self.dependencies.wake)();
+            return Ok(Some(claimed));
+        }
         let spawned = (self.dependencies.spawn)(
             Box::new(move || {
                 let completion = execution::execute(
@@ -201,6 +226,7 @@ impl TaskVerificationService {
                     worker_cancelled.as_ref(),
                     worker_closed.as_ref(),
                     automatic.as_ref(),
+                    worker_binding.as_ref(),
                 );
                 let _ = worker_sender.send(completion);
                 worker_wake();
@@ -270,7 +296,12 @@ impl TaskVerificationService {
                 *flight = None;
                 return true;
             }
-        } else if authority::require_current(self.dependencies.as_ref(), &active.stored).is_err() {
+        } else if active
+            .binding
+            .as_ref()
+            .is_some_and(|binding| !binding.is_current())
+            || authority::require_current(self.dependencies.as_ref(), &active.stored).is_err()
+        {
             active.cancelled.store(true, Ordering::Release);
         }
         false

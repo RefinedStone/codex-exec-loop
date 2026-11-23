@@ -16,6 +16,10 @@ use crate::domain::planning::{
 use super::ParallelModeService;
 
 pub(super) enum AutomaticCompletionContinuation {
+    Binding(
+        Box<AutomaticCompletionContinuation>,
+        super::binding_action::CapturedTaskAction,
+    ),
     Epoch(super::ParallelModeAutomationPermit),
     PostTurn(PostTurnContinuationPermit),
     Unrestricted,
@@ -25,6 +29,7 @@ pub(super) enum AutomaticCompletionContinuation {
 impl TaskVerificationContinuation for AutomaticCompletionContinuation {
     fn is_current(&self) -> bool {
         match self {
+            Self::Binding(continuation, action) => action.is_current() && continuation.is_current(),
             Self::Epoch(permit) => permit.is_active(),
             Self::PostTurn(permit) => permit.is_current(),
             Self::Unrestricted => true,
@@ -34,6 +39,15 @@ impl TaskVerificationContinuation for AutomaticCompletionContinuation {
 
     fn with_current_commit(&self, operation: &mut dyn FnMut()) -> bool {
         match self {
+            Self::Binding(continuation, action) => {
+                let Ok(guard) = action.acquire() else {
+                    return false;
+                };
+                if guard.validate().is_err() {
+                    return false;
+                }
+                continuation.with_current_commit(operation)
+            }
             Self::Epoch(permit) => permit.with_active_commit(operation).is_some(),
             Self::PostTurn(permit) => permit.with_current(operation).is_some(),
             Self::Unrestricted => {

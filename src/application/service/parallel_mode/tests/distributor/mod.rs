@@ -1885,6 +1885,7 @@ fn build_supervisor_snapshot_populates_idle_orchestrator_without_session_detail(
 // 차단, rebase conflict, recovery 시나리오는 happy path보다 실패 원인이 길어
 // 별도 파일로 둔다. 이 상위 모듈은 성공 경로와 supervisor projection의 공통
 // distributor 계약만 남긴다.
+mod binding_support;
 mod blocked;
 mod evidence_gate;
 mod rebase;
