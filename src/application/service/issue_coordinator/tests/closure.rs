@@ -100,7 +100,7 @@ fn close_approval_is_separate_from_integration_and_reuses_one_persisted_request(
         request.request.definition().gate,
         IssueAutomationGate::Close
     );
-    assert_eq!(request.request.definition().due_at, None);
+    assert!(request.request.definition().due_at.is_some());
     assert_eq!(
         request.request.definition().on_timeout,
         IssueDecisionTimeout::Wait
@@ -409,7 +409,7 @@ fn close_approval_is_not_reopened_after_confirmed_close_even_when_policy_changes
         CLOSE_POLICY.replace("transition = true", "comment = true\ntransition = true",)
     );
     let cancel = IssueCollectionCancellation::new();
-    super::super::closure::reconcile(&coordinator, &issue, &cancel, &|_| {}).unwrap();
+    super::super::closure::reconcile(&coordinator, &issue, &cancel, 123, &|_| {}).unwrap();
     assert!(
         close_requests(&h).is_empty(),
         "a human-reopened issue receives no new close card"
@@ -433,7 +433,7 @@ fn close_approval_is_not_reopened_after_confirmed_close_even_when_policy_changes
         .snapshot
         .state
         .close_proof = None;
-    super::super::closure::reconcile(&coordinator, &issue, &cancel, &|_| {}).unwrap();
+    super::super::closure::reconcile(&coordinator, &issue, &cancel, 123, &|_| {}).unwrap();
     assert_eq!(
         close_requests(&h).len(),
         1,

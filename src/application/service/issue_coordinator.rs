@@ -42,6 +42,7 @@ pub enum IssueCoordinatorFact {
         fact: IssueDecisionFact,
         revision: u64,
     },
+    DecisionReminded(IssueDecisionReminder),
     ExecutionProgressed {
         event_id: String,
         issue: IssueReference,
@@ -101,6 +102,9 @@ fn work_event_reporter<'a>(
                         reported.insert(event_id.clone())
                     }
                     IssueCoordinatorFact::FeedbackPosted(event) => {
+                        reported.insert(event.event_id.clone())
+                    }
+                    IssueCoordinatorFact::DecisionReminded(event) => {
                         reported.insert(event.event_id.clone())
                     }
                     IssueCoordinatorFact::Triaged(_) | IssueCoordinatorFact::Decision { .. } => {
@@ -193,6 +197,9 @@ impl IssueCoordinatorService {
         }
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
+        let deadline_error = self
+            .process_decision_deadlines(cancel, now_unix_ms, committed)
+            .err();
         let feedback_error = self.reconcile_feedback(cancel).err();
         self.report_pending(committed)?;
         super::issue_intervention::recover_pending_controls(
@@ -210,7 +217,8 @@ impl IssueCoordinatorService {
             &mut execution_failures,
         )
         .err()
-        .or(feedback_error);
+        .or(feedback_error)
+        .or(deadline_error);
         let mut after = None;
         'batches: loop {
             if cancel.is_cancelled() {
@@ -256,6 +264,11 @@ impl IssueCoordinatorService {
     }
 
     pub fn acknowledge_event(&self, event_id: &str) -> Result<()> {
+        if event_id.starts_with("issue-decision-reminder:") {
+            return self
+                .store
+                .acknowledge_issue_decision_reminder(&self.workspace, event_id);
+        }
         if event_id.starts_with("issue-feedback:") {
             return self
                 .feedback
@@ -335,7 +348,33 @@ impl IssueCoordinatorService {
                     .map(IssueCoordinatorFact::FeedbackPosted),
             );
         }
+        facts.extend(
+            self.store
+                .pending_issue_decision_reminders(&self.workspace, 256)?
+                .into_iter()
+                .map(IssueCoordinatorFact::DecisionReminded),
+        );
         Ok(facts)
+    }
+
+    /// Scheduling reads only persisted request times; processing rechecks current authority.
+    pub(crate) fn next_decision_deadline_at(&self, now_unix_ms: u64) -> Result<Option<u64>> {
+        self.decisions.next_deadline_at(now_unix_ms)
+    }
+
+    fn process_decision_deadlines(
+        &self,
+        cancel: &IssueCollectionCancellation,
+        now_unix_ms: u64,
+        committed: &Reporter<'_>,
+    ) -> Result<()> {
+        self.decisions
+            .process_deadlines(cancel, now_unix_ms, &|commit| {
+                committed(vec![IssueCoordinatorFact::Decision {
+                    fact: commit.record.request.fact(),
+                    revision: commit.catalog_revision,
+                }]);
+            })
     }
 
     fn reconcile(
@@ -498,6 +537,8 @@ impl IssueCoordinatorService {
                 IssueWorkStartAuthority::Human => {
                     decision.is_some_and(|decision| human_start(&decision.request))
                 }
+                IssueWorkStartAuthority::TimeoutDefault => decision
+                    .is_some_and(|decision| timeout_default_start(&assessment, &decision.request)),
             }
         {
             let floor = self.revoke_on_current_error(
@@ -518,9 +559,16 @@ impl IssueCoordinatorService {
         }
         match action {
             IssueCoordinatorAction::OpenDecision => {
-                let definition = start_definition(&item.issue, basis)?;
+                let mut definition = start_definition(&item.issue, basis)?;
+                if assessment.gates().iter().any(|gate| {
+                    gate.gate == IssueAutomationGate::Start
+                        && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutDefault
+                }) {
+                    definition.on_timeout = IssueDecisionTimeout::Default;
+                    definition.recommended = Some("start".to_owned());
+                }
                 cancel.commit_if_active(|| {
-                    let commit = self.decisions.ensure_request(decision_id, definition)?;
+                    let commit = self.decisions.ensure_request_at(decision_id, definition, now_unix_ms)?;
                     if commit.changed {
                         committed(vec![IssueCoordinatorFact::Decision {
                             fact: commit.record.request.fact(),
@@ -573,14 +621,18 @@ impl IssueCoordinatorService {
                 }
             }
             IssueCoordinatorAction::SubmitWork => {
-                let preserve_human = work.as_ref().is_some_and(|work| {
-                    work.current_start_authority() == IssueWorkStartAuthority::Human
+                let preserve_decision = work.as_ref().is_some_and(|work| {
+                    work.current_start_authority() != IssueWorkStartAuthority::Policy
                         && work.current_authorization_basis() == &basis
                 });
-                let authorization = if policy_start(&assessment) && !preserve_human {
+                let authorization = if policy_start(&assessment) && !preserve_decision {
                     Some(StartAuthorization::Policy(&basis))
                 } else {
-                    decision.map(|decision| StartAuthorization::Human(&decision.request))
+                    decision.map(|decision| {
+                        if timeout_default_start(&assessment, &decision.request) {
+                            StartAuthorization::TimeoutDefault(&decision.request)
+                        } else { StartAuthorization::Human(&decision.request) }
+                    })
                 };
                 if let Some(authorization) = authorization {
                     self.submit(

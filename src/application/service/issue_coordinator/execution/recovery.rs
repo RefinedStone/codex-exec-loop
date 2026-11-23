@@ -15,6 +15,7 @@ pub(super) fn reconcile(
     work: &IssueWorkCheckpoint,
     record: &IssueExecutionRecord,
     cancel: &IssueCollectionCancellation,
+    now_unix_ms: u64,
     execution_enabled: bool,
     committed: &Reporter<'_>,
 ) -> Result<()> {
@@ -44,7 +45,15 @@ pub(super) fn reconcile(
             );
             intervene(service, work, id, IssueInterventionAction::Hold, cancel)?;
         }
-        return ensure_recovery_decision(service, work, record, terminal, cancel, committed);
+        return ensure_recovery_decision(
+            service,
+            work,
+            record,
+            terminal,
+            cancel,
+            now_unix_ms,
+            committed,
+        );
     }
     if terminal.classification == IssueExecutionTerminalClass::ReworkNeeded {
         // 기존 PR 검증 FSM이 원자 admission으로 보완 task를 계보에 붙인다.
@@ -75,6 +84,9 @@ pub(super) fn reconcile(
         IssueWorkStartAuthority::Human => decision
             .as_ref()
             .map(|stored| StartAuthorization::Human(&stored.request)),
+        IssueWorkStartAuthority::TimeoutDefault => decision
+            .as_ref()
+            .map(|stored| StartAuthorization::TimeoutDefault(&stored.request)),
     };
     if work.current_authorization_basis() != &basis
         || !authorization.is_some_and(|authorization| {
@@ -133,6 +145,7 @@ fn ensure_recovery_decision(
     record: &IssueExecutionRecord,
     terminal: &IssueExecutionTerminalRecord,
     cancel: &IssueCollectionCancellation,
+    now_unix_ms: u64,
     committed: &Reporter<'_>,
 ) -> Result<()> {
     let (_, assessment) = current_assessment(service, &work.order.issue, committed)?;
@@ -228,7 +241,11 @@ fn ensure_recovery_decision(
         asked_by: "issue-coordinator".into(),
         evidence: vec![format!("terminal:{}", terminal.record_id)],
     };
-    let commit = cancel.commit_if_active(|| service.decisions.ensure_request(id, definition))?;
+    let commit = cancel.commit_if_active(|| {
+        service
+            .decisions
+            .ensure_request_at(id, definition, now_unix_ms)
+    })?;
     let Some(commit) = commit else {
         return Ok(());
     };

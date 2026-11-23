@@ -1,6 +1,6 @@
 //! Human answers and a confirmed Gated selection remain distinct start authorities.
 use crate::domain::issue_automation::coordinator::{
-    IssueWorkStartAuthority, human_start, policy_start, ready_for_start,
+    IssueWorkStartAuthority, human_start, policy_start, ready_for_start, timeout_default_start,
 };
 use crate::domain::issue_automation::decision::{
     IssueDecisionBasis, IssueDecisionId, IssueDecisionRequest,
@@ -10,6 +10,7 @@ use crate::domain::issue_automation::triage::IssueTriageAssessment;
 #[derive(Clone, Copy)]
 pub(super) enum StartAuthorization<'a> {
     Human(&'a IssueDecisionRequest),
+    TimeoutDefault(&'a IssueDecisionRequest),
     Policy(&'a IssueDecisionBasis),
 }
 
@@ -22,7 +23,7 @@ pub(super) struct StartContext<'a> {
 impl<'a> StartAuthorization<'a> {
     pub fn basis(self) -> &'a IssueDecisionBasis {
         match self {
-            Self::Human(decision) => &decision.definition().basis,
+            Self::Human(decision) | Self::TimeoutDefault(decision) => &decision.definition().basis,
             Self::Policy(basis) => basis,
         }
     }
@@ -30,13 +31,14 @@ impl<'a> StartAuthorization<'a> {
     pub fn authority(self) -> IssueWorkStartAuthority {
         match self {
             Self::Human(_) => IssueWorkStartAuthority::Human,
+            Self::TimeoutDefault(_) => IssueWorkStartAuthority::TimeoutDefault,
             Self::Policy(_) => IssueWorkStartAuthority::Policy,
         }
     }
 
     pub fn decision_id(self) -> Option<&'a IssueDecisionId> {
         match self {
-            Self::Human(decision) => Some(decision.id()),
+            Self::Human(decision) | Self::TimeoutDefault(decision) => Some(decision.id()),
             Self::Policy(_) => None,
         }
     }
@@ -53,6 +55,7 @@ impl<'a> StartAuthorization<'a> {
                     human_start(decision) && decision.issue() == &assessment.basis().issue
                 }
                 Self::Policy(_) => policy_start(assessment),
+                Self::TimeoutDefault(decision) => timeout_default_start(assessment, decision),
             }
     }
 }

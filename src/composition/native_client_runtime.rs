@@ -1910,6 +1910,8 @@ impl NativeClientRuntime {
                             KernelEvent::issue_decision_requested(&fact, revision)
                         } else { KernelEvent::issue_decision_resolved(&fact, revision) }
                     }
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::DecisionReminded(event) =>
+                        KernelEvent::issue_decision_reminded(&event),
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::WorkSubmitted {
                         event_id, issue, work_order_id, task_ids, revision } => KernelEvent::IssueWorkSubmitted {
                             event_id, issue: (&issue).into(), work_order_id, task_ids, revision },

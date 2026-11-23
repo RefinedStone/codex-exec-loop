@@ -569,7 +569,7 @@ impl Harness {
 }
 
 #[test]
-fn propose_opens_one_human_decision_without_deadline_or_task() {
+fn propose_opens_one_human_wait_decision_with_a_fixed_deadline_and_no_task() {
     let h = Harness::new();
     let facts = h.tick(false).unwrap();
     assert!(matches!(
@@ -581,7 +581,10 @@ fn propose_opens_one_human_decision_without_deadline_or_task() {
         first.request.definition().kind,
         IssueDecisionKind::StartApproval
     );
-    assert_eq!(first.request.definition().due_at, None);
+    assert_eq!(
+        first.request.definition().due_at.as_deref(),
+        Some("1970-01-02T00:00:00.123Z")
+    );
     assert_eq!(
         first.request.definition().on_timeout,
         IssueDecisionTimeout::Wait
@@ -1191,4 +1194,5 @@ mod closure;
 
 mod execution_detail;
 
+mod deadlines;
 mod gated;

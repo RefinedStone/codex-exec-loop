@@ -731,7 +731,13 @@ impl KernelSession {
             let commands = attached.commands.clone();
             let detail =
                 read_kernel_log(move || commands.issue(issue, KERNEL_CALL_TIMEOUT)).await?;
-            return to_result(KernelQueryAnswer::Issue(IssueState::from_domain(&detail)));
+            let queried_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
+            return to_result(KernelQueryAnswer::Issue(
+                IssueState::from_domain(&detail).with_as_of_unix_ms(queried_at),
+            ));
         }
         if let Some(query) = attached.issue_query(&request.query)? {
             let commands = attached.commands.clone();

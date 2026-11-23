@@ -10,7 +10,10 @@ use super::MAX_ISSUE_AUTOMATION_REVISION;
 use super::policy::{IssueAutomationGate, IssueAutomationGateAction};
 use super::triage::IssueTriageAssessment;
 
+mod deadline;
 mod validation;
+
+pub use deadline::{ISSUE_DECISION_TIMEOUT_CHANNEL, IssueDecisionDeadline, IssueDecisionReminder};
 
 pub const MAX_ISSUE_DECISION_ID_BYTES: usize = 128;
 pub const MAX_ISSUE_DECISION_OPTION_BYTES: usize = 128;
@@ -480,7 +483,10 @@ impl IssueDecisionRequest {
                 validate_issue_decision_confirmation_reference(reference)?;
                 answer.by = IssueDecisionAnswerBy::Human;
                 answer.confirmation = Some(reference.to_owned());
-            } else if gate_action == IssueAutomationGateAction::Human {
+            } else if matches!(
+                gate_action,
+                IssueAutomationGateAction::Human | IssueAutomationGateAction::TimeoutDefault
+            ) {
                 return Err(IssueDecisionError::HumanConfirmationRequired);
             }
             validation::answer(&answer, self.definition())?;

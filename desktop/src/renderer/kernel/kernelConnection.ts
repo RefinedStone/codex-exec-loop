@@ -36,6 +36,7 @@ export interface IssueDecisionAttention {
   kernel: string;
   decisionId: string;
   issue: IssueEventReference;
+  reminderId?: string;
 }
 
 export interface IssueConfirmationBridge {
@@ -283,6 +284,8 @@ export class KernelConnection {
   private overviewRefreshRequest = 0;
   private readonly eventCounts = new Map<string, number>();
   private readonly decisionRevisions = new Map<string, number>();
+  private readonly decisionReminders = new Set<string>();
+  private readonly resolvedDecisions = new Set<string>();
   private scheduledIssueRefresh = false;
 
   private issuesGeneration = 0;
@@ -337,6 +340,8 @@ export class KernelConnection {
     if (!sameWorkspace) {
       this.generation += 1;
       this.decisionRevisions.clear();
+      this.decisionReminders.clear();
+      this.resolvedDecisions.clear();
       this.store.setKernel({ ...this.store.getKernel(), issueAttention: [] });
     }
     this.store.setKernel({ ...this.store.getKernel(), message: null });
@@ -577,6 +582,8 @@ export class KernelConnection {
       const record = event.event;
       if (record.kind === "issue_decision_requested" || record.kind === "issue_decision_resolved") {
         this.applyIssueDecision(record.decision, record.revision);
+      } else if (record.kind === "issue_decision_reminded") {
+        this.applyIssueDecision(record.decision, record.revision, record.event_id);
       } else if (record.kind === "issue_execution_progressed" || record.kind === "issue_integrated"
         || record.kind === "issue_closed" || record.kind === "issue_feedback_posted") {
         this.refreshIssueFromRecord(record.issue, record.revision);
@@ -595,18 +602,24 @@ export class KernelConnection {
     if (this.interests.has("overview")) this.applyOverview(event);
   }
 
-  private applyIssueDecision(decision: IssueDecisionFactRecord, revision: number): void {
+  private applyIssueDecision(decision: IssueDecisionFactRecord, revision: number, reminderId?: string): void {
     const view = this.store.getKernel();
     if ((!this.interests.has("issues") && !this.interests.has("issue_attention")) || !this.wanted || !view.kernel ||
       !isRecord(decision) || typeof decision.decision_id !== "string" || !isRecord(decision.subject) ||
       !isIssueReference(decision.subject.issue) || !isRevision(revision)) return;
+    if (reminderId !== undefined && (typeof reminderId !== "string" || !reminderId
+      || this.decisionReminders.has(reminderId) || decision.state !== "open")) return;
+    if (decision.state === "open" && this.resolvedDecisions.has(decision.decision_id)) return;
     const previous = this.decisionRevisions.get(decision.decision_id);
     if (previous !== undefined && previous >= revision) return;
     this.decisionRevisions.set(decision.decision_id, revision);
+    if (reminderId) this.decisionReminders.add(reminderId);
+    if (decision.state !== "open") this.resolvedDecisions.add(decision.decision_id);
     const attention = view.issueAttention.filter((item) => item.decisionId !== decision.decision_id);
     if (decision.state === "open") {
       const known = view.issueAttention.find((item) => item.decisionId === decision.decision_id);
-      attention.push(known ?? { workspace: this.wanted, kernel: view.kernel, decisionId: decision.decision_id, issue: decision.subject.issue });
+      const target = known ?? { workspace: this.wanted, kernel: view.kernel, decisionId: decision.decision_id, issue: decision.subject.issue };
+      attention.push(reminderId ? { ...target, reminderId } : target);
     }
     this.store.setKernel({ ...view, issueAttention: attention.slice(-64) });
     this.scheduleIssueRefresh();
@@ -930,6 +943,15 @@ export class KernelConnection {
           this.detailKnownRevision = Math.max(this.detailKnownRevision, detail.revision);
         }
         this.updateIssues({ detail, detailStale: false });
+        if (detail.status === "ready") {
+          // A delayed durable reminder cannot reopen a decision already resolved in a fresh query.
+          for (const entry of detail.decision_history ?? []) {
+            if (entry.decision.state !== "open") this.resolvedDecisions.add(entry.decision.decision_id);
+          }
+          const view = this.store.getKernel();
+          const attention = view.issueAttention.filter((entry) => !this.resolvedDecisions.has(entry.decisionId));
+          if (attention.length !== view.issueAttention.length) this.store.setKernel({ ...view, issueAttention: attention });
+        }
         const page = this.store.getKernel().issues.page;
         if (detail.status !== "unavailable" && page?.status === "ready" && page.revision < detail.revision) {
           this.updateIssues({ stale: true, canGoBack: false });
@@ -957,6 +979,9 @@ export class KernelConnection {
 
   private async runIssueCommand(command: KernelCommand, pending: IssueCommandPending): Promise<IssueCommandOutcome> {
     if (!this.canRead("issues") || this.store.getKernel().issues.commandPending !== null) return "unavailable";
+    const submittedDetail = this.store.getKernel().issues.detail;
+    const submittedDecision = command.type === "answer_issue_decision" && submittedDetail?.status === "ready"
+      ? submittedDetail.open_decisions?.find((decision) => decision.id === command.decision_id) : undefined;
     let failureOutcome: IssueCommandOutcome = "failed";
     const token = this.issueToken(++this.issueCommandRequest);
     this.uncertainIssueOutcome = null;
@@ -1008,6 +1033,26 @@ export class KernelConnection {
       }
       if (response.failure) throw new Error(response.failure);
       if (!response.processed) throw new Error("커널이 요청을 처리하지 못했습니다. 상태를 다시 읽어 주세요.");
+      const resolved = response.result?.type === "issue_decision_resolved" ? response.result : null;
+      if (submittedDecision && submittedDetail?.status === "ready" && resolved
+        && typeof resolved.changed === "boolean" && isRevision(resolved.catalog_revision)
+        && resolved.catalog_revision >= submittedDetail.revision && isRecord(resolved.decision)
+        && resolved.decision.decision_id === submittedDecision.id
+        && resolved.decision.kind === submittedDecision.kind && resolved.decision.gate === submittedDecision.gate
+        && isRecord(resolved.decision.subject) && isIssueReference(resolved.decision.subject.issue)
+        && sameIssue(resolved.decision.subject.issue, submittedDecision.subject.issue)
+        && isNamedValue(resolved.decision.state, ["answered", "superseded", "expired", "withdrawn"])
+        && (resolved.outcome === "already_resolved"
+          || (resolved.outcome === "answered" && resolved.decision.state === "answered")
+          || (resolved.outcome === "superseded" && resolved.decision.state === "superseded"))) {
+        // The utility's successful receipt can precede the subscribed event and detail reply.
+        // Remember its terminal state now, without scheduling a second overlapping refresh.
+        const id = submittedDecision.id;
+        this.resolvedDecisions.add(id);
+        this.decisionRevisions.set(id, Math.max(this.decisionRevisions.get(id) ?? 0, resolved.catalog_revision));
+        const view = this.store.getKernel();
+        this.store.setKernel({ ...view, issueAttention: view.issueAttention.filter((entry) => entry.decisionId !== id) });
+      }
       const receipt = response.result?.type === "issue_intervened" ? response.result.receipt : null;
       const unknownIntervention = pending === "intervention" && (
         !receipt || !("command_id" in command) || receipt.command_id !== command.command_id

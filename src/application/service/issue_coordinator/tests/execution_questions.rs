@@ -262,7 +262,7 @@ fn the_same_question_opens_one_fixed_decision_without_starting_any_work() {
     assert_eq!(definition.gate, IssueAutomationGate::Spec);
     assert_eq!(definition.evidence, ["question:question-1"]);
     assert_eq!(definition.on_timeout, IssueDecisionTimeout::Wait);
-    assert!(definition.due_at.is_none());
+    assert!(definition.due_at.is_some());
     assert_eq!(
         definition.basis.work_order_id,
         Some(h.work().unwrap().order.work_order_id)

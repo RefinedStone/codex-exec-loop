@@ -74,6 +74,10 @@ fn offline_issue_detail_reads_existing_missing_and_rejects_foreign_scope_without
         .query(request(&reference), false)
         .expect("stored issue detail");
     assert_eq!(found["status"], "ready");
+    assert!(
+        found["as_of_unix_ms"].as_u64().is_some(),
+        "ready detail carries the server query time"
+    );
     assert_eq!(found["item"]["issue"]["issue_id"], reference.issue_id);
     assert!(!found.to_string().contains("legacy body"));
     let list = kernel

@@ -431,6 +431,14 @@ pub enum KernelEvent {
         revision: u64,
         reason: Option<ReasonCode>,
     },
+    /// 기한 전 재알림의 영속 사실이다. 요청의 판이나 답변을 바꾸지 않는다.
+    IssueDecisionReminded {
+        event_id: String,
+        decision: IssueDecisionFactRecord,
+        due_at: String,
+        reminded_at: String,
+        revision: u64,
+    },
     /// 영속 work-order 연결이 확정된 사실이다. handoff 본문은 포함하지 않는다.
     IssueWorkSubmitted {
         event_id: String,
@@ -837,6 +845,7 @@ impl KernelEvent {
             Self::IssueFeedbackPosted { .. } => KernelRecordKind::IssueFeedbackPosted,
             Self::IssueDecisionRequested { .. } => KernelRecordKind::IssueDecisionRequested,
             Self::IssueDecisionResolved { .. } => KernelRecordKind::IssueDecisionResolved,
+            Self::IssueDecisionReminded { .. } => KernelRecordKind::IssueDecisionReminded,
             Self::IssueAutomationModeChanged { .. } => KernelRecordKind::IssueAutomationModeChanged,
             Self::AutoFollowConfigured { .. } => KernelRecordKind::AutoFollowConfigured,
             Self::ThreadPromptQueued(_) => KernelRecordKind::ThreadPromptQueued,
@@ -872,6 +881,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
+            | Self::IssueDecisionReminded { .. }
             | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => "",
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
@@ -920,6 +930,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
+            | Self::IssueDecisionReminded { .. }
             | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => None,
         }
@@ -978,6 +989,7 @@ impl KernelEvent {
             | Self::IssueWorkPermitRevoked { .. }
             | Self::IssueTriaged { .. }
             | Self::IssueDecisionRequested { .. }
+            | Self::IssueDecisionReminded { .. }
             | Self::IssueDecisionResolved { .. }
             | Self::IssueAutomationModeChanged { .. } => return None,
         };
@@ -1309,6 +1321,7 @@ impl KernelEvent {
     pub fn issue_work_event_id(&self) -> Option<&str> {
         match self {
             Self::IssueWorkSubmitted { event_id, .. }
+            | Self::IssueDecisionReminded { event_id, .. }
             | Self::IssueWorkPermitGranted { event_id, .. }
             | Self::IssueExecutionProgressed { event_id, .. }
             | Self::IssueIntegrated { event_id, .. }

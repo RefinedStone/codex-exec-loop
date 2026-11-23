@@ -46,11 +46,13 @@ export function notifyDotReply(dotName: string, onOpen: () => void): void {
 }
 
 /** 이슈 결정 알림에는 저장소명·질문·권고·본문·메모를 넣지 않고, 앱이 뒤에 있을 때만 보여 준다. */
-export function notifyIssueDecision(onOpen: () => void, tag: string): void {
+export function notifyIssueDecision(onOpen: () => void, tag: string, reminder = false): void {
   const { mode, sound } = useSettings.getState().notifications;
   if (mode === "off" || !available()) return;
   const gated = (focused: boolean) => {
-    if (!focused && useSettings.getState().notifications.mode !== "off") show("Akra", "이슈에 새 결정 요청이 있습니다. 이슈 탭에서 확인해 주세요.", onOpen, sound, tag);
+    if (!focused && useSettings.getState().notifications.mode !== "off") show("Akra", reminder
+      ? "이슈 결정의 응답 기한이 다가옵니다. 이슈 탭에서 확인해 주세요."
+      : "이슈에 새 결정 요청이 있습니다. 이슈 탭에서 확인해 주세요.", onOpen, sound, tag);
   };
   window.akra.isAppFocused().then(gated, () => gated(document.hasFocus()));
 }

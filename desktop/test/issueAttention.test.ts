@@ -18,4 +18,12 @@ describe("private issue attention", () => {
     expect(issueDecisionAttentionEvents({ ...state(), connection: { phase: "disconnected", endpoint: "fixture" } }, state([event]))).toEqual([]);
     expect(issueDecisionAttentionEvents({ ...state(), kernel: { ...EMPTY_KERNEL_VIEW, phase: "attaching" } }, state([event]))).toEqual([]);
   });
+
+  it("notifies once for a new durable reminder while keeping the same decision target", () => {
+    const reminder = { ...event, reminderId: "issue-decision-reminder:1" };
+    expect(issueDecisionAttentionEvents(state([event]), state([reminder]))).toEqual([reminder]);
+    expect(issueDecisionAttentionEvents(state([reminder]), state([{ ...reminder }]))).toEqual([]);
+    expect(issueDecisionAttentionEvents({ ...state([event]), connection: { phase: "disconnected", endpoint: "fixture" } }, state([reminder]))).toEqual([]);
+    expect(issueDecisionAttentionEvents(state([reminder]), state())).toEqual([]);
+  });
 });

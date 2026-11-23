@@ -96,8 +96,7 @@ pub(super) fn definition(value: &IssueDecisionDefinition) -> Result<(), IssueDec
             if value.gate != IssueAutomationGate::Close
                 || value.basis.work_order_id.is_none()
                 || value.basis.field_hash.is_none()
-                || value.on_timeout != super::IssueDecisionTimeout::Wait
-                || value.due_at.is_some() =>
+                || value.on_timeout != super::IssueDecisionTimeout::Wait =>
         {
             return Err(IssueDecisionError::InvalidField {
                 field: "close_approval",
@@ -159,6 +158,7 @@ pub(super) fn answer(
         (IssueDecisionAnswerBy::Human, Some(reference)) => {
             super::validate_issue_decision_confirmation_reference(reference)?;
         }
+        (IssueDecisionAnswerBy::Default, None) if valid_default_answer(value, definition) => {}
         _ => return Err(IssueDecisionError::UnsupportedAnswerOrigin),
     }
     if let Some(note) = &value.note {
@@ -169,6 +169,20 @@ pub(super) fn answer(
     }
     identifier(&value.channel, "answer.channel", 128)?;
     timestamp(&value.at, "answer.at")
+}
+
+fn valid_default_answer(value: &IssueDecisionAnswer, definition: &IssueDecisionDefinition) -> bool {
+    definition.on_timeout == super::IssueDecisionTimeout::Default
+        && definition.recommended.as_deref() == Some(value.option.as_str())
+        && value.note.is_none()
+        && value.caller.is_none()
+        && value.channel == super::ISSUE_DECISION_TIMEOUT_CHANNEL
+        && definition
+            .due_at
+            .as_deref()
+            .and_then(|due_at| chrono::DateTime::parse_from_rfc3339(due_at).ok())
+            .zip(chrono::DateTime::parse_from_rfc3339(&value.at).ok())
+            .is_some_and(|(due_at, answered_at)| answered_at >= due_at)
 }
 
 fn timestamp(value: &str, field: &'static str) -> Result<(), IssueDecisionError> {

@@ -501,8 +501,12 @@ impl CommandOnlyKernel {
             .map_err(protocol_error)?
         {
             let detail = super::issue_collection::build(&self.workspace).issue(&issue)?;
+            let queried_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
             return Ok(serde_json::to_value(KernelQueryAnswer::Issue(
-                IssueState::from_domain(&detail),
+                IssueState::from_domain(&detail).with_as_of_unix_ms(queried_at),
             ))?);
         }
         if let Some((after, limit)) = query

@@ -36,6 +36,9 @@ pub enum IssueState {
 #[serde(deny_unknown_fields)]
 pub struct IssueDetailState {
     pub revision: u64,
+    /// 이 응답을 조회한 서버 UTC 시각이다. 결정의 revision과 독립적이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_unix_ms: Option<u64>,
     pub item: IssueListItem,
     #[serde(default)]
     pub open_decisions: Vec<IssueDecisionRequestState>,
@@ -113,11 +116,19 @@ impl IssueState {
         Self::Unavailable {}
     }
 
+    pub fn with_as_of_unix_ms(mut self, at: Option<u64>) -> Self {
+        if let Self::Ready(detail) = &mut self {
+            detail.as_of_unix_ms = at;
+        }
+        self
+    }
+
     pub fn from_domain(detail: &IssueCollectionDetail) -> Self {
         let report = detail.report.as_ref().map(Into::into);
         match &detail.item {
             Some(item) => Self::Ready(Box::new(IssueDetailState {
                 revision: detail.revision,
+                as_of_unix_ms: None,
                 item: item.into(),
                 open_decisions: item
                     .open_decisions

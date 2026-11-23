@@ -107,7 +107,7 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
           </header>
           {current && <>
             <IssueExecutionTracking execution={current.execution} feedback={current.feedback} timeline={current.timeline} onOpenUrl={onOpenUrl} />
-            <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} busy={busy || loading} onAnswer={onAnswer} drafts={drafts.decisions} onDraftChange={(key, draft) => {
+            <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} asOfUnixMs={current.as_of_unix_ms} busy={busy || loading} onAnswer={onAnswer} drafts={drafts.decisions} onDraftChange={(key, draft) => {
               setDrafts((previous) => {
                 if (!previous.decisions.has(key)) return previous;
                 const decisions = new Map(previous.decisions);

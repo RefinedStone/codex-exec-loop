@@ -55,6 +55,7 @@ fn issue_event_reference(event: &KernelEvent) -> Option<&IssueEventReference> {
         | KernelEvent::IssueClosed { issue, .. }
         | KernelEvent::IssueFeedbackPosted { issue, .. } => Some(issue),
         KernelEvent::IssueDecisionRequested { decision, .. }
+        | KernelEvent::IssueDecisionReminded { decision, .. }
         | KernelEvent::IssueDecisionResolved { decision, .. } => match &decision.subject {
             IssueDecisionSubjectRecord::Issue { issue } => Some(issue),
         },
@@ -114,6 +115,7 @@ fn event_summary(event: &KernelEvent) -> String {
             IssueDecisionState::Superseded => "기준 변경으로 이전 결정 요청이 종료되었습니다.",
             IssueDecisionState::Open => "결정 요청의 상태를 기록했습니다.",
         },
+        KernelEvent::IssueDecisionReminded { .. } => "결정 요청의 응답 기한이 다가옵니다.",
         KernelEvent::IssueWorkSubmitted { .. } => "이슈를 구현 작업에 연결했습니다.",
         KernelEvent::IssueHeld { .. } => "이슈 작업을 보류했습니다.",
         KernelEvent::IssueReleased { .. } => "이슈 작업의 보류를 해제했습니다.",

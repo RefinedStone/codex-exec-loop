@@ -66,7 +66,6 @@ pub fn close_work_context_matches(
         && execution.work_order_id == work.order.work_order_id
         && definition.basis.field_hash.is_some()
         && definition.on_timeout == IssueDecisionTimeout::Wait
-        && definition.due_at.is_none()
         && definition
             .options
             .iter()

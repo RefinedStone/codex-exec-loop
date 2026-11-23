@@ -1,9 +1,11 @@
 import type { IssueDecisionRequestState } from "./protocol";
+import { issueDeadlineDateLabel, issueDecisionDeadline } from "./issueDecisionDeadline";
 import { EMPTY_ISSUE_DECISION_DRAFT, ISSUE_DECISION_KIND_LABEL, ISSUE_DECISION_STATE_LABEL, decisionDraftIdentity, issueTextBytes, type IssueDecisionDraft, type ReadyIssueDetail } from "./issueInteractions";
 
 export interface IssueDecisionCardsProps {
   decisions: readonly IssueDecisionRequestState[];
   history: ReadyIssueDetail["decision_history"];
+  asOfUnixMs?: number | null;
   busy: boolean;
   drafts: ReadonlyMap<string, IssueDecisionDraft>;
   onDraftChange(key: string, draft: IssueDecisionDraft): void;
@@ -11,9 +13,10 @@ export interface IssueDecisionCardsProps {
 }
 
 /** 질문·선택지·권고는 현재 공개 정책을 통과한 서버 표시값만 사용한다. */
-function DecisionCard({ request, busy, state = request.state, reason, onAnswer, draft = EMPTY_ISSUE_DECISION_DRAFT, onDraftChange }: {
+function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason, onAnswer, draft = EMPTY_ISSUE_DECISION_DRAFT, onDraftChange }: {
   request: IssueDecisionRequestState;
   busy: boolean;
+  asOfUnixMs?: number | null;
   state?: string;
   reason?: string;
   onAnswer: IssueDecisionCardsProps["onAnswer"];
@@ -24,6 +27,7 @@ function DecisionCard({ request, busy, state = request.state, reason, onAnswer, 
   const setOption = (option: string) => onDraftChange?.({ ...draft, option });
   const setNote = (note: string) => onDraftChange?.({ ...draft, note });
   const open = state === "open";
+  const deadline = issueDecisionDeadline(request, asOfUnixMs);
   const tooLong = issueTextBytes(note) > 4_096;
   const selected = request.options.some((value) => value.id === option);
   const noteRequired = request.kind === "agent_question" && option === "reply";
@@ -35,6 +39,13 @@ function DecisionCard({ request, busy, state = request.state, reason, onAnswer, 
         <span className="issues-status" data-status={state}>{ISSUE_DECISION_STATE_LABEL[state] ?? state}</span>
       </div>
       <p className="issues-decision-question" data-testid="issue-decision-question">{request.question}</p>
+      {deadline && <div className="issues-inline-notice muted" data-testid="issue-decision-deadline">
+        <p>응답 기한 <time dateTime={deadline.dueAt}>{issueDeadlineDateLabel(deadline.dueAt)}</time></p>
+        {open && <>
+          <p data-testid="issue-decision-remaining">{deadline.remaining}{deadline.asOf && <> · <time dateTime={deadline.asOf}>{issueDeadlineDateLabel(deadline.asOf)}</time> 조회 기준</>}</p>
+          <p data-testid="issue-decision-timeout">{deadline.afterDeadline}</p>
+        </>}
+      </div>}
       {reason && <p className="issues-inline-notice muted" data-testid="issue-decision-reason">{reason}</p>}
       <fieldset disabled={busy || !open} className="issues-decision-options">
         <legend className="sr-only">답변 선택</legend>
@@ -65,14 +76,14 @@ function DecisionCard({ request, busy, state = request.state, reason, onAnswer, 
   );
 }
 
-export function IssueDecisionCards({ decisions, history, busy, onAnswer, drafts, onDraftChange }: IssueDecisionCardsProps) {
+export function IssueDecisionCards({ decisions, history, asOfUnixMs, busy, onAnswer, drafts, onDraftChange }: IssueDecisionCardsProps) {
   const openIds = new Set(decisions.map((request) => request.id));
   const resolved = (history ?? []).filter((entry) => !openIds.has(entry.decision.decision_id));
   return (
     <div className="issues-decisions" data-testid="issue-decisions">
       {decisions.map((request) => {
         const key = decisionDraftIdentity(request);
-        return <DecisionCard key={key} request={request} busy={busy} onAnswer={onAnswer} draft={drafts.get(key)} onDraftChange={(draft) => onDraftChange(key, draft)} />;
+        return <DecisionCard key={key} request={request} busy={busy} asOfUnixMs={asOfUnixMs} onAnswer={onAnswer} draft={drafts.get(key)} onDraftChange={(draft) => onDraftChange(key, draft)} />;
       })}
       {resolved.length > 0 && (
         <section className="issues-decision-history" aria-label="이전 결정" data-testid="issue-decision-history">

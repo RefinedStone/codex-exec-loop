@@ -1,14 +1,18 @@
 //! 결정 요청은 실행 권한을 만들지 않는다. 현재 관찰과 첫 답변을 한 장부 transaction으로 검사한다.
 use anyhow::{Context, Result, anyhow, bail};
-use rusqlite::{Connection, Row, TransactionBehavior, params};
+use chrono::{DateTime, SecondsFormat, Utc};
+use rusqlite::{Connection, Row, Transaction, TransactionBehavior, params};
 
 use crate::application::port::outbound::issue_automation_store_port::{
     IssueDecisionCommit, IssueDecisionFence, IssueDecisionSaveResult, IssueTriageFence,
 };
 use crate::domain::issue_automation::collection::IssueCollectionItem;
 use crate::domain::issue_automation::decision::{
-    IssueDecisionBasis, IssueDecisionId, IssueDecisionRequest, IssueDecisionState,
-    PersistedIssueDecisionRequest, StoredIssueDecision,
+    IssueDecisionAnswerBy, IssueDecisionBasis, IssueDecisionId, IssueDecisionKind,
+    IssueDecisionRequest, IssueDecisionState, PersistedIssueDecisionRequest, StoredIssueDecision,
+};
+use crate::domain::issue_automation::policy::{
+    IssueAutomationGate, IssueAutomationGateAction, IssueAutomationTimeouts,
 };
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 use crate::domain::issue_work::IssueReference;
@@ -211,65 +215,127 @@ pub(super) fn ensure(
     }
     adapter.with_connection(workspace, |connection, guard| {
         transaction(connection, guard, |transaction| {
-            if let Some(existing) = read(transaction, workspace, request.id())? {
-                if existing.request.definition() != request.definition() {
-                    bail!("the decision ID already belongs to a different request")
-                }
-                return saved(existing, catalog_revision(transaction, workspace)?, false);
-            }
-            // Polling the same immutable definition with a new ID reuses even a terminal request.
-            if let Some(existing) = read_unique(transaction, workspace, &request.uniqueness_key())?
-            {
-                return saved(existing, catalog_revision(transaction, workspace)?, false);
-            }
-            let Some(item) = current_item(transaction, workspace, expected, assessment)? else {
-                return Ok(IssueDecisionSaveResult::Conflict);
-            };
-            // A durable triage supplies the previous gate revision for the next evaluation.
-            // Without it metadata-only changes could repeatedly start at revision one.
-            if item
-                .triage
-                .as_ref()
-                .is_none_or(|triage| triage.assessment != *assessment)
-            {
-                return Ok(IssueDecisionSaveResult::Conflict);
-            }
-            if request.definition().basis
-                != current_basis(transaction, workspace, request, assessment)?
-                || !work_context_current(transaction, workspace, request)?
-            {
-                return Ok(IssueDecisionSaveResult::Conflict);
-            }
-            let encoded = encode(request)?;
-            let reference = request.issue();
-            transaction.execute(
-                "INSERT INTO issue_decision_requests
-                    (decision_id, workspace_dir, provider, server_id, repository_id, issue_id,
-                     binding_id, uniqueness_key, state, request, revision)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'open', ?9, 1)",
-                params![
-                    request.id().as_str(),
-                    workspace,
-                    enum_name(&reference.provider)?,
-                    reference.server_id,
-                    reference.repository_id,
-                    reference.issue_id,
-                    item.binding_id.as_str(),
-                    request.uniqueness_key(),
-                    encoded,
-                ],
-            )?;
-            let revision = bump_catalog(transaction, workspace)?;
-            saved(
-                StoredIssueDecision {
-                    request: request.clone(),
-                    revision: 1,
-                },
-                revision,
-                true,
-            )
+            ensure_current(transaction, workspace, expected, assessment, request)
         })
     })
+}
+
+/// 생성형 기한은 첫 insert transaction이 소유한다. 기존 strict ensure 계약은 유지한다.
+pub(super) fn ensure_timed(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+    expected: IssueTriageFence,
+    assessment: &IssueTriageAssessment,
+    request: &IssueDecisionRequest,
+    now_unix_ms: u64,
+    timeouts: &IssueAutomationTimeouts,
+) -> Result<IssueDecisionSaveResult> {
+    validate_reference_scope(workspace, request.issue())?;
+    if request.state() != IssueDecisionState::Open || request.definition().due_at.is_some() {
+        bail!("a timed decision requires an open template without a deadline")
+    }
+    if timeouts.start_seconds == 0 || timeouts.remind_before_seconds >= timeouts.start_seconds {
+        bail!("the decision timeout settings are invalid")
+    }
+    adapter.with_connection(workspace, |connection, guard| {
+        transaction(connection, guard, |transaction| {
+            if let Some(existing) = read(transaction, workspace, request.id())? {
+                let mut template = existing.request.definition().clone();
+                template.due_at = None;
+                if template != *request.definition() {
+                    bail!("the decision ID already belongs to a different request")
+                }
+                // Legacy None도 기존 사실이다. 생성 시각을 추측하여 소급 변경하지 않는다.
+                return saved(existing, catalog_revision(transaction, workspace)?, false);
+            }
+            let due_millis = timeouts
+                .start_seconds
+                .checked_mul(1000)
+                .and_then(|ttl| now_unix_ms.checked_add(ttl))
+                .and_then(|due| i64::try_from(due).ok())
+                .and_then(DateTime::<Utc>::from_timestamp_millis)
+                .ok_or_else(|| anyhow!("the decision deadline is outside the supported range"))?;
+            let mut definition = request.definition().clone();
+            definition.due_at = Some(due_millis.to_rfc3339_opts(SecondsFormat::Millis, true));
+            let timed = IssueDecisionRequest::new(request.id().clone(), definition)?;
+            let result = ensure_current(transaction, workspace, expected, assessment, &timed)?;
+            if let IssueDecisionSaveResult::Saved(commit) = &result
+                && commit.changed
+            {
+                super::decision_deadlines::schedule(
+                    transaction,
+                    workspace,
+                    &commit.record.request,
+                    timeouts.remind_before_seconds,
+                )?;
+            }
+            Ok(result)
+        })
+    })
+}
+
+fn ensure_current(
+    transaction: &Transaction<'_>,
+    workspace: &str,
+    expected: IssueTriageFence,
+    assessment: &IssueTriageAssessment,
+    request: &IssueDecisionRequest,
+) -> Result<IssueDecisionSaveResult> {
+    if let Some(existing) = read(transaction, workspace, request.id())? {
+        if existing.request.definition() != request.definition() {
+            bail!("the decision ID already belongs to a different request")
+        }
+        return saved(existing, catalog_revision(transaction, workspace)?, false);
+    }
+    // Polling the same immutable definition with a new ID reuses even a terminal request.
+    if let Some(existing) = read_unique(transaction, workspace, &request.uniqueness_key())? {
+        return saved(existing, catalog_revision(transaction, workspace)?, false);
+    }
+    let Some(item) = current_item(transaction, workspace, expected, assessment)? else {
+        return Ok(IssueDecisionSaveResult::Conflict);
+    };
+    // A durable triage supplies the previous gate revision for the next evaluation.
+    // Without it metadata-only changes could repeatedly start at revision one.
+    if item
+        .triage
+        .as_ref()
+        .is_none_or(|triage| triage.assessment != *assessment)
+    {
+        return Ok(IssueDecisionSaveResult::Conflict);
+    }
+    if request.definition().basis != current_basis(transaction, workspace, request, assessment)?
+        || !work_context_current(transaction, workspace, request)?
+    {
+        return Ok(IssueDecisionSaveResult::Conflict);
+    }
+    let encoded = encode(request)?;
+    let reference = request.issue();
+    transaction.execute(
+        "INSERT INTO issue_decision_requests
+            (decision_id, workspace_dir, provider, server_id, repository_id, issue_id,
+             binding_id, uniqueness_key, state, request, revision)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'open', ?9, 1)",
+        params![
+            request.id().as_str(),
+            workspace,
+            enum_name(&reference.provider)?,
+            reference.server_id,
+            reference.repository_id,
+            reference.issue_id,
+            item.binding_id.as_str(),
+            request.uniqueness_key(),
+            encoded,
+        ],
+    )?;
+    let revision = bump_catalog(transaction, workspace)?;
+    saved(
+        StoredIssueDecision {
+            request: request.clone(),
+            revision: 1,
+        },
+        revision,
+        true,
+    )
 }
 
 pub(super) fn save(
@@ -281,6 +347,12 @@ pub(super) fn save(
 ) -> Result<IssueDecisionSaveResult> {
     validate_reference_scope(workspace, request.issue())?;
     validate_expected_revision(expected.decision_revision)?;
+    if request
+        .answer()
+        .is_some_and(|answer| answer.by == IssueDecisionAnswerBy::Default)
+    {
+        bail!("default answers require the deadline transition")
+    }
     adapter.with_connection(workspace, |connection, guard| {
         transaction(connection, guard, |transaction| {
             let Some(existing) = read(transaction, workspace, request.id())? else {
@@ -301,7 +373,7 @@ pub(super) fn save(
                 && work_context_current(transaction, workspace, request)?;
             if basis_matches && (assessment.gates().iter().any(|gate|
                 gate.gate == existing.request.definition().gate
-                    && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::Human)
+                    && matches!(gate.action, IssueAutomationGateAction::Human | IssueAutomationGateAction::TimeoutDefault))
                 || (request.definition().basis.work_order_id.is_some()
                     && matches!(
                         request.definition().kind,
@@ -330,22 +402,131 @@ pub(super) fn save(
             if request.state() != expected_state {
                 bail!("the decision resolution does not match the current basis")
             }
-            let revision = next_revision(existing.revision)?;
-            let changed = transaction.execute(
-                "UPDATE issue_decision_requests SET state = ?1, request = ?2, revision = ?3
-                 WHERE workspace_dir = ?4 AND decision_id = ?5 AND revision = ?6 AND state = 'open'",
-                params![
-                    enum_name(&request.state())?, encode(request)?, sql_revision(revision)?,
-                    workspace, request.id().as_str(), sql_revision(expected.decision_revision)?,
-                ],
-            )?;
-            if changed != 1 {
-                bail!("the decision changed during its transaction")
-            }
-            let catalog = bump_catalog(transaction, workspace)?;
-            saved(StoredIssueDecision { request: request.clone(), revision }, catalog, true)
+            persist_resolution(transaction, workspace, &existing, request)
         })
     })
+}
+
+/// 현재 장부와 주입된 host 시각으로만 Default를 구성한다. 모델·worker·외부 API는 부르지 않는다.
+pub(super) fn timeout(
+    adapter: &SqliteIssueAutomationStoreAdapter,
+    workspace: &str,
+    expected: IssueDecisionFence,
+    assessment: &IssueTriageAssessment,
+    id: &IssueDecisionId,
+    now_unix_ms: u64,
+) -> Result<IssueDecisionSaveResult> {
+    validate_expected_revision(expected.decision_revision)?;
+    adapter.with_connection(workspace, |connection, guard| {
+        transaction(connection, guard, |transaction| {
+            let Some(existing) = read(transaction, workspace, id)? else {
+                return Ok(IssueDecisionSaveResult::Conflict);
+            };
+            // 사람 답변이 먼저였으면 오래된 fence나 시각으로도 기존 확정 답만 돌려준다.
+            if existing.request.state() != IssueDecisionState::Open {
+                return saved(existing, catalog_revision(transaction, workspace)?, false);
+            }
+            if existing.revision != expected.decision_revision
+                || current_item(transaction, workspace, expected.triage, assessment)?.is_none()
+            {
+                return Ok(IssueDecisionSaveResult::Conflict);
+            }
+            let current_basis =
+                current_basis(transaction, workspace, &existing.request, assessment)?;
+            if !work_context_current(transaction, workspace, &existing.request)? {
+                let mut obsolete = existing.request.to_record();
+                obsolete.state = IssueDecisionState::Superseded;
+                let obsolete = IssueDecisionRequest::hydrate(obsolete)?;
+                return persist_resolution(transaction, workspace, &existing, &obsolete);
+            }
+            let gate_action = timeout_gate(transaction, workspace, assessment, &existing.request)?;
+            let Some(resolution) =
+                existing
+                    .request
+                    .timeout_for_gate(&current_basis, gate_action, now_unix_ms)?
+            else {
+                return saved(existing, catalog_revision(transaction, workspace)?, false);
+            };
+            if !resolution.changed {
+                return saved(existing, catalog_revision(transaction, workspace)?, false);
+            }
+            persist_resolution(transaction, workspace, &existing, &resolution.request)
+        })
+    })
+}
+
+fn timeout_gate(
+    connection: &Connection,
+    workspace: &str,
+    assessment: &IssueTriageAssessment,
+    request: &IssueDecisionRequest,
+) -> Result<IssueAutomationGateAction> {
+    use crate::domain::issue_automation::IssueAutomationAutonomy;
+    use crate::domain::issue_automation::autonomy::IssueAutonomyLevel;
+    use crate::domain::issue_automation::coordinator::ready_for_start;
+
+    let definition = request.definition();
+    if definition.kind != IssueDecisionKind::StartApproval
+        || definition.gate != IssueAutomationGate::Start
+        || definition.basis.work_order_id.is_some()
+        || assessment.effective_mode() != IssueAutomationAutonomy::Gated
+        || !ready_for_start(assessment)
+        || !assessment.gates().iter().any(|gate| {
+            gate.gate == IssueAutomationGate::Start
+                && gate.enabled
+                && gate.action == IssueAutomationGateAction::TimeoutDefault
+        })
+    {
+        return Ok(IssueAutomationGateAction::Human);
+    }
+    let selection = super::autonomy::read(connection, workspace)?;
+    if selection.requested_level != Some(IssueAutonomyLevel::Gated)
+        || selection.pending.is_some()
+        || selection.revision != assessment.basis().runtime_selection_revision
+    {
+        return Ok(IssueAutomationGateAction::Human);
+    }
+    Ok(IssueAutomationGateAction::TimeoutDefault)
+}
+
+fn persist_resolution(
+    transaction: &Transaction<'_>,
+    workspace: &str,
+    existing: &StoredIssueDecision,
+    request: &IssueDecisionRequest,
+) -> Result<IssueDecisionSaveResult> {
+    request.validate_successor(&existing.request)?;
+    if !matches!(
+        request.state(),
+        IssueDecisionState::Answered | IssueDecisionState::Superseded
+    ) {
+        bail!("the decision resolution must be terminal")
+    }
+    let revision = next_revision(existing.revision)?;
+    let changed = transaction.execute(
+        "UPDATE issue_decision_requests SET state = ?1, request = ?2, revision = ?3
+         WHERE workspace_dir = ?4 AND decision_id = ?5 AND revision = ?6 AND state = 'open'",
+        params![
+            enum_name(&request.state())?,
+            encode(request)?,
+            sql_revision(revision)?,
+            workspace,
+            request.id().as_str(),
+            sql_revision(existing.revision)?,
+        ],
+    )?;
+    if changed != 1 {
+        bail!("the decision changed during its transaction")
+    }
+    let catalog = bump_catalog(transaction, workspace)?;
+    saved(
+        StoredIssueDecision {
+            request: request.clone(),
+            revision,
+        },
+        catalog,
+        true,
+    )
 }
 
 pub(super) fn current_item(
@@ -402,7 +583,7 @@ pub(super) fn current_item(
     Ok(Some(item))
 }
 
-fn current_basis(
+pub(super) fn current_basis(
     connection: &Connection,
     workspace: &str,
     request: &IssueDecisionRequest,

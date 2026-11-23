@@ -30,6 +30,7 @@ type Collect = dyn Fn(&IssueCollectionCancellation, u64, bool, &Reporter) -> Res
     + Send
     + Sync;
 type Track = dyn Fn(&IssueCollectionCancellation, u64, bool, &Reporter) -> Result<()> + Send + Sync;
+type DecisionDeadlineReader = dyn Fn(u64) -> Result<Option<u64>> + Send + Sync;
 
 #[cfg(test)]
 type TestCollect =
@@ -57,18 +58,22 @@ struct InFlight {
 
 struct TrackingInFlight {
     cancel: Arc<IssueCollectionCancellation>,
-    completion: Receiver<Result<()>>,
+    started_at: Instant,
+    at_unix_ms: u64,
+    completion: Receiver<Result<Option<u64>>>,
 }
 
 pub(crate) struct IssueObserver {
     collect: Arc<Collect>,
     track: Option<Arc<Track>>,
+    decision_deadline_reader: Option<Arc<DecisionDeadlineReader>>,
     waker: CoreInputWaker,
     projection: IssueCollectionProjection,
     in_flight: Option<InFlight>,
     next_run: Option<Instant>,
     tracking_in_flight: Option<TrackingInFlight>,
     next_tracking_run: Option<Instant>,
+    next_decision_deadline: Option<Instant>,
     tracking_pending: bool,
     execution_enabled: bool,
     sync_pending: bool,
@@ -135,6 +140,9 @@ impl IssueObserver {
             waker,
         );
         if let Some(coordinator) = coordinator {
+            let deadlines = coordinator.clone();
+            observer.decision_deadline_reader =
+                Some(Arc::new(move |at| deadlines.next_decision_deadline_at(at)));
             observer.track = Some(Arc::new(move |cancel, at, execution_enabled, committed| {
                 coordinator.track_execution(cancel, at, execution_enabled, &|facts| {
                     committed(
@@ -162,11 +170,13 @@ impl IssueObserver {
             projection,
             collect,
             track: None,
+            decision_deadline_reader: None,
             waker,
             in_flight: None,
             next_run: None,
             tracking_in_flight: None,
             next_tracking_run: None,
+            next_decision_deadline: None,
             tracking_pending: false,
             execution_enabled: false,
             sync_pending: false,
@@ -217,6 +227,15 @@ impl IssueObserver {
         self.tracking_in_flight.is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_decision_deadlines_for_test(
+        mut self,
+        reader: Arc<DecisionDeadlineReader>,
+    ) -> Self {
+        self.decision_deadline_reader = Some(reader);
+        self
+    }
+
     pub(crate) fn view(&self, now: Instant) -> IssueCollectionHostView {
         IssueCollectionHostView {
             projection: self.projection.clone(),
@@ -241,8 +260,15 @@ impl IssueObserver {
     }
 
     fn tracking_deadline(&self, now: Instant) -> Option<Instant> {
-        (self.track.is_some() && self.tracking_in_flight.is_none())
-            .then_some(self.next_tracking_run.unwrap_or(now))
+        if self.track.is_none() || self.tracking_in_flight.is_some() {
+            return None;
+        }
+        Some(
+            self.next_decision_deadline
+                .map_or(self.next_tracking_run.unwrap_or(now), |deadline| {
+                    deadline.min(self.next_tracking_run.unwrap_or(now))
+                }),
+        )
     }
 
     fn collection_deadline(&self, now: Instant) -> Option<Instant> {
@@ -320,6 +346,7 @@ impl IssueObserver {
             changed: false,
             committed: self.take_committed(),
         };
+        self.track_new_decisions(&cycle.committed, now);
         let completion =
             self.in_flight
                 .as_ref()
@@ -375,7 +402,9 @@ impl IssueObserver {
             cycle.changed = true;
         }
         self.poll_tracking(now, at_unix_ms);
-        cycle.committed.extend(self.take_committed());
+        let committed = self.take_committed();
+        self.track_new_decisions(&committed, now);
+        cycle.committed.extend(committed);
         cycle.changed |= !cycle.committed.is_empty();
         cycle
     }
@@ -396,6 +425,23 @@ impl IssueObserver {
         self.committed_receiver.try_iter().flatten().collect()
     }
 
+    fn track_new_decisions(&mut self, committed: &[IssueObserverCommittedFact], now: Instant) {
+        if committed.iter().any(|fact| {
+            matches!(
+                fact,
+                IssueObserverCommittedFact::Coordinated(
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::Decision {
+                        fact,
+                        ..
+                    }
+                ) if fact.state == crate::domain::issue_automation::decision::IssueDecisionState::Open
+            )
+        }) {
+            // 수집이 새 질문을 만들었으면 5초 fallback 전에 그 질문의 짧은 기한도 읽는다.
+            self.request_tracking(now);
+        }
+    }
+
     fn poll_tracking(&mut self, now: Instant, at_unix_ms: u64) {
         let completion = self.tracking_in_flight.as_ref().and_then(|flight| {
             match flight.completion.try_recv() {
@@ -411,9 +457,27 @@ impl IssueObserver {
                 .tracking_in_flight
                 .take()
                 .expect("tracking worker completed");
-            if !flight.cancel.is_cancelled() && result.is_err() {
-                // 로컬 추적 실패는 원격 공급자의 실패 횟수나 수집 커서에 영향을 주지 않는다.
-                tracing::warn!("issue execution tracking could not complete its local update");
+            self.next_decision_deadline = None;
+            if !flight.cancel.is_cancelled() {
+                match result {
+                    Ok(Some(deadline)) => {
+                        // DB 시각은 worker 시작 때의 UTC/Instant 쌍으로 환산한다.
+                        // 완료가 늦어졌다면 이미 지난 Instant가 즉시 다음 추적을 깨운다.
+                        self.next_decision_deadline = deadline
+                            .checked_sub(flight.at_unix_ms)
+                            .filter(|delay| *delay > 0)
+                            .and_then(|delay| {
+                                flight.started_at.checked_add(Duration::from_millis(delay))
+                            });
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        // 로컬 추적 실패는 원격 공급자의 실패 횟수나 수집 커서에 영향을 주지 않는다.
+                        tracing::warn!(
+                            "issue execution tracking could not complete its local update"
+                        );
+                    }
+                }
             }
             self.next_tracking_run = Some(now + TRACKING_INTERVAL);
         }
@@ -432,6 +496,7 @@ impl IssueObserver {
         let Some(track) = self.track.clone() else {
             return;
         };
+        let deadline_reader = self.decision_deadline_reader.clone();
         let cancel = Arc::new(IssueCollectionCancellation::new());
         let worker_cancel = cancel.clone();
         let execution_enabled = self.execution_enabled;
@@ -448,7 +513,16 @@ impl IssueObserver {
                         committed_waker.wake();
                     }
                 };
-                let result = track(&worker_cancel, at_unix_ms, execution_enabled, &report);
+                let result = track(&worker_cancel, at_unix_ms, execution_enabled, &report)
+                    .and_then(|()| {
+                        if worker_cancel.is_cancelled() {
+                            Ok(None)
+                        } else if let Some(reader) = deadline_reader {
+                            reader(at_unix_ms)
+                        } else {
+                            Ok(None)
+                        }
+                    });
                 let _ = send.send(result);
                 waker.wake();
             },
@@ -461,11 +535,18 @@ impl IssueObserver {
         );
         match spawned {
             Ok(_detached_worker) => {
-                self.tracking_in_flight = Some(TrackingInFlight { cancel, completion });
+                self.tracking_in_flight = Some(TrackingInFlight {
+                    cancel,
+                    started_at: now,
+                    at_unix_ms,
+                    completion,
+                });
                 self.next_tracking_run = None;
+                self.next_decision_deadline = None;
             }
             Err(_) => {
                 self.next_tracking_run = Some(now + TRACKING_INTERVAL);
+                self.next_decision_deadline = None;
                 tracing::warn!("issue execution tracking could not start");
             }
         }

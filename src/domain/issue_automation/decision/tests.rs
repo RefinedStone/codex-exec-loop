@@ -4,6 +4,8 @@ use crate::domain::issue_automation::triage::{IssueTriageInput, triage_issue};
 use crate::domain::issue_validation::IssueRequirements;
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider};
 
+mod deadlines;
+
 fn shared(value: &str) -> IssueDecisionSharedText {
     IssueDecisionSharedText::new_shared(value).unwrap()
 }
