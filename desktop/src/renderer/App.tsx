@@ -566,7 +566,7 @@ export function App() {
     () =>
       useDesktopStore.subscribe((state, previous) => {
         for (const event of issueDecisionAttentionEvents(previous, state)) {
-          notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`);
+          notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`, event.reminderId !== undefined);
         }
         for (const event of attentionEvents(previous, state)) {
           const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";

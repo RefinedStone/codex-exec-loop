@@ -18,6 +18,7 @@ pub(super) fn reconcile(
     service: &IssueCoordinatorService,
     issue: &IssueReference,
     cancel: &IssueCollectionCancellation,
+    now_unix_ms: u64,
     committed: &Reporter<'_>,
 ) -> Result<()> {
     if cancel.is_cancelled()
@@ -113,8 +114,11 @@ pub(super) fn reconcile(
         asked_by: "issue-coordinator".into(),
         evidence,
     };
-    let Some(commit) =
-        cancel.commit_if_active(|| service.decisions.ensure_request(id, definition))?
+    let Some(commit) = cancel.commit_if_active(|| {
+        service
+            .decisions
+            .ensure_request_at(id, definition, now_unix_ms)
+    })?
     else {
         return Ok(());
     };

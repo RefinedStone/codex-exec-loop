@@ -44,14 +44,14 @@ pub(super) fn load_recent(
             "WITH scoped AS (
             SELECT sequence, recorded_at, payload_json,
                 CASE
-                    WHEN kind IN ('issue_decision_requested', 'issue_decision_resolved')
+                    WHEN kind IN ('issue_decision_requested', 'issue_decision_resolved', 'issue_decision_reminded')
                     THEN json_extract(payload_json, '$.decision.subject.issue')
                     ELSE json_extract(payload_json, '$.issue')
                 END AS issue_ref
             FROM kernel_events
             WHERE kind IN (
                 'issue_tracked', 'issue_triaged', 'issue_decision_requested',
-                'issue_decision_resolved', 'issue_work_submitted', 'issue_held',
+                'issue_decision_resolved', 'issue_decision_reminded', 'issue_work_submitted', 'issue_held',
                 'issue_released', 'issue_work_permit_revoked', 'issue_work_permit_granted',
                 'issue_execution_progressed', 'issue_integrated', 'issue_closed',
                 'issue_feedback_posted'

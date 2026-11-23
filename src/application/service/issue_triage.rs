@@ -108,6 +108,20 @@ impl IssueTriageService {
             .map_err(|_| anyhow!("the current execution attempt policy is unavailable"))
     }
 
+    /// 요청과 같은 정책 판의 기한 설정만 사용한다.
+    pub(crate) fn decision_timeouts_for_policy(
+        &self,
+        expected_version: &str,
+    ) -> Result<crate::domain::issue_automation::policy::IssueAutomationTimeouts> {
+        let context = self
+            .context()
+            .ok_or_else(|| anyhow!("the current decision deadline policy could not be assessed"))?;
+        if context.automation.version != expected_version {
+            bail!("the decision deadline policy changed")
+        }
+        Ok(context.automation.policy.timeouts.clone())
+    }
+
     /// Admission consumes only the budget from the policy revision just assessed.
     pub(crate) fn start_budget_for_policy(
         &self,

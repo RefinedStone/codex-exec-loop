@@ -873,6 +873,7 @@ fn kernel_simulation_issue_decision_answers_after_planning_failure_without_refre
     );
 }
 
+mod deadlines;
 mod human_confirmation;
 
 #[test]

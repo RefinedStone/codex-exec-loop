@@ -642,6 +642,8 @@ spec_names! {
             "An open issue decision was committed to the issue ledger. Only stable identity and decision metadata are recorded; question and note text are excluded.";
         IssueDecisionResolved => "issue_decision_resolved",
             "An issue decision was closed by its first answer or superseded by a changed basis. An agent answer is not human confirmation and does not grant execution.";
+        IssueDecisionReminded => "issue_decision_reminded",
+            "A once-per-decision reminder was committed before the deadline. Its durable event ID deduplicates retries; it does not change the decision revision or grant execution.";
         IssueWorkSubmitted => "issue_work_submitted",
             "A durable issue work order was registered. Only stable identity and task IDs are recorded.";
         IssueHeld => "issue_held",

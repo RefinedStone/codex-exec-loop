@@ -216,6 +216,42 @@ fn issue_detail_unknown_has_no_content_fallback_and_uses_the_catalog_revision() 
 }
 
 #[test]
+fn issue_detail_query_time_preserves_the_snapshot_and_legacy_wire_contract() {
+    let snapshot = detail(Some(IssueCollectionItem {
+        start_budget_wait: None,
+        work: None,
+        open_decisions: Vec::new(),
+        issue: reference(),
+        binding_id: IssueAutomationBindingId::new("binding").unwrap(),
+        tracked: None,
+        current: None,
+        observation_revision: None,
+        tracked_revision: None,
+        triage: None,
+    }));
+    let legacy = IssueState::from_domain(&snapshot);
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("as_of_unix_ms")
+            .is_none()
+    );
+    for at in [1_795_000_000_000, 1_795_000_120_000] {
+        let queried = legacy.clone().with_as_of_unix_ms(Some(at));
+        let wire = serde_json::to_value(KernelQueryAnswer::Issue(queried.clone())).unwrap();
+        assert_eq!(wire["as_of_unix_ms"], at);
+        assert_eq!(wire["revision"], snapshot.revision);
+        assert_wire_matches_spec(&wire);
+        assert_eq!(queried.with_as_of_unix_ms(None), legacy);
+    }
+    let restored: IssueState =
+        serde_json::from_value(serde_json::to_value(&legacy).unwrap()).unwrap();
+    assert_eq!(restored, legacy);
+    let missing = IssueState::from_domain(&detail(None));
+    assert_eq!(missing.clone().with_as_of_unix_ms(Some(123)), missing);
+}
+
+#[test]
 fn issue_detail_exposes_server_actions_and_only_the_selected_safe_conversation_target() {
     use crate::domain::issue_automation::interaction::{
         IssueActionCommand, IssueActionProjection, IssueControlProjection, IssueConversationTarget,

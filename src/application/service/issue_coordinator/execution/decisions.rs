@@ -30,7 +30,7 @@ pub(super) fn reconcile(
     work: &IssueWorkCheckpoint,
     record: &IssueExecutionRecord,
     cancel: &IssueCollectionCancellation,
-    _now_unix_ms: u64,
+    now_unix_ms: u64,
     execution_enabled: bool,
     committed: &Reporter<'_>,
 ) -> Result<()> {
@@ -91,8 +91,11 @@ pub(super) fn reconcile(
     }
     let id = question_decision_id(work, question, &basis)?;
     let definition = question_definition(work, question, basis)?;
-    let Some(commit) =
-        cancel.commit_if_active(|| service.decisions.ensure_request(id.clone(), definition))?
+    let Some(commit) = cancel.commit_if_active(|| {
+        service
+            .decisions
+            .ensure_request_at(id.clone(), definition, now_unix_ms)
+    })?
     else {
         return Ok(());
     };

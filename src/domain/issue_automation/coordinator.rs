@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 
 use super::decision::{
     IssueDecisionAnswerBy, IssueDecisionBasis, IssueDecisionId, IssueDecisionRequest,
-    IssueDecisionState,
+    IssueDecisionState, IssueDecisionTimeout,
 };
 use super::policy::{IssueAutomationGate, IssueAutomationGateAction};
 use super::triage::{IssueTriageAssessment, IssueTriageEligibility, IssueTriageReadiness};
@@ -35,19 +35,20 @@ pub enum IssueWorkBlockReason {
     FeedbackUnconfirmed,
 }
 
-/// Missing authority fields in legacy checkpoints mean Human, never Policy.
+/// Missing authority fields in legacy checkpoints always mean Human.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueWorkStartAuthority {
     #[default]
     Human,
     Policy,
+    TimeoutDefault,
 }
 
 impl IssueWorkStartAuthority {
     pub fn validate(self, decision_id: Option<&IssueDecisionId>) -> Result<(), &'static str> {
         match (self, decision_id) {
-            (Self::Human, Some(_)) | (Self::Policy, None) => Ok(()),
+            (Self::Human | Self::TimeoutDefault, Some(_)) | (Self::Policy, None) => Ok(()),
             _ => Err("issue work start authority does not match its decision"),
         }
     }
@@ -195,12 +196,12 @@ pub struct IssueCoordinatorInput<'a> {
     pub decision: Option<&'a IssueDecisionRequest>,
     pub work: Option<&'a IssueWorkCheckpoint>,
     pub frozen_source: Option<&'a str>,
-    /// propose에는 deadline이 없다. 외부 시계에 의존하지 않는 입력 경계만 유지한다.
+    /// 마감 전이는 별도로 확정한다. 조정 규칙은 확정된 답과 현재 판만 사용한다.
     pub now_unix_ms: u64,
 }
 
 pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
-    let _ = input.now_unix_ms; // propose는 시간 경과만으로 승인/만료를 만들지 않는다.
+    let _ = input.now_unix_ms; // 시간 경과만으로 저장되지 않은 승인을 만들지 않는다.
     use IssueCoordinatorAction::*;
     if matches!(
         input.state,
@@ -231,6 +232,12 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
                 IssueWorkStartAuthority::Policy => policy_start(assessment),
                 IssueWorkStartAuthority::Human => input.decision.is_some_and(|decision| {
                     human_start(decision)
+                        && Some(decision.id()) == work.current_authorization_decision_id()
+                        && decision.issue() == &work.order.issue
+                        && &decision.definition().basis == work.current_authorization_basis()
+                }),
+                IssueWorkStartAuthority::TimeoutDefault => input.decision.is_some_and(|decision| {
+                    timeout_default_start(assessment, decision)
                         && Some(decision.id()) == work.current_authorization_decision_id()
                         && decision.issue() == &work.order.issue
                         && &decision.definition().basis == work.current_authorization_basis()
@@ -290,13 +297,13 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     if !eligible {
         return None;
     }
-    if human_start(decision) {
+    if human_start(decision) || timeout_default_start(assessment, decision) {
         return SubmitWork;
     }
     None
 }
 
-/// The start actions implemented by propose/gated; timeout policies are a later slice.
+/// Propose stays human; Gated also admits automatic or timeout-default starts.
 pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
     matches!(
         assessment.effective_mode(),
@@ -306,10 +313,11 @@ pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
         && assessment.gates().iter().any(|gate| {
             gate.gate == IssueAutomationGate::Start
                 && gate.enabled
-                && matches!(
+                && (matches!(
                     gate.action,
                     IssueAutomationGateAction::Human | IssueAutomationGateAction::Auto
-                )
+                ) || (assessment.effective_mode() == IssueAutomationAutonomy::Gated
+                    && gate.action == IssueAutomationGateAction::TimeoutDefault))
         })
 }
 
@@ -331,6 +339,52 @@ pub fn human_start(decision: &IssueDecisionRequest) -> bool {
             answer.option == "start"
                 && answer.by == IssueDecisionAnswerBy::Human
                 && answer.confirmation.is_some()
+        })
+}
+
+/// Default 답은 현재 Gated 관문과 같은 판일 때만 시작의 근거다.
+/// authorization epoch의 현재값은 호출자가 장부와 비교한다.
+pub fn timeout_default_start(
+    assessment: &IssueTriageAssessment,
+    decision: &IssueDecisionRequest,
+) -> bool {
+    let definition = decision.definition();
+    let Ok(mut basis) =
+        IssueDecisionBasis::from_assessment(assessment, IssueAutomationGate::Start, None)
+    else {
+        return false;
+    };
+    basis.authorization_epoch = definition.basis.authorization_epoch;
+    let Some(due_at) = definition
+        .due_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return false;
+    };
+    ready_for_start(assessment)
+        && assessment.effective_mode() == IssueAutomationAutonomy::Gated
+        && assessment.gates().iter().any(|gate| {
+            gate.gate == IssueAutomationGate::Start
+                && gate.enabled
+                && gate.action == IssueAutomationGateAction::TimeoutDefault
+        })
+        && decision.issue() == &assessment.basis().issue
+        && decision.state() == IssueDecisionState::Answered
+        && definition.kind == super::decision::IssueDecisionKind::StartApproval
+        && definition.gate == IssueAutomationGate::Start
+        && definition.basis == basis
+        && definition.on_timeout == IssueDecisionTimeout::Default
+        && definition.recommended.as_deref() == Some("start")
+        && decision.answer().is_some_and(|answer| {
+            answer.option == "start"
+                && answer.by == IssueDecisionAnswerBy::Default
+                && answer.confirmation.is_none()
+                && answer.note.is_none()
+                && answer.caller.is_none()
+                && answer.channel == "issue-timeout"
+                && chrono::DateTime::parse_from_rfc3339(&answer.at)
+                    .is_ok_and(|answered_at| answered_at >= due_at)
         })
 }
 

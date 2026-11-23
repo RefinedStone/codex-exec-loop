@@ -17,6 +17,8 @@ const binding = { ...issue, id: "fixture-binding" };
 delete binding.issue_id;
 const requests = [];
 let revision = 7;
+let queriedAt = Date.parse("2026-11-21T09:00:00Z");
+const decisionDueAt = "2026-11-22T09:00:00Z";
 let level = "observe";
 let effectiveOverride = null;
 let cap = "propose";
@@ -35,7 +37,7 @@ const requestDecision = (id = "decision-start") => ({
   question, options: [
     { id: "approve", label: "작업 시작 승인", effect: "현재 계획으로 작업을 시작합니다. 전달 단계에서는 별도의 허가를 확인합니다." },
     { id: "hold", label: "보류", effect: "작업을 시작하지 않고 이슈를 보류합니다." },
-  ], recommended: "approve", on_timeout: "wait",
+  ], recommended: "approve", on_timeout: "wait", due_at: decisionDueAt,
 });
 let openDecisions = [requestDecision()];
 const fact = (request, state = request.state) => ({
@@ -74,7 +76,7 @@ const actions = () => ["hold_issue", "release_issue", "steer_issue", "take_over_
             : !control.cancelled;
   return { command, enabled, reason: enabled ? null : "현재 작업 상태에서 사용할 수 없습니다." };
 });
-const detail = () => ({ type: "issue", status: "ready", revision, item: item(), open_decisions: structuredClone(openDecisions),
+const detail = () => ({ type: "issue", status: "ready", revision, as_of_unix_ms: queriedAt, item: item(), open_decisions: structuredClone(openDecisions),
   decision_history: structuredClone(history), control: { ...control }, actions: actions(), conversation: structuredClone(conversation) });
 const commandRequests = (type) => requests.flatMap((entry) => {
   const request = entry.method === "akra/kernel/command_confirmed" ? entry.params.request : entry.method === "akra/kernel/command" ? entry.params : null;
@@ -298,6 +300,8 @@ try {
   await panel.getByTestId("issues-title").click();
   const currentCard = () => panel.locator('[data-testid="issue-decision-card"][data-state="open"]').first();
   await currentCard().waitFor();
+  assert.match(await currentCard().getByTestId("issue-decision-remaining").innerText(), /1일 남음.*조회 기준/s);
+  assert.match(await currentCard().getByTestId("issue-decision-timeout").innerText(), /기한 후에도 사람의 답변을 기다립니다/);
 
   // 최신 이슈 상세의 제품 버튼이 전체 대상 좌표로 전용 창을 연다. 자동화 프로필은 native 복원을 차단한다.
   const originalWindowOpened = app.waitForEvent("window");
@@ -347,6 +351,40 @@ try {
   assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), draftNote);
   assert.equal(await panel.getByTestId("issue-steer-message").inputValue(), draftMessage);
   assert.equal(await panel.getByTestId("issue-steer-send").isEnabled(), true);
+
+  // 서버 조회 시각과 재알림만 바뀌어도 작성 중인 답과 native confirmation 대상은 유지한다.
+  queriedAt = Date.parse(decisionDueAt) - 2 * 60 * 60 * 1000;
+  revision++;
+  const reminder = { type: "recorded", sequence: 1, recorded_at: new Date(queriedAt).toISOString(),
+    event: { kind: "issue_decision_reminded", event_id: "issue-decision-reminder:fixture", decision: fact(openDecisions[0]),
+      due_at: decisionDueAt, reminded_at: new Date(queriedAt).toISOString(), revision } };
+  const reminderRead = holdNextDetailReply();
+  const notificationsBeforeReminder = await page.evaluate(() => window.issueNotifications.length);
+  gateway.sendKernelEvent(reminder);
+  try {
+    await until(() => reminderRead.requested, "reminder detail request");
+    await panel.getByTestId("issues-detail-loading").waitFor();
+    assert.deepEqual(draftCommandCounts(), beforeDraftCommands);
+  } finally { reminderRead.release(); }
+  await currentCard().waitFor();
+  await until(async () => (await panel.getByTestId("issues-detail-loading").count()) === 0, "reminder detail response");
+  await until(async () => (await page.evaluate(() => window.issueNotifications.length)) === notificationsBeforeReminder + 1, "one reminder notification");
+  assert.match(await currentCard().getByTestId("issue-decision-remaining").innerText(), /2시간 남음.*조회 기준/s);
+  assert.equal(await currentCard().locator('input[value="approve"]').isChecked(), true);
+  assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), draftNote);
+  assert.match(await page.evaluate(() => window.issueNotifications.at(-1).options.body), /응답 기한이 다가옵니다/);
+  gateway.sendKernelEvent(reminder);
+  queriedAt = Date.parse(decisionDueAt) + 1;
+  // The later refresh is also a socket-order barrier after the duplicate reminder.
+  await refreshDrafts("overdue wait after duplicate reminder");
+  assert.match(await currentCard().getByTestId("issue-decision-remaining").innerText(), /기한 지남.*조회 기준/s);
+  assert.equal(await currentCard().locator('input[value="approve"]').isChecked(), true);
+  assert.equal(await currentCard().getByTestId("issue-decision-note").inputValue(), draftNote);
+  assert.equal(await page.evaluate(() => window.issueNotifications.length), notificationsBeforeReminder + 1);
+  assert.equal(await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length), beforeDraftDialogs);
+  assert.deepEqual(draftCommandCounts(), beforeDraftCommands);
+  console.log("PASS server-time deadline, one durable reminder and draft preservation through overdue Wait");
+
   await panel.getByTestId("issue-action-cancel_issue_work").click();
   await panel.getByTestId("issue-cancel-confirm").waitFor();
   await refreshDrafts("same basis cancel form");

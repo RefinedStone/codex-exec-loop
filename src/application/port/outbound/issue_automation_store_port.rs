@@ -10,8 +10,10 @@ use crate::domain::issue_automation::collection::{
     IssueTriageProjection, StoredIssueCollection,
 };
 use crate::domain::issue_automation::decision::{
-    IssueDecisionId, IssueDecisionRequest, StoredIssueDecision,
+    IssueDecisionDeadline, IssueDecisionId, IssueDecisionReminder, IssueDecisionRequest,
+    StoredIssueDecision,
 };
+use crate::domain::issue_automation::policy::IssueAutomationTimeouts;
 use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 use crate::domain::issue_automation::{
@@ -514,6 +516,68 @@ pub trait IssueAutomationStorePort: Send + Sync {
         current: &IssueTriageAssessment,
         request: &IssueDecisionRequest,
     ) -> Result<IssueDecisionSaveResult>;
+
+    /// due_at이 없는 생성 template에 최초 저장 시각부터의 기한을 한 번만 부여한다.
+    /// 기존 요청의 기한과 legacy None은 바꾸지 않는다. 명시적 기한은 strict ensure를 쓴다.
+    #[allow(clippy::too_many_arguments)]
+    fn ensure_issue_decision_timed(
+        &self,
+        _workspace: &str,
+        _expected: IssueTriageFence,
+        _current: &IssueTriageAssessment,
+        _request: &IssueDecisionRequest,
+        _now_unix_ms: u64,
+        _timeouts: &IssueAutomationTimeouts,
+    ) -> Result<IssueDecisionSaveResult> {
+        anyhow::bail!("timed issue decisions are unavailable")
+    }
+
+    /// 열린 기한 요청의 안정 ID 오름차순 keyset 페이지다. adapter는 limit을 256 이하로 제한한다.
+    fn issue_decision_deadlines(
+        &self,
+        _workspace: &str,
+        _after_id: Option<&IssueDecisionId>,
+        _limit: usize,
+    ) -> Result<Vec<IssueDecisionDeadline>> {
+        Ok(Vec::new())
+    }
+
+    /// 현재 기준과 서버 시각으로 timeout 전이를 구성한다. 일반 답변 저장과 출처를 분리한다.
+    fn timeout_issue_decision(
+        &self,
+        _workspace: &str,
+        _expected: IssueDecisionFence,
+        _current: &IssueTriageAssessment,
+        _id: &IssueDecisionId,
+        _now_unix_ms: u64,
+    ) -> Result<IssueDecisionSaveResult> {
+        anyhow::bail!("issue decision timeouts are unavailable")
+    }
+
+    /// 최초 알림 사실을 확정한다. 이미 처리됐거나 기한 밖이면 None이며 결정 판은 바꾸지 않는다.
+    fn remind_issue_decision(
+        &self,
+        _workspace: &str,
+        _expected: IssueDecisionFence,
+        _current: &IssueTriageAssessment,
+        _id: &IssueDecisionId,
+        _now_unix_ms: u64,
+    ) -> Result<Option<IssueDecisionReminder>> {
+        Ok(None)
+    }
+
+    /// ACK 전까지 같은 event_id로 재전달한다. event_id 오름차순이며 최대 256건이다.
+    fn pending_issue_decision_reminders(
+        &self,
+        _workspace: &str,
+        _limit: usize,
+    ) -> Result<Vec<IssueDecisionReminder>> {
+        Ok(Vec::new())
+    }
+
+    fn acknowledge_issue_decision_reminder(&self, _workspace: &str, _event_id: &str) -> Result<()> {
+        anyhow::bail!("issue decision reminder receipts are unavailable")
+    }
 
     /// 관찰/판정/결정 행 CAS와 첫 답변을 한 transaction으로 확정한다.
     fn save_issue_decision(

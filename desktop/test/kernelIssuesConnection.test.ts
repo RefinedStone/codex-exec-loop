@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView, type IssueConfirmationBridge } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
+import { issueDecisionAttentionEvents } from "../src/renderer/session/attention";
 import type { CommandResponse, IssueAutomationAnswer, IssueAutonomyLevel, IssueAutonomyState, IssueEventReference } from "../src/renderer/kernel/protocol";
 import type { ConfirmIssueAutomationModeRequest, IssueConfirmationResponse } from "../src/shared/issueConfirmation";
 
@@ -1156,6 +1157,25 @@ function decisionRequest(issue = issueReference(), id = "decision-1") {
   };
 }
 
+function nativeDecisionReply() {
+  return {
+    cancelled: false,
+    response: { processed: true, result: { type: "issue_decision_resolved", catalog_revision: 8, changed: true, outcome: "answered",
+      decision: { decision_id: "decision-1", kind: "start_approval", gate: "start", state: "answered", answer_by: "human", option: "approve",
+        subject: { kind: "issue", issue: issueReference() }, basis: decisionRequest().basis },
+    } },
+  } satisfies IssueConfirmationResponse;
+}
+
+function reminderEvent(revision = 7) {
+  const request = decisionRequest();
+  return { event: { type: "recorded", sequence: 20, recorded_at: "2026-11-24T07:00:00Z", event: {
+    kind: "issue_decision_reminded", event_id: "issue-decision-reminder:late-receipt", revision,
+    decision: { decision_id: request.id, kind: request.kind, gate: request.gate, state: "open", subject: request.subject, basis: request.basis },
+    due_at: "2026-11-24T09:00:00Z", reminded_at: "2026-11-24T07:00:00Z",
+  } } };
+}
+
 function interactionDetail(issue = issueReference()) {
   return {
     ...issueDetail(issue), open_decisions: [decisionRequest(issue)], decision_history: [],
@@ -1272,6 +1292,67 @@ describe("issue decisions and interventions", () => {
     await first;
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
     expect(h.view().issues.notice).toBe("요청을 처리했습니다.");
+  });
+
+  it("uses a successful native receipt before a delayed detail reply to suppress a late reminder notification", async () => {
+    const native = deferredValue<IssueConfirmationResponse>();
+    const notificationEvents: ReturnType<typeof issueDecisionAttentionEvents> = [];
+    let previous = EMPTY_KERNEL_VIEW;
+    const connection = { phase: "connected" as const, endpoint: "fixture" };
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(() => native.promise);
+    const h = harness({ confirmations: { confirmIssueDecision: confirmation }, observeView: (kernel) => {
+      notificationEvents.push(...issueDecisionAttentionEvents({ connection, kernel: previous }, { connection, kernel }));
+      previous = kernel;
+    } });
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const pending = h.connection.answerIssueDecision("decision-1", "approve");
+    const reply = nativeDecisionReply();
+    native.resolve(reply);
+    await h.when(() => h.queries("issues").length > before);
+    expect(h.view().issues.detailLoading).toBe(true);
+    h.connection.handleEvent(reminderEvent(7));
+    expect(h.view().issueAttention).toEqual([]);
+    expect(notificationEvents).toEqual([]);
+    h.answerIssueReads(issuePage(["I_first"], 8), automation(8));
+    h.reply(h.query("issue"), { ...interactionDetail(), revision: 8, report: report(8), open_decisions: [],
+      decision_history: [{ decision: reply.response.result.decision }] });
+    await pending;
+    expect(notificationEvents).toEqual([]);
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it.each(["different_decision", "different_issue", "invalid_revision", "open_state", "unknown_outcome", "failed", "unknown"] as const)("does not infer a terminal decision from a %s confirmation result", async (scenario) => {
+    const valid = nativeDecisionReply();
+    const result = valid.response.result;
+    const invalid: unknown = scenario === "unknown" ? { cancelled: false, outcome: "unknown" }
+      : scenario === "failed" ? { ...valid, response: { ...valid.response, processed: false, failure: "fixture failure" } }
+        : { ...valid, response: { ...valid.response, result: {
+          ...result,
+          ...(scenario === "invalid_revision" ? { catalog_revision: -1 } : {}),
+          ...(scenario === "unknown_outcome" ? { outcome: "unknown" } : {}),
+          decision: { ...result.decision,
+            ...(scenario === "different_decision" ? { decision_id: "another-decision" } : {}),
+            ...(scenario === "different_issue" ? { subject: { kind: "issue", issue: issueReference("I_other") } } : {}),
+            ...(scenario === "open_state" ? { state: "open" } : {}),
+          },
+        } } };
+    const confirmation = vi.fn<NonNullable<IssueConfirmationBridge["confirmIssueDecision"]>>(async () => invalid as IssueConfirmationResponse);
+    const h = harness({ confirmations: { confirmIssueDecision: confirmation } });
+    await h.openIssues();
+    await selectInteraction(h);
+    const before = h.queries("issues").length;
+    const pending = h.connection.answerIssueDecision("decision-1", "approve");
+    await completeInteractionRefresh(h, before);
+    await pending;
+    const reminderReads = h.queries("issues").length;
+    h.connection.handleEvent(reminderEvent(9));
+    expect(h.view().issueAttention).toMatchObject([{ decisionId: "decision-1", reminderId: "issue-decision-reminder:late-receipt" }]);
+    await completeInteractionRefresh(h, reminderReads);
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 
   it("re-reads after an unknown confirmation outcome without replaying the answer", async () => {
@@ -1614,6 +1695,55 @@ describe("issue decisions and interventions", () => {
     h.connection.handleEvent({ event: { type: "issue_decision", decision: { ...fact, state: "answered" }, revision: 9 } });
     h.connection.handleEvent({ event: { type: "issue_decision", decision: fact, revision: 8 } });
     expect(h.view().issueAttention).toEqual([]);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("accepts one reminder event and rejects duplicate, stale and resolved-decision reminders", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const shown = h.connection.show("/repo", ["issue_attention"]);
+    h.reply(h.requests("akra/kernel/attach")[0], { client_id: "1", protocol_version: 1, kernel: "repo" });
+    await shown;
+    const request = decisionRequest();
+    const fact = { decision_id: request.id, kind: request.kind, subject: request.subject, gate: request.gate, basis: request.basis, state: "open" };
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: fact, revision: 8 } });
+    const reminder = (eventId: string, revision: number) => ({ event: {
+      type: "recorded", sequence: revision, recorded_at: "2026-11-24T07:00:00Z",
+      event: { kind: "issue_decision_reminded", event_id: eventId, decision: fact,
+        due_at: "2026-11-24T09:00:00Z", reminded_at: "2026-11-24T07:00:00Z", revision },
+    } });
+    h.connection.handleEvent(reminder("issue-decision-reminder:1", 9));
+    const attention = h.view().issueAttention;
+    expect(attention).toEqual([{ workspace: "/repo", kernel: "repo", decisionId: request.id,
+      issue: issueReference(), reminderId: "issue-decision-reminder:1" }]);
+    h.connection.handleEvent(reminder("issue-decision-reminder:1", 9));
+    h.connection.handleEvent(reminder("issue-decision-reminder:1", 99));
+    h.connection.handleEvent(reminder("issue-decision-reminder:older", 8));
+    expect(h.view().issueAttention).toEqual(attention);
+    h.connection.handleEvent({ event: { type: "issue_decision", decision: { ...fact, state: "answered" }, revision: 10 } });
+    h.connection.handleEvent(reminder("issue-decision-reminder:late", 11));
+    expect(h.view().issueAttention).toEqual([]);
+    expect(h.requests("akra/kernel/query")).toHaveLength(0);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("does not restore attention when a fresh detail already shows the decision resolved", async () => {
+    const h = harness();
+    await h.openIssues();
+    const request = decisionRequest();
+    const fact = { decision_id: request.id, kind: request.kind, subject: request.subject, gate: request.gate, basis: request.basis, state: "answered" };
+    const selected = h.connection.selectIssue(issueReference());
+    const detail = { ...interactionDetail(), open_decisions: [], decision_history: [{ decision: fact }], as_of_unix_ms: Date.parse("2026-11-24T09:00:00Z") };
+    h.reply(h.query("issue"), detail);
+    await selected;
+    const count = h.requests("akra/kernel/query").length;
+    h.connection.handleEvent({ event: { type: "recorded", sequence: 20, recorded_at: "2026-11-24T07:00:00Z",
+      event: { kind: "issue_decision_reminded", event_id: "issue-decision-reminder:late-query", decision: { ...fact, state: "open" },
+        due_at: "2026-11-24T09:00:00Z", reminded_at: "2026-11-24T07:00:00Z", revision: 8 },
+    } });
+    expect(h.view().issueAttention).toEqual([]);
+    expect(h.view().issues.detail).toEqual(detail);
+    expect(h.requests("akra/kernel/query")).toHaveLength(count);
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 

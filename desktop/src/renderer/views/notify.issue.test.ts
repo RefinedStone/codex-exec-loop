@@ -10,6 +10,25 @@ afterEach(() => {
 });
 
 describe("private issue notifications", () => {
+  it("uses fixed reminder text and the existing decision notification tag", async () => {
+    const shown: Array<{ title: string; options: NotificationOptions }> = [];
+    class FakeNotification {
+      static permission = "granted";
+      constructor(title: string, options: NotificationOptions) { shown.push({ title, options }); }
+    }
+    vi.stubGlobal("Notification", FakeNotification);
+    vi.stubGlobal("window", { akra: { isAppFocused: async () => false } });
+    vi.stubGlobal("document", { hasFocus: () => false });
+    const open = vi.fn();
+    notifyIssueDecision(open, "akra:issue-decision:repo:decision-1", true);
+    await vi.waitFor(() => expect(shown).toHaveLength(1));
+    expect(shown[0]).toEqual({ title: "Akra", options: expect.objectContaining({
+      body: "이슈 결정의 응답 기한이 다가옵니다. 이슈 탭에서 확인해 주세요.",
+      tag: "akra:issue-decision:repo:decision-1",
+    }) });
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("shows only fixed text in a background notification and opens only on click", async () => {
     const shown: Array<{ title: string; options: NotificationOptions; notification: FakeNotification }> = [];
     class FakeNotification {

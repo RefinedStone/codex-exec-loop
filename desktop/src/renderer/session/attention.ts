@@ -42,9 +42,10 @@ export const ATTENTION_TEXT: Record<AttentionKind, string> = {
   approval: "승인을 기다립니다.",
 };
 
-/** 결정 알림은 실시간으로 추가된 좌표만 대상으로 삼는다. 재접속 복원과 같은 ID의 재방송은 제외한다. */
+/** 새 요청과 새 영속 재알림만 알린다. 같은 event ID의 재방송이나 재조회는 제외한다. */
 export function issueDecisionAttentionEvents(previous: Pick<DesktopState, "connection" | "kernel">, next: Pick<DesktopState, "connection" | "kernel">) {
   if (previous.connection?.phase !== "connected" || next.connection?.phase !== "connected"
     || previous.kernel.phase !== "attached" || next.kernel.phase !== "attached" || previous.kernel.kernel !== next.kernel.kernel) return [];
-  return next.kernel.issueAttention.filter((event) => !previous.kernel.issueAttention.some((known) => known.decisionId === event.decisionId));
+  return next.kernel.issueAttention.filter((event) => !previous.kernel.issueAttention.some((known) =>
+    known.decisionId === event.decisionId && known.reminderId === event.reminderId));
 }

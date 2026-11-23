@@ -2984,6 +2984,14 @@
                 },
                 "type": "array"
               },
+              "as_of_unix_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "control": {
                 "anyOf": [
                   {
@@ -3986,6 +3994,44 @@
         "required": [
           "kind",
           "decision",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "issue_decision_reminded",
+      "summary": "A once-per-decision reminder was committed before the deadline. Its durable event ID deduplicates retries; it does not change the decision revision or grant execution.",
+      "payload": {
+        "properties": {
+          "decision": {
+            "$ref": "#/$defs/IssueDecisionFactRecord"
+          },
+          "due_at": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "issue_decision_reminded",
+            "type": "string"
+          },
+          "reminded_at": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "event_id",
+          "decision",
+          "due_at",
+          "reminded_at",
           "revision"
         ],
         "type": "object"
@@ -10885,6 +10931,14 @@
                   },
                   "type": "array"
                 },
+                "as_of_unix_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
                 "control": {
                   "anyOf": [
                     {
@@ -11511,6 +11565,40 @@
           "required": [
             "kind",
             "decision",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/IssueDecisionFactRecord"
+            },
+            "due_at": {
+              "type": "string"
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "issue_decision_reminded",
+              "type": "string"
+            },
+            "reminded_at": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "event_id",
+            "decision",
+            "due_at",
+            "reminded_at",
             "revision"
           ],
           "type": "object"

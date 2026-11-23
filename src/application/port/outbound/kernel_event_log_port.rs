@@ -19,6 +19,7 @@ pub trait KernelEventLogPort: Send + Sync {
                     "issue_integrated",
                     "issue_closed",
                     "issue_feedback_posted",
+                    "issue_decision_reminded",
                 ],
             )?
             .iter()

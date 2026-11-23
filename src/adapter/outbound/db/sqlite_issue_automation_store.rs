@@ -31,8 +31,10 @@ use crate::domain::issue_automation::collection::{
     StoredIssueCollection,
 };
 use crate::domain::issue_automation::decision::{
-    IssueDecisionId, IssueDecisionRequest, StoredIssueDecision,
+    IssueDecisionDeadline, IssueDecisionId, IssueDecisionReminder, IssueDecisionRequest,
+    StoredIssueDecision,
 };
+use crate::domain::issue_automation::policy::IssueAutomationTimeouts;
 use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::triage::IssueTriageAssessment;
 
@@ -41,6 +43,7 @@ mod autonomy;
 mod collection;
 mod coordinator;
 mod decision;
+mod decision_deadlines;
 mod events;
 mod execution;
 mod execution_answers;
@@ -55,7 +58,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
@@ -751,6 +754,73 @@ impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
         decision::ensure(self, workspace_dir, expected, current, request)
     }
 
+    fn ensure_issue_decision_timed(
+        &self,
+        workspace_dir: &str,
+        expected: IssueTriageFence,
+        current: &IssueTriageAssessment,
+        request: &IssueDecisionRequest,
+        now_unix_ms: u64,
+        timeouts: &IssueAutomationTimeouts,
+    ) -> Result<IssueDecisionSaveResult> {
+        decision::ensure_timed(
+            self,
+            workspace_dir,
+            expected,
+            current,
+            request,
+            now_unix_ms,
+            timeouts,
+        )
+    }
+
+    fn timeout_issue_decision(
+        &self,
+        workspace_dir: &str,
+        expected: IssueDecisionFence,
+        current: &IssueTriageAssessment,
+        id: &IssueDecisionId,
+        now_unix_ms: u64,
+    ) -> Result<IssueDecisionSaveResult> {
+        decision::timeout(self, workspace_dir, expected, current, id, now_unix_ms)
+    }
+
+    fn issue_decision_deadlines(
+        &self,
+        workspace_dir: &str,
+        after_id: Option<&IssueDecisionId>,
+        limit: usize,
+    ) -> Result<Vec<IssueDecisionDeadline>> {
+        decision_deadlines::batch(self, workspace_dir, after_id, limit)
+    }
+
+    fn remind_issue_decision(
+        &self,
+        workspace_dir: &str,
+        expected: IssueDecisionFence,
+        current: &IssueTriageAssessment,
+        id: &IssueDecisionId,
+        now_unix_ms: u64,
+    ) -> Result<Option<IssueDecisionReminder>> {
+        decision_deadlines::remind(self, workspace_dir, expected, current, id, now_unix_ms)
+    }
+
+    fn pending_issue_decision_reminders(
+        &self,
+        workspace_dir: &str,
+        limit: usize,
+    ) -> Result<Vec<IssueDecisionReminder>> {
+        decision_deadlines::pending(self, workspace_dir, limit)
+    }
+
+    fn acknowledge_issue_decision_reminder(
+        &self,
+        workspace_dir: &str,
+        event_id: &str,
+    ) -> Result<()> {
+        decision_deadlines::acknowledge(self, workspace_dir, event_id)
+    }
+
     fn save_issue_decision(
         &self,
         workspace_dir: &str,
@@ -786,7 +856,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=9) => {
+            (APPLICATION_ID, version @ 1..=10) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -814,7 +884,7 @@ fn ensure_schema(
                     transaction.execute_batch(autonomy::SCHEMA)?;
                     transaction.execute_batch(autonomy::COMMAND_SCHEMA)?;
                     transaction.execute_batch(autonomy::FENCE_SCHEMA)?;
-                } else {
+                } else if version < 10 {
                     autonomy::migrate_selection(transaction)?;
                 }
                 if version < 8 {
@@ -826,7 +896,10 @@ fn ensure_schema(
                     feedback::create_schema(transaction)?;
                     feedback::seed_existing_grants(transaction)?;
                 }
-                admission::create_schema(transaction)?;
+                if version < 10 {
+                    admission::create_schema(transaction)?;
+                }
+                decision_deadlines::create_schema(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -858,6 +931,7 @@ fn ensure_schema(
                 execution_answers::create_schema(transaction)?;
                 feedback::create_schema(transaction)?;
                 admission::create_schema(transaction)?;
+                decision_deadlines::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -935,6 +1009,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 10 {
         expected.extend(admission::schema_objects());
+    }
+    if version >= 11 {
+        expected.extend(decision_deadlines::schema_objects());
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

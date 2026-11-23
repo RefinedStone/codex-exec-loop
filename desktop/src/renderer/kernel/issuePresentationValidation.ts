@@ -30,6 +30,7 @@ function decision(value: unknown, issue: ObjectValue): boolean {
 }
 
 export function hasValidIssueInteractions(value: ObjectValue, issue: ObjectValue): boolean {
+  if (value.as_of_unix_ms != null && (!revision(value.as_of_unix_ms) || (value.as_of_unix_ms as number) > 8_640_000_000_000_000)) return false;
   if (value.open_decisions != null && (!Array.isArray(value.open_decisions) || !value.open_decisions.every((item: unknown) => decision(item, issue)))) return false;
   if (value.control != null) {
     if (!record(value.control) || !["tracked", "held", "taken_over", "cancelled"].every((key) => typeof (value.control as ObjectValue)[key] === "boolean")

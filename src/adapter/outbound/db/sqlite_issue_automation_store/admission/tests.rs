@@ -8,6 +8,7 @@ use std::sync::{Arc, Barrier};
 mod fences;
 mod migration;
 mod support;
+mod timeout_default;
 use support::*;
 
 #[test]

@@ -39,16 +39,40 @@ pub(super) fn prepare(
     authority: IssueWorkStartAuthority,
     budget: &IssueAutomationBudget,
 ) -> Prepared {
+    prepare_with_default_answer(fixture, id, authority, budget, true)
+}
+
+pub(super) fn prepare_unanswered_default(
+    fixture: &Fixture,
+    id: &str,
+    budget: &IssueAutomationBudget,
+) -> Prepared {
+    prepare_with_default_answer(
+        fixture,
+        id,
+        IssueWorkStartAuthority::TimeoutDefault,
+        budget,
+        false,
+    )
+}
+
+fn prepare_with_default_answer(
+    fixture: &Fixture,
+    id: &str,
+    authority: IssueWorkStartAuthority,
+    budget: &IssueAutomationBudget,
+    answer_default: bool,
+) -> Prepared {
     let adapter = fixture.adapter();
     let control = adapter.ensure_collection(fixture.cwd()).unwrap();
     let mut selection = adapter.issue_autonomy_selection(fixture.cwd()).unwrap();
     if selection.requested_level.is_none() {
         let intent = IssueAutonomyIntent {
             command_id: "fixture-native-selection".into(),
-            level: if authority == IssueWorkStartAuthority::Policy {
-                IssueAutonomyLevel::Gated
-            } else {
+            level: if authority == IssueWorkStartAuthority::Human {
                 IssueAutonomyLevel::Propose
+            } else {
+                IssueAutonomyLevel::Gated
             },
             expected_revision: selection.revision,
             policy_version: "a".repeat(64),
@@ -120,13 +144,18 @@ pub(super) fn prepare(
         IssueTransition::Assess(IssueTriageResult::Ready),
     );
     let (fence, item) = subject(fixture, tracked.reference());
-    let mode = if authority == IssueWorkStartAuthority::Policy {
-        "gated"
-    } else {
+    let mode = if authority == IssueWorkStartAuthority::Human {
         "propose"
+    } else {
+        "gated"
+    };
+    let start_gate = if authority == IssueWorkStartAuthority::TimeoutDefault {
+        "timeout_default"
+    } else {
+        "auto"
     };
     let policy = resolve_issue_automation_policy(Some(&format!(
-        "[binding.github]\nmode = \"{mode}\"\n[authority]\nautonomy_cap = \"gated\"\n[select]\nmode = \"all_open\"\ntrusted_actors = [{{provider=\"github\",server_id=\"github.com\",actor_id=\"U_author\"}}]\n[gates.gated.normal]\nstart = \"auto\"\n[budget]\nmax_running={}\nmax_started_per_day={}\nmax_attempts={}\n",
+        "[binding.github]\nmode = \"{mode}\"\n[authority]\nautonomy_cap = \"gated\"\n[select]\nmode = \"all_open\"\ntrusted_actors = [{{provider=\"github\",server_id=\"github.com\",actor_id=\"U_author\"}}]\n[gates.gated.normal]\nstart = \"{start_gate}\"\n[budget]\nmax_running={}\nmax_started_per_day={}\nmax_attempts={}\n",
         budget.max_running, budget.max_started_per_day, budget.max_attempts,
     )), None).unwrap();
     let assessment = triage_issue(IssueTriageInput {
@@ -151,8 +180,9 @@ pub(super) fn prepare(
     let (fence, _) = subject(fixture, &item.issue);
     let approved_basis =
         IssueDecisionBasis::from_assessment(&assessment, IssueAutomationGate::Start, None).unwrap();
-    let decision_id = if authority == IssueWorkStartAuthority::Human {
+    let decision_id = if authority != IssueWorkStartAuthority::Policy {
         let id = start_decision_id(&item.issue, &approved_basis);
+        let is_default = authority == IssueWorkStartAuthority::TimeoutDefault;
         let shared = |text: &str| IssueDecisionSharedText::new_shared(text).unwrap();
         let request = IssueDecisionRequest::new(
             id.clone(),
@@ -166,10 +196,14 @@ pub(super) fn prepare(
                     label: shared("시작"),
                     effect: shared("작업을 시작한다."),
                 }],
-                recommended: None,
+                recommended: is_default.then(|| "start".into()),
                 basis: approved_basis.clone(),
-                on_timeout: IssueDecisionTimeout::Wait,
-                due_at: None,
+                on_timeout: if is_default {
+                    IssueDecisionTimeout::Default
+                } else {
+                    IssueDecisionTimeout::Wait
+                },
+                due_at: is_default.then(|| "1970-01-01T00:00:01Z".into()),
                 asked_by: "fixture".into(),
                 evidence: vec![],
             },
@@ -181,35 +215,58 @@ pub(super) fn prepare(
                 .unwrap(),
             IssueDecisionSaveResult::Saved(_)
         ));
-        let answered = request
-            .answer_for_gate(
-                &approved_basis,
-                IssueAutomationGateAction::Human,
-                IssueDecisionAgentAnswer {
-                    option: "start".into(),
-                    note: None,
-                    caller: Some("Desktop".into()),
-                    channel: "native".into(),
-                    at: "2026-11-22T00:00:00Z".into(),
-                },
-                Some("desktop-confirmation:0123456789abcdef0123456789abcdef"),
-            )
-            .unwrap()
-            .request;
-        assert!(matches!(
-            adapter
-                .save_issue_decision(
-                    fixture.cwd(),
-                    IssueDecisionFence {
-                        triage: fence,
-                        decision_revision: 1
+        if is_default {
+            if answer_default {
+                assert!(matches!(
+                    adapter
+                        .timeout_issue_decision(
+                            fixture.cwd(),
+                            IssueDecisionFence {
+                                triage: fence,
+                                decision_revision: 1,
+                            },
+                            &assessment,
+                            &id,
+                            1_000,
+                        )
+                        .unwrap(),
+                    IssueDecisionSaveResult::Saved(commit)
+                        if commit.changed
+                            && commit.record.request.answer().is_some_and(|answer|
+                                answer.by == IssueDecisionAnswerBy::Default)
+                ));
+            }
+        } else {
+            let answered = request
+                .answer_for_gate(
+                    &approved_basis,
+                    IssueAutomationGateAction::Human,
+                    IssueDecisionAgentAnswer {
+                        option: "start".into(),
+                        note: None,
+                        caller: Some("Desktop".into()),
+                        channel: "native".into(),
+                        at: "2026-11-22T00:00:00Z".into(),
                     },
-                    &assessment,
-                    &answered,
+                    Some("desktop-confirmation:0123456789abcdef0123456789abcdef"),
                 )
-                .unwrap(),
-            IssueDecisionSaveResult::Saved(_)
-        ));
+                .unwrap()
+                .request;
+            assert!(matches!(
+                adapter
+                    .save_issue_decision(
+                        fixture.cwd(),
+                        IssueDecisionFence {
+                            triage: fence,
+                            decision_revision: 1
+                        },
+                        &assessment,
+                        &answered,
+                    )
+                    .unwrap(),
+                IssueDecisionSaveResult::Saved(_)
+            ));
+        }
         Some(id)
     } else {
         None

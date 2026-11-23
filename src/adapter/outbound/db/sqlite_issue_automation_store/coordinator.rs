@@ -9,6 +9,7 @@ use crate::application::port::outbound::issue_automation_store_port::{
 use crate::domain::issue_automation::collection::IssueCollectionMode;
 use crate::domain::issue_automation::coordinator::{
     IssueWorkCheckpoint, IssueWorkStartAuthority, human_start, policy_start, ready_for_start,
+    timeout_default_start,
 };
 use crate::domain::issue_automation::decision::{IssueDecisionBasis, IssueDecisionId};
 use crate::domain::issue_automation::policy::IssueAutomationGate;
@@ -155,7 +156,7 @@ pub(super) fn validate_current(
         return Ok(false);
     };
     // Automatic starts have no human decision whose insertion could supply this fence.
-    // Require the exact durable assessment for both authority origins.
+    // Require the exact durable assessment for every start authority.
     Ok(item
         .triage
         .as_ref()
@@ -226,16 +227,42 @@ pub(super) fn validate_authorization(
             }
         }
         IssueWorkStartAuthority::Policy => {
-            let selection = super::autonomy::read(tx, workspace)?;
-            if !policy_start(assessment)
-                || selection.requested_level
-                    != Some(crate::domain::issue_automation::autonomy::IssueAutonomyLevel::Gated)
-                || selection.pending.is_some()
-                || selection.revision != assessment.basis().runtime_selection_revision
-            {
-                bail!("the issue work requires an explicit current gated selection");
+            if !policy_start(assessment) {
+                bail!("the issue work requires a current automatic start gate");
             }
+            validate_gated_selection(tx, workspace, assessment)?;
         }
+        IssueWorkStartAuthority::TimeoutDefault => {
+            let decision = super::decision::read(
+                tx,
+                workspace,
+                decision_id.expect("validated timeout-default authority"),
+            )?
+            .ok_or_else(|| anyhow!("the issue work default start decision was not found"))?;
+            if !timeout_default_start(assessment, &decision.request)
+                || decision.request.issue() != issue
+                || decision.request.definition().basis != *approved
+            {
+                bail!("the issue work does not have a current default start decision");
+            }
+            validate_gated_selection(tx, workspace, assessment)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_gated_selection(
+    tx: &Connection,
+    workspace: &str,
+    assessment: &IssueTriageAssessment,
+) -> Result<()> {
+    let selection = super::autonomy::read(tx, workspace)?;
+    if selection.requested_level
+        != Some(crate::domain::issue_automation::autonomy::IssueAutonomyLevel::Gated)
+        || selection.pending.is_some()
+        || selection.revision != assessment.basis().runtime_selection_revision
+    {
+        bail!("the issue work requires an explicit current gated selection");
     }
     Ok(())
 }

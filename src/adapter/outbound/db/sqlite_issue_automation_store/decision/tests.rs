@@ -21,6 +21,8 @@ use crate::domain::issue_automation::triage::{IssueTriageInput, triage_issue};
 use crate::domain::issue_policy::{IssueDisclosurePolicy, IssuePolicy};
 use crate::domain::issue_validation::IssueRequirements;
 
+mod timeouts;
+
 fn observation(fixture: &Fixture) -> IssueSourceObservation {
     let mut snapshot = snapshot("## 완료 기준\n- 변경 사항을 검증한다.\n");
     snapshot.policy_version = issue_policy_version(&IssuePolicy::builtin());
@@ -716,4 +718,5 @@ fn schema_v5_migration_preserves_existing_decision_and_observation_records() {
         .unwrap();
 }
 
+mod deadlines;
 mod feedback_deferred;

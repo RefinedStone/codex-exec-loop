@@ -114,6 +114,18 @@ impl From<&IssueDecisionBasis> for IssueDecisionBasisRecord {
 }
 
 impl KernelEvent {
+    pub fn issue_decision_reminded(
+        event: &crate::domain::issue_automation::decision::IssueDecisionReminder,
+    ) -> Self {
+        Self::IssueDecisionReminded {
+            event_id: event.event_id.clone(),
+            decision: (&event.fact).into(),
+            due_at: event.due_at.clone(),
+            reminded_at: event.reminded_at.clone(),
+            revision: event.revision,
+        }
+    }
+
     pub fn issue_decision_requested(fact: &IssueDecisionFact, revision: u64) -> Self {
         Self::IssueDecisionRequested {
             decision: fact.into(),

@@ -7,7 +7,7 @@ mod decisions;
 mod recovery;
 
 impl IssueCoordinatorService {
-    /// 원격 이슈를 조회하거나 새 최초 task를 등록하지 않는다.
+    /// 로컬 실행과 기한을 추적한다. 확정된 Default 시작만 기존 시작 경계로 전달한다.
     pub fn track_execution(
         &self,
         cancel: &IssueCollectionCancellation,
@@ -21,6 +21,9 @@ impl IssueCoordinatorService {
         }
         let report_once = work_event_reporter(committed);
         let committed: &Reporter<'_> = &report_once;
+        let deadline_error = self
+            .process_decision_deadlines(cancel, now_unix_ms, committed)
+            .err();
         let feedback_error = self.reconcile_feedback(cancel).err();
         self.report_pending(committed)?;
         super::super::issue_intervention::recover_pending_controls(
@@ -36,7 +39,7 @@ impl IssueCoordinatorService {
             committed,
             &mut std::collections::BTreeSet::new(),
         );
-        result.and_then(|()| feedback_error.map_or(Ok(()), Err))
+        result.and_then(|()| feedback_error.or(deadline_error).map_or(Ok(()), Err))
     }
 }
 
@@ -79,7 +82,19 @@ pub(super) fn track(
                     committed,
                 )
             })()
-            .and_then(|()| super::closure::reconcile(service, &item.issue, cancel, committed));
+            .and_then(|()| {
+                super::closure::reconcile(service, &item.issue, cancel, now_unix_ms, committed)
+            })
+            .and_then(|()| {
+                reconcile_timeout_start(
+                    service,
+                    &item,
+                    cancel,
+                    now_unix_ms,
+                    execution_enabled,
+                    committed,
+                )
+            });
             if let Err(error) = result {
                 failed_work_orders.insert(issue_work_order_id(&item.issue));
                 first_error.get_or_insert(error);
@@ -100,6 +115,66 @@ pub(super) fn track(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+// A crash between Default commit and submission must not require another remote collection.
+// The normal coordinator still performs resync, budget admission and permit checks.
+fn reconcile_timeout_start(
+    service: &IssueCoordinatorService,
+    item: &IssueCollectionItem,
+    cancel: &IssueCollectionCancellation,
+    now_unix_ms: u64,
+    execution_enabled: bool,
+    committed: &Reporter<'_>,
+) -> Result<()> {
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
+    let observing = service
+        .store
+        .get_collection(&service.workspace)?
+        .is_some_and(|collection| collection.config.mode == IssueCollectionMode::Observe);
+    if let Some(work) = service
+        .store
+        .get_issue_work(&service.workspace, &item.issue)?
+        && work.current_start_authority() == IssueWorkStartAuthority::TimeoutDefault
+    {
+        if !observing {
+            return fence_execution(service, &work);
+        }
+        return service.reconcile(
+            item.clone(),
+            cancel,
+            now_unix_ms,
+            execution_enabled,
+            committed,
+        );
+    }
+    if !execution_enabled || !observing {
+        return Ok(());
+    }
+    let Some(triage) = &item.triage else {
+        return Ok(());
+    };
+    if !triage.assessment.gates().iter().any(|gate| {
+        gate.gate == IssueAutomationGate::Start
+            && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutDefault
+    }) { return Ok(()); }
+    let basis = service.approval_basis(&triage.assessment)?;
+    let id = start_decision_id(&item.issue, &basis);
+    let Some(decision) = service.store.get_issue_decision(&service.workspace, &id)? else {
+        return Ok(());
+    };
+    if timeout_default_start(&triage.assessment, &decision.request) {
+        service.reconcile(
+            item.clone(),
+            cancel,
+            now_unix_ms,
+            execution_enabled,
+            committed,
+        )?;
+    }
+    Ok(())
 }
 
 fn track_one(
@@ -263,6 +338,7 @@ fn track_one(
             &current_work,
             &record,
             cancel,
+            now_unix_ms,
             execution_enabled,
             committed,
         ) {

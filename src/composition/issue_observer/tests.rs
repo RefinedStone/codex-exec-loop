@@ -9,6 +9,8 @@ use crate::domain::issue_automation::collection::{
     IssueCollectionConfig, IssueCollectionFailure, IssueCollectionStatus, StoredIssueCollection,
 };
 
+mod deadlines;
+
 const WAIT: Duration = Duration::from_secs(5);
 
 struct NoEffects;

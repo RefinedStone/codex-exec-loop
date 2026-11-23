@@ -28,6 +28,8 @@ use super::issue_triage::IssueTriageService;
 
 const DECISION_CAS_ATTEMPTS: usize = 3;
 
+mod deadlines;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueDecisionAnswerResult {
     pub commit: IssueDecisionCommit,
@@ -99,7 +101,26 @@ impl IssueDecisionService {
     pub fn ensure_request(
         &self,
         id: IssueDecisionId,
+        definition: IssueDecisionDefinition,
+    ) -> Result<IssueDecisionCommit> {
+        self.ensure_request_with_time(id, definition, None)
+    }
+
+    /// 새 요청의 기한만 최초 저장 시 고정한다. 기존 요청의 기한과 판은 바꾸지 않는다.
+    pub fn ensure_request_at(
+        &self,
+        id: IssueDecisionId,
+        definition: IssueDecisionDefinition,
+        now_unix_ms: u64,
+    ) -> Result<IssueDecisionCommit> {
+        self.ensure_request_with_time(id, definition, Some(now_unix_ms))
+    }
+
+    fn ensure_request_with_time(
+        &self,
+        id: IssueDecisionId,
         mut definition: IssueDecisionDefinition,
+        now_unix_ms: Option<u64>,
     ) -> Result<IssueDecisionCommit> {
         if definition.subject.issue().project_scope.workspace_dir != self.workspace_dir {
             bail!("the decision belongs to a different workspace")
@@ -126,11 +147,24 @@ impl IssueDecisionService {
             {
                 bail!("the decision requires a current persisted issue assessment")
             }
-            match self
-                .store
-                .ensure_issue_decision(&self.workspace_dir, fence, &current, &request)
-                .map_err(ledger_unavailable)?
-            {
+            let saved = if let Some(now_unix_ms) = now_unix_ms {
+                let timeouts = self
+                    .triage
+                    .decision_timeouts_for_policy(&current.basis().automation_policy_version)?;
+                self.store.ensure_issue_decision_timed(
+                    &self.workspace_dir,
+                    fence,
+                    &current,
+                    &request,
+                    now_unix_ms,
+                    &timeouts,
+                )
+            } else {
+                self.store
+                    .ensure_issue_decision(&self.workspace_dir, fence, &current, &request)
+            }
+            .map_err(ledger_unavailable)?;
+            match saved {
                 IssueDecisionSaveResult::Saved(commit) => return Ok(*commit),
                 IssueDecisionSaveResult::Conflict => continue,
             }
