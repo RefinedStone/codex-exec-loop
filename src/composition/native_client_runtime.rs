@@ -1899,7 +1899,7 @@ impl NativeClientRuntime {
                 IssueObserverCommittedFact::Tracked(fact) => {
                     KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
                 }
-                IssueObserverCommittedFact::Coordinated(fact) => match fact {
+                IssueObserverCommittedFact::Coordinated(fact) => match *fact {
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::FeedbackPosted(event) =>
                         KernelEvent::issue_feedback_posted(&event),
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::Triaged(fact) => KernelEvent::issue_triaged(
@@ -1974,6 +1974,7 @@ impl NativeClientRuntime {
                 pending
                     .clone()
                     .into_iter()
+                    .map(Box::new)
                     .map(IssueObserverCommittedFact::Coordinated)
                     .collect(),
             );

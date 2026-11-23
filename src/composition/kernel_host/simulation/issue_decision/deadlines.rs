@@ -155,6 +155,7 @@ fn boot_with_clock(
                 report(
                     facts
                         .into_iter()
+                        .map(Box::new)
                         .map(IssueObserverCommittedFact::Coordinated)
                         .collect(),
                 );

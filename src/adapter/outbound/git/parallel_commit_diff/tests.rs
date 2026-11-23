@@ -24,7 +24,7 @@ fn request() -> ParallelCommitDiffRequest<'static> {
 fn nul_numstat_preserves_complete_paths_and_explicit_binary_counts() {
     let diff = parse_numstat(
         request(),
-        "3\t2\tsrc/hello world.rs\0-\t-\tassets/icon.bin\00\t7\t문서/옛 문서.md\0".as_bytes(),
+        "3\t2\tsrc/hello world.rs\x00-\t-\tassets/icon.bin\x000\t7\t문서/옛 문서.md\x00".as_bytes(),
     )
     .unwrap();
     assert_eq!(diff.base_commit_sha, BASE);
@@ -47,17 +47,17 @@ fn malformed_or_partially_read_numstat_never_returns_a_partial_diff() {
     for bytes in [
         &b""[..],
         b"1\t0\tsrc/lib.rs",
-        b"1\t0\tsrc/lib.rs\0\0",
-        b"1\tsrc/lib.rs\0",
-        b"\t0\tsrc/lib.rs\0",
-        b"-\t0\tassets/icon.bin\0",
-        b"0\t-\tassets/icon.bin\0",
-        b"+1\t0\tsrc/lib.rs\0",
-        b"01\t0\tsrc/lib.rs\0",
-        b"1.5\t0\tsrc/lib.rs\0",
-        b"1\t0\t\0old\0new\0",
-        b"1\t0\tsrc/lib.rs\01\t0\tsrc/lib.rs\0",
-        b"1\t0\tsrc/lib.rs\0malformed-tail\0",
+        b"1\t0\tsrc/lib.rs\x00\x00",
+        b"1\tsrc/lib.rs\x00",
+        b"\t0\tsrc/lib.rs\x00",
+        b"-\t0\tassets/icon.bin\x00",
+        b"0\t-\tassets/icon.bin\x00",
+        b"+1\t0\tsrc/lib.rs\x00",
+        b"01\t0\tsrc/lib.rs\x00",
+        b"1.5\t0\tsrc/lib.rs\x00",
+        b"1\t0\t\x00old\x00new\x00",
+        b"1\t0\tsrc/lib.rs\x001\t0\tsrc/lib.rs\x00",
+        b"1\t0\tsrc/lib.rs\x00malformed-tail\x00",
     ] {
         assert!(parse_numstat(request(), bytes).is_err(), "{bytes:?}");
     }
@@ -66,10 +66,10 @@ fn malformed_or_partially_read_numstat_never_returns_a_partial_diff() {
 #[test]
 fn non_utf8_and_control_paths_are_rejected_without_skipping_the_file() {
     for bytes in [
-        &b"1\t0\tsrc/\xff.rs\0"[..],
-        b"1\t0\tsrc/tab\tfile.rs\0",
-        b"1\t0\tsrc/line\nfile.rs\0",
-        b"1\t0\t../outside\0",
+        &b"1\t0\tsrc/\xff.rs\x00"[..],
+        b"1\t0\tsrc/tab\tfile.rs\x00",
+        b"1\t0\tsrc/line\nfile.rs\x00",
+        b"1\t0\t../outside\x00",
     ] {
         assert!(parse_numstat(request(), bytes).is_err());
     }
@@ -78,16 +78,16 @@ fn non_utf8_and_control_paths_are_rejected_without_skipping_the_file() {
 #[test]
 fn numeric_overflow_and_collection_limits_fail_the_entire_inspection() {
     for data in [
-        b"18446744073709551616\t0\tsrc/lib.rs\0".to_vec(),
-        b"18446744073709551615\t1\tsrc/lib.rs\0".to_vec(),
-        b"18446744073709551615\t0\ta\01\t0\tb\0".to_vec(),
+        b"18446744073709551616\t0\tsrc/lib.rs\x00".to_vec(),
+        b"18446744073709551615\t1\tsrc/lib.rs\x00".to_vec(),
+        b"18446744073709551615\t0\ta\x001\t0\tb\x00".to_vec(),
         format!(
-            "1\t0\t{}\0",
+            "1\t0\t{}\x00",
             "x".repeat(MAX_ISSUE_DELIVERY_DIFF_PATH_BYTES + 1)
         )
         .into_bytes(),
         (0..=MAX_ISSUE_DELIVERY_DIFF_FILES)
-            .map(|index| format!("1\t0\tsrc/file-{index}.rs\0"))
+            .map(|index| format!("1\t0\tsrc/file-{index}.rs\x00"))
             .collect::<String>()
             .into_bytes(),
         vec![b'x'; MAX_DIFF_STDOUT_BYTES + 1],

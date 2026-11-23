@@ -44,6 +44,17 @@ impl AnswerExecution {
 }
 
 impl IssueWorkExecutionPort for AnswerExecution {
+    fn frozen_delivery_source(&self, workspace: &str, work: &str) -> Result<Option<String>> {
+        self.base.frozen_delivery_source(workspace, work)
+    }
+    fn delivery_diff(
+        &self,
+        workspace: &str,
+        work: &str,
+        source: &str,
+    ) -> Result<crate::domain::issue_automation::delivery::IssueDeliveryDiff> {
+        self.base.delivery_diff(workspace, work, source)
+    }
     fn control(&self, workspace: &str, work: &str) -> Result<IssueWorkControl> {
         self.base.control(workspace, work)
     }

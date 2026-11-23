@@ -46,6 +46,17 @@ impl InterruptedSubmission {
 }
 
 impl IssueWorkExecutionPort for InterruptedSubmission {
+    fn frozen_delivery_source(&self, workspace: &str, work: &str) -> Result<Option<String>> {
+        self.inner.frozen_delivery_source(workspace, work)
+    }
+    fn delivery_diff(
+        &self,
+        workspace: &str,
+        work: &str,
+        source: &str,
+    ) -> Result<crate::domain::issue_automation::delivery::IssueDeliveryDiff> {
+        self.inner.delivery_diff(workspace, work, source)
+    }
     fn submit(&self, workspace: &str, order: &IssueWorkOrder) -> Result<Vec<String>> {
         self.probe.attempts.fetch_add(1, Ordering::SeqCst);
         let inject = !self.injected.swap(true, Ordering::SeqCst);
