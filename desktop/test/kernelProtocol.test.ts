@@ -88,6 +88,27 @@ describe("kernel protocol generation", () => {
     expect(compile('const limit: IssuePageLimit = "100";', protocol).status).toBe(1);
   });
 
+  it("supports nullable bounded arrays while preserving their element type", () => {
+    const changed: KernelSpec = {
+      ...spec,
+      $defs: {
+        ...spec.$defs,
+        TaskEvidenceTaskIds: { type: ["array", "null"], items: { type: "string" }, minItems: 1, maxItems: 256 },
+      },
+    };
+    const protocol = renderKernelProtocol(changed);
+    expect(protocol).toContain("export type TaskEvidenceTaskIds = (Array<string> | null);");
+    expect(compile(`
+      const selected: TaskEvidenceTaskIds = ["task-1", "task-2"];
+      const all: TaskEvidenceTaskIds = null;
+      const query: KernelQuery = { type: "task_evidence", task_ids: selected, limit: 256 };
+    `, protocol)).toEqual({ status: 0, output: "" });
+    expect(compile('const ids: TaskEvidenceTaskIds = [123];', protocol).status).toBe(1);
+    expect(() => renderKernelProtocol({
+      ...spec, $defs: { Broken: { type: "array", minItems: 1, maxItems: 256 } },
+    })).toThrow("Broken: array needs items");
+  });
+
   it.each(["oneOf", "anyOf"] as const)("preserves a sibling object discriminator beside %s", (keyword) => {
     const changed: KernelSpec = {
       ...spec,

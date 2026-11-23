@@ -24,6 +24,13 @@ pub use issue_decision::{
     IssueDecisionSubjectRecord,
 };
 
+mod task_evidence;
+#[cfg(test)]
+pub(crate) use task_evidence::sample_task_evidence_events;
+pub use task_evidence::{
+    TaskCriterionEvidenceRecord, TaskCriterionWaiverActor, TaskCriterionWaiverRecord,
+};
+
 /*
  * 준비가 끝났지만 제출이 거절된 thread 지정 프롬프트이다 (plan 19 Q2-3). 준비가 만든 작업은 이미 큐에 있다. 커널이
  * 쉬면 같은 handoff 로 한 번 다시 낸다. 기록에서 되돌릴 수 있게 직렬화한다 (Q3-1).
@@ -447,6 +454,16 @@ pub enum KernelEvent {
         at: String,
         revision: u64,
     },
+    CriterionEvidenceRecorded {
+        event_id: String,
+        evidence_revision: u64,
+        evidence: TaskCriterionEvidenceRecord,
+    },
+    CriterionWaived {
+        event_id: String,
+        evidence_revision: u64,
+        waiver: TaskCriterionWaiverRecord,
+    },
     /// 영속 work-order 연결이 확정된 사실이다. handoff 본문은 포함하지 않는다.
     IssueWorkSubmitted {
         event_id: String,
@@ -841,6 +858,8 @@ impl KernelEvent {
     pub fn record_kind(&self) -> KernelRecordKind {
         match self {
             Self::IssueHeld { .. } => KernelRecordKind::IssueHeld,
+            Self::CriterionEvidenceRecorded { .. } => KernelRecordKind::CriterionEvidenceRecorded,
+            Self::CriterionWaived { .. } => KernelRecordKind::CriterionWaived,
             Self::IssueReleased { .. } => KernelRecordKind::IssueReleased,
             Self::IssueWorkPermitRevoked { .. } => KernelRecordKind::IssueWorkPermitRevoked,
             Self::IssueTracked { .. } => KernelRecordKind::IssueTracked,
@@ -879,6 +898,8 @@ impl KernelEvent {
     pub fn thread_id(&self) -> &str {
         match self {
             Self::RepositoryChanged { .. }
+            | Self::CriterionEvidenceRecorded { .. }
+            | Self::CriterionWaived { .. }
             | Self::AutoFollowConfigured { .. }
             | Self::IssueTracked { .. }
             | Self::IssueWorkSubmitted { .. }
@@ -925,6 +946,8 @@ impl KernelEvent {
             | Self::TurnStarted { op_id, .. }
             | Self::TurnEnded { op_id, .. } => *op_id,
             Self::ThreadPromptRejected { .. }
+            | Self::CriterionEvidenceRecorded { .. }
+            | Self::CriterionWaived { .. }
             | Self::AutoFollowConfigured { .. }
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
@@ -985,6 +1008,8 @@ impl KernelEvent {
                 OperationEnd::Lost => OperationState::Lost,
             },
             Self::ThreadPromptRejected { .. }
+            | Self::CriterionEvidenceRecorded { .. }
+            | Self::CriterionWaived { .. }
             | Self::AutoFollowConfigured { .. }
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
@@ -2165,6 +2190,8 @@ mod tests {
                 8,
                 Some("akra-cli"),
             ),
+            KernelEvent::task_evidence(&sample_task_evidence_events()[0]),
+            KernelEvent::task_evidence(&sample_task_evidence_events()[1]),
         ];
         // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.
         assert_eq!(

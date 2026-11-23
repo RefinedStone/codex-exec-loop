@@ -70,7 +70,14 @@ pub(super) fn resume(
     start_authorization: &dyn ParallelAgentWorkerStartAuthorization,
 ) -> Result<ConversationTurnTerminalReceipt> {
     let result = adapter.with_isolated_streaming_runtime(|connection| {
-        let workspace = protected_thread_workspace(request.cwd)?;
+        let mut workspace = protected_thread_workspace(request.cwd)?;
+        let evidence_root = worker_evidence::WorkerEvidenceRoot::prepare(
+            request.evidence_incoming_root,
+            adapter.execution_policy.sandbox_mode,
+        )?;
+        if let Some(root) = &evidence_root {
+            root.apply_config(&mut workspace)?;
+        }
         if workspace.cwd != request.cwd || request.thread_id.trim().is_empty() {
             anyhow::bail!("isolated continuation requires its exact canonical cwd and thread");
         }
@@ -81,7 +88,7 @@ pub(super) fn resume(
             let restored = connection.unarchive_thread(request.thread_id)?;
             exact_thread(&restored.thread, request.thread_id, &requested_cwd)?;
         }
-        let thread_request = runtime_configuration_request(
+        let mut thread_request = runtime_configuration_request(
             None,
             None,
             Some(&requested_cwd),
@@ -89,6 +96,9 @@ pub(super) fn resume(
             adapter.execution_policy.approvals_reviewer,
             Some(adapter.execution_policy.sandbox_mode),
         );
+        if let Some(root) = &evidence_root {
+            root.record_request(&mut thread_request);
+        }
         let resumed = connection.resume_thread(ThreadResumeParams {
             thread_id: request.thread_id.into(),
             cwd: Some(workspace.cwd),
@@ -106,6 +116,9 @@ pub(super) fn resume(
             adapter.connection_config.runtime_launch_environment(),
         )?;
         let applied_cwd = exact_applied_workspace_cwd(&envelope, &requested_cwd, "thread/resume")?;
+        if let Some(root) = &evidence_root {
+            root.verify_applied(&envelope, &requested_cwd)?;
+        }
         connection.discard_notifications_before_turn_binding();
         send_required_app_server_event(
             &event_sender,
@@ -125,11 +138,9 @@ pub(super) fn resume(
         start_authorization.validate()?;
         // This is the only turn/start call in the continuation path. Neither transport failure
         // nor missing ACK is retried; the planning authority already owns an Unknown receipt.
-        adapter.start_turn_and_wait_for_stream(
+        adapter.start_worker_turn_and_wait_for_stream(
             connection,
-            vec![TurnInputItem::text(request.prompt)],
-            None,
-            None,
+            request.prompt,
             &event_sender,
             AppServerPromptTraceContext {
                 workspace_dir: applied_cwd,
@@ -139,6 +150,7 @@ pub(super) fn resume(
                 developer_instructions: None,
                 thread_id: request.thread_id.into(),
             },
+            evidence_root.as_ref(),
         )
     });
     finish_stream_result(result, &event_sender)

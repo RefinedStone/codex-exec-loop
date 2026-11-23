@@ -43,6 +43,26 @@ fn sample_commands() -> Vec<KernelCommand> {
             confirm: true,
         },
         KernelCommand::RefreshPlanning {},
+        KernelCommand::PrepareEvidence {
+            request_id: "prepare-1".into(),
+            task_id: "task-1".into(),
+            criterion_id: "criterion 1".into(),
+            scope_id: "a".repeat(64),
+            expected_acceptance_revision: 3,
+        },
+        KernelCommand::RecordEvidence {
+            attempt_id: "b".repeat(64),
+            status: TaskEvidenceStatus::Pass,
+            note: None,
+        },
+        KernelCommand::WaiveCriterion {
+            request_id: "waive-1".into(),
+            task_id: "task-1".into(),
+            criterion_id: "criterion 1".into(),
+            scope_id: "a".repeat(64),
+            expected_acceptance_revision: 3,
+            reason: "Agreed exemption".into(),
+        },
         KernelCommand::CreateTask {
             task: sample_task_fields(),
         },
@@ -803,7 +823,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 18);
+    assert_eq!(queries.len(), 19);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Delegations {},
         KernelQuery::Delegation { id: "job-1".into() },
@@ -816,6 +836,11 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},
         KernelQuery::Planning {},
+        KernelQuery::TaskEvidence {
+            task_ids: None,
+            after_task_id: None,
+            limit: None,
+        },
         KernelQuery::Parallel {},
         KernelQuery::History {
             after: None,
@@ -2377,6 +2402,8 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             3,
             Some("akra-desktop"),
         ),
+        Record::task_evidence(&crate::domain::kernel_event::sample_task_evidence_events()[0]),
+        Record::task_evidence(&crate::domain::kernel_event::sample_task_evidence_events()[1]),
     ]
 }
 
@@ -2431,6 +2458,11 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},
         KernelQuery::Planning {},
+        KernelQuery::TaskEvidence {
+            task_ids: None,
+            after_task_id: None,
+            limit: None,
+        },
         KernelQuery::Parallel {},
         KernelQuery::History {
             after: Some(3),
@@ -2527,6 +2559,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
             }],
         },
         KernelEvent::Planning(PlanningState {
+            task_evidence: None,
             status: PlanningStatus::ReadyWithTask,
             revision: Some(4),
             queue_summary: Some("1 ready".to_string()),

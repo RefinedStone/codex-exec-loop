@@ -924,6 +924,17 @@ fn run_parallel_dispatch_worker(
             }
         };
     }
+    let (evidence_incoming_root, evidence_notice) = match turn_service
+        .prepare_worker_evidence_incoming(
+            &request.planning_workspace_directory,
+            &request.expected_lease,
+        ) {
+        Ok(root) => (root, None),
+        Err(_) => (
+            None,
+            Some(super::worker_evidence::EVIDENCE_PREPARATION_NOTICE.to_string()),
+        ),
+    };
     let (event_tx, event_rx) = conversation_stream_channel();
     let service_request = request.clone();
     event_log::emit_lazy("parallel_worker_stream_starting", || {
@@ -956,6 +967,7 @@ fn run_parallel_dispatch_worker(
                 stream_worker_port.run_isolated_resumed_thread_stream(
                     ParallelAgentWorkerResumeRequest {
                         cwd: &service_request.worktree_directory,
+                        evidence_incoming_root: evidence_incoming_root.as_deref(),
                         thread_id: &claim.request.question.thread_id,
                         prompt: &service_request.prompt,
                         service_name: &service_request.service_name,
@@ -967,6 +979,7 @@ fn run_parallel_dispatch_worker(
                 stream_worker_port.run_isolated_new_thread_stream(
                     ParallelAgentWorkerStreamRequest {
                         cwd: &service_request.worktree_directory,
+                        evidence_incoming_root: evidence_incoming_root.as_deref(),
                         prompt: &service_request.prompt,
                         developer_instructions: &service_request.developer_instructions,
                         service_name: &service_request.service_name,
@@ -977,7 +990,7 @@ fn run_parallel_dispatch_worker(
         })
     });
 
-    let mut notices = Vec::new();
+    let mut notices = evidence_notice.into_iter().collect::<Vec<_>>();
     let mut stream_state = ParallelDispatchWorkerStreamState::default();
 
     // TurnTerminal 또는 transport Failed 이후의 이벤트는 official completion 판단에 쓰지 않는다.
@@ -1923,6 +1936,7 @@ fn parallel_worker_agent_message_completed_trace_payload(
 #[cfg(test)]
 mod tests {
     mod continuation;
+    mod worker_evidence;
 
     use super::{
         ParallelDispatchOfficialCompletionOutcome, ParallelDispatchTurnCompleted,

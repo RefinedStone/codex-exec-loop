@@ -211,6 +211,211 @@ async fn desktop_name_is_not_proof_and_an_exact_confirmed_mode_command_replays_w
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn criterion_waiver_uses_the_native_broker_and_cannot_survive_acceptance_scope_change() {
+    use crate::adapter::inbound::desktop_confirmation_bridge::storage::random_id;
+
+    // Private authority는 workspace 밖에도 남는다. PID가 재사용돼도 이전 멱등 기록과 겹치지 않는다.
+    let folder =
+        KernelTestFolder::new(&format!("human-criterion-waiver-{}", random_id(8).unwrap()));
+    let kernels = Arc::new(RepositoryKernelRegistry::default());
+    let mut main = connect_kernel_client(kernels.clone()).await;
+    let mut agent = connect_kernel_client(kernels.clone()).await;
+    named_attach(&mut main, "attach-main", &folder.workspace()).await;
+    named_attach(&mut agent, "attach-agent", &folder.workspace()).await;
+    let criterion = json!({"id":"criterion with spaces","scenario":"The expected result exists.","channel":"command","essential":true});
+    let created = kernel_request(&mut agent, "create", "akra/kernel/command", json!({
+        "command":{"type":"create_task","task":{"title":"Evidence fixture","acceptance":[criterion]}},
+        "idempotency_key":"create-evidence-task"
+    })).await;
+    let task_id = created["result"]["result"]["task_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("task creation returns its stable ID: {created}"))
+        .to_owned();
+    let query = json!({"query":{"type":"task_evidence","task_ids":[task_id]}});
+    let state = kernel_request(&mut main, "scope", "akra/kernel/query", query.clone()).await;
+    let scope = state["result"]["tasks"][0]["scope"].clone();
+    assert!(
+        scope["scope_id"].as_str().is_some_and(|id| id.len() == 64),
+        "{state}"
+    );
+    let command = json!({"type":"waive_criterion","request_id":"waiver-one","task_id":task_id,
+        "criterion_id":"criterion with spaces","scope_id":scope["scope_id"],
+        "expected_acceptance_revision":scope["acceptance_revision"],"reason":"Private waiver reason fixture"});
+    let denied = kernel_request(
+        &mut agent,
+        "raw-waiver",
+        "akra/kernel/command",
+        json!({
+            "command":command,"idempotency_key":"unverified-waiver"
+        }),
+    )
+    .await;
+    assert_eq!(
+        denied["result"]["rejection"]["reason"], "human_confirmation_required",
+        "{denied}"
+    );
+    let mut helper = MainBroker::start().await;
+    let registration = helper.register(&mut main).await;
+    let request = json!({"command":command,"idempotency_key":"confirmed-waiver"});
+    let prepared = kernel_request(
+        &mut main,
+        "preview-waiver",
+        "akra/kernel/confirmation/prepare",
+        json!({"request":request}),
+    )
+    .await;
+    let intent = prepared["result"]["intent"].clone();
+    assert_eq!(intent["target"]["kind"], "criterion_waiver", "{prepared}");
+    assert_eq!(intent["target"]["scope_id"], scope["scope_id"]);
+    assert!(
+        prepared["result"]["display"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("별도로")
+    );
+    let proof_id = helper.approve(&registration, &intent).await;
+    let envelope = json!({"request":request,"confirmation":{
+        "registration_id":registration["registration_id"],"proof_id":proof_id,"intent":intent
+    }});
+    let mut changed = envelope.clone();
+    changed["request"]["command"]["reason"] = json!("A different justification");
+    let mismatch = kernel_request(
+        &mut main,
+        "changed-reason",
+        "akra/kernel/command_confirmed",
+        changed,
+    )
+    .await;
+    assert_eq!(mismatch["error"]["code"], -32602, "{mismatch}");
+    let accepted = kernel_request(
+        &mut main,
+        "waive",
+        "akra/kernel/command_confirmed",
+        envelope,
+    )
+    .await;
+    assert_eq!(
+        accepted["result"]["result"]["type"], "criterion_waived",
+        "{accepted}"
+    );
+    assert_eq!(
+        accepted["result"]["result"]["receipt"]["waiver"]["by"],
+        "human"
+    );
+    assert!(
+        !accepted["result"]["result"]
+            .to_string()
+            .contains("Private waiver reason fixture")
+    );
+    let waived = kernel_request(
+        &mut main,
+        "waived-state",
+        "akra/kernel/query",
+        query.clone(),
+    )
+    .await;
+    assert_eq!(
+        waived["result"]["tasks"][0]["criteria"][0]["state"], "waived",
+        "{waived}"
+    );
+    let replayed = kernel_request(
+        &mut main,
+        "waiver-replay",
+        "akra/kernel/command",
+        request.clone(),
+    )
+    .await;
+    assert_eq!(
+        replayed["result"]["operation"]["replayed"], true,
+        "{replayed}"
+    );
+
+    let mut stale_request = request;
+    stale_request["command"]["request_id"] = json!("waiver-two");
+    stale_request["idempotency_key"] = json!("stale-waiver");
+    let stale_preview = kernel_request(
+        &mut main,
+        "stale-preview",
+        "akra/kernel/confirmation/prepare",
+        json!({"request":stale_request}),
+    )
+    .await;
+    let stale_intent = stale_preview["result"]["intent"].clone();
+    let stale_proof = helper.approve(&registration, &stale_intent).await;
+    let planning = kernel_request(
+        &mut agent,
+        "current-planning",
+        "akra/kernel/query",
+        json!({"query":{"type":"planning"}}),
+    )
+    .await;
+    let mut changed_criterion = criterion;
+    changed_criterion["scenario"] = json!("A newly agreed result exists.");
+    let updated = kernel_request(
+        &mut agent,
+        "change-criteria",
+        "akra/kernel/command",
+        json!({
+            "command":{"type":"update_task","task_id":task_id,
+                "task":{"title":"Evidence fixture","acceptance":[changed_criterion]},
+                "expected_planning_revision":planning["result"]["revision"]},
+            "idempotency_key":"change-evidence-criteria"
+        }),
+    )
+    .await;
+    assert_eq!(
+        updated["result"]["result"]["type"], "task_updated",
+        "{updated}"
+    );
+    let stale = kernel_request(&mut main, "consume-stale-waiver", "akra/kernel/command_confirmed", json!({
+        "request":stale_request,"confirmation":{"registration_id":registration["registration_id"],"proof_id":stale_proof,"intent":stale_intent}
+    })).await;
+    assert!(stale["result"]["result"].is_null(), "{stale}");
+    let current = kernel_request(&mut main, "new-scope", "akra/kernel/query", query).await;
+    assert_ne!(
+        current["result"]["tasks"][0]["scope"]["scope_id"],
+        scope["scope_id"]
+    );
+    assert_ne!(
+        current["result"]["tasks"][0]["criteria"][0]["state"],
+        "waived"
+    );
+    // 앞선 operation batch를 쓰는 동안 outbox는 비차단으로 미룬다. native 영수증 성공과
+    // durable history의 게시 사이에 있는 1초 재시도 경계를 기다린다.
+    let waivers = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let history = kernel_request(
+                &mut main,
+                "waiver-history",
+                "akra/kernel/query",
+                json!({"query":{"type":"history","after":0}}),
+            )
+            .await;
+            let count = history["result"]["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|record| record["event"]["kind"] == "criterion_waived")
+                .count();
+            if count > 0 {
+                break count;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("confirmed waiver should reach durable history");
+    assert_eq!(
+        waivers, 1,
+        "one native approval commits one immutable public fact"
+    );
+    detach(&mut main).await;
+    detach(&mut agent).await;
+    helper.stop().await;
+    kernels.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn confirmation_inputs_errors_and_malformed_frames_are_never_recorded_or_forwarded() {
     const SECRET: &str = "human-confirmation-private-canary";
     let folder = KernelTestFolder::new("human-recording");

@@ -1,5 +1,6 @@
 /// StoredCommandContext의 확인 증거와 준비 조회 metadata를 이 포트가 소유한다.
 pub mod issue_confirmation;
+pub mod task_evidence;
 
 use anyhow::Result;
 
@@ -11,6 +12,9 @@ use crate::domain::issue_automation::intervention::{
 };
 
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
+use crate::domain::planning::evidence::{
+    TaskCriterionWaiverReceipt, TaskEvidencePrepared, TaskEvidenceReceipt,
+};
 use crate::domain::planning::{
     DirectionState, PlanningMutationRefusal, TaskAcceptanceCriterion, TaskStatus,
 };
@@ -81,6 +85,15 @@ pub struct StoredDirectionFields {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
+    PrepareEvidence {
+        request: task_evidence::PrepareTaskEvidenceRequest,
+    },
+    RecordEvidence {
+        request: task_evidence::RecordTaskEvidenceRequest,
+    },
+    WaiveCriterion {
+        request: task_evidence::WaiveTaskCriterionRequest,
+    },
     InterveneIssue {
         request: IssueInterventionRequest,
     },
@@ -127,6 +140,9 @@ impl StoredCommand {
     /// 이 저장 명령의 스펙 항목이다.
     pub const fn kind(&self) -> KernelCommandKind {
         match self {
+            Self::PrepareEvidence { .. } => KernelCommandKind::PrepareEvidence,
+            Self::RecordEvidence { .. } => KernelCommandKind::RecordEvidence,
+            Self::WaiveCriterion { .. } => KernelCommandKind::WaiveCriterion,
             Self::InterveneIssue { request } => match &request.action {
                 IssueInterventionAction::Hold => KernelCommandKind::HoldIssue,
                 IssueInterventionAction::Release => KernelCommandKind::ReleaseIssue,
@@ -153,6 +169,17 @@ impl StoredCommand {
 /// 성공한 저장 명령의 결과이다. 명령의 답에 실린다. 기록에는 싣지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommandResult {
+    EvidencePrepared {
+        preparation: Box<TaskEvidencePrepared>,
+    },
+    CriterionEvidenceRecorded {
+        receipt: Box<TaskEvidenceReceipt>,
+        changed: bool,
+    },
+    CriterionWaived {
+        receipt: Box<TaskCriterionWaiverReceipt>,
+        changed: bool,
+    },
     IssueIntervened {
         receipt: Box<IssueInterventionReceipt>,
     },

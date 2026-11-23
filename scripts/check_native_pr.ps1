@@ -172,6 +172,8 @@ function Invoke-WindowsPortableChecks {
         "sqlite_issue_automation_store::private_store::tests::",
         "adapter::outbound::vault_key_store::",
         "application::service::evidence_vault_unlock::",
+        "task_evidence_artifact::tests::",
+        "sqlite_planning_authority_adapter::tests::task_evidence::",
         "trace_event_log::tests::exact_trace_file_rejects_windows_",
         "trace_event_log::tests::windows_trace_file_and_rolling_directory_receive_private_owner_acl",
         "actual_windows_environment_filter_accepts_mixed_case_allowlisted_keys",
@@ -185,7 +187,10 @@ function Invoke-WindowsPortableChecks {
     if ($IncludeCleanHostContracts) {
         $testFilters += @(
             "reconcile_provisions_missing_slots_into_idle_baselines",
-            "host_owned_worker_commit_"
+            "host_owned_worker_commit_",
+            "parallel_worker_commit::tree_snapshot::tests::",
+            "worker_evidence::",
+            "parallel_mode::tests::pool::lease::task_evidence::"
         )
     }
     foreach ($testFilter in $testFilters) {

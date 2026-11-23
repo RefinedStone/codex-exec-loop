@@ -67,6 +67,21 @@ pub struct ParallelWorkerCommitRequest<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelWorkerTreeRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub expected_branch_name: &'a str,
+    pub expected_base_commit_sha: &'a str,
+    pub expected_head_commit_sha: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelWorkerTreeSnapshot {
+    pub head_commit_sha: String,
+    pub tree_sha: String,
+    pub worktree_clean: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParallelCommitDiffRequest<'a> {
     pub workspace_directory: &'a str,
     pub base_commit_sha: &'a str,
@@ -235,6 +250,26 @@ pub trait ParallelModeRuntimePort: Send + Sync {
         _request: ParallelWorkerCommitRequest<'_>,
     ) -> Result<ParallelWorkerCommitOutcome, String> {
         Err("host-owned parallel worker commit is unavailable in this runtime".to_string())
+    }
+
+    /// Compute the guarded host-commit tree using a private temporary index. The real
+    /// index, HEAD, refs, and worktree must stay unchanged. A baseline/no-change tree is
+    /// valid evidence; unavailable, unstable, or incomplete observations fail closed.
+    fn snapshot_parallel_worker_tree(
+        &self,
+        _request: ParallelWorkerTreeRequest<'_>,
+    ) -> Result<ParallelWorkerTreeSnapshot, String> {
+        Err("parallel worker tree observation is unavailable in this runtime".to_string())
+    }
+
+    /// Resolve an already-local immutable commit object to its tree. Never fetch or
+    /// substitute a branch/HEAD when the selected frozen source is unavailable.
+    fn read_commit_tree(
+        &self,
+        _workspace_directory: &str,
+        _commit_sha: &str,
+    ) -> Result<String, String> {
+        Err("immutable commit tree observation is unavailable in this runtime".to_string())
     }
 
     /// Reads the complete frozen commit range. Unsupported or bounded output must fail closed.

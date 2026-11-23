@@ -40,6 +40,9 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel auto_follow pause_auto_follow --json` | write | Pause automatic follow-up turns. |
 | `akra kernel planning reset_planning --json` | destructive | Delete planning data (the queue, the directions, or all of it). |
 | `akra kernel planning refresh_planning --json` | read | Read the planning queue again. The result arrives as the `planning` event. |
+| `akra kernel planning prepare_evidence --json` | write | Reserve one evidence attempt for the current task, acceptance scope and running lease. The host chooses the artifact path and observes the source tree. Reuse request_id to recover the same reservation; client-supplied paths, hashes and actor claims are not accepted. |
+| `akra kernel planning record_evidence --json` | write | Record pass, fail or blocked for one reserved evidence attempt after the host verifies the fixed artifact and unchanged source. The immutable receipt does not grant delivery or integration authority; read planning for current evidence status. |
+| `akra kernel planning waive_criterion --json` | write | Exempt one criterion in the exact current acceptance scope after a verified Desktop human confirmation. Code changes alone do not revoke this exemption; an acceptance scope change does. This does not approve Spec, Delivery or Integrate. Reuse request_id to recover the same receipt. |
 | `akra kernel planning create_task --json` | write | Add a planning task as the operator, optionally with acceptance criteria. Missing or null acceptance starts empty; acceptance_revision is host-owned and is not an input. The answer carries the new task id and the new planning revision. |
 | `akra kernel planning update_task --json` | write | Change a planning task as the operator. The title, the priority reason, and the references are replaced; a missing direction, description, status, or priority keeps its value. Missing or null acceptance keeps the agreed criteria; an empty array clears them. acceptance_revision is host-owned and is not an input. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
 | `akra kernel planning delete_task --json` | destructive | Delete a planning task and the references to it. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command. |
@@ -78,7 +81,8 @@ Pass input fields as `--field value`. Use the input schema from `describe` for r
 - `akra kernel query sessions --json`: The session list of the workspace and its load state.
 - `akra kernel query auto_follow --json`: The automatic follow-up settings. They are the same for every thread.
 - `akra kernel query thread_activity --json`: The threads that still have work: a running turn, a pending approval, or automatic follow-up.
-- `akra kernel query planning --json`: The planning queue.
+- `akra kernel query planning --json`: The planning queue and the first bounded page of current task evidence when available. Follow task_evidence.next_task_id with the task_evidence query to read later tasks.
+- `akra kernel query task_evidence --json`: Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.
 - `akra kernel query parallel --json`: The parallel mode state: pool, agents, merge queue, and pull request validation.
 - `akra kernel query history --json`: A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.
 - `akra kernel query operation --json`: The state of one operation and its records. `op_id` comes from the `operation` of a command answer.

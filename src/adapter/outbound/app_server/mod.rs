@@ -24,6 +24,7 @@ pub(crate) mod connection;
 mod execution_policy;
 mod kernel_skill;
 mod worker_continuation;
+mod worker_evidence;
 // gateway_upstream.rs: akra-gateway 용 upstream app-server(--listen) 감시와 세션별 proxy 자식 프로세스.
 pub(crate) mod gateway_upstream;
 mod planning_worker;
@@ -1060,6 +1061,7 @@ impl CodexAppServerAdapter {
                 self.execution_policy.approval_policy,
                 self.execution_policy.approvals_reviewer,
                 self.execution_policy.sandbox_mode,
+                None,
             )
         });
         match &result {
@@ -1283,6 +1285,30 @@ impl CodexAppServerAdapter {
         }
     }
 
+    fn start_worker_turn_and_wait_for_stream(
+        &self,
+        connection: &mut AppServerConnection,
+        prompt: &str,
+        event_sender: &ConversationStreamSender,
+        prompt_trace_context: AppServerPromptTraceContext,
+        evidence_root: Option<&worker_evidence::WorkerEvidenceRoot>,
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        self.start_turn_and_wait_for_stream_with_policy(
+            connection,
+            vec![TurnInputItem::text(prompt)],
+            None,
+            None,
+            event_sender,
+            prompt_trace_context,
+            &self.turn_interrupt_signal,
+            self.turn_interrupt_signal.current_generation(),
+            self.execution_policy.approval_policy,
+            self.execution_policy.approvals_reviewer,
+            self.execution_policy.sandbox_mode,
+            evidence_root,
+        )
+    }
+
     #[tracing::instrument(
         level = "trace",
         skip(self, connection, input, event_sender, prompt_trace_context)
@@ -1309,6 +1335,7 @@ impl CodexAppServerAdapter {
             self.execution_policy.approval_policy,
             self.execution_policy.approvals_reviewer,
             self.execution_policy.sandbox_mode,
+            None,
         )
     }
 
@@ -1320,7 +1347,8 @@ impl CodexAppServerAdapter {
             input,
             event_sender,
             prompt_trace_context,
-            interrupt_signal
+            interrupt_signal,
+            evidence_root
         )
     )]
     #[allow(clippy::too_many_arguments)]
@@ -1337,6 +1365,7 @@ impl CodexAppServerAdapter {
         approval_policy: ApprovalPolicyValue,
         approvals_reviewer: Option<ApprovalsReviewerValue>,
         sandbox_mode: SandboxModeValue,
+        evidence_root: Option<&worker_evidence::WorkerEvidenceRoot>,
     ) -> Result<ConversationTurnTerminalReceipt> {
         /*
          * The interrupt generation is sampled before turn/start so a stale stop from a
@@ -1348,7 +1377,7 @@ impl CodexAppServerAdapter {
         let started_at = prompt_logging_enabled.then(|| Utc::now().to_rfc3339());
         let mut input_records = prompt_logging_enabled.then(|| prompt_log_input_records(&input));
         let trace_thread_id = prompt_trace_context.thread_id.clone();
-        let runtime_request = runtime_configuration_request(
+        let mut runtime_request = runtime_configuration_request(
             model,
             effort,
             None,
@@ -1356,13 +1385,25 @@ impl CodexAppServerAdapter {
             approvals_reviewer,
             Some(sandbox_mode),
         );
+        let mut sandbox_policy = sandbox_mode.as_turn_sandbox_policy();
+        if let Some(root) = evidence_root {
+            root.verify()?;
+            root.record_request(&mut runtime_request);
+            if let protocol::SandboxPolicyValue::WorkspaceWrite { writable_roots } =
+                &mut sandbox_policy
+            {
+                *writable_roots = Some(vec![root.value().to_string()]);
+            } else {
+                anyhow::bail!("worker evidence root cannot change the execution policy");
+            }
+        }
         let turn_response = match connection.start_turn_with_event_sender(
             TurnStartParams {
                 thread_id: trace_thread_id.clone(),
                 input,
                 approval_policy: Some(approval_policy),
                 approvals_reviewer,
-                sandbox_policy: Some(sandbox_mode.as_turn_sandbox_policy()),
+                sandbox_policy: Some(sandbox_policy),
                 model: model.map(str::to_string),
                 effort,
             },
@@ -1935,9 +1976,16 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
     ) -> Result<ConversationTurnTerminalReceipt> {
         // Parallel worker sessions use isolated processes but persist app-server threads so `:peek` can read them later.
         let result = self.with_isolated_streaming_runtime(|connection| {
-            let workspace = protected_thread_workspace(request.cwd)?;
+            let mut workspace = protected_thread_workspace(request.cwd)?;
+            let evidence_root = worker_evidence::WorkerEvidenceRoot::prepare(
+                request.evidence_incoming_root,
+                self.execution_policy.sandbox_mode,
+            )?;
+            if let Some(root) = &evidence_root {
+                root.apply_config(&mut workspace)?;
+            }
             let requested_cwd = workspace.cwd.clone();
-            let thread_request = runtime_configuration_request(
+            let mut thread_request = runtime_configuration_request(
                 None,
                 None,
                 Some(&requested_cwd),
@@ -1945,6 +1993,9 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 self.execution_policy.approvals_reviewer,
                 Some(self.execution_policy.sandbox_mode),
             );
+            if let Some(root) = &evidence_root {
+                root.record_request(&mut thread_request);
+            }
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
@@ -1969,6 +2020,9 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
             connection.discard_notifications_before_turn_binding();
             let applied_cwd =
                 exact_applied_workspace_cwd(&runtime_envelope, &requested_cwd, "thread/start")?;
+            if let Some(root) = &evidence_root {
+                root.verify_applied(&runtime_envelope, &requested_cwd)?;
+            }
             send_required_app_server_event(
                 &event_sender,
                 ConversationStreamEvent::codex_app_server_launch_attachment(),
@@ -1985,11 +2039,9 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 "thread/prepared",
             )?;
 
-            let stream_result = self.start_turn_and_wait_for_stream(
+            let stream_result = self.start_worker_turn_and_wait_for_stream(
                 connection,
-                vec![TurnInputItem::text(request.prompt)],
-                None,
-                None,
+                request.prompt,
                 &event_sender,
                 AppServerPromptTraceContext {
                     workspace_dir: request.cwd.to_string(),
@@ -1999,6 +2051,7 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                     developer_instructions: Some(request.developer_instructions.to_string()),
                     thread_id: thread_id.clone(),
                 },
+                evidence_root.as_ref(),
             );
             // The application owns completion and may still need this thread for AwaitingUser.
             stream_result
@@ -2235,6 +2288,8 @@ pub(super) fn persisted_error_summary(error: &anyhow::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    mod worker_evidence;
     #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
@@ -3128,6 +3183,7 @@ mod tests {
             .run_isolated_new_thread_stream(
                 ParallelAgentWorkerStreamRequest {
                     cwd: "/repo/slot-1",
+                    evidence_incoming_root: None,
                     prompt: "implement task",
                     developer_instructions: "You are an isolated worker.",
                     service_name: "akra-parallel-worker",
@@ -3238,6 +3294,7 @@ mod tests {
                 .run_isolated_new_thread_stream(
                     ParallelAgentWorkerStreamRequest {
                         cwd: "/repo/slot-1",
+                        evidence_incoming_root: None,
                         prompt: "do not archive an uncompleted turn",
                         developer_instructions: "test terminal truth",
                         service_name: "akra-parallel-worker",
@@ -3272,6 +3329,7 @@ mod tests {
             .run_isolated_new_thread_stream(
                 ParallelAgentWorkerStreamRequest {
                     cwd: "/repo",
+                    evidence_incoming_root: None,
                     prompt: "complete before archive failure",
                     developer_instructions: "test archive cleanup semantics",
                     service_name: "akra-parallel-worker",
@@ -3327,6 +3385,7 @@ mod tests {
                 .run_isolated_resumed_thread_stream(
                     ParallelAgentWorkerResumeRequest {
                         cwd: "/repo",
+                        evidence_incoming_root: None,
                         thread_id: "waiting-thread",
                         prompt: "approved answer",
                         service_name: "parallel-answer",
@@ -3356,6 +3415,7 @@ mod tests {
                 .run_isolated_resumed_thread_stream(
                     ParallelAgentWorkerResumeRequest {
                         cwd: "/repo",
+                        evidence_incoming_root: None,
                         thread_id: "waiting-thread",
                         prompt: "approved answer",
                         service_name: "parallel-answer",
@@ -3425,6 +3485,7 @@ mod tests {
                     .run_isolated_resumed_thread_stream(
                         ParallelAgentWorkerResumeRequest {
                             cwd: "/repo",
+                            evidence_incoming_root: None,
                             thread_id: "waiting-thread",
                             prompt: "approved answer",
                             service_name: "parallel-answer",
@@ -3458,6 +3519,7 @@ mod tests {
                 .run_isolated_resumed_thread_stream(
                     ParallelAgentWorkerResumeRequest {
                         cwd: "/repo",
+                        evidence_incoming_root: None,
                         thread_id: "waiting-thread",
                         prompt: "approved answer",
                         service_name: "parallel-answer",
@@ -3531,6 +3593,7 @@ mod tests {
             .run_isolated_new_thread_stream(
                 ParallelAgentWorkerStreamRequest {
                     cwd: "/repo/slot-1",
+                    evidence_incoming_root: None,
                     prompt: "implement logged task",
                     developer_instructions: "worker developer instructions",
                     service_name: "akra-parallel-worker",
@@ -4805,6 +4868,14 @@ def runtime_envelope(params, default_model):
         "workspace-write": "workspaceWrite",
         "danger-full-access": "dangerFullAccess",
     }.get(params.get("sandbox"), "readOnly")
+    sandbox = {"type": sandbox_type}
+    roots = (params.get("config") or {}).get("sandbox_workspace_write", {}).get("writable_roots")
+    if sandbox_type == "workspaceWrite" and roots is not None:
+        if scenario == "evidence_root_replaced":
+            os.rename(roots[0], roots[0] + ".moved")
+            os.mkdir(roots[0], 0o700)
+        if scenario != "evidence_root_missing":
+            sandbox["writableRoots"] = roots + (["/"] if scenario == "evidence_root_broad" else [])
     return {
         "approvalPolicy": params.get("approvalPolicy") or "on-request",
         "approvalsReviewer": params.get("approvalsReviewer") or "user",
@@ -4812,7 +4883,7 @@ def runtime_envelope(params, default_model):
         "model": params.get("model") or default_model,
         "modelProvider": "openai",
         "reasoningEffort": "medium",
-        "sandbox": {"type": sandbox_type},
+        "sandbox": sandbox,
         "serviceTier": None,
     }
 

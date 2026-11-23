@@ -11,6 +11,9 @@ pub(crate) fn prepare(
     command: &StoredCommand,
 ) -> Result<IssueConfirmationPreview> {
     match command {
+        StoredCommand::WaiveCriterion { request } => {
+            super::task_evidence::build(workspace).prepare_waiver(request)
+        }
         StoredCommand::AnswerIssueDecision {
             decision_id,
             option,

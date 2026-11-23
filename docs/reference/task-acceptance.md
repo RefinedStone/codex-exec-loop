@@ -11,11 +11,12 @@
 `committed_planning_revision`을 반환하므로 기준과 기준 revision을 함께 읽을 수 있다.
 
 이 계약은 기준의 내용과 변경 이력을 저장한다. channel을 지정해도 명령이나 브라우저를 실행하지
-않고, 기준을 저장했다는 사실을 pass로 판정하지 않는다. 실제 검증 실행·증거·수동 면제와
-observe/enforce 전달 게이트는 후속 범위다. 기준이 없는 기존 task도 계속 실행할 수 있다.
+않고, 기준을 저장했다는 사실을 pass로 판정하지 않는다. 증거 기록과 기준별 수동 면제는
+[Task 증거 계약](task-evidence.md)에 정의한다. 독립 검증 실행과 enforce 전달 게이트는 후속 범위다.
+기준이 없는 기존 task도 계속 실행할 수 있다.
 
-Desktop의 일반 Kernel `planning` 조회는 여전히 큐 요약이다. 이 변경에는 Desktop 기준 편집이나
-증거 탐색 화면이 포함되지 않는다. 기존 관리자 HTML 편집은 기준을 생략하여 그대로 보존한다.
+Desktop의 일반 Kernel `planning` 조회는 큐 요약과 선택적인 증거 metadata를 제공한다. Desktop 기준
+편집이나 증거 탐색 화면은 별도 후속 범위다. 기존 관리자 HTML 편집은 기준을 생략하여 그대로 보존한다.
 
 ## 기준과 호스트 버전
 

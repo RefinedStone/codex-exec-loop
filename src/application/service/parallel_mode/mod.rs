@@ -38,6 +38,7 @@ mod branch_names;
 mod completion;
 pub mod control_plane;
 pub(crate) mod distributor;
+pub(crate) mod evidence;
 mod git_sequence;
 mod orchestration;
 mod orchestrator_loop;
@@ -56,6 +57,7 @@ pub(crate) mod turn;
 mod work_link;
 mod worker_commit;
 mod worker_diff;
+mod worker_evidence;
 pub(crate) use self::automation_guard::{
     ParallelDispatchWorkerActivity, ParallelModeAutomationEpochClosed, ParallelModeAutomationGuard,
     ParallelModeAutomationPermit,
@@ -426,6 +428,7 @@ pub struct ParallelModeService {
     pr_validation_observation: Option<Arc<dyn GithubPrValidationPort>>,
     delivery_safety_policy: ParallelModeDeliverySafetyPolicy,
     parallel_agent_profile_service: Option<ParallelAgentProfileService>,
+    task_evidence: Option<worker_evidence::WorkerEvidenceConfiguration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,6 +468,7 @@ impl ParallelModeService {
             pr_validation_observation: None,
             delivery_safety_policy,
             parallel_agent_profile_service: None,
+            task_evidence: None,
         }
     }
 
@@ -473,6 +477,18 @@ impl ParallelModeService {
         observation: Arc<dyn GithubPrValidationPort>,
     ) -> Self {
         self.pr_validation_observation = Some(observation);
+        self
+    }
+
+    pub fn with_task_evidence(
+        mut self,
+        repository: Arc<dyn crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort>,
+        artifacts: Arc<dyn crate::application::port::outbound::task_evidence_artifact_port::TaskEvidenceArtifactPort>,
+    ) -> Self {
+        self.task_evidence = Some(worker_evidence::WorkerEvidenceConfiguration {
+            repository,
+            artifacts,
+        });
         self
     }
 

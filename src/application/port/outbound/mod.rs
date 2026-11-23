@@ -10,6 +10,7 @@ pub mod conversation_thread_turn_options_port;
 // kernel event log port 는 커널의 판단 사건을 저장소별 추가 전용 기록에 쓰고 읽는다 (plan 19 Q3).
 pub mod kernel_event_log_port;
 pub mod kernel_gateway_port;
+pub mod task_evidence_repository_port;
 // planning reset route port 는 입구의 planning 초기화를 저장소 커널의 명령으로 보낸다 (plan 18 K4-9a).
 pub mod planning_reset_route_port;
 pub mod repository_state_port;
@@ -122,6 +123,7 @@ pub mod issue_collection_origin_port;
 // 이슈 출처의 발견과 안정 ID 재동기화 계약이다 (#2537).
 pub mod issue_source_port;
 pub mod issue_work_execution_port;
+pub mod task_evidence_artifact_port;
 
 pub(crate) mod delegation_store_port;
 pub mod issue_creation_provenance_port;

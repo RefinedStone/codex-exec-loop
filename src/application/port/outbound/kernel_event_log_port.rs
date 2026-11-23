@@ -7,6 +7,27 @@ use crate::domain::kernel_event::{KernelEvent, KernelEventPage, RecordedKernelEv
  * 읽을 때는 기록 순서를 지킨다. 이 binary 가 모르는 사건(더 새 binary 가 쓴 것)은 건너뛴다.
  */
 pub trait KernelEventLogPort: Send + Sync {
+    /// 증거 outbox의 ID와 공개 payload를 함께 확인한다. 실제 저장 adapter는 history retention과
+    /// 독립된 영속 receipt를 사용한다. 같은 ID의 다른 payload는 존재하는 것으로 처리하지 않는다.
+    fn has_task_evidence_event(&self, workspace_dir: &str, expected: &KernelEvent) -> Result<bool> {
+        let event_id = expected
+            .task_evidence_event_id()
+            .ok_or_else(|| anyhow::anyhow!("expected a task evidence event"))?;
+        for event in self.load_kernel_events(
+            workspace_dir,
+            &["criterion_evidence_recorded", "criterion_waived"],
+        )? {
+            if event.task_evidence_event_id() == Some(event_id) {
+                anyhow::ensure!(
+                    event == *expected,
+                    "a task evidence event identity cannot change"
+                );
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// outbox ack 전 crash를 복구할 때 쓰는 영속 dedupe 조회다.
     fn has_issue_work_event(&self, workspace_dir: &str, event_id: &str) -> Result<bool> {
         Ok(self

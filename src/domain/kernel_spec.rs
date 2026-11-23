@@ -85,6 +85,12 @@ spec_names! {
             "Delete planning data (the queue, the directions, or all of it).";
         RefreshPlanning => "refresh_planning",
             "Read the planning queue again. The result arrives as the `planning` event.";
+        PrepareEvidence => "prepare_evidence",
+            "Reserve one evidence attempt for the current task, acceptance scope and running lease. The host chooses the artifact path and observes the source tree. Reuse request_id to recover the same reservation; client-supplied paths, hashes and actor claims are not accepted.";
+        RecordEvidence => "record_evidence",
+            "Record pass, fail or blocked for one reserved evidence attempt after the host verifies the fixed artifact and unchanged source. The immutable receipt does not grant delivery or integration authority; read planning for current evidence status.";
+        WaiveCriterion => "waive_criterion",
+            "Exempt one criterion in the exact current acceptance scope after a verified Desktop human confirmation. Code changes alone do not revoke this exemption; an acceptance scope change does. This does not approve Spec, Delivery or Integrate. Reuse request_id to recover the same receipt.";
         CreateTask => "create_task",
             "Add a planning task as the operator, optionally with acceptance criteria. Missing or null acceptance starts empty; acceptance_revision is host-owned and is not an input. The answer carries the new task id and the new planning revision.";
         UpdateTask => "update_task",
@@ -390,6 +396,9 @@ impl KernelCommandKind {
             | Self::StopAll
             | Self::DecideApproval
             | Self::ResetPlanning
+            | Self::PrepareEvidence
+            | Self::RecordEvidence
+            | Self::WaiveCriterion
             | Self::CreateTask
             | Self::UpdateTask
             | Self::DeleteTask
@@ -521,6 +530,15 @@ impl KernelCommandKind {
                 &[Reason::KernelUnreachable],
             ),
             Self::ResetPlanning => (CommandScope::Planning, Destructive, Natural, &[]),
+            Self::PrepareEvidence | Self::RecordEvidence => {
+                (CommandScope::Planning, Write, Keyed, &[])
+            }
+            Self::WaiveCriterion => (
+                CommandScope::Planning,
+                Write,
+                Keyed,
+                &[Reason::HumanConfirmationRequired],
+            ),
             Self::RefreshPlanning => (
                 CommandScope::Planning,
                 Read,
@@ -551,6 +569,9 @@ impl KernelCommandKind {
             scope,
             state: match self {
                 Self::ResetPlanning
+                | Self::PrepareEvidence
+                | Self::RecordEvidence
+                | Self::WaiveCriterion
                 | Self::CreateTask
                 | Self::UpdateTask
                 | Self::DeleteTask
@@ -666,6 +687,10 @@ spec_names! {
             "A journaled issue feedback write was confirmed by readback. Only intent, actor, comment or label identity is recorded; the shared text and provider response are excluded.";
         IssueAutomationModeChanged => "issue_automation_mode_changed",
             "An issue collection mode change was committed. The ledger is authoritative; this audit record is not used to restore the mode.";
+        CriterionEvidenceRecorded => "criterion_evidence_recorded",
+            "An immutable task criterion evidence receipt was committed after host artifact and source observation. Its durable event ID deduplicates replay; raw paths, evidence content and notes are excluded. Current validity comes from the planning query.";
+        CriterionWaived => "criterion_waived",
+            "A verified human exemption was committed for one task criterion and acceptance scope. Its durable event ID deduplicates replay; raw reason text and confirmation capability are excluded. It does not approve delivery or integration.";
     }
 }
 

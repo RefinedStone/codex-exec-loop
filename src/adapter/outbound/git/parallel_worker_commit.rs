@@ -8,6 +8,9 @@ use crate::application::port::outbound::parallel_mode_runtime_port::{
 };
 use crate::{git_subprocess, subprocess};
 
+mod tree_snapshot;
+pub(super) use tree_snapshot::{read_commit_tree, snapshot_parallel_worker_tree};
+
 const MAX_GIT_STDOUT_BYTES: usize = 1024 * 1024;
 const MAX_GIT_STDERR_BYTES: usize = 256 * 1024;
 const MAX_CHANGED_PATHS: usize = 4096;
@@ -84,23 +87,7 @@ pub(super) fn prepare_parallel_worker_commit(
         request.expected_head_commit_sha,
         1,
     )?;
-    let head_gitlinks = gitlink_entries_at_head(workspace)?;
-    let changed_paths = collect_changed_paths(workspace)?;
-    let changed_path_snapshot = inspect_changed_path_metadata(workspace, &changed_paths)?;
-    reject_external_filters_for_changed_paths(workspace)?;
-    checked_git_output(workspace, ["add", "-A", "--", "."], None)?;
-    reject_untracked_special_files(workspace)?;
-    let staged_paths = collect_changed_paths(workspace)?;
-    ensure_changed_path_set_unchanged(&changed_paths, &staged_paths)?;
-    ensure_index_gitlinks_match_head(workspace, &head_gitlinks)?;
-    let staged_path_snapshot = inspect_changed_path_metadata(workspace, &staged_paths)?;
-    if staged_path_snapshot != changed_path_snapshot {
-        return Err(
-            "parallel worker changed file identity while host staging was in progress".to_string(),
-        );
-    }
-    reject_unsafe_index_and_submodule_state(workspace)?;
-    ensure_only_staged_changes_remain(workspace)?;
+    stage_worker_index(workspace, None)?;
 
     let staged_diff = git_output(
         workspace,
@@ -173,6 +160,32 @@ pub(super) fn prepare_parallel_worker_commit(
     ensure_branch_tree_differs_from_base(workspace, request.expected_base_commit_sha, &commit_sha)?;
 
     Ok(ParallelWorkerCommitOutcome::created(commit_sha))
+}
+
+/// The host commit and read-only evidence observer share the same bounded staging
+/// checks. Only the observer selects a private index; submodule recursion always
+/// uses each submodule's own index and never inherits this parent override.
+fn stage_worker_index(workspace: &Path, index: Option<&Path>) -> Result<(), String> {
+    let head_gitlinks = gitlink_entries_at_head(workspace)?;
+    let changed_paths = collect_changed_paths(workspace, index)?;
+    let changed_path_snapshot = inspect_changed_path_metadata(workspace, &changed_paths)?;
+    reject_external_filters_for_changed_paths(workspace, index)?;
+    checked_git_output_with_index(workspace, ["add", "-A", "--", "."], None, index)?;
+    reject_untracked_special_files(workspace)?;
+    let staged_paths = collect_changed_paths(workspace, index)?;
+    ensure_changed_path_set_unchanged(&changed_paths, &staged_paths)?;
+    ensure_index_gitlinks_match_head(workspace, &head_gitlinks, index)?;
+    let staged_path_snapshot = inspect_changed_path_metadata(workspace, &staged_paths)?;
+    if staged_path_snapshot != changed_path_snapshot {
+        return Err(
+            "parallel worker changed file identity while host staging was in progress".to_string(),
+        );
+    }
+    reject_unsafe_index_and_submodule_state(workspace)?;
+    if index.is_some() {
+        reject_unsafe_index_state_with_index(workspace, index)?;
+    }
+    ensure_only_staged_changes_remain(workspace, index)
 }
 
 fn reject_untracked_special_files(workspace: &Path) -> Result<(), String> {
@@ -429,14 +442,27 @@ fn reject_unsafe_index_and_submodule_state(workspace: &Path) -> Result<(), Strin
 }
 
 fn reject_unsafe_index_state(workspace: &Path) -> Result<(), String> {
-    let unmerged = checked_git_output(workspace, ["ls-files", "--unmerged", "-z", "--"], None)?;
+    reject_unsafe_index_state_with_index(workspace, None)
+}
+
+fn reject_unsafe_index_state_with_index(
+    workspace: &Path,
+    index: Option<&Path>,
+) -> Result<(), String> {
+    let unmerged = checked_git_output_with_index(
+        workspace,
+        ["ls-files", "--unmerged", "-z", "--"],
+        None,
+        index,
+    )?;
     if !unmerged.stdout.is_empty() {
         return Err(
             "host-owned parallel worker commit is blocked by unmerged index entries".to_string(),
         );
     }
 
-    let tagged = checked_git_output(workspace, ["ls-files", "-v", "-z", "--"], None)?;
+    let tagged =
+        checked_git_output_with_index(workspace, ["ls-files", "-v", "-z", "--"], None, index)?;
     let hidden_entries = count_hidden_index_entries(&tagged.stdout)?;
     if hidden_entries == 0 {
         Ok(())
@@ -588,8 +614,10 @@ fn gitlink_entries_at_head(workspace: &Path) -> Result<BTreeMap<String, String>,
 fn ensure_index_gitlinks_match_head(
     workspace: &Path,
     head_gitlinks: &BTreeMap<String, String>,
+    index: Option<&Path>,
 ) -> Result<(), String> {
-    let output = checked_git_output(workspace, ["ls-files", "--stage", "-z", "--"], None)?;
+    let output =
+        checked_git_output_with_index(workspace, ["ls-files", "--stage", "-z", "--"], None, index)?;
     let index_gitlinks = parse_index_gitlink_entries(&output.stdout)?;
     if &index_gitlinks == head_gitlinks {
         Ok(())
@@ -904,8 +932,11 @@ fn changed_path_identity(path: &Path, metadata: &std::fs::Metadata) -> Result<St
     Ok(format!("{}:{}", metadata.len(), path.display()))
 }
 
-fn reject_external_filters_for_changed_paths(workspace: &Path) -> Result<(), String> {
-    let paths = collect_changed_paths(workspace)?;
+fn reject_external_filters_for_changed_paths(
+    workspace: &Path,
+    index: Option<&Path>,
+) -> Result<(), String> {
+    let paths = collect_changed_paths(workspace, index)?;
     if paths.is_empty() {
         return Ok(());
     }
@@ -914,17 +945,20 @@ fn reject_external_filters_for_changed_paths(workspace: &Path) -> Result<(), Str
     let mut batch_bytes: usize = 0;
     for path in &paths {
         if !batch.is_empty() && batch_bytes.saturating_add(path.len()) > MAX_ATTRIBUTE_BATCH_BYTES {
-            reject_external_filters_for_batch(workspace, &batch)?;
+            reject_external_filters_for_batch(workspace, &batch, index)?;
             batch.clear();
             batch_bytes = 0;
         }
         batch_bytes = batch_bytes.saturating_add(path.len());
         batch.push(path.as_str());
     }
-    reject_external_filters_for_batch(workspace, &batch)
+    reject_external_filters_for_batch(workspace, &batch, index)
 }
 
-fn collect_changed_paths(workspace: &Path) -> Result<BTreeSet<String>, String> {
+fn collect_changed_paths(
+    workspace: &Path,
+    index: Option<&Path>,
+) -> Result<BTreeSet<String>, String> {
     let mut paths = BTreeSet::new();
     for args in [
         vec![
@@ -952,7 +986,7 @@ fn collect_changed_paths(workspace: &Path) -> Result<BTreeSet<String>, String> {
         ],
         vec!["ls-files", "--others", "--exclude-standard", "-z", "--"],
     ] {
-        let output = checked_git_output(workspace, args, None)?;
+        let output = checked_git_output_with_index(workspace, args, None, index)?;
         for path in parse_nul_paths(&output.stdout)? {
             paths.insert(path);
         }
@@ -981,10 +1015,14 @@ fn ensure_changed_path_set_unchanged(
     }
 }
 
-fn reject_external_filters_for_batch(workspace: &Path, paths: &[&str]) -> Result<(), String> {
+fn reject_external_filters_for_batch(
+    workspace: &Path,
+    paths: &[&str],
+    index: Option<&Path>,
+) -> Result<(), String> {
     let mut args = vec!["check-attr", "-z", "filter", "--"];
     args.extend(paths.iter().copied());
-    let output = checked_git_output(workspace, args, None)?;
+    let output = checked_git_output_with_index(workspace, args, None, index)?;
     let fields = parse_nul_paths(&output.stdout)?;
     let mut chunks = fields.chunks_exact(3);
     for chunk in &mut chunks {
@@ -1017,8 +1055,8 @@ fn parse_nul_paths(output: &[u8]) -> Result<Vec<String>, String> {
     Ok(values)
 }
 
-fn ensure_only_staged_changes_remain(workspace: &Path) -> Result<(), String> {
-    let unstaged = git_output(
+fn ensure_only_staged_changes_remain(workspace: &Path, index: Option<&Path>) -> Result<(), String> {
+    let unstaged = git_output_with_index(
         workspace,
         [
             "diff",
@@ -1028,6 +1066,7 @@ fn ensure_only_staged_changes_remain(workspace: &Path) -> Result<(), String> {
             "--",
         ],
         None,
+        index,
     )?;
     match unstaged.status.code() {
         Some(0) => {}
@@ -1038,10 +1077,11 @@ fn ensure_only_staged_changes_remain(workspace: &Path) -> Result<(), String> {
         }
         _ => return Err(git_failure("verify staged worker files", &unstaged)),
     }
-    let untracked = checked_git_output(
+    let untracked = checked_git_output_with_index(
         workspace,
         ["ls-files", "--others", "--exclude-standard", "-z", "--"],
         None,
+        index,
     )?;
     if !untracked.stdout.is_empty() {
         return Err("parallel worker left untracked files after host staging".to_string());
@@ -1098,7 +1138,20 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = git_output(workspace, args, commit_timestamp)?;
+    checked_git_output_with_index(workspace, args, commit_timestamp, None)
+}
+
+fn checked_git_output_with_index<I, S>(
+    workspace: &Path,
+    args: I,
+    commit_timestamp: Option<&str>,
+    index: Option<&Path>,
+) -> Result<Output, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = git_output_with_index(workspace, args, commit_timestamp, index)?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -1118,7 +1171,26 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    git_output_with_index(workspace, args, commit_timestamp, None)
+}
+
+fn git_output_with_index<I, S>(
+    workspace: &Path,
+    args: I,
+    commit_timestamp: Option<&str>,
+    index: Option<&Path>,
+) -> Result<Output, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let mut command = safe_git_command(workspace)?;
+    if let Some(index) = index {
+        // This path is allocated and pinned by the host. Never inherit a caller's
+        // index override or create shared-index files in the actual repository.
+        command.args(["-c", "core.splitIndex=false"]);
+        command.env("GIT_INDEX_FILE", index);
+    }
     command.args(args);
     if let Some(timestamp) = commit_timestamp {
         command.env("GIT_AUTHOR_NAME", "Akra Parallel Worker");

@@ -190,3 +190,85 @@ fn autonomy_confirmation_rejects_invalid_identifiers_policy_and_exhausted_revisi
         );
     }
 }
+
+fn criterion_waiver_target() -> IssueConfirmationTarget {
+    IssueConfirmationTarget::CriterionWaiver {
+        workspace: "/workspace/repo".into(),
+        task_id: "task-1".into(),
+        criterion_id: "criterion with spaces".into(),
+        scope_id: "a".repeat(64),
+        acceptance_revision: 7,
+        reason_digest: "b".repeat(64),
+    }
+}
+
+#[test]
+fn criterion_waiver_confirmation_binds_the_exact_scope_and_reason() {
+    let target = criterion_waiver_target();
+    target.validate().unwrap();
+    let verified = VerifiedHumanConfirmation::from_verified(target.clone(), reference()).unwrap();
+    verified.require_target(&target).unwrap();
+    let encoded = serde_json::to_value(&target).unwrap();
+    for (field, changed) in [
+        ("workspace", serde_json::json!("/workspace/other")),
+        ("task_id", serde_json::json!("task-2")),
+        ("criterion_id", serde_json::json!("another criterion")),
+        ("scope_id", serde_json::json!("c".repeat(64))),
+        ("acceptance_revision", serde_json::json!(8)),
+        ("reason_digest", serde_json::json!("d".repeat(64))),
+    ] {
+        let mut changed_target = encoded.clone();
+        changed_target[field] = changed;
+        let changed_target: IssueConfirmationTarget =
+            serde_json::from_value(changed_target).unwrap();
+        changed_target.validate().unwrap();
+        assert_eq!(
+            verified.require_target(&changed_target),
+            Err(IssueConfirmationError::ScopeMismatch),
+            "{field}"
+        );
+    }
+    // scope 회전은 동일 task ID와 동일 revision의 재생성도 구분한다.
+    let mut recreated = target;
+    if let IssueConfirmationTarget::CriterionWaiver { scope_id, .. } = &mut recreated {
+        *scope_id = "e".repeat(64);
+    }
+    assert_eq!(
+        verified.require_target(&recreated),
+        Err(IssueConfirmationError::ScopeMismatch)
+    );
+}
+
+#[test]
+fn criterion_waiver_metadata_rejects_forged_or_incomplete_authority() {
+    for (field, invalid) in [
+        ("task_id", serde_json::json!("")),
+        ("criterion_id", serde_json::json!(" ")),
+        ("criterion_id", serde_json::json!(" padded")),
+        ("scope_id", serde_json::json!("a".repeat(63))),
+        ("scope_id", serde_json::json!("A".repeat(64))),
+        ("acceptance_revision", serde_json::json!(0)),
+        (
+            "acceptance_revision",
+            serde_json::json!(MAX_ISSUE_AUTOMATION_REVISION + 1),
+        ),
+        ("reason_digest", serde_json::json!("not-a-digest")),
+    ] {
+        let mut encoded = serde_json::to_value(criterion_waiver_target()).unwrap();
+        encoded[field] = invalid;
+        let target: IssueConfirmationTarget = serde_json::from_value(encoded).unwrap();
+        assert_eq!(
+            target.validate(),
+            Err(IssueConfirmationError::Invalid),
+            "{field}"
+        );
+    }
+    for field in ["human", "confirmed", "by", "tree_oid"] {
+        let mut encoded = serde_json::to_value(criterion_waiver_target()).unwrap();
+        encoded[field] = serde_json::json!(true);
+        assert!(
+            serde_json::from_value::<IssueConfirmationTarget>(encoded).is_err(),
+            "{field}"
+        );
+    }
+}

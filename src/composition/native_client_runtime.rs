@@ -1,4 +1,6 @@
 mod issue_timeline;
+#[cfg(test)]
+mod task_evidence_tests;
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -34,6 +36,7 @@ use crate::application::service::planning::PlanningServices;
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::application::service::task_evidence::TaskEvidenceService;
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::composition::issue_observer::{
@@ -177,6 +180,8 @@ pub(crate) struct NativeClientRuntime {
     repository_state: Option<RepositoryState>,
     issue_collection: Option<Arc<IssueCollectionService>>,
     issue_observer: Option<IssueObserver>,
+    task_evidence: Option<Arc<TaskEvidenceService>>,
+    task_evidence_outbox_deadline: Option<Instant>,
     // Only controls idle lifetime. Execution always revalidates live policy and durable authority.
     issue_automation_keepalive: Cell<bool>,
     published_issue_change: bool,
@@ -661,6 +666,8 @@ impl NativeClientRuntime {
             repository_state: None,
             issue_collection: None,
             issue_observer: None,
+            task_evidence: None,
+            task_evidence_outbox_deadline: None,
             issue_automation_keepalive: Cell::new(false),
             published_issue_change: false,
             published_kernel_records: Vec::new(),
@@ -1067,7 +1074,10 @@ impl NativeClientRuntime {
             .issue_observer
             .as_ref()
             .and_then(|observer| observer.next_deadline(now));
-        [core, parallel, issues].into_iter().flatten().min()
+        [core, parallel, issues, self.task_evidence_outbox_deadline]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     pub(crate) fn run_host_cycle(
@@ -1119,6 +1129,12 @@ impl NativeClientRuntime {
             self.record_repository_state(current);
         }
         self.poll_issue_observer(now);
+        if self
+            .task_evidence_outbox_deadline
+            .is_some_and(|deadline| deadline <= now)
+        {
+            self.drain_task_evidence_outbox(now);
+        }
         outcomes
     }
 
@@ -1362,6 +1378,12 @@ impl NativeClientRuntime {
                 | StoredCommand::AnswerIssueDecision { .. }
                 | StoredCommand::InterveneIssue { .. }
         );
+        let is_evidence_command = matches!(
+            &command,
+            StoredCommand::PrepareEvidence { .. }
+                | StoredCommand::RecordEvidence { .. }
+                | StoredCommand::WaiveCriterion { .. }
+        );
         let context =
             crate::application::port::inbound::stored_command_port::StoredCommandContext {
                 caller: caller.map(str::to_string),
@@ -1482,16 +1504,20 @@ impl NativeClientRuntime {
                 }
             }
         }
-        let outcome = match workspace_directory.filter(|_| !is_issue_command) {
-            Some(workspace_directory) => self.dispatch_client_event(NativeClientEvent::core(
-                CoreInput::Command(AppCommand::RefreshPlanningRuntime {
-                    workspace_directory,
-                }),
-            )),
-            None => NativeClientDispatchOutcome::Parallel(
-                NativeParallelDispatchOutcome::from_events(Vec::new()),
-            ),
-        };
+        if is_evidence_command {
+            self.drain_task_evidence_outbox(Instant::now());
+        }
+        let outcome =
+            match workspace_directory.filter(|_| !is_issue_command && !is_evidence_command) {
+                Some(workspace_directory) => self.dispatch_client_event(NativeClientEvent::core(
+                    CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                        workspace_directory,
+                    }),
+                )),
+                None => NativeClientDispatchOutcome::Parallel(
+                    NativeParallelDispatchOutcome::from_events(Vec::new()),
+                ),
+            };
         ClientCommandDispatch::Ran {
             outcome,
             operation: op_id.map(|op_id| OperationReceipt {
@@ -1724,6 +1750,7 @@ impl NativeClientRuntime {
         // 열린 턴과 연산도 잃은 것으로 닫는다 (K4-4). 되돌린 프롬프트를 다시 내기 전에 적는다.
         self.record_kernel_events(lost_work);
         self.drain_issue_work_outbox();
+        self.drain_task_evidence_outbox(Instant::now());
         if !open.is_empty() {
             // 아직 클라이언트가 없다. 결과는 조회로 보인다. 기록용 사건은 이 dispatch 안에서 기록된다.
             let _ = self.dispatch_core_input(CoreInput::Command(
@@ -1759,6 +1786,50 @@ impl NativeClientRuntime {
         self.refresh_issue_autonomy_keepalive();
         self.drain_issue_work_outbox();
         Ok(())
+    }
+
+    pub(super) fn attach_task_evidence(&mut self, service: Arc<TaskEvidenceService>) {
+        self.task_evidence = Some(service);
+        self.drain_task_evidence_outbox(Instant::now());
+    }
+
+    fn drain_task_evidence_outbox(&mut self, now: Instant) {
+        let (Some(service), Some((log, workspace))) =
+            (self.task_evidence.clone(), self.kernel_event_log.clone())
+        else {
+            self.task_evidence_outbox_deadline = None;
+            return;
+        };
+        // 이 메서드와 recorder enqueue는 같은 kernel thread가 호출한다. 이 검사부터 직접 append까지
+        // 앞선 sequence의 새 enqueue는 없다. 기존 writer를 기다리거나 별도 스레드를 만들지 않는다.
+        if self
+            .kernel_events
+            .as_ref()
+            .is_some_and(|recorder| !recorder.is_caught_up())
+        {
+            self.task_evidence_outbox_deadline = now.checked_add(Duration::from_secs(1));
+            return;
+        }
+        let result = super::task_evidence_outbox::drain(
+            &service,
+            log.as_ref(),
+            &workspace,
+            &mut self.last_kernel_sequence,
+        );
+        self.recent_kernel_records
+            .extend(result.records.iter().cloned());
+        while self.recent_kernel_records.len() > RECENT_KERNEL_RECORDS {
+            self.recent_kernel_records.pop_front();
+        }
+        self.published_kernel_records.extend(result.records);
+        self.task_evidence_outbox_deadline = if result.retry {
+            tracing::warn!("task evidence remains in the durable outbox");
+            now.checked_add(Duration::from_secs(1))
+        } else if result.more {
+            Some(now)
+        } else {
+            None
+        };
     }
 
     #[cfg(test)]
@@ -2044,6 +2115,7 @@ impl NativeClientRuntime {
         self.core.runtime.has_remaining_work()
             || self.parallel_control_plane.has_remaining_work()
             || self.issue_automation_keepalive.get()
+            || self.task_evidence_outbox_deadline.is_some()
     }
 
     /// Called only when attachment, issue commands or observer state changes, never by idle checks.

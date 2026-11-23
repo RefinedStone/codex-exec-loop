@@ -27,14 +27,45 @@ fn ensure_kernel_event_table(connection: &Connection) -> Result<()> {
                 event_id TEXT PRIMARY KEY NOT NULL,
                 payload_json TEXT NOT NULL,
                 sequence INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS kernel_task_evidence_event_receipts (
+                event_id TEXT PRIMARY KEY NOT NULL,
+                payload_json TEXT NOT NULL,
+                sequence INTEGER NOT NULL
             );",
         )
         .context("failed to ensure the kernel event table")
 }
 
 mod issue_timeline;
+#[cfg(test)]
+mod tests;
 
 impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
+    fn has_task_evidence_event(&self, workspace_dir: &str, expected: &KernelEvent) -> Result<bool> {
+        use rusqlite::OptionalExtension;
+        let event_id = expected
+            .task_evidence_event_id()
+            .context("expected a task evidence event")?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        ensure_kernel_event_table(&connection)?;
+        let prior: Option<String> = connection
+            .query_row(
+                "SELECT payload_json FROM kernel_task_evidence_event_receipts WHERE event_id=?1",
+                [event_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(prior) = prior else {
+            return Ok(false);
+        };
+        if prior != serde_json::to_string(expected)? {
+            bail!("a task evidence event identity cannot change");
+        }
+        Ok(true)
+    }
+
     fn load_recent_issue_kernel_events(
         &self,
         workspace_dir: &str,
@@ -73,6 +104,23 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
             let event = &record.event;
             let payload =
                 serde_json::to_string(event).context("failed to serialize a kernel event")?;
+            if let Some(event_id) = event.task_evidence_event_id() {
+                use rusqlite::OptionalExtension;
+                let prior: Option<String> = transaction.query_row(
+                    "SELECT payload_json FROM kernel_task_evidence_event_receipts WHERE event_id=?1",
+                    [event_id], |row| row.get(0),
+                ).optional()?;
+                if let Some(prior) = prior {
+                    if prior != payload {
+                        bail!("a task evidence event identity cannot change");
+                    }
+                    continue;
+                }
+                transaction.execute(
+                    "INSERT INTO kernel_task_evidence_event_receipts(event_id,payload_json,sequence) VALUES (?1,?2,?3)",
+                    params![event_id, payload, record.sequence],
+                )?;
+            }
             if let Some(event_id) = event.issue_work_event_id() {
                 use rusqlite::OptionalExtension;
                 let prior: Option<String> = transaction.query_row(
