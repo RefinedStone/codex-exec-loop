@@ -74,3 +74,4 @@ pub(crate) mod issue_markdown;
 
 pub mod issue_creation;
 pub(crate) mod kernel_extension;
+pub(crate) mod storage_analysis;
