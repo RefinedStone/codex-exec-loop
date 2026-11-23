@@ -11,6 +11,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const userData = await mkdtemp(join(tmpdir(), "akra-blog-e2e-"));
 const kernel = "blog-test-repository";
 const endpoint = fake.uniqueTestEndpoint();
+const workspace = fake.loadReplayTable(fake.INTERRUPTED_TURN_RECORDING).get("thread/resume").result.thread.cwd;
 let enabled = false;
 let article;
 let fail = true;
@@ -18,6 +19,16 @@ const commits = [1, 2, 3].map(n => ({sha: String(n).repeat(40), time: Math.floor
 const STAGES = ["collect", "write", "review"];
 let codex = true;
 let seen = 0;
+const otherWorkspace = "/work/blog-other", otherKernel = "blog-other-repository";
+const requests = [];
+let originAttachBarrier;
+async function until(predicate, label) {
+  const deadline = Date.now() + 15_000;
+  while (!(await predicate())) {
+    if (Date.now() > deadline) throw new Error("Timed out: " + label);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
 // 단계 하나씩 커널의 변경 알림을 보낸다. 첫 실행은 초안 쓰기에서 실패하고, 이어서 하기는 그 단계부터 다시 한다.
 let hold = false;
 function advance() {
@@ -45,8 +56,19 @@ function advance() {
 }
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   kernel: {kernel, queries: {}, onRequest(method, params) {
+    requests.push({method, params:structuredClone(params)});
+    if (method === "akra/kernel/attach") {
+      assert.ok([workspace, otherWorkspace].includes(params.workspace));
+      return {result:{client_id:"1",protocol_version:1,kernel:params.workspace === workspace ? kernel : otherKernel},
+        replyAfter:params.workspace === workspace ? originAttachBarrier : undefined};
+    }
     if (method === "akra/kernel/extensions/list") return {result:[{id:"akra.tech-blog",version:2,scope:"repository",enabled}]};
     if (method !== "akra/kernel/extensions/call") return;
+    if (params.kernel === otherKernel) {
+      if (params.action === "list") return {result:[]};
+      if (params.action === "targets") return {result:{commits:[],fresh:0,selected:[],first:true,limit:30,codex}};
+      throw new Error("article action reached the other repository: " + params.action);
+    }
     assert.equal(params.kernel,kernel);
     assert.equal(params.extension,"akra.tech-blog");
     assert.equal(params.version,2);
@@ -104,8 +126,23 @@ delete env.ELECTRON_RUN_AS_NODE;
 let app;
 try {
   app = await electron.launch({executablePath:createRequire(import.meta.url)("electron"),args:[root,...(process.env.CI?["--no-sandbox"]:[])],env});
+  await app.evaluate(({ipcMain}) => {
+    globalThis.blogExportOpens = [];
+    ipcMain.removeHandler("akra:git-open-file");
+    ipcMain.handle("akra:git-open-file", (_event, cwd, path) => { globalThis.blogExportOpens.push({cwd, path}); });
+  });
   const page = await app.firstWindow({timeout: 30_000});
   page.setDefaultTimeout(15_000);
+  await page.evaluate(async () => {
+    window.blogNotifications = [];
+    class FixtureNotification {
+      static permission = "granted";
+      constructor(title, options) { this.title = title; this.options = options; window.blogNotifications.push(this); }
+      close() {}
+    }
+    Object.defineProperty(window, "Notification", {value:FixtureNotification, configurable:true});
+    await window.akra.settings.set({notifications:{mode:"always",sound:false}});
+  });
   await page.getByTestId("connection-phase").filter({hasText:"연결됨"}).waitFor();
   await page.getByTestId("thread-entry").first().click();
   await app.evaluate(({Menu})=>Menu.getApplicationMenu().getMenuItemById("open-settings").click());
@@ -127,12 +164,20 @@ try {
   assert.match(await panel.locator(".blog-preview pre").textContent(), /\*\*본문\*\*/);
   await panel.getByRole("button",{name:"파일로 내보내기"}).click();
   await panel.getByText("blog/2026-11-23-review-post/post.md").waitFor();
-  await panel.getByRole("button",{name:"편집기로 열기"}).waitFor();
+  const exportedPath = article.exported.path;
+  await panel.getByRole("button",{name:"편집기로 열기"}).click();
+  const openDeadline = Date.now() + 15_000;
+  while ((await app.evaluate(() => globalThis.blogExportOpens.length)) === 0) {
+    if (Date.now() > openDeadline) throw new Error("exported article open did not reach the main process");
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(await app.evaluate(() => globalThis.blogExportOpens), [{cwd:workspace, path:exportedPath}]);
   await panel.getByRole("button",{name:"다시 쓰기…"}).click();
   await panel.getByRole("button",{name:"더 짧게"}).click();
   await panel.getByRole("button",{name:"다시 쓰기",exact:true}).click();
   await panel.getByText("판 2").waitFor();
   await panel.getByText("내보낸 파일보다 새 판입니다.").waitFor();
+  assert.equal(await panel.getByRole("button",{name:"편집기로 열기"}).count(), 0, "a stale export does not open as the current edition");
   assert.equal(await panel.locator(".blog-preview h1").textContent(), "짧게 고친 글");
   await panel.getByRole("button",{name:"이전 판으로"}).click();
   await panel.getByText("판 3").waitFor();
@@ -151,6 +196,7 @@ try {
   await panel.getByTestId("blog-result").waitFor();
   await panel.getByRole("button",{name:"다시 쓰기…"}).click();
   await panel.getByRole("button",{name:"더 짧게"}).click();
+  await page.evaluate(() => { window.blogNotifications = []; });
   hold = true;
   await panel.getByRole("button",{name:"다시 쓰기",exact:true}).click();
   await page.getByTestId("tech-blog-toggle").click();
@@ -166,6 +212,34 @@ try {
   await panel.getByTestId("blog-result").waitFor();
   await page.getByTestId("blog-activity-unread").waitFor({state: "detached"});
   assert.equal(seen, seenBefore + 1);
+  await until(() => page.evaluate(() => window.blogNotifications.some(notice => notice.options.tag === "akra:blog:one")), "the completed article notification");
+  await app.evaluate(({ipcMain}, cwd) => {
+    ipcMain.removeHandler("akra:choose-folder");
+    ipcMain.handle("akra:choose-folder", () => cwd);
+  }, otherWorkspace);
+  await page.getByTestId("new-folder-thread").click();
+  await page.getByTestId("home").locator(".home-pickers button").first().click();
+  await page.getByRole("option",{name:"폴더 고르기…",exact:true}).click();
+  await until(() => requests.some(request => request.method === "akra/kernel/extensions/list" && request.params.kernel === otherKernel), "the other repository catalog");
+  await panel.getByRole("heading",{name:"새 글",exact:true}).waitFor();
+  const attachedBefore = requests.filter(request => request.method === "akra/kernel/attach" && request.params.workspace === workspace).length;
+  const openedBefore = requests.filter(request => request.method === "akra/kernel/extensions/call" && request.params.kernel === kernel && request.params.action === "open").length;
+  let releaseAttach;
+  originAttachBarrier = new Promise(resolve => { releaseAttach = resolve; });
+  try {
+    await page.evaluate(() => window.blogNotifications.find(notice => notice.options.tag === "akra:blog:one").onclick());
+    await until(() => requests.filter(request => request.method === "akra/kernel/attach" && request.params.workspace === workspace).length > attachedBefore, "the original repository attach waiting for its reply");
+    assert.equal(requests.filter(request => request.method === "akra/kernel/extensions/call" && request.params.kernel === otherKernel && ["open","seen"].includes(request.params.action)).length, 0);
+  } finally { originAttachBarrier = undefined; releaseAttach(); }
+  try { await panel.getByTestId("blog-result").waitFor(); }
+  catch (error) {
+    console.error(JSON.stringify({phase:"notification return", requests:requests.slice(-35), panel:await panel.innerText().catch(() => "not mounted")}));
+    throw error;
+  }
+  assert.equal(await panel.locator(".blog-preview h1").textContent(), "짧게 고친 글");
+  assert.ok(requests.filter(request => request.method === "akra/kernel/extensions/call" && request.params.kernel === kernel && request.params.action === "open").length > openedBefore);
+  assert.equal(requests.filter(request => request.method === "akra/kernel/attach").at(-1).params.workspace, workspace);
+  assert.equal(requests.filter(request => request.method === "akra/kernel/extensions/call" && request.params.kernel === otherKernel && ["open","seen"].includes(request.params.action)).length, 0);
   await panel.getByRole("button",{name:"← 글 목록"}).click();
   codex = false;
   await page.getByTestId("tech-blog-toggle").click();
@@ -173,7 +247,9 @@ try {
   await panel.getByTestId("blog-setup").waitFor();
   await panel.getByRole("button",{name:/리뷰를 글로 옮기기/}).click();
   await panel.getByTestId("blog-result").waitFor();
-  console.log("PASS one-press blog generation, failure, resume, export, rewrite, restore, edit, review and reopen; saved articles stay open without Codex CLI; closed-panel completion shows a toast and an unread mark until opened");
+  assert.equal(await app.evaluate(() => globalThis.blogExportOpens.length), 1, "only an explicit export-open click opens a file");
+  assert.ok(!gateway.receivedMethods.includes("turn/start") && !gateway.receivedMethods.includes("turn/steer"));
+  console.log("PASS one-press blog generation, failure, resume, export with exact workspace/path IPC, rewrite, restore, edit, review and reopen; saved articles stay open without Codex CLI; closed-panel unread and cross-repository notification focus survive a delayed attach; no model calls");
 } finally {
   if (app) await app.close();
   await gateway.close();
