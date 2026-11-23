@@ -14,6 +14,9 @@ use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningRuntimeProjection,
     PlanningRuntimeWorkspaceStatus, PlanningServices, PlanningTaskHandoff,
 };
+use crate::application::service::task_verification::{
+    AutomaticTaskVerificationOutcome, with_verification_commit,
+};
 use crate::diagnostics::event_log;
 use crate::domain::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::domain::parallel_mode::{
@@ -742,6 +745,7 @@ struct ParallelDispatchWorkerSettlement {
 struct ParallelDispatchOfficialCompletionOutcome {
     notices: Vec<String>,
     official_completion_refresh_succeeded: bool,
+    awaiting_user: bool,
 }
 
 impl ParallelDispatchOfficialCompletionOutcome {
@@ -749,6 +753,7 @@ impl ParallelDispatchOfficialCompletionOutcome {
         Self {
             notices,
             official_completion_refresh_succeeded: false,
+            awaiting_user: false,
         }
     }
 
@@ -756,6 +761,15 @@ impl ParallelDispatchOfficialCompletionOutcome {
         Self {
             notices,
             official_completion_refresh_succeeded: true,
+            awaiting_user: false,
+        }
+    }
+
+    fn awaiting_user(notices: Vec<String>) -> Self {
+        Self {
+            notices,
+            official_completion_refresh_succeeded: false,
+            awaiting_user: true,
         }
     }
 }
@@ -1223,7 +1237,11 @@ fn run_parallel_dispatch_worker(
         stream_state.latest_main_reply.as_deref(),
     );
     notices.extend(official_completion.notices);
-    if official_completion.official_completion_refresh_succeeded {
+    if official_completion.awaiting_user {
+        // Keep the same worker thread/worktree available for a human answer. This
+        // terminal turn does not archive the thread or reserve official refresh.
+        ParallelDispatchWorkerRunResult::completed(notices)
+    } else if official_completion.official_completion_refresh_succeeded {
         if let Err(_error) = worker_port.archive_completed_isolated_thread(
             &request.worktree_directory,
             &turn_completed.receipt.thread_id,
@@ -1496,7 +1514,7 @@ fn run_parallel_dispatch_official_completion(
     ) {
         Ok(false) => {}
         Ok(true) => {
-            return ParallelDispatchOfficialCompletionOutcome::failed(vec![
+            return ParallelDispatchOfficialCompletionOutcome::awaiting_user(vec![
                 "사용자 답변 또는 전달 확인을 기다리는 작업은 공식 완료하지 않습니다.".into(),
             ]);
         }
@@ -1559,41 +1577,67 @@ fn run_parallel_dispatch_official_completion(
         return ParallelDispatchOfficialCompletionOutcome::failed(notices);
     }
 
-    // Official completion refreshes are serialized by slot lease order, not by thread wake-up
-    // timing. That preserves planning authority when multiple parallel workers finish together.
-    let refresh_order = match turn_service
-        .reserve_official_completion_refresh_order_for_lease(&request.expected_lease)
-    {
-        Ok(Some(order)) => order,
-        Ok(None) => {
-            event_log::emit_lazy("parallel_official_completion_blocked", || {
-                serde_json::json!({
-                    "worktree": &request.worktree_directory,
-                    "task_id": &request.handoff_task.task_id,
-                    "blocked_reason": "no running slot lease was found",
-                })
-            });
-            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
-                "parallel worker completion skipped official refresh because no running slot lease was found / task: {}",
-                request.handoff_task.task_title
-            )]);
+    let continuation = turn_service.automatic_completion_continuation(
+        &request.planning_workspace_directory,
+        Some(request.automation_epoch_id),
+        None,
+    );
+    match turn_service.verify_host_commit_for_official_completion(
+        &request.planning_workspace_directory,
+        &request.expected_lease,
+        &host_commit.commit_sha,
+        &turn_completed.receipt.turn_id,
+        continuation.clone(),
+    ) {
+        Ok(AutomaticTaskVerificationOutcome::NotApplicable) => {}
+        Ok(AutomaticTaskVerificationOutcome::Finished { receipts }) => {
+            notices.push(format!(
+                "호스트 검증 결과 {}건을 저장했습니다.",
+                receipts.len()
+            ));
         }
-        Err(error) => {
-            turn_service.mark_official_completion_failed_for_lease(&request.expected_lease, &error);
-            event_log::emit_lazy("parallel_official_completion_blocked", || {
-                serde_json::json!({
-                    "worktree": &request.worktree_directory,
-                    "task_id": &request.handoff_task.task_id,
-                    "blocked_reason": "refresh order reservation failed",
-                    "error": &error,
-                })
-            });
-            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
-                "parallel worker completion could not reserve official refresh order / task: {} / {error}",
-                request.handoff_task.task_title
-            )]);
+        Ok(AutomaticTaskVerificationOutcome::AwaitingUser { .. }) => {
+            return with_verification_commit(continuation.as_ref(), || {
+                match turn_service.preserve_worker_awaiting_user(
+                    &request.planning_workspace_directory,
+                    &request.expected_lease,
+                ) {
+                    Ok(true) => {
+                        notices
+                            .push("호스트 검증 실패가 누적되어 사용자 답변을 기다립니다.".into());
+                        ParallelDispatchOfficialCompletionOutcome::awaiting_user(notices)
+                    }
+                    Ok(false) => ParallelDispatchOfficialCompletionOutcome::failed(vec![
+                        "호스트 검증 뒤 사용자 대기 상태를 확인하지 못해 작업 공간을 보존합니다."
+                            .into(),
+                    ]),
+                    Err(detail) => ParallelDispatchOfficialCompletionOutcome::failed(vec![detail]),
+                }
+            })
+            .unwrap_or_else(|| ParallelDispatchOfficialCompletionOutcome::failed(Vec::new()));
         }
-    };
+        Err(detail) => {
+            return with_verification_commit(continuation.as_ref(), || {
+                // Preserve a human transition only while the completion still owns its
+                // epoch. Cancellation wins before either the read or the session write.
+                if turn_service
+                    .preserve_worker_awaiting_user(
+                        &request.planning_workspace_directory,
+                        &request.expected_lease,
+                    )
+                    .unwrap_or(false)
+                {
+                    notices.push("사용자 답변을 기다리며 작업 공간을 보존합니다.".into());
+                    return ParallelDispatchOfficialCompletionOutcome::awaiting_user(notices);
+                }
+                turn_service
+                    .mark_official_completion_failed_for_lease(&request.expected_lease, &detail);
+                notices.push(detail);
+                ParallelDispatchOfficialCompletionOutcome::failed(notices)
+            })
+            .unwrap_or_else(|| ParallelDispatchOfficialCompletionOutcome::failed(Vec::new()));
+        }
+    }
 
     let latest_main_reply = latest_main_reply
         .filter(|reply| !reply.trim().is_empty())
@@ -1607,49 +1651,73 @@ fn run_parallel_dispatch_official_completion(
             .changed_planning_file_paths,
     );
 
-    let completion_report = match turn_service.begin_official_completion_for_lease(
-        &request.expected_lease,
-        &turn_completed.receipt.turn_id,
-        Some(refresh_order),
-        Some(latest_main_reply),
-        Some(&validation_summary),
-    ) {
-        Ok(Some(report)) => report,
-        Ok(None) => {
-            event_log::emit_lazy("parallel_official_completion_blocked", || {
-                serde_json::json!({
-                    "worktree": &request.worktree_directory,
-                    "task_id": &request.handoff_task.task_id,
-                    "blocked_reason": "no running slot to report",
-                    "refresh_order": refresh_order,
-                })
-            });
-            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
-                "parallel worker completion had no running slot to report / task: {}",
-                request.handoff_task.task_title
-            )]);
-        }
-        Err(error) => {
-            turn_service.mark_official_completion_failed_for_lease(&request.expected_lease, &error);
-            event_log::emit_lazy("parallel_official_completion_blocked", || {
-                serde_json::json!({
-                    "worktree": &request.worktree_directory,
-                    "task_id": &request.handoff_task.task_id,
-                    "blocked_reason": "completion capture failed",
-                    "refresh_order": refresh_order,
-                    "error": &error,
-                })
-            });
-            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
-                "parallel worker completion capture failed / task: {} / {error}",
-                request.handoff_task.task_title
-            )]);
+    // Reserve and capture under the same epoch used by Host verification. Cancellation
+    // either wins before every bounded write, or waits for this accepted capture to finish.
+    // Do not recheck is_current or acquire an epoch permit inside this commit guard.
+    let capture = with_verification_commit(continuation.as_ref(), || {
+        let refresh_order = match turn_service
+            .reserve_official_completion_refresh_order_for_lease(&request.expected_lease)
+        {
+            Ok(Some(order)) => order,
+            Ok(None) => {
+                return Err(ParallelDispatchOfficialCompletionOutcome::failed(vec![
+                    format!(
+                        "parallel worker completion skipped official refresh because no running slot lease was found / task: {}",
+                        request.handoff_task.task_title
+                    ),
+                ]));
+            }
+            Err(error) => {
+                turn_service
+                    .mark_official_completion_failed_for_lease(&request.expected_lease, &error);
+                return Err(ParallelDispatchOfficialCompletionOutcome::failed(vec![
+                    format!(
+                        "parallel worker completion could not reserve official refresh order / task: {} / {error}",
+                        request.handoff_task.task_title
+                    ),
+                ]));
+            }
+        };
+        let completion_report = match turn_service.begin_official_completion_for_lease(
+            &request.expected_lease,
+            &turn_completed.receipt.turn_id,
+            Some(refresh_order),
+            Some(latest_main_reply),
+            Some(&validation_summary),
+        ) {
+            Ok(Some(report)) => report,
+            Ok(None) => {
+                return Err(ParallelDispatchOfficialCompletionOutcome::failed(vec![
+                    format!(
+                        "parallel worker completion had no running slot to report / task: {}",
+                        request.handoff_task.task_title
+                    ),
+                ]));
+            }
+            Err(error) => {
+                turn_service
+                    .mark_official_completion_failed_for_lease(&request.expected_lease, &error);
+                return Err(ParallelDispatchOfficialCompletionOutcome::failed(vec![
+                    format!(
+                        "parallel worker completion capture failed / task: {} / {error}",
+                        request.handoff_task.task_title
+                    ),
+                ]));
+            }
+        };
+        let refreshing_notice =
+            turn_service.mark_official_completion_refreshing_for_lease(&request.expected_lease);
+        Ok((refresh_order, completion_report, refreshing_notice))
+    });
+    let (refresh_order, completion_report, refreshing_notice) = match capture {
+        Some(Ok(captured)) => captured,
+        Some(Err(outcome)) => return outcome,
+        None => {
+            notices.push("자동 완료 처리가 중단되어 공식 완료 기록을 만들지 않았습니다.".into());
+            return ParallelDispatchOfficialCompletionOutcome::failed(notices);
         }
     };
-
-    if let Some(notice) =
-        turn_service.mark_official_completion_refreshing_for_lease(&request.expected_lease)
-    {
+    if let Some(notice) = refreshing_notice {
         notices.push(notice);
     }
 
@@ -1659,10 +1727,6 @@ fn run_parallel_dispatch_official_completion(
         &request.planning_workspace_directory,
         request.automation_epoch_id,
     ) else {
-        turn_service.mark_official_completion_failed_for_lease(
-            &request.expected_lease,
-            "parallel automation epoch closed before planning authority refresh",
-        );
         notices.push(format!(
             "parallel official completion paused before planning refresh / task: {}",
             request.handoff_task.task_title
@@ -1697,10 +1761,6 @@ fn run_parallel_dispatch_official_completion(
         &request.planning_workspace_directory,
         request.automation_epoch_id,
     ) {
-        turn_service.mark_official_completion_failed_for_lease(
-            &request.expected_lease,
-            "parallel automation epoch closed during planning authority refresh",
-        );
         notices.push(format!(
             "parallel delivery paused after planning refresh / task: {}",
             request.handoff_task.task_title
@@ -1935,6 +1995,7 @@ fn parallel_worker_agent_message_completed_trace_payload(
 
 #[cfg(test)]
 mod tests {
+    mod automatic_verification;
     mod continuation;
     mod worker_evidence;
 

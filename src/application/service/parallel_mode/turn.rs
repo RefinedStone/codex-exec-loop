@@ -3,8 +3,10 @@ use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWork
 use crate::application::service::parallel_mode::{
     ParallelModeOfficialCompletionReport, ParallelModeOrchestratorTrigger, ParallelModeService,
 };
+use crate::application::service::task_verification::TaskVerificationContinuation;
 use crate::domain::parallel_mode::{ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot};
 use crate::domain::planning::{ParallelTurnHandoff, PostTurnContinuationPermit};
+use std::sync::Arc;
 
 pub type ParallelTurnSlotLeaseHandoff = ParallelTurnHandoff;
 
@@ -984,6 +986,69 @@ impl ParallelModeTurnService {
     ) -> Result<ParallelWorkerCommitOutcome, String> {
         self.parallel_mode_service
             .prepare_workspace_worker_commit(expected_lease)
+    }
+
+    pub(crate) fn automatic_completion_continuation(
+        &self,
+        workspace: &str,
+        epoch_id: Option<u64>,
+        continuation: Option<PostTurnContinuationPermit>,
+    ) -> Arc<dyn TaskVerificationContinuation> {
+        use super::automatic_verification::AutomaticCompletionContinuation;
+        Arc::new(match (&self.automation_guard, epoch_id) {
+            (Some(guard), Some(epoch)) => {
+                let permit = guard.permit(workspace, epoch);
+                AutomaticCompletionContinuation::Epoch(match continuation {
+                    Some(continuation) => permit.with_continuation_permit(continuation),
+                    None => permit,
+                })
+            }
+            (Some(_), None) => AutomaticCompletionContinuation::Closed,
+            (None, _) => match continuation {
+                Some(continuation) => AutomaticCompletionContinuation::PostTurn(continuation),
+                None => AutomaticCompletionContinuation::Unrestricted,
+            },
+        })
+    }
+
+    pub(crate) fn prepare_automatic_verification_for_official_completion(
+        &self,
+        workspace: &str,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        completed_turn_id: &str,
+        continuation: Arc<dyn TaskVerificationContinuation>,
+    ) -> Result<
+        crate::application::service::task_verification::AutomaticTaskVerificationOutcome,
+        String,
+    > {
+        self.parallel_mode_service
+            .prepare_automatic_verification_for_official_completion(
+                workspace,
+                expected_lease,
+                completed_turn_id,
+                continuation,
+            )
+    }
+
+    pub(crate) fn verify_host_commit_for_official_completion(
+        &self,
+        workspace: &str,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        source_commit_sha: &str,
+        completed_turn_id: &str,
+        continuation: Arc<dyn TaskVerificationContinuation>,
+    ) -> Result<
+        crate::application::service::task_verification::AutomaticTaskVerificationOutcome,
+        String,
+    > {
+        self.parallel_mode_service
+            .verify_host_commit_for_official_completion(
+                workspace,
+                expected_lease,
+                source_commit_sha,
+                completed_turn_id,
+                continuation,
+            )
     }
     pub fn mark_official_completion_failed(&self, workspace_directory: &str, failure_detail: &str) {
         let _ = self

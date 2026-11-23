@@ -115,9 +115,52 @@ evidence/sealed/verification/<attempt_id>/artifact
 payload를 비교해 append 후 ACK한다. ACK 유실과 history retention 뒤 재전달에서도 같은 사실을
 다시 게시하지 않는다. 같은 event ID에 다른 결과가 오면 기존 기록을 덮어쓰거나 ACK하지 않는다.
 
-자동 재실행은 없다. 재시작 때 미완료 예약은 `interrupted`로 마무리하고 새 프로세스를 시작하지
+같은 완료의 재처리나 재시작에 따른 자동 재실행은 없다. 재시작 때 미완료 예약은 `interrupted`로 마무리하고 새 프로세스를 시작하지
 않는다. 사용자가 다시 검증하려면 현재 scope를 읽고 새로운 요청을 보낸다. 실패·중단된 예약도
 기존 증거 저장소의 한도와 보존 규칙을 따른다.
+
+## 병렬 완료의 자동 검증
+
+live repository kernel의 병렬 완료는 명시적인 recipe가 있는 필수 `command` 기준을
+호스트 commit 뒤, 공식 planning refresh 전에 검증한다. 병렬 dispatcher와 post-turn은
+같은 live 검증 owner를 사용한다. 해당 기준이 없거나 현재 scope의 Human 면제로 충족되면
+새 검증 프로세스를 실행하지 않는다. 일반 대화의 완료에는 이 경로를 추가하지 않는다.
+
+자동 요청은 완료 turn·기준 scope·criterion·lease 세대·고정 전달 대상·호스트 source에
+결속한 안정적인 ID를 사용한다. 시작 때 캡처한 `Leased` 상태가 같은 세대의 `Running`으로
+진행한 것은 인정하지만 교체된 lease는 채택하지 않는다. 실제 runner도 기대한 clean commit과
+tree, 실행 취소 상태를 확인한다. 저장소당 한 실행을 유지하고 다른 실행은 그 완료를 기다린다.
+
+완료 worker는 Native host loop가 terminal receipt를 DB에 확정할 때까지 기다린다.
+프로세스 응답, 채널 완료 또는 아직 실패 중인 finish transaction만으로 refresh를 시작하지
+않는다. outbox ACK는 이 대기의 조건이 아니다. 모든 기준을 처리하는 대기는 최초 진입에서
+정한 5분 deadline을 공유하며 재시도마다 늘리지 않는다. 동기 파일·DB I/O까지 포함한 전체
+처리 시간의 5분 보장은 아니다. 기한 초과, lease·source 변경, 취소 또는 미확정 결과는
+검증 성공으로 승격하지 않는다.
+
+자동 완료에서 같은 scope·필수 criterion의 **서로 다른 확정 검사 실패가 세 번**이면
+기존 Task를 `awaiting_user`로 두고 작업 공간을 보존한다. 집계 대상은 `GitDiffCheckV1`의
+완전한 sealed 결과와 종료 코드 2다. 치명적 Git 오류, 취소, 시간 초과, Interrupted,
+미실행, 불완전 출력과 capture 누락은 확정 검사 실패로 세지 않는다. 같은 receipt의 재생,
+finish 재시도와 ACK는 횟수를 늘리지 않는다. 최초 정책 판정도 영속화하므로 사람이 재개한
+뒤 오래된 요청을 다시 처리해 Task를 중단시키지 않는다. 과거 scope, 바뀐 control·lease,
+현재 Human 면제 및 선택 기준은 현재 Task를 중단시키지 않는다.
+
+대기로 전환할 때 기존 실행 세션의 상태와 완료 상태도 `awaiting_user`로 보존한다.
+Task·세션·최초 정책 판정·audit는 같은 DB transaction에 저장한다.
+동일한 Running lease 세대와 준비된 thread를 유지하므로 기존 이슈 질문·재개 경로가
+이 대기를 관찰할 수 있다. 자동 완료는 이 경우 planning refresh와 archive를 진행하지 않는다.
+
+Native 종료는 공유 owner의 실행 권한을 먼저 닫는다. 완료 worker가 서비스 참조를 보유해도
+새 검증을 예약하거나 종료 후 실패 정책을 쓰지 못한다. 취소 대기는 continuation 잠금을
+잡지 않으며 취소된 새 오류 분기가 실패 세션·미러 파일을 추가로 기록하지 않는다.
+검증 예약·실패 정책·공식 완료 캡처의 짧은 저장은 기존 continuation과 병렬 epoch의
+취소 경계에 함께 참여한다. 취소가 먼저면 새 저장을 거절하고, 저장이 먼저 승인되면
+그 저장이 끝난 뒤 취소가 반환된다. 긴 검증 실행과 영수증 대기는 이 잠금 밖에서 진행한다.
+
+검증 실패 1·2회나 미실행 사실 자체로 모든 Done 전이를 새로 차단하지는 않는다.
+실제 source push·PR 생성·통합은 별도 전달 게이트가 현재 증거를 다시 판정한다.
+Auto의 전달 허가는 Enforce·프로세스 opt-in·정책·작업별 허가를 결합하는 후속 범위다.
 
 ## 기존 권한과 후속 화면
 

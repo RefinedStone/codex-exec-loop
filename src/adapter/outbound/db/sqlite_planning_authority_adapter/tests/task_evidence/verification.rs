@@ -6,7 +6,9 @@ use crate::domain::parallel_mode::{
 use crate::domain::planning::verification::*;
 use sha2::{Digest, Sha256};
 
+mod captured_lease;
 mod durability;
+mod failure_limit;
 mod fences;
 
 struct HostFixture {
@@ -54,6 +56,7 @@ impl HostFixture {
             criterion_id: "criterion one".into(),
             scope_id: scope.scope_id,
             expected_acceptance_revision: scope.acceptance_revision,
+            expected_lease: None,
             owner_token: self.owner.clone(),
             at: NOW.into(),
         }

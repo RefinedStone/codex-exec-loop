@@ -21,6 +21,7 @@ fn host_passes(f: &DeliveryFixture) -> TaskDeliveryEvidenceObservation {
                     criterion_id: criterion.id.clone(),
                     scope_id: task.scope.scope_id.clone(),
                     expected_acceptance_revision: task.scope.acceptance_revision,
+                    expected_lease: None,
                     owner_token: owner.clone(),
                     at: NOW.into(),
                 },

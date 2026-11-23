@@ -20,8 +20,17 @@ pub(super) fn execute(
     stored: &StoredTaskVerification,
     execution: TaskVerificationExecutionKey,
     cancelled: &AtomicBool,
+    closed: &AtomicBool,
+    automatic: Option<&automatic::ExecutionGuard>,
 ) -> TaskVerificationFinishCommit {
-    match execute_inner(dependencies, stored, &execution, cancelled) {
+    match execute_inner(
+        dependencies,
+        stored,
+        &execution,
+        cancelled,
+        closed,
+        automatic,
+    ) {
         Ok((result, artifact)) => TaskVerificationFinishCommit {
             execution,
             result,
@@ -37,11 +46,19 @@ fn execute_inner(
     stored: &StoredTaskVerification,
     execution: &TaskVerificationExecutionKey,
     cancelled: &AtomicBool,
+    closed: &AtomicBool,
+    automatic: Option<&automatic::ExecutionGuard>,
 ) -> std::result::Result<
     (TaskVerificationResult, Option<TaskEvidenceArtifact>),
     TaskVerificationNotRunReason,
 > {
-    let check_cancelled = || cancelled.load(Ordering::Acquire);
+    let check_cancelled = || {
+        cancelled.load(Ordering::Acquire)
+            || closed.load(Ordering::Acquire)
+            || automatic.is_some_and(|guard| {
+                !guard.continuation.is_current() || Instant::now() >= guard.deadline
+            })
+    };
     if check_cancelled() {
         return Err(TaskVerificationNotRunReason::Cancelled);
     }
@@ -58,6 +75,9 @@ fn execute_inner(
         },
     )
     .map_err(|error| authority::not_run_reason(&error))?;
+    if automatic.is_some_and(|guard| guard.source != source) {
+        return Err(TaskVerificationNotRunReason::Stale);
+    }
     let base = stored
         .lease
         .delivery_target

@@ -33,6 +33,9 @@ use chrono::{DateTime, Utc};
 use std::path::Path;
 use std::sync::Arc;
 pub(crate) mod admin;
+mod automatic_verification;
+#[cfg(test)]
+pub(crate) use automatic_verification::set_before_automatic_completion_commit_hook;
 mod automation_guard;
 mod branch_names;
 mod completion;
@@ -429,6 +432,7 @@ pub struct ParallelModeService {
     delivery_safety_policy: ParallelModeDeliverySafetyPolicy,
     parallel_agent_profile_service: Option<ParallelAgentProfileService>,
     task_evidence: Option<worker_evidence::WorkerEvidenceConfiguration>,
+    task_verification: crate::application::service::task_verification::TaskVerificationHandle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -469,6 +473,7 @@ impl ParallelModeService {
             delivery_safety_policy,
             parallel_agent_profile_service: None,
             task_evidence: None,
+            task_verification: Default::default(),
         }
     }
 
@@ -489,6 +494,14 @@ impl ParallelModeService {
             repository,
             artifacts,
         });
+        self
+    }
+
+    pub fn with_task_verification(
+        mut self,
+        verification: crate::application::service::task_verification::TaskVerificationHandle,
+    ) -> Self {
+        self.task_verification = verification;
         self
     }
 
@@ -1679,4 +1692,4 @@ fn default_supervisor_notice(
     }
 }
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

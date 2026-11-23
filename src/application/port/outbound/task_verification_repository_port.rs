@@ -1,5 +1,6 @@
 //! The live repository owner reserves one execution; reads and retries never dispatch it.
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 use crate::domain::planning::evidence::{
@@ -42,6 +43,9 @@ pub struct TaskVerificationClaimCommit {
     pub criterion_id: String,
     pub scope_id: String,
     pub expected_acceptance_revision: u64,
+    /// Automatic completion must retain the captured lease instead of selecting a replacement.
+    /// None preserves the original explicit-command request fingerprint and replay behavior.
+    pub expected_lease: Option<ParallelModeSlotLeaseSnapshot>,
     pub owner_token: String,
     pub at: String,
 }
@@ -67,6 +71,35 @@ pub struct TaskVerificationFinishCommit {
     pub result: TaskVerificationResult,
     pub artifact: Option<TaskEvidenceArtifact>,
     pub at: String,
+}
+
+/// Internal automatic-completion policy, explicitly requested after a durable terminal fact.
+/// Owner identity is intentionally neither serialized nor exposed through Debug.
+#[derive(Clone)]
+pub struct TaskVerificationFailureLimitCommit {
+    pub attempt_id: String,
+    pub expected_lease: ParallelModeSlotLeaseSnapshot,
+    pub owner_token: String,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskVerificationFailureLimitOutcome {
+    NotFailed,
+    BelowLimit,
+    Superseded,
+    AwaitingUser,
+}
+
+/// The original policy decision is returned on replay; it is not current execution authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskVerificationFailureLimitResult {
+    pub outcome: TaskVerificationFailureLimitOutcome,
+    pub failure_count: u32,
+    pub planning_revision: Option<i64>,
+    /// True only when this call changed the task to AwaitingUser, never on replay.
+    pub changed: bool,
 }
 
 pub trait TaskVerificationRepositoryPort: Send + Sync {
@@ -100,6 +133,16 @@ pub trait TaskVerificationRepositoryPort: Send + Sync {
         _workspace: &str,
         _attempt_id: &str,
     ) -> Result<Option<StoredTaskVerification>> {
+        Err(TaskEvidenceError::Unavailable.into())
+    }
+
+    /// Only automatic completion invokes this policy. Reads, explicit Host verification and
+    /// outbox acknowledgement do not pause tasks or apply the policy retrospectively.
+    fn apply_host_verification_failure_limit(
+        &self,
+        _workspace: &str,
+        _commit: &TaskVerificationFailureLimitCommit,
+    ) -> Result<TaskVerificationFailureLimitResult> {
         Err(TaskEvidenceError::Unavailable.into())
     }
 

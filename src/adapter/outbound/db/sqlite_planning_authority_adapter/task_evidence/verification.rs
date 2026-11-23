@@ -5,6 +5,7 @@ use crate::domain::planning::TaskAcceptanceChannel;
 use crate::domain::planning::verification::*;
 
 mod claim;
+mod failure_limit;
 mod schema;
 mod terminal;
 
@@ -36,6 +37,70 @@ struct RunRow {
     criterion_id: String,
     ordinal: u32,
     finished_revision: Option<u64>,
+}
+
+fn claim_fingerprint(
+    task_id: &str,
+    criterion_id: &str,
+    scope_id: &str,
+    acceptance_revision: u64,
+    expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+) -> Result<String> {
+    let identity = (task_id, criterion_id, scope_id, acceptance_revision);
+    match expected_lease {
+        None => digest(&identity),
+        Some(lease) => digest(&(
+            "captured-host-lease-v1",
+            identity,
+            captured_lease_fingerprint(lease)?,
+        )),
+    }
+}
+
+fn captured_lease_fingerprint(lease: &ParallelModeSlotLeaseSnapshot) -> Result<String> {
+    // These are exactly the identity fields used by same_generation_as. The current lease must
+    // be Running, but the completion request can retain its original Leased launch snapshot.
+    digest(&(
+        &lease.slot_id,
+        &lease.task_id,
+        &lease.task_title,
+        &lease.agent_id,
+        &lease.branch_name,
+        &lease.worktree_path,
+        &lease.leased_at,
+        &lease.delivery_target,
+        &lease.lease_generation,
+    ))
+}
+
+fn validate_captured_lease(expected: &ParallelModeSlotLeaseSnapshot) -> Result<()> {
+    let generation = expected
+        .lease_generation
+        .as_deref()
+        .ok_or(TaskEvidenceError::LeaseChanged)?;
+    validate_evidence_token(generation).map_err(|_| TaskEvidenceError::LeaseChanged)?;
+    if !matches!(
+        expected.state,
+        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running
+    ) || expected.delivery_target.is_none()
+    {
+        return Err(TaskEvidenceError::LeaseChanged.into());
+    }
+    Ok(())
+}
+
+fn require_captured_lease(
+    current: &ParallelModeSlotLeaseSnapshot,
+    expected: &ParallelModeSlotLeaseSnapshot,
+) -> Result<()> {
+    validate_captured_lease(expected)?;
+    if current.state != ParallelModeSlotLeaseState::Running
+        || current.session_key() != expected.session_key()
+        || !current.same_generation_as(expected)
+    {
+        return Err(TaskEvidenceError::LeaseChanged.into());
+    }
+    Ok(())
 }
 
 fn require_owner(connection: &Connection, owner: &str) -> Result<()> {
@@ -118,13 +183,22 @@ fn read_run(connection: &Connection, attempt_id: &str) -> Result<Option<Run>> {
         || row.scope_id != attempt.scope.scope_id
         || row.criterion_id != attempt.criterion_id
         || row.ordinal != attempt.attempt
-        || row.claim_fingerprint
-            != digest(&(
+        || (row.claim_fingerprint
+            != claim_fingerprint(
                 &attempt.scope.task_id,
                 &attempt.criterion_id,
                 &attempt.scope.scope_id,
                 attempt.scope.acceptance_revision,
-            ))?
+                None,
+            )?
+            && row.claim_fingerprint
+                != claim_fingerprint(
+                    &attempt.scope.task_id,
+                    &attempt.criterion_id,
+                    &attempt.scope.scope_id,
+                    attempt.scope.acceptance_revision,
+                    Some(&lease),
+                )?)
         || lease.task_id != attempt.scope.task_id
         || lease.slot_id != attempt.slot_id
         || lease.session_key() != attempt.session_key
@@ -250,6 +324,14 @@ impl TaskVerificationRepositoryPort for SqlitePlanningAuthorityAdapter {
     ) -> Result<Option<StoredTaskVerification>> {
         validate_evidence_token(attempt_id)?;
         Ok(read_run(&connection(workspace)?, attempt_id)?.map(|run| run.stored))
+    }
+
+    fn apply_host_verification_failure_limit(
+        &self,
+        workspace: &str,
+        commit: &TaskVerificationFailureLimitCommit,
+    ) -> Result<TaskVerificationFailureLimitResult> {
+        failure_limit::apply(workspace, commit)
     }
     fn recover_incomplete_host_verifications(
         &self,
