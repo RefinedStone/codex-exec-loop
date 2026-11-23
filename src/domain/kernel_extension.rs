@@ -5,6 +5,18 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 pub const EXTENSION_API_VERSION: u32 = 1;
 
+/// Server-owned identity for a call through the extension application boundary.
+#[derive(Debug, Clone)]
+pub(crate) struct ExtensionContext {
+    pub host_id: String,
+    pub generation: String,
+    pub connection_id: String,
+    pub repository_key: Option<String>,
+    /// Only the transport's verified server thread may populate this field.
+    pub verified_thread: Option<String>,
+    pub activation_revision: u64,
+}
+
 /// Preserve the authoritative JSON-RPC rejection on every machine entrance.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExtensionCallRejection {

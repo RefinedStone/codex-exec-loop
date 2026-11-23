@@ -1,4 +1,5 @@
 //! Host-owned extension admission, activation and durable job lifetime.
+mod inbound;
 mod jobs;
 pub(crate) mod registry;
 mod retention;
@@ -22,16 +23,6 @@ const MAX_JOBS: usize = 128;
 const MAX_RECEIPTS: usize = 512;
 const MAX_ACTIVE_JOBS: usize = 8;
 
-#[derive(Debug, Clone)]
-pub(crate) struct ExtensionContext {
-    pub host_id: String,
-    pub generation: String,
-    pub connection_id: String,
-    pub repository_key: Option<String>,
-    /// Only the transport's verified server thread may populate this field.
-    pub verified_thread: Option<String>,
-    pub activation_revision: u64,
-}
 pub(crate) struct ExtensionJobContext {
     pub context: ExtensionContext,
     pub job_id: String,

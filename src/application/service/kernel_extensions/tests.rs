@@ -1,3 +1,4 @@
+mod admission;
 mod lifecycle;
 use super::*;
 use registry::{ExtensionHandler, ExtensionRegistration};
