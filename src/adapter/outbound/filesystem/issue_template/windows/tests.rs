@@ -87,8 +87,11 @@ fn run_command(command: &mut Command, label: &'static str) -> std::process::Outp
 }
 
 fn junction(link: &Path, target: &Path) {
-    let link = link.to_string_lossy();
-    let target = target.to_string_lossy();
+    // Path::join preserves forward slashes inside template-relative strings,
+    // but cmd's mklink parses them as options. Normalize only the fixture CLI
+    // spelling; production paths and the reparse-point assertions stay intact.
+    let link = link.to_string_lossy().replace('/', "\\");
+    let target = target.to_string_lossy().replace('/', "\\");
     let mut command = Command::new("cmd");
     command.args([
         "/C",

@@ -59,10 +59,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let path = crate::test_utils::platform_safe_temp_dir().join(format!(
             "akra-issue-template-{label}-{}-{unique}",
             std::process::id()
         ));
+        crate::private_directory::ensure_private_directory(&path).expect("private temp workspace");
         fs::create_dir_all(path.join(".github/ISSUE_TEMPLATE")).expect("temp workspace");
         path
     }
