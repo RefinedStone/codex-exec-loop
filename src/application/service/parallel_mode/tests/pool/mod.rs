@@ -200,6 +200,9 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
         )
         .expect("task-1 lease should be acquired");
     let queued_record = PlanningAuthorityDistributorQueueRecord {
+        evidence_binding: None,
+        evidence_observations: Vec::new(),
+        evidence_wait: None,
         link_reference: None,
         queue_item_id: "queued-task-2".to_string(),
         queue_order_key: 1,

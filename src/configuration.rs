@@ -29,6 +29,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use toml_edit::{DocumentMut, Item, value};
 use tracing_subscriber::EnvFilter;
 
+use crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryMode;
+
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CONFIG_FILE_NAME: &str = "config.toml";
 const PROJECT_CONFIG_DIRECTORY: &str = ".akra";
@@ -97,6 +99,7 @@ pub struct GithubConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelConfig {
     pub integration_branch: String,
+    pub evidence_mode: TaskEvidenceDeliveryMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +161,7 @@ impl AkraConfig {
             },
             parallel: ParallelConfig {
                 integration_branch: "prerelease".to_string(),
+                evidence_mode: TaskEvidenceDeliveryMode::Observe,
             },
             app_server: AppServerConfig {
                 response_timeout_secs: 15,
@@ -247,6 +251,8 @@ pub struct GithubConfigLayer {
 pub struct ParallelConfigLayer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub integration_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_mode: Option<TaskEvidenceDeliveryMode>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -351,6 +357,7 @@ pub enum SettingKey {
     GithubPushRemote,
     GithubPullRequestMode,
     ParallelIntegrationBranch,
+    ParallelEvidenceMode,
     AppServerResponseTimeoutSecs,
     AppServerPromptLog,
     SubprocessTimeoutSecs,
@@ -365,7 +372,7 @@ pub enum SettingKey {
 }
 
 impl SettingKey {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::ConversationModel,
         Self::ConversationReasoningEffort,
         Self::TuiShowStartupVisual,
@@ -375,6 +382,7 @@ impl SettingKey {
         Self::GithubPushRemote,
         Self::GithubPullRequestMode,
         Self::ParallelIntegrationBranch,
+        Self::ParallelEvidenceMode,
         Self::AppServerResponseTimeoutSecs,
         Self::AppServerPromptLog,
         Self::SubprocessTimeoutSecs,
@@ -399,6 +407,7 @@ impl SettingKey {
             Self::GithubPushRemote => "github.push_remote",
             Self::GithubPullRequestMode => "github.pull_request_mode",
             Self::ParallelIntegrationBranch => "parallel.integration_branch",
+            Self::ParallelEvidenceMode => "parallel.evidence_mode",
             Self::AppServerResponseTimeoutSecs => "app_server.response_timeout_secs",
             Self::AppServerPromptLog => "app_server.prompt_log",
             Self::SubprocessTimeoutSecs => "subprocess.timeout_secs",
@@ -446,6 +455,7 @@ enum SettingValue {
     Text(String),
     Bool(bool),
     Unsigned(u64),
+    EvidenceMode(TaskEvidenceDeliveryMode),
 }
 
 impl fmt::Display for SettingValue {
@@ -454,6 +464,7 @@ impl fmt::Display for SettingValue {
             Self::Text(value) => formatter.write_str(value),
             Self::Bool(value) => write!(formatter, "{value}"),
             Self::Unsigned(value) => write!(formatter, "{value}"),
+            Self::EvidenceMode(value) => formatter.write_str(evidence_delivery_mode_name(*value)),
         }
     }
 }
@@ -977,6 +988,11 @@ impl AkraConfigLayer {
                 .integration_branch
                 .clone()
                 .map(SettingValue::Text),
+            SettingKey::ParallelEvidenceMode => self
+                .parallel
+                .as_ref()?
+                .evidence_mode
+                .map(SettingValue::EvidenceMode),
             SettingKey::AppServerResponseTimeoutSecs => self
                 .app_server
                 .as_ref()?
@@ -1066,6 +1082,9 @@ impl AkraConfigLayer {
             (SettingKey::ParallelIntegrationBranch, SettingValue::Text(value)) => {
                 self.parallel.get_or_insert_default().integration_branch = Some(value)
             }
+            (SettingKey::ParallelEvidenceMode, SettingValue::EvidenceMode(value)) => {
+                self.parallel.get_or_insert_default().evidence_mode = Some(value)
+            }
             (SettingKey::AppServerResponseTimeoutSecs, SettingValue::Unsigned(value)) => {
                 self.app_server
                     .get_or_insert_default()
@@ -1137,6 +1156,9 @@ impl AkraConfigLayer {
             }
             SettingKey::ParallelIntegrationBranch => {
                 set_option_field(&mut self.parallel, |value| &mut value.integration_branch)
+            }
+            SettingKey::ParallelEvidenceMode => {
+                set_option_field(&mut self.parallel, |value| &mut value.evidence_mode)
             }
             SettingKey::AppServerResponseTimeoutSecs => {
                 set_option_field(&mut self.app_server, |value| {
@@ -1234,6 +1256,9 @@ fn apply_value(
         (SettingKey::ParallelIntegrationBranch, SettingValue::Text(value)) => {
             config.parallel.integration_branch = value
         }
+        (SettingKey::ParallelEvidenceMode, SettingValue::EvidenceMode(value)) => {
+            config.parallel.evidence_mode = value
+        }
         (SettingKey::AppServerResponseTimeoutSecs, SettingValue::Unsigned(value)) => {
             config.app_server.response_timeout_secs = value
         }
@@ -1305,6 +1330,9 @@ fn value_from_config(config: &AkraConfig, key: SettingKey) -> SettingValue {
         SettingKey::ParallelIntegrationBranch => {
             SettingValue::Text(config.parallel.integration_branch.clone())
         }
+        SettingKey::ParallelEvidenceMode => {
+            SettingValue::EvidenceMode(config.parallel.evidence_mode)
+        }
         SettingKey::AppServerResponseTimeoutSecs => {
             SettingValue::Unsigned(config.app_server.response_timeout_secs)
         }
@@ -1354,6 +1382,9 @@ fn validate_layer(layer: &AkraConfigLayer, scope: ConfigScope) -> Result<()> {
 
 fn parse_cli_value(key: SettingKey, raw_value: &str) -> Result<SettingValue> {
     let value = match key {
+        SettingKey::ParallelEvidenceMode => {
+            SettingValue::EvidenceMode(parse_evidence_delivery_mode(raw_value)?)
+        }
         SettingKey::TuiShowStartupVisual
         | SettingKey::GithubAutoDiscoverPullRequest
         | SettingKey::AppServerPromptLog
@@ -1396,6 +1427,7 @@ fn validate_setting_value(key: SettingKey, value: SettingValue) -> Result<()> {
         (SettingKey::ParallelIntegrationBranch, SettingValue::Text(value)) => {
             validate_branch_name(&value)
         }
+        (SettingKey::ParallelEvidenceMode, SettingValue::EvidenceMode(_)) => Ok(()),
         (SettingKey::DiagnosticsTrace, SettingValue::Text(value)) => validate_trace_value(&value),
         (SettingKey::DiagnosticsSpans, SettingValue::Text(value)) => {
             validate_enum_value(key, &value, &["none", "close", "full", "0", "off"])
@@ -1529,6 +1561,18 @@ fn validate_bounded_text(name: &str, value: &str) -> Result<()> {
         bail!("{name} must be a non-empty bounded text value")
     }
     Ok(())
+}
+
+const fn evidence_delivery_mode_name(mode: TaskEvidenceDeliveryMode) -> &'static str {
+    match mode {
+        TaskEvidenceDeliveryMode::Observe => "observe",
+        TaskEvidenceDeliveryMode::Enforce => "enforce",
+    }
+}
+
+fn parse_evidence_delivery_mode(value: &str) -> Result<TaskEvidenceDeliveryMode> {
+    TaskEvidenceDeliveryMode::parse(value)
+        .map_err(|error| anyhow!("parallel.evidence_mode: {error}"))
 }
 
 fn parse_bool(value: &str) -> Result<bool> {
@@ -1906,6 +1950,7 @@ fn set_document_value(document: &mut DocumentMut, key: SettingKey, setting_value
         SettingValue::Text(text) => toml_edit::value(text),
         SettingValue::Bool(enabled) => toml_edit::value(enabled),
         SettingValue::Unsigned(number) => toml_edit::value(number as i64),
+        SettingValue::EvidenceMode(mode) => toml_edit::value(evidence_delivery_mode_name(mode)),
     };
 }
 
@@ -2859,6 +2904,8 @@ fn inspect_layer_file(path: &Path, scope: ConfigScope) -> ConfigFileInspection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod evidence;
 
     #[derive(Clone)]
     struct ConfigFixture {

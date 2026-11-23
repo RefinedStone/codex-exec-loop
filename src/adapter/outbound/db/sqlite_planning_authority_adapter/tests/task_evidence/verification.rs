@@ -94,7 +94,7 @@ impl HostFixture {
     }
 }
 
-fn manifest() -> TaskVerificationExecutionManifest {
+pub(super) fn manifest() -> TaskVerificationExecutionManifest {
     TaskVerificationExecutionManifest {
         recipe: TaskVerificationRecipe::GitDiffCheckV1,
         base_commit_sha: "b".repeat(40),
@@ -111,7 +111,7 @@ fn manifest() -> TaskVerificationExecutionManifest {
     }
 }
 
-fn executed() -> TaskVerificationResult {
+pub(super) fn executed() -> TaskVerificationResult {
     let empty = || TaskVerificationStream {
         sha256: format!("{:x}", Sha256::digest([])),
         size_bytes: 0,

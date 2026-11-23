@@ -131,6 +131,15 @@ pub struct PlanningAuthorityDistributorQueueRecord {
     // Frozen source branch tip reviewed by GitHub and targeted for delivery.
     #[serde(default)]
     pub source_commit_sha: String,
+    /// Captured by the first enqueue transaction; it cannot be rebound to a later task scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_binding: Option<crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryBinding>,
+    /// At most one latest immutable assessment per delivery stage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_observations: Vec<crate::domain::planning::delivery_evidence::TaskDeliveryEvidenceObservation>,
+    /// Only this typed wait may be rearmed by an evidence recheck.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_wait: Option<crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryStage>,
     // Working branch containing the agent result, also a legacy source fallback.
     pub branch_name: String,
     // Worktree path for cleanup, conflict inspection, and manual recovery.
@@ -1893,6 +1902,9 @@ mod tests {
         source_commit_sha: &str,
     ) -> PlanningAuthorityDistributorQueueRecord {
         PlanningAuthorityDistributorQueueRecord {
+            evidence_binding: None,
+            evidence_observations: Vec::new(),
+            evidence_wait: None,
             link_reference: None,
             queue_item_id: "queue-1".to_string(),
             queue_order_key: 7,

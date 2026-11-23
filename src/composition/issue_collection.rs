@@ -86,7 +86,7 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             IssuePolicyService::new(validation_source.clone()),
         ),
     );
-    let execution = build_execution();
+    let execution = build_execution(workspace_dir);
     let autonomy = Arc::new(
         crate::application::service::issue_autonomy::IssueAutonomyService::new(
             workspace_dir.to_owned(),
@@ -236,14 +236,14 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
             workspace_dir.to_owned(),
             store.clone(),
             IssueAutomationPolicyService::new(Arc::new(TestAutomationPolicy)),
-            build_execution(),
+            build_execution(workspace_dir),
         ),
     );
     let interactions = Arc::new(
         crate::application::service::issue_interactions::IssueInteractionsService::new(
             workspace_dir.to_owned(),
             store.clone(),
-            build_execution(),
+            build_execution(workspace_dir),
             triage.clone(),
             IssuePolicyService::new(Arc::new(TestPolicy)),
         ),
@@ -283,7 +283,7 @@ pub(crate) fn build_interventions(
         )),
         IssuePolicyService::new(validation_source.clone()),
     ));
-    let execution = build_execution();
+    let execution = build_execution(workspace_dir);
     Arc::new(
         crate::application::service::issue_intervention::IssueInterventionService::new(
             workspace_dir.to_owned(),
@@ -312,19 +312,23 @@ pub(crate) fn build_autonomy(
             IssueAutomationPolicyService::new(Arc::new(
                 FilesystemIssueAutomationPolicySourceAdapter::new(),
             )),
-            build_execution(),
+            build_execution(workspace_dir),
         ),
     )
 }
 
-fn build_execution() -> Arc<crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter>
-{
+fn build_execution(
+    workspace_dir: &str,
+) -> Arc<crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter> {
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let delivery_evidence =
+        super::production::task_delivery_evidence_for_workspace(workspace_dir, authority.as_ref());
     let parallel = crate::application::service::parallel_mode::ParallelModeService::new(
         authority.clone(),
         Arc::new(crate::adapter::outbound::github::automation::GithubAutomationAdapter::new()),
         Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
-    );
+    )
+    .with_delivery_evidence(delivery_evidence);
     Arc::new(
         crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
             authority.clone(),

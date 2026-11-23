@@ -121,9 +121,11 @@ payload를 비교해 append 후 ACK한다. ACK 유실과 history retention 뒤 �
 
 ## 기존 권한과 후속 화면
 
-이 기능은 Done, dispatch, push, PR 생성, Integrate 또는 Auto의 권한을 바꾸지 않는다. 기준별
+검증 요청이나 receipt 자체로 Done, dispatch, push, PR 생성, Integrate 또는 Auto 권한을
+얻지 않는다. 별도의 [전달 게이트](task-delivery-evidence.md)는 기본 `observe`에서 판정을
+기록하고, 명시적인 `enforce`에서 현재 호스트 검증 또는 Human 면제를 요구한다. 기준별
 Human 면제는 기존 정확한 native 확인 대상으로만 허용하며 Delivery·Spec·Integrate 승인을
-대신하지 않는다. 전달 전 강제 검증 정책 E3와 Desktop 기준 카드·증거 열기 E4는 후속 범위다.
+대신하지 않는다. Desktop 기준 카드·증거 열기 E4는 후속 범위다.
 
 회귀는 domain/SQLite 예약·finish 계약, fake worker 비동기 완료와 복구, 실제 임시 Git·파일,
 공개 DTO·생성 타입·renderer 검증 및 이벤트 ACK 재전달을 다룬다. 실제 모델이나 사용자

@@ -492,6 +492,16 @@ impl ParallelModeService {
         self
     }
 
+    /// Delivery owns one immutable canonical-workspace policy. Worker and integration
+    /// worktrees must not re-resolve configuration as the queued source moves through stages.
+    pub fn with_delivery_evidence(
+        mut self,
+        gate: Arc<dyn crate::application::port::inbound::task_delivery_evidence_port::TaskDeliveryEvidenceGatePort>,
+    ) -> Self {
+        self.distributor_service = self.distributor_service.with_delivery_evidence(gate);
+        self
+    }
+
     pub fn with_parallel_agent_profile_service(
         mut self,
         service: ParallelAgentProfileService,

@@ -163,6 +163,28 @@ test("portable native selectors cover host verification through the actual Windo
   }
 });
 
+test("portable native selectors cover immutable evidence policy and the delivery gate", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
+  const windows = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
+  const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
+  for (const filter of [
+    "configuration::tests::evidence::",
+    "adapter::inbound::cli::tests::config_evidence_mode_",
+    "composition::production::delivery_evidence::tests::",
+    "domain::planning::delivery_evidence::",
+    "application::service::task_delivery_evidence::tests::",
+    "sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_evidence::",
+    "application::service::parallel_mode::tests::distributor::evidence_gate::",
+    "application::service::parallel_mode::tests::distributor::work_permits::evidence_conditions::",
+    "adapter::outbound::github::automation::tests::frozen_integration::",
+    "sqlite_planning_authority_adapter::tests::task_evidence::",
+  ]) {
+    assert.ok(windows.includes(`'${filter}'`), `Windows Bash omits ${filter}`);
+    assert.ok(powershell.includes(`"${filter}"`), `PowerShell omits ${filter}`);
+    assert.ok(workflow.includes(`'${filter}'`), `macOS omits ${filter}`);
+  }
+});
+
 test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/native-pr-checks.yml", import.meta.url),

@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 mod acceptance;
+pub mod delivery_evidence;
 pub(crate) mod direction_policy;
 pub mod evidence;
 pub(crate) mod mutation;

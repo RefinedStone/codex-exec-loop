@@ -934,6 +934,97 @@ mod tests {
     }
 
     #[test]
+    fn config_evidence_mode_roundtrips_project_scope_and_rejects_invalid_writes() {
+        let root = unique_temp_path("cli-evidence-mode");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join(".git"),
+            "gitdir: /nonexistent/cli-config-fixture\n",
+        )
+        .unwrap();
+        let paths =
+            ConfigPaths::discover_with_global(&workspace, root.join("home").join("config.toml"))
+                .unwrap();
+        let key = "parallel.evidence_mode";
+        let mut output = Vec::new();
+        run_config_with_paths(
+            &["get", key].map(std::ffi::OsString::from),
+            &[],
+            &mut output,
+            paths.clone(),
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("observe (builtin)")
+        );
+        assert!(!paths.global.exists());
+
+        for command in [
+            ["set", "--global", key, "observe"],
+            ["set", "--project", key, "enforce"],
+        ] {
+            run_config_with_paths(
+                &command.map(std::ffi::OsString::from),
+                &[],
+                &mut Vec::new(),
+                paths.clone(),
+            )
+            .unwrap();
+        }
+        let project_path = paths.project.as_ref().unwrap();
+        let before = std::fs::read(project_path).unwrap();
+        for invalid in ["enabled", "ENFORCE", "enforce\n"] {
+            assert!(
+                run_config_with_paths(
+                    &["set", "--project", key, invalid].map(std::ffi::OsString::from),
+                    &[],
+                    &mut Vec::new(),
+                    paths.clone(),
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read(project_path).unwrap(), before);
+        }
+        let mut output = Vec::new();
+        run_config_with_paths(
+            &["get", key].map(std::ffi::OsString::from),
+            &[],
+            &mut output,
+            paths.clone(),
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("enforce (project)")
+        );
+        run_config_with_paths(
+            &["unset", "--project", key].map(std::ffi::OsString::from),
+            &[],
+            &mut Vec::new(),
+            paths.clone(),
+        )
+        .unwrap();
+        let mut output = Vec::new();
+        run_config_with_paths(
+            &["get", key].map(std::ffi::OsString::from),
+            &[],
+            &mut output,
+            paths,
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("observe (global)")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn command_classifier_accepts_documented_aliases_only() {
         assert!(is_help_flag(OsStr::new("-h")));
         assert!(is_help_flag(OsStr::new("--help")));

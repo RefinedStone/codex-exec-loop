@@ -15,6 +15,55 @@ use super::super::{current_timestamp, record_distributor_failed_session_detail};
 use super::ParallelModeDistributorQueueRecord;
 use super::queue_keys::sanitize_runtime_record_key;
 
+#[cfg(test)]
+type EvidenceMirrorHook = (
+    crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryStage,
+    Box<dyn FnOnce(&ParallelModeDistributorQueueRecord)>,
+);
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_EVIDENCE_MIRROR_HOOK: std::cell::RefCell<Option<EvidenceMirrorHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(in crate::application::service::parallel_mode) fn install_before_evidence_mirror_hook(
+    stage: crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryStage,
+    hook: impl FnOnce(&ParallelModeDistributorQueueRecord) + 'static,
+) -> impl Drop {
+    struct ResetHook;
+    impl Drop for ResetHook {
+        fn drop(&mut self) {
+            let _ = BEFORE_EVIDENCE_MIRROR_HOOK.with(|slot| slot.borrow_mut().take());
+        }
+    }
+    BEFORE_EVIDENCE_MIRROR_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace((stage, Box::new(hook))).is_none());
+    });
+    ResetHook
+}
+
+#[cfg(test)]
+fn run_before_evidence_mirror_hook(record: &ParallelModeDistributorQueueRecord) {
+    let pending = BEFORE_EVIDENCE_MIRROR_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_some_and(|(stage, _)| {
+            record
+                .evidence_observations
+                .iter()
+                .any(|observation| observation.stage == *stage)
+        }) {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, hook)) = pending {
+        hook(record);
+    }
+}
+
 /*
 distributor queue root는 pool root 아래의 durable queue mirror이다. 실제 source of
 truth는 planning authority의 runtime queue projection이지만, `.distributor-queue/<id>.json` 파일은
@@ -126,6 +175,18 @@ pub(super) fn write_distributor_queue_record(
             )
         })?;
 
+    mirror_distributor_queue_record(runtime, pool_root, record)
+}
+
+/// The gate already committed its observation with the live-claim/queue CAS. Mirror that exact
+/// returned row without another authority write that could overwrite a concurrent change.
+pub(super) fn mirror_distributor_queue_record(
+    runtime: &dyn ParallelModeRuntimePort,
+    pool_root: &Path,
+    record: &ParallelModeDistributorQueueRecord,
+) -> Result<(), String> {
+    #[cfg(test)]
+    run_before_evidence_mirror_hook(record);
     let body = serde_json::to_string_pretty(record)
         .map_err(|error| format!("failed to serialize distributor queue record: {error}"))?;
     runtime

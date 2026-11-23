@@ -8,6 +8,7 @@ pub mod app_server_prompt_log_query;
 pub mod kernel_command;
 // stored_command 는 저장 명령을 planning 서비스로 실행한다 (plan 18 K4-9d).
 pub mod stored_command;
+pub mod task_delivery_evidence;
 pub mod task_evidence;
 pub mod task_verification;
 // conversation_service는 사용자 turn과 app-server 스트림을 대화 단위로 조율한다.

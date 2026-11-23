@@ -563,6 +563,15 @@ jobs:
             'application::service::task_evidence::tests::verification::' \
             'composition::native_client_runtime::task_verification_tests::' \
             'composition::kernel_command_execution::tests::task_verification::' \
+            'configuration::tests::evidence::' \
+            'adapter::inbound::cli::tests::config_evidence_mode_' \
+            'composition::production::delivery_evidence::tests::' \
+            'domain::planning::delivery_evidence::' \
+            'application::service::task_delivery_evidence::tests::' \
+            'sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_evidence::' \
+            'application::service::parallel_mode::tests::distributor::evidence_gate::' \
+            'application::service::parallel_mode::tests::distributor::work_permits::evidence_conditions::' \
+            'adapter::outbound::github::automation::tests::frozen_integration::' \
             'trusted_executable::fingerprint::tests::' \
             'subprocess::controlled::tests::' \
             'adapter::outbound::git::task_verification::tests::' \

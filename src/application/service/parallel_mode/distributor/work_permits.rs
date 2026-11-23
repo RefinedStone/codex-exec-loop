@@ -90,12 +90,14 @@ pub(super) enum WorkOrderPermitWaitRecheck {
     Retry(String),
 }
 
-/// Only a work-order permit wait may yield its place in the distributor queue.
+/// Only a work-order permit wait or typed evidence wait may yield its place in the queue.
 /// Existing operator, conflict, and cleanup blocks retain their previous ordering.
 pub(super) fn select_permitted_queue_head(
     authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
+    evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
     context: &mut PoolRuntimeContext,
+    allow_cleanup_probe: bool,
 ) -> Result<Option<usize>, String> {
     for index in 0..context.distributor_queue_records.len() {
         if context.distributor_queue_records[index].queue_state == ParallelModeQueueItemState::Done
@@ -103,6 +105,23 @@ pub(super) fn select_permitted_queue_head(
             continue;
         }
         let mut record = context.distributor_queue_records[index].clone();
+        if allow_cleanup_probe && super::evidence::can_probe_evidence_wait_cleanup(&record) {
+            return Ok(Some(index));
+        }
+        match recheck_evidence_wait(
+            runtime,
+            evidence_gate,
+            &context.repo_root,
+            &context.pool_root,
+            &mut record,
+        )? {
+            WorkOrderPermitWaitRecheck::NotWaiting => {}
+            WorkOrderPermitWaitRecheck::Waiting => {
+                context.distributor_queue_records[index] = record;
+                continue;
+            }
+            WorkOrderPermitWaitRecheck::Retry(detail) => return Err(detail),
+        }
         match recheck_work_order_permit_wait(
             authority,
             runtime,

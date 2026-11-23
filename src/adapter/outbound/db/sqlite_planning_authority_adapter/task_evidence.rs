@@ -22,10 +22,12 @@ use super::{
     table_exists,
 };
 
+mod delivery;
 mod queries;
 mod schema;
 mod verification;
 mod writes;
+pub(super) use delivery::protect_queue_evidence;
 pub(super) use schema::{retire_all_scopes, retire_task_scope, sync_task_scope};
 
 pub(super) fn ensure_tables(connection: &mut Connection) -> Result<()> {

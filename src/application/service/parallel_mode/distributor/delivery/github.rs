@@ -29,12 +29,14 @@ distributor delivery의 첫 GitHub 단계는 slot agent branch를 원격에 push
 push 실패나 remote 미준비는 block record로 전환한다. 이때 session detail도 pushing으로
 기록해 supervisor가 "현재 통합 큐가 remote push 단계에서 멈췄다"는 사실을 보여 준다.
 */
+#[allow(clippy::too_many_arguments)]
 pub(super) fn distributor_push_source_branch(
     planning_authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
     automation_permit: Option<&ParallelModeAutomationPermit>,
     claim_permit: &DistributorQueueHeadClaimPermit,
 ) -> Result<String, String> {
@@ -125,12 +127,16 @@ pub(super) fn distributor_push_source_branch(
         return Ok(notice);
     }
     claim_permit.renew("exact frozen source push")?;
-    if let Some(notice) = block_if_work_order_permit_denied(
+    if let Some(notice) = block_if_delivery_gates_denied(
         planning_authority,
         runtime,
+        evidence_gate,
         resolution,
         record,
-        PlanningWorkPermitStage::Push,
+        TaskEvidenceDeliveryStage::Push,
+        None,
+        automation_permit,
+        claim_permit,
     )? {
         return Ok(notice);
     }
@@ -190,6 +196,7 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
     automation_permit: Option<&ParallelModeAutomationPermit>,
     claim_permit: &DistributorQueueHeadClaimPermit,
     autonomous_delivery_allowed: &Result<bool, String>,
@@ -331,6 +338,7 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
         resolution,
         record,
         github_automation,
+        evidence_gate,
         automation_permit,
         claim_permit,
     )?);
@@ -359,12 +367,14 @@ source branch가 원격에 올라간 뒤에는 integration branch를 대상으�
 ensure_pull_request는 새 PR을 만들 수도 있고 기존 PR을 재사용할 수도 있다. 성공하면
 PR 번호와 URL을 queue record에 저장해 이후 readiness 검사와 closing 단계가 같은 PR을 추적한다.
 */
+#[allow(clippy::too_many_arguments)]
 pub(super) fn distributor_ensure_pull_request(
     planning_authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
     automation_permit: Option<&ParallelModeAutomationPermit>,
     claim_permit: &DistributorQueueHeadClaimPermit,
 ) -> Result<String, String> {
@@ -454,12 +464,16 @@ pub(super) fn distributor_ensure_pull_request(
         return Ok(notice);
     }
     claim_permit.renew("pull request ensure")?;
-    if let Some(notice) = block_if_work_order_permit_denied(
+    if let Some(notice) = block_if_delivery_gates_denied(
         planning_authority,
         runtime,
+        evidence_gate,
         resolution,
         record,
-        PlanningWorkPermitStage::PullRequest,
+        TaskEvidenceDeliveryStage::PullRequest,
+        None,
+        automation_permit,
+        claim_permit,
     )? {
         return Ok(notice);
     }
@@ -663,6 +677,11 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
     ))
 }
 
+pub(super) enum IntegrationPushReadiness {
+    Ready { requires_human_review: bool },
+    Blocked(String),
+}
+
 pub(super) fn distributor_recheck_pull_request_before_integration_push(
     planning_authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
@@ -671,7 +690,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
     github_automation: &dyn GithubAutomationPort,
     claim_permit: &DistributorQueueHeadClaimPermit,
     autonomous_delivery_allowed: &Result<bool, String>,
-) -> Result<Option<String>, String> {
+) -> Result<IntegrationPushReadiness, String> {
     // Direct integration has no PR reinspection, but still requires a current task permit.
     let Some(pr_number) = record.pull_request_number else {
         if let Some(notice) = block_if_delivery_target_changed(
@@ -683,7 +702,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
             claim_permit,
             "final integration push target verification",
         )? {
-            return Ok(Some(notice));
+            return Ok(IntegrationPushReadiness::Blocked(notice));
         }
         let detail = match work_order_delivery_gate(
             planning_authority,
@@ -691,7 +710,11 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
             record,
             PlanningWorkPermitStage::Integrate,
         ) {
-            Ok(false) => return Ok(None),
+            Ok(false) => {
+                return Ok(IntegrationPushReadiness::Ready {
+                    requires_human_review: false,
+                });
+            }
             Ok(true) => {
                 "work-order integration requires human review through a pull request".to_string()
             }
@@ -706,7 +729,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
             record,
             detail,
         )
-        .map(Some);
+        .map(IntegrationPushReadiness::Blocked);
     };
     claim_permit.renew("pre-push autonomous delivery policy inspection")?;
     let target = record
@@ -726,7 +749,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
                 record,
                 detail.clone(),
             )
-            .map(Some);
+            .map(IntegrationPushReadiness::Blocked);
         }
     };
 
@@ -754,7 +777,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
                     "pull request #{pr_number} could not be reinspected immediately before integration push: {error}"
                 ),
             )
-            .map(Some);
+            .map(IntegrationPushReadiness::Blocked);
         }
     };
     record.pull_request_url = Some(pull_request.url.clone());
@@ -769,7 +792,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
         claim_permit,
         "final integration push target verification",
     )? {
-        return Ok(Some(notice));
+        return Ok(IntegrationPushReadiness::Blocked(notice));
     }
     let requires_human_review = match work_order_delivery_gate(
         planning_authority,
@@ -788,7 +811,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
                 record,
                 detail,
             )
-            .map(Some);
+            .map(IntegrationPushReadiness::Blocked);
         }
     };
     let autonomous_delivery = autonomous_delivery && !requires_human_review;
@@ -807,9 +830,11 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
             record,
             format!("pre-push pull request gate changed: {detail}"),
         )
-        .map(Some);
+        .map(IntegrationPushReadiness::Blocked);
     }
-    Ok(None)
+    Ok(IntegrationPushReadiness::Ready {
+        requires_human_review,
+    })
 }
 
 fn pull_request_readiness_error(

@@ -1,4 +1,7 @@
+use super::evidence::block_if_delivery_gates_denied;
 use super::*;
+use crate::application::port::inbound::task_delivery_evidence_port::TaskDeliveryEvidenceIntegration;
+use crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryStage;
 
 #[cfg(test)]
 use std::cell::RefCell;
@@ -13,8 +16,8 @@ mod integration;
 pub(super) use self::integration::work_order_integration_path;
 
 use self::github::{
-    distributor_prepare_pull_request_or_skip, distributor_push_source_branch,
-    distributor_recheck_pull_request_before_integration_push,
+    IntegrationPushReadiness, distributor_prepare_pull_request_or_skip,
+    distributor_push_source_branch, distributor_recheck_pull_request_before_integration_push,
 };
 use self::integration::{
     PreparedIntegrationState, collect_cherry_pick_conflict_files, fetch_integration_remote_branch,
@@ -72,6 +75,7 @@ pub(super) fn process_distributor_queue_record(
     pool_root: &Path,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
     automation_permit: Option<&ParallelModeAutomationPermit>,
     claim_permit: &DistributorQueueHeadClaimPermit,
     integration_target_oid: &str,
@@ -179,6 +183,7 @@ pub(super) fn process_distributor_queue_record(
             &resolution,
             record,
             github_automation,
+            evidence_gate,
             automation_permit,
             claim_permit,
         )?);
@@ -193,6 +198,7 @@ pub(super) fn process_distributor_queue_record(
             &resolution,
             record,
             github_automation,
+            evidence_gate,
             automation_permit,
             claim_permit,
             autonomous_delivery_allowed,
@@ -207,6 +213,7 @@ pub(super) fn process_distributor_queue_record(
             &resolution,
             record,
             github_automation,
+            evidence_gate,
             automation_permit,
             claim_permit,
             autonomous_delivery_allowed,
@@ -319,7 +326,7 @@ fn validate_frozen_source_workspace(
     .map_err(|detail| format!("frozen source commit range is invalid: {detail}"))
 }
 
-fn block_if_automation_epoch_closed(
+pub(super) fn block_if_automation_epoch_closed(
     planning_authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
@@ -394,6 +401,7 @@ fn distributor_integrate_branch(
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
     automation_permit: Option<&ParallelModeAutomationPermit>,
     claim_permit: &DistributorQueueHeadClaimPermit,
     autonomous_delivery_allowed: &Result<bool, String>,
@@ -852,24 +860,49 @@ fn distributor_integrate_branch(
         }
     };
     claim_permit.renew("integration target push")?;
-    if let Some(notice) = distributor_recheck_pull_request_before_integration_push(
-        planning_authority,
-        runtime,
-        resolution,
-        record,
-        github_automation,
-        claim_permit,
-        autonomous_delivery_allowed,
-    )? {
-        return Ok(notice);
+    let preflight_requires_human_review =
+        match distributor_recheck_pull_request_before_integration_push(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            github_automation,
+            claim_permit,
+            autonomous_delivery_allowed,
+        )? {
+            IntegrationPushReadiness::Ready {
+                requires_human_review,
+            } => requires_human_review,
+            IntegrationPushReadiness::Blocked(notice) => return Ok(notice),
+        };
+    if integration_push_required {
+        let integration = TaskDeliveryEvidenceIntegration {
+            base_commit_sha: integration_base_commit_sha.clone(),
+            result_commit_sha: integration_commit_sha.clone(),
+            preflight_requires_human_review: Some(preflight_requires_human_review),
+        };
+        if let Some(notice) = block_if_delivery_gates_denied(
+            planning_authority,
+            runtime,
+            evidence_gate,
+            resolution,
+            record,
+            TaskEvidenceDeliveryStage::Integrate,
+            Some(&integration),
+            automation_permit,
+            claim_permit,
+        )? {
+            return Ok(notice);
+        }
     }
     if integration_push_required
-        && let Err(error) = github_automation.push_integration_branch_to_delivery_target(
+        && let Err(error) = github_automation.push_frozen_integration_commit_to_delivery_target(
             &repo_root,
             &target.push_remote,
             &credential_redacted_push_url,
             &integration_branch,
             &integration_base_commit_sha,
+            &integration_commit_sha,
         )
     {
         let remote_ref = remote_branch_name(&target.push_remote, &target.integration_branch);

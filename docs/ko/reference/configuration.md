@@ -30,7 +30,7 @@ TOML table은 통째로 바꾸지 않고 leaf별로 병합합니다. unset은 �
 | conversation | model = "gpt-5.6-sol"; reasoning_effort = "medium" | 예 |
 | tui | show_startup_visual = true; planning_worker_visibility = "normal" | 예 |
 | github | auto_discover_pull_request = true; review_poll_interval_secs = 60; push_remote = "origin"; pull_request_mode = "required" | 예 |
-| parallel | integration_branch = "prerelease" | 예 |
+| parallel | integration_branch = "prerelease"; evidence_mode = "observe" | 예 |
 | app_server | response_timeout_secs = 15; prompt_log = false | timeout만 |
 | subprocess | timeout_secs = 30 | 예 |
 | diagnostics | trace = "off"; spans = "none"; max_files = 7; max_file_bytes = 16777216; max_total_bytes = 67108864; tokio_console = false | 아니요 |
@@ -55,6 +55,17 @@ conversation.model = "default", conversation.reasoning_effort = "default"는 app
 -c/--config은 여러 번 쓸 수 있고 그 프로세스에만 적용됩니다.
 
     akra -c conversation.model=gpt-5.6-terra -c conversation.reasoning_effort=max
+
+## Task 전달 증거
+
+`parallel.evidence_mode`는 정확히 `observe` 또는 `enforce`를 받습니다. 기본 `observe`는
+전달 판정을 기록하고 증거 부족만으로 기존 전달을 막지 않습니다. `enforce`는 현재 호스트
+검증이나 정확한 Human 기준 면제가 있어야 전달합니다. 대표 checkout에서
+`akra config set --project parallel.evidence_mode enforce`로 설정합니다.
+유효 정책과 설정 오류는 repository identity별로 프로세스 안에 고정합니다. 서비스 재생성이나
+worker·integration worktree로의 이동으로 재해석하지 않으며, 변경은 다음 repository
+kernel/process 시작에 반영합니다. 읽기·형식 오류를 `observe`로 바꾸지 않습니다.
+`git_diff_check_v1` 성공의 제한을 포함한 [전달 증거 계약](../../reference/task-delivery-evidence.md)을 참고하세요.
 
 ## 환경변수와 호환성
 

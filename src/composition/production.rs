@@ -110,6 +110,9 @@ use crate::composition::native_client_runtime::{
 };
 use crate::domain::github_review::GithubPullRequestTarget;
 
+mod delivery_evidence;
+pub(crate) use delivery_evidence::task_delivery_evidence_for_workspace;
+
 const APP_SERVER_CLIENT_NAME: &str = "codex-exec-loop-native";
 const AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR: &str = "AKRA_APP_SERVER_PROMPT_LOG";
 
@@ -288,6 +291,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
     let parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort> =
         Arc::new(parallel_agent_profile_service.clone());
     let parallel_mode_service = parallel_mode_service_from_parts(
+        &workspace_dir,
         ports.planning_authority_port.clone(),
         parallel_agent_profile_service.clone(),
         Arc::new(GithubPrValidationAdapter::for_local_github_credentials(
@@ -1354,6 +1358,7 @@ fn parallel_mode_control_plane_from_parts(
     pr_validation_observation: Arc<dyn GithubPrValidationPort>,
 ) -> ParallelModeControlPlaneComposition {
     let parallel_mode_service = parallel_mode_service_from_parts(
+        workspace_dir,
         planning_authority_port,
         parallel_agent_profile_service,
         pr_validation_observation,
@@ -1367,10 +1372,13 @@ fn parallel_mode_control_plane_from_parts(
 }
 
 fn parallel_mode_service_from_parts(
+    workspace_dir: &str,
     planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     parallel_agent_profile_service: ParallelAgentProfileService,
     pr_validation_observation: Arc<dyn GithubPrValidationPort>,
 ) -> ParallelModeService {
+    let delivery_evidence =
+        task_delivery_evidence_for_workspace(workspace_dir, planning_authority_port.as_ref());
     ParallelModeService::new(
         planning_authority_port,
         github_automation_port(),
@@ -1381,6 +1389,7 @@ fn parallel_mode_service_from_parts(
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
         super::task_evidence::artifacts(),
     )
+    .with_delivery_evidence(delivery_evidence)
     .with_parallel_agent_profile_service(parallel_agent_profile_service)
 }
 
