@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ExtensionCall } from "../extensions/repositoryExtensions";
-import { STORAGE_EXTENSION, type ExtensionJob, type StorageNode, type StoragePage, type StorageSnapshot, type StorageVolume } from "./storageTypes";
+import { STORAGE_EXTENSION, isActiveJob, type ExtensionJob, type StorageNode, type StoragePage, type StorageSnapshot, type StorageVolume } from "./storageTypes";
 
 export function sameSnapshot(value: { snapshot_id: string; revision: number }, snapshot: StorageSnapshot): boolean {
   return value.snapshot_id === snapshot.id && value.revision === snapshot.revision;
@@ -80,6 +80,8 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
         setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); return;
       }
       const latest = currentJobs[0]!;
+      const progress = latest.progress && typeof latest.progress === "object" ? latest.progress as { volume_id?: unknown } : null;
+      if (isActiveJob(latest) && typeof progress?.volume_id === "string" && available.some(volume => volume.id === progress.volume_id)) setVolumeId(progress.volume_id);
       if (currentJobId.current !== latest.id) {
         currentJobId.current = latest.id; currentSnapshot.current = null; interaction.current++;
         setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null);
