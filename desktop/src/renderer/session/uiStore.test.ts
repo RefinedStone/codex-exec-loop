@@ -86,3 +86,20 @@ describe("dot visibility while the issues panel is maximized", () => {
     expect(state.drafts[ui.dotDraftKey("dot-1")]).toBe("keep this draft");
   });
 });
+
+describe("navigation epochs for asynchronous storage evidence", () => {
+  it("invalidates an earlier thread request across home and back to the same thread", () => {
+    ui.visit({ view: "thread", threadId: "thread-a" });
+    const issuedAt = ui.useUiStore.getState().navigationRevision;
+    ui.visit({ view: "home" });
+    ui.visit({ view: "thread", threadId: "thread-a" });
+    expect(ui.useUiStore.getState().navigationRevision).toBeGreaterThan(issuedAt);
+    const beforeBack = ui.useUiStore.getState().navigationRevision;
+    const back = stepNav(ui.useUiStore.getState().nav, -1, () => true)!;
+    ui.showNavEntry(back);
+    const forward = stepNav(ui.useUiStore.getState().nav, 1, () => true)!;
+    ui.showNavEntry(forward);
+    expect(ui.useUiStore.getState().navigationRevision).toBeGreaterThan(beforeBack);
+    expect(ui.useUiStore.getState().view).toBe("thread");
+  });
+});
