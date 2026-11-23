@@ -26,3 +26,13 @@
 .blog-findings { display: grid; gap: 8px; padding-inline-start: 20px; }
 .blog-findings p { margin-top: 2px; }
 .blog-view > .segmented { justify-self: start; }
+.blog-request { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); }
+.blog-studio textarea { width: 100%; box-sizing: border-box; color: inherit; background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: var(--radius-s); padding: 6px; resize: vertical; font: inherit; }
+.blog-draft { min-height: 50vh; font-family: var(--font-mono) !important; font-size: var(--text-s) !important; }
+.blog-more { position: relative; }
+.blog-more > summary { list-style: none; cursor: pointer; }
+.blog-more > summary::-webkit-details-marker { display: none; }
+.blog-menu { position: absolute; z-index: 2; inset-inline-end: 0; top: calc(100% + 4px); display: grid; min-width: 200px; padding: 4px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--bg-elevated); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+.blog-menu button { padding: 6px 8px; border-radius: 4px; text-align: start; color: inherit; }
+.blog-menu button:hover { background: var(--bg-hover); }
+.blog-setup { display: grid; gap: 8px; justify-items: start; }

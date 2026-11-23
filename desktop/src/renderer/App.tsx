@@ -747,7 +747,7 @@ export function App() {
                   )}
                 </WorkingTreePanel>
               )}
-              {selectedExtension && <ExtensionPanel key={extensions.kernel} extensions={extensions} id={selectedExtension.id}/>}
+              {selectedExtension && <ExtensionPanel key={extensions.kernel} extensions={extensions} id={selectedExtension.id} workspace={extensionWorkspace}/>}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
                 onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread} />}
