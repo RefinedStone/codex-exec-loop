@@ -9,6 +9,7 @@ import { sameSnapshot, useStorageExplorer } from "./useStorageExplorer";
 import { StorageTree } from "./StorageTree";
 import { StorageLiveTree } from "./StorageLiveTree";
 import { StorageTreemap } from "./StorageTreemap";
+import { prepareStorageNavigation, type StorageNavigation } from "./storageNavigation";
 
 export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled }: RegisteredPanelProps) {
   const model = useStorageExplorer(call, epoch, scopeKey, enabled);
@@ -28,6 +29,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
   const [focusRequest, setFocusRequest] = useState(0);
   const evidence = useStorageEvidence();
   const handledEvidence = useRef(0);
+  const navigationRequest = useRef(0);
   const navigationRevision = useUiStore(state => state.navigationRevision);
   const snapshotKey = model.snapshot ? model.snapshot.id + ":" + model.snapshot.revision : "";
   const shareLifetime = useRef({ scopeKey, threadId, selectedId: model.selectedId, snapshotKey, navigationRevision });
@@ -81,10 +83,38 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       if (sequence === summarySequence.current && model.scope.current === life && sameSnapshot(page, basis)) setSummary(previous => previous?.next_cursor === current.next_cursor ? { ...page, items: [...current.items, ...page.items.filter(item => !current.items.some(old => old.node.id === item.node.id && old.role === item.role))] } : previous);
     } catch (error) { if (sequence === summarySequence.current && model.scope.current === life) model.setError(String(error)); }
   };
-  const selectNode = (node: StorageNode) => {
-    if (!model.snapshot || !sameSnapshot(node, model.snapshot)) return;
-    model.setNodes(previous => new Map(previous).set(node.id, node));
-    model.select(node.id);
+
+  const applyNavigation = ({ chain, pages }: StorageNavigation) => {
+    model.setNodes(previous => {
+      const next = new Map(previous);
+      for (const node of chain) next.set(node.id, node);
+      for (const page of pages.values()) for (const node of page.items) next.set(node.id, node);
+      return next;
+    });
+    model.setPages(previous => {
+      const next = new Map(previous);
+      for (const [id, page] of pages) {
+        const old = next.get(id);
+        const extra = old?.snapshot_id === page.snapshot_id && old.revision === page.revision ? old.items.filter(node => !page.items.some(item => item.id === node.id)) : [];
+        next.set(id, { ...page, items: [...page.items, ...extra], next_cursor: extra.length ? old!.next_cursor : page.next_cursor });
+      }
+      return next;
+    });
+    model.setRevealedPath(chain.map(node => node.id));
+    model.setExpanded(previous => new Set([...previous, ...chain.filter(node => node.kind !== "file").map(node => node.id)]));
+    model.setSelectedId(chain.at(-1)!.id);
+    setMode("tree"); setFocusRequest(value => value + 1); model.setError("");
+  };
+  const selectNode = async (node: StorageNode) => {
+    const basis = model.snapshot, life = model.scope.current;
+    if (!basis || !sameSnapshot(node, basis)) return;
+    const request = ++navigationRequest.current, interaction = ++model.interaction.current;
+    const valid = () => navigationRequest.current === request && model.scope.current === life && model.interaction.current === interaction
+      && model.currentSnapshot.current?.id === basis.id && model.currentSnapshot.current.revision === basis.revision;
+    try {
+      const navigation = await prepareStorageNavigation(call, basis, node.id, valid);
+      if (navigation && valid()) applyNavigation(navigation);
+    } catch (error) { if (valid()) model.setError(String(error)); }
   };
 
   const previewShare = async () => {
@@ -127,8 +157,9 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     if (!evidence || evidence.id === handledEvidence.current || !model.snapshot) return;
     handledEvidence.current = evidence.id;
     clearStorageEvidence(evidence.id);
+    const request = ++navigationRequest.current;
     const life = model.scope.current, interaction = model.interaction.current, basis = model.snapshot;
-    const valid = () => handledEvidence.current === evidence.id && model.scope.current === life && model.interaction.current === interaction
+    const valid = () => navigationRequest.current === request && handledEvidence.current === evidence.id && model.scope.current === life && model.interaction.current === interaction
       && model.currentSnapshot.current?.id === basis.id && model.currentSnapshot.current.revision === basis.revision
       && useUiStore.getState().navigationRevision === evidence.navigationRevision
       && shareLifetime.current.threadId === evidence.threadId && shareLifetime.current.scopeKey === scopeKey;
@@ -137,33 +168,13 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       const result = await call<StorageEvidence>("resolve_evidence", { reference: evidence.reference, thread_id: threadId });
       if (!valid()) return;
       if (!sameSnapshot(result, basis)) throw new Error("이 근거는 이전 분석 결과입니다. 현재 결과를 다시 공유하세요.");
-      const chainResult = await call<{ snapshot_id: string; node_id: string; ancestors: StorageNode[] }>("ancestors", { snapshot_id: basis.id, node_id: result.node_id });
-      const chain = chainResult.ancestors;
+      const navigation = await prepareStorageNavigation(call, basis, result.node_id, valid);
+      if (!navigation || !valid()) return;
+      // 준비하는 동안 철회되었거나 참조의 근거가 바뀌었으면 선택을 옮기지 않는다.
+      const checked = await call<StorageEvidence>("resolve_evidence", { reference: evidence.reference, thread_id: threadId });
       if (!valid()) return;
-      if (!chain.length || chain.some(node => !sameSnapshot(node, basis))) throw new Error("근거의 분석 결과가 일치하지 않습니다.");
-      const prepared = await Promise.all(chain.filter(node => node.kind === "directory").map(async node => {
-        const page = await call<StoragePage>("list_children", { snapshot_id: basis.id, node_id: node.id, limit: 100, sort: "allocated_desc" });
-        if (!sameSnapshot(page, basis)) throw new Error("탐색 중 분석 결과가 바뀌었습니다.");
-        return [node.id, page] as const;
-      }));
-      // 조회하는 동안 공유가 철회되었는지도 반환 직전에 확인한다.
-      await call<StorageEvidence>("resolve_evidence", { reference: evidence.reference, thread_id: threadId });
-      if (!valid()) return;
-      model.setNodes(previous => {
-        const next = new Map(previous); for (const node of chain) next.set(node.id, node);
-        for (const [, page] of prepared) for (const node of page.items) next.set(node.id, node);
-        return next;
-      });
-      model.setPages(previous => {
-        const next = new Map(previous); for (const [id, page] of prepared) next.set(id, page);
-        for (const node of chain) if (node.parent_id) {
-          const page = next.get(node.parent_id);
-          if (page && !page.items.some(item => item.id === node.id)) next.set(node.parent_id, { ...page, items: [...page.items, node] });
-        }
-        return next;
-      });
-      model.setExpanded(previous => new Set([...previous, ...chain.map(node => node.id)]));
-      model.setSelectedId(result.node_id); setMode("tree"); setFocusRequest(value => value + 1); model.setError("");
+      if (!sameSnapshot(checked, basis) || checked.node_id !== result.node_id) throw new Error("근거의 분석 결과가 바뀌었습니다.");
+      applyNavigation(navigation);
     })().catch(error => { if (valid()) model.setError(String(error)); });
   }, [evidence, model.snapshot, call, scopeKey, threadId]);
 
@@ -207,7 +218,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
         <button type="button" aria-pressed={mode === "summary"} onClick={() => { model.interaction.current++; setMode("summary"); }}>큰 폴더 요약</button>
       </nav>
       {mode === "tree" ? <StorageTree model={model} focusRequest={focusRequest} /> : <div aria-label="큰 폴더 요약">
-        {summary?.items.map((item, index) => <button type="button" key={`${item.node.id}:${item.role}:${index}`} className="storage-summary-row" onClick={() => selectNode(item.node)}>
+        {summary?.items.map((item, index) => <button type="button" key={`${item.node.id}:${item.role}:${index}`} className="storage-summary-row" onClick={() => void selectNode(item.node)}>
           <span>{item.node.name}{item.role === "remainder" ? " · 이 폴더의 나머지" : ""}</span><strong>{formatBytes(item.included_bytes)}{item.provisional ? " · 잠정" : ""}</strong><small>{item.reason}</small>
         </button>)}
         {summary?.next_cursor && <button type="button" onClick={() => void moreSummary()}>요약 다음 항목</button>}
@@ -237,15 +248,15 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
         {grant && <p role="status">대화 입력창에 공유 참조를 넣었습니다. <button type="button" disabled={sharing} onClick={() => void revokeShare()}>공유 해제</button></p>}
         {selected.kind !== "file" && <>
           <label className="storage-map-toggle"><input type="checkbox" checked={showMap} onChange={event => setShowMap(event.target.checked)} />선택 폴더 트리맵 표시</label>
-          {showMap && <StorageTreemap parent={selected} nodes={model.pages.get(selected.id)?.items ?? []} selectedId={model.selectedId} onSelect={selectNode} />}
+          {showMap && <StorageTreemap parent={selected} nodes={model.pages.get(selected.id)?.items ?? []} selectedId={model.selectedId} onSelect={node => void selectNode(node)} />}
           <h4>파일</h4><div className="storage-filters">
-            <label>이름<input value={nameFilter} onChange={event => setNameFilter(event.target.value)} aria-label="파일 이름 필터" /></label>
-            <label>확장자<input value={extensionFilter} onChange={event => setExtensionFilter(event.target.value)} aria-label="파일 확장자 필터" /></label>
-            <label><input type="checkbox" checked={recursive} onChange={event => setRecursive(event.target.checked)} />하위 파일 포함</label>
+            <label>이름<input value={nameFilter} onChange={event => { model.interaction.current++; setNameFilter(event.target.value); }} aria-label="파일 이름 필터" /></label>
+            <label>확장자<input value={extensionFilter} onChange={event => { model.interaction.current++; setExtensionFilter(event.target.value); }} aria-label="파일 확장자 필터" /></label>
+            <label><input type="checkbox" checked={recursive} onChange={event => { model.interaction.current++; setRecursive(event.target.checked); }} />하위 파일 포함</label>
           </div>
           <table className="storage-files"><caption>선택 폴더의 파일 · {files?.total_count === null || files === null ? "전체 개수 미확인" : `${files.total_count}개`}</caption>
             <thead><tr><th>이름</th><th>할당량</th><th>논리 크기</th></tr></thead>
-            <tbody>{files?.items.map(node => <tr key={node.id}><td><button type="button" onClick={() => selectNode(node)}>{node.name}</button></td><td>{formatBytes(node.allocated_bytes)}</td><td>{formatBytes(node.logical_bytes)}</td></tr>)}</tbody>
+            <tbody>{files?.items.map(node => <tr key={node.id}><td><button type="button" onClick={() => void selectNode(node)}>{node.name}</button></td><td>{formatBytes(node.allocated_bytes)}</td><td>{formatBytes(node.logical_bytes)}</td></tr>)}</tbody>
           </table>
           {files?.next_cursor && <button type="button" onClick={() => void moreFiles()}>파일 다음 항목</button>}
         </>}

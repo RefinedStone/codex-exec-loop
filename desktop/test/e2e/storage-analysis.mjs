@@ -18,14 +18,14 @@ const calls = [];
 let recursiveObserved;
 const reference = "akra-storage:" + Buffer.from(JSON.stringify({ grant_id: "grant-1", node_id: "target", snapshot_id: "scan-1" })).toString("base64url");
 const assetsReference = "akra-storage:" + Buffer.from(JSON.stringify({ grant_id: "grant-1", node_id: "assets", snapshot_id: "scan-1" })).toString("base64url");
-const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 3 + snapshotRevision, directories_scanned: 3, issues: [] });
+const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 3 + snapshotRevision, directories_scanned: 4, issues: [] });
 const node = (id, amount, parent = "root", kind = "directory") => ({ snapshot_id: "scan-1", revision: snapshotRevision, id, parent_id: parent,
-  name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin", file2: "small-cache.bin" })[id] ?? id,
+  name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin", file2: "small-cache.bin", "target-direct": "target 직속 파일", cache: "cache", "cache-direct": "cache 직속 파일" })[id] ?? id,
   kind, allocated_bytes: (gib * BigInt(amount)).toString(), known_allocated_bytes: (gib * BigInt(amount)).toString(), logical_bytes: (gib * BigInt(amount)).toString(),
-  ratio: { numerator_bytes: (gib * BigInt(amount)).toString(), denominator_bytes: parent ? (gib * 12n).toString() : null, reason: parent ? null : "root", provisional: false },
+  ratio: { numerator_bytes: (gib * BigInt(amount)).toString(), denominator_bytes: parent ? (gib * BigInt(({ root: 12, target: 9, assets: 2, cache: 2 })[parent] ?? 12)).toString() : null, reason: parent ? null : "root", provisional: false },
   state: "complete", issues: [], protection: id === "root" ? [{ code: "active", detail: "현재 작업 중인 저장소", observed_at: 1 }] : [], classification: [],
 });
-const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("target", 9), node("assets", 2), node("direct", 1, "root", "direct_files"), node("file", 8, "target", "file"), node("file2", 1, "target", "file")].map(item => invalidAllocation && item.id === "root" ? { ...item, allocated_bytes: "invalid", known_allocated_bytes: "invalid" } : item);
+const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("target", 9), node("assets", 2), node("cache", 2, "assets"), node("cache-direct", 2, "cache", "direct_files"), node("target-direct", 9, "target", "direct_files"), node("direct", 1, "root", "direct_files"), node("file", 8, "target", "file"), node("file2", 1, "target", "file")].map(item => invalidAllocation && item.id === "root" ? { ...item, allocated_bytes: "invalid", known_allocated_bytes: "invalid" } : item);
 const page = items => ({ snapshot_id: "scan-1", revision: snapshotRevision, items, total_count: items.length, next_cursor: null });
 const baseThread = structuredClone(fake.loadReplayTable(fake.INTERRUPTED_TURN_RECORDING).get("thread/resume").result);
 baseThread.thread.turns = [{ id: "storage-answer", status: "completed", itemsView: "full", startedAt: 1, completedAt: 2, durationMs: 1, error: null, items: [
@@ -69,7 +69,7 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
     }
     if (params.action === "snapshot") return { result: job ? snapshot() : null };
     if (params.action === "get_node") return { result: nodes().find(item => item.id === input.node_id) };
-    if (params.action === "list_children") return { result: page(input.node_id === "root" ? nodes().filter(item => item.parent_id === "root") : []) };
+    if (params.action === "list_children") return { result: page(nodes().filter(item => item.parent_id === input.node_id && item.kind !== "file")) };
     if (params.action === "list_files") {
       if (input.recursive) recursiveObserved?.();
       const matching = nodes().filter(item => item.kind === "file" && item.parent_id === input.node_id
@@ -78,8 +78,12 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
       const start = input.cursor === "files:1" ? 1 : 0;
       return { result: { ...page(matching.slice(start, start + 1)), total_count: matching.length, next_cursor: start + 1 < matching.length ? "files:1" : null } };
     }
-    if (params.action === "find_hotspots") return { result: page([{ node: node("target", 9), role: "folder", reason: "1 GiB 이상", included_bytes: (gib * 9n).toString(), provisional: false }]) };
-    if (params.action === "ancestors") return { result: { snapshot_id: "scan-1", node_id: input.node_id, ancestors: [node("root", 12, null), nodes().find(item => item.id === input.node_id)] } };
+    if (params.action === "find_hotspots") return { result: page([{ node: node("target", 9), role: "folder", reason: "1 GiB 이상", included_bytes: (gib * 9n).toString(), provisional: false }, { node: node("cache", 2, "assets"), role: "folder", reason: "큰 자식", included_bytes: (gib * 2n).toString(), provisional: false }]) };
+    if (params.action === "ancestors") {
+      const chain = [], all = nodes(); let current = all.find(item => item.id === input.node_id);
+      while (current) { chain.unshift(current); current = all.find(item => item.id === current.parent_id); }
+      return { result: { snapshot_id: "scan-1", node_id: input.node_id, ancestors: chain } };
+    }
     if (params.action === "share_preview") {
       assert.equal(input.thread_id, threadId);
       return { result: { id: "preview-1", snapshot_id: "scan-1", revision: snapshotRevision, node_id: input.node_id, thread_id: threadId, root: node("root", 12, null), shared_fields: ["상대 이름", "할당 바이트", "논리 바이트", "집계 상태", "보호 사유"], expires_at_ms: Date.now() + 60000 } };
@@ -137,10 +141,29 @@ try {
   const recursiveRead = new Promise(resolve => { recursiveObserved = resolve; });
   await panel.getByLabel("하위 파일 포함").check();
   await recursiveRead;
+  const fileButton = panel.getByRole("button", { name: "huge-cache.bin", exact: true });
+  await fileButton.focus(); await view.keyboard.press("Enter");
+  await view.waitForFunction(() => document.querySelector('[data-node-id="file"]') === document.activeElement);
+  assert.equal(await panel.locator('[data-node-id="file"]').getAttribute("tabindex"), "0");
+  await view.keyboard.press("ArrowLeft");
+  await view.waitForFunction(() => document.querySelector('[data-node-id="target"]') === document.activeElement);
+  await panel.getByLabel("선택 폴더 트리맵 표시").check();
+  await panel.getByRole("button", { name: "target 직속 파일, 9.0 GiB, 표에서 선택", exact: true }).waitFor();
+  assert.equal(await panel.locator(".storage-treemap").getByRole("button", { name: /huge-cache/ }).count(), 0, "revealed file detail is not counted again in the treemap");
   await panel.locator('[data-node-id="root"]').click();
   await panel.getByLabel("선택 폴더 트리맵 표시").check();
   await panel.getByRole("button", { name: "target, 9.0 GiB, 표에서 선택", exact: true }).click();
+  await view.waitForFunction(() => document.querySelector('[data-node-id="target"]') === document.activeElement);
   assert.equal(await target.getAttribute("aria-selected"), "true");
+  await panel.getByRole("button", { name: "큰 폴더 요약", exact: true }).click();
+  await panel.locator(".storage-summary-row").filter({ hasText: "cache" }).click();
+  await view.waitForFunction(() => document.querySelector('[data-node-id="cache"]') === document.activeElement);
+  assert.equal(await panel.locator('[data-node-id="assets"]').getAttribute("aria-expanded"), "true");
+  await view.keyboard.press("ArrowLeft"); await view.keyboard.press("ArrowLeft"); await view.keyboard.press("ArrowLeft");
+  await panel.locator('[data-node-id="cache"]').waitFor({ state: "hidden" });
+  await panel.getByRole("button", { name: "cache, 2.0 GiB, 표에서 선택", exact: true }).click();
+  await view.waitForFunction(() => document.querySelector('[data-node-id="cache"]') === document.activeElement);
+  assert.equal(await panel.locator('[data-node-id="cache"]').getAttribute("tabindex"), "0", "nested map selection exposes and focuses its canonical tree row");
   await view.getByTestId("storage-toggle").click();
   await view.getByTestId("storage-toggle").click();
   await target.waitFor();
