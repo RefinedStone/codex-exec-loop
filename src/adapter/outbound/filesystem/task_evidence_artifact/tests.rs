@@ -536,3 +536,54 @@ fn junction_ancestors_are_rejected_before_any_artifact_child_is_created() {
     assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"unchanged");
     assert!(!target.join("incoming").exists());
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_runtime_resolver_and_capture_pins_share_one_prepared_root() {
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+
+    let fixture = Fixture::new();
+    let workspace = fixture.root.to_string_lossy().into_owned();
+    let runtime = SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&workspace)
+        .unwrap()
+        .runtime_dir;
+    let adapter = FilesystemTaskEvidenceArtifactAdapter::new(Arc::new(|workspace| {
+        Ok(PathBuf::from(
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?
+                .runtime_dir,
+        ))
+    }));
+    let path = adapter
+        .prepare_artifact(&workspace, &fixture.attempt)
+        .unwrap();
+    assert!(
+        adapter
+            .observe_and_seal(&workspace, &fixture.attempt, &fixture.attempt.prepared_tree)
+            .is_err()
+    );
+    let bytes = b"host capture with the real Windows runtime resolver\n";
+    fs::write(&path, bytes).unwrap();
+    let artifact = adapter
+        .observe_and_seal(&workspace, &fixture.attempt, &fixture.attempt.prepared_tree)
+        .unwrap();
+    assert_eq!(artifact.sha256, format!("{:x}", Sha256::digest(bytes)));
+    assert_eq!(
+        adapter
+            .observe_and_seal(&workspace, &fixture.attempt, &fixture.attempt.prepared_tree)
+            .unwrap(),
+        artifact
+    );
+    adapter
+        .verify_sealed(&workspace, &fixture.attempt, &artifact)
+        .unwrap();
+    fs::write(path, b"different incoming bytes").unwrap();
+    assert!(
+        adapter
+            .observe_and_seal(&workspace, &fixture.attempt, &fixture.attempt.prepared_tree)
+            .is_err()
+    );
+    adapter
+        .verify_sealed(&workspace, &fixture.attempt, &artifact)
+        .unwrap();
+    let _ = fs::remove_dir_all(runtime);
+}
