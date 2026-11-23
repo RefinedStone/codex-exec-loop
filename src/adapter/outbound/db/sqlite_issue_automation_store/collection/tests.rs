@@ -1,4 +1,5 @@
 mod external_closure;
+mod visibility;
 
 use super::super::tests::{
     Fixture, binding_for, discovered, reference, save_changed, snapshot, transition_and_save,
@@ -27,6 +28,8 @@ use crate::domain::issue_policy::IssueDisclosurePolicy;
 
 fn observed(fixture: &Fixture, id: &str, body: &str) -> IssueSourceObservation {
     IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         creation_provenance:
             crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: reference(fixture.cwd(), id),

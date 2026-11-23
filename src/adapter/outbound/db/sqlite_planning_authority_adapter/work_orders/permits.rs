@@ -15,7 +15,7 @@ use super::{
     load_work_order_record,
 };
 
-pub(super) fn load_basis(
+pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter) fn load_basis(
     connection: &Connection,
     work_order_id: &str,
 ) -> Result<Option<PlanningWorkPermitBasis>> {
@@ -175,6 +175,15 @@ impl PlanningWorkPermitRepositoryPort for SqlitePlanningAuthorityAdapter {
         {
             bail!(
                 "permit_missing: issue automation delivery requires reviewed frozen diff evidence"
+            );
+        }
+        if work_order.origin == "issue_automation"
+            && permit.stage == PlanningWorkPermitStage::Integrate
+            && !permit.requires_human_review
+            && !permit.requires_auto_delivery()
+        {
+            bail!(
+                "permit_missing: issue integration without Human review requires explicit Auto authority"
             );
         }
         if load_basis(&transaction, &permit.work_order_id)?.as_ref() != Some(&permit.basis) {

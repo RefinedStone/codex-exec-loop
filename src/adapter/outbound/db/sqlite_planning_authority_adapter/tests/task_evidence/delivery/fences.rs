@@ -15,6 +15,7 @@ fn effect_requires_the_current_unexpired_claim_even_in_observe_mode() {
         let operation = if state == "wrong-owner" {
             TaskDeliveryEvidenceOperation::Effect {
                 owner_token: "unrelated-owner".into(),
+                preflight_permit: f.snapshot(TaskEvidenceDeliveryStage::Push).permit,
             }
         } else {
             f.effect()

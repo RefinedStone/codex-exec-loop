@@ -221,6 +221,7 @@ pub(super) fn seed_approved_work_checkpoint(
             &h.fixture.workspace,
             &IssueWorkPermitRequest {
                 delivery_review: None,
+                delivery_authority: None,
                 authorization_epoch: record.current_authorization_basis().authorization_epoch,
                 work_order_id: record.order.work_order_id.clone(),
                 approval: record.current_authorization_basis().clone(),

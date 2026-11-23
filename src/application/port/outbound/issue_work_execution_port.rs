@@ -2,6 +2,7 @@
 use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkOrder};
 use crate::domain::issue_automation::decision::IssueDecisionBasis;
 use crate::domain::issue_automation::delivery::IssueDeliveryDiff;
+pub use crate::domain::issue_automation::execution::IssueWorkDeliveryAuthority;
 use crate::domain::issue_automation::execution::{
     IssueExecutionQuestion, IssueExecutionTerminalClass, IssueExecutionTerminalRecord,
 };
@@ -34,6 +35,8 @@ pub struct IssueWorkPermitRequest {
     pub delivery: bool,
     /// Host가 실제 frozen 범위를 판정한 별도 Delivery 근거다.
     pub delivery_review: Option<IssueDecisionBasis>,
+    /// Dispatch has no delivery authority; delivery explicitly selects Human or Auto.
+    pub delivery_authority: Option<IssueWorkDeliveryAuthority>,
 }
 
 /// 이미 공유 정책을 통과한 답변이다. worker 원문이나 외부 확인 증거를 받지 않는다.

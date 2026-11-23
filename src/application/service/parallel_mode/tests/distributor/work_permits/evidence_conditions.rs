@@ -198,7 +198,11 @@ fn a_new_human_review_requirement_or_missing_preflight_cannot_reuse_autonomous_p
             ),
         };
         assert!(
-            error.contains("review requirements changed after the final pull request check"),
+            error.contains(if remove_preflight {
+                "review requirements changed after the final pull request check"
+            } else {
+                "delivery authority changed after the final preflight check"
+            }),
             "remove_preflight={remove_preflight}: {error}\n{}",
             unexpected_delivery_diagnostics(&fixture),
         );

@@ -43,6 +43,8 @@ impl FlowSource {
             body: "## 완료 기준\n- 결과 파일에 approved result를 기록한다.\n".into(),
         };
         let observed = IssueSourceObservation {
+            repository_visibility: Default::default(),
+            repository_name_with_owner: None,
             issue: issue.clone(),
             web: Some(IssueSourceWeb {
                 number: 2555,

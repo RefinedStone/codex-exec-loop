@@ -33,6 +33,7 @@ pub(super) fn make_pre_admission_schema(connection: &Connection) {
 }
 
 pub(super) fn make_pre_arbiter_schema(connection: &Connection) {
+    make_pre_auto_schema(connection);
     connection
         .execute_batch(
             "DROP TABLE issue_arbiter_attempts;
@@ -40,6 +41,23 @@ pub(super) fn make_pre_arbiter_schema(connection: &Connection) {
              DROP TABLE issue_arbiter_budget_clock;",
         )
         .unwrap();
+}
+
+/// Rebuilds the exact v10-v12 CHECK without changing durable command receipts or pending links.
+pub(super) fn make_pre_auto_schema(connection: &Connection) {
+    connection
+        .execute_batch(
+            "ALTER TABLE issue_autonomy_selection RENAME TO issue_autonomy_selection_v13;",
+        )
+        .unwrap();
+    connection
+        .execute_batch(super::autonomy::GATED_SCHEMA)
+        .unwrap();
+    connection.execute_batch(
+        "INSERT INTO issue_autonomy_selection (workspace_dir,requested_level,revision,pending_command_id)
+         SELECT workspace_dir,requested_level,revision,pending_command_id FROM issue_autonomy_selection_v13;
+         DROP TABLE issue_autonomy_selection_v13;"
+    ).unwrap();
 }
 
 pub(super) struct Fixture {

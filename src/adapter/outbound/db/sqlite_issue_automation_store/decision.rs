@@ -465,14 +465,16 @@ fn timeout_gate(
     request: &IssueDecisionRequest,
 ) -> Result<IssueAutomationGateAction> {
     use crate::domain::issue_automation::IssueAutomationAutonomy;
-    use crate::domain::issue_automation::autonomy::IssueAutonomyLevel;
     use crate::domain::issue_automation::coordinator::ready_for_start;
 
     let definition = request.definition();
     if definition.kind != IssueDecisionKind::StartApproval
         || definition.gate != IssueAutomationGate::Start
         || definition.basis.work_order_id.is_some()
-        || assessment.effective_mode() != IssueAutomationAutonomy::Gated
+        || !matches!(
+            assessment.effective_mode(),
+            IssueAutomationAutonomy::Gated | IssueAutomationAutonomy::Auto
+        )
         || !ready_for_start(assessment)
         || !assessment.gates().iter().any(|gate| {
             gate.gate == IssueAutomationGate::Start
@@ -483,7 +485,7 @@ fn timeout_gate(
         return Ok(IssueAutomationGateAction::Human);
     }
     let selection = super::autonomy::read(connection, workspace)?;
-    if selection.requested_level != Some(IssueAutonomyLevel::Gated)
+    if !super::autonomy::matches_automatic_mode(&selection, assessment.effective_mode())
         || selection.pending.is_some()
         || selection.revision != assessment.basis().runtime_selection_revision
     {

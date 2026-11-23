@@ -96,6 +96,9 @@ impl Fixture {
             body: "## 완료 기준\n- 기능이 요구한 결과를 반환한다.\n".into(),
         };
         IssueSourceObservation {
+            repository_visibility:
+                crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
+            repository_name_with_owner: Some("owner/repository".into()),
             creation_provenance:
                 crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
             issue: self.reference(id),

@@ -38,18 +38,23 @@ fn request(assessment: &IssueTriageAssessment, gate: IssueAutomationGate) -> Iss
 
 #[test]
 fn arbiter_only_accepts_safe_start_and_plan_gates_under_the_current_autonomy_mode() {
-    use IssueAutomationAutonomy::{Gated, Observe, Off, Propose};
+    use IssueAutomationAutonomy::{Auto, Gated, Observe, Off, Propose};
     for (mode, label, high, start, plan) in [
+        (Auto, None, false, true, true),
         (Gated, None, false, true, true),
         (Propose, None, false, false, true),
         (Gated, Some("akra:manual"), false, false, false),
         (Gated, Some("danger"), true, false, false),
+        (Auto, Some("akra:manual"), false, false, false),
+        (Auto, Some("danger"), true, false, false),
         (Observe, None, false, false, false),
         (Off, None, false, false, false),
     ] {
         let mut policy = policy();
         policy.binding.github.mode = mode;
-        policy.authority.autonomy_cap = Gated;
+        policy.authority.autonomy_cap = Auto;
+        policy.gates.auto.normal.start = IssueAutomationGateAction::TimeoutArbiter;
+        policy.gates.auto.normal.plan = IssueAutomationGateAction::TimeoutArbiter;
         policy.gates.gated.normal.start = IssueAutomationGateAction::TimeoutArbiter;
         policy.gates.gated.normal.plan = IssueAutomationGateAction::TimeoutArbiter;
         policy.gates.propose.normal.plan = IssueAutomationGateAction::TimeoutArbiter;

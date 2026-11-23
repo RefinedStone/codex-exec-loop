@@ -130,17 +130,11 @@ fn action(
     policy: &IssueAutomationPolicy,
 ) -> IssueAutomationGateAction {
     use IssueAutomationGateAction::Human;
-    // E3 실행 허가가 없는 현재 조각은 delivery/merge를 자동으로 통과시키지 않는다.
-    // 실제 close도 후속 조각이며 언제나 disabled이다.
+    // These actions describe the policy. Actual delivery also requires exact work permits
+    // and current enforced host evidence; Spec and Close never gain automatic authority.
     if evaluation.force_human
         || evaluation.human_gates.contains(&gate)
-        || matches!(
-            gate,
-            IssueAutomationGate::Spec
-                | IssueAutomationGate::Delivery
-                | IssueAutomationGate::Merge
-                | IssueAutomationGate::Close
-        )
+        || matches!(gate, IssueAutomationGate::Spec | IssueAutomationGate::Close)
     {
         return Human;
     }
@@ -158,10 +152,19 @@ fn action(
     match gate {
         IssueAutomationGate::Start => selected.start,
         IssueAutomationGate::Plan => selected.plan,
-        IssueAutomationGate::Spec
-        | IssueAutomationGate::Delivery
-        | IssueAutomationGate::Merge
-        | IssueAutomationGate::Close => Human,
+        IssueAutomationGate::Delivery
+            if mode == IssueAutomationAutonomy::Auto
+                && selected.delivery == IssueAutomationGateAction::Auto =>
+        {
+            IssueAutomationGateAction::Auto
+        }
+        IssueAutomationGate::Merge
+            if mode == IssueAutomationAutonomy::Auto
+                && selected.merge == IssueAutomationGateAction::Auto =>
+        {
+            IssueAutomationGateAction::Auto
+        }
+        _ => Human,
     }
 }
 
@@ -172,6 +175,11 @@ pub(super) fn validate_record(
     if record.gates.len() != GATES.len()
         || !record.observation.observation_only
         || record.observation.assumed_mode < record.effective_mode
+        || (record
+            .reasons
+            .contains(&IssueTriageReasonCode::AutoRepositoryRestricted)
+            && (record.effective_mode == IssueAutomationAutonomy::Auto
+                || record.observation.assumed_mode == IssueAutomationAutonomy::Auto))
     {
         return Err(invalid());
     }
@@ -199,11 +207,17 @@ pub(super) fn validate_record(
         }
         if matches!(
             expected,
-            IssueAutomationGate::Spec
-                | IssueAutomationGate::Delivery
-                | IssueAutomationGate::Merge
-                | IssueAutomationGate::Close
+            IssueAutomationGate::Spec | IssueAutomationGate::Close
         ) && gate.action != IssueAutomationGateAction::Human
+        {
+            return Err(invalid());
+        }
+        if matches!(
+            expected,
+            IssueAutomationGate::Delivery | IssueAutomationGate::Merge
+        ) && gate.action != IssueAutomationGateAction::Human
+            && (record.effective_mode != IssueAutomationAutonomy::Auto
+                || gate.action != IssueAutomationGateAction::Auto)
         {
             return Err(invalid());
         }

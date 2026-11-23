@@ -4,6 +4,9 @@ use crate::application::port::outbound::github_automation_port::GithubAutomation
 const AKRA_GITHUB_PR_MODE_ENV: &str = "AKRA_GITHUB_PR_MODE";
 const AKRA_GITHUB_PR_MODE_CONFIG_KEY: &str = "akra.githubPrMode";
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PullRequestDeliveryMode {
     Auto,
@@ -233,13 +236,13 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
     };
 
     // A per-task review condition narrows the parent process opt-in even on PR fallback paths.
-    let requires_human_review = match work_order_permit_decision(
+    let integration_permit = match work_order_permit_decision(
         planning_authority,
         &repo_root,
         record,
         PlanningWorkPermitStage::Integrate,
     ) {
-        Ok(decision) => decision.requires_human_review(),
+        Ok(decision) => decision,
         Err(detail) => {
             return Ok(vec![block_distributor_queue_record(
                 planning_authority,
@@ -252,6 +255,8 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
             )?]);
         }
     };
+    let requires_human_review = integration_permit.requires_human_review();
+    let requires_auto_delivery = integration_permit.requires_auto_delivery();
     let requires_provider_link = record
         .link_reference
         .as_ref()
@@ -260,7 +265,7 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
         autonomous_delivery && !requires_human_review && !requires_provider_link;
 
     if mode == PullRequestDeliveryMode::Disabled {
-        if !autonomous_delivery {
+        if !autonomous_delivery || requires_auto_delivery {
             return Ok(vec![block_distributor_queue_record(
                 planning_authority,
                 runtime,
@@ -268,7 +273,10 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
                 record,
-                if requires_provider_link {
+                if requires_auto_delivery {
+                    "issue Auto integration requires a pull request with current required checks"
+                        .to_string()
+                } else if requires_provider_link {
                     "close.when: provider_link requires a pull request workflow".to_string()
                 } else if requires_human_review {
                     "work-order integration requires human review through a pull request"
@@ -291,7 +299,7 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
     let capabilities = recorded_or_inspected_capabilities(record, &repo_root, github_automation);
     if !capabilities.pull_request_workflow_ready() {
         return match mode {
-            PullRequestDeliveryMode::Auto if autonomous_delivery => {
+            PullRequestDeliveryMode::Auto if autonomous_delivery && !requires_auto_delivery => {
                 Ok(vec![distributor_skip_pull_request_workflow(
                     planning_authority,
                     runtime,
@@ -311,7 +319,12 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
                 record,
-                "automatic PR fallback requires explicit autonomous delivery opt-in".to_string(),
+                if requires_auto_delivery {
+                    "issue Auto integration cannot bypass an unavailable pull request workflow"
+                        .to_string()
+                } else {
+                    "automatic PR fallback requires explicit autonomous delivery opt-in".to_string()
+                },
             )?]),
             PullRequestDeliveryMode::Required => Ok(vec![block_distributor_queue_record(
                 planning_authority,
@@ -627,7 +640,7 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
         record,
         PlanningWorkPermitStage::Integrate,
     ) {
-        Ok(required) => required,
+        Ok(permit) => permit.requires_human_review(),
         Err(detail) => {
             return block_distributor_queue_record(
                 planning_authority,
@@ -710,12 +723,12 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
             record,
             PlanningWorkPermitStage::Integrate,
         ) {
-            Ok(false) => {
+            Ok(permit) if !permit.requires_human_review() => {
                 return Ok(IntegrationPushReadiness::Ready {
                     requires_human_review: false,
                 });
             }
-            Ok(true) => {
+            Ok(_) => {
                 "work-order integration requires human review through a pull request".to_string()
             }
             Err(detail) => detail,
@@ -800,7 +813,7 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
         record,
         PlanningWorkPermitStage::Integrate,
     ) {
-        Ok(required) => required,
+        Ok(permit) => permit.requires_human_review(),
         Err(detail) => {
             return block_distributor_queue_record(
                 planning_authority,
@@ -894,13 +907,15 @@ fn pull_request_readiness_error(
             short_sha(&source_commit_sha)
         ));
     }
-    if !autonomous_delivery && pull_request.merge_state_status.as_deref() != Some("CLEAN") {
+    // Human approval may be omitted by the delivery policy. Provider checks and mergeability
+    // always apply, including to issue Auto and the existing autonomous planning workflow.
+    if pull_request.merge_state_status.as_deref() != Some("CLEAN") {
         return Some(format!(
             "pull request #{} merge state is not explicitly CLEAN",
             pull_request.number
         ));
     }
-    if !autonomous_delivery && pull_request.required_checks_passed != Some(true) {
+    if pull_request.required_checks_passed != Some(true) {
         return Some(format!(
             "pull request #{} required checks are failing or unknown",
             pull_request.number

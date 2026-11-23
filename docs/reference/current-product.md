@@ -346,7 +346,7 @@ A file-only `gated` or `auto` request without that runtime choice is limited to 
 the file itself is unchanged. Runtime Gated remains subject to user and repository caps (including
 an existing Propose cap on a public repository), actor trust, protected paths, and human-required rules.
 
-An eligible Ready issue is admitted automatically only when its effective level is Gated and its risk
+An eligible Ready issue is admitted automatically only when its effective level is Gated or Auto and its risk
 class's Start gate is `auto`. This records policy authority, without fabricating a human decision.
 A `human` Start gate still needs the current human decision; Gated delivery and integration also
 retain human review.
@@ -374,6 +374,28 @@ validate current policy. Gateway 재시작 시에는 같은 authority 홈의 후
 커널을 시작한다. 등록부는 실행 권한이나 병렬 opt-in을 대신하지 않는다.
 자세한 순서·장애 격리·기존 설치의 등록 방법은
 [Gateway의 이슈 자동화 재시작](issue-automation-restart.md)을 따른다.
+
+### Auto Delivery
+
+IA6-2 ([#2560](https://github.com/RefinedStone/codex-exec-loop/issues/2560)) adds a separately
+confirmed runtime Auto choice. Current provider metadata must identify the same private or internal
+source repository; public, unknown, or missing repository identity caps Auto at Propose. Existing
+lower levels keep their own policy behavior. Policy-required human gates, protected changes, budgets,
+held work, and actor trust continue to apply.
+
+Auto delivery uses the existing distributor and binds its permit to the exact reviewed source range,
+current Merge gate revision, and source repository. It requires enforced task evidence and at least
+one essential Command criterion with `git_diff_check_v1`; missing or unsupported criteria hold
+delivery. The issue body does not automatically become confirmed typed completion criteria.
+
+Automatic integration additionally requires process opt-in
+`AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1`. Without that opt-in, the current PR must have human approval
+for the exact source SHA. Required checks, clean mergeability, and frozen base/head identity remain
+mandatory in both cases. Auto cannot skip an unavailable or disabled PR workflow. See the
+[Auto delivery contract](issue-auto-delivery.md) for authority and compatibility details.
+
+Binding-wide pause and unattended Gateway startup are separate follow-up changes. Selecting Auto
+does not enable the global parallel pool or grant Spec approval.
 
 ## Issue Automation Feedback
 

@@ -25,7 +25,7 @@ pub(super) fn work_order_delivery_gate(
     repo_root: &str,
     record: &ParallelModeDistributorQueueRecord,
     stage: PlanningWorkPermitStage,
-) -> Result<bool, String> {
+) -> Result<PlanningWorkPermitDecision, String> {
     let decision = work_order_permit_decision(authority, repo_root, record, stage)?;
     if let Some(reason) = decision.blocked_reason() {
         return Err(format!(
@@ -35,14 +35,17 @@ pub(super) fn work_order_delivery_gate(
         ));
     }
     if stage == PlanningWorkPermitStage::Integrate
-        && decision.requires_human_review()
+        && (decision.requires_human_review() || decision.requires_auto_delivery())
         && record.pull_request_number.is_none()
     {
-        return Err(
-            "work-order integration requires human review through a pull request".to_string(),
-        );
+        return Err(if decision.requires_auto_delivery() {
+            "issue Auto integration requires a pull request with current required checks"
+                .to_string()
+        } else {
+            "work-order integration requires human review through a pull request".to_string()
+        });
     }
-    Ok(decision.requires_human_review())
+    Ok(decision)
 }
 
 pub(super) fn block_if_work_order_permit_denied(

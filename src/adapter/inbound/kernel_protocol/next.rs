@@ -126,6 +126,7 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         }
         ReasonCode::UntrustedActor
         | ReasonCode::HumanSelectionRequired
+        | ReasonCode::AutoRepositoryRestricted
         | ReasonCode::AlreadyClaimed
         | ReasonCode::TitleMissing
         | ReasonCode::RequiredSectionMissing

@@ -11,7 +11,7 @@ use crate::domain::issue_work::{
 use super::IssueAutomationSnapshot;
 
 mod web;
-pub use web::IssueSourceWeb;
+pub use web::{IssueSourceWeb, validate_repository_name_with_owner};
 
 pub const ISSUE_SOURCE_CURSOR_VERSION: u32 = 1;
 pub const MAX_ISSUE_SOURCE_PAGE_SIZE: u16 = 100;
@@ -389,10 +389,32 @@ pub enum IssueCreationProvenance {
     Unresolved,
 }
 
+/// 현재 공급자 관찰의 저장소 공개 범위다. 안정 식별자나 본문 비교 해시에 포함하지 않는다.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueRepositoryVisibility {
+    #[default]
+    Unknown,
+    Private,
+    Internal,
+    Public,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueSourceObservation {
     pub issue: IssueReference,
+    /// 과거 관찰에 없으면 비공개로 추정하지 않는다. 현재 관찰만 자동 전달의 근거가 된다.
+    #[serde(default)]
+    pub repository_visibility: IssueRepositoryVisibility,
+    /// 공급자가 같은 응답의 안정 저장소 ID와 함께 확인한 소문자 owner/name이다.
+    /// 과거 관찰의 표시 URL에서 소급 생성하지 않는다.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_repository_name"
+    )]
+    pub repository_name_with_owner: Option<String>,
     /// 현재 관찰의 표시 번호와 검증한 URL이다. 과거 JSON에 없으면 다른 값으로 채우지 않는다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web: Option<IssueSourceWeb>,
@@ -408,6 +430,26 @@ pub struct IssueSourceObservation {
     pub label_actors: IssueMetadataList<IssueLabelAttribution>,
     pub linked_pull_request: IssuePrPresence,
     pub content: IssueSourceContent,
+}
+
+impl IssueSourceObservation {
+    pub fn validate_repository_metadata(&self) -> Result<(), IssueSourceFailure> {
+        if let Some(name) = &self.repository_name_with_owner {
+            validate_repository_name_with_owner(name)?;
+        }
+        Ok(())
+    }
+}
+
+fn deserialize_repository_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if let Some(name) = &value {
+        validate_repository_name_with_owner(name).map_err(serde::de::Error::custom)?;
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -437,5 +479,4 @@ where
 }
 
 #[cfg(test)]
-#[path = "source/tests.rs"]
 mod tests;

@@ -96,6 +96,8 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
     let hash = IssueFieldHash::of_fields(&shared.title, &shared.body);
     let binding_id = IssueAutomationBindingId::new("feedback-binding").unwrap();
     let source = IssueSourceObservation {
+        repository_visibility: Default::default(),
+        repository_name_with_owner: None,
         issue: issue.clone(),
         web: None,
         remote_state: IssueRemoteState::Open,

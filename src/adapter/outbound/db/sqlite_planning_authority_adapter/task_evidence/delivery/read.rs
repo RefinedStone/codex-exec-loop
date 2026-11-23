@@ -40,14 +40,21 @@ pub(super) fn snapshot(
         permit_stage(stage),
         Some(&queue.effective_source_commit_sha()),
     )?;
+    let permit_basis = match work_orders::load_task_membership(transaction, &queue.task_id)? {
+        Some(work_order_id) => work_orders::load_permit_basis(transaction, &work_order_id)?,
+        None => None,
+    };
     let requires_preservation =
         continuation::task_preserved_in_connection(transaction, &queue.task_id)?;
-    Ok(StoredTaskDeliveryEvidence {
+    let snapshot = StoredTaskDeliveryEvidence {
         planning_revision,
         evidence_revision,
         queue,
         task,
         permit,
+        permit_basis,
         requires_preservation,
-    })
+    };
+    snapshot.require_auto_authority()?;
+    Ok(snapshot)
 }

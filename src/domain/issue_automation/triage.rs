@@ -146,10 +146,11 @@ pub enum IssueTriageReasonCode {
     ExecutionGrantRequired,
     CloseDisabled,
     BudgetExhausted,
+    AutoRepositoryRestricted,
 }
 
 impl IssueTriageReasonCode {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::NotYetObserved,
         Self::SourceUnavailable,
         Self::MetadataIncomplete,
@@ -176,6 +177,7 @@ impl IssueTriageReasonCode {
         Self::ExecutionGrantRequired,
         Self::CloseDisabled,
         Self::BudgetExhausted,
+        Self::AutoRepositoryRestricted,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -206,6 +208,7 @@ impl IssueTriageReasonCode {
             Self::ExecutionGrantRequired => "execution_grant_required",
             Self::CloseDisabled => "close_disabled",
             Self::BudgetExhausted => "budget_exhausted",
+            Self::AutoRepositoryRestricted => "auto_repository_restricted",
         }
     }
 }

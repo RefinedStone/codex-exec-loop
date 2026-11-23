@@ -17,9 +17,10 @@ use crate::domain::issue_automation::IssueAutomationSnapshot;
 use crate::domain::issue_automation::source::{
     IssueContentWithheldReason, IssueCreationProvenance, IssueDiscoveryCursor,
     IssueLabelAttribution, IssueMetadataCompleteness, IssueMetadataList, IssuePrPresence,
-    IssueRemoteState, IssueSourceActor, IssueSourceActorKind, IssueSourceContent,
-    IssueSourceDisclosure, IssueSourceFailure, IssueSourceLabel, IssueSourceObservation,
-    IssueSourceRead, IssueSourceRepository, IssueSourceWeb,
+    IssueRemoteState, IssueRepositoryVisibility, IssueSourceActor, IssueSourceActorKind,
+    IssueSourceContent, IssueSourceDisclosure, IssueSourceFailure, IssueSourceLabel,
+    IssueSourceObservation, IssueSourceRead, IssueSourceRepository, IssueSourceWeb,
+    validate_repository_name_with_owner,
 };
 use crate::domain::issue_masking::{IssueMaskingBlocked, IssueTextField, plan_issue_masking};
 use crate::domain::issue_secret_spans::secret_spans;
@@ -30,7 +31,7 @@ use crate::domain::issue_work::{
 mod graphql;
 use graphql::{
     Actor, AuthorField, DiscoveryData, Envelope, IssueNode, Label, LabelEvent, MetadataConnection,
-    MetadataPageInfo, ReadData, RepositoryNode,
+    MetadataPageInfo, ReadData, RepositoryNode, RepositoryVisibility,
 };
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -355,8 +356,17 @@ fn observation(
         Some(_) => IssuePrPresence::Present,
         None => IssuePrPresence::Unknown,
     };
+    let repository_name_with_owner = remote_repository.name_with_owner.to_ascii_lowercase();
+    validate_repository_name_with_owner(&repository_name_with_owner)
+        .map_err(|_| IssueSourceFailure::MalformedResponse)?;
     Ok(IssueSourceObservation {
         issue,
+        repository_name_with_owner: Some(repository_name_with_owner),
+        repository_visibility: match remote_repository.visibility {
+            RepositoryVisibility::Private => IssueRepositoryVisibility::Private,
+            RepositoryVisibility::Internal => IssueRepositoryVisibility::Internal,
+            RepositoryVisibility::Public => IssueRepositoryVisibility::Public,
+        },
         web: Some(web),
         remote_state,
         creation_provenance: IssueCreationProvenance::Unattributed,

@@ -132,6 +132,7 @@ fn work_permit_wire_format_keeps_bound_evidence_at_the_grant_level() {
 fn reviewed_basis() -> PlanningWorkPermitBasis {
     let mut value = basis();
     value.delivery_review = Some(PlanningWorkDeliveryReview {
+        authority: None,
         base_commit_sha: "b".repeat(40),
         source_commit_sha: value.source_sha.clone(),
         gate_revision: value.gate_revision,
@@ -234,3 +235,5 @@ fn old_payload_without_delivery_review_hydrates_and_reviewed_payload_roundtrips(
         reviewed
     );
 }
+
+mod auto_delivery;

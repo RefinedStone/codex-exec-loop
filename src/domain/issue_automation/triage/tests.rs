@@ -6,14 +6,15 @@ use crate::domain::issue_automation::policy::{
 };
 use crate::domain::issue_automation::source::{
     IssueLabelAttribution, IssueMetadataCompleteness, IssueMetadataList, IssuePrPresence,
-    IssueRemoteState, IssueSourceActor, IssueSourceContent, IssueSourceFailure, IssueSourceLabel,
-    IssueSourceObservation,
+    IssueRemoteState, IssueRepositoryVisibility, IssueSourceActor, IssueSourceContent,
+    IssueSourceFailure, IssueSourceLabel, IssueSourceObservation,
 };
 use crate::domain::issue_work::{
     IssueComparisonBasis, IssueProjectScope, IssueProvider, IssueSharedCopy,
 };
 
 mod arbiter;
+mod auto;
 
 const AUTOMATION_VERSION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DISCLOSURE_VERSION: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
@@ -45,6 +46,8 @@ fn list<T>(items: Vec<T>) -> IssueMetadataList<T> {
 }
 fn source() -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        repository_visibility: IssueRepositoryVisibility::Private,
+        repository_name_with_owner: Some("refinedstone/codex-exec-loop".into()),
         creation_provenance:
             crate::domain::issue_automation::source::IssueCreationProvenance::Unattributed,
         issue: issue(),
@@ -437,7 +440,10 @@ fn missing_criteria_and_required_sections_reuse_validation_without_copying_field
 
 #[test]
 fn checked_and_unchecked_bullets_are_syntax_not_approval_or_pass() {
-    let policy = policy();
+    let mut policy = policy();
+    // A checked Markdown item cannot replace the policy's human Delivery/Merge conditions.
+    policy.gates.auto.normal.delivery = IssueAutomationGateAction::Human;
+    policy.gates.auto.normal.merge = IssueAutomationGateAction::Human;
     for item in [
         "- criterion",
         "+ criterion",
@@ -1093,16 +1099,17 @@ fn actual_gates_and_counterfactual_observation_stay_separate_under_the_user_cap(
 }
 
 #[test]
-fn delivery_merge_and_unimplemented_close_gain_no_execution_grants() {
+fn auto_delivery_and_merge_are_policy_results_while_close_remains_disabled() {
     let result = run(Some(&source()), &policy(), None).expect("auto policy");
     for gate in result.gates() {
         if matches!(
             gate.gate,
-            IssueAutomationGate::Delivery | IssueAutomationGate::Merge | IssueAutomationGate::Close
+            IssueAutomationGate::Delivery | IssueAutomationGate::Merge
         ) {
-            assert_eq!(gate.action, IssueAutomationGateAction::Human);
+            assert_eq!(gate.action, IssueAutomationGateAction::Auto);
         }
         if gate.gate == IssueAutomationGate::Close {
+            assert_eq!(gate.action, IssueAutomationGateAction::Human);
             assert!(!gate.enabled);
         }
     }
@@ -1296,7 +1303,7 @@ fn hydration_rejects_invalid_hashes_identity_gate_order_revisions_and_execution_
             5 => record.gates[0].gate_revision = MAX_ISSUE_AUTOMATION_REVISION + 1,
             6 => record.gates.swap(0, 1),
             7 => record.gates[5].enabled = true,
-            8 => record.gates[4].action = IssueAutomationGateAction::Auto,
+            8 => record.gates[4].action = IssueAutomationGateAction::TimeoutArbiter,
             9 => record.observation.observation_only = false,
             10 => record.risk_class = IssueAutomationRiskClass::High,
             _ => unreachable!(),

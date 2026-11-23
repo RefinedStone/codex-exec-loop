@@ -82,3 +82,24 @@ fn evidence_binding_requires_an_exact_generation_and_closed_json() {
     json["approved"] = serde_json::json!(true);
     assert!(serde_json::from_value::<TaskEvidenceDeliveryBinding>(json).is_err());
 }
+
+#[test]
+fn automatic_policy_reasons_remain_denials_in_observe_and_public_round_trip() {
+    for reason in [
+        TaskDeliveryEvidenceReason::AutoRequiresEnforce,
+        TaskDeliveryEvidenceReason::AutoRequiresMachineCriterion,
+    ] {
+        let mut observation = empty(TaskEvidenceDeliveryMode::Observe);
+        observation.reasons.insert(0, reason);
+        observation.validate().unwrap();
+        assert!(!observation.allows_delivery());
+        let restored: TaskDeliveryEvidenceObservation =
+            serde_json::from_str(&serde_json::to_string(&observation).unwrap()).unwrap();
+        assert!(!restored.allows_delivery());
+        assert_eq!(restored.reasons[0], reason);
+        let mut ordinary = observation.clone();
+        ordinary.reasons.remove(0);
+        assert!(ordinary.allows_delivery());
+        assert!(!ordinary.same_assessment_as(&observation));
+    }
+}

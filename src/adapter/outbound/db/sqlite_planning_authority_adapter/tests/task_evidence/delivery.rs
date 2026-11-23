@@ -7,6 +7,7 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::delivery_evidence::*;
 
+mod auto_delivery;
 mod fences;
 mod proof;
 
@@ -21,30 +22,48 @@ impl DeliveryFixture {
     }
 
     fn new_inner(label: &str, host_recipe: bool) -> Self {
-        let mut base = Fixture::new(label);
-        if host_recipe {
-            let mut task = base.snapshot().tasks[0].task.clone();
-            for criterion in &mut task.acceptance {
-                criterion.verification_recipe = Some(
-                    crate::domain::planning::verification::TaskVerificationRecipe::GitDiffCheckV1,
-                );
+        Self::configured(label, host_recipe, false)
+    }
+
+    fn configured(label: &str, host_recipe: bool, screen_only: bool) -> Self {
+        Self::configured_before_lease(label, host_recipe, screen_only, |_| {})
+    }
+
+    fn configured_before_lease(
+        label: &str,
+        host_recipe: bool,
+        screen_only: bool,
+        before_lease: impl FnOnce(&Fixture),
+    ) -> Self {
+        let base = Fixture::with_before_lease(label, |base| {
+            if host_recipe || screen_only {
+                let mut task = base.snapshot().tasks[0].task.clone();
+                for criterion in &mut task.acceptance {
+                    if screen_only {
+                        criterion.channel = TaskAcceptanceChannel::Screen;
+                        criterion.verification_recipe = None;
+                    } else {
+                        criterion.verification_recipe = Some(
+                            crate::domain::planning::verification::TaskVerificationRecipe::GitDiffCheckV1,
+                        );
+                    }
+                }
+                task.acceptance_revision += 1;
+                base.save(vec![task]);
             }
-            task.acceptance_revision += 1;
-            base.save(vec![task]);
-        }
-        base.lease =
-            base.lease
-                .clone()
-                .with_delivery_target(ParallelModeDeliveryTargetSnapshot::new(
-                    "origin",
-                    "owner/repo",
-                    ParallelModeRepositoryVisibility::Private,
-                    "prerelease",
-                    "b".repeat(40),
-                ));
-        base.adapter
-            .upsert_runtime_slot_lease(&base.workspace, &base.lease)
-            .unwrap();
+            // The first Running lease already carries the source checked by Dispatch authority.
+            base.lease =
+                base.lease
+                    .clone()
+                    .with_delivery_target(ParallelModeDeliveryTargetSnapshot::new(
+                        "origin",
+                        "owner/repo",
+                        ParallelModeRepositoryVisibility::Private,
+                        "prerelease",
+                        "b".repeat(40),
+                    ));
+            before_lease(base);
+        });
         let mut queue = super::super::queue_record_for_task(
             "delivery-queue",
             &base.lease.session_key(),
@@ -156,6 +175,7 @@ impl DeliveryFixture {
     fn effect(&self) -> TaskDeliveryEvidenceOperation {
         TaskDeliveryEvidenceOperation::Effect {
             owner_token: self.owner.clone(),
+            preflight_permit: self.snapshot(TaskEvidenceDeliveryStage::Push).permit,
         }
     }
 
@@ -350,6 +370,7 @@ fn legacy_queue_without_current_task_is_observable_but_cannot_pass_enforcement()
                     expected: expected.clone(),
                     operation: TaskDeliveryEvidenceOperation::Effect {
                         owner_token: "legacy-owner".into(),
+                        preflight_permit: expected.permit,
                     },
                     observation,
                 },

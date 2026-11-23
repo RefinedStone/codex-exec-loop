@@ -129,6 +129,7 @@ fn legacy_publication_reference_real_submit_does_not_upgrade_unreviewed_delivery
                         gate_revision: 3,
                         delivery: true,
                         delivery_review,
+                        delivery_authority: Some(crate::application::port::outbound::issue_work_execution_port::IssueWorkDeliveryAuthority::HumanReview),
                     }
                 )
                 .is_err()

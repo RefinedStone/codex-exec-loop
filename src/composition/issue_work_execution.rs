@@ -2,10 +2,10 @@
 use crate::application::port::outbound::issue_work_execution_port::*;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkDeliveryReview,
-    PlanningWorkInstruction, PlanningWorkInstructionAdmission, PlanningWorkLinkReference,
-    PlanningWorkOrderRepositoryPort, PlanningWorkPermit, PlanningWorkPermitBasis,
-    PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
+    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkDeliveryAuthority,
+    PlanningWorkDeliveryReview, PlanningWorkInstruction, PlanningWorkInstructionAdmission,
+    PlanningWorkLinkReference, PlanningWorkOrderRepositoryPort, PlanningWorkPermit,
+    PlanningWorkPermitBasis, PlanningWorkPermitRepositoryPort, PlanningWorkPermitStage,
 };
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::task_mutation::PlanningTaskCreateInput;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 mod answer;
 mod conversation;
+mod delivery_authority;
 mod observation;
 mod recovery;
 mod source;
@@ -283,10 +284,11 @@ Work order: {}",
                 base_commit_sha: range.base_commit_sha.clone(),
                 source_commit_sha: range.source_commit_sha.clone(),
                 gate_revision: review.gate_revision,
+                authority: Some(delivery_authority::validate(request, review)?),
             })
         } else {
-            if request.delivery_review.is_some() {
-                bail!("dispatch cannot consume a delivery review");
+            if request.delivery_review.is_some() || request.delivery_authority.is_some() {
+                bail!("dispatch cannot consume a delivery review or authority");
             }
             None
         };
@@ -298,6 +300,12 @@ Work order: {}",
             source_sha: request.source_sha.clone(),
             delivery_review,
         };
+        let auto_delivery = basis.delivery_review.as_ref().is_some_and(|review| {
+            matches!(
+                review.authority,
+                Some(PlanningWorkDeliveryAuthority::Auto { .. })
+            )
+        });
         self.repository
             .set_work_order_permit_basis(workspace, &request.work_order_id, &basis)?;
         let stages: &[PlanningWorkPermitStage] = if request.delivery {
@@ -316,7 +324,8 @@ Work order: {}",
                     work_order_id: request.work_order_id.clone(),
                     stage: *stage,
                     basis: basis.clone(),
-                    requires_human_review: *stage == PlanningWorkPermitStage::Integrate,
+                    requires_human_review: *stage == PlanningWorkPermitStage::Integrate
+                        && !auto_delivery,
                 },
             )?;
         }

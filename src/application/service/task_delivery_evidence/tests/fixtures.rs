@@ -62,6 +62,7 @@ impl Fixture {
                 queue,
                 task: Some(task),
                 permit: PlanningWorkPermitDecision::Legacy,
+                permit_basis: None,
                 requires_preservation: false,
             }),
             reads: AtomicUsize::new(0),
@@ -116,7 +117,10 @@ impl Fixture {
     }
 
     pub fn effect(&self) -> Result<TaskDeliveryEvidenceDecision, String> {
-        let queue = self.repository.snapshot.lock().unwrap().queue.clone();
+        let (queue, preflight_permit) = {
+            let snapshot = self.repository.snapshot.lock().unwrap();
+            (snapshot.queue.clone(), snapshot.permit)
+        };
         self.service.evaluate(
             "/repo",
             &queue,
@@ -124,6 +128,7 @@ impl Fixture {
             None,
             &TaskDeliveryEvidenceOperation::Effect {
                 owner_token: "claim-owner".into(),
+                preflight_permit,
             },
         )
     }

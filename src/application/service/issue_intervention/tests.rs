@@ -275,6 +275,8 @@ impl Fixture {
             body: "## 완료 기준\n- 개입 뒤 다른 작업은 계속 진행한다.\n".to_owned(),
         };
         IssueSourceObservation {
+            repository_visibility: Default::default(),
+            repository_name_with_owner: None,
             issue: issue.clone(),
             web: None,
             remote_state: IssueRemoteState::Open,

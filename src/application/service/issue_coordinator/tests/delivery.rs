@@ -9,7 +9,7 @@ fn started() -> Harness {
     h
 }
 
-fn freeze(h: &Harness, source: char, path: &str) {
+pub(super) fn freeze(h: &Harness, source: char, path: &str) {
     let mut execution = h.execution.state.lock().unwrap();
     let source = source.to_string().repeat(40);
     execution.frozen = Some(source.clone());
@@ -39,7 +39,7 @@ fn decision(h: &Harness) -> StoredIssueDecision {
         .unwrap()
 }
 
-fn answer(h: &Harness, option: &str) {
+pub(super) fn answer(h: &Harness, option: &str) {
     use crate::application::port::inbound::stored_command_port::{
         StoredCommandContext, issue_confirmation::VerifiedHumanConfirmation,
     };

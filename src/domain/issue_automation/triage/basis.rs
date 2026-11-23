@@ -3,8 +3,8 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::issue_automation::source::{
     IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
-    IssueSourceActor, IssueSourceActorKind, IssueSourceContent, IssueSourceFailure,
-    IssueSourceObservation, IssueSourceRead,
+    IssueRepositoryVisibility, IssueSourceActor, IssueSourceActorKind, IssueSourceContent,
+    IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
 };
 use crate::domain::issue_validation::{IssueFieldFormat, IssueRequirements};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
@@ -41,6 +41,11 @@ enum CanonicalRead<'a> {
 struct CanonicalObservation<'a> {
     creation_provenance: IssueCreationProvenance,
     remote_state: IssueRemoteState,
+    // Missing legacy metadata must retain its exact pre-Auto evidence hash.
+    #[serde(skip_serializing_if = "unknown_repository_visibility")]
+    repository_visibility: IssueRepositoryVisibility,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository_name_with_owner: Option<&'a str>,
     labels: Vec<(&'a str, &'a str)>,
     labels_completeness: IssueMetadataCompleteness,
     assignees: Vec<CanonicalActor<'a>>,
@@ -50,6 +55,10 @@ struct CanonicalObservation<'a> {
     label_actors_completeness: IssueMetadataCompleteness,
     linked_pull_request: IssuePrPresence,
     content: CanonicalContent<'a>,
+}
+
+fn unknown_repository_visibility(value: &IssueRepositoryVisibility) -> bool {
+    *value == IssueRepositoryVisibility::Unknown
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -102,6 +111,7 @@ pub(super) fn build_basis(
 }
 
 /// 사용자 표시용 login/web/updated_at과 관찰 row revision은 판정 근거가 아니다.
+/// 공급자가 명시적으로 검증한 저장소 공개 범위와 좌표는 Auto 권한의 판정 근거다.
 /// 현재 메타데이터와 공유본의 내용은 모두 포함하되 순서 없는 목록만 정렬한다.
 pub(super) fn source_basis(
     issue: &IssueReference,
@@ -227,6 +237,8 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
     CanonicalObservation {
         creation_provenance: observation.creation_provenance,
         remote_state: observation.remote_state,
+        repository_visibility: observation.repository_visibility,
+        repository_name_with_owner: observation.repository_name_with_owner.as_deref(),
         labels,
         labels_completeness: observation.labels.completeness,
         assignees,

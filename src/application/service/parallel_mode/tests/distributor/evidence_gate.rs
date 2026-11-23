@@ -100,11 +100,26 @@ struct Fixture {
 
 impl Fixture {
     fn new(label: &str, mode: TaskEvidenceDeliveryMode, accepted: bool) -> Self {
+        Self::with_setup(
+            label,
+            mode,
+            FakeGithubAutomationPort::ready(),
+            |repo, authority| seed_task(&repo.workspace_dir(), authority, accepted),
+            |service| service,
+        )
+    }
+
+    fn with_setup(
+        label: &str,
+        mode: TaskEvidenceDeliveryMode,
+        github: FakeGithubAutomationPort,
+        seed: impl FnOnce(&TempGitRepo, &SqlitePlanningAuthorityAdapter),
+        configure: impl FnOnce(ParallelModeService) -> ParallelModeService,
+    ) -> Self {
         let repo = TempGitRepo::new(label);
         let workspace = repo.workspace_dir();
         let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-        seed_task(&workspace, authority.as_ref(), accepted);
-        let github = FakeGithubAutomationPort::ready();
+        seed(&repo, authority.as_ref());
         let artifacts = Arc::new(FilesystemTaskEvidenceArtifactAdapter::new(Arc::new(
             |workspace| {
                 Ok(PathBuf::from(
@@ -131,8 +146,10 @@ impl Fixture {
             calls: Mutex::new(Vec::new()),
             after: Mutex::new(None),
         });
-        let service = test_parallel_mode_service_with_github(Arc::new(github.clone()))
-            .with_delivery_evidence(gate.clone());
+        let service = configure(test_parallel_mode_service_with_github(Arc::new(
+            github.clone(),
+        )))
+        .with_delivery_evidence(gate.clone());
         let assigned = service
             .acquire_slot_lease(
                 &workspace,
@@ -424,6 +441,31 @@ fn command_context() -> StoredCommandContext {
 }
 
 fn seed_task(workspace: &str, store: &SqlitePlanningAuthorityAdapter, accepted: bool) {
+    seed_task_with_commit(
+        workspace,
+        store,
+        accepted,
+        |task_authority, queue_projection| {
+            store
+                .commit_task_authority_snapshot(
+                    workspace,
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: None,
+                        task_authority,
+                        queue_projection,
+                    },
+                )
+                .unwrap();
+        },
+    );
+}
+
+fn seed_task_with_commit(
+    workspace: &str,
+    store: &SqlitePlanningAuthorityAdapter,
+    accepted: bool,
+    commit: impl FnOnce(&TaskAuthorityDocument, &PriorityQueueProjection),
+) {
     store
         .commit_direction_authority_snapshot(
             workspace,
@@ -459,43 +501,37 @@ fn seed_task(workspace: &str, store: &SqlitePlanningAuthorityAdapter, accepted: 
     } else {
         vec![]
     };
-    store
-        .commit_task_authority_snapshot(
-            workspace,
-            PlanningTaskAuthorityCommit {
-                observed_planning_revision: None,
-                task_authority: &TaskAuthorityDocument {
-                    version: TASK_AUTHORITY_FORMAT_VERSION,
-                    tasks: vec![TaskDefinition {
-                        id: TASK.into(),
-                        direction_id: "delivery".into(),
-                        direction_relation_note: String::new(),
-                        title: "Delivery evidence".into(),
-                        description: "Exercise the real local delivery boundary".into(),
-                        acceptance,
-                        acceptance_revision: u64::from(accepted),
-                        status: TaskStatus::Ready,
-                        base_priority: 50,
-                        dynamic_priority_delta: 0,
-                        priority_reason: String::new(),
-                        depends_on: vec![],
-                        blocked_by: vec![],
-                        created_by: TaskActor::User,
-                        last_updated_by: TaskActor::User,
-                        source_turn_id: None,
-                        provenance: TaskMutationProvenance::new(OriginSessionKind::Main),
-                        updated_at: "2026-11-23T12:00:00Z".into(),
-                    }],
-                },
-                queue_projection: &PriorityQueueProjection {
-                    next_task: None,
-                    active_tasks: vec![],
-                    proposed_tasks: vec![],
-                    skipped_tasks: vec![],
-                },
-            },
-        )
-        .unwrap();
+    commit(
+        &TaskAuthorityDocument {
+            version: TASK_AUTHORITY_FORMAT_VERSION,
+            tasks: vec![TaskDefinition {
+                id: TASK.into(),
+                direction_id: "delivery".into(),
+                direction_relation_note: String::new(),
+                title: "Delivery evidence".into(),
+                description: "Exercise the real local delivery boundary".into(),
+                acceptance,
+                acceptance_revision: u64::from(accepted),
+                status: TaskStatus::Ready,
+                base_priority: 50,
+                dynamic_priority_delta: 0,
+                priority_reason: String::new(),
+                depends_on: vec![],
+                blocked_by: vec![],
+                created_by: TaskActor::User,
+                last_updated_by: TaskActor::User,
+                source_turn_id: None,
+                provenance: TaskMutationProvenance::new(OriginSessionKind::Main),
+                updated_at: "2026-11-23T12:00:00Z".into(),
+            }],
+        },
+        &PriorityQueueProjection {
+            next_task: None,
+            active_tasks: vec![],
+            proposed_tasks: vec![],
+            skipped_tasks: vec![],
+        },
+    );
 }
 
 fn change_acceptance(workspace: &str) {
@@ -525,4 +561,5 @@ fn change_acceptance(workspace: &str) {
         .unwrap();
 }
 
+mod auto_delivery;
 mod flow;
