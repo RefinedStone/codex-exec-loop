@@ -111,6 +111,40 @@ renderer가 교체된 뒤 도착한 이전 결과는 새 화면에 적용하지 
 Gateway 녹화, 숨긴 Electron 창을 사용한다. 실제 모델 턴은 실행하지 않는다.
 검증 결과와 게시된 head는 PR의 검증 기록에 남긴다.
 
+### 자동 회귀의 경계
+
+| 시험 | 실제 경로 | 대역과 미검증 범위 |
+| --- | --- | --- |
+| Desktop `issueConfirmationService` | 승인·취소·재시도·소유 창 검사 순서 | dialog 응답·helper·RPC 의존성은 시험 대역 |
+| Desktop `issue-confirmation`/`issue-interventions` E2E | Electron IPC, 별도 utility process, stdio, 창 수명 | native dialog 응답·helper·Gateway는 시험 대역 |
+| 기존 Rust `human_confirmation` 및 `confirmation::tests` | 실제 helper `run_io`, private IPC, Gateway 검증, SQLite·커널 명령·영수증 | helper를 같은 OS 프로세스의 Tokio task로 실행 |
+| `native_helper_process_confirms_replays_and_revokes_on_eof` | 빌드된 `akra-gateway desktop-confirmation-bridge` 자식의 stdin/stdout, private IPC와 실제 Gateway 검증 | 시험 harness가 승인 응답을 제공. Electron native dialog·Node transport 결합·실제 모델은 별도 |
+
+실제 프로세스 회귀는 [native_process.rs](../../src/adapter/inbound/gateway/tests/human_confirmation/native_process.rs)에 있다.
+기존 Gateway 세션·커널 harness를 재사용하고 helper만 실행 파일로 교체한다.
+등록 준비·Gateway 등록·intent 준비·승인·confirmed 명령·동일 영수증 재전송을 연결하고,
+stdin EOF 뒤 정상 종료·등록 파일과 IPC 디렉터리 정리·미소비 proof 거절을 검사한다.
+타임아웃과 자식 프로세스 guard로 실패 시에도 자식을 종료·회수하며 모델·GitHub를 호출하지 않는다.
+이 결과를 실제 사람의 클릭 확인이나 [#2555 실제 모델 확인](issue-automation-propose-flow.md)의 완료로 기록하지 않는다.
+
+이 회귀는 사전 빌드가 필요해 `#[ignore]`로 표시하며 POSIX Full, Linux Rust CI와 macOS portable CI에서 별도로 명시 실행한다.
+누락된 환경을 통과로 반환하지 않는다. 실행 전 같은 소스의 `akra-gateway`를 빌드하고
+`AKRA_CONFIRMATION_HELPER_TEST_BIN`에 그 절대 경로를, `AKRA_HOME`에 짧은 경로의 시험 전용 임시 디렉터리를 지정한다.
+시험이 프로세스 전역 환경을 바꾸지 않으며 해당 변수로 제품의 검증을 우회하지도 않는다.
+
+자동 준비·실행은 `node scripts/check_native_confirmation_process.mjs`로 한다.
+runner는 Cargo가 반환한 실제 실행 파일 경로를 사용하고, 짧은 private 임시 홈을 만들어
+시험 후 정리한다. 정확히 한 개 시험이 통과했는지도 확인하므로 필터 변경으로 0개가 실행된
+결과를 성공으로 취급하지 않는다.
+
+```bash
+cargo build --locked --bin akra-gateway
+# 위 두 환경변수를 지정한 상태에서 실행한다.
+cargo test --locked --lib \
+  adapter::inbound::gateway::tests::human_confirmation::native_process::native_helper_process_confirms_replays_and_revokes_on_eof \
+  -- --ignored --exact
+```
+
 ### 추가 이름 필터에서 확인한 기존 WSL 제한
 
 넓은 `confirmation` 필터는 이 변경과 무관한 TUI 방향 편집기 시험 두 개도

@@ -26,6 +26,20 @@
 
 서비스 재생성은 같은 workspace와 private runtime 경로를 유지한 채 기존 `FlowServices`를 drop하고, 새 coordinator·SQLite adapter·실제 execution adapter·publication journal adapter를 조립하는 방식이다. 초기화는 `FlowFixture::new`에서 한 번만 수행하며 서비스 재조립에서는 반복하지 않는다. 이미 저장한 task·work-order·ACK 상태를 그대로 읽고, 원격 서비스를 대신하는 fixture 상태와 로컬 bare remote도 유지한다.
 
+### 승인 자동화와 실제 모델 확인의 구분
+
+위 7개 application 결합 시험과 별도로 [사람 확인 경로의 회귀](issue-human-confirmation.md#자동-회귀의-경계)가 있다.
+Desktop E2E는 실제 Electron IPC·utility process에 dialog·helper·Gateway 대역을 연결한다.
+Rust 회귀는 실제 helper 구현·private IPC·Gateway 검증·SQLite를 한 OS 프로세스에서 조립한다.
+추가로 `native_helper_process_confirms_replays_and_revokes_on_eof`는 빌드된 Rust helper를 별도 OS 프로세스로
+실행하여 Gateway 등록·intent·proof 소비·명령 재전송·EOF 폐기를 검사한다.
+이 시험은 명시적으로 준비한 실행 파일과 임시 `AKRA_HOME`을 요구하며 기존 7개의 통과 수에 합산하지 않는다.
+
+제품은 OS가 물리적인 사람의 클릭을 인증한다고 보장하지 않는다. 따라서 시험 harness가 승인 응답을
+제공하는 자동화 검증은 가능하며, 사용자의 직접 조작을 모든 개발·검증의 선행 조건으로 두지 않는다.
+자동 회귀와 달리 실제 실행의 Start는 정식 native 경로를 거치며, 시험 capability·위조 proof·직접 DB 수정을 사용하지 않는다.
+실제 모델·GitHub PR·상태 댓글 확인은 여전히 별도 완료 기준이며 위 자동 회귀의 성공으로 대체하지 않는다.
+
 ## 플랫폼과 실행 준비
 
 실제 publication journal이 사용하는 [PrivateRuntimeLease](../../src/adapter/outbound/filesystem/private_runtime_lease.rs)는 Unix 전용이다. Unix에서는 경로·소유자·권한·파일 신원을 검사하고 process-shared lock을 잡지만, `cfg(not(unix))` 구현은 `the issue persistence lease is unavailable on this platform`으로 거절한다. **현재 Windows native의 실제 issue publication 경로는 미지원**이다. Windows native에서 이 결합 회귀를 시도했을 때도 같은 경계에서 차단됐다.
@@ -221,7 +235,7 @@ full tick의 gate 취득·시험 이슈 action 계산·질문 저장 이벤트�
 
 유효 정책은 `propose`, 시험 선택 라벨 하나, 확인된 stable actor ID, `budget.max_attempts = 1`, 사용자 허가 `feedback.comment = true`, `feedback.labels = false`, `feedback.transition = false`, `close.when = "never"`로 제한한다. PR mode는 `required`, autonomous delivery opt-in은 끈 상태로 둔다. 공개 저장소 실행에는 별도의 parent-process public-repository opt-in을 확인한다.
 
-live 최소 구성은 같은 Linux 사용자·`AKRA_HOME`·로컬 파일시스템과 IPC를 공유하는 Desktop, Gateway, confirmation helper와 작업공간이다. Desktop이 로컬 `akra-gateway desktop-confirmation-bridge`를 시작하고 Gateway가 자기 `AKRA_HOME/run`의 파일과 Unix socket을 검증한다. 해당 이슈의 Start에는 사용자가 실제 GUI의 native 확인 창에서 응답해야 한다. Windows Desktop의 원격 host 조회 기능은 이 로컬 승인 경로를 제공하지 않는다.
+live 최소 구성은 같은 Linux 사용자·`AKRA_HOME`·로컬 파일시스템과 IPC를 공유하는 Desktop, Gateway, confirmation helper와 작업공간이다. Desktop이 로컬 `akra-gateway desktop-confirmation-bridge`를 시작하고 Gateway가 자기 `AKRA_HOME/run`의 파일과 Unix socket을 검증한다. 해당 이슈의 Start는 승인된 시험 범위 안에서 실제 GUI의 native 확인 창을 거쳐 응답한다. 정식 경로의 확인과 OS가 물리적 클릭을 인증한다는 주장은 구분한다. Windows Desktop의 원격 host 조회 기능은 이 로컬 승인 경로를 제공하지 않는다.
 
 WSLg의 `DISPLAY`와 display socket, Linux의 GitHub 계정 `RefinedStone` 및 Codex ChatGPT 로그인 상태를 확인했다. 최종 소스의 Linux Desktop 창 표시, 한글 font 보완과 trace 재시작, 시험용 0-turn thread의 UI 표시도 확인했다. 이 준비 확인은 native 승인이나 실제 모델 접근 성공을 뜻하지 않는다. native Desktop/Gateway 연결과 Propose·Start 확인, 실제 worker profile·모델 접근 권한, 설정을 덮어쓰는 환경변수, active direction·빈 task authority 및 PR 생성으로 작동할 CI·외부 리뷰를 실행 전에 점검한다. 자격 증명 원문은 출력하지 않는다.
 

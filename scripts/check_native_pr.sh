@@ -21,4 +21,5 @@ run_step "TUI layering" bash scripts/check_tui_layering.sh
 run_step "Node surfaces" bash scripts/check_node_surfaces.sh
 run_step "Rust formatting" cargo fmt --all -- --check
 run_step "Rust tests" cargo test --locked
+run_step "Native confirmation process" node scripts/check_native_confirmation_process.mjs
 run_step "Rust clippy" cargo clippy --locked --all-targets --all-features -- -D warnings
