@@ -161,6 +161,55 @@ fn cached_worktrees(
     };
     parse_porcelain(&bytes)
 }
+/// Git lists a separate main Git directory (including absorbed submodules) as its
+/// first worktree path. Its pinned local core.worktree must also match the observed
+/// directory before that record can authorize a checkout classification.
+fn registered_worktree<'a>(
+    db: &StorageIndex,
+    id: i64,
+    path: &Path,
+    metadata: &git_metadata::GitMetadata,
+    records: &'a [WorktreeRecord],
+    cancelled: &AtomicBool,
+) -> Option<&'a WorktreeRecord> {
+    if let Some(record) = records.iter().find(|record| {
+        git_metadata::key(Path::new(
+            &String::from_utf8_lossy(&record.path).into_owned(),
+        )) == git_metadata::key(path)
+    }) {
+        return Some(record);
+    }
+    let main = records.first()?;
+    if main.bare
+        || metadata.work_tree.is_none()
+        || git_metadata::key(&metadata.git_dir) != git_metadata::key(&metadata.common_dir)
+        || git_metadata::key(Path::new(&String::from_utf8_lossy(&main.path).into_owned()))
+            != git_metadata::key(&metadata.common_dir)
+    {
+        return None;
+    }
+    let configured = git(
+        path,
+        metadata,
+        &["config", "--local", "--null", "--get", "core.worktree"],
+        cancelled,
+    )
+    .ok()?;
+    let configured = std::str::from_utf8(configured.strip_suffix(&[0])?).ok()?;
+    if configured.is_empty() || configured.len() > 4096 || configured.contains('\0') {
+        return None;
+    }
+    let configured = Path::new(configured);
+    let resolved = if configured.is_absolute() {
+        configured.to_path_buf()
+    } else {
+        metadata.git_dir.join(configured)
+    };
+    (git_metadata::key(&resolved) == git_metadata::key(path)
+        && matches!(git_metadata::runtime_node(db, path), Ok(Some(observed)) if observed == id))
+    .then_some(main)
+}
+
 fn text(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes)
         .trim_end_matches(['\r', '\n'])
@@ -227,11 +276,15 @@ pub(super) fn annotate(
                 let records = cached_worktrees(db, &path, &metadata, cancelled);
                 match &records {
                     Ok(records) => {
-                        let current = records.iter().find(|r| {
-                            git_metadata::key(Path::new(&String::from_utf8_lossy(&r.path).into_owned()))
-                                == git_metadata::key(&path)
-                        });
+                        let current =
+                            registered_worktree(db, id, &path, &metadata, records, cancelled);
                         if let Some(current) = current {
+                            if !current.bare {
+                                db.conn.execute(
+                                    "INSERT OR IGNORE INTO git_registered_nodes(node) VALUES(?1)",
+                                    [id],
+                                )?;
+                            }
                             if !current.bare
                                 && records
                                     .first()
@@ -286,17 +339,6 @@ pub(super) fn annotate(
                         "Worktree registration query failed",
                     )),
                 }
-                // Querying a superproject through Git can inspect an unobserved parent's index.
-                // Retain the standard registered metadata layout as an explicit, read-only reason.
-                if metadata.common_dir.ancestors().any(|ancestor| {
-                    ancestor.file_name().is_some_and(|name| name == "modules")
-                        && ancestor.parent().and_then(Path::file_name).is_some_and(|name| name == ".git")
-                }) {
-                    reasons.push(evidence(
-                        "submodule",
-                        "The observed Git metadata is registered below a .git/modules directory",
-                    ));
-                }
                 if cancelled.load(Ordering::Acquire) { break; }
                 match cached_index_changes(&path, &metadata, cancelled) {
                     Ok(true) => reasons.push(evidence(
@@ -340,6 +382,7 @@ pub(super) fn annotate(
             params![serde_json::to_string(&reasons)?, id],
         )?;
     }
+    tracked::annotate_submodules(db, cancelled)?;
     if !runtime_complete {
         let raw: String =
             db.conn
@@ -377,6 +420,7 @@ fn prepare_candidates(
     }
     git_metadata::prepare(db)?;
     db.conn.execute_batch("CREATE TABLE git_candidates(node INTEGER PRIMARY KEY,git_discovered INTEGER NOT NULL,runtime_known INTEGER NOT NULL);
+        CREATE TABLE git_registered_nodes(node INTEGER PRIMARY KEY);
         INSERT INTO git_candidates SELECT id,1,0 FROM nodes WHERE kind='directory' AND id IN(
           SELECT parent FROM nodes WHERE name='.git' UNION
           SELECT parent FROM nodes WHERE name IN ('HEAD','objects','refs') GROUP BY parent HAVING count(DISTINCT name)=3);")?;

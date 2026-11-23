@@ -21,6 +21,8 @@
 
 근거: [확장 조립](../../src/composition/storage_extension.rs), [공통 작업 호스트](../../src/application/service/kernel_extensions/mod.rs), [작업 수명](../../src/application/service/kernel_extensions/jobs.rs), [native 어댑터](../../src/adapter/outbound/storage_analysis/mod.rs).
 
+분석을 시작할 때에는 경로를 다시 조회해 얻은 serial만으로 선택을 대신하지 않습니다. 실제로 연 최초 루트 핸들의 볼륨 GUID를 요청한 volume_id와 비교한 뒤에만 루트 identity와 진행 상태를 기록합니다. 선택 후 드라이브 문자가 다른 볼륨으로 바뀌는 경계에서는 열거를 시작하지 않습니다. 이후 하위 항목도 검증된 볼륨 identity와 대조합니다.
+
 ## 2. 상태, 취소와 결과 보존
 
 작업의 실행 상태와 분석 결과의 완전성은 다른 필드입니다.
@@ -36,7 +38,7 @@
 
 호스트의 `cancel`은 취소된 작업 결과를 `result: null`로 반환합니다. 스캐너 내부에서 잠정 취소 결과를 만들 수 있어도, 클라이언트가 이를 임의의 완료 스냅숏으로 만들어 표시해서는 안 됩니다. 실패·취소·중단 작업은 워커 종료 후 정리 대상이며, 일반 사용자는 다시 명시적으로 분석해야 합니다.
 
-성공 결과의 기본 보존 기간은 종료 기록 시점부터 **24시간**입니다. 호스트는 60초 간격으로 만료를 확인하고 새 작업 접수 시에도 정리합니다. 보존 job 수 상한은 128개이며, 공간을 만들기 위해 오래된 terminal 작업이 먼저 정리될 수 있습니다. 확장 비활성화도 결과를 정리합니다. 따라서 24시간 동안 무조건 보존되는 영구 저장소로 사용하면 안 됩니다.
+성공 결과의 기본 보존 기간은 종료 기록 시점부터 **24시간**입니다. 호스트는 60초 간격과 새 작업 접수 시 만료를 확인합니다. 보존 job 수 상한 128개가 모두 아직 만료되지 않은 결과이면 새 작업을 거부하며, 용량 확보를 위해 유효한 결과를 먼저 삭제하지 않습니다. 만료 또는 명시적 비활성화로 cleanup이 완료된 terminal 메타데이터만 새 job과 같은 영속 저장에서 교체하고, 재시도 receipt tombstone은 유효 기간까지 유지합니다. 확장 비활성화는 결과 정리를 요청하므로 영구 보관용 저장소는 아닙니다.
 
 정리는 원래 job ID에 귀속된 색인에만 적용합니다. 해당 스냅숏의 공유를 먼저 무효화하고 사용 중인 reader/worker와 조정한 후, 소유가 확인된 SQLite 파일만 삭제합니다. 다른 스냅숏의 grant나 원본 폴더를 함께 지우지 않습니다.
 
@@ -122,7 +124,7 @@ Git 명령을 시작하기 전에 관측된 Git 메타데이터를 검사합니�
 
 Windows에서는 검증한 기존 config·경로 포인터 파일의 읽기 handle을 Git 조회 종료까지 유지하여 해당 파일의 쓰기·교체를 막습니다. 부재하던 optional 파일의 동시 생성이나 Git 메타데이터 전체를 원자적으로 고정하는 보장은 아닙니다. 이 검사는 별도 프로세스의 모든 파일 접근을 격리하는 OS 샌드박스가 아닙니다.
 
-공통 Git 디렉터리마다 `git worktree list --porcelain -z`를 한 번 수행하고 결과를 작업 SQLite에 캐시합니다. 명령 시간은 3초, 표준 출력은 1MiB, 목록은 4,096개 record로 제한합니다. NUL 구분 경로를 파싱하고 main/linked/bare/detached/locked/prunable 근거를 보존합니다. 사라진 등록이나 `prunable` 표시에 회수 가능 바이트를 부여하지 않습니다. 서브모듈 근거는 관측한 `.git/modules/...` 등록 구조에서 얻습니다. 각 Git 명령을 시작할 때와 명령 사이에 취소를 확인합니다. 취소 전에 이미 시작한 명령은 기존 timeout 안에서 종료를 기다릴 수 있습니다.
+공통 Git 디렉터리마다 `git worktree list --porcelain -z`를 한 번 수행하고 결과를 작업 SQLite에 캐시합니다. 명령 시간은 3초, 표준 출력은 1MiB, 목록은 4,096개 record로 제한합니다. NUL 구분 경로를 파싱하고 main/linked/bare/detached/locked/prunable 근거를 보존합니다. 사라진 등록이나 `prunable` 표시에 회수 가능 바이트를 부여하지 않습니다. 서브모듈은 검증한 부모 cached index의 stage 0·mode `160000` gitlink가 같은 작업에서 관측하고 Git 등록을 확인한 자식 디렉터리의 경로·파일 ID와 대응할 때만 표시합니다. 인덱스 등록을 SQLite에 보존한 뒤 전체 후보 관측이 끝나면 대조하므로 부모·자식 발견 순서에 의존하지 않습니다. `.git/modules/...`라는 경로 모양만으로 서브모듈을 확정하지 않으며, 이를 위해 `.gitmodules`나 원본 본문을 읽거나 외부 부모 트리를 새로 순회하지 않습니다. 각 Git 명령을 시작할 때와 명령 사이에 취소를 확인합니다. 취소 전에 이미 시작한 명령은 기존 timeout 안에서 종료를 기다릴 수 있습니다.
 
 **작업 파일 본문에 기초한 수정 판정과 ignore 규칙을 적용한 완전한 미추적 목록은 제공하지 않습니다.** `git status` 대신 cached index와 로컬 HEAD를 비교하여 `index_changes/index_unchanged/index_unknown`을 남기고, 항상 `status_unknown`을 유지합니다. `index_unchanged`를 깨끗한 worktree나 삭제 가능 판정으로 해석하면 안 됩니다. 사용자 clean filter·external diff·textconv를 실행하는 원본 본문 검사를 하지 않습니다.
 
