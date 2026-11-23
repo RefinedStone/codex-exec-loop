@@ -75,6 +75,51 @@ fn cancellation_terminates_and_reaps_without_waiting_for_the_command_timeout() {
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn cancellation_after_natural_exit_reaps_without_losing_the_cancelled_fact() {
+    let child = child("done");
+    let pid = libc::pid_t::try_from(child.id()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // WNOWAIT fixes the disputed boundary: the native child has exited, but neither
+    // ManagedChild nor the capture loop has reaped it. No sleep races against Git.
+    loop {
+        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+            )
+        };
+        assert_eq!(result, 0, "waitid: {}", std::io::Error::last_os_error());
+        if unsafe { info.si_pid() } == pid {
+            assert_eq!(info.si_code, libc::CLD_EXITED);
+            break;
+        }
+        assert!(Instant::now() < deadline, "native fixture did not exit");
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert!(!child.child_reaped);
+    let result = wait_with_output_controlled(child, deadline, &|| true, 8192, 8192);
+    assert!(matches!(
+        result.termination,
+        ControlledTermination::Cancelled
+    ));
+    assert!(!result.stdout_complete && !result.stderr_complete);
+    let mut status = 0;
+    assert_eq!(
+        unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD),
+        "the original child must have been reaped"
+    );
+}
+
 #[test]
 fn deadline_stops_a_running_process_and_does_not_claim_complete_streams() {
     let started = Instant::now();
