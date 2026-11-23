@@ -96,30 +96,6 @@ impl ExtensionStateStorePort for SqliteExtensionStateStore {
         Ok(())
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn native_store_is_single_owner_and_recovers_the_saved_identity() {
-        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
-            "akra-extension-store-{:032x}",
-            rand::random::<u128>()
-        ));
-        let store = SqliteExtensionStateStore::open(&root).unwrap();
-        assert!(SqliteExtensionStateStore::open(&root).is_err());
-        let state = ExtensionDurableState {
-            host_id: "stable-host".into(),
-            ..Default::default()
-        };
-        store.save(&state).unwrap();
-        drop(store);
-        let restored = SqliteExtensionStateStore::open(&root).unwrap();
-        assert_eq!(restored.load().unwrap().host_id, "stable-host");
-        drop(restored);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
-
 fn retry_transient<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
     for attempt in 0..40 {
         match operation() {
@@ -144,5 +120,29 @@ fn transient(error: &anyhow::Error) -> bool {
     {
         let _ = error;
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_store_is_single_owner_and_recovers_the_saved_identity() {
+        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "akra-extension-store-{:032x}",
+            rand::random::<u128>()
+        ));
+        let store = SqliteExtensionStateStore::open(&root).unwrap();
+        assert!(SqliteExtensionStateStore::open(&root).is_err());
+        let state = ExtensionDurableState {
+            host_id: "stable-host".into(),
+            ..Default::default()
+        };
+        store.save(&state).unwrap();
+        drop(store);
+        let restored = SqliteExtensionStateStore::open(&root).unwrap();
+        assert_eq!(restored.load().unwrap().host_id, "stable-host");
+        drop(restored);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

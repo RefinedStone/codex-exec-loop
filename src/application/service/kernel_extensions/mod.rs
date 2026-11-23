@@ -82,6 +82,10 @@ struct ConfigureInput {
 struct JobInput {
     job_id: String,
 }
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct JobsResponse {
+    jobs: Vec<ExtensionJob>,
+}
 
 impl ExtensionService {
     pub fn new(
@@ -249,9 +253,13 @@ impl ExtensionService {
                     .collect::<Vec<_>>();
                 jobs.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms).then(a.id.cmp(&b.id)));
                 let activation = &state.durable.activations[extension];
-                return Ok(
-                    json!({"jobs":jobs.into_iter().map(|j|visible_job(j,activation)).collect::<Vec<_>>()}),
-                );
+                return serde_json::to_value(JobsResponse {
+                    jobs: jobs
+                        .into_iter()
+                        .map(|job| visible_job(job, activation))
+                        .collect(),
+                })
+                .map_err(Into::into);
             }
             "job" => {
                 let input: JobInput = serde_json::from_value(input)?;
@@ -338,6 +346,18 @@ impl ExtensionService {
             };
             activation.error = None;
             activation.revision += 1;
+            if !input.enabled {
+                for job in next
+                    .jobs
+                    .values_mut()
+                    .filter(|job| job.extension == id && job.state.active())
+                {
+                    job.state = ExtensionJobState::Cancelling;
+                    job.revision += 1;
+                    job.sequence = state.sequence + 1;
+                    job.updated_at_ms = now_ms();
+                }
+            }
             self.persist(&mut state, next)?;
             if !input.enabled {
                 let ids = state
@@ -522,8 +542,7 @@ fn management_operations() -> Vec<ExtensionOperation> {
             name: "jobs".into(),
             kind: ExtensionOperationKind::Query,
             input_schema: empty,
-            output_schema: json!({"type":"object","properties":{"jobs":schema::<Vec<ExtensionJob>>()},
-                "required":["jobs"],"additionalProperties":false}),
+            output_schema: schema::<JobsResponse>(),
             progress_schema: None,
         },
         ExtensionOperation {

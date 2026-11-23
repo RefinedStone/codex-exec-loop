@@ -1,4 +1,5 @@
 //! Thin machine entrance: server catalog schemas validate the same request sent to Desktop's host.
+use crate::domain::kernel_extension::ExtensionCallRejection;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::ffi::OsString;
@@ -16,11 +17,17 @@ pub(super) fn run(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
     });
     let (code, value) = match result {
         Ok(value) => (0, value),
-        Err(error) => (1, json!({"error":{"message":format!("{error:#}")}})),
+        Err(error) => (1, rejection_json(&error)),
     };
     serde_json::to_writer(&mut *stdout, &value)?;
     writeln!(stdout)?;
     Ok(code)
+}
+fn rejection_json(error: &anyhow::Error) -> Value {
+    match error.downcast_ref::<ExtensionCallRejection>() {
+        Some(rejection) => json!({"error": rejection}),
+        None => json!({"error":{"message":format!("{error:#}")}}),
+    }
 }
 fn parse(args: &[OsString]) -> Result<Invocation> {
     let args = args
@@ -102,6 +109,16 @@ mod tests {
     use super::*;
     fn words(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+    #[test]
+    fn extension_cli_preserves_authoritative_rejection_code_message_and_data() {
+        let rejection = ExtensionCallRejection {
+            code: -32003,
+            message: "extension is disabled".into(),
+            data: Some(json!({"reason":"disabled","revision":2})),
+        };
+        let error = anyhow::Error::new(rejection.clone()).context("transport context");
+        assert_eq!(rejection_json(&error), json!({"error":rejection}));
     }
     #[test]
     fn extension_cli_preserves_json_and_rejects_unknown_flags() {

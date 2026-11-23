@@ -1,3 +1,4 @@
+mod lifecycle;
 use super::*;
 use registry::{ExtensionHandler, ExtensionRegistration};
 use std::sync::atomic::AtomicUsize;
@@ -26,6 +27,11 @@ struct TestHandler {
     entered: AtomicUsize,
     release: AtomicBool,
     invalid: AtomicBool,
+    panic_worker: AtomicBool,
+    hold_cancelled_worker: AtomicBool,
+    hold_cleanup: AtomicBool,
+    fail_cleanup: AtomicBool,
+    cleanup_entered: AtomicUsize,
     cleanups: Mutex<Vec<(String, String)>>,
 }
 impl ExtensionHandler for TestHandler {
@@ -42,16 +48,32 @@ impl ExtensionHandler for TestHandler {
     }
     fn run(&self, context: &ExtensionJobContext, _action: &str, input: Value) -> Result<Value> {
         self.entered.fetch_add(1, Ordering::AcqRel);
-        while !self.release.load(Ordering::Acquire) && !context.cancelled() {
+        assert!(
+            !self.panic_worker.load(Ordering::Acquire),
+            "injected worker panic"
+        );
+        while !self.release.load(Ordering::Acquire)
+            && (self.hold_cancelled_worker.load(Ordering::Acquire) || !context.cancelled())
+        {
             std::thread::sleep(Duration::from_millis(2));
         }
-        ensure!(!context.cancelled(), "test worker cancelled");
+        if !self.hold_cancelled_worker.load(Ordering::Acquire) {
+            ensure!(!context.cancelled(), "test worker cancelled");
+        }
         Ok(input)
     }
     fn dedupe_key(&self, _action: &str, input: &Value) -> Result<Option<String>> {
         Ok(Some(input.to_string()))
     }
     fn cleanup(&self, _context: &ExtensionContext, job: &ExtensionJob) -> Result<()> {
+        self.cleanup_entered.fetch_add(1, Ordering::AcqRel);
+        while self.hold_cleanup.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        ensure!(
+            !self.fail_cleanup.load(Ordering::Acquire),
+            "injected cleanup failure"
+        );
         self.cleanups
             .lock()
             .unwrap()
@@ -439,6 +461,22 @@ fn catalog_exposes_management_schemas_and_bounded_event_resync_sequence() {
         Arc::new(TestHandler::default()),
     );
     let catalog = host.catalog();
+    for operation in &catalog[0].operations {
+        jsonschema::validator_for(&operation.input_schema).unwrap();
+        jsonschema::validator_for(&operation.output_schema).unwrap();
+    }
+    let jobs = call(&host, "jobs", json!({}), None).unwrap();
+    let jobs_schema = &catalog[0]
+        .operations
+        .iter()
+        .find(|o| o.name == "jobs")
+        .unwrap()
+        .output_schema;
+    assert!(
+        jsonschema::validator_for(jobs_schema)
+            .unwrap()
+            .is_valid(&jobs)
+    );
     let configure = catalog[0]
         .operations
         .iter()
