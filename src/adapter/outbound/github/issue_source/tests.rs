@@ -208,6 +208,8 @@ fn labels_any_is_or_and_an_empty_filtered_page_still_advances() {
     let first = adapter.discover(request.clone()).unwrap();
     assert!(first.observations.is_empty());
     assert_eq!(first.scanned_count, 1);
+    assert!(first.jira_connection.is_none());
+    assert!(first.jira_binding.is_none());
     let second = adapter
         .discover(IssueDiscoveryRequest {
             target: IssueDiscoveryTarget::Repository(first.repository),

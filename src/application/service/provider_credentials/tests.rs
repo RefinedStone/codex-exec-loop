@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 use super::*;
+mod mutations;
 
 const PROFILE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 

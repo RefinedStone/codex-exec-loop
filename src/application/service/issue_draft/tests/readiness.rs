@@ -104,6 +104,7 @@ labels_any = ["docs"]
     };
     let policy = resolve_issue_automation_policy(Some(policy), None).unwrap();
     let expected = inspect_issue_readiness(IssueReadinessInput {
+        provider: crate::domain::issue_work::IssueProvider::GitHub,
         shared_copy: &copy,
         requirements: &requirements(&conventions).unwrap(),
         policy: &policy.policy,

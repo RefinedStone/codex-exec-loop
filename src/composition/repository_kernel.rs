@@ -175,6 +175,7 @@ pub(crate) struct RepositoryKernelRegistry {
         Mutex<Option<Arc<crate::application::service::kernel_extensions::ExtensionService>>>,
     /// 커널이 붙을 app-server 이다. 없으면 커널마다 자기 app-server 를 띄운다 (시험).
     app_server: Option<GatewayUpstreamSocket>,
+    providers: Option<super::provider_credentials::ProviderServices>,
     idle_notification: Mutex<Option<std::task::Waker>>,
     #[cfg(test)]
     restart_runtime: Option<RestartRuntimeFactory>,
@@ -202,7 +203,11 @@ impl RepositoryKernelRegistry {
                 workspace,
                 &candidate.repository_key,
             )?;
-            Ok(build_issue_collection(workspace, admission))
+            Ok(build_issue_collection_with_providers(
+                workspace,
+                admission,
+                self.providers.clone(),
+            ))
         })
     }
 
@@ -366,6 +371,14 @@ impl RepositoryKernelRegistry {
         }
     }
 
+    pub(crate) fn with_provider_services(
+        mut self,
+        providers: super::provider_credentials::ProviderServices,
+    ) -> Self {
+        self.providers = Some(providers);
+        self
+    }
+
     /// `workspace_dir` 가 속한 저장소의 커널에 클라이언트 하나를 붙이고, 커널의 저장소 신원과 함께 돌려준다. 그
     /// 저장소의 커널이 없으면 만든다. 같은 저장소의 다른 worktree 는 같은 커널에 붙는다. 다른 프로세스가 그
     /// 저장소의 커널을 돌리면 `RepositoryKernelLockHeld` 오류이다.
@@ -412,7 +425,11 @@ impl RepositoryKernelRegistry {
         }
         // 호스트 스레드가 끝난 커널은 먼저 버려 잠금을 푼 뒤 다시 만든다.
         *kernel = None;
-        let built = build_kernel_for_workspace(&target.workspace_root, self.app_server.clone())?;
+        let built = build_kernel_for_workspace_with_providers(
+            &target.workspace_root,
+            self.app_server.clone(),
+            self.providers.clone(),
+        )?;
         let client = built
             .attach_with_lifetime(transient)
             .context("the new kernel stopped before a client attached")?;
@@ -544,9 +561,33 @@ impl RepositoryKernelRegistry {
 
 /// `workspace_dir` 가 속한 저장소의 커널을 조립하고 시작한다. 다른 프로세스가 그 저장소의 커널을 돌리면
 /// 아무것도 시작하지 않고 `RepositoryKernelLockHeld` 오류를 돌려준다.
+#[cfg(test)]
 pub(crate) fn build_kernel_for_workspace(
     workspace_dir: &str,
     app_server: Option<GatewayUpstreamSocket>,
+) -> Result<RepositoryKernel> {
+    build_kernel_for_workspace_with_providers(workspace_dir, app_server, None)
+}
+
+fn build_issue_collection_with_providers(
+    workspace: &str,
+    admission: Arc<IssueBindingAdmission>,
+    providers: Option<super::provider_credentials::ProviderServices>,
+) -> Arc<IssueCollectionService> {
+    match providers {
+        Some(providers) => super::issue_collection::build_with_provider_services(
+            workspace,
+            admission,
+            Some(providers),
+        ),
+        None => build_issue_collection(workspace, admission),
+    }
+}
+
+fn build_kernel_for_workspace_with_providers(
+    workspace_dir: &str,
+    app_server: Option<GatewayUpstreamSocket>,
+    providers: Option<super::provider_credentials::ProviderServices>,
 ) -> Result<RepositoryKernel> {
     // 잠금을 먼저 잡는다. 런타임 조립이 PR 검증 스케줄러 스레드를 시작하기 때문이다.
     let location = crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
@@ -561,7 +602,7 @@ pub(crate) fn build_kernel_for_workspace(
     // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
     // 저장 명령과 관찰자가 같은 서비스의 모드/읽기 epoch 경계를 공유한다.
     let admission = Arc::new(IssueBindingAdmission::new());
-    let issues = build_issue_collection(workspace_dir, admission.clone());
+    let issues = build_issue_collection_with_providers(workspace_dir, admission.clone(), providers);
     assemble_recovered_kernel(lock, workspace_dir, app_server, issues, admission)
 }
 

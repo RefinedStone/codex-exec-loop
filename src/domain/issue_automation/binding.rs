@@ -82,6 +82,29 @@ pub struct IssueAutomationBinding {
 }
 
 impl IssueAutomationBinding {
+    pub fn for_source(
+        repository: &super::source::IssueSourceRepository,
+    ) -> Result<Self, IssueAutomationError> {
+        use sha2::{Digest, Sha256};
+        repository
+            .validate()
+            .map_err(|_| IssueAutomationError::InvalidValue {
+                field: "binding.source",
+            })?;
+        let encoded =
+            serde_json::to_vec(repository).map_err(|_| IssueAutomationError::InvalidValue {
+                field: "binding.source",
+            })?;
+        let digest = Sha256::digest(encoded);
+        Self::new(
+            IssueAutomationBindingId::new(format!("issue-source-{digest:x}"))?,
+            repository.provider,
+            repository.server_id.clone(),
+            repository.repository_id.clone(),
+            repository.project_scope.clone(),
+        )
+    }
+
     pub fn new(
         id: IssueAutomationBindingId,
         provider: IssueProvider,

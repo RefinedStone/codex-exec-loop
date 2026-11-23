@@ -9,7 +9,7 @@ use crate::application::port::outbound::issue_automation_store_port::{
 use crate::domain::issue_automation::collection::IssueCollectionMode;
 use crate::domain::issue_automation::coordinator::{
     IssueWorkBlockReason, IssueWorkCheckpoint, IssueWorkStartAuthority, human_start, policy_start,
-    ready_for_start, timeout_arbiter_start, timeout_default_start,
+    ready_for_human_start, ready_for_start, timeout_arbiter_start, timeout_default_start,
 };
 use crate::domain::issue_automation::decision::{IssueDecisionBasis, IssueDecisionId};
 use crate::domain::issue_automation::policy::IssueAutomationGate;
@@ -293,7 +293,11 @@ pub(super) fn validate_authorization(
     let mut basis =
         IssueDecisionBasis::from_assessment(assessment, IssueAutomationGate::Start, None)?;
     basis.authorization_epoch = super::intervention::authorization_epoch(tx, workspace, issue)?;
-    if basis != *approved || !ready_for_start(assessment) {
+    let ready = match authority {
+        IssueWorkStartAuthority::Human => ready_for_human_start(assessment),
+        _ => ready_for_start(assessment),
+    };
+    if basis != *approved || !ready {
         bail!("the issue work requires a current start authorization");
     }
     let tracked = super::read_issue(tx, workspace, issue)?

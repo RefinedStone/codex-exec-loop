@@ -2,6 +2,7 @@ use crate::domain::issue_policy::IssueSensitiveSpanAction as Action;
 use crate::domain::issue_work::{IssueFieldHash, IssueSharedCopy};
 
 use super::*;
+mod jira;
 mod visibility;
 
 fn repository() -> IssueSourceRepository {
@@ -73,6 +74,8 @@ fn basis() -> IssueComparisonBasis {
 
 fn observation() -> IssueSourceObservation {
     IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: reference(),

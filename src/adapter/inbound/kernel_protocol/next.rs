@@ -127,6 +127,7 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         ReasonCode::UntrustedActor
         | ReasonCode::HumanSelectionRequired
         | ReasonCode::AutoRepositoryRestricted
+        | ReasonCode::JiraPullRequestLookupUnsupported
         | ReasonCode::AlreadyClaimed
         | ReasonCode::TitleMissing
         | ReasonCode::RequiredSectionMissing

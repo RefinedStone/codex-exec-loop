@@ -1,9 +1,12 @@
 use super::*;
 use std::collections::VecDeque;
 use std::sync::Mutex;
+mod feedback;
 
 struct Captured {
     url: String,
+    method: HttpMethod,
+    expected: ExpectedResponse,
     query: Vec<(String, String)>,
     body: Option<Value>,
     authorization: String,
@@ -28,10 +31,17 @@ impl HttpTransport for FakeHttp {
         _token: &SecretToken,
         cancelled: &AtomicBool,
         deadline: Instant,
-    ) -> CredentialResult<Value> {
+    ) -> CredentialResult<HttpResponse> {
         ensure_live(cancelled, deadline)?;
+        let _send_guard = request
+            .send_authorization
+            .as_ref()
+            .map(|authorization| authorization.begin_send())
+            .transpose()?;
         self.calls.lock().unwrap().push(Captured {
             url: request.url,
+            method: request.method,
+            expected: request.expected,
             query: request.query,
             body: request.body,
             authorization: authorization.to_owned(),
@@ -43,6 +53,10 @@ impl HttpTransport for FakeHttp {
             .unwrap()
             .pop_front()
             .unwrap_or(Err(ProviderCredentialError::Unavailable))
+            .map(|value| match request.expected {
+                ExpectedResponse::NoContent if value.is_null() => HttpResponse::NoContent,
+                _ => HttpResponse::Json(value),
+            })
     }
 }
 fn fixture() -> (ProviderHttpAdapter, Arc<FakeHttp>, SecretToken) {
@@ -115,6 +129,8 @@ fn jira_cloud_and_server_verify_with_distinct_bounded_auth() {
             )
         );
         assert!(call.body.is_none());
+        assert_eq!(call.method, HttpMethod::Get);
+        assert_eq!(call.expected, ExpectedResponse::Json(200));
         assert_eq!(call.limit, RESPONSE_LIMIT);
         match deployment {
             JiraDeployment::Cloud => {

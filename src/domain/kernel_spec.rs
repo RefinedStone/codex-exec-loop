@@ -286,6 +286,8 @@ spec_names! {
             "An agent-created or unresolved issue requires a trusted user account to apply a current selection label.";
         AutoRepositoryRestricted => "auto_repository_restricted",
             "Auto is limited to proposals when the current source repository is public or its verified visibility and identity are unavailable.";
+        JiraPullRequestLookupUnsupported => "jira_pull_request_lookup_unsupported",
+            "The Jira provider cannot establish whether a linked pull request exists; only an exact Human start approval may accept that limitation when every other prerequisite is known.";
         BudgetExhausted => "budget_exhausted",
             "A zero static budget cap prevents an automatic start and requires a person to review the budget.";
         ModeOff => "mode_off",
@@ -856,6 +858,7 @@ mod tests {
                 "policy_human_required",
                 "human_selection_required",
                 "auto_repository_restricted",
+                "jira_pull_request_lookup_unsupported",
                 "budget_exhausted",
                 "mode_off",
                 "observation_only",

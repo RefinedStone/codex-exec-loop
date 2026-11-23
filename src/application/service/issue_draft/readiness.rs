@@ -79,6 +79,7 @@ pub(super) fn inspect(
         }
     };
     let result = match inspect_issue_readiness(IssueReadinessInput {
+        provider: crate::domain::issue_work::IssueProvider::GitHub,
         shared_copy: &plan.shared_copy,
         requirements: &requirements,
         policy: &resolved.policy,

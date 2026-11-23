@@ -182,7 +182,7 @@ fn requirements(meta: EditMeta) -> IssueFieldRequirementResponse {
 }
 
 /// 지원하는 필드의 형식을 준다. 지원하지 않으면 이유를 준다.
-fn field_format(
+pub(super) fn field_format(
     key: &str,
     schema: &FieldSchema,
     allowed_values: &[AllowedValue],
@@ -299,15 +299,15 @@ pub(super) struct EditMeta {
 #[serde(rename_all = "camelCase")]
 pub(super) struct EditMetaField {
     #[serde(default)]
-    required: bool,
-    name: Option<String>,
-    schema: FieldSchema,
+    pub(super) required: bool,
+    pub(super) name: Option<String>,
+    pub(super) schema: FieldSchema,
     #[serde(default)]
-    allowed_values: Vec<AllowedValue>,
+    pub(super) allowed_values: Vec<AllowedValue>,
 }
 
 #[derive(Deserialize)]
-struct FieldSchema {
+pub(super) struct FieldSchema {
     #[serde(rename = "type")]
     field_type: String,
     system: Option<String>,
@@ -316,7 +316,7 @@ struct FieldSchema {
 
 /// 선택 필드의 값은 `value`, 우선순위 같은 시스템 필드의 값은 `name` 에 있다.
 #[derive(Deserialize)]
-struct AllowedValue {
+pub(super) struct AllowedValue {
     value: Option<String>,
     name: Option<String>,
 }

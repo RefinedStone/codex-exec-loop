@@ -1,4 +1,4 @@
-//! GitHub 상태 댓글과 진행 라벨의 영속 의도이다. I/O와 실행 허가는 만들지 않는다.
+//! 공급자 상태 댓글과 명시적 상태 전이의 영속 의도다. 실행 허가는 만들지 않는다.
 pub mod projection;
 
 use super::source::IssueSourceLabel;
@@ -32,7 +32,7 @@ fn validate_hash(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 pub fn validate_feedback_issue(issue: &IssueReference) -> Result<(), &'static str> {
-    if issue.provider != IssueProvider::GitHub {
+    if !matches!(issue.provider, IssueProvider::GitHub | IssueProvider::Jira) {
         return Err("unsupported feedback provider");
     }
     for value in [
@@ -43,7 +43,65 @@ pub fn validate_feedback_issue(issue: &IssueReference) -> Result<(), &'static st
     ] {
         validate_feedback_id(value)?;
     }
+    if issue.provider == IssueProvider::Jira {
+        for value in [&issue.repository_id, &issue.issue_id] {
+            validate_jira_feedback_id(value)?;
+        }
+    }
     Ok(())
+}
+
+pub fn validate_jira_feedback_id(value: &str) -> Result<(), &'static str> {
+    if value.is_empty() || value.len() > 64 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("invalid Jira feedback identity");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueFeedbackConnection {
+    pub profile_id: String,
+    pub connection_id: String,
+    pub revision: u64,
+}
+impl IssueFeedbackConnection {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        use crate::domain::provider_credentials::{
+            valid_connection_id, valid_profile_id, valid_revision,
+        };
+        if !valid_profile_id(&self.profile_id)
+            || !valid_connection_id(&self.connection_id)
+            || self.revision == 0
+            || !valid_revision(self.revision)
+        {
+            return Err("invalid feedback connection revision");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueFeedbackJiraTransition {
+    pub transition_id: String,
+    pub from_status_id: String,
+    pub to_status_id: String,
+}
+impl IssueFeedbackJiraTransition {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for id in [
+            &self.transition_id,
+            &self.from_status_id,
+            &self.to_status_id,
+        ] {
+            validate_jira_feedback_id(id)?;
+        }
+        if self.from_status_id == self.to_status_id {
+            return Err("Jira close must change status");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +179,8 @@ pub enum IssueFeedbackOperation {
         integration_sha: String,
         decision_id: String,
         previous_event_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        jira_transition: Option<IssueFeedbackJiraTransition>,
     },
 }
 impl std::fmt::Debug for IssueFeedbackOperation {
@@ -157,6 +217,7 @@ impl std::fmt::Debug for IssueFeedbackOperation {
                 integration_sha,
                 decision_id,
                 previous_event_id,
+                ..
             } => f
                 .debug_struct("CloseIssue")
                 .field("integration_record_id", integration_record_id)
@@ -195,6 +256,8 @@ pub struct IssueFeedbackIntent {
     pub intent_id: String,
     pub issue: IssueReference,
     pub actor_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<IssueFeedbackConnection>,
     pub automation_policy_version: String,
     pub disclosure_policy_version: String,
     pub desired_revision: u64,
@@ -213,6 +276,11 @@ impl IssueFeedbackIntent {
             return Err("invalid feedback intent marker");
         }
         validate_feedback_id(&self.actor_id)?;
+        match (self.issue.provider, self.connection.as_ref()) {
+            (IssueProvider::Jira, Some(connection)) => connection.validate()?,
+            (IssueProvider::GitHub, None) => {}
+            _ => return Err("feedback connection does not match its provider"),
+        }
         validate_hash(&self.automation_policy_version)?;
         validate_hash(&self.disclosure_policy_version)?;
         if self.desired_revision > i64::MAX as u64 || self.recorded_at.trim().is_empty() {
@@ -255,6 +323,9 @@ impl IssueFeedbackIntent {
                 label,
                 previous_event_id,
             } => {
+                if self.issue.provider != IssueProvider::GitHub {
+                    return Err("Jira labels are unsupported");
+                }
                 validate_label(label)?;
                 if let Some(id) = previous_event_id {
                     validate_feedback_id(id)?;
@@ -264,6 +335,9 @@ impl IssueFeedbackIntent {
                 label,
                 owned_event_id,
             } => {
+                if self.issue.provider != IssueProvider::GitHub {
+                    return Err("Jira labels are unsupported");
+                }
                 validate_label(label)?;
                 validate_feedback_id(owned_event_id)?;
             }
@@ -272,7 +346,13 @@ impl IssueFeedbackIntent {
                 integration_sha,
                 decision_id,
                 previous_event_id,
+                jira_transition,
             } => {
+                match (self.issue.provider, jira_transition.as_ref()) {
+                    (IssueProvider::Jira, Some(target)) => target.validate()?,
+                    (IssueProvider::GitHub, None) => {}
+                    _ => return Err("feedback close target does not match its provider"),
+                }
                 validate_feedback_id(integration_record_id)?;
                 validate_feedback_id(decision_id)?;
                 if !matches!(integration_sha.len(), 40 | 64)

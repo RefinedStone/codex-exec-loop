@@ -45,6 +45,7 @@ pub mod issue_update_port;
 pub mod issue_feedback_port;
 pub mod issue_feedback_store_port;
 pub mod issue_publish_intent_journal_port;
+pub mod jira_issue_feedback_api_port;
 // issue policy source port 는 사용자와 프로젝트의 이슈 정책 파일을 읽는 경계이다 (#2416).
 pub mod issue_policy_source_port;
 // 자동화 정책의 독립된 사용자/프로젝트 파일 읽기 경계다 (#2540).
@@ -127,6 +128,7 @@ pub use issue_automation_restart_registry_port::{
 };
 pub mod issue_collection_origin_port;
 // 이슈 출처의 발견과 안정 ID 재동기화 계약이다 (#2537).
+pub mod issue_source_claim_port;
 pub mod issue_source_port;
 pub mod issue_work_execution_port;
 pub mod task_evidence_artifact_port;
@@ -143,6 +145,8 @@ pub(crate) mod vault_restore_workspace_port;
 
 pub mod storage_analysis_port;
 
+pub mod jira_issue_source_api_port;
+pub mod provider_credential_mutation_port;
 pub mod provider_credentials_port;
 
 pub mod provider_work_port;

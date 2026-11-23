@@ -26,6 +26,7 @@ use rusqlite::{Connection, params};
 mod admission;
 mod binding_pause;
 mod closure;
+mod jira;
 mod migration;
 mod receipts;
 
@@ -46,6 +47,8 @@ fn seed(fixture: &Fixture, issue_id: &str) -> IssueReference {
     let mut shared = shared_snapshot("## 완료 기준\n- 결과를 검증한다.\n");
     shared.policy_version = issue_policy_version(&IssuePolicy::builtin());
     let observed = IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: tracked.reference().clone(),
@@ -186,6 +189,7 @@ fn make_intent(
         intent_id: id.into(),
         issue: snapshot.item.issue.clone(),
         actor_id: "U_feedback".into(),
+        connection: None,
         automation_policy_version: basis.automation_policy_version.clone(),
         disclosure_policy_version: basis.disclosure_policy_version.clone().unwrap(),
         desired_revision: snapshot.state.desired_revision,

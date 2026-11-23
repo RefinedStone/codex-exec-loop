@@ -156,6 +156,7 @@ fn services(folder: &KernelTestFolder) -> (ProviderServices, Arc<KeyStore>) {
             owner,
             credentials,
             work,
+            api: Arc::new(crate::adapter::outbound::provider_http::ProviderHttpAdapter::default()),
         },
         keys,
     )

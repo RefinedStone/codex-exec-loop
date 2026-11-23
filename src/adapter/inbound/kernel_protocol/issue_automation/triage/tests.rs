@@ -48,6 +48,8 @@ fn basis() -> IssueComparisonBasis {
 
 fn observed(issue: &IssueReference) -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility:
             crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
         repository_name_with_owner: Some("sample/widgets".into()),
@@ -248,6 +250,108 @@ fn auto_repository_restriction_explains_proposals_without_offering_automatic_app
     assert!(reason.summary.contains("제안 단계"));
     assert!(reason.next_summary.contains("사람이 검토"));
     assert_eq!(reason.next, vec![NextStep::AskUser]);
+}
+
+#[test]
+fn jira_pr_lookup_limit_explains_native_human_review_without_claiming_pr_absence() {
+    let reason =
+        IssueTriageReasonState::from(IssueTriageReasonCode::JiraPullRequestLookupUnsupported);
+    assert_eq!(
+        serde_json::to_value(reason.code).unwrap(),
+        json!("jira_pull_request_lookup_unsupported")
+    );
+    assert!(reason.summary.contains("유무를 확인할 수 없어"));
+    assert!(reason.summary.contains("자동으로 시작하지"));
+    assert!(reason.next_summary.contains("다른 준비 조건이 모두 충족"));
+    assert!(reason.next_summary.contains("Native 확인"));
+    assert_eq!(reason.next, vec![NextStep::AskUser]);
+}
+
+#[test]
+fn unsupported_jira_content_is_presented_as_needs_info_even_when_pr_lookup_is_unknown() {
+    use crate::domain::issue_automation::source::{
+        IssueSourceContentProblem, IssueSourceJiraMetadata, JiraIssueStatusCategory,
+        JiraPullRequestLookup,
+    };
+    use crate::domain::provider_credentials::{ConnectionRef, Provider};
+    let mut item = item("10002", IssueAutomationAutonomy::Propose);
+    item.issue.provider = IssueProvider::Jira;
+    item.issue.server_id = "cloud-123".into();
+    item.issue.repository_id = "10001".into();
+    let Some(IssueSourceRead::Observed(value)) = &mut item.current else {
+        unreachable!()
+    };
+    value.issue = item.issue.clone();
+    value.web = None;
+    value.repository_visibility = Default::default();
+    value.repository_name_with_owner = None;
+    value.linked_pull_request = IssuePrPresence::Unknown;
+    value.content_problems = vec![IssueSourceContentProblem::UnsupportedAdf];
+    value.jira = Some(IssueSourceJiraMetadata {
+        key: "AKRA-42".into(),
+        url: "https://example.atlassian.net/browse/AKRA-42".into(),
+        status_id: "10000".into(),
+        status_category: JiraIssueStatusCategory::New,
+        pull_request_lookup: JiraPullRequestLookup::Unsupported,
+        connection: ConnectionRef {
+            provider: Provider::Jira,
+            profile_id: "a".repeat(64),
+            connection_id: "c".repeat(32),
+            revision: 1,
+        },
+    });
+    let mut policy = policy(IssueAutomationAutonomy::Propose);
+    policy.binding.jira = Some(
+        crate::domain::issue_automation::policy::IssueAutomationJiraBinding {
+            site_url: "https://example.atlassian.net".into(),
+            cloud_id: "cloud-123".into(),
+            project_id: "10001".into(),
+            expected_account_id: "U_trusted".into(),
+            jql: "statusCategory != Done".into(),
+            mode: IssueAutomationAutonomy::Propose,
+            close_transition: None,
+        },
+    );
+    policy.select.trusted_actors[0].provider = IssueProvider::Jira;
+    policy.select.trusted_actors[0].server_id = "cloud-123".into();
+    item.triage.as_mut().unwrap().assessment = triage_issue(IssueTriageInput {
+        issue: &item.issue,
+        current: item.current.as_ref(),
+        policy: &policy,
+        automation_policy_version: &"a".repeat(64),
+        runtime_selection_revision: 0,
+        requirements: &IssueRequirements::default(),
+        validation_policy_version: &"b".repeat(64),
+        held: false,
+        pinned_source_commit: None,
+        previous: None,
+    })
+    .unwrap();
+    let wire = IssueListItem::from(&item);
+    assert_eq!(
+        wire.presentation.status.code,
+        IssueListStatusCode::NeedsInfo
+    );
+    assert_eq!(
+        wire.presentation.url.as_deref(),
+        Some("https://example.atlassian.net/browse/AKRA-42")
+    );
+    assert_eq!(
+        wire.presentation.number, None,
+        "a Jira stable ID is never a GitHub issue number"
+    );
+    assert_eq!(
+        wire.triage.as_ref().unwrap().eligibility,
+        IssueTriageEligibilityState::Unknown
+    );
+    assert!(
+        wire.triage
+            .as_ref()
+            .unwrap()
+            .gates
+            .iter()
+            .all(|gate| !gate.enabled)
+    );
 }
 
 #[test]

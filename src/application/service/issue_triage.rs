@@ -192,7 +192,7 @@ impl IssueTriageService {
             &self.automation_policy,
         )?;
         Ok(resolved.version == expected_policy_version
-            && resolved.policy.binding.github.mode >= IssueAutomationAutonomy::Propose
+            && resolved.policy.selected_mode() >= IssueAutomationAutonomy::Propose
             && resolved.policy.feedback.transition
             && resolved.policy.close.when == IssueAutomationCloseWhen::Integration)
     }

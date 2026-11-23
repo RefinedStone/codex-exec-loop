@@ -71,6 +71,12 @@ impl IssueDiscoveryRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueDiscoveryPage {
     pub repository: IssueSourceRepository,
+    /// Exact Jira credential generation for the operation, including empty/filtered pages.
+    /// This is internal commit metadata; it is not inferred from an opaque provider cursor.
+    pub jira_connection: Option<crate::domain::provider_credentials::ConnectionRef>,
+    /// The exact binding used by this operation, including its search predicate.
+    /// A later policy read cannot relabel a page produced by another binding.
+    pub jira_binding: Option<crate::domain::issue_automation::policy::IssueAutomationJiraBinding>,
     pub observations: Vec<IssueSourceObservation>,
     /// 이 페이지의 처리와 장부 저장이 끝난 뒤에만 다음 커서를 저장한다.
     pub next_cursor: Option<IssueDiscoveryCursor>,

@@ -138,6 +138,11 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 
 ## 이슈 자동화 실행
 
+Jira Cloud는 명시적인 Cloud/project/account/저장소 바인딩과 Propose·Native Human Start를
+사용합니다. PR 조회 미지원은 Unknown으로 남기며 댓글과 선택적인 상태 전이는 별도 권한을
+검사합니다. 실제 TOML 예제와 description 템플릿, 토큰 교체 계약은
+[Jira Cloud 이슈 자동화](../../reference/issue-jira-cloud.md)를 참고하세요.
+
 적용 범위는 IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551))의
 [PR #2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638)입니다.
 각 구현 PR과 부모 체인의 상태는 [plan 28](../../plan/28-akra-issue-automation.md#ia4-조각-상태)에 기록합니다.

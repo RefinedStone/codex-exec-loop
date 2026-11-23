@@ -4,10 +4,10 @@ use crate::domain::issue_automation::IssueAutomationAutonomy;
 use crate::domain::issue_automation::policy::{
     ISSUE_AUTOMATION_POLICY_SCHEMA_VERSION, IssueAutomationAdditionalHumanRule,
     IssueAutomationCloseWhen, IssueAutomationGate, IssueAutomationGateAction,
-    IssueAutomationHumanRule, IssueAutomationPolicyValueError, IssueAutomationRiskRule,
-    IssueAutomationSelectionMode, IssueAutomationTrustedActor,
-    MAX_ISSUE_AUTOMATION_TIMEOUT_SECONDS, validate_gate_action, validate_glob, validate_repository,
-    validate_text_value,
+    IssueAutomationHumanRule, IssueAutomationJiraBinding, IssueAutomationJiraCloseTransition,
+    IssueAutomationPolicyValueError, IssueAutomationRiskRule, IssueAutomationSelectionMode,
+    IssueAutomationTrustedActor, MAX_ISSUE_AUTOMATION_TIMEOUT_SECONDS, validate_gate_action,
+    validate_glob, validate_repository, validate_text_value,
 };
 
 use super::{IssueAutomationPolicyBlocked, IssueAutomationPolicyScope};
@@ -35,6 +35,97 @@ pub(super) struct PolicyLayer {
 #[serde(deny_unknown_fields)]
 pub(super) struct BindingLayer {
     pub github: Option<GitHubBindingLayer>,
+    pub jira: Option<JiraBindingLayer>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct JiraBindingLayer {
+    pub site_url: Option<String>,
+    pub cloud_id: Option<String>,
+    pub project_id: Option<String>,
+    pub expected_account_id: Option<String>,
+    pub jql: Option<String>,
+    pub mode: Option<IssueAutomationAutonomy>,
+    pub close_transition: Option<IssueAutomationJiraCloseTransition>,
+}
+
+impl JiraBindingLayer {
+    pub(super) fn has_scope(&self) -> bool {
+        self.site_url.is_some()
+            || self.cloud_id.is_some()
+            || self.project_id.is_some()
+            || self.expected_account_id.is_some()
+            || self.jql.is_some()
+    }
+
+    pub(super) fn binding(&self) -> IssueAutomationJiraBinding {
+        IssueAutomationJiraBinding {
+            site_url: self.site_url.clone().unwrap_or_default(),
+            cloud_id: self.cloud_id.clone().unwrap_or_default(),
+            project_id: self.project_id.clone().unwrap_or_default(),
+            expected_account_id: self.expected_account_id.clone().unwrap_or_default(),
+            jql: self.jql.clone().unwrap_or_default(),
+            mode: self.mode.unwrap_or(IssueAutomationAutonomy::Observe),
+            close_transition: None,
+        }
+    }
+}
+
+/// A project may narrow a user's workflow grant, but cannot move it to another tenant/project.
+pub(super) fn validate_jira_layers(
+    user: &PolicyLayer,
+    project: &PolicyLayer,
+) -> Result<(), IssueAutomationPolicyBlocked> {
+    let user = user
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.jira.as_ref());
+    let project = project
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.jira.as_ref());
+    if let Some(user) = user.filter(|jira| jira.close_transition.is_some()) {
+        if !user.has_scope() {
+            return Err(IssueAutomationPolicyBlocked::invalid(
+                IssueAutomationPolicyScope::User,
+                invalid(
+                    "binding.jira.close_transition",
+                    "explicit_user_source_scope_required",
+                ),
+            ));
+        }
+        if let Some(project) = project.filter(|jira| jira.has_scope()) {
+            let granted = user.binding();
+            let requested = project.binding();
+            if granted.site_url != requested.site_url
+                || granted.cloud_id != requested.cloud_id
+                || granted.project_id != requested.project_id
+                || granted.expected_account_id != requested.expected_account_id
+            {
+                return Err(IssueAutomationPolicyBlocked::invalid(
+                    IssueAutomationPolicyScope::Project,
+                    invalid(
+                        "binding.jira.close_transition",
+                        "transition_grant_scope_changed",
+                    ),
+                ));
+            }
+        }
+    }
+    if let Some(requested) = project.and_then(|jira| jira.close_transition.as_ref()) {
+        let granted = user.and_then(|jira| jira.close_transition.as_ref());
+        if granted.is_none_or(|granted| !requested.restricts(granted)) {
+            return Err(IssueAutomationPolicyBlocked::invalid(
+                IssueAutomationPolicyScope::Project,
+                invalid(
+                    "binding.jira.close_transition",
+                    "project_cannot_expand_transition_grant",
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -205,6 +296,19 @@ pub(super) fn parse(
 /// 생략값을 내장값으로 채우지 않고, 파일에 명시한 값과 교차 조건만 먼저 검사한다.
 /// 뒤의 파일이 덮어써도 앞의 잘못된 선언이 가려지지 않는다.
 fn validate(layer: &PolicyLayer) -> Result<(), IssueAutomationPolicyValueError> {
+    if let Some(jira) = layer
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.jira.as_ref())
+    {
+        // Source coordinates form one explicit selection; never combine half of two identities.
+        if jira.has_scope() {
+            jira.binding().validate()?;
+        }
+        if let Some(transition) = &jira.close_transition {
+            transition.validate()?;
+        }
+    }
     if let Some(arbiter) = &layer.arbiter {
         if arbiter.min_confidence.is_some_and(|value| value > 10_000) {
             return Err(invalid("arbiter.min_confidence", "confidence_out_of_range"));

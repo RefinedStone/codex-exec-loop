@@ -61,6 +61,13 @@ pub(super) fn calculate(
     let enabled = evaluation.effective_mode >= IssueAutomationAutonomy::Propose
         && evaluation.eligibility == IssueTriageEligibility::Eligible
         && evaluation.readiness == IssueTriageReadiness::Ready;
+    let human_start_only = evaluation.effective_mode >= IssueAutomationAutonomy::Propose
+        && super::jira_human_start_review(
+            basis,
+            evaluation.eligibility,
+            evaluation.readiness,
+            &evaluation.reasons,
+        );
     let mut result = Vec::with_capacity(GATES.len());
     for (index, gate) in GATES.into_iter().enumerate() {
         let gate_revision = match previous {
@@ -72,10 +79,11 @@ pub(super) fn calculate(
                 .filter(|revision| *revision <= MAX_ISSUE_AUTOMATION_REVISION)
                 .ok_or(IssueTriageError::RevisionExhausted)?,
         };
-        let enabled = enabled && gate != IssueAutomationGate::Close;
+        let enabled = (enabled && gate != IssueAutomationGate::Close)
+            || (human_start_only && gate == IssueAutomationGate::Start);
         result.push(IssueTriageGate {
             gate,
-            action: if enabled {
+            action: if enabled && !human_start_only {
                 action(gate, evaluation.effective_mode, evaluation, policy)
             } else {
                 IssueAutomationGateAction::Human
@@ -88,12 +96,33 @@ pub(super) fn calculate(
 }
 
 pub(super) fn observe(
+    basis: &IssueTriageBasis,
     evaluation: &Evaluation,
     policy: &IssueAutomationPolicy,
 ) -> IssueTriageObservation {
     use IssueObservationDisposition as Disposition;
+    let human_start_only = super::jira_human_start_review(
+        basis,
+        evaluation.eligibility,
+        evaluation.readiness,
+        &evaluation.reasons,
+    );
     let disposition = match (evaluation.eligibility, evaluation.readiness) {
         (IssueTriageEligibility::Ineligible, _) => Disposition::Excluded,
+        (_, IssueTriageReadiness::Ready) if human_start_only => {
+            if evaluation.assumed_mode >= IssueAutomationAutonomy::Propose {
+                Disposition::HumanApproval
+            } else {
+                Disposition::ObservationOnly
+            }
+        }
+        (_, IssueTriageReadiness::NeedsInfo)
+            if evaluation
+                .reasons
+                .contains(&IssueTriageReasonCode::JiraPullRequestLookupUnsupported) =>
+        {
+            Disposition::NeedsInfo
+        }
         (IssueTriageEligibility::Unknown, _) | (_, IssueTriageReadiness::Unknown) => {
             Disposition::Unknown
         }
@@ -186,6 +215,24 @@ pub(super) fn validate_record(
     let enabled = record.effective_mode >= IssueAutomationAutonomy::Propose
         && record.eligibility == IssueTriageEligibility::Eligible
         && record.readiness == IssueTriageReadiness::Ready;
+    let human_start_only = super::jira_human_start_review(
+        &record.basis,
+        record.eligibility,
+        record.readiness,
+        &record.reasons,
+    );
+    if record
+        .reasons
+        .contains(&IssueTriageReasonCode::JiraPullRequestLookupUnsupported)
+        && (record.basis.issue.provider != crate::domain::issue_work::IssueProvider::Jira
+            || matches!(
+                record.basis.source,
+                IssueTriageSourceState::NotYetObserved | IssueTriageSourceState::Unknown
+            )
+            || record.eligibility == IssueTriageEligibility::Eligible)
+    {
+        return Err(invalid());
+    }
     let all_human = record.risk_class == IssueAutomationRiskClass::High
         || record.reasons.iter().any(|reason| {
             matches!(
@@ -200,7 +247,12 @@ pub(super) fn validate_record(
         if gate.gate != *expected
             || gate.gate_revision == 0
             || gate.gate_revision > MAX_ISSUE_AUTOMATION_REVISION
-            || gate.enabled != (enabled && *expected != IssueAutomationGate::Close)
+            || gate.enabled
+                != ((enabled && *expected != IssueAutomationGate::Close)
+                    || (human_start_only
+                        && record.effective_mode >= IssueAutomationAutonomy::Propose
+                        && *expected == IssueAutomationGate::Start))
+            || (human_start_only && gate.action != IssueAutomationGateAction::Human)
             || ((!gate.enabled || all_human) && gate.action != IssueAutomationGateAction::Human)
         {
             return Err(invalid());
@@ -270,6 +322,12 @@ fn validate_observation(record: &PersistedIssueTriageAssessment) -> Result<(), I
     use IssueObservationDisposition as Disposition;
     let eligible_ready = record.eligibility == IssueTriageEligibility::Eligible
         && record.readiness == IssueTriageReadiness::Ready;
+    let human_start_only = super::jira_human_start_review(
+        &record.basis,
+        record.eligibility,
+        record.readiness,
+        &record.reasons,
+    );
     let valid = match record.observation.disposition {
         Disposition::AutomaticStart => {
             eligible_ready
@@ -286,7 +344,8 @@ fn validate_observation(record: &PersistedIssueTriageAssessment) -> Result<(), I
                     .contains(&IssueTriageReasonCode::BudgetExhausted)
         }
         Disposition::HumanApproval => {
-            eligible_ready && record.observation.assumed_mode >= IssueAutomationAutonomy::Propose
+            (eligible_ready || human_start_only)
+                && record.observation.assumed_mode >= IssueAutomationAutonomy::Propose
         }
         Disposition::Deferred => {
             eligible_ready
@@ -304,7 +363,11 @@ fn validate_observation(record: &PersistedIssueTriageAssessment) -> Result<(), I
         }
         Disposition::Excluded => record.eligibility == IssueTriageEligibility::Ineligible,
         Disposition::NeedsInfo => {
-            record.eligibility == IssueTriageEligibility::Eligible
+            (record.eligibility == IssueTriageEligibility::Eligible
+                || (record.eligibility == IssueTriageEligibility::Unknown
+                    && record
+                        .reasons
+                        .contains(&IssueTriageReasonCode::JiraPullRequestLookupUnsupported)))
                 && record.readiness == IssueTriageReadiness::NeedsInfo
         }
         Disposition::Unknown => {
@@ -313,7 +376,8 @@ fn validate_observation(record: &PersistedIssueTriageAssessment) -> Result<(), I
                     && record.readiness == IssueTriageReadiness::Unknown)
         }
         Disposition::ObservationOnly => {
-            eligible_ready && record.observation.assumed_mode <= IssueAutomationAutonomy::Observe
+            (eligible_ready || human_start_only)
+                && record.observation.assumed_mode <= IssueAutomationAutonomy::Observe
         }
     };
     if valid {

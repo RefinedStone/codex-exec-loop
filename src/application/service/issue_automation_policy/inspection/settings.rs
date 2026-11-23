@@ -27,6 +27,35 @@ pub(super) fn from_policy(
         "요청 자율 수준의 효과값",
         &policy.binding.github.mode,
     )?;
+    if let Some(jira) = &policy.binding.jira {
+        settings.add("binding.jira.site_url", "Jira Cloud 사이트", &jira.site_url)?;
+        settings.add(
+            "binding.jira.cloud_id",
+            "Jira Cloud 안정 ID",
+            &jira.cloud_id,
+        )?;
+        settings.add(
+            "binding.jira.project_id",
+            "Jira 프로젝트 안정 ID",
+            &jira.project_id,
+        )?;
+        settings.add(
+            "binding.jira.expected_account_id",
+            "Jira 계정 안정 ID",
+            &jira.expected_account_id,
+        )?;
+        settings.add("binding.jira.jql", "Jira 발견 필터", &jira.jql)?;
+        settings.add(
+            "binding.jira.mode",
+            "Jira 요청 자율 수준의 효과값",
+            &jira.mode,
+        )?;
+        settings.add(
+            "binding.jira.close_transition",
+            "사용자가 허용한 Jira 완료 전이",
+            &jira.close_transition,
+        )?;
+    }
     settings.add(
         "authority.autonomy_cap",
         "자율 수준 상한",

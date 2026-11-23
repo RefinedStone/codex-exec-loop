@@ -12,6 +12,11 @@ use super::IssueAutomationSnapshot;
 
 mod web;
 pub use web::{IssueSourceWeb, validate_repository_name_with_owner};
+mod jira;
+pub use jira::{
+    IssueSourceContentProblem, IssueSourceJiraMetadata, JiraIssueStatusCategory,
+    JiraPullRequestLookup,
+};
 
 pub const ISSUE_SOURCE_CURSOR_VERSION: u32 = 1;
 pub const MAX_ISSUE_SOURCE_PAGE_SIZE: u16 = 100;
@@ -404,6 +409,12 @@ pub enum IssueRepositoryVisibility {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueSourceObservation {
     pub issue: IssueReference,
+    /// Conversion or required-field limitations are facts, never inferred from rendered markers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_problems: Vec<IssueSourceContentProblem>,
+    /// Jira display/workflow facts and the exact credential generation that observed them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira: Option<IssueSourceJiraMetadata>,
     /// 과거 관찰에 없으면 비공개로 추정하지 않는다. 현재 관찰만 자동 전달의 근거가 된다.
     #[serde(default)]
     pub repository_visibility: IssueRepositoryVisibility,
@@ -434,6 +445,22 @@ pub struct IssueSourceObservation {
 
 impl IssueSourceObservation {
     pub fn validate_repository_metadata(&self) -> Result<(), IssueSourceFailure> {
+        let mut problems = self.content_problems.clone();
+        problems.sort();
+        problems.dedup();
+        if problems != self.content_problems {
+            return Err(IssueSourceFailure::MalformedResponse);
+        }
+        if let Some(jira) = &self.jira {
+            jira.validate_for(&self.issue)?;
+            if (jira.pull_request_lookup == JiraPullRequestLookup::Unsupported
+                && self.linked_pull_request != IssuePrPresence::Unknown)
+                || ((jira.status_category == JiraIssueStatusCategory::Done)
+                    != (self.remote_state == IssueRemoteState::Closed))
+            {
+                return Err(IssueSourceFailure::MalformedResponse);
+            }
+        }
         if let Some(name) = &self.repository_name_with_owner {
             validate_repository_name_with_owner(name)?;
         }

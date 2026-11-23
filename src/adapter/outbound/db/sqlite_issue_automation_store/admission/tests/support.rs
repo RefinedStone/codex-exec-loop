@@ -115,6 +115,8 @@ fn prepare_with_default_answer(
     let mut snapshot = tracked.snapshot().clone();
     snapshot.policy_version = issue_policy_version(&IssuePolicy::builtin());
     let observation = IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: tracked.reference().clone(),

@@ -27,6 +27,8 @@ fn observation(fixture: &Fixture) -> IssueSourceObservation {
     let mut snapshot = snapshot("## 완료 기준\n- 변경 사항을 검증한다.\n");
     snapshot.policy_version = issue_policy_version(&IssuePolicy::builtin());
     IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         creation_provenance:
@@ -71,6 +73,8 @@ fn observe(fixture: &Fixture, observation: IssueSourceObservation) -> StoredIssu
         },
     };
     let page = IssueDiscoveryPage {
+        jira_connection: None,
+        jira_binding: None,
         repository,
         observations: vec![observation],
         next_cursor: None,

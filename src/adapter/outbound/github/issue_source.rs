@@ -241,6 +241,8 @@ impl IssueSourcePort for GithubIssueSourceAdapter {
         };
         Ok(IssueDiscoveryPage {
             repository,
+            jira_connection: None,
+            jira_binding: None,
             observations,
             next_cursor,
             scanned_count,
@@ -361,6 +363,8 @@ fn observation(
         .map_err(|_| IssueSourceFailure::MalformedResponse)?;
     Ok(IssueSourceObservation {
         issue,
+        content_problems: vec![],
+        jira: None,
         repository_name_with_owner: Some(repository_name_with_owner),
         repository_visibility: match remote_repository.visibility {
             RepositoryVisibility::Private => IssueRepositoryVisibility::Private,

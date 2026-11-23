@@ -76,6 +76,58 @@ fn issue_reference_survives_lineage_and_queue_without_an_implicit_close() {
 }
 
 #[test]
+fn jira_work_link_reaches_the_real_lease_and_pr_without_close_authority() {
+    let link = PlanningWorkLinkReference {
+        url: "https://example.atlassian.net/browse/AKRA_CORE-42".into(),
+        close_on_merge: false,
+    };
+    let fixture = WorkPermitDeliveryFixture::with_link_reference(
+        "jira-key-delivery",
+        FakeGithubAutomationPort::ready(),
+        Some(&link),
+    );
+    assert!(
+        fixture
+            .lease
+            .branch_name
+            .starts_with("akra-agent/slot-1/AKRA_CORE-42-")
+    );
+    assert!(fixture.repo.branch_exists(&fixture.lease.branch_name));
+    let queue = queue_record(&fixture);
+    assert_eq!(queue.link_reference.as_ref(), Some(&link));
+    assert_eq!(queue.effective_source_branch(), fixture.lease.branch_name);
+    let work = SqlitePlanningAuthorityAdapter::new()
+        .load_work_order_for_task(&fixture.repo.workspace_dir(), TASK_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(work.link_reference.as_ref(), Some(&link));
+
+    grant_delivery(&fixture);
+    fixture.process();
+    assert_eq!(
+        *fixture.github.pull_request_titles.lock().unwrap(),
+        vec![format!(
+            "[AKRA_CORE-42] supersession: {}",
+            queue.task_title.trim()
+        )]
+    );
+    let bodies = fixture.github.pull_request_bodies.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].ends_with(&format!("Issue: {}", link.url)));
+    assert!(bodies[0].contains(&format!("- Branch: `{}`", fixture.lease.branch_name)));
+    assert!(bodies[0].contains(&format!(
+        "- Commit: `{}`",
+        queue.effective_source_commit_sha()
+    )));
+    assert!(!bodies[0].contains("Closes "));
+    assert!(fixture.operations().iter().any(|operation| operation
+        == &format!(
+            "ensure-pr:{POOL_BASELINE_BRANCH}:{}",
+            fixture.lease.branch_name
+        )));
+}
+
+#[test]
 fn provider_default_branch_drift_blocks_source_push_and_pr_creation() {
     let github = FakeGithubAutomationPort::ready();
     *github.default_branch.lock().unwrap() = POOL_BASELINE_BRANCH.into();

@@ -38,6 +38,9 @@ pub(super) fn merge(
     }
     // normalize()가 수행하는 동일 min의 두 입력 출처를 보존한다.
     origins.cap("binding.github.mode", "authority.autonomy_cap");
+    if policy.binding.jira.is_some() {
+        origins.cap("binding.jira.mode", "authority.autonomy_cap");
+    }
     (policy, origins)
 }
 
@@ -68,6 +71,37 @@ fn apply_common(
             &mut policy.binding.github.mode,
             github.mode,
             "binding.github.mode",
+            scope,
+            origins,
+        );
+    }
+    if let Some(jira) = layer
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.jira.as_ref())
+    {
+        let selected = policy.binding.jira.get_or_insert_with(|| jira.binding());
+        if jira.has_scope() {
+            let scope_values = jira.binding();
+            selected.site_url = scope_values.site_url;
+            selected.cloud_id = scope_values.cloud_id;
+            selected.project_id = scope_values.project_id;
+            selected.expected_account_id = scope_values.expected_account_id;
+            selected.jql = scope_values.jql;
+            for key in [
+                "site_url",
+                "cloud_id",
+                "project_id",
+                "expected_account_id",
+                "jql",
+            ] {
+                origins.replace(&format!("binding.jira.{key}"), scope);
+            }
+        }
+        assign(
+            &mut selected.mode,
+            jira.mode,
+            "binding.jira.mode",
             scope,
             origins,
         );
@@ -161,6 +195,16 @@ fn apply_user_grants(
     user: &PolicyLayer,
     origins: &mut PolicyProvenance,
 ) {
+    if let Some(transition) = user
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.jira.as_ref())
+        .and_then(|jira| jira.close_transition.clone())
+        && let Some(jira) = &mut policy.binding.jira
+    {
+        jira.close_transition = Some(transition);
+        origins.replace("binding.jira.close_transition", Scope::User);
+    }
     if let Some(arbiter) = &user.arbiter {
         assign(
             &mut policy.arbiter.min_confidence,
@@ -258,6 +302,21 @@ fn restrict_with_project(
     project: &PolicyLayer,
     origins: &mut PolicyProvenance,
 ) {
+    if let Some(transition) = project
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.jira.as_ref())
+        .and_then(|jira| jira.close_transition.clone())
+        && let Some(jira) = &mut policy.binding.jira
+    {
+        // Cross-layer validation has established the exact target and subset relationship.
+        jira.close_transition = Some(transition);
+        origins.combine(
+            "binding.jira.close_transition",
+            Scope::Project,
+            Resolution::Intersection,
+        );
+    }
     if let Some(arbiter) = &project.arbiter {
         if let Some(value) = arbiter.min_confidence {
             policy.arbiter.min_confidence = policy.arbiter.min_confidence.max(value);

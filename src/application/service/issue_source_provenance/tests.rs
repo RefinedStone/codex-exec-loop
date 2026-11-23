@@ -45,6 +45,8 @@ fn list<T>() -> IssueMetadataList<T> {
 
 fn observation(id: &str) -> IssueSourceObservation {
     IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: issue(id),
@@ -145,6 +147,8 @@ fn setup(
 
 fn page() -> IssueDiscoveryPage {
     IssueDiscoveryPage {
+        jira_connection: None,
+        jira_binding: None,
         repository: repository(),
         observations: vec![observation("I_created"), observation("I_other")],
         next_cursor: None,

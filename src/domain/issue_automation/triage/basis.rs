@@ -4,7 +4,8 @@ use sha2::{Digest, Sha256};
 use crate::domain::issue_automation::source::{
     IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
     IssueRepositoryVisibility, IssueSourceActor, IssueSourceActorKind, IssueSourceContent,
-    IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
+    IssueSourceContentProblem, IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
+    JiraIssueStatusCategory, JiraPullRequestLookup,
 };
 use crate::domain::issue_validation::{IssueFieldFormat, IssueRequirements};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
@@ -34,7 +35,7 @@ struct SourceEvidence<'a> {
 enum CanonicalRead<'a> {
     NotYetObserved,
     Unknown(IssueSourceFailure),
-    Observed(CanonicalObservation<'a>),
+    Observed(Box<CanonicalObservation<'a>>),
 }
 
 #[derive(Serialize)]
@@ -54,7 +55,19 @@ struct CanonicalObservation<'a> {
     label_actors: Vec<(&'a str, &'a str, &'a str, Option<CanonicalActor<'a>>)>,
     label_actors_completeness: IssueMetadataCompleteness,
     linked_pull_request: IssuePrPresence,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    content_problems: Vec<IssueSourceContentProblem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jira: Option<CanonicalJira<'a>>,
     content: CanonicalContent<'a>,
+}
+
+#[derive(Serialize)]
+struct CanonicalJira<'a> {
+    key: &'a str,
+    status_id: &'a str,
+    status_category: JiraIssueStatusCategory,
+    pull_request_lookup: JiraPullRequestLookup,
 }
 
 fn unknown_repository_visibility(value: &IssueRepositoryVisibility) -> bool {
@@ -168,7 +181,7 @@ pub(super) fn source_basis(
                 source,
                 Some(version),
                 Some(hash),
-                CanonicalRead::Observed(canonical_observation(observation)),
+                CanonicalRead::Observed(Box::new(canonical_observation(observation))),
             )
         }
     };
@@ -187,6 +200,8 @@ pub(super) fn source_basis(
 }
 
 fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObservation<'_> {
+    let mut content_problems = observation.content_problems.clone();
+    sort_set(&mut content_problems);
     let mut labels: Vec<_> = observation
         .labels
         .items
@@ -247,6 +262,13 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
         label_actors,
         label_actors_completeness: observation.label_actors.completeness,
         linked_pull_request: observation.linked_pull_request,
+        content_problems,
+        jira: observation.jira.as_ref().map(|jira| CanonicalJira {
+            key: &jira.key,
+            status_id: &jira.status_id,
+            status_category: jira.status_category,
+            pull_request_lookup: jira.pull_request_lookup,
+        }),
         content,
     }
 }

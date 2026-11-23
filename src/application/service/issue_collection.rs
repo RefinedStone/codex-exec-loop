@@ -35,6 +35,7 @@ use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference
 pub const ISSUE_DISCOVERY_PAGE_SIZE: u16 = 25;
 pub const ISSUE_RESYNC_BATCH_SIZE: u16 = 10;
 const MODE_CAS_ATTEMPTS: usize = 3;
+pub(crate) mod jira;
 
 /// 서로 독립적인 저장 장부를 조립하는 동안 사실이 바뀌었다. 조회 전체만 한 번 다시 읽는다.
 #[derive(Debug)]
@@ -128,6 +129,7 @@ pub struct IssueCollectionService {
     autonomy: Option<Arc<super::issue_autonomy::IssueAutonomyService>>,
     interactions: Option<Arc<super::issue_interactions::IssueInteractionsService>>,
     binding_pause: Option<Arc<super::issue_binding_pause::IssueBindingPauseService>>,
+    jira: Option<jira::JiraCollectionContext>,
 }
 
 impl IssueCollectionService {
@@ -150,7 +152,24 @@ impl IssueCollectionService {
             autonomy: None,
             interactions: None,
             binding_pause: None,
+            jira: None,
         }
+    }
+
+    pub fn with_jira_collection(
+        mut self,
+        policy: super::issue_automation_policy::IssueAutomationPolicyService,
+        credentials: Option<Arc<dyn crate::application::port::outbound::provider_credentials_port::ProviderCredentialReadPort>>,
+        claims: Arc<
+            dyn crate::application::port::outbound::issue_source_claim_port::IssueSourceClaimPort,
+        >,
+    ) -> Self {
+        self.jira = Some(jira::JiraCollectionContext {
+            policy,
+            credentials,
+            claims,
+        });
+        self
     }
 
     /// 원격 읽기부터 관찰 저장까지 피드백 쓰기와 같은 lease로 직렬화한다.
@@ -498,15 +517,23 @@ impl IssueCollectionService {
         if !self.may_read(&progress.projection.state, cancel)? {
             return self.discard(progress);
         }
-        let origin = match self.origin.github_origin(&self.workspace_dir) {
-            Ok(origin) => origin,
-            Err(_) => {
-                return self.finish(
-                    progress,
-                    cancel,
-                    at_unix_ms,
-                    Some(IssueCollectionFailure::OriginUnavailable),
-                );
+        let jira_selection = match self.jira_selection() {
+            Ok(selection) => selection,
+            Err(reason) => return self.finish(progress, cancel, at_unix_ms, Some(reason)),
+        };
+        let origin = if jira_selection.is_some() {
+            None
+        } else {
+            match self.origin.github_origin(&self.workspace_dir) {
+                Ok(origin) => Some(origin),
+                Err(_) => {
+                    return self.finish(
+                        progress,
+                        cancel,
+                        at_unix_ms,
+                        Some(IssueCollectionFailure::OriginUnavailable),
+                    );
+                }
             }
         };
         let policy = match self.policy.resolve(&self.workspace_dir) {
@@ -536,7 +563,7 @@ impl IssueCollectionService {
             );
         }
 
-        let repository =
+        let mut repository =
             progress
                 .projection
                 .binding
@@ -547,11 +574,26 @@ impl IssueCollectionService {
                     repository_id: binding.repository_id().to_string(),
                     project_scope: binding.project_scope().clone(),
                 });
-        if repository.as_ref().is_some_and(|repository| {
-            repository.provider != IssueProvider::GitHub
-                || repository.server_id != "github.com"
-                || repository.project_scope.workspace_dir != self.workspace_dir
-        }) {
+        let invalid_repository = if let Some((binding, _)) = &jira_selection {
+            let expected = IssueSourceRepository {
+                provider: IssueProvider::Jira,
+                server_id: binding.cloud_id.clone(),
+                repository_id: binding.project_id.clone(),
+                project_scope: IssueProjectScope {
+                    workspace_dir: self.workspace_dir.clone(),
+                },
+            };
+            let mismatched = repository.as_ref().is_some_and(|saved| saved != &expected);
+            repository = Some(expected);
+            mismatched
+        } else {
+            repository.as_ref().is_some_and(|repository| {
+                repository.provider != IssueProvider::GitHub
+                    || repository.server_id != "github.com"
+                    || repository.project_scope.workspace_dir != self.workspace_dir
+            })
+        };
+        if invalid_repository {
             return self.finish(
                 progress,
                 cancel,
@@ -598,13 +640,25 @@ impl IssueCollectionService {
                 }
             }
         }
-        let request = self.discovery_request(
-            &origin,
-            repository,
-            &progress.projection.state,
-            selection,
-            disclosure.clone(),
-        );
+        let request = if jira_selection.is_some() {
+            IssueDiscoveryRequest {
+                target: IssueDiscoveryTarget::Repository(
+                    repository.expect("explicit Jira repository"),
+                ),
+                selection,
+                cursor: progress.projection.state.discovery_cursor.clone(),
+                page_size: ISSUE_DISCOVERY_PAGE_SIZE,
+                disclosure: disclosure.clone(),
+            }
+        } else {
+            self.discovery_request(
+                origin.as_ref().expect("GitHub origin"),
+                repository,
+                &progress.projection.state,
+                selection,
+                disclosure.clone(),
+            )
+        };
         if let Err(reason) = request.validate() {
             return self.finish(
                 progress,
@@ -627,10 +681,13 @@ impl IssueCollectionService {
         }
         let mut failure = None;
         match self.source.discover(request.clone()) {
-            Ok(page) => {
+            Ok(mut page) => {
                 let result = cancel.commit_if_active(|| {
                     if let Some(lease) = &publication_lease {
                         lease.verify_identity()?;
+                    }
+                    if let Some((_, version)) = &jira_selection {
+                        self.claim_jira_page(&request, &mut page, &progress.projection, version)?;
                     }
                     let result = self
                         .store
@@ -674,19 +731,35 @@ impl IssueCollectionService {
             if let Some(lease) = &publication_lease {
                 lease.verify_identity()?;
             }
+            if jira_selection.is_some()
+                && !cancel
+                    .commit_if_active(|| self.claim_known_jira_issue(reference))?
+                    .unwrap_or(false)
+            {
+                reads.push(IssueSourceRead::Unknown {
+                    issue: reference.clone(),
+                    reason: IssueSourceFailure::IdentityMismatch,
+                });
+                continue;
+            }
             let read = self.source.resync(IssueResyncRequest {
                 issue: reference.clone(),
                 disclosure: disclosure.clone(),
             });
             let read = checked_resync_read(reference, &disclosure.policy_version, read);
-            if let IssueSourceRead::Unknown { reason, .. } = &read {
-                failure.get_or_insert(IssueCollectionFailure::Source(*reason));
-            }
             reads.push(read);
         }
         let result = cancel.commit_if_active(|| {
             if let Some(lease) = &publication_lease {
                 lease.verify_identity()?;
+            }
+            if let Some((_, version)) = &jira_selection {
+                self.validate_jira_resync(&batch.targets, &mut reads, version)?;
+            }
+            for read in &reads {
+                if let IssueSourceRead::Unknown { reason, .. } = read {
+                    failure.get_or_insert(IssueCollectionFailure::Source(*reason));
+                }
             }
             let result = self
                 .store

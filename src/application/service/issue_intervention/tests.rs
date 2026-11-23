@@ -275,6 +275,8 @@ impl Fixture {
             body: "## 완료 기준\n- 개입 뒤 다른 작업은 계속 진행한다.\n".to_owned(),
         };
         IssueSourceObservation {
+            content_problems: vec![],
+            jira: None,
             repository_visibility: Default::default(),
             repository_name_with_owner: None,
             issue: issue.clone(),
@@ -320,6 +322,8 @@ impl Fixture {
             },
         };
         let page = IssueDiscoveryPage {
+            jira_connection: None,
+            jira_binding: None,
             repository,
             observations: vec![self.observation(issue)],
             next_cursor: None,

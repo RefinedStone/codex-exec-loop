@@ -41,16 +41,44 @@ impl IssueFeedbackService {
         {
             return Ok(());
         }
-        let observed = self.provider.read_closure(issue)?;
-        if observed.issue != *issue || !observed.complete || observed.closed {
+        let actor = self.provider.actor_context(issue)?;
+        if !actor_matches_snapshot(&actor, snapshot) {
             return Ok(());
         }
-        let actor_id = self.provider.actor_id(issue)?;
+        let (previous_event_id, jira_transition) = if issue.provider == IssueProvider::Jira {
+            let Some(mapping) = automation
+                .policy
+                .binding
+                .jira
+                .as_ref()
+                .and_then(|binding| binding.close_transition.as_ref())
+            else {
+                return Ok(());
+            };
+            let observed = self
+                .provider
+                .read_jira_close_transition(issue, &actor, mapping)?;
+            if observed.issue != *issue
+                || !matches!(snapshot.item.current.as_ref(), Some(IssueSourceRead::Observed(source))
+                if source.jira.as_ref().is_some_and(|jira| jira.status_id == observed.target.from_status_id))
+            {
+                return Ok(());
+            }
+            (observed.previous_event_id, Some(observed.target))
+        } else {
+            let observed = self.provider.read_closure(issue)?;
+            if observed.issue != *issue || !observed.complete || observed.closed {
+                return Ok(());
+            }
+            (observed.latest_event.map(|event| event.event_id), None)
+        };
+        let actor_id = actor.actor_id;
         validate_feedback_id(&actor_id).map_err(anyhow::Error::msg)?;
         let intent = IssueFeedbackIntent {
             intent_id: format!("{:032x}", rand::random::<u128>()),
             issue: issue.clone(),
             actor_id,
+            connection: actor.connection,
             automation_policy_version: automation.version,
             disclosure_policy_version: issue_policy_version(&disclosure),
             desired_revision: snapshot.state.desired_revision,
@@ -58,7 +86,8 @@ impl IssueFeedbackService {
                 integration_record_id: integration.record_id.clone(),
                 integration_sha: integration.integration_sha.clone(),
                 decision_id: approval.request.id().as_str().to_owned(),
-                previous_event_id: observed.latest_event.map(|event| event.event_id),
+                previous_event_id,
+                jira_transition,
             },
             recorded_at: format!("unix-ms:{now_unix_ms}"),
         };
@@ -76,6 +105,7 @@ impl IssueFeedbackService {
             integration_record_id,
             integration_sha,
             decision_id,
+            jira_transition,
             ..
         } = &intent.operation
         else {
@@ -83,6 +113,20 @@ impl IssueFeedbackService {
         };
         policy.close.when == IssueAutomationCloseWhen::Integration
             && policy.feedback.transition
+            && match (intent.issue.provider, jira_transition.as_ref()) {
+                (IssueProvider::GitHub, None) => true,
+                (IssueProvider::Jira, Some(target)) => policy
+                    .binding
+                    .jira
+                    .as_ref()
+                    .and_then(|binding| binding.close_transition.as_ref())
+                    .is_some_and(|mapping| {
+                        mapping.transition_id == target.transition_id
+                            && mapping.to_status_id == target.to_status_id
+                            && mapping.from_status_ids.contains(&target.from_status_id)
+                    }),
+                _ => false,
+            }
             && snapshot.state.close_proof.is_none()
             && matches!(&snapshot.item.current, Some(IssueSourceRead::Observed(observation)) if observation.remote_state == IssueRemoteState::Open)
             && snapshot

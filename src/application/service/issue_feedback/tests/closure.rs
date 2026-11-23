@@ -298,6 +298,7 @@ fn a_crash_before_http_does_not_claim_a_same_account_human_close() {
             .id()
             .as_str()
             .into(),
+        jira_transition: None,
         previous_event_id: None,
     };
     record.intent.desired_revision = 0;

@@ -38,6 +38,18 @@ pub struct PlanningWorkLinkReference {
 }
 
 impl PlanningWorkLinkReference {
+    /// Display/branch metadata from an immutable validated link; this grants no provider action.
+    pub fn jira_issue_key(&self) -> Option<&str> {
+        self.validate().ok()?;
+        if self.close_on_merge {
+            return None;
+        }
+        let (site, key) = self.url.rsplit_once("/browse/")?;
+        (crate::domain::work_context::normalize_jira_site(site).as_deref() == Some(site)
+            && crate::domain::provider_work::valid_jira_key(key))
+        .then_some(key)
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.url.len() > 4096
             || self

@@ -8,7 +8,7 @@ use crate::domain::issue_validation::{
     IssueRequirements, IssueValidationError, IssueValidationErrorKind, IssueValidationField,
     validate_issue,
 };
-use crate::domain::issue_work::IssueSharedCopy;
+use crate::domain::issue_work::{IssueProvider, IssueSharedCopy};
 
 use super::criteria::{CriteriaProblem, count_criteria};
 use super::paths::{MentionedPaths, matches_glob, mentioned_paths};
@@ -18,6 +18,7 @@ use super::{
 };
 
 pub struct IssueReadinessInput<'a> {
+    pub provider: IssueProvider,
     /// 현재 경계에서 공개가 허용된 공유본이다. 원문이나 과거 frozen 공유본으로 대체하지 않는다.
     pub shared_copy: &'a IssueSharedCopy,
     pub requirements: &'a IssueRequirements,
@@ -85,7 +86,7 @@ fn inspect_content(input: &IssueReadinessInput<'_>) -> IssueReadinessResult {
         missing_sections: Vec::new(),
         validation_errors: Vec::new(),
         risk_class: IssueAutomationRiskClass::High,
-        effective_mode: input.policy.binding.github.mode.min(cap),
+        effective_mode: input.policy.mode_for_provider(input.provider).min(cap),
         assumed_mode: input.policy.authority.autonomy_cap.min(cap),
         reasons: Vec::new(),
         expected_gates: Vec::new(),

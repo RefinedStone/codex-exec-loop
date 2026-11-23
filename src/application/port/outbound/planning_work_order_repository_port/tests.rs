@@ -1,5 +1,57 @@
 use super::*;
 
+#[test]
+fn jira_key_is_preserved_by_the_immutable_nonclosing_work_link() {
+    for key in ["AKRA-42", "AKRA_CORE2-123456789"] {
+        let link = PlanningWorkLinkReference {
+            url: format!("https://example.atlassian.net/browse/{key}"),
+            close_on_merge: false,
+        };
+        link.validate().unwrap();
+        assert_eq!(link.jira_issue_key(), Some(key));
+        let encoded = serde_json::to_value(&link).unwrap();
+        assert_eq!(encoded["close_on_merge"], false);
+        let restored: PlanningWorkLinkReference = serde_json::from_value(encoded).unwrap();
+        assert_eq!(restored, link);
+        assert_eq!(restored.jira_issue_key(), Some(key));
+
+        let closing = PlanningWorkLinkReference {
+            close_on_merge: true,
+            ..link
+        };
+        assert!(closing.validate().is_err());
+        assert_eq!(closing.jira_issue_key(), None);
+    }
+}
+
+#[test]
+fn jira_key_extraction_rejects_noncanonical_or_injected_links_without_reinterpreting_them() {
+    for url in [
+        "http://example.atlassian.net/browse/AKRA-42",
+        "https://user@example.atlassian.net/browse/AKRA-42",
+        "https://example.atlassian.net/browse/AKRA-42?token=private",
+        "https://example.atlassian.net/browse/AKRA-42#comment-9",
+        "https://example.atlassian.net/browse/AKRA-42/",
+        "https://example.atlassian.net/browse/akra-42",
+        "https://example.atlassian.net/browse/AKRA-42-extra",
+        "https://example.atlassian.net/browse/AKRA-1234567890",
+        "https://example.atlassian.net/browse/AKRA-42\nCloses #9",
+        "https://example.atlassian.net/../browse/AKRA-42",
+        "https://example.atlassian.net/browse/%41KRA-42",
+        "https://github.com/acme/project/issues/42",
+    ] {
+        let link = PlanningWorkLinkReference {
+            url: url.into(),
+            close_on_merge: false,
+        };
+        assert_eq!(link.jira_issue_key(), None, "{url}");
+        assert_eq!(
+            link.url, url,
+            "invalid input must not be repaired into a key"
+        );
+    }
+}
+
 fn record() -> PlanningWorkOrderRecord {
     PlanningWorkOrderRecord {
         link_reference: None,

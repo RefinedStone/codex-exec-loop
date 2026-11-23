@@ -22,6 +22,12 @@
 
 신뢰 행위자는 provider, server_id, actor_id의 안정 좌표다. GitHub의 actor_id는 GraphQL node ID이며, login을 신뢰 식별자로 사용하거나 자동 변환하지 않는다. ID는 opaque 값으로 보존한다.
 
+Jira Cloud는 선택적인 `binding.jira`에 site/cloud/project/account/JQL을 명시한다. Jira가 선택되면
+GitHub 수집 mode는 Off이며, Jira의 유효 실행 상한은 Propose다. 사용자 파일이 허락한 숫자
+transition/목표 상태와 동일한 출처에서만 저장소가 시작 상태 집합을 좁힐 수 있다. Jira 라벨 쓰기와
+`close.when = "provider_link"`는 지원하지 않는다. 유효한 사용자·저장소 TOML과 description
+템플릿은 [Jira Cloud 구성](../reference/issue-jira-cloud.md)에 정리한다.
+
 추가 사람 확인 규칙은 labels_any 또는 paths_any 중 하나 이상과 적용 gates를 요구한다. 두 선택 조건을 함께 적으면 OR다. 실제 매칭·판정은 후속 조각에서 이 typed 정책을 사용한다.
 
 ## 기본값과 교차 검증
