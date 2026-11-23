@@ -28,7 +28,7 @@ Rust unwind panic은 job 실패로 수습하며 다른 정상 호출은 계속�
 ## 보존과 재구독
 
 - 결과 보존은 완료 뒤 24시간이다. 시작 시, 새 작업 접수 시, 60초 간격 sweep에서 만료 결과를 정리한다.
-- 저장 job 최대 128개, receipt 최대 512개, 동시 활성 job 최대 8개다. 저장 공간이 차면 가장 오래된 종료 job을 먼저 정리한다.
+- 저장 job 최대 128개, receipt 최대 512개, 동시 활성 job 최대 8개다. 모든 결과가 아직 보존 중이면 새 작업을 거절한다. 만료 또는 명시적 비활성화로 이미 정리된 종료 metadata만 신규 접수와 같은 저장에서 교체한다.
 - 아직 만료되지 않은 요청 receipt는 job이 제거되어도 tombstone으로 남아 재시도가 새로운 작업을 만들지 못하게 한다.
 - 이벤트 broadcast 버퍼는 64개이며 진행 기록은 최대 초당 10회다. 느린 구독자는 `resync:true`를 받고 catalog/jobs snapshot을 다시 읽는다.
 - host generation과 sequence가 기준이다. 재접속은 과거 이벤트의 무한 replay를 요청하지 않고 새 snapshot에서 시작한다. catalog의 각 row에 해당 snapshot의 sequence가 들어간다.
@@ -77,3 +77,31 @@ git diff --check
 | `cargo fmt --all`, `git diff --check` | 통과 |
 
 보존 한도가 찼을 때 새 작업이 거절될 수 있으나, 기존 결과는 24시간 만료 또는 명시적 비활성화 정리 전까지 보존한다. 이미 정리된 metadata만 신규 접수와 원자적으로 교체한다. 외부 Gateway와의 최종 원격 CI 상태는 PR에서 확인한다.
+
+## PR #2668: 블로그 v2 base와 만료 정리 경합
+
+`prerelease@bf87a3c643fe798a3258b4a0776ae314af655f5f`가 블로그 확장을 v2로 갱신하여 기존 K 변경과 실제 merge 충돌이 생겼다. v2 VERSION/ACTIONS와 generate·resume의 busy guard를 유지하면서, machine catalog와 Gateway 입력 검증을 실제 Python v2 계약으로 갱신했다. CLI 기본 version 1은 유지하며 블로그 호출에는 명시적인 `--version 2`가 필요하다.
+
+실제 Gateway 회귀는 fixture DB에 저장된 v1 글과 v2 stopped 글을 넣고 configure/targets/list/open/save/cancel/delete 및 잘못된 입력의 무변경을 확인한다. generate·resume 성공 응답과 요청 1회는 fake socket으로 검사한다. 추가 회귀에서 public action과 machine schema의 일치, commits의 형식·중복·한도, targets limit, 생략 가능한 기본값, 명시 CLI version 2와 기본 version 1을 확인한다. 기존 bundled worker 회귀는 collect 단계 한 번 뒤 취소하며 모델 단계로 진행하지 않는다.
+
+[자동 리뷰의 만료 정리/disable 경합](https://github.com/RefinedStone/codex-exec-loop/pull/2668#discussion_r4661680408)은 sweep이 cleanup claim을 소유한 동안 disable 작업이 먼저 반환하면 발생한다. sweep의 cleanup 완료 뒤 worker callback을 다시 실행하지 않고 비활성화 완료 조건만 재검사하도록 수정했다. barrier 회귀는 sweep의 cleanup을 막은 상태에서 disable worker가 먼저 종료한 것을 확인한 후 cleanup을 풀고, durable disabled 전이·정리 1회·claim 해제·재활성화를 확인한다.
+
+통합 소스 `cc02a098f98c9b619e444f4ad60ec6bbb9a774ae`의 focused 검증 결과: extension 44개, architecture_boundaries 144개, kernel protocol 32개, kernel simulation 24개가 모두 통과했다. 최신 `origin/prerelease`를 기준으로 planner가 요구한 Windows Full도 동일 소스에서 exit 0으로 완료했다. Desktop은 65개 test file 통과·1개 skipped, 1,064개 test 통과·7개 skipped였다. Node/admin 검사, Desktop 타입 검사·빌드, Windows native contracts, 전체 target/features clippy도 통과했다. 최종 fmt와 diff 검사 통과 및 clean worktree를 확인했으며 모델 턴은 실행하지 않았다. 이 결과를 기록하는 후속 문서 커밋은 Rust·Desktop 소스를 변경하지 않는다. 최종 원격 CI 상태는 PR의 최신 HEAD 검증 결과로 확인한다.
+
+## PR #2668: 최신 prerelease의 편집·내보내기 계약 통합
+
+2026-11-23에 확인한 실제 기준 브랜치 `prerelease@ca2fe075a2ef2c499dfdda030208ec1fd52e5155`를 병합했다. 이전 기준 `bf87a3c` 이후의 블로그 다시 쓰기(`revise`), 검수(`review`), 이전 판 복원(`restore`), 작업 폴더 내보내기(`export`)를 포함한다. upstream의 Python 실행 동작, 15개 public action, version 2, 네 개 모델 작업의 busy guard 및 `workspace.write` 권한을 유지한다.
+
+Machine catalog에 새 action의 실제 입력 계약을 등록한다. `revise.instruction`은 생략·빈 문자열이 가능하고 최대 1,000자이며, 네 새 action 모두 article ID와 현재 revision을 받는다. 목록의 `task`, 이전 v2 글의 `edition/previous/exported/slug` 기본값과 새로운 판·내보내기 응답을 보존한다. CLI 기본 version 1은 그대로이고 블로그에는 `--version 2`를 명시한다.
+
+실제 Gateway 회귀는 저장 fixture만 사용하여 새 판 저장·이전 판 복원·같은 글의 반복 내보내기·기존의 타인 그림 덮어쓰기 거절을 확인한다. 모델 작업 및 그림 등록의 성공은 fake socket에서만 검사한다. busy guard와 잘못된 입력 회귀는 worker/runtime 생성 이전의 거절을 검증한다. 모델 턴은 실행하지 않는다.
+
+소스 커밋 전 focused 결과: extension 45개, architecture_boundaries 144개, kernel protocol 32개, kernel simulation 24개와 Python studio 15개가 모두 통과했다. Python 모델 응답은 FakeModel로 대체했다. 생성 skill·Desktop protocol 일치 및 fmt·diff 검사도 통과했다. 최신 기준의 Python·Desktop·관련 upstream 테스트 파일은 원본과 동일함을 확인했다. Planner가 요구한 Windows Full은 통합 소스 `0f4b26be198346232ed4b3c6fcf5ecc42809b3e3`에서 exit 0으로 완료했다. Desktop은 65개 test file 통과·1개 skip, 1,066개 test 통과·7개 skip이었고, 타입 검사·번들, Node/admin 검사·dependency audit, Windows native target·계약 검사, 전체 target/features clippy가 통과했다. Full 로그는 `target/kernel-ca2-full.log`다. 화면 E2E는 최종 Desktop 통합 브랜치에서 수행하므로 이 worktree에서는 중복 실행하지 않았다. 이 결과를 기록한 후속 문서 커밋은 제품 소스를 변경하지 않는다. 원격 CI Gate는 PR의 정확한 최신 HEAD를 별도로 확인한다.
+
+## PR #2668: 자동 병합 기준의 읽음 상태 계약
+
+[자동 PR 병합 검증의 Rust 실패](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45118519288/job/137506994563)는 최신 기준 브랜치에 추가된 `seen`을 기존 15개 machine action 목록이 제공하지 못해 발생했다. 기존 branch HEAD 검증과 자동 병합 tree 검증은 서로 다른 소스를 실행한 것이다. 이를 재시도만으로 해결하지 않고, 한 번 fetch해 확인한 `prerelease@d7d165bbb76ae06f9c51768640e2bee6a6d721a9`를 이번 통합 기준으로 고정했다.
+
+원본의 Python·Desktop 변경을 유지하고 machine catalog를 16개 action으로 맞췄다. `seen`은 `id`만 필수로 받는 command이며 revision 없이 호출할 수 있다. 실제 저장 fixture를 통과하는 CLI/Gateway 회귀는 unread를 false로 저장한 뒤에도 revision·updated·edition·글 내용이 유지되는지, 반복 호출과 저장된 v1 글이 같은 응답을 유지하는지 확인한다. 목록의 unread/failed 필드도 실제 Python 결과로 확인한다. 다른 모델 명령의 성공은 계속 fake socket으로만 검사하며 실제 모델 턴은 실행하지 않는다.
+
+소스 커밋 전 검증: 원격에서 실패했던 action 일치 검사를 포함한 extension focused 45개와 최신 Python studio 16개가 모두 통과했다. Python의 모델 응답은 FakeModel로 대체했다. fmt·diff 검사도 통과했으며 Python·Desktop·관련 upstream 테스트 파일이 d7 기준과 동일함을 확인했다. Planner는 Windows Full을 요구했다. 소스 커밋 뒤 수행하는 Windows Full과 정확한 자동 병합 tree의 최종 CI 결과는 [PR #2668 검증절](https://github.com/RefinedStone/codex-exec-loop/pull/2668)에서 관리한다. 아직 완료되지 않은 Full을 성공으로 기록하지 않으며, 결과 기록만을 위한 후속 문서 push는 하지 않는다. 화면 E2E는 최신 App 알림 동작을 보존한 최종 Desktop 통합 브랜치에서 수행한다.
