@@ -619,6 +619,8 @@ fn template_view(template: &IssueTemplateResolution) -> IssueDraftTemplate {
 
 #[cfg(test)]
 mod tests {
+    mod filesystem_template;
+
     mod creation;
     mod readiness;
 
