@@ -276,6 +276,11 @@ jobs:
           set -euo pipefail
           for filter in \
             'private_sqlite::tests::' \
+            'sqlite_issue_automation_restart_registry::tests::' \
+            'application::service::issue_coordinator::tests::autonomy::' \
+            'composition::issue_collection::restart_registry_tests::' \
+            'composition::repository_kernel::restart_tests::' \
+            'adapter::inbound::gateway::restart::tests::' \
             'stable_user_data_root::tests::' \
             'sqlite_issue_automation_store::private_store::tests::' \
             'adapter::outbound::vault_key_store::' \

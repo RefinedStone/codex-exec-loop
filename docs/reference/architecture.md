@@ -765,6 +765,13 @@ attach runs one `InspectSupervisor` that does not change the pool, unless one ra
 When parallel mode turns off it drops the last supervisor snapshot and, with a client attached,
 inspects again. Parallel events of another workspace are ignored.
 
+Gateway 시작 시 자동화 후보 복구도 같은 repository entry와 OS 잠금을 사용한다.
+후보는 authority 홈별 private SQLite에 저장하며, 기존 Git 신원과 대표 checkout을
+생성 없이 검사하고 잠금 뒤 다시 확인한다. 미완료 개입·수준 변경을 복구한 다음
+현재 명시적 선택과 정책이 Gated 이상일 때만 client 없는 runtime을 만든다.
+이 목록은 실행 허가를 보관하지 않으며, 한 후보의 실패는 다른 후보를 막지 않는다.
+등록 순서와 실패 계약은 [이슈 자동화 재시작](issue-automation-restart.md)에 정리되어 있다.
+
 On shutdown the Gateway calls `RepositoryKernelRegistry::shutdown` before it stops the upstream
 app-server: each kernel closes its parallel automation epochs, joins its host thread, and releases
 its lock, even while sessions still hold the registry. Every 30 s the Gateway also unloads kernels

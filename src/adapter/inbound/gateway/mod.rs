@@ -21,6 +21,7 @@ mod listener;
 mod mcp;
 mod recorder;
 mod resource_version;
+mod restart;
 mod router;
 mod session;
 mod storage_context;
@@ -235,6 +236,11 @@ async fn serve(
     recorder: Option<Arc<GatewayRecorder>>,
 ) {
     let idle_notification = register_idle_notification(&kernels);
+    // Discovery is blocking I/O; keep accepting clients and shutdown signals during recovery.
+    let _restart = restart::start(
+        kernels.clone(),
+        crate::composition::issue_collection::build_restart_registry(),
+    );
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     let mut idle_sweep = tokio::time::interval(KERNEL_IDLE_SWEEP_INTERVAL);

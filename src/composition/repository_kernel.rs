@@ -13,6 +13,8 @@
 //! `unload_idle_kernels` 가 같은 순서로 멈추고 잠금을 푼다. 마지막 접속이 transient 였으면 대기 없이 내린다. 그래야 같은 저장소의 TUI 가 시작할 수 있다. 다음 붙기가
 //! 커널을 다시 만든다. 남은 일은 `NativeClientRuntime::has_remaining_work` 가 정한다.
 
+#[cfg(test)]
+mod restart_tests;
 mod storage;
 
 use std::collections::BTreeMap;
@@ -24,7 +26,14 @@ use anyhow::{Context, Result, bail};
 
 use crate::adapter::outbound::app_server::GatewayUpstreamSocket;
 
-use crate::adapter::outbound::filesystem::{RepositoryKernelLock, RepositoryKernelOwner};
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::filesystem::{
+    RepositoryKernelLock, RepositoryKernelLockAdapter, RepositoryKernelOwner,
+};
+use crate::application::port::outbound::{
+    IssueAutomationRestartEntry, IssueAutomationRestartRegistryPort,
+};
+use crate::application::service::issue_collection::IssueCollectionService;
 #[cfg(not(test))]
 use crate::composition::issue_collection::build as build_issue_collection;
 #[cfg(test)]
@@ -33,6 +42,8 @@ use crate::composition::kernel_host::{KernelCallError, KernelClientHandle, Kerne
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::production;
 use crate::core::native_client_port::{NativeClientEvent, ParallelViewState};
+use crate::domain::issue_automation::IssueAutomationAutonomy;
+use crate::domain::issue_automation::autonomy::IssueAutonomyProjection;
 
 /// 화면 없는 커널의 supervisor 화면 상태이다. supervisor 새로 고침은 화면에 보이기 위한 주기적 점검이고,
 /// TUI 도 병렬 화면이 닫혀 있으면 `false` 를 보낸다. 배분 깨우기와 정리 재시도는 이 값과 관계없이 돈다.
@@ -121,6 +132,31 @@ impl RepositoryKernelEntry {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepositoryRestartOutcome {
+    Started,
+    AlreadyRunning,
+    Ineligible,
+    Unsupported,
+}
+
+fn verify_restart_identity(
+    candidate: &IssueAutomationRestartEntry,
+    expected: &IssueAutomationRestartEntry,
+    lock: &RepositoryKernelLock,
+) -> Result<()> {
+    let current = production::issue_automation_restart_target(&candidate.workspace_root)?
+        .context("registered checkout no longer has an existing Git identity")?;
+    if current != *expected || lock.repository_key() != expected.repository_key {
+        bail!("registered repository identity or primary checkout changed during restart");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+type RestartRuntimeFactory =
+    Arc<dyn Fn(&str, Arc<IssueCollectionService>) -> Result<NativeClientRuntime> + Send + Sync>;
+
 /// 저장소별 커널 목록이다. Gateway 가 비동기 접속 사이에서 함께 쓴다.
 #[derive(Default)]
 pub(crate) struct RepositoryKernelRegistry {
@@ -132,9 +168,143 @@ pub(crate) struct RepositoryKernelRegistry {
     /// 커널이 붙을 app-server 이다. 없으면 커널마다 자기 app-server 를 띄운다 (시험).
     app_server: Option<GatewayUpstreamSocket>,
     idle_notification: Mutex<Option<std::task::Waker>>,
+    #[cfg(test)]
+    restart_runtime: Option<RestartRuntimeFactory>,
 }
 
 impl RepositoryKernelRegistry {
+    /// Restore one discovered repository without creating a client. The registry is only a locator.
+    pub(crate) fn restore_registered(
+        &self,
+        candidate: &IssueAutomationRestartEntry,
+        registry: &dyn IssueAutomationRestartRegistryPort,
+    ) -> Result<RepositoryRestartOutcome> {
+        self.restore_registered_with(candidate, registry, |workspace| {
+            production::recover_pending_issue_interventions_for_restart(
+                workspace,
+                &candidate.repository_key,
+            )?;
+            Ok(build_issue_collection(workspace))
+        })
+    }
+
+    /// The injected service performs the same durable recovery before returning. Tests supply
+    /// isolated stores and fake provider/execution ports instead of the user's profile.
+    fn restore_registered_with(
+        &self,
+        candidate: &IssueAutomationRestartEntry,
+        registry: &dyn IssueAutomationRestartRegistryPort,
+        recover: impl FnOnce(&str) -> Result<Arc<IssueCollectionService>>,
+    ) -> Result<RepositoryRestartOutcome> {
+        self.ensure_running()?;
+        let Some(target) = production::issue_automation_restart_target(&candidate.workspace_root)?
+        else {
+            return Ok(RepositoryRestartOutcome::Unsupported);
+        };
+        if target.repository_key != candidate.repository_key {
+            bail!("registered repository identity no longer matches its checkout");
+        }
+        let location = SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(
+            &target.workspace_root,
+        )?
+        .context("registered repository no longer has an existing Git identity")?;
+        self.restore_registered_location(candidate, target, location, registry, recover)
+    }
+
+    fn restore_registered_location(
+        &self,
+        candidate: &IssueAutomationRestartEntry,
+        target: IssueAutomationRestartEntry,
+        location: crate::domain::planning::PlanningAuthorityLocation,
+        registry: &dyn IssueAutomationRestartRegistryPort,
+        recover: impl FnOnce(&str) -> Result<Arc<IssueCollectionService>>,
+    ) -> Result<RepositoryRestartOutcome> {
+        if location.repository_identity != target.repository_key
+            || location.canonical_repo_root != target.workspace_root
+        {
+            bail!("repository identity changed before the restart lock was acquired");
+        }
+        let entry = self.entry(&target.repository_key)?;
+        let mut kernel = entry.lock();
+        self.ensure_running()?;
+        if let Some(running) = kernel.as_ref() {
+            if running.workspace_root() != target.workspace_root {
+                bail!("the running kernel uses a different primary checkout");
+            }
+            match running.host.observe(Duration::from_secs(5)) {
+                Ok(_) => return Ok(RepositoryRestartOutcome::AlreadyRunning),
+                Err(KernelCallError::TimedOut) => {
+                    bail!("the existing kernel did not answer the restart observation")
+                }
+                Err(KernelCallError::Stopped) => {}
+            }
+        }
+        *kernel = None;
+        // This prepares only the already read namespace. It cannot initialize a replacement clone.
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_resolved_private_runtime_directory(location)?;
+        let lock = RepositoryKernelLockAdapter::acquire_for_owner(
+            location,
+            &target.workspace_root,
+            RepositoryKernelOwner::Gateway,
+        )?;
+        verify_restart_identity(candidate, &target, &lock)?;
+        self.ensure_running()?;
+        let issues = recover(&target.workspace_root)?;
+        verify_restart_identity(candidate, &target, &lock)?;
+        match issues.autonomy_state() {
+            IssueAutonomyProjection::Ready(state)
+                if !state.pending && state.requested_level.is_none() =>
+            {
+                // A crash after preregistration but before the selection intent left an orphan.
+                // Remove it while the repository lock still excludes a new native selection.
+                registry.unregister(&target.repository_key)?;
+                return Ok(RepositoryRestartOutcome::Ineligible);
+            }
+            IssueAutonomyProjection::Ready(state)
+                if !state.pending
+                    && state.requested_level.is_some_and(|level| {
+                        IssueAutomationAutonomy::from(level) >= IssueAutomationAutonomy::Gated
+                    })
+                    && state.effective_level >= IssueAutomationAutonomy::Gated => {}
+            _ => return Ok(RepositoryRestartOutcome::Ineligible),
+        }
+        self.ensure_running()?;
+        let built = self.assemble_restart_kernel(lock, &target.workspace_root, issues)?;
+        self.ensure_running()?;
+        self.install_idle_notification(&built);
+        *kernel = Some(built);
+        Ok(RepositoryRestartOutcome::Started)
+    }
+
+    fn assemble_restart_kernel(
+        &self,
+        lock: RepositoryKernelLock,
+        workspace: &str,
+        issues: Arc<IssueCollectionService>,
+    ) -> Result<RepositoryKernel> {
+        #[cfg(test)]
+        if let Some(factory) = &self.restart_runtime {
+            return start_repository_kernel(lock, factory(workspace, issues)?, workspace);
+        }
+        assemble_recovered_kernel(lock, workspace, self.app_server.clone(), issues)
+    }
+
+    pub(crate) fn is_stopping(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
+    }
+
+    fn install_idle_notification(&self, kernel: &RepositoryKernel) {
+        if let Some(notification) = self
+            .idle_notification
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+        {
+            kernel.host.notify_when_idle(notification);
+        }
+    }
+
     pub(crate) fn notify_when_idle(&self, notification: std::task::Waker) {
         *self
             .idle_notification
@@ -319,7 +489,7 @@ impl RepositoryKernelRegistry {
     }
 
     fn ensure_running(&self) -> Result<()> {
-        if self.stopped.load(Ordering::SeqCst) {
+        if self.is_stopping() {
             bail!("the gateway is stopping; repository kernels no longer start")
         }
         Ok(())
@@ -345,6 +515,15 @@ pub(crate) fn build_kernel_for_workspace(
     // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
     // 저장 명령과 관찰자가 같은 서비스의 모드/읽기 epoch 경계를 공유한다.
     let issues = build_issue_collection(workspace_dir);
+    assemble_recovered_kernel(lock, workspace_dir, app_server, issues)
+}
+
+fn assemble_recovered_kernel(
+    lock: RepositoryKernelLock,
+    workspace_dir: &str,
+    app_server: Option<GatewayUpstreamSocket>,
+    issues: Arc<IssueCollectionService>,
+) -> Result<RepositoryKernel> {
     let mut runtime =
         production::build_headless_kernel_runtime(workspace_dir, app_server, issues.clone());
     // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).

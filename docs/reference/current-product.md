@@ -352,8 +352,11 @@ Execution limits are installed before dispatch permission is granted.
 An already running kernel stays resident after its clients leave while its confirmed, validated
 effective autonomy is Gated/Auto. Observe/Propose collection alone keeps the existing idle-unload
 behavior. This lifecycle decision grants no execution permission; admission and dispatch still
-validate current policy. Gated adds no unattended kernel startup after a process restart:
-the next normal attachment restores the persisted selection and work.
+validate current policy. Gateway 재시작 시에는 같은 authority 홈의 후보 등록부를 읽고,
+기존 Git 신원과 저장소 잠금·미완료 변경 복구·현재 선택 및 정책을 확인한 뒤 client 없이
+커널을 시작한다. 등록부는 실행 권한이나 병렬 opt-in을 대신하지 않는다.
+자세한 순서·장애 격리·기존 설치의 등록 방법은
+[Gateway의 이슈 자동화 재시작](issue-automation-restart.md)을 따른다.
 
 ## Issue Automation Feedback
 
@@ -776,8 +779,9 @@ the desktop app itself is not shipped yet.
   (`desktop/src/main/skill*.ts`, `desktop/src/renderer/skills/`, `desktop/src/shared/skills.ts`).
 - Kernel protocol (`akra/kernel/*`, plan 18 K3, protocol version 1 since the kernel spec of K4-1): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
-  kernel on first attach and keeps it after clients leave while work or confirmed Gated/Auto
-  automation remains, so auto-follow and parallel dispatch can continue. Worktrees of one repository
+  kernel on first attach or after validating a registered automation restart candidate, and keeps
+  it after clients leave while work or confirmed Gated/Auto automation remains, so auto-follow and
+  parallel dispatch can continue. Worktrees of one repository
   share one kernel, which works in the primary checkout. An
   attach from an Akra parallel slot worktree, or to a repository without a primary checkout (a bare
   repository), fails. If another process (a TUI) runs the kernel of that
