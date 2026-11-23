@@ -23,6 +23,7 @@ impl Workspace {
             "akra-template-flow-{}-{unique}",
             std::process::id()
         ));
+        crate::private_directory::ensure_private_directory(&path).unwrap();
         fs::create_dir_all(path.join(".github/ISSUE_TEMPLATE")).unwrap();
         Self(path)
     }
