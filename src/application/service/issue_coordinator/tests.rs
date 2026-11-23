@@ -98,6 +98,8 @@ impl Fixture {
             body: "## 완료 기준\n- 기능이 요구한 결과를 반환한다.\n".into(),
         };
         IssueSourceObservation {
+            content_problems: vec![],
+            jira: None,
             repository_visibility: Default::default(),
             repository_name_with_owner: None,
             creation_provenance:
@@ -141,6 +143,8 @@ impl Fixture {
                 },
             };
             let page = IssueDiscoveryPage {
+                jira_connection: None,
+                jira_binding: None,
                 repository,
                 observations: observations.to_vec(),
                 next_cursor: None,
@@ -1236,3 +1240,4 @@ mod delivery;
 mod gated;
 
 mod binding_pause;
+mod jira;

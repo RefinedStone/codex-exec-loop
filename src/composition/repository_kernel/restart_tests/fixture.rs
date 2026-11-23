@@ -119,6 +119,8 @@ impl IssueSourcePort for Source {
             snapshot.policy_version = request.disclosure.policy_version;
         }
         Ok(IssueDiscoveryPage {
+            jira_connection: None,
+            jira_binding: None,
             repository: IssueSourceRepository::from_reference(&observation.issue),
             observations: vec![observation],
             next_cursor: None,
@@ -279,6 +281,8 @@ impl Fixture {
             completeness: IssueMetadataCompleteness::Complete,
         };
         let observation = IssueSourceObservation {
+            content_problems: vec![],
+            jira: None,
             issue: IssueReference {
                 provider: IssueProvider::GitHub,
                 server_id: "github.com".into(),

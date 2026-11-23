@@ -99,6 +99,7 @@ fn actual_rendered_form_answers_pass_parser_validator_and_shared_readiness() {
     let requirements = requirements();
     validate_issue(&copy, &requirements).unwrap();
     let result = inspect_issue_readiness(IssueReadinessInput {
+        provider: crate::domain::issue_work::IssueProvider::GitHub,
         shared_copy: &copy,
         requirements: &requirements,
         policy: &IssueAutomationPolicy::builtin(),
@@ -121,6 +122,7 @@ fn empty_rendered_answers_never_turn_the_placeholder_into_readiness() {
     let requirements = requirements();
     assert!(validate_issue(&copy, &requirements).is_err());
     let result = inspect_issue_readiness(IssueReadinessInput {
+        provider: crate::domain::issue_work::IssueProvider::GitHub,
         shared_copy: &copy,
         requirements: &requirements,
         policy: &IssueAutomationPolicy::builtin(),

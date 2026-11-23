@@ -36,6 +36,27 @@ pub(super) fn validate_policy(
     if policy.binding.github.mode > policy.authority.autonomy_cap {
         return Err(invalid("binding.github.mode", "exceeds_autonomy_cap"));
     }
+    if let Some(jira) = &policy.binding.jira {
+        jira.validate()?;
+        if jira.mode > policy.authority.autonomy_cap {
+            return Err(invalid("binding.jira.mode", "exceeds_autonomy_cap"));
+        }
+        if policy.feedback.transition && jira.close_transition.is_none() {
+            return Err(invalid(
+                "binding.jira.close_transition",
+                "explicit_user_transition_required",
+            ));
+        }
+        if policy.feedback.labels {
+            return Err(invalid("feedback.labels", "jira_label_writes_unsupported"));
+        }
+        if policy.close.when == IssueAutomationCloseWhen::ProviderLink {
+            return Err(invalid(
+                "close.when",
+                "jira_provider_link_closure_unsupported",
+            ));
+        }
+    }
     validate_labels(&policy.labels)?;
     for label in &policy.select.labels_any {
         validate_text_value(label, "select.labels_any")?;

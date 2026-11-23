@@ -278,7 +278,13 @@ fn current_fields(item: &IssueCollectionItem) -> (Option<u64>, Option<String>, O
     };
     (
         web.map(|web| web.number),
-        web.map(|web| web.url.clone()),
+        web.map(|web| web.url.clone()).or_else(|| {
+            observation
+                .jira
+                .as_ref()
+                .filter(|jira| jira.validate_for(&item.issue).is_ok())
+                .map(|jira| jira.url.clone())
+        }),
         title,
     )
 }
@@ -301,6 +307,14 @@ fn status_code(item: &IssueCollectionItem) -> IssueListStatusCode {
     if let Some(triage) = &item.triage
         && !triage.stale
     {
+        if triage.assessment.eligibility() == IssueTriageEligibility::Unknown
+            && triage.assessment.readiness() == IssueTriageReadiness::NeedsInfo
+            && triage.assessment.reasons().contains(
+                &crate::domain::issue_automation::triage::IssueTriageReasonCode::JiraPullRequestLookupUnsupported,
+            )
+        {
+            return IssueListStatusCode::NeedsInfo;
+        }
         return match triage.assessment.eligibility() {
             IssueTriageEligibility::Ineligible => IssueListStatusCode::Ineligible,
             IssueTriageEligibility::Unknown => IssueListStatusCode::Unknown,

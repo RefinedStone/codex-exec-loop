@@ -1,4 +1,7 @@
-use crate::domain::issue_automation::feedback::{IssueFeedbackIntent, IssueFeedbackReceipt};
+use crate::domain::issue_automation::feedback::{
+    IssueFeedbackConnection, IssueFeedbackIntent, IssueFeedbackJiraTransition, IssueFeedbackReceipt,
+};
+use crate::domain::issue_automation::policy::IssueAutomationJiraCloseTransition;
 use crate::domain::issue_automation::source::IssueSourceLabel;
 use crate::domain::issue_work::IssueReference;
 use anyhow::Result;
@@ -47,9 +50,35 @@ pub enum IssueFeedbackReadResult {
     Contradictory,
 }
 
-/// GitHub의 원격 읽기/단일 쓰기 경계다. 재전송·정책·일지 전이는 service가 소유한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueFeedbackActorContext {
+    pub actor_id: String,
+    pub connection: Option<IssueFeedbackConnection>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueFeedbackJiraTransitionSnapshot {
+    pub issue: IssueReference,
+    pub target: IssueFeedbackJiraTransition,
+    pub previous_event_id: Option<String>,
+}
+
+/// 원격 읽기/단일 쓰기 경계다. 재전송·정책·일지 전이는 service가 소유한다.
 pub trait IssueFeedbackPort: Send + Sync {
     fn actor_id(&self, issue: &IssueReference) -> Result<String>;
+    fn actor_context(&self, issue: &IssueReference) -> Result<IssueFeedbackActorContext> {
+        Ok(IssueFeedbackActorContext {
+            actor_id: self.actor_id(issue)?,
+            connection: None,
+        })
+    }
+    fn read_jira_close_transition(
+        &self,
+        _issue: &IssueReference,
+        _actor: &IssueFeedbackActorContext,
+        _mapping: &IssueAutomationJiraCloseTransition,
+    ) -> Result<IssueFeedbackJiraTransitionSnapshot> {
+        anyhow::bail!("Jira status transition is unsupported")
+    }
     fn read_label(&self, issue: &IssueReference, name: &str) -> Result<IssueFeedbackLabelSnapshot>;
     fn read_closure(&self, _issue: &IssueReference) -> Result<IssueFeedbackClosureSnapshot> {
         anyhow::bail!("issue close observation is unsupported")

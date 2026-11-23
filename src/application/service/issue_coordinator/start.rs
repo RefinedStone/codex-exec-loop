@@ -1,7 +1,7 @@
 //! Human answers and a confirmed Gated selection remain distinct start authorities.
 use crate::domain::issue_automation::coordinator::{
-    IssueWorkStartAuthority, human_start, policy_start, ready_for_start, timeout_arbiter_start,
-    timeout_default_start,
+    IssueWorkStartAuthority, human_start, policy_start, ready_for_human_start,
+    timeout_arbiter_start, timeout_default_start,
 };
 use crate::domain::issue_automation::decision::{
     IssueDecisionBasis, IssueDecisionId, IssueDecisionRequest,
@@ -55,11 +55,12 @@ impl<'a> StartAuthorization<'a> {
         assessment: &IssueTriageAssessment,
         current_basis: &IssueDecisionBasis,
     ) -> bool {
-        ready_for_start(assessment)
-            && self.basis() == current_basis
+        self.basis() == current_basis
             && match self {
                 Self::Human(decision) => {
-                    human_start(decision) && decision.issue() == &assessment.basis().issue
+                    ready_for_human_start(assessment)
+                        && human_start(decision)
+                        && decision.issue() == &assessment.basis().issue
                 }
                 Self::Policy(_) => policy_start(assessment),
                 Self::TimeoutDefault(decision) => timeout_default_start(assessment, decision),

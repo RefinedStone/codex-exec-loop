@@ -70,6 +70,7 @@ fn create_intent() -> IssueFeedbackIntent {
         intent_id: "intent-1".to_string(),
         issue: issue(),
         actor_id: "U_1".to_string(),
+        connection: None,
         automation_policy_version: "a".repeat(64),
         disclosure_policy_version: "b".repeat(64),
         desired_revision: 1,

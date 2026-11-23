@@ -5,8 +5,8 @@ use crate::domain::issue_automation::policy::{
 };
 use crate::domain::issue_automation::source::{
     IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
-    IssueRepositoryVisibility, IssueSourceActorKind, IssueSourceContent, IssueSourceObservation,
-    IssueSourceRead,
+    IssueRepositoryVisibility, IssueSourceActorKind, IssueSourceContent, IssueSourceContentProblem,
+    IssueSourceObservation, IssueSourceRead, JiraPullRequestLookup,
 };
 
 use super::readiness::{budget_exhausted, held_or_manual, label_cap};
@@ -63,7 +63,7 @@ fn evaluate_observation(input: &IssueTriageInput<'_>) -> Result<Evaluation, Issu
         eligibility: IssueTriageEligibility::Unknown,
         readiness: IssueTriageReadiness::Unknown,
         risk: IssueAutomationRiskClass::High,
-        effective_mode: input.policy.binding.github.mode,
+        effective_mode: input.policy.mode_for_provider(input.issue.provider),
         assumed_mode: input.policy.authority.autonomy_cap,
         force_human: true,
         human_gates: Vec::new(),
@@ -122,6 +122,7 @@ fn evaluate_observation(input: &IssueTriageInput<'_>) -> Result<Evaluation, Issu
         return Ok(result);
     }
     let readiness = inspect_issue_readiness(IssueReadinessInput {
+        provider: observation.issue.provider,
         shared_copy: copy,
         requirements: input.requirements,
         policy: input.policy,
@@ -136,6 +137,19 @@ fn evaluate_observation(input: &IssueTriageInput<'_>) -> Result<Evaluation, Issu
     result.force_human = readiness.force_human;
     result.human_gates = readiness.human_gates;
     result.reasons.extend(readiness.reasons);
+    for problem in &observation.content_problems {
+        result.readiness = IssueTriageReadiness::NeedsInfo;
+        result.force_human = true;
+        result.reasons.push(match problem {
+            IssueSourceContentProblem::MissingRequiredField => {
+                IssueTriageReasonCode::RequiredSectionMissing
+            }
+            IssueSourceContentProblem::UnsupportedAdf
+            | IssueSourceContentProblem::UnsupportedRequiredField => {
+                IssueTriageReasonCode::UnsupportedContent
+            }
+        });
+    }
     Ok(result)
 }
 
@@ -146,6 +160,12 @@ fn eligibility(
 ) -> IssueTriageEligibility {
     let mut excluded = false;
     let mut unknown = false;
+    let jira_metadata_valid = observation.issue.provider
+        != crate::domain::issue_work::IssueProvider::Jira
+        || (observation.jira.is_some() && observation.validate_repository_metadata().is_ok());
+    if !jira_metadata_valid {
+        unknown = true;
+    }
     if observation.remote_state == IssueRemoteState::Closed {
         excluded = true;
         reasons.push(IssueTriageReasonCode::IssueClosed);
@@ -190,9 +210,20 @@ fn eligibility(
         excluded = true;
         reasons.push(IssueTriageReasonCode::AlreadyClaimed);
     }
-    if observation.assignees.completeness != IssueMetadataCompleteness::Complete
-        || observation.linked_pull_request == IssuePrPresence::Unknown
-    {
+    if observation.assignees.completeness != IssueMetadataCompleteness::Complete {
+        unknown = true;
+    }
+    let unsupported_pr_lookup = observation.issue.provider
+        == crate::domain::issue_work::IssueProvider::Jira
+        && jira_metadata_valid
+        && observation.linked_pull_request == IssuePrPresence::Unknown
+        && observation.jira.as_ref().is_some_and(|jira| {
+            jira.pull_request_lookup == JiraPullRequestLookup::Unsupported
+                && jira.validate_for(&observation.issue).is_ok()
+        });
+    if unsupported_pr_lookup {
+        reasons.push(IssueTriageReasonCode::JiraPullRequestLookupUnsupported);
+    } else if observation.linked_pull_request == IssuePrPresence::Unknown {
         unknown = true;
     }
     if unknown {
@@ -200,7 +231,7 @@ fn eligibility(
     }
     if excluded {
         IssueTriageEligibility::Ineligible
-    } else if unknown {
+    } else if unknown || unsupported_pr_lookup {
         IssueTriageEligibility::Unknown
     } else {
         IssueTriageEligibility::Eligible

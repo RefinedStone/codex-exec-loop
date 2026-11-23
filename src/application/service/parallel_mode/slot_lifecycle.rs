@@ -258,6 +258,10 @@ impl ParallelModeService {
             })?;
         let lease_generation = new_slot_lease_generation()?;
         let branch_instance_id = test_branch_instance_id.unwrap_or(&lease_generation[..16]);
+        let work_link = self
+            .planning_authority
+            .work_order_link_reference_for_task(&context.repo_root, &request.task_id)
+            .map_err(|_| "immutable work-order link is unavailable".to_owned())?;
         let branch_name = allocate_agent_branch_name(
             self.parallel_runtime.as_ref(),
             &context.repo_root,
@@ -265,6 +269,7 @@ impl ParallelModeService {
             &request.task_slug,
             &request.task_id,
             &request.task_title,
+            work_link.as_ref().and_then(|link| link.jira_issue_key()),
             branch_instance_id,
             &live_remote_branch_names,
         )?;

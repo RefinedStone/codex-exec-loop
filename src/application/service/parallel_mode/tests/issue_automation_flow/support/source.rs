@@ -43,6 +43,8 @@ impl FlowSource {
             body: "## 완료 기준\n- 결과 파일에 approved result를 기록한다.\n".into(),
         };
         let observed = IssueSourceObservation {
+            content_problems: vec![],
+            jira: None,
             repository_visibility: Default::default(),
             repository_name_with_owner: None,
             issue: issue.clone(),
@@ -136,6 +138,8 @@ impl IssueSourcePort for FlowSource {
             IssueSourceRead::Unknown { reason, .. } => return Err(reason),
         };
         Ok(IssueDiscoveryPage {
+            jira_connection: None,
+            jira_binding: None,
             repository,
             observations,
             next_cursor: None,

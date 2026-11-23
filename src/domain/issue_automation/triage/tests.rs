@@ -15,6 +15,7 @@ use crate::domain::issue_work::{
 
 mod arbiter;
 mod auto;
+mod jira;
 
 const AUTOMATION_VERSION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DISCLOSURE_VERSION: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
@@ -46,6 +47,8 @@ fn list<T>(items: Vec<T>) -> IssueMetadataList<T> {
 }
 fn source() -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: IssueRepositoryVisibility::Private,
         repository_name_with_owner: Some("refinedstone/codex-exec-loop".into()),
         creation_provenance:
@@ -1487,6 +1490,7 @@ fn draft_readiness_and_live_triage_use_the_same_content_risk_and_gate_rules() {
             .map(|label| label.name.clone())
             .collect();
         let preview = inspect_issue_readiness(IssueReadinessInput {
+            provider: crate::domain::issue_work::IssueProvider::GitHub,
             shared_copy: &snapshot.shared_copy,
             requirements: &requirements,
             policy: &policy,
@@ -1533,6 +1537,7 @@ fn readiness_reports_missing_sections_and_never_needs_a_remote_identity() {
     let policy = policy();
     let labels = vec![policy.labels.auto.clone()];
     let result = inspect_issue_readiness(IssueReadinessInput {
+        provider: crate::domain::issue_work::IssueProvider::GitHub,
         shared_copy: &copy,
         requirements: &requirements,
         policy: &policy,
@@ -1632,6 +1637,7 @@ fn configurable_labels_lower_modes_and_old_names_no_longer_act_as_hidden_control
     for label in ["work:auto", "work:gated"] {
         let labels = vec![label.to_owned()];
         let result = inspect_issue_readiness(IssueReadinessInput {
+            provider: crate::domain::issue_work::IssueProvider::GitHub,
             shared_copy: &copy,
             requirements: &IssueRequirements::default(),
             policy: &policy,

@@ -531,7 +531,7 @@ impl IssueCoordinatorService {
         let execution = if work.as_ref().is_some_and(|work| {
             work.permit_source.is_some()
                 && *work.current_authorization_basis() == basis
-                && ready_for_start(&assessment)
+                && ready_for_human_start(&assessment)
         }) {
             match self
                 .execution
@@ -572,7 +572,7 @@ impl IssueCoordinatorService {
             )
             && let Some(work) = &work
             && work.current_authorization_basis() == &basis
-            && ready_for_start(&assessment)
+            && ready_for_human_start(&assessment)
             && match work.current_start_authority() {
                 IssueWorkStartAuthority::Policy => policy_start(&assessment),
                 IssueWorkStartAuthority::Human => {
@@ -603,6 +603,14 @@ impl IssueCoordinatorService {
         match action {
             IssueCoordinatorAction::OpenDecision => {
                 let mut definition = start_definition(&item.issue, basis)?;
+                if assessment.requires_jira_human_start_review() {
+                    definition.question = IssueDecisionSharedText::new_shared(
+                        "Jira에서 연결된 PR 유무를 확인할 수 없습니다. 직접 확인한 뒤 이 이슈 작업을 시작할까요?",
+                    )?;
+                    definition.options[0].effect = IssueDecisionSharedText::new_shared(
+                        "진행 중인 PR이나 중복 작업이 없는지 직접 확인한 후 시작을 승인합니다. 이 확인은 현재 이슈 판의 작업 시작에만 적용되며 자동 시작이나 자동 통합을 허용하지 않습니다.",
+                    )?;
+                }
                 if assessment.gates().iter().any(|gate| {
                     gate.gate == IssueAutomationGate::Start
                         && gate.action == crate::domain::issue_automation::policy::IssueAutomationGateAction::TimeoutDefault
@@ -731,7 +739,7 @@ impl IssueCoordinatorService {
                             Ok(())
                         })?;
                     }
-                } else if ready_for_start(&assessment)
+                } else if ready_for_human_start(&assessment)
                     && assessment.reasons().contains(
                         &crate::domain::issue_automation::triage::IssueTriageReasonCode::BudgetExhausted,
                     )
@@ -1356,7 +1364,11 @@ impl IssueCoordinatorService {
                 acceptance,
                 scope: self.workspace.clone(),
                 branch_hint: None,
-                link_reference: observation.web.as_ref().map(|web| web.url.clone()),
+                link_reference: observation
+                    .web
+                    .as_ref()
+                    .map(|web| web.url.clone())
+                    .or_else(|| observation.jira.as_ref().map(|jira| jira.url.clone())),
                 provider_link: self
                     .triage
                     .provider_link_for_policy(&basis.policy_version)?,

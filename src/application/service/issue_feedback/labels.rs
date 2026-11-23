@@ -46,6 +46,9 @@ impl IssueFeedbackService {
                 lease.as_ref(),
             );
         }
+        if issue.provider != IssueProvider::GitHub {
+            return Ok(false);
+        }
         if !safe_progress_label(&automation.policy) {
             return Ok(false);
         }
@@ -76,6 +79,7 @@ impl IssueFeedbackService {
             intent_id: format!("{:032x}", rand::random::<u128>()),
             issue: issue.clone(),
             actor_id,
+            connection: None,
             automation_policy_version: automation.version.clone(),
             disclosure_policy_version: issue_policy_version(&disclosure),
             desired_revision: snapshot.state.desired_revision,
@@ -235,6 +239,7 @@ impl IssueFeedbackService {
             intent_id: format!("{:032x}", rand::random::<u128>()),
             issue: issue.clone(),
             actor_id,
+            connection: None,
             automation_policy_version: automation.version.clone(),
             disclosure_policy_version: issue_policy_version(disclosure),
             desired_revision: snapshot.state.desired_revision,

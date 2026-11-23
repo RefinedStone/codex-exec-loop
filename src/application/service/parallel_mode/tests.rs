@@ -884,6 +884,7 @@ impl std::fmt::Debug for FakeGithubAutomationHook {
 #[derive(Debug, Clone)]
 struct FakeGithubAutomationPort {
     default_branch: Arc<Mutex<String>>,
+    pull_request_titles: Arc<Mutex<Vec<String>>>,
     pull_request_bodies: Arc<Mutex<Vec<String>>>,
     capabilities: GithubAutomationCapabilities,
     repository_identity: Arc<Mutex<String>>,
@@ -921,6 +922,7 @@ impl FakeGithubAutomationPort {
     fn ready() -> Self {
         Self {
             default_branch: Arc::new(Mutex::new("main".to_string())),
+            pull_request_titles: Arc::new(Mutex::new(Vec::new())),
             pull_request_bodies: Arc::new(Mutex::new(Vec::new())),
             capabilities: GithubAutomationCapabilities::new(
                 ParallelModeCapabilitySnapshot::new(
@@ -1477,9 +1479,13 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         repo_root: &str,
         base_branch: &str,
         head_branch: &str,
-        _title: &str,
+        title: &str,
         body: &str,
     ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.pull_request_titles
+            .lock()
+            .unwrap()
+            .push(title.to_string());
         self.pull_request_bodies
             .lock()
             .unwrap()

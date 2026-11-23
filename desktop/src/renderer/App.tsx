@@ -51,6 +51,7 @@ import { findFolderForRepository, readIssueHandoffPrompt } from "./work/githubPr
 import { JiraPanel } from "./work/JiraPanel";
 import { LinearPanel } from "./work/LinearPanel";
 import { createProviderGateway } from "./work/providerGateway";
+import { openIssueAutomationUrl } from "./kernel/issueAutomationLinks";
 import type { GatewayRequest } from "./work/notionHub";
 import { NotionPanel } from "./work/NotionPanel";
 import { GitGraphPanel } from "./git/GitGraphPanel";
@@ -838,7 +839,12 @@ export function App() {
                   onAnswerDecision={async (decisionId, option, note) => session.current?.answerIssueDecision(decisionId, option, note)}
                   onIntervene={async (action, message, confirm) => session.current?.interveneIssue(action, message, confirm) ?? "unavailable"}
                   onOpenConversation={openIssueConversation}
-                  onOpenUrl={(url) => window.akra.github.openExternal(url)}
+                  onOpenUrl={(url) => {
+                    void openIssueAutomationUrl(url, {
+                      request: gatewayRequest, native: window.akra.providerCredentials,
+                      openGitHub: (value) => window.akra.github.openExternal(value),
+                    }).catch((error: unknown) => toast(errorText(error)));
+                  }}
                 />
               )}
               {panel === "browser" && <BrowserPanel bridge={window.akra.browser} threadId={browserThreadId} onStartConversation={async () => {

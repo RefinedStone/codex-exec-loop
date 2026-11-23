@@ -120,7 +120,13 @@ impl IssueFeedbackService {
         let Some((automation, disclosure)) = self.write_context(snapshot)? else {
             return Ok(false);
         };
-        Ok(automation.version == intent.automation_policy_version
+        Ok(actor_matches_snapshot(
+            &IssueFeedbackActorContext {
+                actor_id: intent.actor_id.clone(),
+                connection: intent.connection.clone(),
+            },
+            snapshot,
+        ) && automation.version == intent.automation_policy_version
             && issue_policy_version(&disclosure) == intent.disclosure_policy_version
             && if matches!(&intent.operation, IssueFeedbackOperation::CloseIssue { .. }) {
                 self.close_policy_current(intent, snapshot, &automation.policy)

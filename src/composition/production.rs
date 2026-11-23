@@ -486,9 +486,10 @@ pub(crate) fn build_gateway_backend(
     providers: crate::composition::provider_credentials::ProviderServices,
 ) -> Result<GatewayBackend> {
     let upstream = AppServerGatewayUpstream::start(run_dir)?;
-    let kernels = Arc::new(RepositoryKernelRegistry::sharing_app_server(
-        upstream.kernel_socket(),
-    ));
+    let kernels = Arc::new(
+        RepositoryKernelRegistry::sharing_app_server(upstream.kernel_socket())
+            .with_provider_services(providers.clone()),
+    );
     let hub = Arc::new(CodexMcpHubBackend::resident_from_environment()?);
     let mcp_hub = Arc::new(GatewayMcpHub::new(
         hub.home().display().to_string(),

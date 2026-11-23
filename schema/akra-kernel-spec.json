@@ -5587,6 +5587,15 @@
       ]
     },
     {
+      "name": "jira_pull_request_lookup_unsupported",
+      "summary": "The Jira provider cannot establish whether a linked pull request exists; only an exact Human start approval may accept that limitation when every other prerequisite is known.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
       "name": "budget_exhausted",
       "summary": "A zero static budget cap prevents an automatic start and requires a person to review the budget.",
       "next": [
@@ -14932,6 +14941,7 @@
         "policy_human_required",
         "human_selection_required",
         "auto_repository_restricted",
+        "jira_pull_request_lookup_unsupported",
         "budget_exhausted",
         "mode_off",
         "observation_only",

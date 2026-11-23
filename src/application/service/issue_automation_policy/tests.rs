@@ -7,6 +7,8 @@ use crate::domain::issue_automation::policy::{
 };
 
 use super::*;
+mod jira;
+mod jira_examples;
 
 #[test]
 fn arbiter_settings_preserve_legacy_defaults_and_projects_only_tighten_user_limits() {

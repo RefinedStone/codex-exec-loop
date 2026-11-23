@@ -96,3 +96,36 @@ fn lack_of_process_opt_in_requires_human_approval_of_the_exact_source() {
     pull_request.approved_review_commit_shas = vec![record.source_commit_sha.clone()];
     assert!(pull_request_readiness_error(&pull_request, &record, "prerelease", false).is_none());
 }
+
+#[test]
+fn jira_pr_metadata_uses_the_frozen_link_key_and_never_a_closing_keyword() {
+    use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkLinkReference;
+
+    let (mut record, _) = reviewed_source();
+    record.task_title = "  Preserve Jira identity  ".into();
+    record.link_reference = Some(PlanningWorkLinkReference {
+        url: "https://example.atlassian.net/browse/AKRA_CORE-42".into(),
+        close_on_merge: false,
+    });
+    assert_eq!(
+        build_distributor_pull_request_title(&record),
+        "[AKRA_CORE-42] supersession: Preserve Jira identity"
+    );
+    let body = build_distributor_pull_request_body(&record);
+    assert!(body.ends_with("Issue: https://example.atlassian.net/browse/AKRA_CORE-42"));
+    assert!(!body.contains("Closes "));
+
+    record.link_reference.as_mut().unwrap().url =
+        "https://example.atlassian.net/browse/akra-42".into();
+    assert_eq!(
+        build_distributor_pull_request_title(&record),
+        "supersession: Preserve Jira identity",
+        "a malformed key must not be silently uppercased into a Jira reference"
+    );
+    record.link_reference = None;
+    assert_eq!(
+        build_distributor_pull_request_title(&record),
+        "supersession: Preserve Jira identity"
+    );
+    assert!(!build_distributor_pull_request_body(&record).contains("Issue: "));
+}

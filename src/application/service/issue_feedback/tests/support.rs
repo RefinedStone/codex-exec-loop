@@ -101,6 +101,8 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
     let hash = IssueFieldHash::of_fields(&shared.title, &shared.body);
     let binding_id = IssueAutomationBindingId::new("feedback-binding").unwrap();
     let source = IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: issue.clone(),
@@ -226,6 +228,7 @@ pub(crate) fn pending_record(issue: IssueReference) -> IssueFeedbackIntentRecord
             intent_id: intent_id.into(),
             issue,
             actor_id: ACTOR.into(),
+            connection: None,
             automation_policy_version: "a".repeat(64),
             disclosure_policy_version: "b".repeat(64),
             desired_revision: 1,
@@ -290,7 +293,7 @@ impl IssueAutomationPolicySourcePort for FakePolicy {
         Ok(self.project.lock().unwrap().clone())
     }
 }
-struct DefaultDisclosure;
+pub(super) struct DefaultDisclosure;
 impl IssuePolicySourcePort for DefaultDisclosure {
     fn load_user_policy_toml(&self) -> Result<Option<String>> {
         Ok(None)

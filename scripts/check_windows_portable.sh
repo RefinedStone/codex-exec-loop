@@ -93,4 +93,29 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'adapter::inbound::kernel_protocol::issue_binding_pause::' \
   'composition::native_client_runtime::tests::binding_pause::' \
   'composition::kernel_host::simulation::issue_decision::human_confirmation::binding_pause::' \
-  'kernel_events::tests::binding_pause_receipt_deduplicates_after_retention_and_rejects_changed_payload'
+  'kernel_events::tests::binding_pause_receipt_deduplicates_after_retention_and_rejects_changed_payload' \
+  'provider_credentials' \
+  'provider_work' \
+  'provider_http' \
+  'adapter::outbound::jira::issue_source::tests::' \
+  'adapter::outbound::jira::issue_feedback::tests::' \
+  'domain::issue_automation::source::tests::jira::' \
+  'domain::issue_automation::triage::tests::jira::' \
+  'application::service::issue_automation_policy::tests::jira' \
+  'application::service::issue_collection::tests::jira::' \
+  'sqlite_issue_source_claims::tests::' \
+  'application::service::issue_coordinator::tests::jira::' \
+  'application::service::issue_feedback::tests::jira::' \
+  'sqlite_issue_automation_store::feedback::tests::jira::' \
+  'adapter::inbound::kernel_protocol::issue_automation::triage::tests::' \
+  'application::port::outbound::planning_work_order_repository_port::tests::jira_' \
+  'application::service::parallel_mode::tests::pool::lease::malformed_jira_branch_keys_' \
+  'application::service::parallel_mode::distributor::delivery::github::tests::jira_pr_metadata_' \
+  'provider_key_store' \
+  'native_credential_prompt' \
+  'provider_credential_prompt' \
+  'provider_credential_migration' \
+  'private_ipc::credential' \
+  'private_ipc::owner' \
+  'application::service::parallel_mode::tests::pool::lease::jira_branch_' \
+  'application::service::parallel_mode::tests::distributor::work_permits::link_reference::jira_work_link_'

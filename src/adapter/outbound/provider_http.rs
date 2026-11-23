@@ -1,4 +1,5 @@
-//! Gateway-only authenticated reads. Tokens never become a public request or diagnostic.
+//! Gateway-only typed provider operations. Tokens never become a public request or diagnostic.
+use crate::application::port::outbound::provider_credential_mutation_port::ProviderMutationAuthorizationPort;
 use crate::application::port::outbound::provider_credentials_port::ProviderAccountVerifierPort;
 use crate::application::port::outbound::provider_work_port::ProviderWorkApiPort;
 use crate::domain::provider_credentials::*;
@@ -13,7 +14,9 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
+mod feedback;
 mod jira;
+mod jira_source;
 mod linear;
 
 const RESPONSE_LIMIT: usize = 8 << 20;
@@ -25,10 +28,70 @@ const LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 /// Internal only: callers cannot supply a URL, HTTP method, query or authorization through RPC.
 struct HttpRequest {
     url: String,
+    method: HttpMethod,
+    expected: ExpectedResponse,
+    send_authorization: Option<Arc<dyn ProviderMutationAuthorizationPort>>,
+    preserve_client_errors: bool,
     query: Vec<(String, String)>,
     body: Option<Value>,
     limit: usize,
     timeout: Duration,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HttpMethod {
+    Get,
+    Post,
+    Put,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedResponse {
+    Json(u16),
+    NoContent,
+}
+enum HttpResponse {
+    Json(Value),
+    NoContent,
+}
+impl HttpResponse {
+    fn json(self) -> CredentialResult<Value> {
+        match self {
+            Self::Json(value) => Ok(value),
+            Self::NoContent => Err(ProviderCredentialError::Corrupt),
+        }
+    }
+}
+
+enum JiraCloudRoute<'a> {
+    Rest(&'a str),
+    TenantInfo,
+}
+struct JiraCloudRead<'a> {
+    route: JiraCloudRoute<'a>,
+    query: Vec<(String, String)>,
+    body: Option<Value>,
+}
+impl<'a> JiraCloudRead<'a> {
+    fn get_rest(relative: &'a str, query: Vec<(String, String)>) -> Self {
+        Self {
+            route: JiraCloudRoute::Rest(relative),
+            query,
+            body: None,
+        }
+    }
+    fn post_rest(relative: &'a str, body: Value) -> Self {
+        Self {
+            route: JiraCloudRoute::Rest(relative),
+            query: vec![],
+            body: Some(body),
+        }
+    }
+    fn tenant_info() -> Self {
+        Self {
+            route: JiraCloudRoute::TenantInfo,
+            query: vec![],
+            body: None,
+        }
+    }
 }
 struct JiraRead<'a> {
     relative: &'a str,
@@ -62,7 +125,7 @@ trait HttpTransport: Send + Sync {
         token: &SecretToken,
         cancelled: &AtomicBool,
         deadline: Instant,
-    ) -> CredentialResult<Value>;
+    ) -> CredentialResult<HttpResponse>;
 }
 struct NativeHttpTransport;
 impl HttpTransport for NativeHttpTransport {
@@ -73,8 +136,17 @@ impl HttpTransport for NativeHttpTransport {
         token: &SecretToken,
         cancelled: &AtomicBool,
         deadline: Instant,
-    ) -> CredentialResult<Value> {
+    ) -> CredentialResult<HttpResponse> {
         ensure_live(cancelled, deadline)?;
+        if (request.method == HttpMethod::Put
+            || matches!(
+                request.expected,
+                ExpectedResponse::Json(201) | ExpectedResponse::NoContent
+            ))
+            && request.send_authorization.is_none()
+        {
+            return Err(ProviderCredentialError::InvalidRequest);
+        }
         let timeout = request
             .timeout
             .min(deadline.saturating_duration_since(Instant::now()));
@@ -98,24 +170,43 @@ impl HttpTransport for NativeHttpTransport {
         let mut authorization = reqwest::header::HeaderValue::from_bytes(authorization.as_bytes())
             .map_err(|_| ProviderCredentialError::InvalidRequest)?;
         authorization.set_sensitive(true);
+        let builder = match request.method {
+            HttpMethod::Get => client.get(&request.url),
+            HttpMethod::Post => client.post(&request.url),
+            HttpMethod::Put => client.put(&request.url),
+        };
         let builder = if let Some(body) = request.body {
-            client.post(&request.url).json(&body)
+            builder.json(&body)
         } else {
-            client.get(&request.url)
+            builder
         }
         .query(&request.query)
         .header(reqwest::header::AUTHORIZATION, authorization)
         .header(reqwest::header::ACCEPT, "application/json");
+        // No network request precedes this one-shot check. Keep its owned guard through
+        // response parsing, errors and Unknown; redirects and automatic retries are disabled.
+        ensure_live(cancelled, deadline)?;
+        let _send_guard = request
+            .send_authorization
+            .as_ref()
+            .map(|authorization| authorization.begin_send())
+            .transpose()?;
+        ensure_live(cancelled, deadline)?;
         let mut response = builder
+            .timeout(timeout.min(deadline.saturating_duration_since(Instant::now())))
             .send()
             .map_err(|_| ProviderCredentialError::Unavailable)?;
         ensure_live(cancelled, deadline)?;
         let status = response.status();
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(ProviderCredentialError::Unauthorized);
-        }
-        if !status.is_success() {
-            return Err(ProviderCredentialError::Unavailable);
+        check_response_status(
+            status.as_u16(),
+            request.expected,
+            request.preserve_client_errors,
+        )?;
+        if request.expected == ExpectedResponse::NoContent
+            && response.content_length().is_some_and(|size| size != 0)
+        {
+            return Err(ProviderCredentialError::Corrupt);
         }
         if response
             .content_length()
@@ -139,7 +230,43 @@ impl HttpTransport for NativeHttpTransport {
             bytes.extend_from_slice(&chunk[..size]);
         }
         ensure_live(cancelled, deadline)?;
-        parse_response(&bytes, token, request.limit)
+        parse_expected_response(&bytes, token, request.expected, request.limit)
+    }
+}
+fn check_response_status(
+    status: u16,
+    expected: ExpectedResponse,
+    preserve_client_errors: bool,
+) -> CredentialResult<()> {
+    if matches!(status, 401 | 403) {
+        return Err(ProviderCredentialError::Unauthorized);
+    }
+    if preserve_client_errors {
+        match status {
+            400 => return Err(ProviderCredentialError::InvalidRequest),
+            404 => return Err(ProviderCredentialError::NotFound),
+            _ => {}
+        }
+    }
+    let expected_status = match expected {
+        ExpectedResponse::Json(status) => status,
+        ExpectedResponse::NoContent => 204,
+    };
+    if status != expected_status {
+        return Err(ProviderCredentialError::Unavailable);
+    }
+    Ok(())
+}
+fn parse_expected_response(
+    bytes: &[u8],
+    token: &SecretToken,
+    expected: ExpectedResponse,
+    limit: usize,
+) -> CredentialResult<HttpResponse> {
+    match expected {
+        ExpectedResponse::Json(_) => parse_response(bytes, token, limit).map(HttpResponse::Json),
+        ExpectedResponse::NoContent if bytes.is_empty() => Ok(HttpResponse::NoContent),
+        ExpectedResponse::NoContent => Err(ProviderCredentialError::Corrupt),
     }
 }
 fn ensure_live(cancelled: &AtomicBool, deadline: Instant) -> CredentialResult<()> {
@@ -181,6 +308,57 @@ impl Default for ProviderHttpAdapter {
     }
 }
 impl ProviderHttpAdapter {
+    fn jira_cloud_read(
+        &self,
+        metadata: &ConnectionMetadata,
+        token: &SecretToken,
+        request: JiraCloudRead<'_>,
+        cancelled: &AtomicBool,
+        deadline: Instant,
+    ) -> CredentialResult<Value> {
+        let configuration = metadata.configuration.normalized(Provider::Jira)?;
+        if configuration.deployment != Some(JiraDeployment::Cloud) {
+            return Err(ProviderCredentialError::Unsupported);
+        }
+        let site = configuration
+            .site_url
+            .as_deref()
+            .ok_or(ProviderCredentialError::InvalidRequest)?;
+        let url = match request.route {
+            JiraCloudRoute::TenantInfo => format!("{site}/_edge/tenant_info"),
+            JiraCloudRoute::Rest(relative) => {
+                validate_relative(relative)?;
+                format!("{site}/rest/api/3/{relative}")
+            }
+        };
+        let authorization = jira_authorization(&configuration, token)?;
+        let response = self
+            .transport
+            .read(
+                HttpRequest {
+                    url,
+                    method: if request.body.is_some() {
+                        HttpMethod::Post
+                    } else {
+                        HttpMethod::Get
+                    },
+                    expected: ExpectedResponse::Json(200),
+                    send_authorization: None,
+                    preserve_client_errors: true,
+                    query: request.query,
+                    body: request.body,
+                    limit: RESPONSE_LIMIT,
+                    timeout: REQUEST_TIMEOUT,
+                },
+                &authorization,
+                token,
+                cancelled,
+                deadline,
+            )?
+            .json()?;
+        reject_reflected_credentials(&response, token, &authorization)?;
+        Ok(response)
+    }
     fn jira_read(
         &self,
         config: &ConnectionConfiguration,
@@ -200,19 +378,26 @@ impl ProviderHttpAdapter {
             "2"
         };
         let authorization = jira_authorization(&config, token)?;
-        let value = self.transport.read(
-            HttpRequest {
-                url: format!("{site}/rest/api/{version}/{}", read.relative),
-                query: read.query,
-                body: None,
-                limit: read.limit,
-                timeout: read.timeout,
-            },
-            &authorization,
-            token,
-            cancelled,
-            deadline,
-        )?;
+        let value = self
+            .transport
+            .read(
+                HttpRequest {
+                    url: format!("{site}/rest/api/{version}/{}", read.relative),
+                    method: HttpMethod::Get,
+                    expected: ExpectedResponse::Json(200),
+                    send_authorization: None,
+                    preserve_client_errors: false,
+                    query: read.query,
+                    body: None,
+                    limit: read.limit,
+                    timeout: read.timeout,
+                },
+                &authorization,
+                token,
+                cancelled,
+                deadline,
+            )?
+            .json()?;
         // The native transport checks this too; keeping it at the adapter boundary covers injected transports.
         if contains_secret(&value, token.as_str())
             || contains_secret(&value, &authorization)
@@ -232,19 +417,26 @@ impl ProviderHttpAdapter {
         cancelled: &AtomicBool,
         deadline: Instant,
     ) -> CredentialResult<Value> {
-        let value = self.transport.read(
-            HttpRequest {
-                url: LINEAR_ENDPOINT.to_owned(),
-                query: vec![],
-                body: Some(json!({"query":query,"variables":variables})),
-                limit: RESPONSE_LIMIT,
-                timeout: REQUEST_TIMEOUT,
-            },
-            token.as_str(),
-            token,
-            cancelled,
-            deadline,
-        )?;
+        let value = self
+            .transport
+            .read(
+                HttpRequest {
+                    url: LINEAR_ENDPOINT.to_owned(),
+                    method: HttpMethod::Post,
+                    expected: ExpectedResponse::Json(200),
+                    send_authorization: None,
+                    preserve_client_errors: false,
+                    query: vec![],
+                    body: Some(json!({"query":query,"variables":variables})),
+                    limit: RESPONSE_LIMIT,
+                    timeout: REQUEST_TIMEOUT,
+                },
+                token.as_str(),
+                token,
+                cancelled,
+                deadline,
+            )?
+            .json()?;
         if contains_secret(&value, token.as_str()) {
             return Err(ProviderCredentialError::Corrupt);
         }
@@ -259,6 +451,35 @@ impl ProviderHttpAdapter {
             .cloned()
             .ok_or(ProviderCredentialError::Corrupt)
     }
+}
+fn validate_relative(relative: &str) -> CredentialResult<()> {
+    if relative.is_empty()
+        || relative.len() > 2048
+        || relative
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+        || !relative
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/_.-".contains(&byte))
+    {
+        return Err(ProviderCredentialError::InvalidRequest);
+    }
+    Ok(())
+}
+fn reject_reflected_credentials(
+    value: &Value,
+    token: &SecretToken,
+    authorization: &str,
+) -> CredentialResult<()> {
+    if contains_secret(value, token.as_str())
+        || contains_secret(value, authorization)
+        || authorization
+            .strip_prefix("Basic ")
+            .is_some_and(|encoded| contains_secret(value, encoded))
+    {
+        return Err(ProviderCredentialError::Corrupt);
+    }
+    Ok(())
 }
 fn jira_authorization(
     config: &ConnectionConfiguration,

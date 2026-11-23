@@ -901,6 +901,7 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
         &long_slug,
         "task-1",
         "Task One",
+        None,
         TEST_BRANCH_INSTANCE_ID,
         &[],
     )
@@ -913,6 +914,7 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
         &long_slug,
         "task-1",
         "Task One",
+        None,
         TEST_BRANCH_INSTANCE_ID,
         &[],
     )
@@ -933,6 +935,90 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
 }
 
 #[test]
+fn jira_branch_keeps_the_complete_uppercase_key_through_long_slug_and_all_collision_sources() {
+    let repo = TempGitRepo::new("jira-branch-collisions");
+    // The supported maximum key must survive truncation of the descriptive task slug.
+    let key = format!("{}-123456789", "A".repeat(50));
+    let task_slug = "long-readable-task-segment-".repeat(8);
+    let combined = format!("{key}-{}", sanitize_task_slug(&task_slug).unwrap());
+    let allocate = |live: &[String]| {
+        allocate_agent_branch_name(
+            &test_parallel_runtime(),
+            &repo.workspace_dir(),
+            "slot-1",
+            &task_slug,
+            "task-1",
+            "Task One",
+            Some(&key),
+            TEST_BRANCH_INSTANCE_ID,
+            live,
+        )
+        .expect("the full Jira key must fit even when the task description is shortened")
+    };
+    let first = allocate(&[]);
+    run_git(&repo.repo_root, &["branch", &first, POOL_BASELINE_BRANCH]);
+    let second = allocate(&[]);
+    repo.set_remote_tracking_branch(&format!("origin/{second}"), POOL_BASELINE_BRANCH);
+    let third = allocate(&[]);
+    let fourth = allocate(std::slice::from_ref(&third));
+
+    let unique = [&first, &second, &third, &fourth]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), 4);
+    for (index, branch) in [&first, &second, &third, &fourth].into_iter().enumerate() {
+        let slug = branch.strip_prefix("akra-agent/slot-1/").unwrap();
+        assert!(slug.starts_with(&format!("{key}-")), "{branch}");
+        assert!(slug.len() <= 96, "{branch}");
+        assert_eq!(MAX_AGENT_BRANCH_SLUG_LEN, 96);
+        let suffix = if index == 0 {
+            format!("-{TEST_BRANCH_INSTANCE_ID}")
+        } else {
+            format!("-{TEST_BRANCH_INSTANCE_ID}-{}", index + 1)
+        };
+        let bounded = slug
+            .strip_suffix(&suffix)
+            .expect("lease and collision identity");
+        assert!(bounded.ends_with(&short_branch_slug_hash(&combined)));
+        assert!(command_succeeds(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "check-ref-format",
+                "--branch",
+                branch.as_str()
+            ],
+        ));
+    }
+}
+
+#[test]
+fn malformed_jira_branch_keys_are_rejected_before_reading_any_repository() {
+    for key in [
+        "akra-42",
+        "AKRA-42/other",
+        "AKRA-42\n",
+        "AKRA-1234567890",
+        "",
+    ] {
+        let error = allocate_agent_branch_name(
+            &test_parallel_runtime(),
+            "/unused-jira-key-check",
+            "slot-1",
+            "ordinary-task",
+            "task-1",
+            "Task One",
+            Some(key),
+            TEST_BRANCH_INSTANCE_ID,
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(error, "invalid Jira issue key in immutable work link");
+    }
+}
+
+#[test]
 fn allocate_agent_branch_name_is_unique_across_concurrent_lease_instances() {
     let repo = TempGitRepo::new("lease-slot-cross-process-branch-identity");
     let first = allocate_agent_branch_name(
@@ -942,6 +1028,7 @@ fn allocate_agent_branch_name_is_unique_across_concurrent_lease_instances() {
         "task-one",
         "task-1",
         "Task One",
+        None,
         "0000000000000001",
         &[],
     )
@@ -953,6 +1040,7 @@ fn allocate_agent_branch_name_is_unique_across_concurrent_lease_instances() {
         "task-one",
         "task-1",
         "Task One",
+        None,
         "0000000000000002",
         &[],
     )
@@ -980,6 +1068,7 @@ fn allocate_agent_branch_name_numbers_remote_tracking_collisions() {
         "task-one",
         "task-1",
         "Task One",
+        None,
         TEST_BRANCH_INSTANCE_ID,
         &[],
     )

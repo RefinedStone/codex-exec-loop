@@ -88,6 +88,8 @@ fn observation(content: IssueSourceContent) -> IssueSourceRead {
         name: "ready".to_string(),
     };
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         creation_provenance:

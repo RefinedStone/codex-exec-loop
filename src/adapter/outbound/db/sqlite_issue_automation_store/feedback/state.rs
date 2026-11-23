@@ -346,6 +346,14 @@ pub(super) fn permits_new_write(
     let IssueSourceContent::Shared(shared) = &observed.content else {
         return false;
     };
+    if intent.issue.provider == crate::domain::issue_work::IssueProvider::Jira
+        && !matches!((observed.jira.as_ref(), intent.connection.as_ref()), (Some(jira), Some(connection))
+            if jira.connection.profile_id == connection.profile_id
+                && jira.connection.connection_id == connection.connection_id
+                && jira.connection.revision == connection.revision)
+    {
+        return false;
+    }
     if shared.policy_version != intent.disclosure_policy_version {
         return false;
     }

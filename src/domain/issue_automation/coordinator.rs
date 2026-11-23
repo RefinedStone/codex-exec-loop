@@ -238,7 +238,7 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     let Some(assessment) = input.assessment else {
         return Triage;
     };
-    let eligible = ready_for_start(assessment)
+    let eligible = ready_for_human_start(assessment)
         && !input.flags.held
         && !input.flags.stale
         && !input.flags.unknown;
@@ -363,6 +363,19 @@ pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
                         | IssueAutomationGateAction::TimeoutArbiter
                 )))
         })
+}
+
+/// Only the existing exact Human confirmation can accept Jira's explicitly reported
+/// unsupported PR lookup. Unknown source or any additional unknown fact stays closed.
+pub fn ready_for_human_start(assessment: &IssueTriageAssessment) -> bool {
+    ready_for_start(assessment)
+        || (assessment.requires_jira_human_start_review()
+            && assessment.effective_mode() >= IssueAutomationAutonomy::Propose
+            && assessment.gates().iter().any(|gate| {
+                gate.gate == IssueAutomationGate::Start
+                    && gate.enabled
+                    && gate.action == IssueAutomationGateAction::Human
+            }))
 }
 
 pub fn policy_start(assessment: &IssueTriageAssessment) -> bool {

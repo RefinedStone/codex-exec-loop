@@ -147,10 +147,11 @@ pub enum IssueTriageReasonCode {
     CloseDisabled,
     BudgetExhausted,
     AutoRepositoryRestricted,
+    JiraPullRequestLookupUnsupported,
 }
 
 impl IssueTriageReasonCode {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::NotYetObserved,
         Self::SourceUnavailable,
         Self::MetadataIncomplete,
@@ -178,6 +179,7 @@ impl IssueTriageReasonCode {
         Self::CloseDisabled,
         Self::BudgetExhausted,
         Self::AutoRepositoryRestricted,
+        Self::JiraPullRequestLookupUnsupported,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -209,6 +211,7 @@ impl IssueTriageReasonCode {
             Self::CloseDisabled => "close_disabled",
             Self::BudgetExhausted => "budget_exhausted",
             Self::AutoRepositoryRestricted => "auto_repository_restricted",
+            Self::JiraPullRequestLookupUnsupported => "jira_pull_request_lookup_unsupported",
         }
     }
 }
@@ -299,6 +302,17 @@ impl IssueTriageAssessment {
         &self.record.observation
     }
 
+    /// The provider cannot establish PR absence. Only a current native Human Start
+    /// approval can accept this explicit limitation; automatic eligibility stays Unknown.
+    pub fn requires_jira_human_start_review(&self) -> bool {
+        jira_human_start_review(
+            &self.record.basis,
+            self.record.eligibility,
+            self.record.readiness,
+            &self.record.reasons,
+        )
+    }
+
     pub fn input_fingerprint(&self) -> String {
         basis::canonical_hash(self.basis())
     }
@@ -383,7 +397,7 @@ pub fn triage_issue(
     }
     let evaluation = evaluate::evaluate(&input)?;
     let gates = gates::calculate(&basis, &evaluation, input.policy, input.previous)?;
-    let observation = gates::observe(&evaluation, input.policy);
+    let observation = gates::observe(&basis, &evaluation, input.policy);
     let mut reasons = evaluation.reasons;
     reasons.push(IssueTriageReasonCode::ExecutionGrantRequired);
     reasons.push(IssueTriageReasonCode::CloseDisabled);
@@ -406,6 +420,34 @@ pub fn triage_issue(
     })?;
     result.validate_successor(input.previous)?;
     Ok(result)
+}
+
+fn jira_human_start_review(
+    basis: &IssueTriageBasis,
+    eligibility: IssueTriageEligibility,
+    readiness: IssueTriageReadiness,
+    reasons: &[IssueTriageReasonCode],
+) -> bool {
+    use IssueTriageReasonCode as Reason;
+    basis.issue.provider == crate::domain::issue_work::IssueProvider::Jira
+        && basis.source == IssueTriageSourceState::Shared
+        && eligibility == IssueTriageEligibility::Unknown
+        && readiness == IssueTriageReadiness::Ready
+        && reasons.contains(&Reason::JiraPullRequestLookupUnsupported)
+        // A future unknown reason is closed until it has an explicit Human contract.
+        && reasons.iter().all(|reason| matches!(reason,
+            Reason::JiraPullRequestLookupUnsupported
+                | Reason::HighRisk
+                | Reason::HeldOrManual
+                | Reason::ProtectedPath
+                | Reason::PolicyHumanRequired
+                | Reason::ModeOff
+                | Reason::ObservationOnly
+                | Reason::ExecutionGrantRequired
+                | Reason::CloseDisabled
+                | Reason::BudgetExhausted
+                | Reason::AutoRepositoryRestricted
+        ))
 }
 
 /// 판정과 동일한 Markdown 규칙으로 공유본의 완료 기준을 추출한다.

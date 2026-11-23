@@ -26,8 +26,9 @@ pub(crate) fn effective_policy(
     selection: &IssueAutonomySelection,
 ) -> ResolvedIssueAutomationPolicy {
     if let Some(level) = selection.requested_level {
-        file.policy.binding.github.mode =
-            IssueAutomationAutonomy::from(level).min(file.policy.authority.autonomy_cap);
+        file.policy.set_selected_mode(
+            IssueAutomationAutonomy::from(level).min(file.policy.selected_autonomy_cap()),
+        );
         let encoded = serde_json::to_vec(&(
             "issue-runtime-autonomy-v1",
             &file.version,
@@ -36,9 +37,10 @@ pub(crate) fn effective_policy(
         ))
         .expect("the runtime policy tuple is serializable");
         file.version = format!("{:x}", Sha256::digest(encoded));
-    } else if file.policy.binding.github.mode > IssueAutomationAutonomy::Propose {
+    } else if file.policy.selected_mode() > IssueAutomationAutonomy::Propose {
         // A file can raise the ceiling, but cannot silently grant the first automatic start.
-        file.policy.binding.github.mode = IssueAutomationAutonomy::Propose;
+        file.policy
+            .set_selected_mode(IssueAutomationAutonomy::Propose);
         let encoded = serde_json::to_vec(&("issue-runtime-unconfirmed-autonomy-v1", &file.version))
             .expect("the unconfirmed runtime policy is serializable");
         file.version = format!("{:x}", Sha256::digest(encoded));
@@ -72,8 +74,8 @@ pub(crate) fn projection(
         Err(_) => return IssueAutonomyProjection::PolicyBlocked,
     };
     let effective = effective_policy(file, &selection);
-    let cap = effective.policy.authority.autonomy_cap;
-    let mode = effective.policy.binding.github.mode;
+    let cap = effective.policy.selected_autonomy_cap();
+    let mode = effective.policy.selected_mode();
     let pending = selection.pending.is_some();
     IssueAutonomyProjection::Ready(IssueAutonomyReady {
         requested_level: selection.requested_level,
@@ -89,7 +91,11 @@ pub(crate) fn projection(
                 let reason = if pending {
                     Some("자율 수준 변경을 복구하는 중입니다.".to_owned())
                 } else if requested > cap {
-                    Some("사용자 정책의 자율 수준 상한을 넘을 수 없습니다.".to_owned())
+                    Some(if effective.policy.binding.jira.is_some() && requested > IssueAutomationAutonomy::Propose {
+                        "Jira Cloud는 연결된 PR의 부재를 확인할 수 없어 Propose와 사람 승인만 지원합니다.".to_owned()
+                    } else {
+                        "사용자 정책의 자율 수준 상한을 넘을 수 없습니다.".to_owned()
+                    })
                 } else {
                     None
                 };

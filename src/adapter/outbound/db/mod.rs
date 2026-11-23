@@ -3,6 +3,7 @@
 pub(crate) mod sqlite_delegation_store;
 pub mod sqlite_issue_automation_restart_registry;
 pub mod sqlite_issue_automation_store;
+pub mod sqlite_issue_source_claims;
 pub use sqlite_issue_automation_restart_registry::SqliteIssueAutomationRestartRegistryAdapter;
 pub mod sqlite_planning_authority_adapter;
 pub mod sqlite_pr_review_journal;

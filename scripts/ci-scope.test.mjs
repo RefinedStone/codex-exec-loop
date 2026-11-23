@@ -34,6 +34,21 @@ test("Rust changes keep tests, lint, and portable validation together", () => {
   assert.equal(plan.node, false);
 });
 
+test("Jira source, collection, policy, and credential fences require native validation", () => {
+  for (const path of [
+    "src/adapter/outbound/jira/issue_source.rs",
+    "src/adapter/outbound/provider_http/jira_source.rs",
+    "src/application/service/issue_collection/jira.rs",
+    "src/domain/issue_automation/policy/jira.rs",
+    "src/application/service/provider_credentials.rs",
+  ]) {
+    const plan = classifyChangedPaths([path]);
+    assert.equal(plan.rust, true, path);
+    assert.equal(plan.portable, true, path);
+    assert.equal(plan.docs_only, false, path);
+  }
+});
+
 test("admin-only changes run Node surfaces without unrelated Rust jobs", () => {
   const plan = classifyChangedPaths(["assets/admin/game/src/main.ts", "templates/admin/resources/main-sprite.png"]);
   assert.equal(plan.scope, "admin");
@@ -275,6 +290,58 @@ test("portable native selectors cover binding pause without rerunning inherited 
   const linuxTests = workflow.match(/\n  rust_tests:[\s\S]*?(?=\n  rust_lint:)/)?.[0] || "";
   assert.match(linuxTests, /runs-on: ubuntu-latest/);
   assert.match(linuxTests, /run: (?:node scripts\/ci-performance\.mjs run rust-tests -- )?cargo test --locked(?: --timings)?\s*\n/);
+});
+
+test("portable native selectors cover Jira and inherited credential fences exactly once", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
+  const windows = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
+  const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
+  const posix = readFileSync(new URL("./check_native_pr.sh", import.meta.url), "utf8");
+  const macosStep = workflow.match(/node scripts\/run_native_rust_contracts\.mjs[\s\S]*?(?=\n      - name:)/)?.[0] || "";
+  const powershellStep = powershell.match(/function Invoke-WindowsPortableChecks[\s\S]*?(?=\nPush-Location)/)?.[0] || "";
+  const selectors = [
+    ["Windows Bash", [...windows.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1])],
+    ["PowerShell", [...powershellStep.matchAll(/^\s+"([^"\r\n]+)",?\r?$/gm)].map((match) => match[1])],
+    ["macOS", [...macosStep.matchAll(/^\s+'([^'\r\n]+)'(?:\s*\\)?\r?$/gm)].map((match) => match[1])],
+  ];
+  for (const testPath of [
+    "adapter::outbound::jira::issue_source::tests::",
+    "adapter::outbound::provider_http::jira_source::tests::",
+    "adapter::outbound::provider_http::tests::feedback::",
+    "application::service::provider_credentials::tests::mutations::",
+    "adapter::outbound::jira::issue_feedback::tests::",
+    "domain::issue_automation::source::tests::jira::",
+    "domain::issue_automation::triage::tests::jira::",
+    "application::service::issue_automation_policy::tests::jira::",
+    "application::service::issue_automation_policy::tests::jira_examples::",
+    "application::service::issue_collection::tests::jira::",
+    "adapter::outbound::db::sqlite_issue_source_claims::tests::",
+    "application::service::issue_coordinator::tests::jira::",
+    "application::service::issue_feedback::tests::jira::",
+    "adapter::outbound::db::sqlite_issue_automation_store::feedback::tests::jira::",
+    "adapter::inbound::kernel_protocol::issue_automation::triage::tests::",
+    "application::port::outbound::planning_work_order_repository_port::tests::jira_",
+    "application::service::parallel_mode::tests::pool::lease::malformed_jira_branch_keys_",
+    "application::service::parallel_mode::distributor::delivery::github::tests::jira_pr_metadata_",
+    "application::service::parallel_mode::tests::pool::lease::jira_branch_",
+    "application::service::parallel_mode::tests::distributor::work_permits::link_reference::jira_work_link_",
+  ]) {
+    for (const [platform, filters] of selectors) {
+      assert.equal(filters.filter((filter) => testPath.includes(filter)).length, 1,
+        `${platform} must cover ${testPath} through exactly one group`);
+    }
+  }
+  const cleanHost = powershellStep.match(/if \(\$IncludeCleanHostContracts\) \{\s*\$testFilters \+= @\(([\s\S]*?)\n        \)/)?.[1] || "";
+  for (const filter of [
+    "application::service::parallel_mode::tests::pool::lease::jira_branch_",
+    "application::service::parallel_mode::tests::distributor::work_permits::link_reference::jira_work_link_",
+  ]) {
+    assert.ok(cleanHost.includes(`"${filter}"`), `the actual Git fixture needs the clean-host group: ${filter}`);
+  }
+  const linuxTests = workflow.match(/\n  rust_tests:[\s\S]*?(?=\n  rust_lint:)/)?.[0] || "";
+  assert.match(linuxTests, /runs-on: ubuntu-latest/);
+  assert.match(linuxTests, /run: (?:node scripts\/ci-performance\.mjs run rust-tests -- )?cargo test --locked(?: --timings)?\s*\n/);
+  assert.match(posix, /run_step "Rust tests" cargo test --locked\s*\n/);
 });
 
 test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {

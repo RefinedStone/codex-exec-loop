@@ -199,6 +199,7 @@ pub(crate) struct ProviderServices {
     >,
     pub(crate) work:
         std::sync::Arc<crate::application::service::provider_work::ProviderWorkService>,
+    pub(crate) api: std::sync::Arc<crate::adapter::outbound::provider_http::ProviderHttpAdapter>,
 }
 /// Construction does not query a key store, prompt a user, or make a network request.
 pub(crate) fn build() -> Result<ProviderServices> {
@@ -226,12 +227,13 @@ pub(crate) fn build() -> Result<ProviderServices> {
         Arc::new(NativeCredentialPromptAdapter),
         api.clone(),
     )?);
-    let work = Arc::new(ProviderWorkService::new(credentials.clone(), api));
+    let work = Arc::new(ProviderWorkService::new(credentials.clone(), api.clone()));
     Ok(ProviderServices {
         profile,
         owner,
         credentials,
         work,
+        api,
     })
 }
 

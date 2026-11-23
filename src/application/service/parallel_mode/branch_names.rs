@@ -27,6 +27,7 @@ pub(super) fn allocate_agent_branch_name(
     task_slug: &str,
     task_id: &str,
     task_title: &str,
+    jira_key: Option<&str>,
     branch_instance_id: &str,
     live_remote_branch_names: &[String],
 ) -> Result<String, String> {
@@ -42,10 +43,16 @@ pub(super) fn allocate_agent_branch_name(
     }
     // task_slug는 계획 시스템이 준 짧은 이름이라 가장 읽기 좋고, 없으면 id와
     // title을 차례로 축약한다. 이 순서가 lease 파일, PR branch, pool board의 표시명을 맞춘다.
-    let sanitized_slug = sanitize_task_slug(task_slug)
+    let mut sanitized_slug = sanitize_task_slug(task_slug)
         .or_else(|| sanitize_task_slug(task_id))
         .or_else(|| sanitize_task_slug(task_title))
         .unwrap_or_else(|| "task".to_string());
+    if let Some(key) = jira_key {
+        if !crate::domain::provider_work::valid_jira_key(key) {
+            return Err("invalid Jira issue key in immutable work link".into());
+        }
+        sanitized_slug = format!("{key}-{sanitized_slug}");
+    }
     // remote branch 목록은 루프 밖에서 한 번만 읽는다. allocation 중 같은 프로세스가
     // 만든 local branch 충돌은 `branch_exists`가 잡고, 이미 원격에 있던 이름은 이 set이 잡는다.
     let remote_branch_names =
@@ -58,6 +65,11 @@ pub(super) fn allocate_agent_branch_name(
             branch_instance_id,
             collision_index,
         );
+        if jira_key.is_some_and(|key| {
+            !candidate.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/{key}-"))
+        }) {
+            return Err("the complete Jira issue key cannot fit in the branch name".into());
+        }
         if agent_branch_name_is_available(runtime, repo_root, &candidate, &remote_branch_names) {
             return Ok(candidate);
         }

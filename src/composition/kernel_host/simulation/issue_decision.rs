@@ -327,6 +327,8 @@ impl Source {
     ) -> IssueSourceObservation {
         let body = self.body.lock().unwrap().clone();
         IssueSourceObservation {
+            content_problems: vec![],
+            jira: None,
             repository_visibility: Default::default(),
             repository_name_with_owner: None,
             creation_provenance: IssueCreationProvenance::Unattributed,
@@ -391,6 +393,8 @@ impl IssueSourcePort for Source {
             project_scope: repository.project_scope.clone(),
         };
         Ok(IssueDiscoveryPage {
+            jira_connection: None,
+            jira_binding: None,
             repository,
             observations: vec![self.observation(issue, &request.disclosure)],
             next_cursor: None,

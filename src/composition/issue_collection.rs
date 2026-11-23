@@ -10,8 +10,6 @@ use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJ
 use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
 use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
 use crate::adapter::outbound::git::issue_origin::GitIssueCollectionOriginAdapter;
-use crate::adapter::outbound::github::issue_feedback::GithubIssueFeedbackAdapter;
-use crate::adapter::outbound::github::issue_source::GithubIssueSourceAdapter;
 use crate::application::port::outbound::IssueAutomationRestartRegistryPort;
 use crate::application::port::outbound::issue_feedback_store_port::IssueFeedbackStorePort;
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
@@ -23,6 +21,7 @@ use crate::application::service::issue_source_provenance::IssueSourceProvenanceS
 use crate::application::service::issue_triage::IssueTriageService;
 
 mod arbiter;
+mod jira;
 
 /// All production entry points share the issue authority profile's discovery registry.
 /// The adapter resolves the path only on an operation, never while assembling a service.
@@ -80,6 +79,28 @@ fn build_with_admission_and_restart_registry(
     admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
     restart_registry: Arc<dyn IssueAutomationRestartRegistryPort>,
 ) -> Arc<IssueCollectionService> {
+    build_with_runtime_services(workspace_dir, admission, restart_registry, None)
+}
+
+pub(crate) fn build_with_provider_services(
+    workspace_dir: &str,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+    providers: Option<super::provider_credentials::ProviderServices>,
+) -> Arc<IssueCollectionService> {
+    build_with_runtime_services(
+        workspace_dir,
+        admission,
+        build_restart_registry(),
+        providers,
+    )
+}
+
+fn build_with_runtime_services(
+    workspace_dir: &str,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+    restart_registry: Arc<dyn IssueAutomationRestartRegistryPort>,
+    providers: Option<super::provider_credentials::ProviderServices>,
+) -> Arc<IssueCollectionService> {
     let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
@@ -92,13 +113,20 @@ fn build_with_admission_and_restart_registry(
             Ok(PathBuf::from(location.runtime_dir))
         }));
     let validation_source = Arc::new(FilesystemIssuePolicySourceAdapter::new());
+    let claims: Arc<dyn crate::application::port::outbound::issue_source_claim_port::IssueSourceClaimPort> = Arc::new(
+        crate::adapter::outbound::db::sqlite_issue_source_claims::SqliteIssueSourceClaimsAdapter::new(restart_registry_runtime),
+    );
+    let credential_reader = providers.as_ref().map(|services| services.credentials.clone() as Arc<dyn crate::application::port::outbound::provider_credentials_port::ProviderCredentialReadPort>);
     let feedback = Arc::new(
         IssueFeedbackService::new(
             workspace_dir.to_owned(),
             store.clone(),
-            Arc::new(GithubIssueFeedbackAdapter::new(PathBuf::from(
+            Arc::new(jira::RoutedIssueFeedback::new(
                 workspace_dir,
-            ))),
+                store.clone(),
+                claims.clone(),
+                providers.as_ref(),
+            )),
             publication.clone(),
             IssueAutomationPolicyService::new(Arc::new(
                 FilesystemIssueAutomationPolicySourceAdapter::new(),
@@ -117,7 +145,12 @@ fn build_with_admission_and_restart_registry(
     ));
     let source = Arc::new(
         IssueSourceProvenanceService::new(
-            Arc::new(GithubIssueSourceAdapter::new(PathBuf::from(workspace_dir))),
+            Arc::new(jira::RoutedIssueSource::new(
+                workspace_dir,
+                store.clone(),
+                claims.clone(),
+                providers,
+            )),
             Arc::new(
                 IssueCreationJournalAdapter::new(|workspace| {
                     let location =
@@ -206,6 +239,13 @@ fn build_with_admission_and_restart_registry(
             source,
             Arc::new(GitIssueCollectionOriginAdapter::new()),
             IssuePolicyService::new(validation_source),
+        )
+        .with_jira_collection(
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
+            credential_reader,
+            claims,
         )
         .with_triage(triage)
         .with_autonomy(autonomy)

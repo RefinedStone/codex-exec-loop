@@ -4,8 +4,8 @@ use super::issue_collection::IssueCollectionCancellation;
 use super::issue_masking::{IssueTextField, mask_issue_text};
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
 use crate::application::port::outbound::issue_feedback_port::{
-    IssueFeedbackLabelSnapshot, IssueFeedbackPort, IssueFeedbackReadResult,
-    IssueFeedbackWriteResult,
+    IssueFeedbackActorContext, IssueFeedbackLabelSnapshot, IssueFeedbackPort,
+    IssueFeedbackReadResult, IssueFeedbackWriteResult,
 };
 use crate::application::port::outbound::issue_feedback_store_port::{
     IssueFeedbackClaimResult, IssueFeedbackCompletion, IssueFeedbackFence,
@@ -24,7 +24,7 @@ use crate::domain::issue_automation::source::IssueSourceRead;
 use crate::domain::issue_automation::{IssueAutomationAutonomy, IssueAutomationState};
 use crate::domain::issue_policy::IssuePolicy;
 use crate::domain::issue_secret_spans::secret_spans;
-use crate::domain::issue_work::IssueReference;
+use crate::domain::issue_work::{IssueProvider, IssueReference};
 use anyhow::{Result, anyhow, bail};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -191,7 +191,11 @@ impl IssueFeedbackService {
         {
             return Ok(());
         }
-        let actor_id = self.provider.actor_id(issue)?;
+        let actor = self.provider.actor_context(issue)?;
+        if !actor_matches_snapshot(&actor, &current) {
+            return Ok(());
+        }
+        let actor_id = actor.actor_id;
         validate_feedback_id(&actor_id).map_err(anyhow::Error::msg)?;
         let intent_id = format!("{:032x}", rand::random::<u128>());
         let body = format!(
@@ -221,6 +225,7 @@ impl IssueFeedbackService {
             intent_id,
             issue: issue.clone(),
             actor_id,
+            connection: actor.connection,
             automation_policy_version: automation.version,
             disclosure_policy_version: issue_policy_version(&disclosure),
             desired_revision: current.state.desired_revision,
@@ -296,7 +301,11 @@ impl IssueFeedbackService {
         }
         let file = self.automation.resolve(&self.workspace)?;
         let automation = super::issue_autonomy::effective_policy(file, &snapshot.autonomy);
-        if automation.policy.binding.github.mode == IssueAutomationAutonomy::Off {
+        if automation
+            .policy
+            .mode_for_provider(snapshot.item.issue.provider)
+            == IssueAutomationAutonomy::Off
+        {
             return Ok(None);
         }
         let disclosure = self.disclosure.resolve(&self.workspace)?;
@@ -315,6 +324,24 @@ impl IssueFeedbackService {
             .iter()
             .any(|record| record.issue.same_remote_issue(issue) && record.state.is_unresolved()))
     }
+}
+
+fn actor_matches_snapshot(
+    actor: &IssueFeedbackActorContext,
+    snapshot: &IssueFeedbackSnapshot,
+) -> bool {
+    if snapshot.item.issue.provider == IssueProvider::GitHub {
+        return actor.connection.is_none();
+    }
+    let Some(IssueSourceRead::Observed(observed)) = snapshot.item.current.as_ref() else {
+        return false;
+    };
+    let (Some(jira), Some(connection)) = (observed.jira.as_ref(), actor.connection.as_ref()) else {
+        return false;
+    };
+    connection.profile_id == jira.connection.profile_id
+        && connection.connection_id == jira.connection.connection_id
+        && connection.revision == jira.connection.revision
 }
 
 fn snapshot_allows_write(snapshot: &IssueFeedbackSnapshot) -> bool {

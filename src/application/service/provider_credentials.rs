@@ -16,6 +16,7 @@ const CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 const ACQUIRE_BUDGET: Duration = Duration::from_secs(20);
 const MAX_CLEANUP_CALLS: usize = 128;
 type OwnerMap = HashMap<(Provider, String), NativeOperationOwner>;
+mod mutation;
 
 pub struct ProviderCredentialService {
     profile_id: String,
@@ -25,6 +26,7 @@ pub struct ProviderCredentialService {
     verifier: Arc<dyn ProviderAccountVerifierPort>,
     owners: Mutex<OwnerMap>,
     closing: Arc<AtomicBool>,
+    mutations: Arc<mutation::MutationAdmission>,
     changed: tokio::sync::broadcast::Sender<ProviderCredentialChanged>,
 }
 
@@ -40,6 +42,12 @@ impl ProviderCredentialService {
             return Err(ProviderCredentialError::InvalidRequest);
         }
         let (changed, _) = tokio::sync::broadcast::channel(64);
+        let closing = Arc::new(AtomicBool::new(false));
+        let mutations = Arc::new(mutation::MutationAdmission::new(
+            profile_id.clone(),
+            ledger.clone(),
+            closing.clone(),
+        ));
         Ok(Self {
             profile_id,
             ledger,
@@ -47,7 +55,8 @@ impl ProviderCredentialService {
             prompt,
             verifier,
             owners: Mutex::new(HashMap::new()),
-            closing: Arc::new(AtomicBool::new(false)),
+            closing,
+            mutations,
             changed,
         })
     }
@@ -56,9 +65,9 @@ impl ProviderCredentialService {
         self.changed.subscribe()
     }
 
-    /// Stop accepting new input and durably fence every pending operation without OS I/O.
+    /// Fence pending input without key-store I/O, then drain bounded admitted HTTP mutations.
     pub fn shutdown(&self) -> CredentialResult<()> {
-        self.closing.store(true, Ordering::SeqCst);
+        self.mutations.close()?;
         for owner in self
             .owners
             .lock()
@@ -79,7 +88,8 @@ impl ProviderCredentialService {
                 Ok(())
             })?;
         }
-        Ok(())
+        self.mutations
+            .drain(None, u64::MAX, Instant::now() + ACQUIRE_BUDGET)
     }
 
     /// Call only after acquiring the Gateway's exclusive profile owner and before serving requests.
@@ -148,9 +158,22 @@ impl ProviderCredentialService {
     ) -> CredentialResult<OperationReceipt> {
         self.validate_operation_request(&request)?;
         let ledger = self.load(request.provider)?;
-        Ok(find_operation(&ledger, &request.operation_id)?
+        let receipt = find_operation(&ledger, &request.operation_id)?
             .receipt
-            .clone())
+            .clone();
+        if receipt.status == CredentialOperationStatus::Committed {
+            let before_revision = receipt
+                .connection
+                .as_ref()
+                .map(|reference| reference.revision)
+                .unwrap_or(next_revision(receipt.expected_revision)?);
+            self.mutations.drain(
+                Some(request.provider),
+                before_revision,
+                Instant::now() + ACQUIRE_BUDGET,
+            )?;
+        }
+        Ok(receipt)
     }
 
     pub fn start_connect(
@@ -269,6 +292,11 @@ impl ProviderCredentialService {
                 Some(superseded),
             ))
         })?;
+        self.mutations.drain(
+            Some(request.provider),
+            next_revision(request.expected_revision)?,
+            Instant::now() + ACQUIRE_BUDGET,
+        )?;
         if superseded.is_none() {
             // An explicit replay retries only the old generation cleanup; it never re-fences
             // current input or increments the tombstone revision.
@@ -341,10 +369,16 @@ impl ProviderCredentialService {
             }
             next.row_version = next_revision(previous.row_version)?;
             next.validate()?;
-            if self
-                .ledger
-                .compare_exchange_guarded(&previous, &next, publish_allowed)?
-            {
+            let exchange = || {
+                self.ledger
+                    .compare_exchange_guarded(&previous, &next, publish_allowed)
+            };
+            let changed = if previous.active != next.active {
+                self.mutations.with_connection_change(exchange)?
+            } else {
+                exchange()?
+            };
+            if changed {
                 let _ = self.changed.send(ProviderCredentialChanged {
                     provider,
                     profile_id: self.profile_id.clone(),

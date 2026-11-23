@@ -6,6 +6,7 @@ fn close_intent(previous: Option<&str>) -> IssueFeedbackIntent {
         integration_record_id: "integration-1".to_string(),
         integration_sha: "a".repeat(40),
         decision_id: "decision-1".to_string(),
+        jira_transition: None,
         previous_event_id: previous.map(str::to_string),
     };
     intent

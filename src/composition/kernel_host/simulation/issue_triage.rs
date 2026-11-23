@@ -163,6 +163,8 @@ impl SimIssueSource {
     ) -> IssueSourceObservation {
         let body = self.body.lock().expect("body").clone();
         IssueSourceObservation {
+            content_problems: vec![],
+            jira: None,
             repository_visibility:
                 crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
             repository_name_with_owner: Some("owner/repository".into()),
@@ -230,6 +232,8 @@ impl IssueSourcePort for SimIssueSource {
             project_scope: repository.project_scope.clone(),
         };
         Ok(IssueDiscoveryPage {
+            jira_connection: None,
+            jira_binding: None,
             repository,
             observations: vec![self.observation(issue, &request.disclosure)],
             next_cursor: None,

@@ -181,6 +181,8 @@ fn observation(issue: &IssueReference) -> IssueSourceObservation {
     let title = "Fixture issue";
     let body = "## 완료 기준\n- 변경 결과를 검증한다.\n";
     IssueSourceObservation {
+        content_problems: vec![],
+        jira: None,
         issue: issue.clone(),
         repository_visibility: IssueRepositoryVisibility::Private,
         repository_name_with_owner: None,

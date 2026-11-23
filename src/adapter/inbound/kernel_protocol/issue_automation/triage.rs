@@ -259,6 +259,10 @@ fn reason_parts(reason: IssueTriageReasonCode) -> (ReasonCode, &'static str) {
             ReasonCode::AutoRepositoryRestricted,
             "공개 저장소이거나 저장소의 공개 범위와 출처를 확인할 수 없어 제안 단계로 제한합니다.",
         ),
+        IssueTriageReasonCode::JiraPullRequestLookupUnsupported => (
+            ReasonCode::JiraPullRequestLookupUnsupported,
+            "Jira 연결에서 관련 PR의 유무를 확인할 수 없어 자동으로 시작하지 않습니다.",
+        ),
         IssueTriageReasonCode::BudgetExhausted => (
             ReasonCode::BudgetExhausted,
             "예산 상한이 0이어서 자동 시작할 수 없습니다.",
@@ -338,6 +342,9 @@ fn reason_next_summary(reason: IssueTriageReasonCode) -> &'static str {
         }
         IssueTriageReasonCode::AutoRepositoryRestricted => {
             "원본 저장소의 현재 공개 범위와 연결을 확인하고 제안된 작업을 사람이 검토하세요."
+        }
+        IssueTriageReasonCode::JiraPullRequestLookupUnsupported => {
+            "진행 중인 PR이나 중복 작업이 없는지 직접 확인하세요. 다른 준비 조건이 모두 충족되면 현재 이슈의 시작 결정을 Native 확인으로 승인할 수 있습니다."
         }
         IssueTriageReasonCode::BudgetExhausted => {
             "예산과 시도 한도를 확인하고 사람의 검토를 기다리세요."

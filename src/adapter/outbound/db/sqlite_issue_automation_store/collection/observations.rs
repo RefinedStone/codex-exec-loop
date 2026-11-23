@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, Transaction, params};
-use sha2::{Digest, Sha256};
 
 use crate::application::port::outbound::issue_source_port::{
     IssueDiscoveryPage, IssueDiscoveryRequest, IssueDiscoveryTarget,
@@ -136,14 +135,7 @@ pub(super) fn resolve_binding(
         return Ok(binding);
     }
     // This identifies a local binding, never an issue. Remote issue IDs always come from the provider.
-    let digest = Sha256::digest(serde_json::to_vec(repository)?);
-    let binding = IssueAutomationBinding::new(
-        IssueAutomationBindingId::new(format!("issue-source-{digest:x}"))?,
-        repository.provider,
-        repository.server_id.clone(),
-        repository.repository_id.clone(),
-        repository.project_scope.clone(),
-    )?;
+    let binding = IssueAutomationBinding::for_source(repository)?;
     validate_binding_scope(workspace, &binding)?;
     transaction.execute(
         "INSERT INTO issue_automation_bindings
