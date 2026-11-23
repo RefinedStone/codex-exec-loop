@@ -2,9 +2,13 @@
 const EVENT = "akra:blog-focus";
 let pending: string | null = null;
 
-export function focusBlogArticle(id: string): void {
+/**
+ * `announce` 가 거짓이면 열린 패널에 알리지 않는다. 저장소를 바꾸는 중이면 지금 패널은 다른 저장소의 것이다:
+ * 새 저장소의 패널이 열릴 때 가져간다.
+ */
+export function focusBlogArticle(id: string, announce = true): void {
   pending = id;
-  window.dispatchEvent(new CustomEvent(EVENT));
+  if (announce) window.dispatchEvent(new CustomEvent(EVENT));
 }
 
 /** 기다리는 글 ID 를 한 번만 준다. */

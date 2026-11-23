@@ -24,7 +24,7 @@ import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
 import { ATTENTION_TEXT, attentionEvents, issueDecisionAttentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
-import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, isDotDockVisible, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
+import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, isDotDockVisible, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showHome, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { SkillsPanel } from "./skills/SkillsPanel";
 import { folderName } from "./sidebar/threadStatus";
@@ -640,11 +640,22 @@ export function App() {
     connected && view !== "remote" && kernelPhase === "attached" && attachedWorkspace === kernelWorkspace ? kernelId : null);
   // 글이 끝나거나 멈추면 알린다 (plan 31 §7.8). 패널이 블로그를 보이고 있으면 화면이 바뀌므로 토스트는 띄우지 않는다.
   // OS 알림에는 글의 제목과 내용을 넣지 않는다: 잠금 화면과 알림 기록에 남는다.
+  // 알림을 누를 때 다른 저장소를 보고 있으면 글이 속한 저장소로 옮긴 뒤 연다.
+  const blogWorkspace = useRef(kernelWorkspace);
+  blogWorkspace.current = kernelWorkspace;
+  const shownWorkspace = useRef(extensionWorkspace);
+  shownWorkspace.current = extensionWorkspace;
   const blog = useBlogActivity(extensions, useCallback((article) => {
+    const workspace = blogWorkspace.current;
     const text = didStop(article) ? "블로그 글 만들기가 멈췄습니다." : "블로그 글이 준비됐습니다.";
     const shown = useUiStore.getState().panel === "akra.tech-blog" && viewingBlogArticle() === article.id;
     if (!shown) toast(text);
-    notifyOs("Akra", text, () => { focusBlogArticle(article.id); openPanel("akra.tech-blog"); }, `akra:blog:${article.id}`);
+    notifyOs("Akra", text, () => {
+      const moving = !!workspace && shownWorkspace.current !== workspace;
+      if (moving) showHome(workspace);
+      focusBlogArticle(article.id, !moving);
+      openPanel("akra.tech-blog");
+    }, `akra:blog:${article.id}`);
   }, []));
   const closeDisabledBlog = extensions.ready && !!selectedExtension && !extensions.enabledIds.includes(selectedExtension.id);
   useEffect(() => {
