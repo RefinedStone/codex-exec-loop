@@ -322,3 +322,31 @@ fn rejects_existing_inherited_runtime_acl_without_repair() {
     assert!(super::open_or_create(&runtime, FILES, Synchronous::Extra).is_err());
     assert!(!runtime.join(FILES.database).exists());
 }
+
+#[cfg(windows)]
+#[test]
+fn rejects_existing_database_acl_without_repair() {
+    for inherited_acl in [true, false] {
+        let fixture = RuntimeFixture::new();
+        let path = fixture.0.join(FILES.database);
+        if inherited_acl {
+            std::fs::write(&path, b"").unwrap();
+        } else {
+            drop(open(&fixture.0, FILES, Synchronous::Extra).unwrap());
+            let mut command = std::process::Command::new("icacls.exe");
+            command.arg(&path).args(["/grant", "*S-1-1-0:(R)"]);
+            let output = crate::subprocess::wait_with_output_timeout(
+                crate::subprocess::spawn(&mut command).unwrap(),
+                "private SQLite ACL fixture",
+                std::time::Duration::from_secs(10),
+            )
+            .unwrap();
+            assert!(output.status.success());
+        }
+        let before = std::fs::read(&path).unwrap();
+        assert!(open(&fixture.0, FILES, Synchronous::Extra).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let file = std::fs::File::open(&path).unwrap();
+        assert!(crate::private_fs::validate_windows_private_owner_and_acl(&path, &file).is_err());
+    }
+}

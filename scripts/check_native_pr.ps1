@@ -166,6 +166,8 @@ function Invoke-WindowsPortableChecks {
         "telegram_bot::tests::telegram_config_windows_",
         "telegram_global_runner_lease::tests::",
         "private_sqlite::tests::",
+        "filesystem::issue_publish_intent_journal::",
+        "gateway::tests::issue_shared_copy_flow::",
         "stable_user_data_root::tests::",
         "sqlite_issue_automation_store::private_store::tests::",
         "adapter::outbound::vault_key_store::",

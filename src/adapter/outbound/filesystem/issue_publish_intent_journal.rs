@@ -1,14 +1,24 @@
-//! 이슈 게시 의도 일지이다 (#2424). 저장소 runtime 디렉터리의 `issue-publish-intents.jsonl` 파일 하나이다.
-//! 한 줄이 의도 하나이다 (`IssuePublishIntentRecord` 의 JSON). 저장할 때마다 파일 전체를 원자적으로 바꾼다.
+//! 저장소 private runtime의 이슈 게시 의도 일지이다 (#2424, #2660).
+//! Unix는 JSONL 파일을 원자 교체하고 Windows는 private SQLite transaction으로 저장한다.
+//! Windows publication reservation은 별도 DB에 두어 Sent를 먼저 durable commit한다.
 //!
 //! git 작업 일지와 다른 점: 읽지 못한 줄은 오류이다. 건너뛰면 결과를 모르는 의도를 놓치고 같은 글을 다시 보낸다.
 
-use std::path::{Path, PathBuf};
+#[cfg(any(not(windows), test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+#[cfg(not(windows))]
+use anyhow::Context;
+use anyhow::Result;
 
+#[cfg(windows)]
+mod windows;
+
+#[cfg(not(windows))]
 use super::private_runtime_lease::PrivateRuntimeLease;
+#[cfg(not(windows))]
 use super::secure_fs;
 use crate::application::port::outbound::issue_publish_intent_journal_port::{
     IssuePublicationLease, IssuePublishIntentJournalPort,
@@ -38,6 +48,7 @@ impl IssuePublishIntentJournalAdapter {
     }
 }
 
+#[cfg(not(windows))]
 fn read_records(runtime_dir: &Path) -> Result<Vec<IssuePublishIntentRecord>> {
     let body = secure_fs::read_optional_file(runtime_dir, Path::new(JOURNAL_FILE_NAME))?
         .unwrap_or_default();
@@ -49,6 +60,7 @@ fn read_records(runtime_dir: &Path) -> Result<Vec<IssuePublishIntentRecord>> {
         .collect()
 }
 
+#[cfg(not(windows))]
 impl IssuePublicationLease for PrivateRuntimeLease {
     fn verify_identity(&self) -> Result<()> {
         PrivateRuntimeLease::verify_identity(self)
@@ -61,6 +73,10 @@ impl IssuePublishIntentJournalPort for IssuePublishIntentJournalAdapter {
         workspace_dir: &str,
     ) -> Result<Box<dyn IssuePublicationLease + '_>> {
         let runtime_dir = (self.resolve_runtime_dir)(workspace_dir)?;
+        #[cfg(windows)]
+        let lease =
+            windows::PublicationLease::acquire(runtime_dir, std::time::Duration::from_secs(30))?;
+        #[cfg(not(windows))]
         let lease = PrivateRuntimeLease::acquire(
             runtime_dir,
             PUBLICATION_LOCK_NAME,
@@ -75,25 +91,42 @@ impl IssuePublishIntentJournalPort for IssuePublishIntentJournalAdapter {
             .write
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut records = read_records(&runtime_dir)?;
-        match records
-            .iter_mut()
-            .find(|existing| existing.intent_id == record.intent_id)
+        #[cfg(windows)]
         {
-            Some(existing) => *existing = record.clone(),
-            None => records.push(record.clone()),
+            windows::save_record(&runtime_dir, record)
         }
-        // shortcut: 끝난 의도도 계속 남는다 (게시 한 번에 한 줄), 파일이 커지면 오래된 끝난 의도를 버린다.
-        let mut body = String::new();
-        for record in &records {
-            body.push_str(&serde_json::to_string(record)?);
-            body.push('\n');
+        #[cfg(not(windows))]
+        {
+            let mut records = read_records(&runtime_dir)?;
+            match records
+                .iter_mut()
+                .find(|existing| existing.intent_id == record.intent_id)
+            {
+                Some(existing) => *existing = record.clone(),
+                None => records.push(record.clone()),
+            }
+            // shortcut: 끝난 의도도 계속 남는다 (게시 한 번에 한 줄), 파일이 커지면 오래된 끝난 의도를 버린다.
+            let mut body = String::new();
+            for record in &records {
+                body.push_str(&serde_json::to_string(record)?);
+                body.push('\n');
+            }
+            secure_fs::write_file_atomic(
+                &runtime_dir,
+                Path::new(JOURNAL_FILE_NAME),
+                body.as_bytes(),
+            )
         }
-        secure_fs::write_file_atomic(&runtime_dir, Path::new(JOURNAL_FILE_NAME), body.as_bytes())
     }
 
     fn load(&self, workspace_dir: &str) -> Result<Vec<IssuePublishIntentRecord>> {
-        read_records(&(self.resolve_runtime_dir)(workspace_dir)?)
+        let runtime = (self.resolve_runtime_dir)(workspace_dir)?;
+        #[cfg(windows)]
+        {
+            windows::read_records(&runtime)
+        }
+        #[cfg(not(windows))]
+        read_records(&runtime)
     }
 }
 
@@ -111,7 +144,7 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
+        crate::private_directory::ensure_private_directory(&directory).unwrap();
         directory
     }
 
@@ -120,7 +153,10 @@ mod tests {
         IssuePublishIntentJournalAdapter::new(move |_| Ok(resolved.clone()))
     }
 
-    fn record(intent_id: &str, state: IssuePublishIntentState) -> IssuePublishIntentRecord {
+    pub(super) fn record(
+        intent_id: &str,
+        state: IssuePublishIntentState,
+    ) -> IssuePublishIntentRecord {
         IssuePublishIntentRecord {
             intent_id: intent_id.to_string(),
             issue: IssueReference {
@@ -223,6 +259,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_broken_line_is_an_error_and_is_not_overwritten() {
         let directory = temp_runtime_dir("broken");
