@@ -31,6 +31,8 @@ mod issue_decision;
 #[cfg(unix)]
 mod issue_flow;
 mod issue_intervention;
+#[cfg(any(unix, windows))]
+mod issue_shared_copy_flow;
 mod repository_extensions;
 mod resource_versions;
 

@@ -227,6 +227,27 @@ fn damage_main_header(runtime: &Path, damage: &str) {
     database.sync_all().unwrap();
 }
 
+fn copy_private_crash_fixture(source: &Path, destination: &Path) {
+    std::fs::copy(source, destination).unwrap();
+    #[cfg(windows)]
+    {
+        use crate::private_fs::{
+            WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL, WINDOWS_WRITE_DAC, set_windows_private_acl,
+            validate_windows_path_identity,
+        };
+        use std::os::windows::fs::OpenOptionsExt;
+        // CopyFile preserves bytes but the new destination inherits its directory ACL.
+        // Model an already-private crashed database; production must not repair that ACL.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL | WINDOWS_WRITE_DAC)
+            .open(destination)
+            .unwrap();
+        validate_windows_path_identity(destination, &file, false).unwrap();
+        set_windows_private_acl(&file, false).unwrap();
+    }
+}
+
 fn assert_recovered_header(runtime: &Path) {
     let database = std::fs::read(runtime.join(DATABASE_NAME)).unwrap();
     assert_eq!(&database[..16], b"SQLite format 3\0");
@@ -257,8 +278,8 @@ fn hot_rollback_journal_recovers_a_torn_database_header() {
         let plain = RuntimeFixture::new();
         let protected = RuntimeFixture::new();
         for name in [DATABASE_NAME, super::ROLLBACK_JOURNAL_NAME] {
-            std::fs::copy(source.0.join(name), plain.0.join(name)).unwrap();
-            std::fs::copy(source.0.join(name), protected.0.join(name)).unwrap();
+            copy_private_crash_fixture(&source.0.join(name), &plain.0.join(name));
+            copy_private_crash_fixture(&source.0.join(name), &protected.0.join(name));
         }
         // The child has exited, so its locks are gone. Only the main file is
         // damaged; both copies retain SQLite's journal bytes and checksums.
@@ -346,7 +367,7 @@ fn invalid_journals_do_not_bypass_legacy_wal_header_rejection() {
 
     for journal in [Vec::new(), vec![0; 1024], vec![0x11; 1024]] {
         let runtime = RuntimeFixture::new();
-        std::fs::copy(&database, runtime.0.join(DATABASE_NAME)).unwrap();
+        copy_private_crash_fixture(&database, &runtime.0.join(DATABASE_NAME));
         let journal_path = runtime.0.join(super::ROLLBACK_JOURNAL_NAME);
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);

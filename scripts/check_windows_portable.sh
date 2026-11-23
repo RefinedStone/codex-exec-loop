@@ -25,6 +25,8 @@ run_contract 'windows_plain_workspace_production_flow_initializes_edits_and_rese
 run_contract 'telegram_bot::tests::telegram_config_windows_'
 run_contract 'telegram_global_runner_lease::tests::'
 run_contract 'private_sqlite::tests::'
+run_contract 'filesystem::issue_publish_intent_journal::'
+run_contract 'gateway::tests::issue_shared_copy_flow::'
 run_contract 'stable_user_data_root::tests::'
 run_contract 'sqlite_issue_automation_store::private_store::tests::'
 run_contract 'adapter::outbound::vault_key_store::'

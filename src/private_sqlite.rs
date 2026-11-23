@@ -111,6 +111,11 @@ impl PrivateConnection {
     pub(crate) fn parts(&mut self) -> (&mut Connection, &PrivateStoreGuard) {
         (&mut self.connection, &self.guard)
     }
+
+    #[cfg(windows)]
+    pub(crate) fn verify_identity(&self) -> Result<()> {
+        self.guard.verify_identity()
+    }
 }
 
 struct DatabaseAnchor {
@@ -218,7 +223,18 @@ pub(crate) fn open(
     files: DatabaseFiles,
     synchronous: Synchronous,
 ) -> Result<PrivateConnection> {
-    open_database(runtime, files, synchronous, false)
+    open_database(runtime, files, synchronous, false, Duration::from_secs(5))
+}
+
+/// Bound the complete SQLite acquisition wait before accessing its schema.
+#[cfg(windows)]
+pub(crate) fn open_with_busy_timeout(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+    busy_timeout: Duration,
+) -> Result<PrivateConnection> {
+    open_database(runtime, files, synchronous, false, busy_timeout)
 }
 
 /// Create missing runtime components privately while keeping every directory pinned.
@@ -228,7 +244,7 @@ pub(crate) fn open_or_create(
     files: DatabaseFiles,
     synchronous: Synchronous,
 ) -> Result<PrivateConnection> {
-    open_database(runtime, files, synchronous, true)
+    open_database(runtime, files, synchronous, true, Duration::from_secs(5))
 }
 
 fn validate_runtime_path(runtime: &Path) -> Result<()> {
@@ -277,6 +293,7 @@ fn open_database(
     files: DatabaseFiles,
     synchronous: Synchronous,
     create: bool,
+    busy_timeout: Duration,
 ) -> Result<PrivateConnection> {
     // Validate the complete request before creating even the first directory.
     files.validate()?;
@@ -305,7 +322,7 @@ fn open_database(
         | OpenFlags::SQLITE_OPEN_NOFOLLOW;
     let connection = Connection::open_with_flags(runtime.join(files.database), flags)
         .context("failed to open private SQLite database")?;
-    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.busy_timeout(busy_timeout)?;
     guard.verify_identity()?;
     let mode = connection.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))?;
     if !mode.eq_ignore_ascii_case("delete") {
@@ -783,8 +800,20 @@ mod platform {
     }
 
     pub(super) fn open_database(path: &Path, _: &File) -> Result<Arc<DatabaseAnchor>> {
-        let file = file_options().create(true).open(path)?;
-        secure_file(path, &file)?;
+        let file = match file_options().create_new(true).open(path) {
+            Ok(file) => {
+                secure_file(path, &file)?;
+                file
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let file = file_options().open(path)?;
+                // Only an atomically created database may receive its initial ACL.
+                // Existing databases must never have unsafe permissions repaired.
+                verify_file(path, &file)?;
+                file
+            }
+            Err(error) => return Err(error).context("failed to create private SQLite database"),
+        };
         Ok(Arc::new(DatabaseAnchor::new(file)))
     }
 

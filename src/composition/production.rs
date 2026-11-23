@@ -543,13 +543,24 @@ pub(crate) fn build_issue_form_install()
     ))
 }
 
+/// 기존 이슈 게시와 Gateway 조립 회귀가 같은 저장소 runtime 해석을 사용한다.
+pub(crate) fn build_issue_publish_journal()
+-> Arc<dyn crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort>{
+    use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
+
+    Arc::new(IssuePublishIntentJournalAdapter::new(|workspace_dir| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    }))
+}
+
 fn build_issue_drafts()
 -> Result<Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>> {
     use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
     use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
     use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJournalAdapter;
     use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
-    use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
     use crate::adapter::outbound::filesystem::issue_template::FilesystemIssueTemplateSourceAdapter;
     use crate::adapter::outbound::github::{
         GithubIssueCreateAdapter, GithubIssueSnapshotAdapter, GithubIssueUpdateAdapter,
@@ -566,17 +577,13 @@ fn build_issue_drafts()
     let _ = crate::private_directory::ensure_private_directory(&vault_root);
     let vault = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root));
     let snapshot = Arc::new(GithubIssueSnapshotAdapter::new(akra_home.clone()));
-    let journal = IssuePublishIntentJournalAdapter::new(|workspace_dir| {
-        let location =
-            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
-        Ok(PathBuf::from(location.runtime_dir))
-    });
+    let journal = build_issue_publish_journal();
     // Creation and updates share the same ordering owner and restore-link mutex.
     let publisher = Arc::new(
         IssueJournaledPublishService::new(
             snapshot.clone(),
             Arc::new(GithubIssueUpdateAdapter::new(akra_home.clone())),
-            Arc::new(journal),
+            journal,
             vault.clone(),
         )
         .with_feedback_store(super::issue_collection::build_feedback_store()),
