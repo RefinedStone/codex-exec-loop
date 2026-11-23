@@ -57,7 +57,8 @@ impl RepositoryExtensions {
     pub(crate) fn common(
         &self,
         kernel: &str,
-    ) -> Result<Arc<crate::application::service::kernel_extensions::ExtensionService>> {
+    ) -> Result<Arc<dyn crate::application::port::inbound::extension_host_port::ExtensionHostPort>>
+    {
         let mut common = self.common.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(host) = &*common {
             return Ok(host.clone());
@@ -106,6 +107,7 @@ impl RepositoryExtensions {
             label: "기술 블로그",
             actions: &ACTIONS,
             permissions: &["git.read", "article.write", "model.run", "workspace.write"],
+            operations: crate::domain::repository_extension::tech_blog::operations(),
         }])
     }
 
@@ -119,6 +121,15 @@ impl RepositoryExtensions {
         if extension != BLOG || version != VERSION {
             bail!("지원하지 않는 확장 또는 버전입니다. Desktop 과 Akra 를 함께 업데이트하세요.");
         }
+        // Publish and enforce the same machine contract before any legacy worker side effect.
+        let operation = crate::domain::repository_extension::tech_blog::operations()
+            .into_iter()
+            .find(|operation| operation.name == action)
+            .context("지원하지 않는 확장 명령입니다.")?;
+        anyhow::ensure!(
+            jsonschema::validator_for(&operation.input_schema)?.is_valid(&input),
+            "블로그 입력이 등록된 확장 스키마와 일치하지 않습니다."
+        );
         if !ACTIONS.contains(&action) {
             bail!("지원하지 않는 확장 명령입니다.");
         }
@@ -215,6 +226,69 @@ impl RepositoryExtensions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blog_machine_catalog_matches_version_two_public_actions() {
+        let operations = crate::domain::repository_extension::tech_blog::operations();
+        let declared = operations
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(declared, ACTIONS.into_iter().collect());
+        for action in STARTS_JOB {
+            let operation = operations.iter().find(|o| o.name == action).unwrap();
+            assert_eq!(
+                operation.kind,
+                crate::domain::kernel_extension::ExtensionOperationKind::Command
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn blog_version_two_model_entries_preserve_schema_and_busy_guards() {
+        let workspace = std::env::temp_dir().join(format!(
+            "akra-blog-admission-{:032x}",
+            rand::random::<u128>()
+        ));
+        let host = RepositoryExtensions::new(&workspace.to_string_lossy());
+        host.jobs.store(1, Ordering::Release);
+        for (action, input) in [
+            (
+                "generate",
+                json!({"commits":["0123456789abcdef0123456789abcdef01234567"]}),
+            ),
+            ("resume", json!({"id":"saved-article","revision":1})),
+            (
+                "revise",
+                json!({"id":"saved-article","revision":1,"instruction":"Clarify the evidence"}),
+            ),
+            ("review", json!({"id":"saved-article","revision":1})),
+        ] {
+            let error = host.call(BLOG, VERSION, action, input).await.unwrap_err();
+            assert!(error.to_string().contains("모델 호출이 아직"), "{error}");
+        }
+        host.jobs.store(0, Ordering::Release);
+        for (action, input) in [
+            ("generate", json!({"commits":[]})),
+            ("resume", json!({"id":"saved-article"})),
+            (
+                "revise",
+                json!({"id":"saved-article","revision":1,"instruction":"x".repeat(1_001)}),
+            ),
+            ("review", json!({"id":"saved-article"})),
+            ("restore", json!({"id":"saved-article"})),
+            ("export", json!({"id":"saved-article"})),
+        ] {
+            let error = host.call(BLOG, VERSION, action, input).await.unwrap_err();
+            assert!(error.to_string().contains("스키마"), "{error}");
+        }
+        assert!(host.call(BLOG, 1, "list", json!({})).await.is_err());
+        assert!(
+            !workspace.exists(),
+            "admission rejection must precede worker/runtime effects"
+        );
+    }
+
     #[tokio::test]
     async fn packaged_blog_worker_round_trips_without_a_model() {
         let root =

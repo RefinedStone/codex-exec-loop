@@ -12,6 +12,10 @@ Both scopes use `extensions/list`, `extensions/call` and `extensions/changed`. L
 
 Each static package declares ID, package/API versions, scope, optional panel, permissions and operations. Each operation owns standalone input, output and optional progress JSON Schema documents. Local references stay within that document. Remote references are rejected, so registration performs no remote schema fetch. All declared and implemented actions must match before a package is admitted. A broken package is reported in the catalog with registration errors while valid packages remain available; a duplicate never replaces a previously registered package.
 
+Driving adapters use the application-owned `ExtensionHostPort`; the server-owned call identity lives in the domain contract. The concrete host remains in application services and composition.
+
+The legacy blog catalog also publishes operation input schemas matching the bundled Python studio's fields, enum values, lengths and optional defaults. Gateway admission validates those same schemas before invoking the studio. Existing article revision checks, evidence validation and model jobs remain owned by the studio.
+
 The generic host validates request size and schema, API compatibility, granted permissions and current activation before admission and dispatch. It validates returned values against the registered output schema. The catalog also publishes the same schemas for `configure`, `jobs`, `job` and `cancel`. Existing built-in kernel command types and their semantics remain unchanged.
 
 ## State and background jobs
@@ -22,7 +26,7 @@ Job operations return a durable receipt immediately. The host bounds active jobs
 
 `jobs {}` returns `{"jobs":[...]}`. `job {"job_id":"..."}` and `cancel {"job_id":"..."}` return one job. States are `queued`, `running`, `cancelling`, `completed`, `cancelled`, `failed` and `interrupted`. Result and progress payloads are hidden while an extension is disabled or disabling.
 
-Completed results are retained for 24 hours, with `result_expires_at_ms` in the receipt. Startup, new admission and a 60-second host sweep invoke cleanup for expired results, then remove result/progress payloads. At 128 stored jobs, admission cleans and retires the oldest terminated job before making room; active jobs are never evicted. Unexpired idempotency receipts remain as tombstones, so an evicted-result retry fails as expired instead of rerunning work. Receipts expire after 24 hours and are bounded to 512.
+Completed results are retained for 24 hours, with `result_expires_at_ms` in the receipt. Startup, new admission and a 60-second host sweep invoke cleanup for expired results, then remove result/progress payloads. At 128 stored jobs, new work is rejected while all retained results still need cleanup: capacity never shortens the 24-hour result lifetime. Retry and in-flight deduplication still work at capacity. After expiry or explicit disable has completed cleanup, admission may retire the oldest cleaned terminal metadata in the same durable commit as its new queued job and receipt. Admission checks, retirement and insertion share the host lock, so concurrent duplicate or rejected requests do not evict results. A failed state save changes neither the old metadata nor the new receipt. Unexpired idempotency receipts remain as tombstones, so a retired-result retry fails as expired instead of rerunning work. Receipts expire after 24 hours and are bounded to 512.
 
 Events are bounded to 64 buffered changes and progress persistence is throttled to at most ten updates per second. An event includes host generation and a monotonic sequence. Lagged subscribers receive `resync:true`; clients re-read the catalog and jobs. Every catalog entry carries the sequence of that snapshot.
 

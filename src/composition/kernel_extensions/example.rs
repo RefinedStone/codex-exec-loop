@@ -1,8 +1,9 @@
 //! A headless trusted extension exercising the same registry as product packages.
+use crate::application::service::kernel_extensions::ExtensionJobContext;
 use crate::application::service::kernel_extensions::registry::{
     ExtensionHandler, ExtensionRegistration,
 };
-use crate::application::service::kernel_extensions::{ExtensionContext, ExtensionJobContext};
+use crate::domain::kernel_extension::ExtensionContext;
 use crate::domain::kernel_extension::{
     EXTENSION_API_VERSION, ExtensionDescriptor, ExtensionOperation, ExtensionOperationKind,
     ExtensionScope,

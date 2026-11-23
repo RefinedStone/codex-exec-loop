@@ -6436,6 +6436,12 @@
         "label": {
           "type": "string"
         },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/ExtensionOperation"
+          },
+          "type": "array"
+        },
         "panel": {
           "type": "string"
         },
@@ -6462,7 +6468,8 @@
         "panel",
         "label",
         "actions",
-        "permissions"
+        "permissions",
+        "operations"
       ],
       "type": "object"
     },

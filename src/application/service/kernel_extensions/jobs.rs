@@ -32,12 +32,6 @@ impl ExtensionService {
         );
         let receipt_key = key.map(|key| format!("{}:{key}", entry.manifest.id));
         self.reap_expired()?;
-        let has_receipt = receipt_key
-            .as_ref()
-            .is_some_and(|key| self.lock().durable.receipts.contains_key(key));
-        if !has_receipt {
-            self.make_job_room(&context)?;
-        }
         let (job, cancel) = {
             let mut state = self.lock();
             ensure!(!state.stopped, "extension host is stopping");
@@ -105,13 +99,27 @@ impl ExtensionService {
                 "extension concurrent job limit reached"
             );
             ensure!(
-                state.durable.jobs.len() < MAX_JOBS,
-                "extension job retention limit reached; disable to clear retained results"
-            );
-            ensure!(
                 receipt_key.is_none() || state.durable.receipts.len() < MAX_RECEIPTS,
                 "extension receipt limit reached"
             );
+            // Preserve unexpired results. Only already-cleaned terminal metadata can
+            // be retired, atomically with the newly accepted job and its receipt.
+            let retire = if state.durable.jobs.len() >= MAX_JOBS {
+                Some(
+                    state
+                        .durable
+                        .jobs
+                        .values()
+                        .filter(|job| {
+                            !job.state.active() && job.cleanup == ExtensionCleanupState::Complete
+                        })
+                        .min_by_key(|job| job.updated_at_ms)
+                        .context("extension job retention limit reached; wait for result expiry or disable to clear retained results")?
+                        .clone(),
+                )
+            } else {
+                None
+            };
             let now = now_ms();
             let job = ExtensionJob {
                 id: random_id(),
@@ -120,7 +128,7 @@ impl ExtensionService {
                 state: ExtensionJobState::Queued,
                 generation: self.generation.clone(),
                 revision: 1,
-                sequence: state.sequence + 1,
+                sequence: state.sequence + 1 + u64::from(retire.is_some()),
                 progress: Value::Null,
                 result: None,
                 error: None,
@@ -131,6 +139,10 @@ impl ExtensionService {
                 dedupe_key: dedupe,
             };
             let mut next = state.durable.clone();
+            if let Some(retired) = &retire {
+                next.jobs.remove(&retired.id);
+                // Unexpired receipts remain as tombstones and never rerun retired work.
+            }
             next.jobs.insert(job.id.clone(), job.clone());
             if let Some(key) = receipt_key {
                 next.receipts.insert(
@@ -145,6 +157,9 @@ impl ExtensionService {
             self.persist(&mut state, next)?;
             let cancel = Arc::new(AtomicBool::new(false));
             state.cancellations.insert(job.id.clone(), cancel.clone());
+            if let Some(retired) = retire {
+                self.publish(&mut state, &retired.extension, Some(retired.id));
+            }
             self.publish(&mut state, &job.extension, Some(job.id.clone()));
             (job, cancel)
         };

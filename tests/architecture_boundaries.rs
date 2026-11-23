@@ -2608,6 +2608,9 @@ fn core_effect_workers_share_one_redacted_panic_totality_boundary() {
 
     let mut raw_spawn_owners = Vec::new();
     for path in rust_files_under(&repo_root().join("src/composition")) {
+        if is_test_only_path(&path) {
+            continue;
+        }
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         for line in production_callable_reference_lines(&source, "spawn") {

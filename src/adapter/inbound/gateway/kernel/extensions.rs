@@ -7,11 +7,12 @@ use crate::adapter::inbound::kernel_protocol::{
         ExtensionChanged, ExtensionScope,
     },
 };
-use crate::application::service::kernel_extensions::{ExtensionContext, ExtensionService};
+use crate::application::port::inbound::extension_host_port::ExtensionHostPort;
+use crate::domain::kernel_extension::ExtensionContext;
 use crate::domain::kernel_extension::{ExtensionEvent, ExtensionScope as HostScope};
 
 pub(super) struct AttachedExtension {
-    host: Arc<ExtensionService>,
+    host: Arc<dyn ExtensionHostPort>,
     events: tokio::task::JoinHandle<()>,
 }
 impl Drop for AttachedExtension {
@@ -21,7 +22,7 @@ impl Drop for AttachedExtension {
 }
 
 impl KernelSession {
-    pub(super) fn extension_context(&self, host: &ExtensionService) -> ExtensionContext {
+    pub(super) fn extension_context(&self, host: &dyn ExtensionHostPort) -> ExtensionContext {
         host.context(
             self.connection_id.clone(),
             (host.scope() == HostScope::Repository).then(|| host.host_id().to_owned()),
@@ -169,13 +170,13 @@ impl KernelSession {
     }
     async fn invoke_registered(
         &self,
-        host: Arc<ExtensionService>,
+        host: Arc<dyn ExtensionHostPort>,
         request: Option<ExtensionCall>,
     ) -> Result<Value, KernelProtocolError> {
         let Some(request) = request else {
             return to_result(host.catalog());
         };
-        let context = self.extension_context(&host);
+        let context = self.extension_context(host.as_ref());
         blocking(move || {
             host.call(
                 context,
@@ -194,7 +195,7 @@ use tokio::sync::broadcast;
 fn forward_extension_events(
     mut events: broadcast::Receiver<ExtensionEvent>,
     outbox: mpsc::Sender<Message>,
-    host: Arc<ExtensionService>,
+    host: Arc<dyn ExtensionHostPort>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
