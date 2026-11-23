@@ -1985,17 +1985,6 @@ mod tests {
                 2,
                 &"a".repeat(64),
             ),
-            KernelEvent::issue_decision_arbiter_finished(
-                &crate::domain::issue_automation::arbiter::IssueArbiterFinishedEvent {
-                    event_id: format!("issue-arbiter-finished:{}", "b".repeat(64)),
-                    fact: open_decision.clone(),
-                    outcome: crate::domain::issue_automation::arbiter::IssueArbiterFinishedOutcome::Waiting {
-                        reason: crate::domain::issue_automation::arbiter::IssueArbiterWaitReason::LowConfidence,
-                    },
-                    at: "2026-11-12T00:00:00Z".into(),
-                    catalog_revision: 12,
-                },
-            ),
             KernelEvent::issue_decision_requested(&open_decision, 9),
             KernelEvent::issue_decision_resolved(&answered_decision, 10),
             KernelEvent::issue_decision_reminded(
@@ -2005,6 +1994,17 @@ mod tests {
                     due_at: "2026-11-12T00:00:00Z".into(),
                     reminded_at: "2026-11-11T22:00:00Z".into(),
                     revision: 11,
+                },
+            ),
+            KernelEvent::issue_decision_arbiter_finished(
+                &crate::domain::issue_automation::arbiter::IssueArbiterFinishedEvent {
+                    event_id: format!("issue-arbiter-finished:{}", "b".repeat(64)),
+                    fact: open_decision.clone(),
+                    outcome: crate::domain::issue_automation::arbiter::IssueArbiterFinishedOutcome::Waiting {
+                        reason: crate::domain::issue_automation::arbiter::IssueArbiterWaitReason::LowConfidence,
+                    },
+                    at: "2026-11-12T00:00:00Z".into(),
+                    catalog_revision: 12,
                 },
             ),
             KernelEvent::IssueWorkSubmitted {

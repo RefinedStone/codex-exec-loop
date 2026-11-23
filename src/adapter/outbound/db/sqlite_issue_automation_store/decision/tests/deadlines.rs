@@ -463,7 +463,10 @@ fn version_ten_migration_preserves_definitions_and_does_not_invent_reminder_hist
         .with_connection(fixture.cwd(), |connection, _| {
             assert_eq!(
                 super::super::super::schema_identity(connection)?,
-                (super::super::super::APPLICATION_ID, 11)
+                (
+                    super::super::super::APPLICATION_ID,
+                    super::super::super::SCHEMA_VERSION
+                )
             );
             super::super::super::validate_schema(connection)
         })
