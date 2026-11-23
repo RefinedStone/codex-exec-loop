@@ -1,6 +1,6 @@
 //! Machine schemas for the bundled Python studio's public editing requests.
 // Keep permissive extra fields and optional defaults from tech_blog_studio.py.
-// Runtime existence, revision conflicts, evidence paths and PNG content remain worker checks.
+// Runtime existence, revision conflicts, commit membership and PNG content remain worker checks.
 use crate::domain::kernel_extension::{ExtensionOperation, ExtensionOperationKind};
 use serde_json::{Value, json};
 
@@ -24,6 +24,13 @@ pub(crate) fn operations() -> Vec<ExtensionOperation> {
             object(),
         ),
         operation(
+            "targets",
+            ExtensionOperationKind::Query,
+            json!({"limit":{"type":"integer","minimum":1,"maximum":500,"default":50}}),
+            &[],
+            object(),
+        ),
+        operation(
             "list",
             ExtensionOperationKind::Query,
             json!({}),
@@ -38,31 +45,73 @@ pub(crate) fn operations() -> Vec<ExtensionOperation> {
             object(),
         ),
         operation(
-            "create",
+            "seen",
             ExtensionOperationKind::Command,
-            json!({
-                "topic":text(300,false),
-                "paths":{"type":"array","maxItems":4,"items":{"type":"string"}},
-                "style":{"enum":["PROBLEM_SOLVING","TECHNICAL_DEEP_DIVE"]},
-                "mode":{"enum":["PROJECT_RETROSPECTIVE","TECH_EXPLORATION"]}
-            }),
-            &["topic", "style", "mode"],
+            json!({"id":id}),
+            &["id"],
             object(),
         ),
         operation(
-            "accept",
+            "generate",
+            ExtensionOperationKind::Command,
+            json!({
+                "commits":{
+                    "type":"array","minItems":1,"maxItems":30,"uniqueItems":true,
+                    "items":{
+                        "type":"string","minLength":40,"maxLength":40,
+                        "pattern":"^[a-f0-9]{40}$"
+                    }
+                },
+                "topic":text(300,true)
+            }),
+            &["commits"],
+            object(),
+        ),
+        operation(
+            "cancel",
+            ExtensionOperationKind::Command,
+            json!({"id":id}),
+            &["id"],
+            object(),
+        ),
+        // These commands return the article containing its legacy worker job.
+        operation(
+            "resume",
             ExtensionOperationKind::Command,
             article_key.clone(),
             &["id", "revision"],
             object(),
         ),
     ];
+    let mut revise = article_key.clone();
+    revise["instruction"] = text(1_000, true);
+    entries.push(operation(
+        "revise",
+        ExtensionOperationKind::Command,
+        revise,
+        &["id", "revision"],
+        object(),
+    ));
+    entries.push(operation(
+        "review",
+        ExtensionOperationKind::Command,
+        article_key.clone(),
+        &["id", "revision"],
+        object(),
+    ));
     let mut save = article_key.clone();
     save["draft"] = text(100_000, true);
     entries.push(operation(
         "save",
         ExtensionOperationKind::Command,
         save,
+        &["id", "revision"],
+        object(),
+    ));
+    entries.push(operation(
+        "restore",
+        ExtensionOperationKind::Command,
+        article_key.clone(),
         &["id", "revision"],
         object(),
     ));
@@ -76,28 +125,28 @@ pub(crate) fn operations() -> Vec<ExtensionOperation> {
         &["id", "revision", "png", "caption"],
         object(),
     ));
-    let mut model = article_key;
-    model["model"] = json!({
-        "type":"string","minLength":1,"maxLength":100,
-        "pattern":"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
-    });
-    model["instruction"] = text(4000, true);
-    for action in ["write", "review"] {
-        // These legacy commands return the article containing its already-created job.
-        entries.push(operation(
-            action,
-            ExtensionOperationKind::Command,
-            model.clone(),
-            &["id", "revision", "model"],
-            object(),
-        ));
-    }
+    entries.push(operation(
+        "export",
+        ExtensionOperationKind::Command,
+        article_key,
+        &["id", "revision"],
+        object(),
+    ));
+    entries.push(operation(
+        "delete",
+        ExtensionOperationKind::Command,
+        json!({"id":id}),
+        &["id"],
+        object(),
+    ));
     entries
 }
 
 fn text(limit: usize, optional: bool) -> Value {
     let mut schema = json!({"type":"string","maxLength":limit});
-    if !optional {
+    if optional {
+        schema["default"] = json!("");
+    } else {
         schema["minLength"] = json!(1);
         schema["pattern"] = json!("\\S");
     }

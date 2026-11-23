@@ -416,6 +416,10 @@ impl ExtensionService {
         for job in jobs {
             self.cleanup_job(context, &job)?;
         }
+        self.finish_disable_if_clean(extension)
+    }
+
+    pub(super) fn finish_disable_if_clean(&self, extension: &str) -> Result<()> {
         let mut state = self.lock();
         if state.durable.activations[extension].desired_enabled {
             return Ok(());

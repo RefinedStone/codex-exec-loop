@@ -33,6 +33,7 @@ struct TestHandler {
     hold_cleanup: AtomicBool,
     fail_cleanup: AtomicBool,
     cleanup_entered: AtomicUsize,
+    cleanup_barriers: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
     cleanups: Mutex<Vec<(String, String)>>,
 }
 impl ExtensionHandler for TestHandler {
@@ -68,6 +69,11 @@ impl ExtensionHandler for TestHandler {
     }
     fn cleanup(&self, _context: &ExtensionContext, job: &ExtensionJob) -> Result<()> {
         self.cleanup_entered.fetch_add(1, Ordering::AcqRel);
+        let barriers = self.cleanup_barriers.lock().unwrap().clone();
+        if let Some((entered, release)) = barriers {
+            entered.wait();
+            release.wait();
+        }
         while self.hold_cleanup.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(2));
         }
