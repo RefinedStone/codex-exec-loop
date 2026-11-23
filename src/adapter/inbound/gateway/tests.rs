@@ -1733,3 +1733,5 @@ async fn issue_draft_requests_are_answered_on_the_local_host_and_stay_out_of_the
     );
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+mod kernel_extensions;

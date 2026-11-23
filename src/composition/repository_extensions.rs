@@ -38,6 +38,9 @@ pub(crate) struct RepositoryExtensions {
     owner: String,
     changed: broadcast::Sender<()>,
     jobs: AtomicUsize,
+    common: std::sync::Mutex<
+        Option<Arc<crate::application::service::kernel_extensions::ExtensionService>>,
+    >,
 }
 
 impl RepositoryExtensions {
@@ -47,15 +50,47 @@ impl RepositoryExtensions {
             owner: format!("{:032x}", rand::random::<u128>()),
             changed: broadcast::channel(8).0,
             jobs: AtomicUsize::new(0),
+            common: std::sync::Mutex::new(None),
         })
     }
 
+    pub(crate) fn common(
+        &self,
+        kernel: &str,
+    ) -> Result<Arc<crate::application::service::kernel_extensions::ExtensionService>> {
+        let mut common = self.common.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(host) = &*common {
+            return Ok(host.clone());
+        }
+        let host = crate::composition::kernel_extensions::build_repository(
+            &self.workspace.to_string_lossy(),
+            kernel,
+        )?;
+        *common = Some(host.clone());
+        Ok(host)
+    }
+    pub(crate) fn shutdown(&self) {
+        if let Some(host) = self
+            .common
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
+            host.shutdown();
+        }
+    }
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<()> {
         self.changed.subscribe()
     }
 
     pub(crate) fn busy(&self) -> bool {
         self.jobs.load(Ordering::Acquire) != 0
+            || self
+                .common
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .is_some_and(|h| h.busy())
     }
 
     pub(crate) async fn catalog(self: &Arc<Self>) -> Result<Vec<ExtensionManifest>> {
