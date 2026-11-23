@@ -95,7 +95,7 @@ fn inspection_preserves_resolve_hash_and_never_displays_comments_or_missing_path
     );
     assert_eq!(source.user_reads.load(Ordering::SeqCst), 1);
     assert_eq!(source.project_reads.load(Ordering::SeqCst), 1);
-    assert_eq!(settings.len(), 69);
+    assert_eq!(settings.len(), 73);
     assert_eq!(
         settings
             .iter()
@@ -232,6 +232,51 @@ fn caps_minimum_and_and_intersection_keep_both_declared_inputs() {
     assert_eq!(actors.len(), 1);
     assert_eq!(actors[0].server_id, "github.com");
     assert_eq!(actors[0].actor_id, "U_same");
+}
+
+#[test]
+fn arbiter_provenance_explains_maximum_confidence_and_minimum_call_limits() {
+    let user =
+        "[arbiter]\nmin_confidence=9200\nmax_running=2\nmax_started_per_day=8\ntimeout_seconds=150";
+    let project =
+        "[arbiter]\nmin_confidence=9500\nmax_running=3\nmax_started_per_day=4\ntimeout_seconds=60";
+    let (_, settings) = ready(inspect_text(Some(user), Some(project)));
+    for (key, value, resolution) in [
+        (
+            "arbiter.min_confidence",
+            "9500",
+            IssueAutomationPolicyResolution::Maximum,
+        ),
+        (
+            "arbiter.max_running",
+            "2",
+            IssueAutomationPolicyResolution::Minimum,
+        ),
+        (
+            "arbiter.max_started_per_day",
+            "4",
+            IssueAutomationPolicyResolution::Minimum,
+        ),
+        (
+            "arbiter.timeout_seconds",
+            "60",
+            IssueAutomationPolicyResolution::Minimum,
+        ),
+    ] {
+        let row = setting(&settings, key);
+        assert_eq!(row.value, value);
+        assert_eq!(row.resolution, resolution);
+        assert_eq!(
+            row.origins
+                .iter()
+                .map(|origin| origin.scope)
+                .collect::<Vec<_>>(),
+            vec![
+                IssueAutomationPolicyOriginScope::User,
+                IssueAutomationPolicyOriginScope::Project
+            ]
+        );
+    }
 }
 
 #[test]

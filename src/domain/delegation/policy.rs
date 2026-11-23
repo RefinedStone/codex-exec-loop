@@ -132,10 +132,17 @@ pub(crate) fn resolve(
     feature: &str,
     revision: String,
 ) -> Result<Route> {
+    let assessment = feature == super::ISSUE_ASSESSMENT_FEATURE;
     let mut route = Route {
         requires_defensive_isolation: feature == "pr_review",
         ..Route::default()
     };
+    if assessment {
+        route.max_running = 1;
+        route.max_started_per_day = 5;
+        route.deadline_ms = 180_000;
+        route.fall_back_on.clear();
+    }
     for file in [&user, &repo] {
         ensure!(
             file.schema_version.is_none_or(|version| version == 1),
@@ -197,7 +204,8 @@ pub(crate) fn resolve(
         "feature cannot dispatch"
     );
     let draft = feature == super::ISSUE_DRAFT_REVIEW_FEATURE;
-    let defaults = [if draft { CODEX } else { CHAT }.to_owned()];
+    let codex_only = draft || assessment;
+    let defaults = [if codex_only { CODEX } else { CHAT }.to_owned()];
     let user_order = user_feature
         .and_then(|f| f.route.as_deref())
         .unwrap_or(&defaults);
@@ -205,13 +213,17 @@ pub(crate) fn resolve(
         .and_then(|f| f.route.as_deref())
         .unwrap_or(user_order);
     ensure!(order.len() <= 16, "route may contain at most 16 backends");
+    ensure!(
+        !assessment || order.len() == 1,
+        "issue assessment requires exactly one backend"
+    );
     route.backends.clear();
     for name in order {
         let user_backend = user.backend.get(name);
         let repo_backend = repo.backend.get(name);
         let enabled = user_backend
             .and_then(|b| b.enabled)
-            .unwrap_or(name == CHAT || draft && name == CODEX);
+            .unwrap_or(name == CHAT || codex_only && name == CODEX);
         ensure!(
             !repo_backend.and_then(|b| b.enabled).unwrap_or(false) || enabled,
             "repository cannot enable a backend"
@@ -229,6 +241,10 @@ pub(crate) fn resolve(
             "model-only review backend is scoped to PR review"
         );
         ensure!(!draft || kind == CODEX, "issue draft review requires Codex");
+        ensure!(
+            !assessment || kind == CODEX,
+            "issue assessment requires Codex"
+        );
         ensure!(
             repo_backend
                 .and_then(|b| b.kind.as_deref())
@@ -256,21 +272,24 @@ pub(crate) fn resolve(
             !route.backends.iter().any(|backend| backend.name == *name),
             "duplicate route backend"
         );
+        let max_resumes = repo_backend
+            .and_then(|b| b.max_resumes)
+            .map(|limit| {
+                cap(
+                    user_backend.and_then(|b| b.max_resumes).unwrap_or(2),
+                    Some(limit),
+                )
+            })
+            .transpose()?
+            .or_else(|| user_backend.and_then(|b| b.max_resumes));
         route.backends.push(Backend {
             name: name.clone(),
             kind: kind.into(),
             model,
             max_concurrent: cap(max_concurrent, repo_backend.and_then(|b| b.max_concurrent))?,
-            max_resumes: repo_backend
-                .and_then(|b| b.max_resumes)
-                .map(|limit| {
-                    cap(
-                        user_backend.and_then(|b| b.max_resumes).unwrap_or(2),
-                        Some(limit),
-                    )
-                })
-                .transpose()?
-                .or_else(|| user_backend.and_then(|b| b.max_resumes)),
+            // An arbiter attempt is a single durable reservation. Recovery and fallback
+            // must not silently spend another model call for the same decision basis.
+            max_resumes: if assessment { Some(0) } else { max_resumes },
         });
     }
     ensure!(!route.backends.is_empty(), "no enabled route");
@@ -290,26 +309,49 @@ pub(crate) fn resolve(
     {
         route.fall_back_on = reasons;
     }
+    if assessment {
+        ensure!(
+            [user_feature, repo_feature].iter().all(|feature| {
+                feature
+                    .and_then(|feature| feature.fall_back_on.as_ref())
+                    .is_none_or(Vec::is_empty)
+            }),
+            "issue assessment does not support fallback"
+        );
+    }
+    let user_deadline_ms = user_feature
+        .and_then(|feature| feature.deadline.as_deref())
+        .map(parse_deadline)
+        .transpose()?;
     if let Some(deadline) = repo_feature
         .and_then(|f| f.deadline.as_deref())
         .or_else(|| user_feature.and_then(|f| f.deadline.as_deref()))
     {
-        let (number, factor) = if let Some(n) = deadline.strip_suffix('m') {
-            (n, 60_000)
-        } else if let Some(n) = deadline.strip_suffix('s') {
-            (n, 1000)
-        } else if let Some(n) = deadline.strip_suffix('h') {
-            (n, 3_600_000)
-        } else {
-            anyhow::bail!("deadline must end in s, m, or h");
-        };
-        route.deadline_ms = number
-            .parse::<i64>()?
-            .checked_mul(factor)
-            .filter(|value| (1000..=86_400_000).contains(value))
-            .ok_or_else(|| anyhow::anyhow!("deadline must be between one second and one day"))?;
+        let effective = parse_deadline(deadline)?;
+        ensure!(
+            !assessment || effective <= user_deadline_ms.unwrap_or(route.deadline_ms),
+            "repository cannot increase the issue assessment deadline"
+        );
+        route.deadline_ms = effective;
     }
     Ok(route)
+}
+
+fn parse_deadline(deadline: &str) -> Result<i64> {
+    let (number, factor) = if let Some(n) = deadline.strip_suffix('m') {
+        (n, 60_000)
+    } else if let Some(n) = deadline.strip_suffix('s') {
+        (n, 1000)
+    } else if let Some(n) = deadline.strip_suffix('h') {
+        (n, 3_600_000)
+    } else {
+        anyhow::bail!("deadline must end in s, m, or h");
+    };
+    number
+        .parse::<i64>()?
+        .checked_mul(factor)
+        .filter(|value| (1000..=86_400_000).contains(value))
+        .ok_or_else(|| anyhow::anyhow!("deadline must be between one second and one day"))
 }
 
 fn cap(user: u32, repo: Option<u32>) -> Result<u32> {
@@ -366,5 +408,91 @@ mod tests {
         let source = "[feature.pr_review]\nmode = \"on\"\nroute = [\"chatgpt_chat\"]";
         let route = resolve(parse(source), parse(""), "pr_review", "v1".into()).unwrap();
         assert!(route.requires_defensive_isolation);
+    }
+
+    #[test]
+    fn issue_assessment_is_a_single_read_only_codex_call_by_default() {
+        let route = resolve(
+            parse(""),
+            parse(""),
+            super::super::ISSUE_ASSESSMENT_FEATURE,
+            "v1".into(),
+        )
+        .unwrap();
+        assert_eq!(route.backends.len(), 1);
+        assert_eq!(route.backends[0].kind, CODEX);
+        assert_eq!(route.backends[0].max_resumes, Some(0));
+        assert!(route.fall_back_on.is_empty());
+        assert_eq!(route.effect, Effect::ReadOnly);
+        assert!(!route.pr_comments_allowed);
+        assert_eq!(
+            (
+                route.max_running,
+                route.max_started_per_day,
+                route.deadline_ms
+            ),
+            (1, 5, 180_000)
+        );
+    }
+
+    #[test]
+    fn issue_assessment_rejects_browser_routes_fallback_and_repository_expansion() {
+        for source in [
+            "[feature.issue_assessment]\nroute = [\"chatgpt_chat\"]",
+            "[feature.issue_assessment]\nroute = [\"codex_thread\",\"chatgpt_chat\"]",
+            "[feature.issue_assessment]\nfall_back_on = [\"quota\"]",
+            "[feature.issue_assessment]\nmode = \"observe\"",
+        ] {
+            assert!(
+                resolve(
+                    parse(source),
+                    parse(""),
+                    super::super::ISSUE_ASSESSMENT_FEATURE,
+                    "v1".into()
+                )
+                .is_err()
+            );
+        }
+        let user = "[feature.issue_assessment]\ndeadline = \"90s\"\n[budget]\nmax_running = 2\nmax_started_per_day = 4";
+        for repo in [
+            "[feature.issue_assessment]\ndeadline = \"91s\"",
+            "[budget]\nmax_running = 3",
+            "[budget]\nmax_started_per_day = 5",
+            "[backend.codex_thread]\nmodel = \"unapproved\"",
+        ] {
+            assert!(
+                resolve(
+                    parse(user),
+                    parse(repo),
+                    super::super::ISSUE_ASSESSMENT_FEATURE,
+                    "v1".into()
+                )
+                .is_err()
+            );
+        }
+        let route = resolve(parse(user), parse("[feature.issue_assessment]\ndeadline = \"60s\"\n[budget]\nmax_running = 1\nmax_started_per_day = 2"), super::super::ISSUE_ASSESSMENT_FEATURE, "v2".into()).unwrap();
+        assert_eq!(
+            (
+                route.max_running,
+                route.max_started_per_day,
+                route.deadline_ms
+            ),
+            (1, 2, 60_000)
+        );
+    }
+
+    #[test]
+    fn issue_assessment_never_inherits_shared_backend_resume_permission() {
+        let source = "[backend.codex_thread]\nmax_resumes = 2\nmodel = \"fixture-model\"\n[feature.issue_assessment]\ndeadline = \"5m\"";
+        let route = resolve(
+            parse(source),
+            parse(""),
+            super::super::ISSUE_ASSESSMENT_FEATURE,
+            "v1".into(),
+        )
+        .unwrap();
+        assert_eq!(route.backends[0].max_resumes, Some(0));
+        assert_eq!(route.backends[0].model.as_deref(), Some("fixture-model"));
+        assert_eq!(route.deadline_ms, 300_000);
     }
 }

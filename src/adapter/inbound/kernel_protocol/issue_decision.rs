@@ -2,6 +2,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::issue_automation::arbiter::IssueArbiterWaitReason;
 use crate::domain::issue_automation::decision::{
     IssueDecisionFact, IssueDecisionKind, IssueDecisionState, IssueDecisionTimeout,
     MAX_ISSUE_DECISION_ID_BYTES, MAX_ISSUE_DECISION_NOTE_BYTES, MAX_ISSUE_DECISION_OPTION_BYTES,
@@ -32,6 +33,9 @@ pub struct IssueDecisionRequestState {
     /// 이 결정에 고정된 실제 변경 범위의 판정이다. 최신 실행 상태로 덮어쓰지 않는다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_review: Option<IssueDeliveryReviewState>,
+    /// 결정의 정의나 판을 바꾸지 않는 현재 중재 대기 표시다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arbiter_wait: Option<IssueArbiterWaitState>,
     pub on_timeout: IssueDecisionTimeout,
     pub due_at: Option<String>,
     pub state: IssueDecisionState,
@@ -44,6 +48,12 @@ pub struct IssueDecisionOptionState {
     pub id: String,
     pub label: String,
     pub effect: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueArbiterWaitState {
+    pub reason: IssueArbiterWaitReason,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -87,6 +97,7 @@ impl From<&StoredIssueDecision> for IssueDecisionRequestState {
             recommended: definition.recommended.clone(),
             basis: (&definition.basis).into(),
             delivery_review: definition.delivery_review.as_ref().map(Into::into),
+            arbiter_wait: None,
             on_timeout: definition.on_timeout,
             due_at: definition.due_at.clone(),
             state: request.state(),

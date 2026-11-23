@@ -13,6 +13,7 @@ use crate::domain::issue_work::IssueProvider;
 /// Rebuilds the exact pre-v10 selection CHECK and removes later additions.
 /// Migration regressions then downgrade the remaining tables to their target version.
 pub(super) fn make_pre_admission_schema(connection: &Connection) {
+    make_pre_arbiter_schema(connection);
     connection
         .execute_batch(
             "DROP TABLE issue_decision_reminders;
@@ -29,6 +30,16 @@ pub(super) fn make_pre_admission_schema(connection: &Connection) {
          SELECT workspace_dir,requested_level,revision,pending_command_id FROM issue_autonomy_selection_v10;
          DROP TABLE issue_autonomy_selection_v10;"
     ).unwrap();
+}
+
+pub(super) fn make_pre_arbiter_schema(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TABLE issue_arbiter_attempts;
+             DROP TABLE issue_arbiter_finished_events;
+             DROP TABLE issue_arbiter_budget_clock;",
+        )
+        .unwrap();
 }
 
 pub(super) struct Fixture {

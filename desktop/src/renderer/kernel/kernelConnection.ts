@@ -26,6 +26,7 @@ import {
 } from "./protocol";
 import { sendKernelCommand } from "./sendKernelCommand";
 import { hasValidIssueAutonomy, hasValidIssueExecutionTracking, hasValidIssueInteractions } from "./issuePresentationValidation";
+import { currentIssueArbiterNotice, isIssueArbiterWaitReason, type IssueArbiterFinishedRecord } from "./issueArbiter";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
 export type KernelInterest = "overview" | "issues" | "delegation" | "issue_attention";
@@ -37,6 +38,7 @@ export interface IssueDecisionAttention {
   decisionId: string;
   issue: IssueEventReference;
   reminderId?: string;
+  arbiter?: { eventId: string; outcome: "applied" | "waiting" };
 }
 
 export interface IssueConfirmationBridge {
@@ -110,6 +112,8 @@ export interface KernelView {
   issues: KernelIssuesView;
   /** 현재 저장소 스트림에서 받은 결정 좌표만 보관한다. 질문과 답변 본문은 없다. */
   issueAttention: IssueDecisionAttention[];
+  /** 현재 조회로 검증한 중재 결과 알림이다. 열린 결정 목록과 별도로 보관한다. */
+  issueArbiterNotices: IssueDecisionAttention[];
 }
 
 export const EMPTY_KERNEL_VIEW: KernelView = {
@@ -124,6 +128,7 @@ export const EMPTY_KERNEL_VIEW: KernelView = {
   parallelControl: EMPTY_PARALLEL_CONTROL,
   issues: EMPTY_KERNEL_ISSUES,
   issueAttention: [],
+  issueArbiterNotices: [],
 };
 
 export interface KernelStore {
@@ -267,7 +272,7 @@ function isIssueAutomationPolicyAnswer(value: unknown): value is IssueAutomation
   return value.status === "ready" && typeof value.version === "string" && Array.isArray(value.settings)
     && value.settings.every((setting: unknown) => isRecord(setting) && typeof setting.key === "string"
       && typeof setting.label === "string" && typeof setting.value === "string"
-      && isNamedValue(setting.resolution, ["default", "override", "minimum", "and", "intersection", "union", "cap", "derived"])
+      && isNamedValue(setting.resolution, ["default", "override", "minimum", "maximum", "and", "intersection", "union", "cap", "derived"])
       && typeof setting.resolution_summary === "string" && Array.isArray(setting.origins)
       && setting.origins.every((origin: unknown) => isRecord(origin)
         && isNamedValue(origin.scope, ["builtin", "user", "project"]) && typeof origin.label === "string"));
@@ -286,6 +291,9 @@ export class KernelConnection {
   private readonly decisionRevisions = new Map<string, number>();
   private readonly decisionReminders = new Set<string>();
   private readonly resolvedDecisions = new Set<string>();
+  private readonly arbiterEvents = new Set<string>();
+  private readonly pendingArbiterEvents = new Map<string, symbol>();
+  private readonly arbiterNoticeRevisions = new Map<string, number>();
   private scheduledIssueRefresh = false;
 
   private issuesGeneration = 0;
@@ -342,7 +350,10 @@ export class KernelConnection {
       this.decisionRevisions.clear();
       this.decisionReminders.clear();
       this.resolvedDecisions.clear();
-      this.store.setKernel({ ...this.store.getKernel(), issueAttention: [] });
+      this.arbiterEvents.clear();
+      this.pendingArbiterEvents.clear();
+      this.arbiterNoticeRevisions.clear();
+      this.store.setKernel({ ...this.store.getKernel(), issueAttention: [], issueArbiterNotices: [] });
     }
     this.store.setKernel({ ...this.store.getKernel(), message: null });
 
@@ -367,6 +378,7 @@ export class KernelConnection {
   connectionChanged(connected: boolean): void {
     this.connected = connected;
     this.generation += 1;
+    this.pendingArbiterEvents.clear();
     this.overviewGeneration += 1;
     this.overviewRequest += 1;
     this.overviewRefreshRequest += 1;
@@ -584,6 +596,8 @@ export class KernelConnection {
         this.applyIssueDecision(record.decision, record.revision);
       } else if (record.kind === "issue_decision_reminded") {
         this.applyIssueDecision(record.decision, record.revision, record.event_id);
+      } else if (record.kind === "issue_decision_arbiter_finished") {
+        void this.applyIssueArbiterFinished(record);
       } else if (record.kind === "issue_execution_progressed" || record.kind === "issue_integrated"
         || record.kind === "issue_closed" || record.kind === "issue_feedback_posted") {
         this.refreshIssueFromRecord(record.issue, record.revision);
@@ -621,19 +635,89 @@ export class KernelConnection {
       const target = known ?? { workspace: this.wanted, kernel: view.kernel, decisionId: decision.decision_id, issue: decision.subject.issue };
       attention.push(reminderId ? { ...target, reminderId } : target);
     }
-    this.store.setKernel({ ...view, issueAttention: attention.slice(-64) });
+    this.store.setKernel({ ...view, issueAttention: attention.slice(-64),
+      issueArbiterNotices: decision.state === "open" ? view.issueArbiterNotices : view.issueArbiterNotices.filter((notice) =>
+        notice.decisionId !== decision.decision_id || notice.arbiter?.outcome !== "waiting") });
     this.scheduleIssueRefresh();
+  }
+
+  private async applyIssueArbiterFinished(event: IssueArbiterFinishedRecord): Promise<void> {
+    const view = this.store.getKernel();
+    const decision = event.decision;
+    if ((!this.interests.has("issues") && !this.interests.has("issue_attention")) || !this.wanted || !view.kernel
+      || typeof event.event_id !== "string" || !event.event_id || !isRevision(event.revision)
+      || this.arbiterEvents.has(event.event_id) || this.pendingArbiterEvents.has(event.event_id)
+      || !isRecord(event.outcome) || !["applied", "waiting", "superseded", "discarded"].includes(event.outcome.kind)
+      || (event.outcome.kind === "waiting" && !isIssueArbiterWaitReason(event.outcome.reason))
+      || !isRecord(decision) || typeof decision.decision_id !== "string" || !decision.decision_id
+      || !isRecord(decision.basis) || !isRecord(decision.subject) || !isIssueReference(decision.subject.issue)
+      || !this.matchesIssueRepository(decision.subject.issue, true)) return;
+    const id = decision.decision_id;
+    const token = Symbol(event.event_id);
+    const generation = this.generation;
+    const workspace = this.wanted;
+    const kernel = view.kernel;
+    this.pendingArbiterEvents.set(event.event_id, token);
+    const knownRevision = this.arbiterNoticeRevisions.get(id) ?? 0;
+    this.arbiterNoticeRevisions.set(id, Math.max(event.revision, knownRevision));
+    if (event.revision >= knownRevision) {
+      const notices = view.issueArbiterNotices.filter((notice) => notice.decisionId !== id || notice.arbiter?.outcome !== "waiting");
+      if (notices.length !== view.issueArbiterNotices.length) this.store.setKernel({ ...view, issueArbiterNotices: notices });
+    }
+    // Finished revision is a catalog revision, unlike execution-journal records.
+    if (this.canRead("issues")) this.latestIssueRevision = Math.max(this.latestIssueRevision, event.revision,
+      knownRevision, this.decisionRevisions.get(id) ?? 0);
+    this.refreshIssueFromRecord(decision.subject.issue, event.revision);
+    const current = () => generation === this.generation && this.wanted === workspace
+      && (this.interests.has("issues") || this.interests.has("issue_attention"))
+      && this.store.getKernel().phase === "attached" && this.store.getKernel().kernel === kernel;
+    try {
+      for (let attempt = 0; attempt < 2 && current(); attempt++) {
+        // Background 관심도 같은 현재성 검사를 거친다. 이 조회는 선택한 상세나 초안을 바꾸지 않는다.
+        const detail = await this.client.request<unknown>(KERNEL_METHOD.query, { query: { type: "issue", issue: decision.subject.issue } });
+        if (!current() || !isIssueDetailAnswer(detail) || detail.status === "unavailable") return;
+        if (detail.status === "ready" && !sameIssue(detail.item.issue, decision.subject.issue)) return;
+        if (detail.revision < Math.max(event.revision, this.latestIssueRevision, this.decisionRevisions.get(id) ?? 0)) continue;
+        this.arbiterEvents.add(event.event_id);
+        if (this.canRead("issues")) this.noteIssueRevision(detail.revision);
+        else this.latestIssueRevision = Math.max(this.latestIssueRevision, detail.revision);
+        if (detail.status === "ready") this.rememberResolvedIssueDecisions(detail);
+        if (event.revision < (this.arbiterNoticeRevisions.get(id) ?? 0)
+          || event.revision < (this.decisionRevisions.get(id) ?? 0)) return;
+        const outcome = currentIssueArbiterNotice(event, detail);
+        if (!outcome || (outcome === "waiting" && this.resolvedDecisions.has(id))) return;
+        const latest = this.store.getKernel();
+        this.store.setKernel({ ...latest, issueArbiterNotices: [...latest.issueArbiterNotices.filter((notice) => notice.decisionId !== id), {
+          workspace, kernel, decisionId: id, issue: decision.subject.issue, arbiter: { eventId: event.event_id, outcome },
+        }].slice(-64) });
+        return;
+      }
+    } catch {
+      // 현재 상태를 확인하지 못한 이벤트는 재전달 때 다시 읽을 수 있다. 성공으로 합성하지 않는다.
+    } finally {
+      if (this.pendingArbiterEvents.get(event.event_id) === token) this.pendingArbiterEvents.delete(event.event_id);
+    }
+  }
+
+  private rememberResolvedIssueDecisions(detail: Extract<IssueDetailAnswer, { status: "ready" }>): void {
+    for (const entry of detail.decision_history ?? []) {
+      if (entry.decision.state !== "open") this.resolvedDecisions.add(entry.decision.decision_id);
+    }
+    const waiting = new Set((detail.open_decisions ?? []).filter((entry) => entry.arbiter_wait).map((entry) => entry.id));
+    const view = this.store.getKernel();
+    const attention = view.issueAttention.filter((entry) => !this.resolvedDecisions.has(entry.decisionId));
+    const notices = view.issueArbiterNotices.filter((entry) => entry.arbiter?.outcome !== "waiting"
+      || (!this.resolvedDecisions.has(entry.decisionId) && (!sameIssue(entry.issue, detail.item.issue)
+        || detail.revision < (this.arbiterNoticeRevisions.get(entry.decisionId) ?? 0) || waiting.has(entry.decisionId))));
+    if (attention.length !== view.issueAttention.length || notices.length !== view.issueArbiterNotices.length) {
+      this.store.setKernel({ ...view, issueAttention: attention, issueArbiterNotices: notices });
+    }
   }
 
   /** 이벤트는 읽기 요청만 무효화한다. journal revision을 catalog revision과 비교하지 않는다. */
   private refreshIssueFromRecord(issue: IssueEventReference, revision: number): void {
-    if (!this.canRead("issues") || !isIssueReference(issue) || !isRevision(revision)) return;
+    if (!this.canRead("issues") || !isIssueReference(issue) || !isRevision(revision) || !this.matchesIssueRepository(issue)) return;
     const issues = this.store.getKernel().issues;
-    const expected = (issues.automation?.status === "ready" ? issues.automation.binding : null)
-      ?? issues.selectedIssue ?? (issues.page?.status === "ready" ? issues.page.items[0]?.issue : null);
-    if (expected ? issue.provider !== expected.provider || issue.server_id !== expected.server_id
-      || issue.repository_id !== expected.repository_id || issue.project_scope.workspace_dir !== expected.project_scope.workspace_dir
-      : issue.project_scope.workspace_dir !== this.wanted) return;
     // 이벤트 전의 진행 중 응답은 같은 catalog 판이어도 새 표시를 덮을 수 없다.
     this.issueStateRequest += 1;
     this.issuePageRequest += 1;
@@ -645,6 +729,16 @@ export class KernelConnection {
       stale: issues.page !== null, canGoBack: false,
     });
     this.scheduleIssueRefresh();
+  }
+
+  private matchesIssueRepository(issue: IssueEventReference, verifyUnobservedWorkspaceByQuery = false): boolean {
+    const issues = this.store.getKernel().issues;
+    const expected = (issues.automation?.status === "ready" ? issues.automation.binding : null)
+      ?? issues.selectedIssue ?? (issues.page?.status === "ready" ? issues.page.items[0]?.issue : null);
+    return expected ? issue.provider === expected.provider && issue.server_id === expected.server_id
+      && issue.repository_id === expected.repository_id && issue.project_scope.workspace_dir === expected.project_scope.workspace_dir
+      // A linked worktree attaches to its primary checkout. Until a binding is known, only the attached kernel's query can verify that alias.
+      : verifyUnobservedWorkspaceByQuery || issue.project_scope.workspace_dir === this.wanted;
   }
 
   private scheduleIssueRefresh(): void {
@@ -945,12 +1039,7 @@ export class KernelConnection {
         this.updateIssues({ detail, detailStale: false });
         if (detail.status === "ready") {
           // A delayed durable reminder cannot reopen a decision already resolved in a fresh query.
-          for (const entry of detail.decision_history ?? []) {
-            if (entry.decision.state !== "open") this.resolvedDecisions.add(entry.decision.decision_id);
-          }
-          const view = this.store.getKernel();
-          const attention = view.issueAttention.filter((entry) => !this.resolvedDecisions.has(entry.decisionId));
-          if (attention.length !== view.issueAttention.length) this.store.setKernel({ ...view, issueAttention: attention });
+          this.rememberResolvedIssueDecisions(detail);
         }
         const page = this.store.getKernel().issues.page;
         if (detail.status !== "unavailable" && page?.status === "ready" && page.revision < detail.revision) {
@@ -1051,7 +1140,8 @@ export class KernelConnection {
         this.resolvedDecisions.add(id);
         this.decisionRevisions.set(id, Math.max(this.decisionRevisions.get(id) ?? 0, resolved.catalog_revision));
         const view = this.store.getKernel();
-        this.store.setKernel({ ...view, issueAttention: view.issueAttention.filter((entry) => entry.decisionId !== id) });
+        this.store.setKernel({ ...view, issueAttention: view.issueAttention.filter((entry) => entry.decisionId !== id),
+          issueArbiterNotices: view.issueArbiterNotices.filter((entry) => entry.decisionId !== id || entry.arbiter?.outcome !== "waiting") });
       }
       const receipt = response.result?.type === "issue_intervened" ? response.result.receipt : null;
       const unknownIntervention = pending === "intervention" && (

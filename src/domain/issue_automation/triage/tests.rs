@@ -13,6 +13,8 @@ use crate::domain::issue_work::{
     IssueComparisonBasis, IssueProjectScope, IssueProvider, IssueSharedCopy,
 };
 
+mod arbiter;
+
 const AUTOMATION_VERSION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DISCLOSURE_VERSION: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 const VALID_BODY: &str = "## 완료 기준\n- 결과가 저장된다\n- [ ] 다시 읽을 수 있다\n";

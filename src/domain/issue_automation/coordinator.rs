@@ -44,12 +44,14 @@ pub enum IssueWorkStartAuthority {
     Human,
     Policy,
     TimeoutDefault,
+    TimeoutArbiter,
 }
 
 impl IssueWorkStartAuthority {
     pub fn validate(self, decision_id: Option<&IssueDecisionId>) -> Result<(), &'static str> {
         match (self, decision_id) {
-            (Self::Human | Self::TimeoutDefault, Some(_)) | (Self::Policy, None) => Ok(()),
+            (Self::Human | Self::TimeoutDefault | Self::TimeoutArbiter, Some(_))
+            | (Self::Policy, None) => Ok(()),
             _ => Err("issue work start authority does not match its decision"),
         }
     }
@@ -266,6 +268,12 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
                         && decision.issue() == &work.order.issue
                         && &decision.definition().basis == work.current_authorization_basis()
                 }),
+                IssueWorkStartAuthority::TimeoutArbiter => input.decision.is_some_and(|decision| {
+                    timeout_arbiter_start(assessment, decision)
+                        && Some(decision.id()) == work.current_authorization_decision_id()
+                        && decision.issue() == &work.order.issue
+                        && &decision.definition().basis == work.current_authorization_basis()
+                }),
             };
         if !approved {
             return CancelWork;
@@ -321,7 +329,10 @@ pub fn next_action(input: IssueCoordinatorInput<'_>) -> IssueCoordinatorAction {
     if !eligible {
         return None;
     }
-    if human_start(decision) || timeout_default_start(assessment, decision) {
+    if human_start(decision)
+        || timeout_default_start(assessment, decision)
+        || timeout_arbiter_start(assessment, decision)
+    {
         return SubmitWork;
     }
     None
@@ -341,7 +352,11 @@ pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
                     gate.action,
                     IssueAutomationGateAction::Human | IssueAutomationGateAction::Auto
                 ) || (assessment.effective_mode() == IssueAutomationAutonomy::Gated
-                    && gate.action == IssueAutomationGateAction::TimeoutDefault))
+                    && matches!(
+                        gate.action,
+                        IssueAutomationGateAction::TimeoutDefault
+                            | IssueAutomationGateAction::TimeoutArbiter
+                    )))
         })
 }
 
@@ -409,6 +424,43 @@ pub fn timeout_default_start(
                 && answer.channel == "issue-timeout"
                 && chrono::DateTime::parse_from_rfc3339(&answer.at)
                     .is_ok_and(|answered_at| answered_at >= due_at)
+        })
+}
+
+/// 전용 Arbiter finish가 저장한 답도 현재 인가·시작 관문과 같을 때만 접수 근거다.
+pub fn timeout_arbiter_start(
+    assessment: &IssueTriageAssessment,
+    decision: &IssueDecisionRequest,
+) -> bool {
+    use super::arbiter::{ISSUE_ARBITER_CHANNEL, arbiter_gate_allowed};
+    let definition = decision.definition();
+    let Ok(mut basis) =
+        IssueDecisionBasis::from_assessment(assessment, IssueAutomationGate::Start, None)
+    else {
+        return false;
+    };
+    basis.authorization_epoch = definition.basis.authorization_epoch;
+    let Some(due_at) = definition
+        .due_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return false;
+    };
+    ready_for_start(assessment)
+        && arbiter_gate_allowed(definition, assessment)
+        && decision.issue() == &assessment.basis().issue
+        && definition.kind == super::decision::IssueDecisionKind::StartApproval
+        && definition.gate == IssueAutomationGate::Start
+        && definition.basis == basis
+        && decision.state() == IssueDecisionState::Answered
+        && decision.answer().is_some_and(|answer| {
+            answer.option == "start"
+                && answer.by == IssueDecisionAnswerBy::Arbiter
+                && answer.confirmation.is_none()
+                && answer.caller.is_none()
+                && answer.channel == ISSUE_ARBITER_CHANNEL
+                && chrono::DateTime::parse_from_rfc3339(&answer.at).is_ok_and(|at| at >= due_at)
         })
 }
 

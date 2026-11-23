@@ -21,6 +21,13 @@ use crate::domain::issue_automation::{
 };
 use crate::domain::issue_work::IssueReference;
 
+mod arbiter;
+pub use arbiter::{
+    IssueArbiterClaimRequest, IssueArbiterClaimResult, IssueArbiterCurrentContext,
+    IssueArbiterFinishCommit, IssueArbiterFinishRequest, IssueArbiterFinishResult,
+    IssueArbiterWaitRequest,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredIssueAutomationBinding {
     pub binding: IssueAutomationBinding,
@@ -146,6 +153,53 @@ pub enum IssueDecisionSaveResult {
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
 /// 같은 안정 ID의 재삽입은 기존 내용을 보존한다. 갱신은 revision CAS로만 한다.
 pub trait IssueAutomationStorePort: Send + Sync {
+    fn claim_issue_arbiter(
+        &self,
+        _workspace: &str,
+        _request: &IssueArbiterClaimRequest,
+    ) -> Result<IssueArbiterClaimResult> {
+        anyhow::bail!("issue arbiter persistence is unavailable")
+    }
+    fn finish_issue_arbiter(
+        &self,
+        _workspace: &str,
+        _request: &IssueArbiterFinishRequest,
+    ) -> Result<IssueArbiterFinishResult> {
+        anyhow::bail!("issue arbiter persistence is unavailable")
+    }
+    fn record_issue_arbiter_wait(
+        &self,
+        _workspace: &str,
+        _request: &IssueArbiterWaitRequest,
+    ) -> Result<IssueArbiterFinishResult> {
+        anyhow::bail!("issue arbiter persistence is unavailable")
+    }
+    /// 닫힌 decision의 pending 호출도 포함한다. ID 순서로 한 번에 최대 256개다.
+    fn unfinished_issue_arbiter_attempts(
+        &self,
+        _workspace: &str,
+        _after_id: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<crate::domain::issue_automation::arbiter::IssueArbiterAttempt>> {
+        anyhow::bail!("issue arbiter persistence is unavailable")
+    }
+    fn pending_issue_arbiter_events(
+        &self,
+        _workspace: &str,
+        _limit: usize,
+    ) -> Result<Vec<crate::domain::issue_automation::arbiter::IssueArbiterFinishedEvent>> {
+        anyhow::bail!("issue arbiter persistence is unavailable")
+    }
+    fn acknowledge_issue_arbiter_event(&self, _workspace: &str, _event_id: &str) -> Result<()> {
+        anyhow::bail!("issue arbiter persistence is unavailable")
+    }
+    fn issue_decision_arbiter_waits(
+        &self,
+        _workspace: &str,
+        _decision_ids: &[IssueDecisionId],
+    ) -> Result<crate::domain::issue_automation::arbiter::IssueArbiterWaitSnapshot> {
+        anyhow::bail!("issue arbiter persistence is unavailable")
+    }
     fn issue_autonomy_selection(
         &self,
         _workspace: &str,

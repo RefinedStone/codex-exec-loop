@@ -22,7 +22,7 @@ import { IssuePanel } from "./kernel/IssuePanel";
 import type { IssueDecisionAttention, KernelInterest } from "./kernel/kernelConnection";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
-import { ATTENTION_TEXT, attentionEvents, issueDecisionAttentionEvents } from "./session/attention";
+import { ATTENTION_TEXT, attentionEvents, isCurrentIssueDecisionAttention, issueDecisionAttentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
 import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, isDotDockVisible, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showHome, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
@@ -566,7 +566,9 @@ export function App() {
     () =>
       useDesktopStore.subscribe((state, previous) => {
         for (const event of issueDecisionAttentionEvents(previous, state)) {
-          notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`, event.reminderId !== undefined);
+          notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`,
+            event.arbiter ? (event.arbiter.outcome === "applied" ? "arbiter_applied" : "arbiter_waiting") : event.reminderId !== undefined,
+            () => isCurrentIssueDecisionAttention(useDesktopStore.getState(), event));
         }
         for (const event of attentionEvents(previous, state)) {
           const title = state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === event.threadId)?.title ?? "Akra";

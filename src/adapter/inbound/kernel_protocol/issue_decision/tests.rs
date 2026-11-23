@@ -198,6 +198,7 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
     closed_record.state = IssueDecisionState::Withdrawn;
     let closed = IssueDecisionRequest::hydrate(closed_record).unwrap();
     let detail = IssueCollectionDetail {
+        arbiter_waits: Vec::new(),
         timeline: None,
         revision: 41,
         report: None,
@@ -460,6 +461,7 @@ fn delivery_review_projects_the_frozen_decision_and_preserves_legacy_json() {
     }))
     .unwrap();
     assert!(legacy.get("delivery_review").is_none());
+    assert!(legacy.get("arbiter_wait").is_none());
     assert!(legacy["basis"].get("delivery").is_none());
 
     let mut original = delivery_request('b').to_record();
@@ -537,4 +539,92 @@ fn native_confirmation_target_roundtrip_keeps_delivery_basis_and_exact_commit_id
             .validate()
             .is_err()
     );
+}
+
+#[test]
+fn arbiter_wait_is_projected_only_for_the_exact_open_decision_without_changing_its_definition() {
+    use crate::adapter::inbound::kernel_protocol::IssueState;
+    use crate::domain::issue_automation::arbiter::{IssueArbiterWaitEntry, IssueArbiterWaitReason};
+    let mut record = request().to_record();
+    record.definition.on_timeout = IssueDecisionTimeout::Arbiter;
+    record.definition.due_at = Some("2026-11-23T00:00:00Z".to_owned());
+    let stored = StoredIssueDecision {
+        request: IssueDecisionRequest::hydrate(record).unwrap(),
+        revision: 3,
+    };
+    let original = serde_json::to_value(IssueDecisionRequestState::from(&stored)).unwrap();
+    assert!(original.get("arbiter_wait").is_none());
+    let wait = IssueArbiterWaitEntry {
+        decision_id: stored.request.id().clone(),
+        decision_revision: 3,
+        basis: stored.request.definition().basis.clone(),
+        reason: IssueArbiterWaitReason::LowConfidence,
+    };
+    let detail = IssueCollectionDetail {
+        arbiter_waits: vec![wait],
+        timeline: None,
+        revision: 42,
+        report: None,
+        interaction: None,
+        execution: None,
+        feedback: None,
+        item: Some(IssueCollectionItem {
+            start_budget_wait: None,
+            issue: reference(),
+            binding_id: IssueAutomationBindingId::new("binding").unwrap(),
+            tracked: None,
+            current: None,
+            observation_revision: None,
+            tracked_revision: None,
+            triage: None,
+            work: None,
+            open_decisions: vec![stored],
+        }),
+    };
+    let wire =
+        serde_json::to_value(KernelQueryAnswer::Issue(IssueState::from_domain(&detail))).unwrap();
+    let shown = &wire["open_decisions"][0];
+    assert_eq!(wire["revision"], 42);
+    assert_eq!(shown["arbiter_wait"], json!({"reason":"low_confidence"}));
+    for field in [
+        "id",
+        "revision",
+        "state",
+        "on_timeout",
+        "basis",
+        "due_at",
+        "question",
+        "options",
+    ] {
+        assert_eq!(shown[field], original[field], "{field}");
+    }
+    assert_schema("queries", "issue", "output", &wire);
+    for change in 0..4 {
+        let mut mismatched = detail.clone();
+        match change {
+            0 => {
+                mismatched.arbiter_waits[0].decision_id =
+                    IssueDecisionId::new("other-decision").unwrap()
+            }
+            1 => mismatched.arbiter_waits[0].decision_revision += 1,
+            2 => mismatched.arbiter_waits[0].basis.gate_revision += 1,
+            _ => {
+                let stored = &mut mismatched.item.as_mut().unwrap().open_decisions[0];
+                let mut record = stored.request.to_record();
+                record.definition.on_timeout = IssueDecisionTimeout::Wait;
+                stored.request = IssueDecisionRequest::hydrate(record).unwrap();
+            }
+        }
+        let wire = serde_json::to_value(IssueState::from_domain(&mismatched)).unwrap();
+        assert!(
+            wire["open_decisions"][0].get("arbiter_wait").is_none(),
+            "{change}"
+        );
+    }
+    for invalid in [
+        json!({"reason":"unknown"}),
+        json!({"reason":"low_confidence","model_text":"private"}),
+    ] {
+        assert!(serde_json::from_value::<IssueArbiterWaitState>(invalid).is_err());
+    }
 }

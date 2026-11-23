@@ -16,6 +16,7 @@ pub enum IssueAutomationPolicyResolution {
     Derived,
     Override,
     Minimum,
+    Maximum,
     And,
     Intersection,
     Union,

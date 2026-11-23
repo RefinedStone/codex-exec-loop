@@ -1,4 +1,5 @@
-import type { IssueDecisionRequestState } from "./protocol";
+import type { IssueDecisionFactRecord, IssueDecisionRequestState } from "./protocol";
+import { ISSUE_ARBITER_WAIT_TEXT, issueDecisionAnswerOrigin } from "./issueArbiter";
 import { issueDeadlineDateLabel, issueDecisionDeadline } from "./issueDecisionDeadline";
 import { issueDeliveryReview } from "./issueDeliveryReview";
 import { EMPTY_ISSUE_DECISION_DRAFT, ISSUE_DECISION_KIND_LABEL, ISSUE_DECISION_STATE_LABEL, decisionDraftIdentity, issueTextBytes, type IssueDecisionDraft, type ReadyIssueDetail } from "./issueInteractions";
@@ -14,12 +15,13 @@ export interface IssueDecisionCardsProps {
 }
 
 /** 질문·선택지·권고는 현재 공개 정책을 통과한 서버 표시값만 사용한다. */
-function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason, onAnswer, draft = EMPTY_ISSUE_DECISION_DRAFT, onDraftChange }: {
+function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason, answerBy, onAnswer, draft = EMPTY_ISSUE_DECISION_DRAFT, onDraftChange }: {
   request: IssueDecisionRequestState;
   busy: boolean;
   asOfUnixMs?: number | null;
   state?: string;
   reason?: string;
+  answerBy?: IssueDecisionFactRecord["answer_by"];
   onAnswer: IssueDecisionCardsProps["onAnswer"];
   draft?: IssueDecisionDraft;
   onDraftChange?(draft: IssueDecisionDraft): void;
@@ -28,6 +30,8 @@ function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason
   const setOption = (option: string) => onDraftChange?.({ ...draft, option });
   const setNote = (note: string) => onDraftChange?.({ ...draft, note });
   const open = state === "open";
+  const arbiterWait = open ? request.arbiter_wait : null;
+  const answerOrigin = state === "answered" ? issueDecisionAnswerOrigin(answerBy) : null;
   const delivery = issueDeliveryReview(request);
   const heading = delivery ? "결과 제출 승인" : ISSUE_DECISION_KIND_LABEL[request.kind] ?? "결정";
   const deadline = issueDecisionDeadline(request, asOfUnixMs);
@@ -39,9 +43,14 @@ function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason
     <section className="issues-decision-card" data-testid="issue-decision-card" data-decision-id={request.id} data-state={state} aria-label={heading}>
       <div className="issues-decision-heading">
         <strong>{heading}</strong>
-        <span className="issues-status" data-status={state}>{delivery && open ? "사람 승인 대기" : ISSUE_DECISION_STATE_LABEL[state] ?? state}</span>
+        <span className="issues-status" data-status={state}>{arbiterWait ? "사람 답변 대기" : delivery && open ? "사람 승인 대기" : ISSUE_DECISION_STATE_LABEL[state] ?? state}</span>
       </div>
       <p className="issues-decision-question" data-testid="issue-decision-question">{request.question}</p>
+      {arbiterWait && <div className="issues-inline-notice muted" data-testid="issue-arbiter-wait" data-reason={arbiterWait.reason}>
+        <p>{ISSUE_ARBITER_WAIT_TEXT[arbiterWait.reason]}</p>
+        <p>사람의 답변을 기다립니다. 아래에서 답변을 선택할 수 있습니다.</p>
+      </div>}
+      {answerOrigin && <p className="issues-inline-notice muted" data-testid="issue-decision-origin">{answerOrigin}</p>}
       {delivery && <div className="issues-delivery-review" data-testid="issue-delivery-review">
         <p>{open ? "이 변경에 대한 사람의 답변을 기다립니다." : "이 결정에서 검토한 변경 범위입니다."}</p>
         <ul className="issues-reasons" aria-label="결과 제출 검토 이유">
@@ -104,13 +113,15 @@ export function IssueDecisionCards({ decisions, history, asOfUnixMs, busy, onAns
         <section className="issues-decision-history" aria-label="이전 결정" data-testid="issue-decision-history">
           <h3>이전 결정</h3>
           {resolved.map((entry) => entry.request ? (
-            <DecisionCard key={entry.decision.decision_id} request={entry.request} state={entry.decision.state} busy={true} reason={entry.resolution_reason?.summary ?? "완료된 결정은 다시 답할 수 없습니다."} onAnswer={onAnswer} />
+            <DecisionCard key={entry.decision.decision_id} request={entry.request} state={entry.decision.state} answerBy={entry.decision.answer_by} busy={true} reason={entry.resolution_reason?.summary ?? "완료된 결정은 다시 답할 수 없습니다."} onAnswer={onAnswer} />
           ) : (
             <article className="issues-decision-card" key={entry.decision.decision_id} data-testid="issue-decision-history-item" data-state={entry.decision.state}>
               <div className="issues-decision-heading">
                 <strong>{ISSUE_DECISION_KIND_LABEL[entry.decision.kind] ?? "이전 결정"}</strong>
                 <span className="issues-status">{ISSUE_DECISION_STATE_LABEL[entry.decision.state] ?? entry.decision.state}</span>
               </div>
+              {entry.decision.state === "answered" && issueDecisionAnswerOrigin(entry.decision.answer_by) &&
+                <p className="issues-inline-notice muted" data-testid="issue-decision-origin">{issueDecisionAnswerOrigin(entry.decision.answer_by)}</p>}
               <p className="issues-inline-notice muted">{entry.resolution_reason?.summary ?? "완료된 결정입니다."}</p>
               <p className="issues-inline-notice muted">이전 질문과 선택지는 현재 공개 범위에서 표시할 수 없습니다.</p>
             </article>

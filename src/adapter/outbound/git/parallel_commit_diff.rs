@@ -58,7 +58,7 @@ pub(super) fn inspect_parallel_commit_diff(
     parse_numstat(request, &output.stdout)
 }
 
-fn ensure_exact_worktree_root(workspace: &Path) -> Result<(), String> {
+pub(super) fn ensure_exact_worktree_root(workspace: &Path) -> Result<(), String> {
     // --work-tree pins Git's routing, so also require the repository marker at this root.
     let marker = std::fs::symlink_metadata(workspace.join(".git"))
         .map_err(|_| "delivery diff inspection requires the exact worktree root".to_string())?;
@@ -77,7 +77,7 @@ fn ensure_exact_worktree_root(workspace: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_exact_commit(workspace: &Path, sha: &str) -> Result<(), String> {
+pub(super) fn ensure_exact_commit(workspace: &Path, sha: &str) -> Result<(), String> {
     let commit = format!("{sha}^{{commit}}");
     let output = checked_git_output(workspace, &["rev-parse", "--verify", &commit])?;
     let observed = std::str::from_utf8(&output.stdout)
@@ -172,7 +172,7 @@ fn checked_git_output(workspace: &Path, args: &[&str]) -> Result<Output, String>
     Ok(output)
 }
 
-fn safe_git_command(workspace: &Path) -> Command {
+pub(super) fn safe_git_command(workspace: &Path) -> Command {
     let mut command = git_subprocess::command(std::iter::empty::<&str>());
     command
         .arg("--work-tree")

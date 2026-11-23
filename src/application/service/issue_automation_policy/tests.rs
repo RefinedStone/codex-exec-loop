@@ -9,6 +9,88 @@ use crate::domain::issue_automation::policy::{
 use super::*;
 
 #[test]
+fn arbiter_settings_preserve_legacy_defaults_and_projects_only_tighten_user_limits() {
+    let defaults = resolve_issue_automation_policy(None, None).unwrap();
+    let explicit = resolve_issue_automation_policy(Some("[arbiter]\nmin_confidence=9000\nmax_running=1\nmax_started_per_day=5\ntimeout_seconds=180"), None).unwrap();
+    assert_eq!(explicit, defaults);
+    assert!(
+        !serde_json::to_value(&defaults.policy)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("arbiter")
+    );
+    let user =
+        "[arbiter]\nmin_confidence=9200\nmax_running=2\nmax_started_per_day=8\ntimeout_seconds=150";
+    let widening = "[arbiter]\nmin_confidence=8000\nmax_running=9\nmax_started_per_day=99\ntimeout_seconds=300";
+    assert_eq!(
+        resolve_issue_automation_policy(Some(user), Some(widening))
+            .unwrap()
+            .policy
+            .arbiter,
+        resolve_issue_automation_policy(Some(user), None)
+            .unwrap()
+            .policy
+            .arbiter
+    );
+    let tighter =
+        "[arbiter]\nmin_confidence=9500\nmax_running=1\nmax_started_per_day=3\ntimeout_seconds=60";
+    let settings = resolve_issue_automation_policy(Some(user), Some(tighter))
+        .unwrap()
+        .policy
+        .arbiter;
+    assert_eq!(
+        (
+            settings.min_confidence,
+            settings.max_running,
+            settings.max_started_per_day,
+            settings.timeout_seconds
+        ),
+        (9500, 1, 3, 60)
+    );
+    assert_ne!(
+        resolve_issue_automation_policy(Some(user), None)
+            .unwrap()
+            .version,
+        defaults.version
+    );
+    assert_eq!(
+        resolve_issue_automation_policy(None, Some(widening))
+            .unwrap()
+            .policy
+            .arbiter,
+        defaults.policy.arbiter
+    );
+}
+
+#[test]
+fn arbiter_policy_rejects_invalid_units_confidence_and_unknown_capabilities() {
+    for field in [
+        "min_confidence=10001",
+        "min_confidence=-1",
+        "min_confidence=0.9",
+        "timeout_seconds=0",
+        "timeout_seconds=2592001",
+        "max_running=-1",
+        "max_started_per_day=1.5",
+        "model='override'",
+        "retry=true",
+    ] {
+        assert!(
+            resolve_issue_automation_policy(Some(&format!("[arbiter]\n{field}")), None).is_err(),
+            "{field}"
+        );
+    }
+    let disabled = resolve_issue_automation_policy(
+        Some("[arbiter]\nmax_running=0\nmax_started_per_day=0"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(disabled.policy.arbiter.max_running, 0);
+    assert_eq!(disabled.policy.arbiter.max_started_per_day, 0);
+}
+
+#[test]
 fn ordinary_values_merge_per_leaf_and_risk_rules_replace_as_an_ordered_list() {
     let user = r#"
         [binding.github]

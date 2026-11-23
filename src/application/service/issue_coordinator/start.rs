@@ -1,6 +1,7 @@
 //! Human answers and a confirmed Gated selection remain distinct start authorities.
 use crate::domain::issue_automation::coordinator::{
-    IssueWorkStartAuthority, human_start, policy_start, ready_for_start, timeout_default_start,
+    IssueWorkStartAuthority, human_start, policy_start, ready_for_start, timeout_arbiter_start,
+    timeout_default_start,
 };
 use crate::domain::issue_automation::decision::{
     IssueDecisionBasis, IssueDecisionId, IssueDecisionRequest,
@@ -11,6 +12,7 @@ use crate::domain::issue_automation::triage::IssueTriageAssessment;
 pub(super) enum StartAuthorization<'a> {
     Human(&'a IssueDecisionRequest),
     TimeoutDefault(&'a IssueDecisionRequest),
+    TimeoutArbiter(&'a IssueDecisionRequest),
     Policy(&'a IssueDecisionBasis),
 }
 
@@ -23,7 +25,9 @@ pub(super) struct StartContext<'a> {
 impl<'a> StartAuthorization<'a> {
     pub fn basis(self) -> &'a IssueDecisionBasis {
         match self {
-            Self::Human(decision) | Self::TimeoutDefault(decision) => &decision.definition().basis,
+            Self::Human(decision)
+            | Self::TimeoutDefault(decision)
+            | Self::TimeoutArbiter(decision) => &decision.definition().basis,
             Self::Policy(basis) => basis,
         }
     }
@@ -32,13 +36,16 @@ impl<'a> StartAuthorization<'a> {
         match self {
             Self::Human(_) => IssueWorkStartAuthority::Human,
             Self::TimeoutDefault(_) => IssueWorkStartAuthority::TimeoutDefault,
+            Self::TimeoutArbiter(_) => IssueWorkStartAuthority::TimeoutArbiter,
             Self::Policy(_) => IssueWorkStartAuthority::Policy,
         }
     }
 
     pub fn decision_id(self) -> Option<&'a IssueDecisionId> {
         match self {
-            Self::Human(decision) | Self::TimeoutDefault(decision) => Some(decision.id()),
+            Self::Human(decision)
+            | Self::TimeoutDefault(decision)
+            | Self::TimeoutArbiter(decision) => Some(decision.id()),
             Self::Policy(_) => None,
         }
     }
@@ -56,6 +63,7 @@ impl<'a> StartAuthorization<'a> {
                 }
                 Self::Policy(_) => policy_start(assessment),
                 Self::TimeoutDefault(decision) => timeout_default_start(assessment, decision),
+                Self::TimeoutArbiter(decision) => timeout_arbiter_start(assessment, decision),
             }
     }
 }

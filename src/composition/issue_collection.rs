@@ -20,6 +20,8 @@ use crate::application::service::issue_policy::IssuePolicyService;
 use crate::application::service::issue_source_provenance::IssueSourceProvenanceService;
 use crate::application::service::issue_triage::IssueTriageService;
 
+mod arbiter;
+
 pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
     let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
         let location =
@@ -113,6 +115,10 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             decisions,
             IssuePolicyService::new(validation_source.clone()),
             execution,
+        )
+        .with_arbiter(
+            arbiter::model(workspace_dir),
+            Arc::new(crate::adapter::outbound::git::issue_assessment_evidence::GitIssueAssessmentEvidenceAdapter::new()),
         )
         .with_feedback(feedback)
         .with_publication_journal(publication.clone()),

@@ -161,6 +161,36 @@ fn apply_user_grants(
     user: &PolicyLayer,
     origins: &mut PolicyProvenance,
 ) {
+    if let Some(arbiter) = &user.arbiter {
+        assign(
+            &mut policy.arbiter.min_confidence,
+            arbiter.min_confidence,
+            "arbiter.min_confidence",
+            Scope::User,
+            origins,
+        );
+        assign(
+            &mut policy.arbiter.max_running,
+            arbiter.max_running,
+            "arbiter.max_running",
+            Scope::User,
+            origins,
+        );
+        assign(
+            &mut policy.arbiter.max_started_per_day,
+            arbiter.max_started_per_day,
+            "arbiter.max_started_per_day",
+            Scope::User,
+            origins,
+        );
+        assign(
+            &mut policy.arbiter.timeout_seconds,
+            arbiter.timeout_seconds,
+            "arbiter.timeout_seconds",
+            Scope::User,
+            origins,
+        );
+    }
     assign(
         &mut policy.authority.autonomy_cap,
         user.authority
@@ -228,6 +258,41 @@ fn restrict_with_project(
     project: &PolicyLayer,
     origins: &mut PolicyProvenance,
 ) {
+    if let Some(arbiter) = &project.arbiter {
+        if let Some(value) = arbiter.min_confidence {
+            policy.arbiter.min_confidence = policy.arbiter.min_confidence.max(value);
+            origins.combine(
+                "arbiter.min_confidence",
+                Scope::Project,
+                Resolution::Maximum,
+            );
+        }
+        for (key, target, value) in [
+            (
+                "arbiter.max_running",
+                &mut policy.arbiter.max_running,
+                arbiter.max_running,
+            ),
+            (
+                "arbiter.max_started_per_day",
+                &mut policy.arbiter.max_started_per_day,
+                arbiter.max_started_per_day,
+            ),
+        ] {
+            if let Some(value) = value {
+                *target = (*target).min(value);
+                origins.combine(key, Scope::Project, Resolution::Minimum);
+            }
+        }
+        if let Some(value) = arbiter.timeout_seconds {
+            policy.arbiter.timeout_seconds = policy.arbiter.timeout_seconds.min(value);
+            origins.combine(
+                "arbiter.timeout_seconds",
+                Scope::Project,
+                Resolution::Minimum,
+            );
+        }
+    }
     if let Some(cap) = project
         .authority
         .as_ref()

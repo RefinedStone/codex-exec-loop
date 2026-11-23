@@ -26,6 +26,10 @@ pub(super) fn validate_policy(
     if policy.schema_version != ISSUE_AUTOMATION_POLICY_SCHEMA_VERSION {
         return Err(invalid("schema_version", "unsupported_version"));
     }
+    policy
+        .arbiter
+        .validate()
+        .map_err(|_| invalid("arbiter", "invalid_arbiter_settings"))?;
     if let Some(repository) = &policy.binding.github.repository {
         validate_repository(repository)?;
     }

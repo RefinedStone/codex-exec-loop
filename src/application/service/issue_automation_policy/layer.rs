@@ -24,6 +24,7 @@ pub(super) struct PolicyLayer {
     pub gates: Option<GatesLayer>,
     pub timeouts: Option<TimeoutsLayer>,
     pub budget: Option<BudgetLayer>,
+    pub arbiter: Option<ArbiterLayer>,
     pub feedback: Option<FeedbackLayer>,
     pub close: Option<CloseLayer>,
     pub protection: Option<ProtectionLayer>,
@@ -150,6 +151,15 @@ pub(super) struct BudgetLayer {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct ArbiterLayer {
+    pub min_confidence: Option<u16>,
+    pub max_running: Option<u32>,
+    pub max_started_per_day: Option<u32>,
+    pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct FeedbackLayer {
     pub comment: Option<bool>,
     pub labels: Option<bool>,
@@ -195,6 +205,17 @@ pub(super) fn parse(
 /// 생략값을 내장값으로 채우지 않고, 파일에 명시한 값과 교차 조건만 먼저 검사한다.
 /// 뒤의 파일이 덮어써도 앞의 잘못된 선언이 가려지지 않는다.
 fn validate(layer: &PolicyLayer) -> Result<(), IssueAutomationPolicyValueError> {
+    if let Some(arbiter) = &layer.arbiter {
+        if arbiter.min_confidence.is_some_and(|value| value > 10_000) {
+            return Err(invalid("arbiter.min_confidence", "confidence_out_of_range"));
+        }
+        if arbiter
+            .timeout_seconds
+            .is_some_and(|value| value == 0 || value > MAX_ISSUE_AUTOMATION_TIMEOUT_SECONDS)
+        {
+            return Err(invalid("arbiter.timeout_seconds", "duration_out_of_range"));
+        }
+    }
     if layer
         .schema_version
         .is_some_and(|version| version != ISSUE_AUTOMATION_POLICY_SCHEMA_VERSION)

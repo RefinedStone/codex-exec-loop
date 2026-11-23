@@ -47,6 +47,7 @@ fn report() -> IssueTriageObserveReport {
 
 fn detail(item: Option<IssueCollectionItem>) -> IssueCollectionDetail {
     IssueCollectionDetail {
+        arbiter_waits: Vec::new(),
         timeline: None,
         revision: 31,
         item,
