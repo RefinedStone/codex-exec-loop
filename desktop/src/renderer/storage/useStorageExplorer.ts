@@ -13,6 +13,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   const [nodes, setNodes] = useState(new Map<string, StorageNode>());
   const [pages, setPages] = useState(new Map<string, StoragePage>());
   const [expanded, setExpanded] = useState(new Set<string>());
+  const [revealedPath, setRevealedPath] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [volumeId, setVolumeId] = useState("");
   const [error, setError] = useState("");
@@ -77,17 +78,17 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       setJobs(currentJobs);
       if (!currentJobs.length) {
         currentJobId.current = null; currentSnapshot.current = null;
-        setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); return;
+        setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]); return;
       }
       const latest = currentJobs[0]!;
       const progress = latest.progress && typeof latest.progress === "object" ? latest.progress as { volume_id?: unknown } : null;
       if (isActiveJob(latest) && typeof progress?.volume_id === "string" && available.some(volume => volume.id === progress.volume_id)) setVolumeId(progress.volume_id);
       if (currentJobId.current !== latest.id) {
         currentJobId.current = latest.id; currentSnapshot.current = null; interaction.current++;
-        setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null);
+        setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]);
       }
       if (!latest.result) {
-        currentSnapshot.current = null; setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); return;
+        currentSnapshot.current = null; setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]); return;
       }
       const next = await call<StorageSnapshot | null>("snapshot", { snapshot_id: latest.result.id })
         .catch(error => { if (String(error).includes("snapshot_pending")) return null; throw error; });
@@ -96,6 +97,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       const changed = old?.id !== next.id || old.revision !== next.revision;
       if (!changed) return;
       const previousSelection = old?.id === next.id ? selection.current : null;
+      if (old?.id !== next.id) setRevealedPath([]);
       const nextExpanded = old?.id === next.id ? new Set([...expansion.current, next.root_node_id]) : new Set([next.root_node_id]);
       const [root, selected] = await Promise.all([
         call<StorageNode>("get_node", { snapshot_id: next.id, node_id: next.root_node_id }),
@@ -116,7 +118,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
 
   useEffect(() => {
     setVolumes([]); setJobs([]); setSnapshot(null); currentSnapshot.current = null; currentJobId.current = null; setBusy(false);
-    setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setError("");
+    setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); setRevealedPath([]); setError("");
     interaction.current++;
   }, [scopeKey]);
   useEffect(() => { void refresh(); return () => { refreshSequence.current++; }; }, [refresh, epoch]);
@@ -152,6 +154,6 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   };
   return { call, scope, interaction, volumes, jobs, snapshot, nodes, pages, expanded, selectedId, volumeId,
     setVolumeId, error, setError, busy, scan, cancel, refresh, loadChildren, select, toggle,
-    setNodes, setPages, setExpanded, setSelectedId, currentSnapshot };
+    setNodes, setPages, setExpanded, setSelectedId, revealedPath, setRevealedPath, currentSnapshot };
 }
 export type StorageExplorer = ReturnType<typeof useStorageExplorer>;
