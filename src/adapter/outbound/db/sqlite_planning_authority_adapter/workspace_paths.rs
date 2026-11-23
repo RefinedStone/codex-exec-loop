@@ -68,6 +68,61 @@ struct RepositoryPathResolution {
 }
 
 impl SqlitePlanningAuthorityAdapter {
+    /// The restart registry shares the authority profile, including its test isolation.
+    pub(crate) fn authority_home_root() -> Result<PathBuf> {
+        akra_home_root()
+    }
+
+    /// Read an existing Git incarnation and its real primary checkout without initializing either.
+    /// Only an existing non-Git directory is unsupported; broken or missing Git identity is an error.
+    pub(crate) fn resolve_existing_repository_kernel_location(
+        workspace_dir: &str,
+    ) -> Result<Option<PlanningAuthorityLocation>> {
+        let workspace_root = fs::canonicalize(workspace_dir)
+            .with_context(|| format!("failed to resolve restart workspace {workspace_dir}"))?;
+        if !workspace_root.is_dir() {
+            bail!("restart workspace is not a directory: {workspace_dir}");
+        }
+        let Some(common_dir) = git_stdout(workspace_dir, &["rev-parse", "--git-common-dir"]) else {
+            for ancestor in workspace_root.ancestors() {
+                match fs::symlink_metadata(ancestor.join(".git")) {
+                    Ok(_) => {
+                        bail!("restart workspace has unreadable Git metadata: {workspace_dir}")
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).context("failed to inspect restart Git metadata");
+                    }
+                }
+            }
+            return Ok(None);
+        };
+        let common_dir = fs::canonicalize(absolutize_path(&workspace_root, Path::new(&common_dir)))
+            .context("failed to resolve restart Git common directory")?;
+        validate_repository_metadata_directory(&common_dir)?;
+        let incarnation = read_repository_incarnation_marker(&common_dir)?
+            .context("restart workspace has no existing repository incarnation")?;
+        let primary = resolve_primary_checkout_root(workspace_dir, &common_dir)
+            .context("restart workspace has no valid primary checkout")?;
+        let runtime = akra_home_root()?
+            .join(AKRA_PROJECTS_DIRECTORY)
+            .join(&incarnation.project_namespace)
+            .join(RUNTIME_DIRECTORY);
+        Ok(Some(PlanningAuthorityLocation {
+            workspace_root: workspace_root.display().to_string(),
+            canonical_repo_root: primary.display().to_string(),
+            repository_identity: format!(
+                "{REPOSITORY_INCARNATION_MARKER_HEADER}:{}",
+                incarnation.id
+            ),
+            authority_store_path: runtime
+                .join(AUTHORITY_STORE_FILE_NAME)
+                .display()
+                .to_string(),
+            runtime_dir: runtime.display().to_string(),
+        }))
+    }
+
     /// 기존 marker만 읽는다. 상세 조회가 repository incarnation이나 store를 만들지 않는다.
     pub(super) fn resolve_authority_location_for_read(
         workspace_dir: &str,

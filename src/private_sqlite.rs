@@ -101,6 +101,13 @@ impl Synchronous {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum DatabaseOpenMode {
+    LegacyCreate,
+    StrictCreate,
+    Existing,
+}
+
 const TRANSIENT_ATTEMPTS: usize = 8;
 const TRANSIENT_DELAY: Duration = Duration::from_millis(5);
 
@@ -229,6 +236,109 @@ pub(crate) fn open(
     open_database(runtime, files, synchronous, false, Duration::from_secs(5))
 }
 
+/// Open only an existing database. A confirmed missing component is empty state;
+/// missing directories/database are never created and existing permissions are not repaired.
+/// Dangling links remain errors. Existing rollback-journal handling is retained: Windows
+/// normalizes journal ACLs before SQLite performs native hot-journal recovery.
+pub(crate) fn open_existing(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+) -> Result<Option<PrivateConnection>> {
+    files.validate()?;
+    validate_runtime_path(runtime)?;
+    for attempt in 0..TRANSIENT_ATTEMPTS {
+        match open_existing_once(runtime, files, synchronous) {
+            Err(error) if error.is::<EntryAppeared>() && attempt + 1 < TRANSIENT_ATTEMPTS => {
+                std::thread::sleep(TRANSIENT_DELAY);
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded existing database lookup returns")
+}
+
+fn open_existing_once(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+) -> Result<Option<PrivateConnection>> {
+    let Some(directories) = platform::open_existing_runtime(runtime)? else {
+        return Ok(None);
+    };
+    reject_wal_sidecars(runtime, files)?;
+    let directory = &directories
+        .last()
+        .context("missing private runtime anchor")?
+        .file;
+    let Some(database) = platform::open_database(
+        &runtime.join(files.database),
+        directory,
+        DatabaseOpenMode::Existing,
+    )?
+    else {
+        confirm_absence(&runtime.join(files.database), &directories)?;
+        // A journal without its database is damaged state, not an empty registry.
+        confirm_absence(&runtime.join(files.rollback_journal), &directories)?;
+        reject_wal_sidecars(runtime, files)?;
+        return Ok(None);
+    };
+    finish_open(
+        runtime,
+        files,
+        synchronous,
+        Duration::from_secs(5),
+        directories,
+        database,
+        false,
+    )
+    .map(Some)
+}
+
+#[derive(Debug)]
+struct EntryAppeared;
+
+impl std::fmt::Display for EntryAppeared {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("private SQLite entry appeared during absence verification")
+    }
+}
+
+impl std::error::Error for EntryAppeared {}
+
+fn confirm_absence(path: &Path, directories: &[DirectoryAnchor]) -> Result<()> {
+    for directory in directories {
+        directory.verify()?;
+    }
+    let appeared = match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+                bail!("private SQLite missing entry is redirected or has an unsafe type");
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+                if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    bail!("private SQLite missing entry is a reparse point");
+                }
+            }
+            true
+        }
+        Err(error) => return Err(error).context("failed to confirm private SQLite absence"),
+    };
+    for directory in directories {
+        directory.verify()?;
+    }
+    if appeared {
+        // Retry only an observed normal entry appearing, through all ordinary ACL,
+        // identity, and schema checks. Permission/corruption failures are not retried.
+        return Err(EntryAppeared.into());
+    }
+    Ok(())
+}
+
 /// Bound the complete SQLite acquisition wait before accessing its schema.
 #[cfg(windows)]
 pub(crate) fn open_with_busy_timeout(
@@ -248,6 +358,23 @@ pub(crate) fn open_or_create(
     synchronous: Synchronous,
 ) -> Result<PrivateConnection> {
     open_database(runtime, files, synchronous, true, Duration::from_secs(5))
+}
+
+/// Create privately, but never repair a pre-existing database's permissions.
+/// The legacy entry points retain their historical permission behavior.
+pub(crate) fn open_or_create_strict(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+) -> Result<PrivateConnection> {
+    open_database_with_mode(
+        runtime,
+        files,
+        synchronous,
+        true,
+        Duration::from_secs(5),
+        DatabaseOpenMode::StrictCreate,
+    )
 }
 
 fn validate_runtime_path(runtime: &Path) -> Result<()> {
@@ -298,6 +425,24 @@ fn open_database(
     create: bool,
     busy_timeout: Duration,
 ) -> Result<PrivateConnection> {
+    open_database_with_mode(
+        runtime,
+        files,
+        synchronous,
+        create,
+        busy_timeout,
+        DatabaseOpenMode::LegacyCreate,
+    )
+}
+
+fn open_database_with_mode(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+    create: bool,
+    busy_timeout: Duration,
+    mode: DatabaseOpenMode,
+) -> Result<PrivateConnection> {
     // Validate the complete request before creating even the first directory.
     files.validate()?;
     validate_runtime_path(runtime)?;
@@ -307,7 +452,28 @@ fn open_database(
         .last()
         .context("missing private runtime anchor")?
         .file;
-    let database = platform::open_database(&runtime.join(files.database), directory)?;
+    let database = platform::open_database(&runtime.join(files.database), directory, mode)?
+        .context("private SQLite database creation returned no file")?;
+    finish_open(
+        runtime,
+        files,
+        synchronous,
+        busy_timeout,
+        directories,
+        database,
+        true,
+    )
+}
+
+fn finish_open(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+    busy_timeout: Duration,
+    directories: Vec<DirectoryAnchor>,
+    database: Arc<DatabaseAnchor>,
+    create_database: bool,
+) -> Result<PrivateConnection> {
     let guard = PrivateStoreGuard {
         runtime: runtime.to_path_buf(),
         files,
@@ -320,7 +486,11 @@ fn open_database(
     validate_database_header(guard.database_file(), hot_journal.as_ref())?;
 
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-        | OpenFlags::SQLITE_OPEN_CREATE
+        | if create_database {
+            OpenFlags::SQLITE_OPEN_CREATE
+        } else {
+            OpenFlags::empty()
+        }
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_NOFOLLOW;
     let connection = Connection::open_with_flags(runtime.join(files.database), flags)
@@ -504,6 +674,61 @@ mod platform {
         Ok(anchors)
     }
 
+    pub(super) fn open_existing_runtime(runtime: &Path) -> Result<Option<Vec<DirectoryAnchor>>> {
+        let components = runtime.components().collect::<Vec<_>>();
+        let root = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open("/")?;
+        let mut anchors = vec![DirectoryAnchor {
+            path: PathBuf::from("/"),
+            file: root,
+            private: components.len() == 1,
+        }];
+        anchors[0].verify()?;
+        let mut path = PathBuf::from("/");
+        for (index, component) in components.iter().enumerate() {
+            match component {
+                Component::RootDir => continue,
+                Component::Normal(name) => {
+                    let parent = anchors.last().context("missing runtime parent")?;
+                    parent.verify()?;
+                    let child = CString::new(name.as_bytes())?;
+                    path.push(component.as_os_str());
+                    let directory = match open_at(
+                        &parent.file,
+                        &child,
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                        0,
+                    ) {
+                        Ok(directory) => directory,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            confirm_absence(&path, &anchors)?;
+                            return Ok(None);
+                        }
+                        Err(error) => {
+                            return Err(error)
+                                .context("failed to open existing private SQLite directory");
+                        }
+                    };
+                    let anchor = DirectoryAnchor {
+                        path: path.clone(),
+                        file: directory,
+                        private: index + 1 == components.len(),
+                    };
+                    anchor.verify()?;
+                    parent.verify()?;
+                    anchors.push(anchor);
+                }
+                _ => bail!("private SQLite runtime must not contain parent or prefix aliases"),
+            }
+        }
+        for anchor in &anchors {
+            anchor.verify()?;
+        }
+        Ok(Some(anchors))
+    }
+
     fn create_directory_at(directory: &File, name: &CString) -> Result<bool> {
         // SAFETY: the parent descriptor and NUL-terminated child name remain valid.
         let status = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
@@ -542,7 +767,13 @@ mod platform {
         Ok(())
     }
 
-    pub(super) fn open_database(path: &Path, directory: &File) -> Result<Arc<DatabaseAnchor>> {
+    pub(super) fn open_database(
+        path: &Path,
+        directory: &File,
+        mode: DatabaseOpenMode,
+    ) -> Result<Option<Arc<DatabaseAnchor>>> {
+        let create = !matches!(mode, DatabaseOpenMode::Existing);
+        let strict = !matches!(mode, DatabaseOpenMode::LegacyCreate);
         let mut anchors = DATABASE_ANCHORS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -552,27 +783,47 @@ mod platform {
         match fs::symlink_metadata(path) {
             Ok(metadata) => {
                 validate_owned_file(&metadata)?;
+                if strict && metadata.mode() & 0o777 != 0o600 {
+                    bail!("existing private SQLite database file is not private");
+                }
                 if let Some(anchor) = anchors
                     .get(&(metadata.dev(), metadata.ino()))
                     .and_then(Weak::upgrade)
                 {
                     verify_file(path, &anchor.file)?;
-                    return Ok(anchor);
+                    return Ok(Some(anchor));
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !create => {
+                return Ok(None);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error).context("failed to inspect private SQLite database"),
         }
-        let file = open_at(
-            directory,
-            &CString::new(
-                path.file_name()
-                    .context("missing database filename")?
-                    .as_bytes(),
-            )?,
-            libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
-            0o600,
+        let name = CString::new(
+            path.file_name()
+                .context("missing database filename")?
+                .as_bytes(),
         )?;
+        let flags = libc::O_RDWR | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        let (file, created) = if create {
+            match open_at(
+                directory,
+                &name,
+                flags | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            ) {
+                Ok(file) => (file, true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    (open_at(directory, &name, flags, 0)?, false)
+                }
+                Err(error) => {
+                    return Err(error).context("failed to create private SQLite database");
+                }
+            }
+        } else {
+            (open_at(directory, &name, flags, 0)?, false)
+        };
         let metadata = file.metadata()?;
         let inode = (metadata.dev(), metadata.ino());
         if let Some(anchor) = anchors.get(&inode).and_then(Weak::upgrade) {
@@ -582,15 +833,19 @@ mod platform {
                 .unwrap_or_else(|error| error.into_inner())
                 .push(file);
             verify_file(path, &anchor.file)?;
-            return Ok(anchor);
+            return Ok(Some(anchor));
         }
         validate_owned_file(&metadata)?;
         verify_same_file(path, &metadata)?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        if created || !strict {
+            // Strict operations correct a restrictive umask only on their new inode.
+            // Legacy consumers retain their existing permission-normalization contract.
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
         verify_file(path, &file)?;
         let anchor = Arc::new(DatabaseAnchor::new(file));
         anchors.insert(inode, Arc::downgrade(&anchor));
-        Ok(anchor)
+        Ok(Some(anchor))
     }
 
     pub(super) fn release_database(database: Option<Arc<DatabaseAnchor>>) {
@@ -758,6 +1013,51 @@ mod platform {
         Ok(anchors)
     }
 
+    pub(super) fn open_existing_runtime(runtime: &Path) -> Result<Option<Vec<DirectoryAnchor>>> {
+        let components = runtime.components().collect::<Vec<_>>();
+        let mut path = PathBuf::new();
+        let mut anchors: Vec<DirectoryAnchor> = Vec::new();
+        for (index, component) in components.iter().enumerate() {
+            match component {
+                Component::Prefix(_) => {
+                    path.push(component.as_os_str());
+                    continue;
+                }
+                Component::RootDir | Component::Normal(_) => path.push(component.as_os_str()),
+                _ => bail!("private SQLite runtime must not contain parent aliases"),
+            }
+            if let Some(parent) = anchors.last() {
+                parent.verify()?;
+            }
+            // Retain non-delete-sharing handles even on the read path. Validate each
+            // component before traversing beneath it, including dangling junctions.
+            let directory = match open_directory(&path, true, false) {
+                Ok(directory) => directory,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    confirm_absence(&path, &anchors)?;
+                    return Ok(None);
+                }
+                Err(error) => {
+                    return Err(error).context("failed to open existing private SQLite directory");
+                }
+            };
+            let anchor = DirectoryAnchor {
+                path: path.clone(),
+                file: directory,
+                private: index + 1 == components.len(),
+            };
+            anchor.verify()?;
+            if let Some(parent) = anchors.last() {
+                parent.verify()?;
+            }
+            anchors.push(anchor);
+        }
+        for anchor in &anchors {
+            anchor.verify()?;
+        }
+        Ok(Some(anchors))
+    }
+
     pub(super) fn open_directory(path: &Path, pin: bool, write_acl: bool) -> std::io::Result<File> {
         use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 
@@ -829,7 +1129,22 @@ mod platform {
         })
     }
 
-    pub(super) fn open_database(path: &Path, _: &File) -> Result<Arc<DatabaseAnchor>> {
+    pub(super) fn open_database(
+        path: &Path,
+        _: &File,
+        mode: DatabaseOpenMode,
+    ) -> Result<Option<Arc<DatabaseAnchor>>> {
+        if matches!(mode, DatabaseOpenMode::Existing) {
+            let file = match file_options().open(path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => {
+                    return Err(error).context("failed to open existing private SQLite database");
+                }
+            };
+            verify_file(path, &file)?;
+            return Ok(Some(Arc::new(DatabaseAnchor::new(file))));
+        }
         let file = match file_options().create_new(true).open(path) {
             Ok(file) => {
                 secure_file(path, &file)?;
@@ -844,7 +1159,7 @@ mod platform {
             }
             Err(error) => return Err(error).context("failed to create private SQLite database"),
         };
-        Ok(Arc::new(DatabaseAnchor::new(file)))
+        Ok(Some(Arc::new(DatabaseAnchor::new(file))))
     }
 
     pub(super) fn release_database(database: Option<Arc<DatabaseAnchor>>) {
@@ -923,7 +1238,15 @@ mod platform {
         bail!("private directory pinning is unsupported on this platform")
     }
 
-    pub(super) fn open_database(_: &Path, _: &File) -> Result<Arc<DatabaseAnchor>> {
+    pub(super) fn open_existing_runtime(_: &Path) -> Result<Option<Vec<DirectoryAnchor>>> {
+        bail!("private SQLite databases are unsupported on this platform")
+    }
+
+    pub(super) fn open_database(
+        _: &Path,
+        _: &File,
+        _: DatabaseOpenMode,
+    ) -> Result<Option<Arc<DatabaseAnchor>>> {
         bail!("private SQLite databases are unsupported on this platform")
     }
 
