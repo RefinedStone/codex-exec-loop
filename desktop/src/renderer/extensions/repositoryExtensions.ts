@@ -14,7 +14,8 @@ export function useRepositoryExtensions(request: GatewayRequest, subscribe: Chan
   const [catalog, setCatalog] = useState<{ kernel: string; items: Manifest[]; error: string } | null>(null);
   const invoke = useCallback(<T,>(extension: string, action: string, input: unknown = {}): Promise<T> => {
     if (!kernel) return Promise.reject(new Error("저장소를 먼저 선택하세요."));
-    return request(extensionMethod, { kernel, extension, version: 1, action, input });
+    const version = extensionPanels.find(p => p.id === extension)?.version ?? 1;
+    return request(extensionMethod, { kernel, extension, version, action, input });
   }, [request, kernel]);
   useEffect(() => {
     if (!kernel) return;

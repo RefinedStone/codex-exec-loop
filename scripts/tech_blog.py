@@ -30,6 +30,12 @@ STYLE_QUESTIONS = {
     EditorialStyle.TECHNICAL_DEEP_DIVE: "동작 원리, 재현 조건, 경계 사례를 근거에서 찾는다.",
 }
 POLICY_VERSION = 1
+REVIEW_INSTRUCTIONS = [
+    "새 검수 컨텍스트에서 원고 전체를 읽고 등록되지 않은 사실 주장도 원본 발췌와 대조한다.",
+    "프로젝트 회고는 직접 확인한 경험과 추정을, 기술 탐구는 문헌·재현·제안을 구분한다.",
+    "AX 경험을 다루면 사람과 도구가 맡은 행동, 바뀐 판단 지점, 실제로 확인한 결과를 대조한다.",
+    "각 그림의 공개용 PNG를 직접 열어 캡션과 원고를 대조한다. 열 수 없으면 승인을 보류한다.",
+]
 GIT_PROGRAM = "git"
 MODEL_COMMAND = None
 
@@ -172,12 +178,7 @@ def build_packet(root, repo):
         "policy_version": POLICY_VERSION, "topic": topic, "kind": kind, "style": style,
         "mode": mode, "commit": commit, "sources": sources, "claims": claims,
         "figures": figures, "draft": draft, "style_question": STYLE_QUESTIONS[style],
-        "review_instructions": [
-            "새 검수 컨텍스트에서 원고 전체를 읽고 등록되지 않은 사실 주장도 원본 발췌와 대조한다.",
-            "프로젝트 회고는 직접 확인한 경험과 추정을, 기술 탐구는 문헌·재현·제안을 구분한다.",
-            "AX 경험을 다루면 사람과 도구가 맡은 행동, 바뀐 판단 지점, 실제로 확인한 결과를 대조한다.",
-            "각 그림의 공개용 PNG를 직접 열어 캡션과 원고를 대조한다. 열 수 없으면 승인을 보류한다.",
-        ],
+        "review_instructions": REVIEW_INSTRUCTIONS,
     }
     return packet, digest(canonical(packet)), findings
 
@@ -210,29 +211,33 @@ def assess_review(packet, fingerprint, review):
 
 
 class ReviewerError(Exception):
-    pass
+    def __init__(self, message, code="model_failed"):
+        super().__init__(message)
+        self.code = code
 
 
 def run_codex_json(model, prompt, schema, images):
     # On Windows npm can install codex as a cmd shim. Pass only fixed filenames
     # and a model identifier as arguments. All case-controlled text goes to stdin.
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", model):
+    if model is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", model):
         raise ValueError("검수 모델 ID를 확인하세요.")
     command_prefix = MODEL_COMMAND
     if command_prefix is None:
         executable = shutil.which("codex")
         command_prefix = [executable] if executable else []
     if not command_prefix:
-        raise ReviewerError("Codex CLI를 찾지 못했습니다. 설치 및 PATH를 확인하세요.")
+        raise ReviewerError("Codex CLI를 찾지 못했습니다. 설치 및 PATH를 확인하세요.", "codex_missing")
     with tempfile.TemporaryDirectory(prefix="akra-blog-review-") as folder:
         workspace = Path(folder)
         shutil.copyfile(schema, workspace / "schema.json")
         command = [
             *command_prefix, "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
             "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "plugins",
-            "-c", "web_search=disabled", "--model", model, "--output-schema", "schema.json",
+            "-c", "web_search=disabled", "--output-schema", "schema.json",
             "--output-last-message", "answer.json",
         ]
+        if model is not None:
+            command.extend(["--model", model])  # 없으면 Codex 의 기본 모델이다.
         for index, data in enumerate(images, start=1):
             name = f"figure-{index}.png"
             (workspace / name).write_bytes(data)
@@ -242,7 +247,9 @@ def run_codex_json(model, prompt, schema, images):
                 [*command, "--", "-"], cwd=workspace, input=prompt, timeout=600,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
+        except subprocess.TimeoutExpired as error:
+            raise ReviewerError(f"Codex 검수 실행 실패: {error}", "model_timeout") from error
+        except OSError as error:
             raise ReviewerError(f"Codex 검수 실행 실패: {error}") from error
         if result.returncode:
             raise ReviewerError(f"Codex 검수 실패 (종료 코드 {result.returncode}). CLI 버전과 로그인을 확인하세요.")
@@ -250,7 +257,7 @@ def run_codex_json(model, prompt, schema, images):
             answer = json.loads((workspace / "answer.json").read_text(encoding="utf-8"))
             return answer
         except (OSError, ValueError, KeyError, TypeError) as error:
-            raise ReviewerError("Codex가 검수 결과 JSON을 반환하지 않았습니다.") from error
+            raise ReviewerError("Codex가 검수 결과 JSON을 반환하지 않았습니다.", "model_reply_invalid") from error
 
 
 def run_reviewer(root, packet, model):
@@ -271,7 +278,7 @@ def run_reviewer(root, packet, model):
     ).encode("utf-8") + canonical({"attachments": attachments, "packet": packet})
     answer = run_codex_json(model, prompt, Path(__file__).with_name("tech_blog_review.schema.json"), images)
     if not isinstance(answer, dict) or "checks" not in answer:
-        raise ReviewerError("Codex가 검수 항목을 반환하지 않았습니다.")
+        raise ReviewerError("Codex가 검수 항목을 반환하지 않았습니다.", "model_reply_invalid")
     return answer["checks"]
 
 

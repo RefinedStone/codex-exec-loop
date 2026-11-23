@@ -15,7 +15,7 @@ async fn blog_changes_reach_another_attached_desktop_and_reject_stale_scope() {
     let catalog = kernel_request(&mut observer, "before", list, json!({"kernel":kernel})).await;
     assert_eq!(catalog["result"][0]["id"], "akra.tech-blog", "{catalog}");
     assert_eq!(catalog["result"][0]["enabled"], false);
-    let enable = json!({"kernel":kernel,"extension":"akra.tech-blog","version":1,"action":"configure","input":{"enabled":true}});
+    let enable = json!({"kernel":kernel,"extension":"akra.tech-blog","version":2,"action":"configure","input":{"enabled":true}});
     let mut stale = enable.clone();
     stale["kernel"] = json!("another-repository");
     let denied = kernel_request(&mut editor, "stale", call, stale).await;

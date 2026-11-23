@@ -2,11 +2,23 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "title",
+    "style",
     "draft",
     "reply",
     "claims"
   ],
   "properties": {
+    "title": {
+      "type": "string"
+    },
+    "style": {
+      "type": "string",
+      "enum": [
+        "PROBLEM_SOLVING",
+        "TECHNICAL_DEEP_DIVE"
+      ]
+    },
     "draft": {
       "type": "string"
     },
