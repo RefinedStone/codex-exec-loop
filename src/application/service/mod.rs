@@ -90,3 +90,5 @@ pub mod issue_source_provenance;
 pub(crate) mod desktop_vault_restore;
 pub mod issue_intervention;
 pub(crate) mod kernel_extensions;
+pub mod storage_analysis;
+pub(crate) mod storage_sharing;

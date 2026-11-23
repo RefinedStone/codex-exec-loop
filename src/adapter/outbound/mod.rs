@@ -33,3 +33,5 @@ pub(crate) mod extension_gateway_client;
 pub(crate) mod native_vault_confirmation;
 pub(crate) mod tech_blog_worker;
 pub mod telegram;
+
+pub mod storage_analysis;

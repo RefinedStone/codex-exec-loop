@@ -1,0 +1,240 @@
+use super::{
+    index::{Observation, StorageIndex},
+    native, worktree,
+};
+use crate::domain::storage_analysis::*;
+use anyhow::{Result, anyhow};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{SyncSender, sync_channel},
+    },
+    time::{Duration, Instant},
+};
+
+enum Event {
+    Entry(Observation),
+    Issue(i64, StorageIssue),
+    Done(i64),
+}
+
+pub(super) fn scan(
+    db: &mut StorageIndex,
+    root: &Path,
+    index_root: &Path,
+    request: &ScanRequest,
+    cancelled: &AtomicBool,
+    progress: &(dyn Fn(ScanProgress) + Sync),
+    runtime_probe: Option<&(dyn Fn(&Path) -> Vec<StorageEvidence> + Send + Sync)>,
+) -> Result<()> {
+    let root = fs::canonicalize(root)?;
+    let index_root = fs::canonicalize(index_root)?;
+    let root_meta = native::metadata(&root, &root, None)?;
+    if root_meta.issue.is_some() || !root_meta.directory {
+        return Err(anyhow!("storage_unverified_root"));
+    }
+    db.conn.execute(
+        "UPDATE nodes SET object_key=?1 WHERE id=1",
+        [root_meta.identity.clone()],
+    )?;
+    let volume = root_meta.volume.clone();
+    let mut snapshot = db.snapshot()?;
+    let abort = AtomicBool::new(false);
+    let mut last = Instant::now();
+    let mut first_file_reported = false;
+    progress(ScanProgress {
+        snapshot_id: snapshot.id.clone(),
+        files_scanned: 0,
+        directories_scanned: 0,
+        known_allocated_bytes: "0".into(),
+        state: StorageState::Running,
+    });
+    while !cancelled.load(Ordering::Acquire) {
+        let batch = db.pending(request.options.concurrency)?;
+        if batch.is_empty() {
+            break;
+        }
+        db.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let outcome = std::thread::scope(|scope| -> Result<()> {
+            let (tx, rx) = sync_channel::<Event>(128);
+            for (id, path) in batch {
+                if cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                let tx = tx.clone();
+                let root = &root;
+                let excluded = &index_root;
+                let volume = &volume;
+                let abort = &abort;
+                scope.spawn(move || {
+                    enumerate(id, path, root, excluded, volume, cancelled, abort, tx)
+                });
+            }
+            drop(tx);
+            let mut failure = None;
+            for event in rx {
+                if failure.is_some() {
+                    continue;
+                }
+                let write = match event {
+                    Event::Entry(o) => {
+                        if !o.directory {
+                            snapshot.files_scanned += 1;
+                        }
+                        db.record(o).map(|_| ())
+                    }
+                    Event::Issue(id, issue) => db.mark_issue(id, issue),
+                    Event::Done(id) => {
+                        snapshot.directories_scanned += 1;
+                        db.visited(id)
+                    }
+                };
+                if let Err(error) = write {
+                    abort.store(true, Ordering::Release);
+                    failure = Some(error);
+                }
+                if (!first_file_reported && snapshot.files_scanned > 0)
+                    || last.elapsed() >= Duration::from_millis(200)
+                {
+                    first_file_reported |= snapshot.files_scanned > 0;
+                    progress(ScanProgress {
+                        snapshot_id: snapshot.id.clone(),
+                        files_scanned: snapshot.files_scanned,
+                        directories_scanned: snapshot.directories_scanned,
+                        known_allocated_bytes: db.known_total.get().to_string(),
+                        state: if cancelled.load(Ordering::Acquire) {
+                            StorageState::Cancelled
+                        } else {
+                            StorageState::Running
+                        },
+                    });
+                    last = Instant::now();
+                }
+            }
+            if let Some(error) = failure {
+                Err(error)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = outcome {
+            let _ = db.conn.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        db.save_snapshot(&snapshot)?;
+        db.conn.execute_batch("COMMIT")?;
+    }
+    db.aggregate()?;
+    if !cancelled.load(Ordering::Acquire) {
+        worktree::annotate(db, cancelled, runtime_probe)?;
+    }
+    let partial: bool = db
+        .conn
+        .query_row("SELECT unknown FROM nodes WHERE id=1", [], |r| r.get(0))?;
+    snapshot.state = if cancelled.load(Ordering::Acquire) {
+        StorageState::Cancelled
+    } else if partial {
+        StorageState::Partial
+    } else {
+        StorageState::Complete
+    };
+    snapshot.finished_at = Some(chrono::Utc::now().to_rfc3339());
+    if partial {
+        snapshot.issues.push(StorageIssue::one(
+            "partial_observation",
+            "Some paths or allocations could not be verified; inspect node reasons",
+        ));
+    }
+    db.save_snapshot(&snapshot)?;
+    progress(ScanProgress {
+        snapshot_id: snapshot.id.clone(),
+        files_scanned: snapshot.files_scanned,
+        directories_scanned: snapshot.directories_scanned,
+        known_allocated_bytes: db.known_total.get().to_string(),
+        state: snapshot.state,
+    });
+    Ok(())
+}
+fn stopped(cancelled: &AtomicBool, abort: &AtomicBool) -> bool {
+    cancelled.load(Ordering::Acquire) || abort.load(Ordering::Acquire)
+}
+fn enumerate(
+    id: i64,
+    path: PathBuf,
+    root: &Path,
+    excluded: &Path,
+    volume: &str,
+    cancelled: &AtomicBool,
+    abort: &AtomicBool,
+    tx: SyncSender<Event>,
+) {
+    if stopped(cancelled, abort) {
+        return;
+    }
+    let handle = match native::metadata(&path, root, Some(volume)) {
+        Ok(meta) if meta.directory && meta.issue.is_none() => meta,
+        Ok(meta) => {
+            let _ = tx.send(Event::Issue(
+                id,
+                meta.issue
+                    .unwrap_or_else(|| StorageIssue::one("path_changed", "Directory was replaced")),
+            ));
+            let _ = tx.send(Event::Done(id));
+            return;
+        }
+        Err(error) => {
+            let _ = tx.send(Event::Issue(id, native::classify_error(&error)));
+            let _ = tx.send(Event::Done(id));
+            return;
+        }
+    };
+    let entries = match fs::read_dir(&path) {
+        Ok(entries) => entries,
+        Err(error) => {
+            let _ = tx.send(Event::Issue(id, native::classify_error(&error.into())));
+            let _ = tx.send(Event::Done(id));
+            return;
+        }
+    };
+    for entry in entries {
+        if stopped(cancelled, abort) {
+            return;
+        }
+        let entry = match entry {
+            Ok(e) => e,
+            Err(error) => {
+                let _ = tx.send(Event::Issue(id, native::classify_error(&error.into())));
+                continue;
+            }
+        };
+        let child = entry.path();
+        // Exclude the whole private index directory including journals, temporary files and other jobs.
+        if child == excluded || child.starts_with(excluded) {
+            continue;
+        }
+        let meta = match native::metadata(&child, root, Some(volume)) {
+            Ok(meta) => meta,
+            Err(error) => {
+                let _ = tx.send(Event::Issue(id, native::classify_error(&error)));
+                continue;
+            }
+        };
+        let observation = Observation {
+            parent: id,
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path: child,
+            directory: meta.directory,
+            logical: if meta.directory { 0 } else { meta.logical },
+            allocated: meta.allocated,
+            identity: meta.identity,
+            issue: meta.issue,
+        };
+        if tx.send(Event::Entry(observation)).is_err() {
+            return;
+        }
+    }
+    drop(handle);
+    let _ = tx.send(Event::Done(id));
+}
