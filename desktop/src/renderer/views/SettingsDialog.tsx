@@ -8,7 +8,7 @@ import type { RepositoryExtensions } from "../extensions/repositoryExtensions";
 import { extensionPanels, panelForExtension } from "../extensions/registry";
 import { updateSettings, useSettings } from "../session/settingsStore";
 import { matchesSetting } from "../session/settingsView";
-import { MOD_KEY, toggleTheme, useUiStore } from "../session/uiStore";
+import { MOD_KEY, openPanel, toggleTheme, useUiStore } from "../session/uiStore";
 
 interface Row {
   id: string;
@@ -138,29 +138,47 @@ function settingsRows(settings: AppSettings, theme: string, zoom: number): Row[]
   ];
 }
 
-export function SettingsDialog({ extensions, chooseFolder }: { extensions?: RepositoryExtensions; chooseFolder?: () => Promise<void> } = {}) {
-  const [changing, setChanging] = useState(false);
-  const [extensionError, setExtensionError] = useState("");
+function ExtensionControl({ extensions, id, enabled, compatible, lifecycle }: { extensions: RepositoryExtensions; id: string; enabled: boolean; compatible: boolean; lifecycle: string }) {
+  const [error, setError] = useState("");
+  const panel = panelForExtension(id);
+  return <div>
+    <div className="segmented">
+      <button disabled={!extensions.ready || (!compatible && !enabled) || extensions.pending.includes(id) || lifecycle === "disabling"} aria-pressed={enabled} onClick={async () => {
+        setError("");
+        try { await extensions.configure(id, !enabled); } catch (failure) { setError(String(failure)); }
+      }}>{extensions.pending.includes(id) ? "상태 변경 중…" : lifecycle === "disabling" ? "끄는 중…" : enabled ? "끄기" : "켜기"}</button>
+      {enabled && lifecycle === "enabled" && extensions.enabledIds.includes(id) && panel && <button onClick={() => openPanel(panel.id)}>열기</button>}
+    </div>
+    {error && <p role="alert">{error}</p>}
+  </div>;
+}
+
+export function SettingsDialog({ extensions, localExtensions, chooseFolder }: { extensions?: RepositoryExtensions; localExtensions?: RepositoryExtensions; chooseFolder?: () => Promise<void> } = {}) {
   const settings = useSettings();
   const theme = useUiStore((state) => state.theme);
   const zoom = useZoomFactor();
   const [query, setQuery] = useState("");
   const close = () => useUiStore.setState({ overlay: null });
   const entries = settingsRows(settings, theme, zoom);
-  const items = extensions?.items.length ? extensions.items : extensionPanels.map(p => ({...p, enabled:false}));
-  if (extensions) for (const item of items) {
-    const panel = panelForExtension(item.id);
-    entries.push({ id: item.id, section: "확장", label: panel?.label ?? item.id,
-    hint: extensionError || extensions.error || "이 저장소의 작업으로 기술 블로그 글을 자동으로 만듭니다. 모델 사용량을 씁니다.",
-    control: extensions.kernel ? <div className="segmented">
-      <button disabled={!extensions.ready || changing} aria-pressed={item.enabled} onClick={async () => {
-        setChanging(true); setExtensionError("");
-        try { await extensions.configure(item.id, !item.enabled); } catch (e) { setExtensionError(String(e)); }
-        finally { setChanging(false); }
-      }}>{item.enabled ? "끄기" : "켜기"}</button>
-      {item.enabled && panel && <button onClick={()=>useUiStore.setState({panel:panel.id, overlay:null})}>열기</button>}
-    </div> : <button onClick={()=>void chooseFolder?.()}>저장소 선택</button>,
-    });
+  for (const [scope, source] of [["local_user", localExtensions], ["repository", extensions]] as const) {
+    if (!source) continue;
+    const items = source.items.length ? source.items : extensionPanels.filter(panel => panel.scope === scope).map(panel => ({
+      ...panel, enabled: false, desired_enabled: false, compatible: true, lifecycle: "disabled", compatibility_reason: null, error: null, revision: 0, generation: 0,
+    }));
+    for (const item of items) {
+      const panel = panelForExtension(item.id);
+      const scopeName = scope === "local_user" ? "이 PC · 현재 사용자" : "현재 저장소";
+      const status = item.lifecycle === "disabling" ? "끄는 중" : item.lifecycle === "error" ? "전환 오류" : item.enabled ? "켜짐" : "꺼짐";
+      const reason = source.error || item.error || item.compatibility_reason;
+      const description = item.id === "akra.tech-blog" ? " · 이 저장소의 작업으로 기술 블로그 글을 자동으로 만듭니다. 모델 사용량을 씁니다." : "";
+      entries.push({ id: item.id, section: "확장", label: panel?.label ?? item.id,
+        hint: `${scopeName} · 버전 ${item.version} · ${status}${description}${reason ? ` · ${reason}` : ""}${scope === "local_user" ? " · 변경하면 같은 사용자의 다른 창에도 적용됩니다." : ""}`,
+        control: source.kernel
+          ? <ExtensionControl key={`${source.kernel}:${item.id}`} extensions={source} id={item.id} enabled={item.enabled} compatible={item.compatible} lifecycle={item.lifecycle} />
+          : scope === "repository" ? <button onClick={() => void chooseFolder?.()}>저장소 선택</button>
+          : <span role="status">{source.error ? "로컬 호스트 연결 실패" : "로컬 호스트 연결 중…"}</span>,
+      });
+    }
   }
   const rows = entries.filter((row) => matchesSetting(row, query));
   const sections = [...new Set(rows.map((row) => row.section))];

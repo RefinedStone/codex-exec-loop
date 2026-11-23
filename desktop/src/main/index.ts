@@ -1,3 +1,4 @@
+import { revealStoragePath } from "./storageReveal";
 // Electron main: Gateway 문자열 중계와 native UI를 소유한다. 확인 프로토콜은 별도 utility process에서 처리한다.
 import { spawn } from "node:child_process";
 import { lstat } from "node:fs/promises";
@@ -552,6 +553,7 @@ ipcMain.handle(IPC_CHANNELS.gitCreatePullRequest, async (event, cwd: unknown, dr
 });
 // `shell.openPath` 는 쓰지 않는다. Windows 에서 `.js`, `.bat` 같은 파일을 실행한다. 에이전트가 만든 파일일 수 있다.
 // shortcut: 편집기는 VS Code 주소(`vscode://file/…`)로만 연다. 다른 편집기는 앱 안 편집(P-12)이나 설정이 생기면 더한다.
+ipcMain.handle(IPC_CHANNELS.storageReveal, (_event, request: unknown) => revealStoragePath(request, path => shell.showItemInFolder(path)));
 ipcMain.handle(IPC_CHANNELS.gitOpenFile, async (_event, cwd: unknown, path: unknown) => {
   const target = await resolveGitFile(cwd, path);
   // 처리기가 없으면 OS 가 앱 선택 창을 띄우고 `openExternal` 은 성공으로 끝난다. 그래서 먼저 등록 여부를 본다.

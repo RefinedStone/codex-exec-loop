@@ -355,14 +355,14 @@ export class DesktopSession {
   }
 
   /** 업무 패널이 같은 Gateway 접속으로 보내는 요청이다: MCP hub(plan 21)와 작업 컨텍스트(plan 22). */
-  onExtensionChanged(event: string, listener: (kernel: string) => void): () => void {
+  onExtensionChanged(event: string, listener: (kernel: string, change?: import("../extensions/extensionState").ExtensionChange) => void): () => void {
     return this.client.onNotification((method, params) => {
-      if (method === event && params && typeof params === "object" && "kernel" in params && typeof params.kernel === "string") listener(params.kernel);
+      if (method === event && params && typeof params === "object" && "kernel" in params && typeof params.kernel === "string") listener(params.kernel, params as import("../extensions/extensionState").ExtensionChange);
     });
   }
 
   requestGatewayService<T>(method: string, params: unknown): Promise<T> {
-    if (method !== "akra/kernel/extensions/list" && method !== "akra/kernel/extensions/call" && !GATEWAY_SERVICE_PREFIXES.some((prefix) => method.startsWith(prefix))) {
+    if (!["akra/kernel/extensions/list", "akra/kernel/extensions/call", "akra/kernel/extensions/attach", "akra/kernel/extensions/detach"].includes(method) && !GATEWAY_SERVICE_PREFIXES.some((prefix) => method.startsWith(prefix))) {
       return Promise.reject(new Error(`${method} 는 패널이 쓸 수 있는 Gateway 요청이 아닙니다.`));
     }
     if (!this.connected) {

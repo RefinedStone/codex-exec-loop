@@ -37,6 +37,7 @@ export const IPC_CHANNELS = {
   gitHunks: "akra:git-hunks",
   gitHunkAction: "akra:git-hunk-action",
   gitOpenFile: "akra:git-open-file",
+  storageReveal: "akra:storage-reveal",
   issueAutomationPolicyOpenFile: "issueAutomationPolicy:openFile",
   confirmIssueDecision: "akra:confirm-issue-decision",
   confirmIssueAutomationMode: "akra:confirm-issue-automation-mode",
@@ -425,6 +426,7 @@ export interface IssueAutomationPolicyFileRequest {
 }
 
 export interface AkraBridge {
+  revealStoragePath(request: { path: string; host: "local" }): Promise<void>;
   /** JSON-RPC 메시지 한 개를 Gateway 로 보낸다. */
   send(text: string): void;
   onMessage(listener: (text: string) => void): () => void;

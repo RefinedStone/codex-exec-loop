@@ -1,7 +1,8 @@
 // 에이전트 메시지의 마크다운 표시이다 (P3 §6.3). react-markdown 은 원시 HTML 을 그리지 않는다.
 // 링크는 새 창으로 열어 main 의 setWindowOpenHandler 가 기본 브라우저로 넘기게 한다 (앱 화면은 이동하지 않는다).
 import { memo, type ReactNode, useRef, useState } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
+import { isStorageReference, requestStorageEvidence } from "../storage/storageEvidence";
 import remarkGfm from "remark-gfm";
 
 const COPIED_MS = 1500;
@@ -34,11 +35,9 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 }
 
 const COMPONENTS: Components = {
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => isStorageReference(href)
+    ? <button type="button" className="storage-evidence-link" onClick={() => requestStorageEvidence(href)}>표에서 보기 · {children}</button>
+    : <a href={href} target="_blank" rel="noreferrer">{children}</a>,
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
 };
 
@@ -51,7 +50,7 @@ const REMARK_PLUGINS = [remarkGfm];
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="markdown">
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS} urlTransform={url => isStorageReference(url) ? url : defaultUrlTransform(url)}>
         {text}
       </ReactMarkdown>
     </div>
