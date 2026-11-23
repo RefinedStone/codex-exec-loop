@@ -3529,7 +3529,13 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime distributor queue transaction")?;
         ensure_task_not_retired(&transaction, &record.task_id, "distributor queue record")?;
-        let record = &super::task_evidence::protect_queue_evidence(&transaction, record)?;
+        let record = &super::task_evidence::protect_queue_evidence(&transaction, record)
+            .with_context(|| {
+                format!(
+                    "failed to persist runtime distributor queue record `{}`",
+                    record.queue_item_id
+                )
+            })?;
         let payload_json = serde_json::to_string(record)
             .context("failed to serialize runtime distributor queue projection")?;
         super::work_orders::link_validation_source_in_transaction(

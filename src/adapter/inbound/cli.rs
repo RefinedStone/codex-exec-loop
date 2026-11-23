@@ -976,6 +976,7 @@ mod tests {
         }
         let project_path = paths.project.as_ref().unwrap();
         let before = std::fs::read(project_path).unwrap();
+        let global_before = std::fs::read(&paths.global).unwrap();
         for invalid in ["enabled", "ENFORCE", "enforce\n"] {
             assert!(
                 run_config_with_paths(
@@ -1008,6 +1009,16 @@ mod tests {
             paths.clone(),
         )
         .unwrap();
+        let project_after = std::fs::read_to_string(project_path).unwrap();
+        let project_toml = toml::from_str::<toml::Value>(&project_after).unwrap();
+        assert!(
+            project_toml
+                .get("parallel")
+                .and_then(|parallel| parallel.get("evidence_mode"))
+                .is_none(),
+            "{project_after}",
+        );
+        assert_eq!(std::fs::read(&paths.global).unwrap(), global_before);
         let mut output = Vec::new();
         run_config_with_paths(
             &["get", key].map(std::ffi::OsString::from),
@@ -1016,11 +1027,8 @@ mod tests {
             paths,
         )
         .unwrap();
-        assert!(
-            String::from_utf8(output)
-                .unwrap()
-                .contains("observe (global)")
-        );
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("observe (global)"), "{rendered}");
         let _ = std::fs::remove_dir_all(root);
     }
 

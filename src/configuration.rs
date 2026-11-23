@@ -1962,12 +1962,12 @@ fn remove_document_value(document: &mut DocumentMut, key: SettingKey) {
     let Some(section_item) = document.get_mut(section) else {
         return;
     };
-    if let Some(table) = section_item.as_table_mut() {
+    if let Some(table) = section_item.as_table_like_mut() {
         table.remove(field);
     }
     let remove_section = document
         .get(section)
-        .and_then(Item::as_table)
+        .and_then(Item::as_table_like)
         .is_some_and(|table| table.is_empty());
     if remove_section {
         document.remove(section);
@@ -2251,7 +2251,24 @@ fn replace_configuration_file(source: &Path, destination: &Path) -> std::io::Res
 
 #[cfg(not(unix))]
 fn create_private_temporary_file(path: &Path, _scope: ConfigScope) -> std::io::Result<File> {
-    OpenOptions::new().write(true).create_new(true).open(path)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    if _scope == ConfigScope::Global {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        // Protect the ACL on this creation handle before the file is installed.
+        // Generic write alone does not grant SetSecurityInfo's WRITE_DAC access.
+        options
+            .access_mode(
+                crate::private_fs::WINDOWS_GENERIC_WRITE
+                    | crate::private_fs::WINDOWS_READ_CONTROL
+                    | crate::private_fs::WINDOWS_WRITE_DAC,
+            )
+            .share_mode(crate::private_fs::WINDOWS_FILE_SHARE_ALL)
+            .custom_flags(crate::private_fs::WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
 }
 
 struct ConfigWriteLock {
