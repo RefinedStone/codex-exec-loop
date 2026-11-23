@@ -56,7 +56,7 @@ fn fixture() -> Result<(
         let mut statement = connection.prepare(
             "SELECT n.id,n.kind,n.name,p.name,n.object_key FROM nodes n LEFT JOIN nodes p ON p.id=n.parent ORDER BY n.id"
         )?;
-        let rows = statement
+        statement
             .query_map([], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -66,8 +66,7 @@ fn fixture() -> Result<(
                     row.get::<_, Option<String>>(4)?,
                 ))
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
     };
     for (id, kind, name, parent, object_key) in rows {
         let units = if id == 1 {
