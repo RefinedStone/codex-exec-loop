@@ -784,6 +784,17 @@ mod platform {
         use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
         use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
 
+        // Ancestor handles already pin and verify this existing parent. Canonicalize
+        // only the FFI spelling so CreateDirectoryW accepts paths beyond MAX_PATH.
+        let parent = path
+            .parent()
+            .context("missing private SQLite directory parent")?;
+        let name = path
+            .file_name()
+            .context("missing private SQLite directory name")?;
+        let path = fs::canonicalize(parent)
+            .context("failed to resolve pinned private SQLite directory parent")?
+            .join(name);
         let security = crate::private_fs::WindowsOwnerOnlySecurityDescriptor::for_current_user()?;
         let attributes = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,

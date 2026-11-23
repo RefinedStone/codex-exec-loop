@@ -587,3 +587,61 @@ fn windows_runtime_resolver_and_capture_pins_share_one_prepared_root() {
         .unwrap();
     let _ = fs::remove_dir_all(runtime);
 }
+
+#[cfg(windows)]
+#[test]
+fn long_nonverbatim_runtime_preserves_pins_and_immutable_artifact_publication() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let fixture = Fixture::new();
+    let mut runtime = PathBuf::from(
+        crate::trusted_executable::windows_process_argument_path(&fixture.root).unwrap(),
+    );
+    for _ in 0..4 {
+        runtime.push("long-runtime-component".repeat(3));
+    }
+    assert!(!runtime.to_string_lossy().starts_with(r"\\?\"));
+    assert!(runtime.as_os_str().encode_wide().count() > 260);
+    let pinned = PinnedPrivateDirectory::open(&runtime, true).unwrap();
+    let renamed = runtime.with_file_name("renamed-runtime");
+    assert!(fs::rename(&runtime, &renamed).is_err());
+    pinned.verify().unwrap();
+    drop(pinned);
+    fs::rename(&runtime, &renamed).unwrap();
+    fs::rename(&renamed, &runtime).unwrap();
+
+    let sealed = runtime
+        .join("evidence")
+        .join("sealed")
+        .join(&fixture.attempt.attempt_id)
+        .join(ARTIFACT_FILE);
+    let adapter =
+        FilesystemTaskEvidenceArtifactAdapter::new(Arc::new(move |_| Ok(runtime.clone())));
+    let path = adapter
+        .prepare_artifact("workspace", &fixture.attempt)
+        .unwrap();
+    let bytes = b"immutable capture through a long non-verbatim Windows path\n";
+    fs::write(&path, bytes).unwrap();
+    let artifact = adapter
+        .observe_and_seal("workspace", &fixture.attempt, &fixture.attempt.prepared_tree)
+        .unwrap();
+    assert_eq!(artifact.sha256, format!("{:x}", Sha256::digest(bytes)));
+    assert_eq!(artifact.size_bytes, bytes.len() as u64);
+    assert_eq!(
+        adapter
+            .observe_and_seal("workspace", &fixture.attempt, &fixture.attempt.prepared_tree)
+            .unwrap(),
+        artifact
+    );
+    fs::write(path, b"changed incoming bytes").unwrap();
+    assert!(
+        adapter
+            .observe_and_seal("workspace", &fixture.attempt, &fixture.attempt.prepared_tree)
+            .is_err()
+    );
+    adapter
+        .verify_sealed("workspace", &fixture.attempt, &artifact)
+        .unwrap();
+    assert_eq!(fs::read(&sealed).unwrap(), bytes);
+    assert!(!sealed.parent().unwrap().join("capture").exists());
+}
