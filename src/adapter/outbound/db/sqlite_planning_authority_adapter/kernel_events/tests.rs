@@ -121,7 +121,8 @@ fn task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload(
     let KernelEvent::TaskVerificationFinished { verification, .. } = &mut changed_host else {
         panic!("expected a host execution receipt");
     };
-    verification.artifact.as_mut().unwrap().sha256 = "9".repeat(64);
+    verification.artifact.as_mut().unwrap().sha256 = "a".repeat(64);
+    assert_ne!(changed_host, events[2]);
     assert!(
         adapter
             .has_task_evidence_event(&workspace, &changed_host)
