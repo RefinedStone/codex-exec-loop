@@ -17,19 +17,22 @@ let fail = true;
 const commits = [1, 2, 3].map(n => ({sha: String(n).repeat(40), time: Math.floor(Date.now() / 1000) - n * 3600, subject: `feat: 작업 ${n}`}));
 const STAGES = ["collect", "write", "review"];
 let codex = true;
+let seen = 0;
 // 단계 하나씩 커널의 변경 알림을 보낸다. 첫 실행은 초안 쓰기에서 실패하고, 이어서 하기는 그 단계부터 다시 한다.
+let hold = false;
 function advance() {
+  if (hold) return;
   setTimeout(() => {
     if (!article.job) return;
     if (article.task !== "generate") {
       if (article.stage === "revise") Object.assign(article, {stage: "review", draft: "# 짧게 고친 글\n\n두 번째 판", calls: article.calls + 1});
-      else Object.assign(article, {state: "reviewed", stage: null, job: null, calls: article.calls + 1, review: {state: "reviewed", findings: []}});
+      else Object.assign(article, {state: "reviewed", stage: null, job: null, calls: article.calls + 1, review: {state: "reviewed", findings: []}, unread: true});
       if (article.job) advance();
     } else if (article.stage === "write" && fail) {
       fail = false;
       Object.assign(article, {state: "stopped", job: null, stopped: {reason: "failed", code: "model_timeout", message: "모델의 답이 10분을 넘었습니다."}});
     } else if (article.stage === "review") {
-      Object.assign(article, {state: "reviewed", stage: null, job: null, calls: 2, review: {state: "reviewed", findings: []}});
+      Object.assign(article, {state: "reviewed", stage: null, job: null, calls: 2, review: {state: "reviewed", findings: []}, unread: true});
     } else {
       if (article.stage === "write") Object.assign(article, {title: "리뷰를 글로 옮기기", draft: "# 리뷰를 글로 옮기기\n\n자동으로 쓴 **본문**", calls: 1});
       if (article.stage === "collect") article.evidence = {commits: commits.slice(0, 2).map((c, i) => ({id: `s${i + 1}`, sha: c.sha, subject: c.subject})), files: 4, summarized: 1};
@@ -38,7 +41,7 @@ function advance() {
     }
     article.revision++;
     gateway.sendExtensionChange(kernel);
-  }, 150);
+  }, 400);
 }
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   kernel: {kernel, queries: {}, onRequest(method, params) {
@@ -52,7 +55,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     if (params.action === "configure") { enabled = data.enabled; return {result:{enabled}}; }
     assert.ok(enabled);
     if (params.action === "targets") return {result:{commits, fresh: 2, selected: commits.slice(0, 2).map(c => c.sha), first: false, limit: 30, codex}};
-    if (params.action === "list") return {result:article ? [{id:article.id,title:article.title,state:article.state,stage:article.stage,task:article.task,updated:article.updated}] : []};
+    if (params.action === "list") return {result:article ? [{id:article.id,title:article.title,state:article.state,stage:article.stage,task:article.task,updated:article.updated,unread:!!article.unread}] : []};
     if (params.action === "generate") {
       assert.deepEqual(data.commits, commits.slice(0, 2).map(c => c.sha));
       assert.equal(data.topic, "");
@@ -66,6 +69,9 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
       Object.assign(article, {state:"running", stopped:null, job:{id:"job2",started:Math.floor(Date.now() / 1000)}});
       article.revision++;
       advance();
+    } else if (params.action === "seen") {
+      seen++;
+      article.unread = false;
     } else if (params.action === "export") {
       assert.equal(data.revision,article.revision);
       article.exported = {path:"blog/2026-11-23-review-post/post.md", edition:article.edition};
@@ -88,6 +94,8 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
       Object.assign(article, {draft: data.draft, state: "edited", review: null});
       article.revision++;
     } else if (params.action !== "open") throw new Error(`unexpected action ${params.action}`);
+    // 실제 호스트처럼 조회가 아닌 명령 뒤에는 변경 알림을 보낸다.
+    if (params.action !== "open") setTimeout(() => gateway.sendExtensionChange(kernel), 0);
     return {result:article};
   }},
 });
@@ -141,13 +149,31 @@ try {
   await page.getByTestId("tech-blog-toggle").click();
   await panel.getByRole("button",{name:/리뷰를 글로 옮기기/}).click();
   await panel.getByTestId("blog-result").waitFor();
+  await panel.getByRole("button",{name:"다시 쓰기…"}).click();
+  await panel.getByRole("button",{name:"더 짧게"}).click();
+  hold = true;
+  await panel.getByRole("button",{name:"다시 쓰기",exact:true}).click();
+  await page.getByTestId("tech-blog-toggle").click();
+  await page.getByTestId("blog-activity-running").waitFor();
+  assert.equal(await page.getByTestId("tech-blog-toggle").getAttribute("title"), "기술 블로그 · 글을 만드는 중");
+  hold = false;
+  advance();
+  await page.getByText("블로그 글이 준비됐습니다.").waitFor();
+  await page.getByTestId("blog-activity-unread").waitFor();
+  assert.equal(await page.getByTestId("tech-blog-toggle").getAttribute("title"), "기술 블로그 · 새 글 1개");
+  const seenBefore = seen;
+  await page.getByTestId("tech-blog-toggle").click();
+  await panel.getByTestId("blog-result").waitFor();
+  await page.getByTestId("blog-activity-unread").waitFor({state: "detached"});
+  assert.equal(seen, seenBefore + 1);
+  await panel.getByRole("button",{name:"← 글 목록"}).click();
   codex = false;
   await page.getByTestId("tech-blog-toggle").click();
   await page.getByTestId("tech-blog-toggle").click();
   await panel.getByTestId("blog-setup").waitFor();
   await panel.getByRole("button",{name:/리뷰를 글로 옮기기/}).click();
   await panel.getByTestId("blog-result").waitFor();
-  console.log("PASS one-press blog generation, failure, resume, export, rewrite, restore, edit, review and reopen; saved articles stay open without Codex CLI");
+  console.log("PASS one-press blog generation, failure, resume, export, rewrite, restore, edit, review and reopen; saved articles stay open without Codex CLI; closed-panel completion shows a toast and an unread mark until opened");
 } finally {
   if (app) await app.close();
   await gateway.close();

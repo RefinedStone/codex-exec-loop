@@ -14,12 +14,13 @@ const BLOG: &str = "akra.tech-blog";
 const VERSION: u32 = 2;
 /// 작업을 시작하는 명령이다. 워커가 단계 1개씩 하고, 호스트는 남은 단계가 없을 때까지 다시 부른다.
 const STARTS_JOB: [&str; 4] = ["generate", "resume", "revise", "review"];
-const ACTIONS: [&str; 15] = [
+const ACTIONS: [&str; 16] = [
     "catalog",
     "configure",
     "targets",
     "list",
     "open",
+    "seen",
     "generate",
     "cancel",
     "resume",
