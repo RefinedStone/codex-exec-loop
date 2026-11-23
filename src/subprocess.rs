@@ -237,7 +237,21 @@ impl ManagedChild {
 
         #[cfg(all(unix, not(target_os = "linux")))]
         if let Some(process_group_id) = self.process_group_id.take() {
-            return signal_unix_process_group(process_group_id, libc::SIGKILL, self.child_reaped);
+            let result =
+                signal_unix_process_group(process_group_id, libc::SIGKILL, self.child_reaped);
+            #[cfg(target_os = "macos")]
+            if let Err(error) = &result
+                && error.raw_os_error() == Some(libc::EPERM)
+                && !self.child_reaped
+                && matches!(self.try_wait(), Ok(Some(_)))
+            {
+                // Cancellation can arrive before the capture loop reaps a fast leader.
+                // Apply the existing post-reap rule only when this exact child has already
+                // exited naturally. A live child or failed reap keeps the original error;
+                // do not force-kill first or signal the possibly recycled group again.
+                return Ok(());
+            }
+            return result;
         }
 
         #[cfg(windows)]
