@@ -11,9 +11,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const extension = "akra.storage-analysis", kernel = "lifecycle-user-fixture";
 const dirs = [await mkdtemp(join(tmpdir(), "akra-extension-life-a-")), await mkdtemp(join(tmpdir(), "akra-extension-life-b-"))];
 let enabled = false, desired = false, lifecycle = "disabled", revision = 0, configureMode = "fail", attachCount = 0;
-let replyBarrier = null, configureEntered = null, heldList = null;
+let replyBarrier = null, configureEntered = null, heldList = null, failureReason = null;
 const calls = [];
-const manifest = () => ({ id: extension, version: 1, scope: "local_user", label: "저장 공간 분석기", enabled, desired_enabled: desired, compatible: true, lifecycle, revision, generation: "lifecycle-host" });
+const manifest = () => ({ id: extension, version: 1, scope: "local_user", label: "저장 공간 분석기", enabled, desired_enabled: desired, compatible: true, lifecycle, error: failureReason, revision, generation: "lifecycle-host" });
 const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   kernel: { kernel: "lifecycle-repository-fixture", queries: {}, onRequest(method, params) {
     if (method === "akra/kernel/extensions/attach") { attachCount++; return { result: { kernel, scope: "local_user", generation: "lifecycle-host" } }; }
@@ -190,6 +190,13 @@ try {
   assert.ok(!gateway.receivedMethods.includes("turn/start") && !gateway.receivedMethods.includes("turn/steer"));
   console.log("PASS reconnect during disable reattaches to final host authority without reopening, rescanning, or model calls");
 
+  lifecycle = "error"; failureReason = "storage_cleanup_failed: 색인 파일 잠금을 해제하지 못했습니다."; revision++; change();
+  for (const view of [page, other]) {
+    await row(view).getByText(/색인 파일 잠금을 해제하지 못했습니다/).waitFor();
+    assert.match(await row(view).innerText(), /이 PC · 현재 사용자/);
+    assert.match(await row(view).innerText(), /전환 오류/);
+  }
+  console.log("PASS external lifecycle error retains scope and explains the host cleanup failure");
 } finally {
   if (second) await second.close();
   if (app) { await app.evaluate(() => { for (const release of globalThis.extensionChunkFixture?.releases ?? []) release(); }).catch(() => {}); await app.close(); }

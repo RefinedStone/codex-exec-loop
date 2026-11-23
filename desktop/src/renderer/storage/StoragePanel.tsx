@@ -155,19 +155,20 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
   };
 
   useEffect(() => {
-    if (!evidence || evidence.id === handledEvidence.current || !model.snapshot) return;
+    if (!evidence || evidence.id === handledEvidence.current || !model.snapshot && model.loading) return;
     handledEvidence.current = evidence.id;
     clearStorageEvidence(evidence.id);
     const request = ++navigationRequest.current;
     const life = model.scope.current, interaction = model.interaction.current, basis = model.snapshot;
     const valid = () => navigationRequest.current === request && handledEvidence.current === evidence.id && model.scope.current === life && model.interaction.current === interaction
-      && model.currentSnapshot.current?.id === basis.id && model.currentSnapshot.current.revision === basis.revision
+      && (basis ? model.currentSnapshot.current?.id === basis.id && model.currentSnapshot.current.revision === basis.revision : model.currentSnapshot.current === null)
       && useUiStore.getState().navigationRevision === evidence.navigationRevision
       && shareLifetime.current.threadId === evidence.threadId && shareLifetime.current.scopeKey === scopeKey;
     if (threadId !== evidence.threadId || !valid()) return;
     void (async () => {
       const result = await call<StorageEvidence>("resolve_evidence", { reference: evidence.reference, thread_id: threadId });
       if (!valid()) return;
+      if (!basis) throw new Error("현재 표시할 분석 결과가 없어 이 근거를 열 수 없습니다.");
       if (!sameSnapshot(result, basis)) throw new Error("이 근거는 이전 분석 결과입니다. 현재 결과를 다시 공유하세요.");
       const navigation = await prepareStorageNavigation(call, basis, result.node_id, valid);
       if (!navigation || !valid()) return;
@@ -177,7 +178,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       if (!sameSnapshot(checked, basis) || checked.node_id !== result.node_id) throw new Error("근거의 분석 결과가 바뀌었습니다.");
       applyNavigation(navigation);
     })().catch(error => { if (valid()) model.setError(String(error)); });
-  }, [evidence, model.snapshot, call, scopeKey, threadId]);
+  }, [evidence, model.snapshot, model.loading, call, scopeKey, threadId]);
 
   const reveal = async () => {
     const life = shareLifetime.current, basis = model.snapshot;
