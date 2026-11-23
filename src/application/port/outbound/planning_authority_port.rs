@@ -1450,7 +1450,7 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         if let Some(decision) = &self.shared_work_permit_decision {
             return decision
                 .lock()
-                .map(|decision| decision.clone())
+                .map(|decision| *decision)
                 .map_err(|_| anyhow::anyhow!("fake work permit lock is poisoned"));
         }
         Ok(PlanningWorkPermitDecision::Legacy)

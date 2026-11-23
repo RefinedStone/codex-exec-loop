@@ -16,7 +16,7 @@ fn controlled_child_fixture() {
         Ok("done") => {
             std::io::stdout().write_all(b"host-finished\n").unwrap();
         }
-        _ => return,
+        _ => (),
     }
 }
 
