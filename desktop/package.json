@@ -19,7 +19,8 @@
     "generate:protocol": "node scripts/generate-protocol.mjs",
     "generate:kernel-protocol": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/generate-kernel-protocol.mjs",
     "e2e": "electron-vite build && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-e2e.mjs",
-    "postinstall": "node scripts/fix-pty-permissions.mjs"
+    "postinstall": "node scripts/fix-pty-permissions.mjs",
+    "e2e:storage-service": "electron-vite build && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-storage-service-e2e.mjs"
   },
   "dependencies": {
     "@pierre/diffs": "1.6.4",

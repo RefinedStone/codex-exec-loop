@@ -363,3 +363,5 @@ fn blog_v2_catalog_preserves_the_public_surface_and_saved_v1_outputs() {
             }]))
     );
 }
+
+mod storage_desktop_fixture;

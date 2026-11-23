@@ -265,3 +265,5 @@ fn storage_extension_real_scan_and_shared_read_use_one_registered_index() {
     assert!(invoke(&context, "job", json!({"job_id":id}), None).unwrap()["result"].is_null());
     host.shutdown();
 }
+
+mod desktop_bridge;
