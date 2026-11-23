@@ -623,20 +623,32 @@ fn long_nonverbatim_runtime_preserves_pins_and_immutable_artifact_publication() 
     let bytes = b"immutable capture through a long non-verbatim Windows path\n";
     fs::write(&path, bytes).unwrap();
     let artifact = adapter
-        .observe_and_seal("workspace", &fixture.attempt, &fixture.attempt.prepared_tree)
+        .observe_and_seal(
+            "workspace",
+            &fixture.attempt,
+            &fixture.attempt.prepared_tree,
+        )
         .unwrap();
     assert_eq!(artifact.sha256, format!("{:x}", Sha256::digest(bytes)));
     assert_eq!(artifact.size_bytes, bytes.len() as u64);
     assert_eq!(
         adapter
-            .observe_and_seal("workspace", &fixture.attempt, &fixture.attempt.prepared_tree)
+            .observe_and_seal(
+                "workspace",
+                &fixture.attempt,
+                &fixture.attempt.prepared_tree
+            )
             .unwrap(),
         artifact
     );
     fs::write(path, b"changed incoming bytes").unwrap();
     assert!(
         adapter
-            .observe_and_seal("workspace", &fixture.attempt, &fixture.attempt.prepared_tree)
+            .observe_and_seal(
+                "workspace",
+                &fixture.attempt,
+                &fixture.attempt.prepared_tree
+            )
             .is_err()
     );
     adapter
