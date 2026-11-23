@@ -72,6 +72,9 @@ impl ArbiterHarness {
         let clock = self.clock.clone();
         self.h
             .coordinator()
+            .with_issue_binding_admission(Arc::new(
+                crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+            ))
             .with_arbiter(model, self.evidence.clone())
             .with_arbiter_clock(Arc::new(move || *clock.lock().unwrap()))
     }

@@ -20,7 +20,7 @@ autonomy_cap = "auto"
 mode = "all_open"
 "#;
 
-struct NoExecution;
+pub(super) struct NoExecution;
 
 impl IssueWorkExecutionPort for NoExecution {
     fn snapshot(&self, _: &str, _: &str) -> anyhow::Result<IssueWorkExecutionSnapshot> {

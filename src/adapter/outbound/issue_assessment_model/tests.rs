@@ -180,6 +180,23 @@ fn adapter(driver: Arc<Driver>) -> CodexIssueAssessmentModelAdapter {
 }
 
 #[test]
+fn denied_actual_dispatch_never_falls_back_to_an_unguarded_backend() {
+    use crate::application::port::agent_action::{AgentActionAuthorization, AgentActionGuard};
+    let driver = Arc::new(Driver::default());
+    let adapter = adapter(driver.clone());
+    let authorization: Arc<dyn AgentActionAuthorization> =
+        Arc::new(|| -> Result<Box<dyn AgentActionGuard>> {
+            anyhow::bail!("binding generation is closed")
+        });
+    assert!(
+        adapter
+            .dispatch_authorized(request(), authorization)
+            .is_err()
+    );
+    assert!(driver.state.lock().unwrap().calls.is_empty());
+}
+
+#[test]
 fn assessment_uses_the_fixed_profile_without_a_workspace_or_callback_capability() {
     let driver = Arc::new(Driver::default());
     let adapter = adapter(Arc::clone(&driver));

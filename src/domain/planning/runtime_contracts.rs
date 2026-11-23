@@ -319,10 +319,20 @@ pub fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueBindingActionCapture {
+    pub binding_id: crate::domain::issue_automation::IssueAutomationBindingId,
+    pub revision: u64,
+    pub work_order_id: String,
+    pub authorization_epoch: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSnapshotCapture {
     pub workspace_directory: String,
     pub state: TurnSnapshotCaptureState,
     pub parallel_slot_lease: Option<Box<ParallelModeSlotLeaseSnapshot>>,
+    /// Launch-time identity for automatic follow-up; it does not authorize a Human turn.
+    pub issue_binding_action: Option<Box<IssueBindingActionCapture>>,
 }
 
 impl TurnSnapshotCapture {
@@ -331,6 +341,7 @@ impl TurnSnapshotCapture {
             workspace_directory: workspace_directory.into(),
             state: TurnSnapshotCaptureState::Ready(Box::new(snapshot)),
             parallel_slot_lease: None,
+            issue_binding_action: None,
         }
     }
 
@@ -339,6 +350,7 @@ impl TurnSnapshotCapture {
             workspace_directory: workspace_directory.into(),
             state: TurnSnapshotCaptureState::CaptureFailed(message),
             parallel_slot_lease: None,
+            issue_binding_action: None,
         }
     }
 
@@ -347,6 +359,11 @@ impl TurnSnapshotCapture {
         parallel_slot_lease: Option<ParallelModeSlotLeaseSnapshot>,
     ) -> Self {
         self.parallel_slot_lease = parallel_slot_lease.map(Box::new);
+        self
+    }
+
+    pub fn with_issue_binding_action(mut self, action: Option<IssueBindingActionCapture>) -> Self {
+        self.issue_binding_action = action.map(Box::new);
         self
     }
 }

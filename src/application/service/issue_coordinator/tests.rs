@@ -1234,3 +1234,5 @@ mod auto_delivery;
 mod deadlines;
 mod delivery;
 mod gated;
+
+mod binding_pause;

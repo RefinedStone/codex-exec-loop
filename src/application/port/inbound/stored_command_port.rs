@@ -5,6 +5,7 @@ pub mod task_evidence;
 use anyhow::Result;
 
 use crate::domain::issue_automation::autonomy::{IssueAutonomyLevel, IssueAutonomyProjection};
+use crate::domain::issue_automation::binding_pause::StoredIssueBindingPauseCommand;
 use crate::domain::issue_automation::collection::{IssueCollectionMode, IssueCollectionProjection};
 use crate::domain::issue_automation::decision::{IssueDecisionFact, IssueDecisionOutcome};
 use crate::domain::issue_automation::intervention::{
@@ -86,6 +87,12 @@ pub struct StoredDirectionFields {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
+    SetIssueBindingPaused {
+        command_id: String,
+        binding_id: String,
+        paused: bool,
+        expected_revision: u64,
+    },
     RequestTaskVerification {
         request: task_evidence::RequestTaskVerificationRequest,
     },
@@ -160,6 +167,7 @@ impl StoredCommand {
             },
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
+            Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
@@ -174,6 +182,10 @@ impl StoredCommand {
 /// 성공한 저장 명령의 결과이다. 명령의 답에 실린다. 기록에는 싣지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommandResult {
+    /// 수락 시점의 불변 명령이다. receipt가 없으면 정지/재개 완료가 아니다.
+    IssueBindingPauseRequested {
+        command: Box<StoredIssueBindingPauseCommand>,
+    },
     /// 예약 완료이며 검증 실행 성공을 뜻하지 않는다.
     TaskVerificationRequested { attempt_id: String, changed: bool },
     EvidencePrepared {

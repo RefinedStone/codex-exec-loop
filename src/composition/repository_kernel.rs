@@ -25,10 +25,10 @@ use anyhow::{Context, Result, bail};
 use crate::adapter::outbound::app_server::GatewayUpstreamSocket;
 
 use crate::adapter::outbound::filesystem::{RepositoryKernelLock, RepositoryKernelOwner};
-#[cfg(not(test))]
-use crate::composition::issue_collection::build as build_issue_collection;
 #[cfg(test)]
-use crate::composition::issue_collection::build_for_kernel_test as build_issue_collection;
+use crate::composition::issue_collection::build_for_kernel_test_with_admission as build_issue_collection;
+#[cfg(not(test))]
+use crate::composition::issue_collection::build_with_admission as build_issue_collection;
 use crate::composition::kernel_host::{KernelCallError, KernelClientHandle, KernelHost};
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::production;
@@ -344,9 +344,20 @@ pub(crate) fn build_kernel_for_workspace(
     production::recover_pending_issue_interventions(workspace_dir)?;
     // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
     // 저장 명령과 관찰자가 같은 서비스의 모드/읽기 epoch 경계를 공유한다.
-    let issues = build_issue_collection(workspace_dir);
-    let mut runtime =
-        production::build_headless_kernel_runtime(workspace_dir, app_server, issues.clone());
+    let admission = Arc::new(
+        crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+    );
+    let issues = build_issue_collection(workspace_dir, admission.clone());
+    issues
+        .binding_pause_service()
+        .ok_or_else(|| anyhow::anyhow!("binding pause service is unavailable"))?
+        .recover_before_runtime()?;
+    let mut runtime = production::build_headless_kernel_runtime(
+        workspace_dir,
+        app_server,
+        issues.clone(),
+        admission,
+    );
     // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     runtime.attach_repository_observer(production::repository_state_port());

@@ -391,8 +391,24 @@ for the exact source SHA. Required checks, clean mergeability, and frozen base/h
 mandatory in both cases. Auto cannot skip an unavailable or disabled PR workflow. See the
 [Auto delivery contract](issue-auto-delivery.md) for authority and compatibility details.
 
-Binding-wide pause and unattended Gateway startup are separate follow-up changes. Selecting Auto
-does not enable the global parallel pool or grant Spec approval.
+Selecting Auto does not enable the global parallel pool or grant Spec approval. Binding-wide
+pause uses the separate runtime contract below; unattended Gateway startup remains #2561 work.
+
+### Binding Pause / Resume
+
+`set_issue_binding_paused` is a Runtime command for one registered issue binding. Acceptance closes
+new action admission and persists a pending intent; an absent receipt is not Pause completion.
+Completion follows work authorization fencing, permit revocation, and draining admitted requests
+through their response or Unknown settlement. A started worker turn is not claimed to be forcibly
+stopped. Existing execution facts, human answers, and task-level holds remain available.
+
+Resume requires Native confirmation bound to the exact workspace, command, binding run revision,
+binding metadata, autonomy revision, and current policy. A changed basis keeps the binding paused.
+Old-generation callbacks and permits cannot acquire the resumed generation. Other bindings and
+ordinary work continue, including delivery past a paused queue head. Native and TUI execution use
+their repository owner's shared admission; pending commands and immutable completion outbox records
+are recovered before reopening execution. See [Binding Pause / Resume](issue-binding-pause.md) for
+accepted/completed states, execution boundaries, recovery, and the limits of remote Unknown results.
 
 ## Issue Automation Feedback
 

@@ -642,6 +642,7 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             | StoredCommandResult::CriterionEvidenceRecorded { .. }
             | StoredCommandResult::CriterionWaived { .. }
             | StoredCommandResult::IssueAutonomyChanged { .. }
+            | StoredCommandResult::IssueBindingPauseRequested { .. }
             | StoredCommandResult::IssueDecisionResolved { .. }
             | StoredCommandResult::IssueIntervened { .. },
         ) => {

@@ -173,6 +173,10 @@ pub struct IssueTrackedSummary {
 pub struct IssueCollectionItem {
     pub issue: IssueReference,
     pub binding_id: IssueAutomationBindingId,
+    /// 바인딩 Pause/Resume의 실행 세대다. 메타데이터 revision과 독립이다.
+    pub binding_run_revision: u64,
+    /// paused 또는 전환 중인 pending 상태는 새 자동 효과를 허용하지 않는다.
+    pub binding_run_blocked: bool,
     /// 최초 Withheld 관찰은 워크플로 행을 만들지 않는다.
     pub tracked: Option<IssueTrackedSummary>,
     /// v1에서 넘어온 아직 재관찰하지 않은 행은 None이다.

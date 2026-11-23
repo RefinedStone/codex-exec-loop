@@ -6,6 +6,7 @@ use crate::domain::issue_automation::{IssueAutomationState, IssueTransition, Iss
 use std::sync::{Arc, Barrier};
 
 mod arbiter;
+mod binding_pause;
 mod fences;
 mod migration;
 mod support;

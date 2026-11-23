@@ -36,6 +36,7 @@ pub(crate) struct Fixture {
     pub provider: Arc<FakeProvider>,
     pub journal: Arc<FakePublication>,
     pub policy: Arc<FakePolicy>,
+    pub admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
 }
 impl Fixture {
     pub fn new(comment: bool, labels: bool) -> Self {
@@ -47,6 +48,9 @@ impl Fixture {
             provider,
             journal,
             policy: Arc::new(FakePolicy::new(comment, labels)),
+            admission: Arc::new(
+                crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+            ),
         }
     }
     pub fn service(&self) -> IssueFeedbackService {
@@ -58,6 +62,7 @@ impl Fixture {
             IssueAutomationPolicyService::new(self.policy.clone()),
             IssuePolicyService::new(Arc::new(DefaultDisclosure)),
         )
+        .with_issue_binding_admission(self.admission.clone())
     }
     pub fn sync(&self) -> Result<()> {
         self.service()
@@ -159,6 +164,12 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
     execution.progress.revision = 1;
     execution.progress.attempts.execution = 1;
     IssueFeedbackSnapshot {
+        binding_pause: crate::domain::issue_automation::binding_pause::IssueBindingPauseState {
+            binding_id: binding_id.clone(),
+            revision: 0,
+            paused: false,
+            pending: None,
+        },
         collection: StoredIssueCollection {
             config: IssueCollectionConfig::default(),
             epoch: 1,
@@ -169,6 +180,8 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
             status: IssueCollectionStatus::default(),
         },
         item: IssueCollectionItem {
+            binding_run_revision: 0,
+            binding_run_blocked: false,
             start_budget_wait: None,
             issue: issue.clone(),
             binding_id,

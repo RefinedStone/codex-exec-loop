@@ -326,6 +326,7 @@ fn close_approval_store_rejects_unverified_answer_and_changed_integration() {
         .unwrap();
     let fence = IssueDecisionFence {
         triage: IssueTriageFence {
+            binding_run_revision: 0,
             collection_epoch: collection.epoch,
             observation_revision: item.observation_revision,
             tracked_revision: item.tracked_revision,
@@ -395,14 +396,19 @@ fn close_approval_is_not_reopened_after_confirmed_close_even_when_policy_changes
         feedback_store.clone(),
         publication.clone(),
     ));
-    let feedback = Arc::new(IssueFeedbackService::new(
-        h.fixture.workspace.clone(),
-        feedback_store.clone(),
-        provider.clone(),
-        publication,
-        IssueAutomationPolicyService::new(h.policy.clone()),
-        IssuePolicyService::new(Arc::new(ValidationPolicy)),
-    ));
+    let feedback = Arc::new(
+        IssueFeedbackService::new(
+            h.fixture.workspace.clone(),
+            feedback_store.clone(),
+            provider.clone(),
+            publication,
+            IssueAutomationPolicyService::new(h.policy.clone()),
+            IssuePolicyService::new(Arc::new(ValidationPolicy)),
+        )
+        .with_issue_binding_admission(Arc::new(
+            crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+        )),
+    );
     let coordinator = h.coordinator().with_feedback(feedback);
     *h.policy.text.lock().unwrap() = format!(
         "{AUTO_POLICY}{}",
@@ -471,14 +477,19 @@ fn close_approval_arriving_during_feedback_sync_waits_for_a_fresh_source_recheck
         publication.clone(),
     ));
     provider.closure.lock().unwrap().issue = issue.clone();
-    let feedback = Arc::new(IssueFeedbackService::new(
-        h.fixture.workspace.clone(),
-        feedback_store.clone(),
-        provider.clone(),
-        publication,
-        IssueAutomationPolicyService::new(h.policy.clone()),
-        IssuePolicyService::new(Arc::new(ValidationPolicy)),
-    ));
+    let feedback = Arc::new(
+        IssueFeedbackService::new(
+            h.fixture.workspace.clone(),
+            feedback_store.clone(),
+            provider.clone(),
+            publication,
+            IssueAutomationPolicyService::new(h.policy.clone()),
+            IssuePolicyService::new(Arc::new(ValidationPolicy)),
+        )
+        .with_issue_binding_admission(Arc::new(
+            crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+        )),
+    );
     let coordinator = h.coordinator().with_feedback(feedback);
     let before = h.source.calls.load(Ordering::SeqCst);
     let cancel = IssueCollectionCancellation::new();

@@ -195,6 +195,8 @@ pub(super) fn snapshot_in_transaction(
     let Some(item) = collection::queries::item(connection, workspace, issue)? else {
         return Ok(None);
     };
+    let binding_pause =
+        super::super::binding_pause::read_state(connection, workspace, &item.binding_id)?;
     let work = coordinator::read(connection, workspace, issue)?;
     let execution = work
         .as_ref()
@@ -224,6 +226,7 @@ pub(super) fn snapshot_in_transaction(
     Ok(Some(IssueFeedbackSnapshot {
         collection,
         item,
+        binding_pause,
         work,
         execution,
         autonomy: autonomy::read(connection, workspace)?,
@@ -254,6 +257,7 @@ pub(super) fn snapshot(
 pub(super) fn validate_fence(fence: IssueFeedbackFence) -> Result<()> {
     for value in [
         fence.collection_epoch,
+        fence.binding_run_revision,
         fence.autonomy_revision,
         fence.authorization_epoch,
         fence.feedback_revision,
@@ -314,6 +318,7 @@ pub(super) fn permits_new_write(
     intent: &IssueFeedbackIntent,
 ) -> bool {
     if current.collection.config.mode != IssueCollectionMode::Observe
+        || !current.binding_pause.allows_automation()
         || current.pending_intervention
         || current.autonomy.pending.is_some()
         || current.state.desired_revision != intent.desired_revision
@@ -395,6 +400,7 @@ pub(super) fn mark_first_grant(
                 return Ok(IssueFeedbackGrantResult::Conflict);
             };
             if current.fence() != expected
+                || !current.binding_pause.allows_automation()
                 || current
                     .work
                     .as_ref()

@@ -857,13 +857,77 @@ fn native_tui_workspace_dir() -> String {
         .unwrap_or_else(|_| ".".to_string())
 }
 
-pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
-    build_native_application_for_workspace(
-        &native_tui_workspace_dir(),
+pub(crate) fn build_native_tui_application(
+    kernel_lock: Option<&RepositoryKernelLock>,
+) -> NativeTuiApplicationComposition {
+    let workspace = native_tui_workspace_dir();
+    let admission = Arc::new(
+        crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+    );
+    let issues = repository_kernel_target(&workspace)
+        .map(|target| {
+            let issues = super::issue_collection::build_with_admission(
+                &target.workspace_root,
+                admission.clone(),
+            );
+            let pause = issues
+                .binding_pause_service()
+                .expect("repository collection supplies binding pause");
+            let restored = restore_native_tui_issue_bindings(
+                kernel_lock,
+                &target,
+                pause.as_ref(),
+                admission.as_ref(),
+            );
+            (target.workspace_root, issues, pause, restored)
+        })
+        .ok();
+    if issues.is_none() {
+        admission.close_all();
+    }
+    let binding = issues
+        .as_ref()
+        .map(|(_, issues, _, _)| (admission.clone(), issues.automation_store()));
+    let application = build_native_application_for_workspace(
+        &workspace,
         None,
         TaskVerificationHandle::default(),
+        binding,
     )
-    .application
+    .application;
+    match issues {
+        Some((workspace, _, pause, true)) => application.with_issue_binding_pause(
+            pause,
+            admission,
+            workspace,
+            kernel_event_log_port(),
+        ),
+        // An unowned fallback keeps durable pause facts for the next owner. It neither
+        // polls pending commands nor appends/acknowledges their completion outbox.
+        _ => application,
+    }
+}
+
+/// Only the OS owner of this exact repository may restore an open admission graph.
+pub(in crate::composition) fn restore_native_tui_issue_bindings(
+    kernel_lock: Option<&RepositoryKernelLock>,
+    target: &RepositoryKernelTarget,
+    pause: &crate::application::service::issue_binding_pause::IssueBindingPauseService,
+    admission: &crate::application::service::issue_binding_admission::IssueBindingAdmission,
+) -> bool {
+    if kernel_lock.is_none_or(|lock| lock.repository_key() != target.repository_key.as_str()) {
+        admission.close_all();
+        tracing::warn!("TUI does not own this repository kernel; issue automation remains closed");
+        return false;
+    }
+    if pause.recover_before_runtime().is_err() {
+        admission.close_all();
+        tracing::warn!(
+            "TUI issue binding recovery is unavailable; issue automation remains closed"
+        );
+        return false;
+    }
+    true
 }
 
 /// 커널의 판단 사건 기록이다 (plan 19 Q3-1). planning SQLite 의 `kernel_events` 표이다.
@@ -932,6 +996,7 @@ fn stored_command_port_with_verification(
         }
     }
     let (planning, workspace, store) = store_planning_services(Arc::new(NoPlanningWorker));
+    let binding_pause = issues.binding_pause_service();
     let mut service =
         StoredCommandService::new(PlanningAdminFacadeService::from_planning_with_authority(
             workspace_dir,
@@ -947,6 +1012,9 @@ fn stored_command_port_with_verification(
             workspace_dir,
             steering,
         ));
+    if let Some(binding_pause) = binding_pause {
+        service = service.with_binding_pause(binding_pause);
+    }
     if let Some(verification) = verification {
         service = service.with_task_verification(verification);
     }
@@ -1006,6 +1074,7 @@ pub(crate) fn build_headless_kernel_runtime(
     workspace_dir: &str,
     app_server: Option<GatewayUpstreamSocket>,
     issues: Arc<crate::application::service::issue_collection::IssueCollectionService>,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
 ) -> NativeClientRuntime {
     // All parallel and post-turn clones share this unbound handle. Only the
     // successfully initialized live repository owner may bind its service.
@@ -1014,20 +1083,33 @@ pub(crate) fn build_headless_kernel_runtime(
         workspace_dir,
         app_server,
         verification_handle.clone(),
+        Some((admission.clone(), issues.automation_store())),
     );
     let mut runtime = assembly.application.into_headless_client_runtime();
+    runtime
+        .attach_issue_binding_pause(
+            issues
+                .binding_pause_service()
+                .expect("repository collection supplies binding pause"),
+            admission.clone(),
+        )
+        .expect("one binding pause owner per runtime");
     let waker = runtime.host_waker();
     // A failed private-owner initialization leaves verification unavailable. It cannot
     // turn this ordinary runtime into a command-only execution/recovery path.
-    let verification =
-        super::task_verification::build(workspace_dir, Arc::new(move || waker.wake()))
+    let verification = super::task_verification::build(
+        workspace_dir,
+        Arc::new(move || waker.wake()),
+        admission,
+        issues.automation_store(),
+    )
+    .ok()
+    .and_then(|service| {
+        runtime
+            .attach_task_verification(service.clone(), &verification_handle)
             .ok()
-            .and_then(|service| {
-                runtime
-                    .attach_task_verification(service.clone(), &verification_handle)
-                    .ok()
-                    .map(|_| service)
-            });
+            .map(|_| service)
+    });
     // 실행 중인 app-server의 제어 권한은 조립 안에서 저장 명령에 주입한다.
     // 클라이언트 facade에는 별도 제어 접근자를 남기지 않는다.
     runtime.attach_stored_commands(
@@ -1054,6 +1136,7 @@ fn build_native_application_for_workspace(
     workspace_dir: &str,
     app_server: Option<GatewayUpstreamSocket>,
     verification_handle: TaskVerificationHandle,
+    binding_admission: Option<(Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>, Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>)>,
 ) -> NativeApplicationAssembly {
     let workspace_dir = workspace_dir.to_string();
     let capture_enabled = app_server_prompt_logging_enabled();
@@ -1091,6 +1174,11 @@ fn build_native_application_for_workspace(
         )),
     )
     .with_task_verification(verification_handle);
+    let parallel_mode_service = if let Some((admission, store)) = binding_admission {
+        parallel_mode_service.with_issue_binding_admission(admission, store)
+    } else {
+        parallel_mode_service
+    };
     let parallel_mode_control_plane = parallel_mode_control_plane_from_service(
         &workspace_dir,
         planning,
@@ -1815,7 +1903,7 @@ mod tests {
             .expect("telegram parallel control port should inspect status");
         assert!(telegram_snapshot.visible_event_count <= 1);
 
-        let _tui = build_native_tui_application();
+        let _tui = build_native_tui_application(None);
     }
 
     #[cfg(windows)]

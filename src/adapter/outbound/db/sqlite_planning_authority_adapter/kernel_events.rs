@@ -28,6 +28,11 @@ fn ensure_kernel_event_table(connection: &Connection) -> Result<()> {
                 payload_json TEXT NOT NULL,
                 sequence INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS kernel_binding_pause_event_receipts (
+                event_id TEXT PRIMARY KEY NOT NULL,
+                payload_json TEXT NOT NULL,
+                sequence INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS kernel_task_evidence_event_receipts (
                 event_id TEXT PRIMARY KEY NOT NULL,
                 payload_json TEXT NOT NULL,
@@ -42,6 +47,34 @@ mod issue_timeline;
 mod tests;
 
 impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
+    fn has_issue_binding_pause_event(
+        &self,
+        workspace_dir: &str,
+        expected: &KernelEvent,
+    ) -> Result<bool> {
+        use rusqlite::OptionalExtension;
+        let event_id = expected
+            .issue_binding_pause_event_id()
+            .context("expected a binding pause event")?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        ensure_kernel_event_table(&connection)?;
+        let prior: Option<String> = connection
+            .query_row(
+                "SELECT payload_json FROM kernel_binding_pause_event_receipts WHERE event_id=?1",
+                [event_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(prior) = prior else {
+            return Ok(false);
+        };
+        if prior != serde_json::to_string(expected)? {
+            bail!("a binding pause event identity cannot change");
+        }
+        Ok(true)
+    }
+
     fn has_task_evidence_event(&self, workspace_dir: &str, expected: &KernelEvent) -> Result<bool> {
         use rusqlite::OptionalExtension;
         let event_id = expected
@@ -104,6 +137,23 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
             let event = &record.event;
             let payload =
                 serde_json::to_string(event).context("failed to serialize a kernel event")?;
+            if let Some(event_id) = event.issue_binding_pause_event_id() {
+                use rusqlite::OptionalExtension;
+                let prior: Option<String> = transaction.query_row(
+                    "SELECT payload_json FROM kernel_binding_pause_event_receipts WHERE event_id=?1",
+                    [event_id], |row| row.get(0),
+                ).optional()?;
+                if let Some(prior) = prior {
+                    if prior != payload {
+                        bail!("a binding pause event identity cannot change");
+                    }
+                    continue;
+                }
+                transaction.execute(
+                    "INSERT INTO kernel_binding_pause_event_receipts(event_id,payload_json,sequence) VALUES (?1,?2,?3)",
+                    params![event_id, payload, record.sequence],
+                )?;
+            }
             if let Some(event_id) = event.task_evidence_event_id() {
                 use rusqlite::OptionalExtension;
                 let prior: Option<String> = transaction.query_row(

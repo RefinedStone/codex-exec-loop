@@ -10,6 +10,7 @@ use crate::domain::planning::evidence::*;
 use crate::domain::planning::verification::*;
 
 mod automatic;
+mod binding_pause;
 mod cancellation;
 mod capture;
 mod fixtures;

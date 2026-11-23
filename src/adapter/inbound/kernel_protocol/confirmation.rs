@@ -176,6 +176,7 @@ mod tests {
             KernelCommandKind::AnswerIssueDecision,
             KernelCommandKind::SetIssueAutomationMode,
             KernelCommandKind::SetIssueAutonomy,
+            KernelCommandKind::SetIssueBindingPaused,
             KernelCommandKind::WaiveCriterion,
         ] {
             assert!(

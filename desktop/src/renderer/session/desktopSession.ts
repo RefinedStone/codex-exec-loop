@@ -128,7 +128,7 @@ const DOTS_LIST_METHOD = "akra/dots/list";
 const DOTS_WATCH_METHOD = "akra/dots/watch";
 const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
-export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira" | "confirmIssueAutomationMode" | "confirmIssueDecision" | "confirmIssueAutonomy">> & {
+export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "jira" | "confirmIssueAutomationMode" | "confirmIssueDecision" | "confirmIssueAutonomy" | "confirmIssueBindingResume">> & {
   readonly chatHistory?: true;
 };
 
@@ -210,6 +210,7 @@ export class DesktopSession {
     this.kernel = new KernelConnection(this.client, store, readOnly ? undefined : bridge.confirmIssueAutomationMode, readOnly ? {} : {
       confirmIssueDecision: bridge.confirmIssueDecision,
       confirmIssueAutonomy: bridge.confirmIssueAutonomy,
+      confirmIssueBindingResume: bridge.confirmIssueBindingResume,
     });
   }
 
@@ -321,6 +322,10 @@ export class DesktopSession {
 
   syncIssues(): Promise<void> {
     return this.kernel.syncIssues();
+  }
+
+  setIssueBindingPaused(paused: boolean): Promise<void> {
+    return this.kernel.setIssueBindingPaused(paused);
   }
 
   setIssueAutonomy(level: IssueAutonomyLevel): Promise<void> {

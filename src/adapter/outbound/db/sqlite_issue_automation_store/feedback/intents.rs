@@ -15,7 +15,7 @@ use crate::domain::issue_automation::feedback::{
 use crate::domain::issue_work::IssueReference;
 
 const COLUMNS: &str = "intent_id,provider,server_id,repository_id,issue_id,owner_workspace,status,record,revision,recorded_fence";
-type EncodedFence = (
+type LegacyFence = (
     u64,
     Option<u64>,
     Option<u64>,
@@ -25,6 +25,24 @@ type EncodedFence = (
     u64,
     u64,
 );
+type CurrentFeedbackFenceTuple = (
+    u64,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    u64,
+    u64,
+    u64,
+    u64,
+);
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum EncodedFence {
+    Current(CurrentFeedbackFenceTuple),
+    Legacy(LegacyFence),
+}
 
 struct StoredIntent {
     record: IssueFeedbackIntentRecord,
@@ -33,6 +51,19 @@ struct StoredIntent {
 
 fn encode_fence(fence: IssueFeedbackFence) -> Result<String> {
     state::validate_fence(fence)?;
+    // The original zero generation keeps the exact v13 JSON representation.
+    if fence.binding_run_revision == 0 {
+        return Ok(serde_json::to_string(&(
+            fence.collection_epoch,
+            fence.observation_revision,
+            fence.tracked_revision,
+            fence.work_revision,
+            fence.execution_revision,
+            fence.autonomy_revision,
+            fence.authorization_epoch,
+            fence.feedback_revision,
+        ))?);
+    }
     Ok(serde_json::to_string(&(
         fence.collection_epoch,
         fence.observation_revision,
@@ -42,6 +73,7 @@ fn encode_fence(fence: IssueFeedbackFence) -> Result<String> {
         fence.autonomy_revision,
         fence.authorization_epoch,
         fence.feedback_revision,
+        fence.binding_run_revision,
     ))?)
 }
 
@@ -49,8 +81,14 @@ fn decode_fence(encoded: String) -> Result<IssueFeedbackFence> {
     if encoded.len() > 1024 {
         bail!("the feedback recorded fence exceeds its bound");
     }
-    let value: EncodedFence = serde_json::from_str(&encoded)
+    let wire: EncodedFence = serde_json::from_str(&encoded)
         .map_err(|_| anyhow!("the feedback recorded fence is invalid"))?;
+    let value = match wire {
+        EncodedFence::Current(value) => value,
+        EncodedFence::Legacy(value) => (
+            value.0, value.1, value.2, value.3, value.4, value.5, value.6, value.7, 0,
+        ),
+    };
     let fence = IssueFeedbackFence {
         collection_epoch: value.0,
         observation_revision: value.1,
@@ -60,6 +98,7 @@ fn decode_fence(encoded: String) -> Result<IssueFeedbackFence> {
         autonomy_revision: value.5,
         authorization_epoch: value.6,
         feedback_revision: value.7,
+        binding_run_revision: value.8,
     };
     state::validate_fence(fence)?;
     Ok(fence)

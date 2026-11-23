@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+mod binding_admission;
 
 #[test]
 fn codex_thread_capabilities_do_not_claim_defensive_isolation() {

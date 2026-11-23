@@ -221,6 +221,7 @@ pub(super) fn save(
     assessment: &IssueTriageAssessment,
 ) -> Result<IssueTriageSaveResult> {
     validate_expected_revision(expected.collection_epoch)?;
+    super::sql_revision(expected.binding_run_revision)?;
     for revision in [
         expected.observation_revision,
         expected.tracked_revision,
@@ -256,7 +257,8 @@ pub(super) fn save(
             let Some(item) = queries::item(transaction, workspace, reference)? else {
                 return Ok(IssueTriageSaveResult::Conflict);
             };
-            if item.observation_revision != expected.observation_revision
+            if item.binding_run_revision != expected.binding_run_revision
+                || item.observation_revision != expected.observation_revision
                 || item.tracked_revision != expected.tracked_revision
             {
                 return Ok(IssueTriageSaveResult::Conflict);

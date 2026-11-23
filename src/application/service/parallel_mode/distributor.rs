@@ -676,6 +676,7 @@ pub(super) struct ParallelModeDistributorService {
     planning_authority: Arc<dyn PlanningAuthorityPort>,
     parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
     delivery_evidence: Arc<dyn TaskDeliveryEvidenceGatePort>,
+    pub(super) issue_binding: Option<super::binding_action::IssueBindingActionConfiguration>,
     pub(super) delivery_safety_policy: ParallelModeDeliverySafetyPolicy,
 }
 
@@ -726,8 +727,29 @@ struct DistributorQueueHeadClaimPermit {
     workspace_directory: String,
     queue_item_id: String,
     owner_token: String,
+    action: super::binding_action::CapturedTaskAction,
+    action_guard: Box<dyn crate::application::port::agent_action::AgentActionGuard>,
+    pub(super) issue_binding: Option<super::binding_action::IssueBindingActionConfiguration>,
+    task_id: String,
 }
 impl DistributorQueueHeadClaimPermit {
+    fn validate_binding_authority(&self) -> Result<(), String> {
+        super::binding_action::validate(
+            self.planning_authority.as_ref(),
+            self.issue_binding.as_ref(),
+            &self.workspace_directory,
+            &self.task_id,
+            &self.action,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn validate_binding_memory(&self) -> Result<(), String> {
+        self.action_guard
+            .validate()
+            .map_err(|error| error.to_string())
+    }
+
     fn renew(&self, stage: &str) -> Result<(), String> {
         match self.planning_authority.renew_distributor_queue_claim(
             &self.workspace_directory,
@@ -765,6 +787,7 @@ impl ParallelModeDistributorService {
             planning_authority,
             parallel_runtime,
             delivery_evidence: Arc::new(UnavailableTaskDeliveryEvidenceGate),
+            issue_binding: None,
             delivery_safety_policy,
         }
     }
@@ -1268,6 +1291,7 @@ impl ParallelModeDistributorService {
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
             self.delivery_evidence.as_ref(),
+            self.issue_binding.as_ref(),
             &mut preflight_context,
             true,
         )?
@@ -1276,6 +1300,13 @@ impl ParallelModeDistributorService {
         };
         let mut preflight_head =
             preflight_context.distributor_queue_records[preflight_head_index].clone();
+        let captured_action = super::binding_action::capture(
+            self.planning_authority.as_ref(),
+            self.issue_binding.as_ref(),
+            &preflight_context.repo_root,
+            &preflight_head.task_id,
+        )
+        .map_err(|error| error.to_string())?;
         let blocked_head_can_recover = preflight_head.queue_state
             == ParallelModeQueueItemState::Blocked
             && (is_retryable_distributor_block(&preflight_head.integration_note)
@@ -1354,6 +1385,7 @@ impl ParallelModeDistributorService {
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
             self.delivery_evidence.as_ref(),
+            self.issue_binding.as_ref(),
             &mut context,
             false,
         )?
@@ -1376,8 +1408,15 @@ impl ParallelModeDistributorService {
                 head.agent_id, head.task_id, head.integration_note
             )]);
         }
-        let Some(claim_permit) =
-            self.acquire_queue_head_claim(workspace_dir, &head.queue_item_id)?
+        if head.task_id != preflight_head.task_id {
+            return Err("distributor selection changed before binding admission".into());
+        }
+        let Some(claim_permit) = self.acquire_queue_head_claim(
+            workspace_dir,
+            &head.queue_item_id,
+            &head.task_id,
+            captured_action,
+        )?
         else {
             return Ok(vec![format!(
                 "distributor queue head is already claimed by another process / agent: {} / task: {}",
@@ -1472,7 +1511,18 @@ impl ParallelModeDistributorService {
         &self,
         workspace_dir: &str,
         queue_item_id: &str,
+        task_id: &str,
+        action: super::binding_action::CapturedTaskAction,
     ) -> Result<Option<DistributorQueueHeadClaimPermit>, String> {
+        let action_guard = action.acquire().map_err(|error| error.to_string())?;
+        super::binding_action::validate(
+            self.planning_authority.as_ref(),
+            self.issue_binding.as_ref(),
+            workspace_dir,
+            task_id,
+            &action,
+        )
+        .map_err(|error| error.to_string())?;
         let owner_token =
             distributor_claim_owner_token(self.parallel_runtime.as_ref(), queue_item_id);
         let acquired = self
@@ -1487,6 +1537,10 @@ impl ParallelModeDistributorService {
             workspace_directory: workspace_dir.to_string(),
             queue_item_id: queue_item_id.to_string(),
             owner_token,
+            action,
+            action_guard,
+            issue_binding: self.issue_binding.clone(),
+            task_id: task_id.to_string(),
         }))
     }
 

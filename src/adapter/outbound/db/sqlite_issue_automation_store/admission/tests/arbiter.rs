@@ -12,6 +12,7 @@ use crate::domain::issue_automation::decision::{
 };
 use crate::domain::issue_automation::policy::IssueAutomationGateAction;
 
+mod binding_pause;
 mod budgets;
 mod fences;
 
@@ -39,6 +40,7 @@ fn claim_request(
         current: prepared.assessment.clone(),
         decision_id: record.request.id().clone(),
         input_basis: IssueArbiterInputBasis {
+            binding_run_revision: prepared.fence.binding_run_revision,
             decision_basis: record.request.definition().basis.clone(),
             decision_revision: record.revision,
             repository_commit_sha: "b".repeat(40),

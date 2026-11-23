@@ -261,8 +261,11 @@ impl KernelCommandPort for CommandOnlyKernel {
         }
         // A durable claim needs a live owner to poll and persist its background completion.
         // Reject before runtime preparation, lock acquisition, or any command-history write.
-        if kind == KernelCommandKind::RequestTaskVerification {
-            return unreachable_answer("Host verification requires the running repository kernel.");
+        if matches!(
+            kind,
+            KernelCommandKind::RequestTaskVerification | KernelCommandKind::SetIssueBindingPaused
+        ) {
+            return unreachable_answer("This command requires the running repository kernel.");
         }
         let input = request
             .command
@@ -590,9 +593,22 @@ impl CommandOnlyKernel {
             // planning 은 저장된 데이터이다. 커널이 없어도 저장소에서 읽는다 (plan 18 K4-9d).
             KernelQuery::IssueAutomation {} => {
                 let service = super::issue_collection::build(&self.workspace);
+                let projection = service.projection()?;
                 KernelQueryAnswer::IssueAutomation(
-                    IssueAutomationState::from_domain(&service.projection()?)
-                        .with_autonomy(&service.autonomy_state()),
+                    IssueAutomationState::from_domain(&projection)
+                        .with_autonomy(&service.autonomy_state())
+                        .with_binding_pause(
+                            projection
+                                .state
+                                .binding_id
+                                .as_ref()
+                                .and_then(|id| {
+                                    service
+                                        .binding_pause_service()
+                                        .and_then(|pause| pause.state(id).ok())
+                                })
+                                .as_ref(),
+                        ),
                 )
             }
             KernelQuery::Planning {} => {

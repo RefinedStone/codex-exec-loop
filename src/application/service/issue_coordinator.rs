@@ -144,6 +144,7 @@ pub struct IssueCoordinatorService {
     feedback: Option<Arc<IssueFeedbackService>>,
     arbiter: Option<arbiter::ArbiterRuntime>,
     publication_journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
+    issue_binding_admission: Option<Arc<super::issue_binding_admission::IssueBindingAdmission>>,
     /// 한 host의 동시 tick/reconnect 호출을 직렬화한다. 실행기 상태는 소유하지 않는다.
     tick_gate: Mutex<()>,
     #[cfg(test)]
@@ -171,6 +172,7 @@ impl IssueCoordinatorService {
             feedback: None,
             arbiter: None,
             publication_journal: None,
+            issue_binding_admission: None,
             tick_gate: Mutex::new(()),
             #[cfg(test)]
             tick_gate_events: None,
@@ -178,6 +180,14 @@ impl IssueCoordinatorService {
     }
 
     /// 관찰 worker의 경합은 대기한다. tracking 중 도착한 수집 tick을 버리지 않는다.
+    pub fn with_issue_binding_admission(
+        mut self,
+        admission: Arc<super::issue_binding_admission::IssueBindingAdmission>,
+    ) -> Self {
+        self.issue_binding_admission = Some(admission);
+        self
+    }
+
     fn lock_tick_gate(&self) -> Result<MutexGuard<'_, ()>> {
         let guard = match self.tick_gate.try_lock() {
             Ok(guard) => Ok(guard),
@@ -250,6 +260,10 @@ impl IssueCoordinatorService {
             for item in batch.items {
                 if cancel.is_cancelled() {
                     break 'batches;
+                }
+                if item.binding_run_blocked {
+                    // Durable pending is already closed. Fact/Unknown reconciliation ran above.
+                    continue;
                 }
                 if execution_failures.contains(&issue_work_order_id(&item.issue)) {
                     // 실행 사실을 읽거나 고정하지 못한 작업에는 이 tick에서 새 허가를 내지 않는다.
@@ -411,7 +425,8 @@ impl IssueCoordinatorService {
         execution_enabled: bool,
         committed: &Reporter<'_>,
     ) -> Result<()> {
-        if item.tracked.is_none()
+        if item.binding_run_blocked
+            || item.tracked.is_none()
             || self
                 .store
                 .pending_issue_interventions(&self.workspace)?
@@ -1259,6 +1274,7 @@ impl IssueCoordinatorService {
                 if let Some(mut item) = batch.items.into_iter().find(|item| item.issue == *issue) {
                     let assessment = self.triage.assess_current(&item)?;
                     let mut fence = IssueTriageFence {
+                        binding_run_revision: item.binding_run_revision,
                         collection_epoch: control.epoch,
                         observation_revision: item.observation_revision,
                         tracked_revision: item.tracked_revision,

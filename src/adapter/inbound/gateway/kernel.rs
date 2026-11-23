@@ -695,6 +695,7 @@ impl KernelSession {
             return to_result(KernelQueryAnswer::IssueAutomation(
                 IssueAutomationState::from_domain(&state.projection)
                     .with_autonomy(&state.autonomy)
+                    .with_binding_pause(state.binding_pause.as_ref())
                     .with_runtime(state.collecting, state.next_poll_after_ms),
             ));
         }
@@ -840,6 +841,7 @@ fn protocol_event(event: KernelHostEvent) -> Option<KernelEvent> {
         KernelHostEvent::Issues(state) => Some(KernelEvent::Issues(
             IssueAutomationState::from_domain(&state.projection)
                 .with_autonomy(&state.autonomy)
+                .with_binding_pause(state.binding_pause.as_ref())
                 .with_runtime(state.collecting, state.next_poll_after_ms),
         )),
         KernelHostEvent::IssueDecision {
@@ -935,7 +937,8 @@ fn confirmation_command(
             command @ (StoredCommand::AnswerIssueDecision { .. }
             | StoredCommand::WaiveCriterion { .. }
             | StoredCommand::SetIssueAutomationMode { .. }
-            | StoredCommand::SetIssueAutonomy { .. }),
+            | StoredCommand::SetIssueAutonomy { .. }
+            | StoredCommand::SetIssueBindingPaused { paused: false, .. }),
         ) => Ok((command, descriptor)),
         _ => Err(invalid_confirmation()),
     }
@@ -949,6 +952,20 @@ fn target_matches_command(
         return false;
     }
     match (target, command) {
+        (
+            IssueConfirmationTarget::BindingResume {
+                command_id,
+                binding_id,
+                expected_revision,
+                ..
+            },
+            StoredCommand::SetIssueBindingPaused {
+                command_id: id,
+                binding_id: binding,
+                paused: false,
+                expected_revision: revision,
+            },
+        ) => command_id == id && binding_id == binding && expected_revision == revision,
         (
             IssueConfirmationTarget::CriterionWaiver {
                 task_id,
@@ -1175,6 +1192,8 @@ mod tests {
         IssuesState::from_domain(&IssueCollectionPage {
             revision: 3,
             items: vec![IssueCollectionItem {
+                binding_run_revision: 0,
+                binding_run_blocked: false,
                 start_budget_wait: None,
                 work: None,
                 open_decisions: Vec::new(),

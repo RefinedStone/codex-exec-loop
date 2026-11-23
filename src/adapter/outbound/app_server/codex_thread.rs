@@ -87,11 +87,25 @@ impl CodexThreadBackend {
         Ok((connection, signal))
     }
 
+    #[cfg(all(test, unix))]
     pub(crate) fn run(
         &self,
         request: CodexThreadRequest<'_>,
         cancellation: &AtomicBool,
         timeout: Duration,
+        on_started: impl FnOnce(),
+    ) -> CodexThreadOutcome {
+        self.run_authorized(request, cancellation, timeout, None, on_started)
+    }
+
+    pub(crate) fn run_authorized(
+        &self,
+        request: CodexThreadRequest<'_>,
+        cancellation: &AtomicBool,
+        timeout: Duration,
+        authorization: Option<
+            &dyn crate::application::port::agent_action::AgentActionAuthorization,
+        >,
         on_started: impl FnOnce(),
     ) -> CodexThreadOutcome {
         use CodexThreadOutcome::{Complete, End};
@@ -168,6 +182,28 @@ impl CodexThreadBackend {
             if let Some(schema) = request.output_schema {
                 params["outputSchema"] = schema;
             }
+            let action_guard = match authorization
+                .map(|authorization| authorization.acquire())
+                .transpose()
+            {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return End {
+                        reason: EndReason::Interrupted,
+                        delivery: NotSent,
+                    };
+                }
+            };
+            if stopped()
+                || action_guard
+                    .as_ref()
+                    .is_some_and(|guard| guard.validate().is_err())
+            {
+                return End {
+                    reason: EndReason::Interrupted,
+                    delivery: NotSent,
+                };
+            }
             let Ok(started) = connection.start_isolated_turn(params, &sink, &signal) else {
                 return End {
                     reason: EndReason::Interrupted,
@@ -181,6 +217,7 @@ impl CodexThreadBackend {
                 };
             }
             on_started();
+            drop(action_guard);
             let Ok(receipt) =
                 connection.wait_for_turn_stream(&thread, &started.turn.id, &signal, 0, &sink)
             else {
@@ -440,10 +477,17 @@ struct IsolatedDirectory {
 
 impl IsolatedDirectory {
     fn create() -> Result<Self> {
-        let temp = super::normalize_absolute_workspace_path(&std::env::temp_dir());
+        Self::create_beneath(&std::env::temp_dir())
+    }
+
+    fn create_beneath(temp: &Path) -> Result<Self> {
+        let temp = super::normalize_absolute_workspace_path(temp);
         ensure!(temp.is_absolute(), "absolute isolation directory required");
+        // The process reports its physical cwd. Keep HOME, the private profile and
+        // protocol cwd on that same spelling when TMPDIR uses a macOS /var alias.
+        let temp = fs::canonicalize(&temp)?;
         // A caller's TMPDIR must not make the isolated process discover repository config.
-        for ancestor in fs::canonicalize(&temp)?.ancestors() {
+        for ancestor in temp.ancestors() {
             for marker in [".git", "AGENTS.md", "AGENTS.override.md"] {
                 ensure!(
                     !ancestor.join(marker).try_exists()?,

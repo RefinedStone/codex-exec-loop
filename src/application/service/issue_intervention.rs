@@ -223,6 +223,7 @@ impl IssueInterventionService {
             if let Some(item) = batch.items.into_iter().find(|item| item.issue == *issue) {
                 let assessment = triage.assess_current(&item)?;
                 let fence=crate::application::port::outbound::issue_automation_store_port::IssueTriageFence{
+                    binding_run_revision: item.binding_run_revision,
                     collection_epoch:collection.epoch,observation_revision:item.observation_revision,
                     tracked_revision:item.tracked_revision,assessment_revision:item.triage.as_ref().map(|record|record.revision),
                 };
@@ -248,8 +249,11 @@ impl IssueInterventionPort for IssueInterventionService {
         if request
             .command_id
             .starts_with(crate::domain::issue_automation::autonomy::ISSUE_AUTONOMY_CONTROL_PREFIX)
+            || request.command_id.starts_with(
+                crate::domain::issue_automation::binding_pause::ISSUE_BINDING_PAUSE_CONTROL_PREFIX,
+            )
         {
-            bail!("the intervention command ID uses a reserved autonomy namespace");
+            bail!("the intervention command ID uses a reserved control namespace");
         }
         if request.issue.project_scope.workspace_dir != self.workspace {
             bail!("the issue intervention belongs to another workspace");

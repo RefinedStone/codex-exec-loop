@@ -68,6 +68,7 @@ mod confirmation;
 mod issue_automation;
 mod issue_automation_policy;
 mod issue_autonomy;
+mod issue_binding_pause;
 mod issue_decision;
 mod issue_interaction;
 mod issue_intervention;
@@ -79,6 +80,7 @@ pub use confirmation::{
 pub use issue_automation::{IssueAutomationMode, IssueAutomationState, IssueState, IssuesState};
 pub use issue_automation_policy::IssueAutomationPolicyState;
 pub use issue_autonomy::{IssueAutonomyLevel, IssueAutonomyState};
+pub use issue_binding_pause::{IssueBindingPauseRequestedState, IssueBindingPauseState};
 pub use issue_decision::{IssueDecisionChangedState, IssueDecisionRequestState};
 pub use issue_intervention::{IssueInterventionReceiptState, IssueSteerDeliveryState};
 
@@ -329,6 +331,7 @@ impl CommandRequest {
             | KernelCommand::DeleteDirection { .. }
             | KernelCommand::SetIssueAutomationMode { .. }
             | KernelCommand::SetIssueAutonomy { .. }
+            | KernelCommand::SetIssueBindingPaused { .. }
             | KernelCommand::AnswerIssueDecision { .. }
             | KernelCommand::HoldIssue { .. }
             | KernelCommand::ReleaseIssue { .. }
@@ -525,6 +528,9 @@ pub enum CommandResult {
         changed: bool,
         autonomy: Box<IssueAutonomyState>,
     },
+    IssueBindingPauseRequested {
+        command: Box<IssueBindingPauseRequestedState>,
+    },
     IssueAutomationModeChanged {
         previous: Option<IssueAutomationMode>,
         mode: IssueAutomationMode,
@@ -628,6 +634,11 @@ impl CommandResult {
                 changed,
                 autonomy: Box::new(IssueAutonomyState::from_domain(&autonomy)),
             },
+            StoredCommandResult::IssueBindingPauseRequested { command } => {
+                Self::IssueBindingPauseRequested {
+                    command: Box::new(command.as_ref().into()),
+                }
+            }
             StoredCommandResult::IssueAutomationModeChanged {
                 previous,
                 projection,
@@ -658,6 +669,7 @@ impl CommandResult {
             KernelCommandKind::DeleteDirection => Some("direction_deleted"),
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::SetIssueAutonomy => Some("issue_autonomy_changed"),
+            KernelCommandKind::SetIssueBindingPaused => Some("issue_binding_pause_requested"),
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
             KernelCommandKind::HoldIssue
             | KernelCommandKind::ReleaseIssue
@@ -986,6 +998,14 @@ pub enum KernelCommand {
         command_id: String,
         level: IssueAutonomyLevel,
     },
+    SetIssueBindingPaused {
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        command_id: String,
+        #[schemars(length(min = 1, max = 512), regex(pattern = NON_BLANK))]
+        binding_id: String,
+        paused: bool,
+        expected_revision: u64,
+    },
     /// 현재 기준과 맞는 열린 결정에 에이전트 답 하나를 저장한다. 사람 확인 증명을 받지 않는다.
     AnswerIssueDecision {
         #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
@@ -1280,6 +1300,7 @@ impl KernelCommand {
             Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
+            Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::HoldIssue { .. } => KernelCommandKind::HoldIssue,
             Self::ReleaseIssue { .. } => KernelCommandKind::ReleaseIssue,
@@ -1316,6 +1337,7 @@ impl KernelCommand {
             | Self::UpdateDirection { .. }
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
+            | Self::SetIssueBindingPaused { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::HoldIssue { .. }
             | Self::ReleaseIssue { .. }
@@ -1423,6 +1445,17 @@ impl KernelCommand {
             StoredCommand::SetIssueAutonomy { command_id, level } => {
                 Self::SetIssueAutonomy { command_id, level }
             }
+            StoredCommand::SetIssueBindingPaused {
+                command_id,
+                binding_id,
+                paused,
+                expected_revision,
+            } => Self::SetIssueBindingPaused {
+                command_id,
+                binding_id,
+                paused,
+                expected_revision,
+            },
             StoredCommand::SetIssueAutomationMode { mode } => {
                 Self::SetIssueAutomationMode { mode: mode.into() }
             }
@@ -1634,6 +1667,20 @@ impl KernelCommand {
                 issue_autonomy::validate_input(&command_id)?;
                 StoredCommand::SetIssueAutonomy { command_id, level }
             }
+            Self::SetIssueBindingPaused {
+                command_id,
+                binding_id,
+                paused,
+                expected_revision,
+            } => {
+                issue_binding_pause::validate_input(&command_id, &binding_id, expected_revision)?;
+                StoredCommand::SetIssueBindingPaused {
+                    command_id,
+                    binding_id,
+                    paused,
+                    expected_revision,
+                }
+            }
             Self::SetIssueAutomationMode { mode } => {
                 StoredCommand::SetIssueAutomationMode { mode: mode.into() }
             }
@@ -1764,6 +1811,7 @@ impl KernelCommand {
             | Self::DeleteDirection { .. }
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
+            | Self::SetIssueBindingPaused { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::HoldIssue { .. }
             | Self::ReleaseIssue { .. }

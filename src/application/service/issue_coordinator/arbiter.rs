@@ -182,6 +182,20 @@ impl IssueCoordinatorService {
         {
             return Ok(());
         }
+        let admission = self
+            .issue_binding_admission
+            .as_ref()
+            .ok_or_else(|| anyhow!("issue binding admission is unavailable"))?
+            .clone();
+        let binding_id = current.item.binding_id.clone();
+        let pause_state = self
+            .store
+            .issue_binding_pause_state(&self.workspace, &binding_id)?;
+        admission.register_if_absent(&pause_state)?;
+        let generation = admission.capture(&binding_id)?;
+        if generation != current.fence.triage.binding_run_revision {
+            return Ok(());
+        }
         let prepared = match self.prepare_arbiter_input(runtime, &current) {
             Ok(prepared) => prepared,
             Err(reason) => {
@@ -218,6 +232,16 @@ impl IssueCoordinatorService {
         })?;
         match claim {
             Some(IssueArbiterClaimResult::Claimed(attempt)) => {
+                let authorization: Arc<
+                    dyn crate::application::port::agent_action::AgentActionAuthorization,
+                > = Arc::new(move || {
+                    let guard = admission.acquire(&binding_id, generation)?;
+                    guard.validate()?;
+                    Ok(Box::new(guard)
+                        as Box<
+                            dyn crate::application::port::agent_action::AgentActionGuard,
+                        >)
+                });
                 let status = cancel.commit_if_active(|| {
                     let remaining_ms = attempt.deadline_at_unix_ms.saturating_sub(tick.now());
                     if remaining_ms == 0 {
@@ -227,13 +251,16 @@ impl IssueCoordinatorService {
                     }
                     Ok(runtime
                         .model
-                        .dispatch(IssueAssessmentModelRequest {
-                            attempt_id: attempt.attempt_id.clone(),
-                            input_json: prepared.json,
-                            expected_route_revision: prepared.configuration.route_revision,
-                            model: prepared.configuration.model,
-                            timeout: Duration::from_millis(remaining_ms),
-                        })
+                        .dispatch_authorized(
+                            IssueAssessmentModelRequest {
+                                attempt_id: attempt.attempt_id.clone(),
+                                input_json: prepared.json,
+                                expected_route_revision: prepared.configuration.route_revision,
+                                model: prepared.configuration.model,
+                                timeout: Duration::from_millis(remaining_ms),
+                            },
+                            authorization,
+                        )
                         .unwrap_or(IssueAssessmentModelStatus::Unusable(
                             IssueAssessmentModelFailure::Unavailable,
                         )))

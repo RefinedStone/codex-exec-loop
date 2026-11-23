@@ -200,3 +200,16 @@ it("routes autonomy to its own utility confirmation kind and honours native canc
   expect(await response).toEqual({ cancelled: true });
   expect(h.child.sent.some((message) => message.type === "submit")).toBe(false);
 });
+
+it("routes binding resume to its own native confirmation kind without granting authority on cancellation", async () => {
+  const h = harness();
+  const request = { workspace: "/work/repo", commandId: "resume-1", bindingId: "binding-1", expectedRevision: 8, key: "resume-key" };
+  const response = h.service.confirmBindingResume(request);
+  await h.prompt();
+  expect(h.child.sent[0]).toMatchObject({ type: "begin", kind: "binding_resume", input: request });
+  h.native.resolve(false);
+  await vi.waitFor(() => expect(h.child.sent).toContainEqual({ type: "answer", approved: false }));
+  h.child.event({ type: "result", response: { cancelled: true } });
+  expect(await response).toEqual({ cancelled: true });
+  expect(h.child.sent.some((message) => message.type === "submit")).toBe(false);
+});

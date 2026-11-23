@@ -5,6 +5,7 @@ import { useDesktopStore } from "../session/desktopStore";
 import { folderName } from "../sidebar/threadStatus";
 import { IssueDetail } from "./IssueDetail";
 import type { IssueDecisionAttention } from "./kernelConnection";
+import { IssueBindingPauseControl } from "./IssueBindingPauseControl";
 import { IssueAutonomyControl } from "./IssueAutonomyControl";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueInterventionName } from "./issueInteractions";
 import { IssueObserveReport } from "./IssueObserveReport";
@@ -54,6 +55,7 @@ interface IssuePanelProps {
   onSetMode(mode: IssueAutomationModeRecord): Promise<void>;
   onSync(): Promise<void>;
   onSetAutonomy(level: IssueAutonomyLevel): Promise<void>;
+  onSetBindingPaused?(paused: boolean): Promise<void>;
   onAnswerDecision(decisionId: string, option: string, note: string): Promise<void>;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
@@ -76,7 +78,7 @@ function IssueRow({ item, onSelectIssue, onOpenUrl }: { item: IssueListItem; onS
   );
 }
 
-export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onAnswerDecision, onIntervene, onOpenConversation, onOpenUrl }: IssuePanelProps) {
+export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onSetBindingPaused, onAnswerDecision, onIntervene, onOpenConversation, onOpenUrl }: IssuePanelProps) {
   const [view, setView] = useState<"list" | "report" | "policy">("list");
   // 알림은 상세 보기로 이동하지만 같은 저장소의 패널과 사용자 초안을 다시 만들지 않는다.
   useEffect(() => { if (attentionTarget) setView("list"); }, [attentionTarget]);
@@ -127,6 +129,7 @@ export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, o
         </div>
       ) : (
         <>
+          {automation?.binding_id && <IssueBindingPauseControl state={automation.binding_pause} connected={attached} busy={busy} onChange={onSetBindingPaused} />}
           <nav className="issues-tabs" aria-label="이슈 보기">
             <button type="button" aria-pressed={view === "list"} onClick={() => { setView("list"); onClearIssueSelection(); }} data-testid="issues-list-tab">목록</button>
             <button type="button" aria-pressed={view === "report"} onClick={() => setView("report")} data-testid="issues-report-tab">관찰 보고</button>

@@ -644,6 +644,41 @@ use crate::application::port::outbound::planning_work_order_repository_port::{
 };
 
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    /// None is a confirmed task without work-order lineage, never an unknown issue origin.
+    fn worker_action_identity_for_task(
+        &self,
+        workspace: &str,
+        task_id: &str,
+    ) -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity>>{
+        if self.check_work_order_permit_for_task(
+            workspace,
+            task_id,
+            PlanningWorkPermitStage::Dispatch,
+            None,
+        )? == PlanningWorkPermitDecision::Legacy
+        {
+            return Ok(None);
+        }
+        anyhow::bail!("worker action lineage is unavailable")
+    }
+
+    /// Read-only revalidation of an already claimed launch, immediately before turn/start.
+    fn validate_work_order_launch_start(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+        identity: Option<&crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity>,
+    ) -> Result<()> {
+        if identity.is_none()
+            && self
+                .worker_action_identity_for_task(workspace, &expected.task_id)?
+                .is_none()
+        {
+            return Ok(());
+        }
+        anyhow::bail!("worker launch seal validation is unavailable")
+    }
+
     /// Publication metadata belongs to durable lineage, never mutable task descriptions.
     fn work_order_link_reference_for_task(
         &self,
@@ -1309,6 +1344,7 @@ pub struct NoopPlanningAuthorityPort {
     // Monotonic refresh counter keeps orchestration on the same path as real adapters.
     next_refresh_order: AtomicU64,
     shared_work_permit_decision: Option<Arc<Mutex<PlanningWorkPermitDecision>>>,
+    confirmed_worker_action_identity: Option<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity>>,
     resolve_authority_location_error: Option<&'static str>,
     canonical_repo_root: Option<String>,
     runtime_projection: Option<PlanningAuthorityRuntimeProjectionSnapshot>,
@@ -1328,6 +1364,15 @@ pub struct NoopPlanningAuthorityPort {
 
 #[cfg(test)]
 impl NoopPlanningAuthorityPort {
+    /// Explicit fixture lineage; None here confirms an ordinary task, unlike missing setup.
+    pub fn with_confirmed_worker_action_identity(
+        mut self,
+        identity: Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity>,
+    ) -> Self {
+        self.confirmed_worker_action_identity = Some(identity);
+        self
+    }
+
     pub fn with_shared_work_permit_decision(
         mut self,
         decision: Arc<Mutex<PlanningWorkPermitDecision>>,
@@ -1440,6 +1485,26 @@ impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
 
 #[cfg(test)]
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
+    fn worker_action_identity_for_task(
+        &self,
+        workspace: &str,
+        task_id: &str,
+    ) -> Result<Option<crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkerActionIdentity>>{
+        if let Some(identity) = &self.confirmed_worker_action_identity {
+            return Ok(identity.clone());
+        }
+        if self.check_work_order_permit_for_task(
+            workspace,
+            task_id,
+            PlanningWorkPermitStage::Dispatch,
+            None,
+        )? == PlanningWorkPermitDecision::Legacy
+        {
+            return Ok(None);
+        }
+        anyhow::bail!("worker action lineage is unavailable")
+    }
+
     fn compare_and_swap_runtime_distributor_queue_record(
         &self,
         _workspace_dir: &str,

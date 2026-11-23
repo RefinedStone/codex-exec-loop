@@ -534,6 +534,7 @@ fn collection_off_triage_requires_a_registered_task_and_the_current_epoch() {
             .unwrap();
         let assessment = h.triage.assess_current(&item).unwrap();
         let mut fence = IssueTriageFence {
+            binding_run_revision: 0,
             collection_epoch: old_epoch,
             observation_revision: item.observation_revision,
             tracked_revision: item.tracked_revision,
@@ -567,6 +568,7 @@ fn collection_off_triage_requires_a_registered_task_and_the_current_epoch() {
             .save_triage(
                 &h.fixture.workspace,
                 IssueTriageFence {
+                    binding_run_revision: 0,
                     collection_epoch: batch.collection.unwrap().epoch,
                     observation_revision: item.observation_revision,
                     tracked_revision: item.tracked_revision,
@@ -673,6 +675,7 @@ fn work_failure_recovery_requires_a_human_at_both_service_and_store_boundaries()
     let fence = IssueDecisionFence {
         decision_revision: open.revision,
         triage: IssueTriageFence {
+            binding_run_revision: 0,
             collection_epoch: batch.collection.unwrap().epoch,
             observation_revision: item.observation_revision,
             tracked_revision: item.tracked_revision,
@@ -729,6 +732,7 @@ fn collection_off_refreshes_held_work_but_rejects_the_previous_tracked_revision(
         .unwrap();
     let previous = &before.items[0];
     let old_fence = IssueTriageFence {
+        binding_run_revision: 0,
         collection_epoch: before.collection.unwrap().epoch,
         observation_revision: previous.observation_revision,
         tracked_revision: previous.tracked_revision,
@@ -761,6 +765,7 @@ fn collection_off_refreshes_held_work_but_rejects_the_previous_tracked_revision(
         .save_triage(
             &h.fixture.workspace,
             IssueTriageFence {
+                binding_run_revision: 0,
                 collection_epoch: batch.collection.unwrap().epoch,
                 observation_revision: current.observation_revision,
                 tracked_revision: current.tracked_revision,

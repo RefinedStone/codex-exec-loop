@@ -229,6 +229,7 @@ impl IssueCoordinatorService {
         let basis = IssueArbiterInputBasis {
             decision_basis: current.basis.clone(),
             decision_revision: current.record.revision,
+            binding_run_revision: current.fence.triage.binding_run_revision,
             repository_commit_sha: source,
             evidence_sha256: evidence.snapshot_sha256,
             model_route_revision: configuration.route_revision.clone(),

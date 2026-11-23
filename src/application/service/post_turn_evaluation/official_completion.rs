@@ -70,27 +70,43 @@ impl PostTurnEvaluationExecutor {
         let Some(expected_lease) = request.expected_parallel_slot_lease() else {
             return OfficialCompletionCapture::NotApplicable;
         };
-
-        let continuation = self
-            .parallel_mode_turn_service
-            .automatic_completion_continuation(
-                &context.planning_workspace_directory,
-                context.parallel_automation_epoch_id,
-                Some(request.continuation_permit.clone()),
-            );
-        match self
-            .parallel_mode_turn_service
-            .prepare_automatic_verification_for_official_completion(
+        let Ok(parallel_mode_turn_service) =
+            self.parallel_mode_turn_service.for_completion_capture(
                 &context.planning_workspace_directory,
                 expected_lease,
-                &request.completed_turn_id,
-                continuation.clone(),
-            ) {
+                request
+                    .execution_snapshot_capture
+                    .as_ref()
+                    .and_then(|capture| capture.issue_binding_action.as_deref()),
+            )
+        else {
+            return OfficialCompletionCapture::Cancelled;
+        };
+        let Ok(completion_guard) = parallel_mode_turn_service
+            .acquire_completion_action(&context.planning_workspace_directory, expected_lease)
+        else {
+            return OfficialCompletionCapture::Cancelled;
+        };
+        if completion_guard.validate().is_err() {
+            return OfficialCompletionCapture::Cancelled;
+        }
+
+        let continuation = parallel_mode_turn_service.automatic_completion_continuation(
+            &context.planning_workspace_directory,
+            context.parallel_automation_epoch_id,
+            Some(request.continuation_permit.clone()),
+        );
+        match parallel_mode_turn_service.prepare_automatic_verification_for_official_completion(
+            &context.planning_workspace_directory,
+            expected_lease,
+            &request.completed_turn_id,
+            continuation.clone(),
+        ) {
             Ok(AutomaticTaskVerificationOutcome::NotApplicable)
             | Ok(AutomaticTaskVerificationOutcome::Finished { .. }) => {}
             Ok(AutomaticTaskVerificationOutcome::AwaitingUser { .. }) => {
                 return with_verification_commit(continuation.as_ref(), || {
-                    match self.parallel_mode_turn_service.preserve_worker_awaiting_user(
+                    match parallel_mode_turn_service.preserve_worker_awaiting_user(
                         &context.planning_workspace_directory,
                         expected_lease,
                     ) {
@@ -107,8 +123,7 @@ impl PostTurnEvaluationExecutor {
             }
             Err(detail) => {
                 return with_verification_commit(continuation.as_ref(), || {
-                    if self
-                        .parallel_mode_turn_service
+                    if parallel_mode_turn_service
                         .preserve_worker_awaiting_user(
                             &context.planning_workspace_directory,
                             expected_lease,
@@ -133,7 +148,7 @@ impl PostTurnEvaluationExecutor {
         // capture below uses both the post-turn generation and the parallel epoch.
         // Its inner methods must not acquire those guards again.
         with_verification_commit(continuation.as_ref(), || {
-            match self.parallel_mode_turn_service.begin_official_completion_for_lease(
+            match parallel_mode_turn_service.begin_official_completion_for_lease(
                 expected_lease,
                 &request.completed_turn_id,
                 None,
@@ -170,8 +185,7 @@ impl PostTurnEvaluationExecutor {
                         )
                     });
                     let detail = format!("parallel completion capture failed: {error}");
-                    let _ = self
-                        .parallel_mode_turn_service
+                    let _ = parallel_mode_turn_service
                         .mark_official_completion_failed_for_lease_with_notice(expected_lease, &detail);
                     self.record_planning_worker_failure(
                         PlanningWorkerStatus::RefreshFailed,
@@ -204,13 +218,59 @@ impl PostTurnEvaluationExecutor {
         // Completion report is the official contract captured before this refresh.
         completion_report: &ParallelModeOfficialCompletionReport,
     ) -> OfficialCompletionRefreshOutcome {
-        let continuation = self
-            .parallel_mode_turn_service
-            .automatic_completion_continuation(
-                planning_workspace_directory,
-                context.parallel_automation_epoch_id,
-                Some(request.continuation_permit.clone()),
+        let captured_service = request
+            .expected_parallel_slot_lease()
+            .map(|lease| {
+                self.parallel_mode_turn_service.for_completion_capture(
+                    planning_workspace_directory,
+                    lease,
+                    request
+                        .execution_snapshot_capture
+                        .as_ref()
+                        .and_then(|capture| capture.issue_binding_action.as_deref()),
+                )
+            })
+            .transpose();
+        let parallel_mode_turn_service = match captured_service {
+            Ok(Some(service)) => service,
+            Ok(None) => self.parallel_mode_turn_service.clone(),
+            Err(_) => {
+                return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                    request,
+                    current_projection.clone(),
+                    Vec::new(),
+                );
+            }
+        };
+        let completion_guard = request
+            .expected_parallel_slot_lease()
+            .map(|lease| {
+                parallel_mode_turn_service
+                    .acquire_completion_action(planning_workspace_directory, lease)
+            })
+            .transpose();
+        let Ok(completion_guard) = completion_guard else {
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
+                Vec::new(),
             );
+        };
+        if completion_guard
+            .as_ref()
+            .is_some_and(|guard| guard.validate().is_err())
+        {
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
+                Vec::new(),
+            );
+        }
+        let continuation = parallel_mode_turn_service.automatic_completion_continuation(
+            planning_workspace_directory,
+            context.parallel_automation_epoch_id,
+            Some(request.continuation_permit.clone()),
+        );
         if !continuation.is_current() {
             return OfficialCompletionRefreshOutcome::for_turn_workspace(
                 request,
@@ -255,7 +315,7 @@ impl PostTurnEvaluationExecutor {
         let prepared = match preparation {
             PlanningPostTurnOfficialCompletionPreparation::Blocked(blocked) => {
                 let Some(failure_notice) = with_verification_commit(continuation.as_ref(), || {
-                    self.parallel_mode_turn_service
+                    parallel_mode_turn_service
                         .mark_official_completion_failed_for_lease_with_notice(
                             expected_lease,
                             &blocked.failure_detail,
@@ -310,8 +370,7 @@ impl PostTurnEvaluationExecutor {
         // Supervisor may emit a runtime notice when the reservation moves into
         // refreshing; preserve that notice so shell status reflects the state change.
         let Some(refreshing_notice) = with_verification_commit(continuation.as_ref(), || {
-            self.parallel_mode_turn_service
-                .mark_official_completion_refreshing_for_lease(expected_lease)
+            parallel_mode_turn_service.mark_official_completion_refreshing_for_lease(expected_lease)
         }) else {
             return OfficialCompletionRefreshOutcome::for_turn_workspace(
                 request,
@@ -392,7 +451,7 @@ impl PostTurnEvaluationExecutor {
                 // until an operator or later recovery path repairs planning state.
                 let detail = format!("official completion refresh failed: {error}");
                 let Some(failure_notice) = request.continuation_permit.with_current(|| {
-                    self.parallel_mode_turn_service
+                    parallel_mode_turn_service
                         .mark_official_completion_failed_for_lease_with_notice(
                             expected_lease,
                             &detail,
@@ -573,11 +632,10 @@ impl PostTurnEvaluationExecutor {
         }
         if let Some(failure_detail) = finalization.blocked_failure_detail.as_ref() {
             let Some(failure_notice) = request.continuation_permit.with_current(|| {
-                self.parallel_mode_turn_service
-                    .mark_official_completion_failed_for_lease_with_notice(
-                        expected_lease,
-                        failure_detail,
-                    )
+                parallel_mode_turn_service.mark_official_completion_failed_for_lease_with_notice(
+                    expected_lease,
+                    failure_detail,
+                )
             }) else {
                 return OfficialCompletionRefreshOutcome::for_turn_workspace(
                     request,
@@ -625,7 +683,7 @@ impl PostTurnEvaluationExecutor {
         let Some(epoch_id) = context.parallel_automation_epoch_id else {
             let detail = "official completion cannot finalize without the captured parallel automation epoch";
             let Some(failure_notice) = request.continuation_permit.with_current(|| {
-                self.parallel_mode_turn_service
+                parallel_mode_turn_service
                     .mark_official_completion_failed_for_lease_with_notice(expected_lease, detail)
             }) else {
                 return OfficialCompletionRefreshOutcome::for_turn_workspace(
@@ -644,11 +702,10 @@ impl PostTurnEvaluationExecutor {
             );
         };
         let Some(commit_ready_outcome) = request.continuation_permit.with_current(|| {
-            self.parallel_mode_turn_service
-                .mark_official_completion_success_for_post_turn_for_lease(
-                    expected_lease,
-                    &authority_refresh_outcome,
-                )
+            parallel_mode_turn_service.mark_official_completion_success_for_post_turn_for_lease(
+                expected_lease,
+                &authority_refresh_outcome,
+            )
         }) else {
             return OfficialCompletionRefreshOutcome::for_turn_workspace(
                 request,
@@ -670,7 +727,7 @@ impl PostTurnEvaluationExecutor {
                     official_completion_durable_finalization_failure_detail(stage, &notices);
                 runtime_notices.extend(notices);
                 let Some(failure_notice) = request.continuation_permit.with_current(|| {
-                    self.parallel_mode_turn_service
+                    parallel_mode_turn_service
                         .mark_official_completion_failed_for_lease_with_notice(
                             expected_lease,
                             &detail,
@@ -716,8 +773,7 @@ impl PostTurnEvaluationExecutor {
                 );
             }
         };
-        let delivery_outcome = self
-            .parallel_mode_turn_service
+        let delivery_outcome = parallel_mode_turn_service
             .run_official_completion_delivery_tick_for_post_turn(
                 &expected_lease,
                 planning_workspace_directory,

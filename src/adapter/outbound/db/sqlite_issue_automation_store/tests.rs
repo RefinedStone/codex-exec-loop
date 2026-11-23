@@ -45,6 +45,7 @@ pub(super) fn make_pre_arbiter_schema(connection: &Connection) {
 
 /// Rebuilds the exact v10-v12 CHECK without changing durable command receipts or pending links.
 pub(super) fn make_pre_auto_schema(connection: &Connection) {
+    make_pre_binding_pause_schema(connection);
     connection
         .execute_batch(
             "ALTER TABLE issue_autonomy_selection RENAME TO issue_autonomy_selection_v13;",
@@ -58,6 +59,16 @@ pub(super) fn make_pre_auto_schema(connection: &Connection) {
          SELECT workspace_dir,requested_level,revision,pending_command_id FROM issue_autonomy_selection_v13;
          DROP TABLE issue_autonomy_selection_v13;"
     ).unwrap();
+}
+
+pub(super) fn make_pre_binding_pause_schema(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TABLE issue_binding_pause_work_fences;
+         DROP TABLE issue_binding_pause_commands;
+         DROP TABLE issue_binding_pause_states;",
+        )
+        .unwrap();
 }
 
 pub(super) struct Fixture {

@@ -96,6 +96,8 @@ struct Fixture {
     evidence: TaskEvidenceService,
     gate: Arc<RecordingGate>,
     lease: ParallelModeSlotLeaseSnapshot,
+    issue_store: Arc<crate::adapter::outbound::db::SqliteIssueAutomationStoreAdapter>,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
 }
 
 impl Fixture {
@@ -119,6 +121,10 @@ impl Fixture {
         let repo = TempGitRepo::new(label);
         let workspace = repo.workspace_dir();
         let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let issue_store = binding_support::store();
+        let admission = Arc::new(
+            crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+        );
         seed(&repo, authority.as_ref());
         let artifacts = Arc::new(FilesystemTaskEvidenceArtifactAdapter::new(Arc::new(
             |workspace| {
@@ -149,7 +155,8 @@ impl Fixture {
         let service = configure(test_parallel_mode_service_with_github(Arc::new(
             github.clone(),
         )))
-        .with_delivery_evidence(gate.clone());
+        .with_delivery_evidence(gate.clone())
+        .with_issue_binding_admission(admission.clone(), issue_store.clone());
         let assigned = service
             .acquire_slot_lease(
                 &workspace,
@@ -181,6 +188,8 @@ impl Fixture {
             evidence,
             gate,
             lease,
+            issue_store,
+            admission,
         }
     }
 
@@ -244,7 +253,8 @@ impl Fixture {
             }),
             wake: Arc::new(|| {}),
         })
-        .unwrap();
+        .unwrap()
+        .with_issue_binding_admission(self.admission.clone(), self.issue_store.clone());
         let context = command_context();
         service.initialize_live_owner(&context.at).unwrap();
         let scope = self.scope();

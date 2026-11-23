@@ -103,6 +103,12 @@ fn sample_commands() -> Vec<KernelCommand> {
             command_id: "autonomy-1".to_owned(),
             level: IssueAutonomyLevel::Propose,
         },
+        KernelCommand::SetIssueBindingPaused {
+            command_id: "pause-1".into(),
+            binding_id: "binding-1".into(),
+            paused: true,
+            expected_revision: 0,
+        },
         KernelCommand::AnswerIssueDecision {
             decision_id: "decision-1".to_owned(),
             option: "continue".to_owned(),
@@ -2499,6 +2505,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         Record::task_evidence(&crate::domain::kernel_event::sample_task_evidence_events()[0]),
         Record::task_evidence(&crate::domain::kernel_event::sample_task_evidence_events()[1]),
         Record::task_evidence(&crate::domain::kernel_event::sample_task_verification_event()),
+        crate::domain::kernel_event::sample_issue_binding_pause_event(),
     ]
 }
 

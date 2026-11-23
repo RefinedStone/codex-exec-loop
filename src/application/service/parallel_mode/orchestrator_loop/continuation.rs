@@ -50,6 +50,13 @@ pub(super) fn dispatch_queued(
         {
             break;
         }
+        let worker_turn_service = match context
+            .turn_service
+            .for_task_action(context.workspace, &request.question.task_id)
+        {
+            Ok(service) => service,
+            Err(_) => continue,
+        };
         let claim = match claim_and_replace_mirror(service, context.workspace, &request) {
             Ok(PlanningWorkerContinuationClaimOutcome::Claimed(claim)) => claim,
             Ok(
@@ -87,7 +94,7 @@ pub(super) fn dispatch_queued(
         spawn_parallel_dispatch_worker(
             worker_request,
             context.worker_port.clone(),
-            context.turn_service.clone(),
+            worker_turn_service,
             context.planning.clone(),
             context.event_sender.clone(),
         );

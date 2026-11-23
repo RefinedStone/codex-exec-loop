@@ -173,3 +173,70 @@ fn a_conflicting_evidence_payload_rolls_back_other_receipts_in_the_same_append()
         0
     );
 }
+
+#[test]
+fn binding_pause_receipt_deduplicates_after_retention_and_rejects_changed_payload() {
+    let directory = Workspace::new(&format!("binding-pause-{}", rand::random::<u64>()));
+    let workspace = directory.name();
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let event = crate::domain::kernel_event::sample_issue_binding_pause_event();
+    adapter
+        .append_kernel_events(&workspace, &[record(1, event.clone())])
+        .unwrap();
+    assert!(
+        adapter
+            .has_issue_binding_pause_event(&workspace, &event)
+            .unwrap()
+    );
+    assert!(
+        !adapter
+            .has_issue_work_event(&workspace, event.issue_binding_pause_event_id().unwrap())
+            .unwrap()
+    );
+    adapter
+        .append_kernel_events(
+            &workspace,
+            &[record(
+                RETAINED_KERNEL_EVENTS + 2,
+                KernelEvent::TurnStarted {
+                    thread_id: "trim".into(),
+                    turn_id: "trim".into(),
+                    op_id: None,
+                },
+            )],
+        )
+        .unwrap();
+    assert!(
+        adapter
+            .load_kernel_events(&workspace, &["issue_binding_pause_completed"])
+            .unwrap()
+            .is_empty()
+    );
+    adapter
+        .append_kernel_events(
+            &workspace,
+            &[record(RETAINED_KERNEL_EVENTS + 3, event.clone())],
+        )
+        .unwrap();
+    assert!(
+        adapter
+            .load_kernel_events(&workspace, &["issue_binding_pause_completed"])
+            .unwrap()
+            .is_empty()
+    );
+    let mut changed = event;
+    let KernelEvent::IssueBindingPauseCompleted { receipt, .. } = &mut changed else {
+        panic!("pause fixture")
+    };
+    receipt.revision += 1;
+    assert!(
+        adapter
+            .has_issue_binding_pause_event(&workspace, &changed)
+            .is_err()
+    );
+    assert!(
+        adapter
+            .append_kernel_events(&workspace, &[record(RETAINED_KERNEL_EVENTS + 4, changed)])
+            .is_err()
+    );
+}

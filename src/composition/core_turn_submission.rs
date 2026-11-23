@@ -106,11 +106,18 @@ fn run_guarded_turn_submission_worker(
             correlation,
             workspace_directory: resolved_request.workspace_directory.clone(),
         });
+        let issue_binding_action = expected_lease.as_ref().and_then(|lease| {
+            parallel_mode_turn_service
+                .capture_issue_completion_action(lease)
+                .ok()
+                .flatten()
+        });
         let execution_snapshot_capture = capture_turn_execution_snapshot(
             &planning_runtime,
             &resolved_request.workspace_directory,
         )
-        .with_parallel_slot_lease(expected_lease);
+        .with_parallel_slot_lease(expected_lease)
+        .with_issue_binding_action(issue_binding_action);
 
         if invalidate_supervisor_snapshot {
             let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);

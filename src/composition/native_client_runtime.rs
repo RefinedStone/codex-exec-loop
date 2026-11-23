@@ -1,3 +1,4 @@
+mod binding_pause;
 mod issue_timeline;
 #[cfg(test)]
 mod task_evidence_tests;
@@ -188,6 +189,11 @@ pub(crate) struct NativeClientRuntime {
     task_evidence: Option<Arc<TaskEvidenceService>>,
     task_verification: Option<Arc<TaskVerificationService>>,
     task_evidence_outbox_deadline: Option<Instant>,
+    binding_pause:
+        Option<Arc<crate::application::service::issue_binding_pause::IssueBindingPauseService>>,
+    binding_admission:
+        Option<Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>>,
+    binding_pause_outbox_deadline: Option<Instant>,
     // Only controls idle lifetime. Execution always revalidates live policy and durable authority.
     issue_automation_keepalive: Cell<bool>,
     published_issue_change: bool,
@@ -215,12 +221,20 @@ struct NativeCoreRuntime {
  * Control-plane handle, event sink, and completion mailbox ownership stay
  * private to this composition boundary.
  */
+struct NativeBindingPauseAttachment {
+    service: Arc<crate::application::service::issue_binding_pause::IssueBindingPauseService>,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+    workspace: String,
+    log: Arc<dyn KernelEventLogPort>,
+}
+
 pub(crate) struct NativeTuiApplicationComposition {
     core_runtime: NativeCoreRuntime,
     parallel_control_plane: ParallelModeControlPlaneComposition,
     turn_control_truth: ConversationRuntimeControlTruth,
     clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
     github_review_polling: Option<crate::core::app::GithubReviewPollingSettings>,
+    binding_pause_attachment: Option<NativeBindingPauseAttachment>,
 }
 
 pub(crate) struct BoundNativeTuiApplication {
@@ -532,6 +546,7 @@ impl NativeTuiApplicationComposition {
             turn_control_truth,
             clipboard_image_probe_trigger,
             github_review_polling: None,
+            binding_pause_attachment: None,
         }
     }
 
@@ -544,10 +559,33 @@ impl NativeTuiApplicationComposition {
         self
     }
 
+    /// TUI keeps its existing runtime and does not start a new issue observer.
+    pub(in crate::composition) fn with_issue_binding_pause(
+        mut self,
+        service: Arc<crate::application::service::issue_binding_pause::IssueBindingPauseService>,
+        admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+        workspace: String,
+        log: Arc<dyn KernelEventLogPort>,
+    ) -> Self {
+        self.binding_pause_attachment = Some(NativeBindingPauseAttachment {
+            service,
+            admission,
+            workspace,
+            log,
+        });
+        self
+    }
+
     pub(crate) fn bind_client_runtime(self) -> BoundNativeTuiApplication {
         let mut client_runtime =
             NativeClientRuntime::from_parts(self.core_runtime, self.parallel_control_plane);
         client_runtime.github_review_polling = self.github_review_polling;
+        if let Some(binding) = self.binding_pause_attachment {
+            client_runtime.attach_kernel_event_log(binding.log, &binding.workspace);
+            client_runtime
+                .attach_issue_binding_pause(binding.service, binding.admission)
+                .expect("one TUI binding owner");
+        }
         BoundNativeTuiApplication {
             client_runtime,
             turn_control_truth: self.turn_control_truth,
@@ -632,6 +670,9 @@ impl NativeCoreRuntime {
 /// 저장소 잠금을 푼다. 그렇지 않으면 같은 저장소의 다음 커널과 이전 작업 스레드가 같은 큐를 배분할 수 있다 (K3-5).
 impl Drop for NativeClientRuntime {
     fn drop(&mut self) {
+        if let Some(admission) = &self.binding_admission {
+            admission.close_all();
+        }
         // A post-turn worker may still hold a strong service reference. Close
         // execution authority before observers, parallel work, and the OS lock end.
         if let Some(service) = self.task_verification.as_ref() {
@@ -680,6 +721,9 @@ impl NativeClientRuntime {
             task_evidence: None,
             task_verification: None,
             task_evidence_outbox_deadline: None,
+            binding_pause: None,
+            binding_admission: None,
+            binding_pause_outbox_deadline: None,
             issue_automation_keepalive: Cell::new(false),
             published_issue_change: false,
             published_kernel_records: Vec::new(),
@@ -1091,6 +1135,10 @@ impl NativeClientRuntime {
             parallel,
             issues,
             self.task_evidence_outbox_deadline,
+            self.binding_pause_outbox_deadline,
+            self.binding_pause
+                .as_ref()
+                .and_then(|service| service.next_deadline()),
             self.task_verification
                 .as_ref()
                 .and_then(|service| service.next_deadline()),
@@ -1148,6 +1196,7 @@ impl NativeClientRuntime {
         {
             self.record_repository_state(current);
         }
+        self.poll_binding_pause(now);
         self.poll_issue_observer(now);
         if self
             .task_verification
@@ -1402,9 +1451,12 @@ impl NativeClientRuntime {
             &command,
             StoredCommand::SetIssueAutomationMode { .. }
                 | StoredCommand::SetIssueAutonomy { .. }
+                | StoredCommand::SetIssueBindingPaused { .. }
                 | StoredCommand::AnswerIssueDecision { .. }
                 | StoredCommand::InterveneIssue { .. }
         );
+        let is_binding_pause_command =
+            matches!(&command, StoredCommand::SetIssueBindingPaused { .. });
         let is_evidence_command = matches!(
             &command,
             StoredCommand::PrepareEvidence { .. }
@@ -1493,6 +1545,9 @@ impl NativeClientRuntime {
                 observer.request_sync(Instant::now());
             }
         }
+        if is_binding_pause_command {
+            self.published_issue_change = true;
+        }
         if is_issue_command {
             self.refresh_issue_autonomy_keepalive();
         }
@@ -1531,6 +1586,9 @@ impl NativeClientRuntime {
                     }]);
                 }
             }
+        }
+        if is_binding_pause_command {
+            self.drain_binding_pause_outbox(Instant::now());
         }
         if is_evidence_command {
             self.drain_task_evidence_outbox(Instant::now());
@@ -1779,6 +1837,7 @@ impl NativeClientRuntime {
         self.record_kernel_events(lost_work);
         self.drain_issue_work_outbox();
         self.drain_task_evidence_outbox(Instant::now());
+        self.drain_binding_pause_outbox(Instant::now());
         if !open.is_empty() {
             // 아직 클라이언트가 없다. 결과는 조회로 보인다. 기록용 사건은 이 dispatch 안에서 기록된다.
             let _ = self.dispatch_core_input(CoreInput::Command(
@@ -1902,6 +1961,11 @@ impl NativeClientRuntime {
             self.issue_automation_keepalive.set(false);
             view.projection = service.projection()?;
             view.autonomy = service.autonomy_state();
+            view.binding_pause = view.projection.state.binding_id.as_ref().and_then(|id| {
+                service
+                    .binding_pause_service()
+                    .and_then(|pause| pause.state(id).ok())
+            });
             self.remember_issue_autonomy(&view.autonomy);
         }
         if view.projection.state.config.mode == IssueCollectionMode::Off {
@@ -2167,6 +2231,15 @@ impl NativeClientRuntime {
             || self.parallel_control_plane.has_remaining_work()
             || self.issue_automation_keepalive.get()
             || self.task_evidence_outbox_deadline.is_some()
+            || self.binding_pause_outbox_deadline.is_some()
+            || self
+                .binding_pause
+                .as_ref()
+                .is_some_and(|service| service.has_pending())
+            || self
+                .binding_admission
+                .as_ref()
+                .is_some_and(|admission| admission.has_inflight())
             || self
                 .task_verification
                 .as_ref()
@@ -2437,6 +2510,7 @@ mod issue_observer_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod binding_pause;
     use std::cell::Cell;
     use std::sync::Arc;
 

@@ -23,6 +23,17 @@ use crate::application::service::issue_triage::IssueTriageService;
 mod arbiter;
 
 pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
+    let admission = Arc::new(
+        crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+    );
+    admission.close_all();
+    build_with_admission(workspace_dir, admission)
+}
+
+pub(crate) fn build_with_admission(
+    workspace_dir: &str,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+) -> Arc<IssueCollectionService> {
     let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
@@ -35,18 +46,21 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             Ok(PathBuf::from(location.runtime_dir))
         }));
     let validation_source = Arc::new(FilesystemIssuePolicySourceAdapter::new());
-    let feedback = Arc::new(IssueFeedbackService::new(
-        workspace_dir.to_owned(),
-        store.clone(),
-        Arc::new(GithubIssueFeedbackAdapter::new(PathBuf::from(
-            workspace_dir,
-        ))),
-        publication.clone(),
-        IssueAutomationPolicyService::new(Arc::new(
-            FilesystemIssueAutomationPolicySourceAdapter::new(),
-        )),
-        IssuePolicyService::new(validation_source.clone()),
-    ));
+    let feedback = Arc::new(
+        IssueFeedbackService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            Arc::new(GithubIssueFeedbackAdapter::new(PathBuf::from(
+                workspace_dir,
+            ))),
+            publication.clone(),
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
+            IssuePolicyService::new(validation_source.clone()),
+        )
+        .with_issue_binding_admission(admission.clone()),
+    );
     let triage = Arc::new(IssueTriageService::new(
         workspace_dir.to_string(),
         store.clone(),
@@ -86,7 +100,18 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             IssuePolicyService::new(validation_source.clone()),
         ),
     );
-    let execution = build_execution(workspace_dir);
+    let execution = build_execution_with_admission(workspace_dir, admission.clone(), store.clone());
+    let binding_pause = Arc::new(
+        crate::application::service::issue_binding_pause::IssueBindingPauseService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
+            execution.clone(),
+            admission.clone(),
+        ),
+    );
     let autonomy = Arc::new(
         crate::application::service::issue_autonomy::IssueAutonomyService::new(
             workspace_dir.to_owned(),
@@ -121,6 +146,7 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
             Arc::new(crate::adapter::outbound::git::issue_assessment_evidence::GitIssueAssessmentEvidenceAdapter::new()),
         )
         .with_feedback(feedback)
+        .with_issue_binding_admission(admission.clone())
         .with_publication_journal(publication.clone()),
     );
     Arc::new(
@@ -134,6 +160,7 @@ pub(crate) fn build(workspace_dir: &str) -> Arc<IssueCollectionService> {
         .with_triage(triage)
         .with_autonomy(autonomy)
         .with_interactions(interactions)
+        .with_binding_pause(binding_pause)
         .with_coordinator(coordinator)
         .with_publication_journal(publication),
     )
@@ -170,6 +197,18 @@ pub(crate) fn build_decisions(
 
 #[cfg(test)]
 pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionService> {
+    let admission = Arc::new(
+        crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+    );
+    admission.close_all();
+    build_for_kernel_test_with_admission(workspace_dir, admission)
+}
+
+#[cfg(test)]
+pub(crate) fn build_for_kernel_test_with_admission(
+    workspace_dir: &str,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+) -> Arc<IssueCollectionService> {
     use crate::application::port::outbound::issue_automation_policy_source_port::IssueAutomationPolicySourcePort;
     use crate::application::port::outbound::issue_collection_origin_port::{
         IssueCollectionOrigin, IssueCollectionOriginPort,
@@ -231,19 +270,29 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
         IssueAutomationPolicyService::new(Arc::new(TestAutomationPolicy)),
         IssuePolicyService::new(Arc::new(TestPolicy)),
     ));
+    let execution = build_execution_with_admission(workspace_dir, admission.clone(), store.clone());
+    let binding_pause = Arc::new(
+        crate::application::service::issue_binding_pause::IssueBindingPauseService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            IssueAutomationPolicyService::new(Arc::new(TestAutomationPolicy)),
+            execution.clone(),
+            admission,
+        ),
+    );
     let autonomy = Arc::new(
         crate::application::service::issue_autonomy::IssueAutonomyService::new(
             workspace_dir.to_owned(),
             store.clone(),
             IssueAutomationPolicyService::new(Arc::new(TestAutomationPolicy)),
-            build_execution(workspace_dir),
+            execution.clone(),
         ),
     );
     let interactions = Arc::new(
         crate::application::service::issue_interactions::IssueInteractionsService::new(
             workspace_dir.to_owned(),
             store.clone(),
-            build_execution(workspace_dir),
+            execution.clone(),
             triage.clone(),
             IssuePolicyService::new(Arc::new(TestPolicy)),
         ),
@@ -258,7 +307,8 @@ pub(crate) fn build_for_kernel_test(workspace_dir: &str) -> Arc<IssueCollectionS
         )
         .with_triage(triage)
         .with_autonomy(autonomy)
-        .with_interactions(interactions),
+        .with_interactions(interactions)
+        .with_binding_pause(binding_pause),
     )
 }
 
@@ -320,6 +370,23 @@ pub(crate) fn build_autonomy(
 fn build_execution(
     workspace_dir: &str,
 ) -> Arc<crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter> {
+    let admission = Arc::new(
+        crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
+    );
+    admission.close_all();
+    let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
+        let location =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace)?;
+        Ok(PathBuf::from(location.runtime_dir))
+    }));
+    build_execution_with_admission(workspace_dir, admission, store)
+}
+
+fn build_execution_with_admission(
+    workspace_dir: &str,
+    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
+    store: Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>,
+) -> Arc<crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter> {
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let delivery_evidence =
         super::production::task_delivery_evidence_for_workspace(workspace_dir, authority.as_ref());
@@ -328,7 +395,8 @@ fn build_execution(
         Arc::new(crate::adapter::outbound::github::automation::GithubAutomationAdapter::new()),
         Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
     )
-    .with_delivery_evidence(delivery_evidence);
+    .with_delivery_evidence(delivery_evidence)
+    .with_issue_binding_admission(admission, store);
     Arc::new(
         crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
             authority.clone(),

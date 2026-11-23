@@ -548,6 +548,7 @@ pub(super) fn current_item(
         return Ok(None);
     }
     validate_expected_revision(expected.collection_epoch)?;
+    super::sql_revision(expected.binding_run_revision)?;
     for revision in [
         expected.observation_revision,
         expected.tracked_revision,
@@ -570,7 +571,8 @@ pub(super) fn current_item(
     let Some(item) = queries::item(connection, workspace, reference)? else {
         return Ok(None);
     };
-    if item.observation_revision != expected.observation_revision
+    if item.binding_run_revision != expected.binding_run_revision
+        || item.observation_revision != expected.observation_revision
         || item.tracked_revision != expected.tracked_revision
         || item.triage.as_ref().map(|triage| triage.revision) != expected.assessment_revision
     {

@@ -11,6 +11,25 @@ pub(crate) fn prepare(
     command: &StoredCommand,
 ) -> Result<IssueConfirmationPreview> {
     match command {
+        StoredCommand::SetIssueBindingPaused {
+            command_id,
+            binding_id,
+            paused: false,
+            expected_revision,
+        } => {
+            #[cfg(not(test))]
+            let collection = super::issue_collection::build(workspace);
+            #[cfg(test)]
+            let collection = super::issue_collection::build_for_kernel_test(workspace);
+            let binding =
+                crate::domain::issue_automation::IssueAutomationBindingId::new(binding_id.clone())
+                    .map_err(anyhow::Error::msg)?;
+            collection
+                .binding_pause_service()
+                .ok_or_else(|| anyhow::anyhow!("binding pause is unavailable"))?
+                .prepare_confirmation(command_id, &binding, false, *expected_revision)
+        }
+
         StoredCommand::WaiveCriterion { request } => {
             super::task_evidence::build(workspace).prepare_waiver(request)
         }

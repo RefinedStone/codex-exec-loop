@@ -138,6 +138,8 @@ fn item(id: &str, mode: IssueAutomationAutonomy) -> IssueCollectionItem {
     let current = observed(&issue);
     let triage = projection(&issue, Some(&current), mode);
     IssueCollectionItem {
+        binding_run_revision: 0,
+        binding_run_blocked: false,
         start_budget_wait: None,
         work: None,
         open_decisions: Vec::new(),

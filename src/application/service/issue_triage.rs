@@ -257,6 +257,7 @@ impl IssueTriageService {
                 }
                 let assessment = context.assess(&item)?;
                 let expected = IssueTriageFence {
+                    binding_run_revision: item.binding_run_revision,
                     collection_epoch: epoch,
                     observation_revision: item.observation_revision,
                     tracked_revision: item.tracked_revision,

@@ -5,6 +5,7 @@ use crate::application::port::inbound::stored_command_port::issue_confirmation::
 };
 
 mod autonomy;
+mod binding_pause;
 mod delivery;
 
 const REFERENCE: &str = "desktop-confirmation:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

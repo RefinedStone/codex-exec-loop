@@ -22,6 +22,7 @@ pub(super) fn execute(
     cancelled: &AtomicBool,
     closed: &AtomicBool,
     automatic: Option<&automatic::ExecutionGuard>,
+    binding: Option<&binding::BindingVerification>,
 ) -> TaskVerificationFinishCommit {
     match execute_inner(
         dependencies,
@@ -30,6 +31,7 @@ pub(super) fn execute(
         cancelled,
         closed,
         automatic,
+        binding,
     ) {
         Ok((result, artifact)) => TaskVerificationFinishCommit {
             execution,
@@ -48,6 +50,7 @@ fn execute_inner(
     cancelled: &AtomicBool,
     closed: &AtomicBool,
     automatic: Option<&automatic::ExecutionGuard>,
+    binding: Option<&binding::BindingVerification>,
 ) -> std::result::Result<
     (TaskVerificationResult, Option<TaskEvidenceArtifact>),
     TaskVerificationNotRunReason,
@@ -58,12 +61,18 @@ fn execute_inner(
             || automatic.is_some_and(|guard| {
                 !guard.continuation.is_current() || Instant::now() >= guard.deadline
             })
+            || binding.is_some_and(|binding| !binding.is_current())
     };
     if check_cancelled() {
         return Err(TaskVerificationNotRunReason::Cancelled);
     }
     authority::require_current(dependencies, stored)
         .map_err(|error| authority::not_run_reason(&error))?;
+    if let Some(binding) = binding {
+        binding
+            .validate(dependencies, stored)
+            .map_err(|_| TaskVerificationNotRunReason::Unavailable)?;
+    }
     let source = with_running_worker(
         dependencies.authority.as_ref(),
         dependencies.runtime.as_ref(),
@@ -121,6 +130,9 @@ fn execute_inner(
         &stored.lease,
         || {
             authority::require_current(dependencies, stored)?;
+            if let Some(binding) = binding {
+                binding.validate(dependencies, stored)?;
+            }
             if snapshot_worker_tree(dependencies.runtime.as_ref(), &stored.lease)? != source {
                 return Err(TaskEvidenceError::Stale.into());
             }

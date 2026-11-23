@@ -8,6 +8,7 @@ use crate::domain::issue_automation::policy::IssueAutomationGateAction;
 
 fn decision_fence(snapshot: &IssueFeedbackSnapshot) -> IssueTriageFence {
     IssueTriageFence {
+        binding_run_revision: snapshot.item.binding_run_revision,
         collection_epoch: snapshot.collection.epoch,
         observation_revision: snapshot.item.observation_revision,
         tracked_revision: snapshot.item.tracked_revision,
