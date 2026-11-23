@@ -7,6 +7,8 @@ use crate::adapter::inbound::desktop_confirmation_bridge::{
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 
+mod native_process;
+
 struct MainBroker {
     input: WriteHalf<DuplexStream>,
     output: FrameReader<ReadHalf<DuplexStream>>,

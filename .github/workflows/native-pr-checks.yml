@@ -107,6 +107,14 @@ jobs:
       - name: Run Rust tests
         run: cargo test --locked
 
+      - name: Set up Node for the native confirmation process check
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Test the built native confirmation process
+        run: node scripts/check_native_confirmation_process.mjs
+
   rust_lint:
     name: Rust Lint and Architecture
     needs: scope
@@ -275,6 +283,18 @@ jobs:
             cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
               "${filter}" -- --nocapture
           done
+
+      - name: Set up Node for the macOS confirmation process check
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Test the built macOS confirmation process
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
+        run: node scripts/check_native_confirmation_process.mjs
 
   smoke_check:
     name: Rust Smoke Check

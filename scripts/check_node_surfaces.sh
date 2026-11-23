@@ -16,6 +16,7 @@ for script_path in \
   scripts/capture_admin_graphic.mjs \
   scripts/capture_admin_validation_evidence.mjs \
   scripts/agent-plan.mjs \
+  scripts/check_native_confirmation_process.mjs \
   scripts/ci-scope.mjs \
   scripts/npm-audit-gate.mjs \
   scripts/normalize_codex_app_server_schema.mjs \
