@@ -72,13 +72,19 @@ impl FilesystemTaskEvidenceArtifactAdapter {
         if observed_tree != &attempt.prepared_tree {
             bail!("task evidence tree changed since preparation");
         }
-        let incoming = self
-            .incoming(workspace, &attempt.lease_generation, false)?
+        // Resolve before pinning: the Windows runtime initializer can request DELETE
+        // access, which conflicts with the ancestor pins retained below.
+        let evidence = self.evidence_root(workspace, false)?;
+        let incoming = evidence
+            .child("incoming", false)?
+            .child(&attempt.lease_generation, false)?
             .child(&attempt.attempt_id, false)?;
         let mut source = files::StableFile::open(&incoming, ARTIFACT_FILE)?;
         let bytes = source.read_bounded(&incoming, MAX_TASK_EVIDENCE_ARTIFACT_BYTES)?;
         let artifact = artifact_for_bytes(&bytes)?;
-        let sealed = self.sealed(workspace, attempt, true)?;
+        let sealed = evidence
+            .child("sealed", true)?
+            .child(&attempt.attempt_id, true)?;
 
         match files::StableFile::open(&sealed, ARTIFACT_FILE) {
             Ok(mut existing) => {
