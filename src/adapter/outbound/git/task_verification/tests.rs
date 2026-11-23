@@ -9,6 +9,23 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[test]
+fn preparation_diagnostics_never_expose_unrecognized_error_contents() {
+    let error = anyhow::anyhow!("secret command/path/env/output body")
+        .context("failed to secure private Windows path `private-path-secret`");
+    assert_eq!(
+        diagnostics::classifications(&error),
+        ["secure_private_path", "opaque_error"]
+    );
+    let error = std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "secret OS error path and content",
+    );
+    let classes = diagnostics::classifications(&error.into());
+    assert_eq!(classes[0], "io(kind=PermissionDenied,os=None)");
+    assert!(!classes.join(" ").contains("secret"));
+}
+
 struct Fixture {
     root: PathBuf,
     base: String,
@@ -65,7 +82,13 @@ impl Fixture {
         }
     }
     fn prepare(&self, source: &TaskEvidenceTree) -> PreparedVerification {
-        prepare(self.request(source), &|| false).unwrap()
+        let started = Instant::now();
+        prepare(self.request(source), &|| false).unwrap_or_else(|reason| {
+            panic!(
+                "fixed recipe preparation failed: reason={reason:?}; elapsed_ms={}",
+                started.elapsed().as_millis()
+            )
+        })
     }
 }
 

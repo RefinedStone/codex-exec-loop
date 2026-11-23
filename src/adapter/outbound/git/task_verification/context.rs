@@ -41,7 +41,12 @@ impl PrivateGitContext {
     ) -> Result<Self> {
         let root = crate::adapter::outbound::github::automation::create_private_temp_directory(
             "akra-task-verification",
-        )?;
+        );
+        #[cfg(test)]
+        if let Err(error) = &root {
+            super::diagnostics::report("allocate_private_context", error);
+        }
+        let root = root?;
         let root = fs::canonicalize(root)?;
         let pin = PinnedPrivateDirectory::open(&root, false)?;
         let home = pin.child("home", true)?;
