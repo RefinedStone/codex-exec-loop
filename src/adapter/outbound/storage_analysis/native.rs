@@ -1,8 +1,10 @@
 use crate::domain::storage_analysis::{StorageIssue, StorageVolume};
 use anyhow::{Result, bail};
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::{
     fs::{self, File},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 pub(super) struct NativeMetadata {
