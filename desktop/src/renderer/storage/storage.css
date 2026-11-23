@@ -50,3 +50,5 @@
 .storage-files td:first-child { max-width: 240px; overflow-wrap: anywhere; }
 .storage-files button { border: 0; padding: 0; background: transparent; text-align: left; }
 .storage-evidence-link { border: 1px solid var(--line-strong); border-radius: var(--radius-s); padding: 3px 8px; color: var(--accent); background: var(--accent-bg); cursor: pointer; font: inherit; }
+
+.storage-live-tree .storage-tree-header, .storage-live-tree .storage-tree-row { grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr); min-width: 350px; }

@@ -26,6 +26,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   const currentJobId = useRef<string | null>(null);
   const expansion = useRef(expanded);
   expansion.current = expanded;
+  const childRequests = useRef(new Map<string, number>());
   const refreshSequence = useRef(0);
   const interaction = useRef(0);
 
@@ -44,16 +45,20 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
   const loadChildren = useCallback(async (nodeId: string, cursor?: string | null) => {
     const basis = currentSnapshot.current, life = scope.current;
     if (!basis || !life.enabled) return;
+    const request = (childRequests.current.get(nodeId) ?? 0) + 1;
+    childRequests.current.set(nodeId, request);
     try {
-      const page = await call<StoragePage>("list_children", { snapshot_id: basis.id, revision: basis.revision, node_id: nodeId, limit: 100, cursor: cursor ?? null, sort: "allocated_desc" });
-      if (scope.current !== life || !sameSnapshot(page, basis) || currentSnapshot.current?.id !== basis.id || currentSnapshot.current.revision !== basis.revision) return;
+      const page = await call<StoragePage>("list_children", { snapshot_id: basis.id, node_id: nodeId, limit: 100, cursor: cursor ?? null, sort: "allocated_desc" });
+      if (scope.current !== life || childRequests.current.get(nodeId) !== request || !sameSnapshot(page, basis) || currentSnapshot.current?.id !== basis.id || currentSnapshot.current.revision !== basis.revision) return;
       acceptPage(page, basis, !!cursor);
       setPages(previous => {
         const next = new Map(previous), old = previous.get(nodeId);
         next.set(nodeId, { ...page, items: cursor && old ? [...old.items, ...page.items.filter(item => !old.items.some(existing => existing.id === item.id))] : page.items });
         return next;
       });
-    } catch (failure) { if (scope.current === life) setError(String(failure)); }
+    } catch (failure) {
+      if (scope.current === life && childRequests.current.get(nodeId) === request && currentSnapshot.current?.id === basis.id && currentSnapshot.current.revision === basis.revision) setError(String(failure));
+    }
   }, [call, acceptPage]);
 
   const refresh = useCallback(async () => {
@@ -68,7 +73,7 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       const available = Array.isArray(listed) ? listed : listed.volumes;
       setVolumes(available);
       setVolumeId(previous => available.some(item => item.id === previous) ? previous : available.find(item => item.supported)?.id ?? "");
-      const currentJobs = result.jobs.filter(job => job.extension === STORAGE_EXTENSION && job.action === "scan").sort((a, b) => b.created_at_ms - a.created_at_ms);
+      const currentJobs = result.jobs.filter(job => job.extension === STORAGE_EXTENSION && job.action === "scan").sort((a, b) => b.created_at_ms - a.created_at_ms || b.sequence - a.sequence);
       setJobs(currentJobs);
       if (!currentJobs.length) {
         currentJobId.current = null; currentSnapshot.current = null;
@@ -79,7 +84,10 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
         currentJobId.current = latest.id; currentSnapshot.current = null; interaction.current++;
         setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null);
       }
-      const next = await call<StorageSnapshot | null>("snapshot", { ...(latest.result?.id ? { snapshot_id: latest.result.id } : {}), job_id: latest.id })
+      if (!latest.result) {
+        currentSnapshot.current = null; setSnapshot(null); setNodes(new Map()); setPages(new Map()); setExpanded(new Set()); setSelectedId(null); return;
+      }
+      const next = await call<StorageSnapshot | null>("snapshot", { snapshot_id: latest.result.id })
         .catch(error => { if (String(error).includes("snapshot_pending")) return null; throw error; });
       if (scope.current !== life || sequence !== refreshSequence.current || !next) return;
       const old = currentSnapshot.current;
@@ -88,9 +96,9 @@ export function useStorageExplorer(call: ExtensionCall, epoch: number, scopeKey:
       const previousSelection = old?.id === next.id ? selection.current : null;
       const nextExpanded = old?.id === next.id ? new Set([...expansion.current, next.root_node_id]) : new Set([next.root_node_id]);
       const [root, selected] = await Promise.all([
-        call<StorageNode>("get_node", { snapshot_id: next.id, revision: next.revision, node_id: next.root_node_id }),
+        call<StorageNode>("get_node", { snapshot_id: next.id, node_id: next.root_node_id }),
         previousSelection && previousSelection !== next.root_node_id
-          ? call<StorageNode>("get_node", { snapshot_id: next.id, revision: next.revision, node_id: previousSelection }).catch(() => null) : Promise.resolve(null),
+          ? call<StorageNode>("get_node", { snapshot_id: next.id, node_id: previousSelection }).catch(() => null) : Promise.resolve(null),
       ]);
       if (scope.current !== life || sequence !== refreshSequence.current || !sameSnapshot(root, next)) return;
       currentSnapshot.current = next;

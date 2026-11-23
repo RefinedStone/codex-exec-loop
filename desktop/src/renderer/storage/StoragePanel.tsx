@@ -7,6 +7,7 @@ import { formatBytes, formatRatio } from "./storageNumbers";
 import { completenessLabels, isActiveJob, jobLabels, type SharePreview, type StorageEvidence, type StorageGrant, type StorageHotspot, type StorageNode, type StoragePage } from "./storageTypes";
 import { sameSnapshot, useStorageExplorer } from "./useStorageExplorer";
 import { StorageTree } from "./StorageTree";
+import { StorageLiveTree } from "./StorageLiveTree";
 import { StorageTreemap } from "./StorageTreemap";
 
 export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled }: RegisteredPanelProps) {
@@ -34,6 +35,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     || shareLifetime.current.snapshotKey !== snapshotKey || shareLifetime.current.navigationRevision !== navigationRevision) {
     shareLifetime.current = { scopeKey, threadId, selectedId: model.selectedId, snapshotKey, navigationRevision };
   }
+  useEffect(() => () => { shareLifetime.current = { ...shareLifetime.current }; }, []);
   const fileSequence = useRef(0);
   const summarySequence = useRef(0);
 
@@ -43,7 +45,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     if (!selected || !model.snapshot || selected.kind === "file") { setFiles(null); return; }
     const sequence = ++fileSequence.current, basis = model.snapshot, life = model.scope.current;
     setFiles(null);
-    void call<StoragePage>("list_files", { snapshot_id: basis.id, revision: basis.revision, node_id: selected.id, limit: 100, sort: "allocated_desc", name_filter: nameFilter || null, extension_filter: extensionFilter || null, recursive }).then(page => {
+    void call<StoragePage>("list_files", { snapshot_id: basis.id, node_id: selected.id, limit: 100, sort: "allocated_desc", name_filter: nameFilter || null, extension_filter: extensionFilter || null, recursive }).then(page => {
       if (sequence === fileSequence.current && model.scope.current === life && sameSnapshot(page, basis)) setFiles(page);
     }).catch(error => { if (sequence === fileSequence.current && model.scope.current === life) model.setError(String(error)); });
     return () => { fileSequence.current++; };
@@ -55,7 +57,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     if (mode !== "summary" || !model.snapshot) return;
     const sequence = ++summarySequence.current, basis = model.snapshot, life = model.scope.current;
     setSummary(null);
-    void call<StoragePage<StorageHotspot>>("find_hotspots", { snapshot_id: basis.id, revision: basis.revision, node_id: basis.root_node_id, limit: 100,
+    void call<StoragePage<StorageHotspot>>("find_hotspots", { snapshot_id: basis.id, node_id: basis.root_node_id, limit: 100,
       thresholds: { absolute_bytes: "1073741824", relative_min_bytes: "268435456", parent_percent: 20 } }).then(page => {
       if (sequence === summarySequence.current && model.scope.current === life && sameSnapshot(page, basis)) setSummary(page);
     }).catch(error => { if (sequence === summarySequence.current && model.scope.current === life) model.setError(String(error)); });
@@ -66,7 +68,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     const basis = model.snapshot, life = model.scope.current, current = files, id = selected?.id, sequence = fileSequence.current;
     if (!basis || !current?.next_cursor || !id) return;
     try {
-      const page = await call<StoragePage>("list_files", { snapshot_id: basis.id, revision: basis.revision, node_id: id, cursor: current.next_cursor, limit: 100, sort: "allocated_desc", name_filter: nameFilter || null, extension_filter: extensionFilter || null, recursive });
+      const page = await call<StoragePage>("list_files", { snapshot_id: basis.id, node_id: id, cursor: current.next_cursor, limit: 100, sort: "allocated_desc", name_filter: nameFilter || null, extension_filter: extensionFilter || null, recursive });
       if (sequence === fileSequence.current && model.scope.current === life && sameSnapshot(page, basis)) setFiles(previous => previous?.next_cursor === current.next_cursor ? { ...page, items: [...current.items, ...page.items.filter(item => !current.items.some(old => old.id === item.id))] } : previous);
     } catch (error) { if (sequence === fileSequence.current && model.scope.current === life) model.setError(String(error)); }
   };
@@ -74,7 +76,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     const basis = model.snapshot, life = model.scope.current, current = summary, sequence = summarySequence.current;
     if (!basis || !current?.next_cursor) return;
     try {
-      const page = await call<StoragePage<StorageHotspot>>("find_hotspots", { snapshot_id: basis.id, revision: basis.revision, node_id: basis.root_node_id, cursor: current.next_cursor, limit: 100,
+      const page = await call<StoragePage<StorageHotspot>>("find_hotspots", { snapshot_id: basis.id, node_id: basis.root_node_id, cursor: current.next_cursor, limit: 100,
         thresholds: { absolute_bytes: "1073741824", relative_min_bytes: "268435456", parent_percent: 20 } });
       if (sequence === summarySequence.current && model.scope.current === life && sameSnapshot(page, basis)) setSummary(previous => previous?.next_cursor === current.next_cursor ? { ...page, items: [...current.items, ...page.items.filter(item => !current.items.some(old => old.node.id === item.node.id && old.role === item.role))] } : previous);
     } catch (error) { if (sequence === summarySequence.current && model.scope.current === life) model.setError(String(error)); }
@@ -90,7 +92,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     if (!selected || !threadId || !basis) return;
     setSharing(true); model.setError("");
     try {
-      const value = await call<SharePreview>("share_preview", { snapshot_id: basis.id, revision: basis.revision, node_id: selected.id, thread_id: threadId });
+      const value = await call<SharePreview>("share_preview", { snapshot_id: basis.id, node_id: selected.id, thread_id: threadId });
       if (shareLifetime.current === life && value.thread_id === threadId && value.node_id === selected.id && sameSnapshot(value, basis)) setPreview(value);
     } catch (error) { if (shareLifetime.current === life) model.setError(String(error)); }
     finally { if (shareLifetime.current === life) setSharing(false); }
@@ -135,12 +137,12 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       const result = await call<StorageEvidence>("resolve_evidence", { reference: evidence.reference, thread_id: threadId });
       if (!valid()) return;
       if (!sameSnapshot(result, basis)) throw new Error("이 근거는 이전 분석 결과입니다. 현재 결과를 다시 공유하세요.");
-      const chainResult = await call<{ snapshot_id: string; node_id: string; ancestors: StorageNode[] }>("ancestors", { snapshot_id: basis.id, revision: basis.revision, node_id: result.node_id });
+      const chainResult = await call<{ snapshot_id: string; node_id: string; ancestors: StorageNode[] }>("ancestors", { snapshot_id: basis.id, node_id: result.node_id });
       const chain = chainResult.ancestors;
       if (!valid()) return;
       if (!chain.length || chain.some(node => !sameSnapshot(node, basis))) throw new Error("근거의 분석 결과가 일치하지 않습니다.");
       const prepared = await Promise.all(chain.filter(node => node.kind === "directory").map(async node => {
-        const page = await call<StoragePage>("list_children", { snapshot_id: basis.id, revision: basis.revision, node_id: node.id, limit: 100, sort: "allocated_desc" });
+        const page = await call<StoragePage>("list_children", { snapshot_id: basis.id, node_id: node.id, limit: 100, sort: "allocated_desc" });
         if (!sameSnapshot(page, basis)) throw new Error("탐색 중 분석 결과가 바뀌었습니다.");
         return [node.id, page] as const;
       }));
@@ -169,7 +171,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     const life = shareLifetime.current, basis = model.snapshot;
     if (!selected || !basis) return;
     try {
-      const result = await call<{ path: string; host_id: string; snapshot_id: string; node_id: string }>("reveal_path", { snapshot_id: basis.id, revision: basis.revision, node_id: selected.id });
+      const result = await call<{ path: string; host_id: string; snapshot_id: string; node_id: string }>("reveal_path", { snapshot_id: basis.id, node_id: selected.id });
       if (shareLifetime.current !== life) return;
       if (result.snapshot_id !== basis.id || result.node_id !== selected.id) throw new Error("탐색기로 열 항목이 현재 선택과 다릅니다.");
       await window.akra.revealStoragePath({ path: result.path, host: "local" });
@@ -181,7 +183,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     {!enabled && <p role="status">확장이 꺼졌거나 끄는 중입니다. 설정에서 현재 상태를 확인하세요.</p>}
     {model.error && <div className="storage-error" role="alert">{model.error}<button type="button" onClick={() => { model.setError(""); void model.refresh(); }}>상태 다시 확인</button></div>}
     <div className="storage-controls">
-      <label>드라이브<select aria-label="분석할 드라이브" value={model.volumeId} onChange={event => model.setVolumeId(event.target.value)} disabled={!enabled || model.busy}>
+      <label>드라이브<select aria-label="분석할 드라이브" value={model.volumeId} onChange={event => model.setVolumeId(event.target.value)} disabled={!enabled || model.busy || isActiveJob(job)}>
         {!model.volumes.length && <option value="">드라이브 확인 중</option>}
         {model.volumes.map(volume => <option key={volume.id} value={volume.id} disabled={!volume.supported}>{volume.label} · {volume.root_path}{!volume.supported ? " · 지원 안 함" : ""}</option>)}
       </select></label>
@@ -197,6 +199,8 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       {isActiveJob(job) && <p className="muted">다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.</p>}
       {model.snapshot?.issues.map(issue => <p key={issue.code} className="muted">{issue.message} · {issue.count}개</p>)}
     </div>
+    {!model.snapshot && job && isActiveJob(job) && <StorageLiveTree key={scopeKey + ":" + job.id} call={call} epoch={epoch} jobId={job.id}
+      rootName="분석 중인 드라이브" />}
     {model.snapshot && <>
       <nav className="segmented" aria-label="저장 공간 보기">
         <button type="button" aria-pressed={mode === "tree"} onClick={() => { model.interaction.current++; setMode("tree"); }}>폴더 점유율 표</button>
@@ -204,7 +208,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
       </nav>
       {mode === "tree" ? <StorageTree model={model} focusRequest={focusRequest} /> : <div aria-label="큰 폴더 요약">
         {summary?.items.map((item, index) => <button type="button" key={`${item.node.id}:${item.role}:${index}`} className="storage-summary-row" onClick={() => selectNode(item.node)}>
-          <span>{item.node.name}{item.role === "remainder" ? " · 이 폴더의 나머지" : ""}</span><strong>{formatBytes(item.included_bytes)}</strong><small>{item.reason}</small>
+          <span>{item.node.name}{item.role === "remainder" ? " · 이 폴더의 나머지" : ""}</span><strong>{formatBytes(item.included_bytes)}{item.provisional ? " · 잠정" : ""}</strong><small>{item.reason}</small>
         </button>)}
         {summary?.next_cursor && <button type="button" onClick={() => void moreSummary()}>요약 다음 항목</button>}
       </div>}

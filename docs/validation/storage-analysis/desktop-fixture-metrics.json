@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-11-23T02:39:53.381Z",
+  "platform": "win32",
+  "versions": {
+    "electron": "45.2.3",
+    "chrome": "156.0.8078.80",
+    "node": "24.22.2"
+  },
+  "fixture": {
+    "gateway": "fake",
+    "native_scan": false,
+    "discovered_directories": 2,
+    "progress_notification_per_sample": true,
+    "hidden_electron": true
+  },
+  "latency_method": "Playwright fill start to inputValue confirmation includes automation overhead. Renderer input event to microtask DOM observation is separate. Next-frame timings are recorded separately because hidden-window requestAnimationFrame cadence is throttled.",
+  "memory_method": "Electron app.getAppMetrics MemoryInfo; all raw fields are reported in Kilobytes. peakWorkingSetSize is the process-lifetime peak observed at sampling, including startup.",
+  "excluded": [
+    "native scanner load",
+    "full volume scale",
+    "GPU and utility processes",
+    "fake Gateway test process"
+  ],
+  "samples": [
+    {
+      "sample": 1,
+      "text_length": 21,
+      "automation_to_dom_ms": 7.020499999999629,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 996.6000000238419
+    },
+    {
+      "sample": 2,
+      "text_length": 21,
+      "automation_to_dom_ms": 5.233799999999974,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 988.5
+    },
+    {
+      "sample": 3,
+      "text_length": 21,
+      "automation_to_dom_ms": 4.486100000000079,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 982
+    }
+  ],
+  "memory_samples": [
+    {
+      "stage": "running_before_inputs",
+      "processes": [
+        {
+          "role": "main",
+          "working_set_kb": 117600,
+          "peak_working_set_kb": 125928,
+          "private_kb": 74612
+        },
+        {
+          "role": "renderer",
+          "working_set_kb": 118208,
+          "peak_working_set_kb": 118208,
+          "private_kb": 58772
+        }
+      ]
+    },
+    {
+      "stage": "input_1",
+      "processes": [
+        {
+          "role": "main",
+          "working_set_kb": 117132,
+          "peak_working_set_kb": 125928,
+          "private_kb": 74036
+        },
+        {
+          "role": "renderer",
+          "working_set_kb": 118916,
+          "peak_working_set_kb": 118916,
+          "private_kb": 58808
+        }
+      ]
+    },
+    {
+      "stage": "input_2",
+      "processes": [
+        {
+          "role": "main",
+          "working_set_kb": 117148,
+          "peak_working_set_kb": 125928,
+          "private_kb": 74040
+        },
+        {
+          "role": "renderer",
+          "working_set_kb": 119364,
+          "peak_working_set_kb": 119364,
+          "private_kb": 59020
+        }
+      ]
+    },
+    {
+      "stage": "input_3",
+      "processes": [
+        {
+          "role": "main",
+          "working_set_kb": 117212,
+          "peak_working_set_kb": 125928,
+          "private_kb": 74040
+        },
+        {
+          "role": "renderer",
+          "working_set_kb": 119424,
+          "peak_working_set_kb": 119428,
+          "private_kb": 59084
+        }
+      ]
+    }
+  ],
+  "process_lifetime_peak_working_set_kb": {
+    "main": 125928,
+    "renderer": 119428
+  }
+}

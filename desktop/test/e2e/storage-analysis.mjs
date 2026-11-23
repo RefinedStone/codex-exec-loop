@@ -15,15 +15,16 @@ const threadId = "01a1abfb-8f0a-7581-a8e4-c2953347f470";
 const gib = 1024n ** 3n;
 let enabled = false, revision = 0, scans = 0, grants = 0, job = null, snapshotRevision = 1, resolveBarrier = null, enteredResolve = null, invalidAllocation = false;
 const calls = [];
+let recursiveObserved;
 const reference = "akra-storage:" + Buffer.from(JSON.stringify({ grant_id: "grant-1", node_id: "target", snapshot_id: "scan-1" })).toString("base64url");
 const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 4, directories_scanned: 3, issues: [] });
 const node = (id, amount, parent = "root", kind = "directory") => ({ snapshot_id: "scan-1", revision: snapshotRevision, id, parent_id: parent,
-  name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin" })[id] ?? id,
+  name: ({ root: "예시 worktree", target: "target", assets: "assets", direct: "직속 파일 합계", file: "huge-cache.bin", file2: "small-cache.bin" })[id] ?? id,
   kind, allocated_bytes: (gib * BigInt(amount)).toString(), known_allocated_bytes: (gib * BigInt(amount)).toString(), logical_bytes: (gib * BigInt(amount)).toString(),
   ratio: { numerator_bytes: (gib * BigInt(amount)).toString(), denominator_bytes: parent ? (gib * 12n).toString() : null, reason: parent ? null : "root", provisional: false },
   state: "complete", issues: [], protection: id === "root" ? [{ code: "active", detail: "현재 작업 중인 저장소", observed_at: 1 }] : [], classification: [],
 });
-const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("target", 9), node("assets", 2), node("direct", 1, "root", "direct_files"), node("file", 9, "target", "file")].map(item => invalidAllocation && item.id === "root" ? { ...item, allocated_bytes: "invalid", known_allocated_bytes: "invalid" } : item);
+const nodes = () => [node("root", invalidAllocation ? 8 : 12, null), node("target", 9), node("assets", 2), node("direct", 1, "root", "direct_files"), node("file", 8, "target", "file"), node("file2", 1, "target", "file")].map(item => invalidAllocation && item.id === "root" ? { ...item, allocated_bytes: "invalid", known_allocated_bytes: "invalid" } : item);
 const page = items => ({ snapshot_id: "scan-1", revision: snapshotRevision, items, total_count: items.length, next_cursor: null });
 const baseThread = structuredClone(fake.loadReplayTable(fake.INTERRUPTED_TURN_RECORDING).get("thread/resume").result);
 baseThread.thread.turns = [{ id: "storage-answer", status: "completed", itemsView: "full", startedAt: 1, completedAt: 2, durationMs: 1, error: null, items: [
@@ -42,6 +43,17 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
     assert.equal(params.kernel, localKernel);
     assert.equal(params.extension, extension);
     const input = params.input ?? {}; calls.push({ action: params.action, input });
+    const allowed = {
+      volumes: [], jobs: [], scan: ["volume_id", "options"], snapshot: ["snapshot_id"],
+      configure: ["enabled", "expected_revision"], cancel: ["job_id"],
+      get_node: ["snapshot_id", "node_id"], ancestors: ["snapshot_id", "node_id"], reveal_path: ["snapshot_id", "node_id"],
+      list_children: ["snapshot_id", "node_id", "limit", "cursor", "sort", "name_filter", "extension_filter", "recursive", "thresholds"],
+      list_files: ["snapshot_id", "node_id", "limit", "cursor", "sort", "name_filter", "extension_filter", "recursive", "thresholds"],
+      find_hotspots: ["snapshot_id", "node_id", "limit", "cursor", "sort", "name_filter", "extension_filter", "recursive", "thresholds"],
+      share_preview: ["snapshot_id", "node_id", "thread_id"], share_create: ["preview_id", "thread_id"],
+      share_revoke: ["grant_id"], resolve_evidence: ["reference", "thread_id"],
+    }[params.action];
+    if (allowed) assert.ok(Object.keys(input).every(key => allowed.includes(key)), "input must match native deny_unknown_fields schema: " + params.action);
     if (params.action === "configure") {
       assert.equal(input.expected_revision, revision); enabled = input.enabled; revision++;
       return { result: { enabled, revision } };
@@ -57,7 +69,14 @@ const gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APP
     if (params.action === "snapshot") return { result: job ? snapshot() : null };
     if (params.action === "get_node") return { result: nodes().find(item => item.id === input.node_id) };
     if (params.action === "list_children") return { result: page(input.node_id === "root" ? nodes().filter(item => item.parent_id === "root") : []) };
-    if (params.action === "list_files") return { result: page(input.node_id === "target" && (!input.name_filter || "huge-cache.bin".includes(input.name_filter)) ? [node("file", 9, "target", "file")] : []) };
+    if (params.action === "list_files") {
+      if (input.recursive) recursiveObserved?.();
+      const matching = nodes().filter(item => item.kind === "file" && item.parent_id === input.node_id
+        && (!input.name_filter || item.name.includes(input.name_filter))
+        && (!input.extension_filter || item.name.endsWith(input.extension_filter.replace(/^\./, ""))));
+      const start = input.cursor === "files:1" ? 1 : 0;
+      return { result: { ...page(matching.slice(start, start + 1)), total_count: matching.length, next_cursor: start + 1 < matching.length ? "files:1" : null } };
+    }
     if (params.action === "find_hotspots") return { result: page([{ node: node("target", 9), role: "folder", reason: "1 GiB 이상", included_bytes: (gib * 9n).toString(), provisional: false }]) };
     if (params.action === "ancestors") return { result: { snapshot_id: "scan-1", node_id: input.node_id, ancestors: [node("root", 12, null), node("target", 9)] } };
     if (params.action === "share_preview") {
@@ -103,6 +122,19 @@ try {
   await view.keyboard.press("ArrowDown");
   assert.equal(await target.getAttribute("aria-selected"), "true");
   await panel.getByRole("button", { name: "huge-cache.bin", exact: true }).waitFor();
+  await panel.getByRole("button", { name: "파일 다음 항목", exact: true }).click();
+  await panel.getByRole("button", { name: "small-cache.bin", exact: true }).waitFor();
+  await panel.getByLabel("파일 이름 필터").fill("missing-name");
+  await panel.getByRole("button", { name: "huge-cache.bin", exact: true }).waitFor({ state: "hidden" });
+  await panel.getByLabel("파일 이름 필터").fill("huge");
+  await panel.getByRole("button", { name: "huge-cache.bin", exact: true }).waitFor();
+  await panel.getByLabel("파일 확장자 필터").fill(".txt");
+  await panel.getByRole("button", { name: "huge-cache.bin", exact: true }).waitFor({ state: "hidden" });
+  await panel.getByLabel("파일 확장자 필터").fill(".bin");
+  await panel.getByRole("button", { name: "huge-cache.bin", exact: true }).waitFor();
+  const recursiveRead = new Promise(resolve => { recursiveObserved = resolve; });
+  await panel.getByLabel("하위 파일 포함").check();
+  await recursiveRead;
   await panel.locator('[data-node-id="root"]').click();
   await panel.getByLabel("선택 폴더 트리맵 표시").check();
   await panel.getByRole("button", { name: "target, 9.0 GiB, 표에서 선택", exact: true }).click();
@@ -142,6 +174,10 @@ try {
 
   if (process.env.AKRA_STORAGE_SCREENSHOT) {
     await view.getByRole("dialog").waitFor({ state: "hidden" });
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 1280));
+    await view.getByTestId("akra.storage-analysis-maximize").click();
+    await panel.locator('[data-node-id="root"]').click();
+    await panel.getByLabel("선택 폴더 트리맵 표시").check();
     await view.evaluate(async () => {
       document.querySelector(".storage-panel").scrollTop = 0;
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -149,6 +185,7 @@ try {
     const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));
     const { writeFile } = await import("node:fs/promises");
     await writeFile(process.env.AKRA_STORAGE_SCREENSHOT, Buffer.from(png, "base64"));
+    await view.getByTestId("akra.storage-analysis-restore").click();
   }
 
   secondApp = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), args: [root, ...(process.env.CI ? ["--no-sandbox"] : [])], env: { ...env, AKRA_DESKTOP_USER_DATA: secondUserData } });
@@ -180,7 +217,7 @@ try {
   await view.getByTestId("extensions-manage").click();
   await setting.getByRole("button", { name: "켜기", exact: true }).waitFor();
   assert.ok(!gateway.receivedMethods.includes("turn/start"));
-  console.log("PASS storage: home enable, explicit scan, exact 75%, keyboard/tree/map, reopen, shared preview, evidence and late-response guards, two-client synchronization, panel error isolation and retry, external disable; no model calls");
+  console.log("PASS storage: home enable, explicit scan, exact 75%, keyboard/tree/map, file paging/filters, reopen, shared preview, evidence and late-response guards, two-client synchronization, panel error isolation and retry, external disable; no model calls");
 } finally {
   if (secondApp) await secondApp.close();
   if (app) await app.close();
