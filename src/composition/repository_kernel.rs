@@ -245,7 +245,8 @@ impl RepositoryKernelRegistry {
 
     pub(crate) fn local_extensions(
         &self,
-    ) -> Result<Arc<crate::application::service::kernel_extensions::ExtensionService>> {
+    ) -> Result<Arc<dyn crate::application::port::inbound::extension_host_port::ExtensionHostPort>>
+    {
         self.ensure_running()?;
         let mut local = self
             .local_extensions

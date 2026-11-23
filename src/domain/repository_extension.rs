@@ -1,3 +1,5 @@
+pub(crate) mod tech_blog;
+
 #[derive(serde::Serialize, schemars::JsonSchema)]
 pub(crate) struct ExtensionManifest {
     pub id: &'static str,
@@ -8,4 +10,5 @@ pub(crate) struct ExtensionManifest {
     pub label: &'static str,
     pub actions: &'static [&'static str],
     pub permissions: &'static [&'static str],
+    pub operations: Vec<crate::domain::kernel_extension::ExtensionOperation>,
 }

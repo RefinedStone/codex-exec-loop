@@ -53,3 +53,27 @@ git diff --check
 최종 실행 결과: 확장 필터 31개, 커널 프로토콜 32개, 커널 시뮬레이션 24개가 모두 통과했다. Full native gate는 exit 0으로 완료했고, 그 안의 Desktop 검사는 1,059개 통과·7개 환경별 skip, 타입 검사·번들 및 Windows 계약 검사·clippy가 통과했다. schema/skill 생성 결과 일치, fmt와 diff 검사도 통과했다.
 
 이 환경에서는 실제 다른 OS 계정, 원격 호스트와의 동시 사용, Linux/macOS native 실행을 수행하지 않았다. 호스트 ID/generation 격리와 Windows private store·ACL·process ownership은 자동 회귀로 확인한다. 모델을 실행하는 `turn/start`나 `turn/steer`는 사용하지 않는다.
+
+## PR #2663 CI 및 자동 리뷰 후속 검증
+
+첫 원격 실행의 Rust 라이브러리 테스트는 Linux에서 5,301개 통과·14개 ignored였지만, `architecture_boundaries`는 142개 통과·2개 실패였다. 로컬 Windows Full 스크립트는 해당 통합 테스트를 실행하지 않으므로 이후에는 이를 별도 필수 검증으로 실행한다.
+
+- Gateway는 application inbound `ExtensionHostPort`만 의존한다. 구체 `ExtensionService`를 transport가 직접 import하지 않으며, 호출 신원 `ExtensionContext`는 domain이 소유한다.
+- composition spawn 검사는 기존 `is_test_only_path` 판별을 적용한다. `#[cfg(test)] mod tests`에서 실행하는 disposable 프로세스가 production worker로 잘못 집계되지 않는다. production spawn 제한은 유지한다.
+- 블로그 catalog는 실제 Python studio의 입력 필드, 길이, enum, 선택 입력 기본값을 반영한 schema를 제공하고 Gateway가 동일 schema를 검사한다. 실제 Python 워커의 configure/create/list/save/open을 CLI 경로로 검증하여 생성이 한 번만 일어나고 성공이 CLI 오류로 변하지 않음을 확인한다. write/review는 fake Gateway 응답으로 확인하며 모델 턴은 실행하지 않는다.
+- 128개 보존 작업, 8개 실행 작업 상태에서 병렬 중복 요청과 추가 작업 거부가 미만료 결과를 변경하지 않는지 검증한다. 24시간 미만 결과의 조기 용량 eviction은 하지 않는다. 정리된 metadata 교체와 신규 접수는 같은 저장에 포함하며 저장 실패, 동시 접수, 기존 receipt tombstone 재시도를 검증한다.
+
+후속 로컬 검증 결과:
+
+| 명령 / 검사 | 결과 |
+|---|---|
+| `cargo test --locked --lib extension --no-fail-fast` | 37개 통과 |
+| `cargo test --locked --test architecture_boundaries` | 144개 통과. 원격 CI 실패 두 검사를 포함 |
+| `cargo test --locked --lib adapter::inbound::kernel_protocol::tests --no-fail-fast` | 32개 통과 |
+| `cargo test --locked --lib composition::kernel_host::simulation --no-fail-fast` | 24개 통과 |
+| `bash scripts/refresh_akra_kernel_spec.sh`, skill 및 Desktop 타입 생성 확인 | 통과. `ExtensionManifest.operations`만 추가. 기존 protocol_version/commands/queries/errors와 나머지 216개 정의 동일 |
+| `node scripts/agent-plan.mjs` | Full 요구 확인 |
+| `powershell -NoProfile -File scripts/check_native_pr.ps1 -Mode Full` | exit 0. Desktop 1,059개 통과·7개 skip, 타입/빌드, Windows native contracts, 전체 target/features clippy 통과 |
+| `cargo fmt --all`, `git diff --check` | 통과 |
+
+보존 한도가 찼을 때 새 작업이 거절될 수 있으나, 기존 결과는 24시간 만료 또는 명시적 비활성화 정리 전까지 보존한다. 이미 정리된 metadata만 신규 접수와 원자적으로 교체한다. 외부 Gateway와의 최종 원격 CI 상태는 PR에서 확인한다.

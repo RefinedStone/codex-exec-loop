@@ -144,7 +144,7 @@ export type ExtensionChanged = { readonly "extension": string; readonly "generat
 
 export type ExtensionLifecycle = ("disabled" | "enabled" | "disabling" | "error");
 
-export type ExtensionManifest = { readonly "actions": Array<string>; readonly "enabled": boolean; readonly "id": string; readonly "label": string; readonly "panel": string; readonly "permissions": Array<string>; readonly "scope": string; readonly "version": number; };
+export type ExtensionManifest = { readonly "actions": Array<string>; readonly "enabled": boolean; readonly "id": string; readonly "label": string; readonly "operations": Array<ExtensionOperation>; readonly "panel": string; readonly "permissions": Array<string>; readonly "scope": string; readonly "version": number; };
 
 export type ExtensionOperation = { readonly "input_schema": unknown; readonly "kind": ExtensionOperationKind; readonly "name": string; readonly "output_schema": unknown; readonly "progress_schema"?: unknown; };
 

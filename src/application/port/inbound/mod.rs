@@ -5,6 +5,7 @@
  */
 pub mod admin_debug_port;
 pub mod app_server_prompt_log_query_port;
+pub(crate) mod extension_host_port;
 // issue handoff port 는 이슈 인계에 쓸 공유본을 준다 (#2428).
 pub mod issue_automation_policy_query_port;
 pub mod issue_handoff_port;

@@ -60,37 +60,4 @@ impl ExtensionService {
         }
         Ok(())
     }
-    pub(super) fn make_job_room(&self, context: &ExtensionContext) -> Result<()> {
-        let oldest = {
-            let state = self.lock();
-            if state.durable.jobs.len() < MAX_JOBS {
-                return Ok(());
-            }
-            state
-                .durable
-                .jobs
-                .values()
-                .filter(|job| !job.state.active())
-                .min_by_key(|job| job.updated_at_ms)
-                .cloned()
-        };
-        let Some(oldest) = oldest else {
-            return Ok(());
-        };
-        self.cleanup_job(context, &oldest)?;
-        let mut state = self.lock();
-        if state
-            .durable
-            .jobs
-            .get(&oldest.id)
-            .is_some_and(|job| job.cleanup == ExtensionCleanupState::Complete)
-        {
-            let mut next = state.durable.clone();
-            next.jobs.remove(&oldest.id);
-            // Keep unexpired receipts as tombstones: a lost-response retry must not start new work.
-            self.persist(&mut state, next)?;
-            self.publish(&mut state, &oldest.extension, Some(oldest.id));
-        }
-        Ok(())
-    }
 }

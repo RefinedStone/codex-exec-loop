@@ -36,7 +36,8 @@ impl RepositoryExtensions {
     pub(crate) fn common(
         &self,
         kernel: &str,
-    ) -> Result<Arc<crate::application::service::kernel_extensions::ExtensionService>> {
+    ) -> Result<Arc<dyn crate::application::port::inbound::extension_host_port::ExtensionHostPort>>
+    {
         let mut common = self.common.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(host) = &*common {
             return Ok(host.clone());
@@ -95,6 +96,7 @@ impl RepositoryExtensions {
                 "review",
             ],
             permissions: &["git.read", "article.write", "model.run"],
+            operations: crate::domain::repository_extension::tech_blog::operations(),
         }])
     }
 
@@ -108,21 +110,15 @@ impl RepositoryExtensions {
         if extension != BLOG || version != 1 {
             bail!("지원하지 않는 확장 또는 버전입니다.");
         }
-        if !matches!(
-            action,
-            "catalog"
-                | "configure"
-                | "list"
-                | "open"
-                | "create"
-                | "save"
-                | "figure"
-                | "accept"
-                | "write"
-                | "review"
-        ) {
-            bail!("지원하지 않는 확장 명령입니다.");
-        }
+        // Publish and enforce the same machine contract before any legacy worker side effect.
+        let operation = crate::domain::repository_extension::tech_blog::operations()
+            .into_iter()
+            .find(|operation| operation.name == action)
+            .context("지원하지 않는 확장 명령입니다.")?;
+        anyhow::ensure!(
+            jsonschema::validator_for(&operation.input_schema)?.is_valid(&input),
+            "블로그 입력이 등록된 확장 스키마와 일치하지 않습니다."
+        );
         let workspace = self.workspace.to_string_lossy().into_owned();
         let runtime =
             tokio::task::spawn_blocking(move || production::delegation_runtime(&workspace))
