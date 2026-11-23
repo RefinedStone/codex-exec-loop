@@ -5,6 +5,8 @@ mod index;
 mod live;
 mod native;
 mod scanner;
+#[cfg(test)]
+mod volume_tests;
 mod worktree;
 
 use crate::application::port::outbound::storage_analysis_port::StorageAnalysisPort;
@@ -178,6 +180,13 @@ impl StorageAnalysisPort for NativeStorageAnalysisAdapter {
             .find(|v| v.id == request.volume_id && v.supported)
             .ok_or_else(|| anyhow!("storage_volume_not_found"))?;
         let root = PathBuf::from(&volume.root_path);
+        let root_volume_binding = native::RootVolumeBinding::SelectedVolume;
+        #[cfg(test)]
+        let root_volume_binding = if self.fixture_root.is_some() {
+            native::RootVolumeBinding::Fixture
+        } else {
+            root_volume_binding
+        };
         let dir = self.job_dir(&request.job_id)?;
         if dir.exists() {
             return Err(anyhow!("storage_job_already_exists"));
@@ -201,6 +210,7 @@ impl StorageAnalysisPort for NativeStorageAnalysisAdapter {
             &self.root,
             request,
             scanner::ScanControl {
+                root_volume_binding,
                 cancelled,
                 progress,
                 runtime_probe: self.runtime_probe.as_ref(),

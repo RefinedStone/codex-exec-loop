@@ -15,6 +15,102 @@ pub(super) struct NativeMetadata {
     // A directory handle disallows its replacement while enumerating it on Windows.
     pub _handle: Option<File>,
 }
+
+pub(super) enum RootVolumeBinding {
+    SelectedVolume,
+    // This mode is supplied only by the explicitly constructed test adapter.
+    #[cfg(test)]
+    Fixture,
+}
+
+pub(super) fn verify_root_volume(
+    root: &NativeMetadata,
+    requested_volume: &str,
+    binding: RootVolumeBinding,
+) -> Result<()> {
+    match binding {
+        #[cfg(test)]
+        RootVolumeBinding::Fixture => {
+            if requested_volume != "fixture-volume" {
+                bail!("storage_volume_unverified");
+            }
+            Ok(())
+        }
+        RootVolumeBinding::SelectedVolume => {
+            if volume_guid_root(requested_volume) != Some(requested_volume) {
+                bail!("storage_volume_unverified");
+            }
+            #[cfg(windows)]
+            {
+                // Bind the request to the same open object that supplied its serial/file ID.
+                // Re-querying a drive letter here would introduce a second replacement race.
+                let observed = root_volume_id(root)?;
+                if !observed.eq_ignore_ascii_case(requested_volume) {
+                    bail!("storage_volume_changed");
+                }
+                Ok(())
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = root;
+                bail!("storage_unsupported_os");
+            }
+        }
+    }
+}
+
+pub(super) fn volume_guid_root(path: &str) -> Option<&str> {
+    let root = path.get(..49)?;
+    if !root.get(..11)?.eq_ignore_ascii_case(r"\\?\Volume{")
+        || root.as_bytes()[47] != b'}'
+        || root.as_bytes()[48] != b'\\'
+    {
+        return None;
+    }
+    let guid = root.get(11..47)?;
+    if !guid.bytes().enumerate().all(|(i, byte)| {
+        if matches!(i, 8 | 13 | 18 | 23) {
+            byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    }) {
+        return None;
+    }
+    Some(root)
+}
+
+#[cfg(windows)]
+pub(super) fn root_volume_id(root: &NativeMetadata) -> Result<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_GUID,
+    };
+    let handle = root
+        ._handle
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("storage_volume_unverified"))?;
+    let mut name = vec![0_u16; 32768];
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            handle.as_raw_handle(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_GUID,
+        )
+    };
+    if length == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if length as usize >= name.len() {
+        bail!("storage_volume_unverified");
+    }
+    let path = String::from_utf16_lossy(&name[..length as usize]);
+    volume_guid_root(&path)
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("storage_volume_unverified"))
+}
+
 pub(super) fn list_volumes() -> Result<Vec<StorageVolume>> {
     #[cfg(windows)]
     {

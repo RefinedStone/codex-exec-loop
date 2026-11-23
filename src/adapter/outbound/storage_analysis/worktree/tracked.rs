@@ -68,7 +68,7 @@ fn compare(db: &StorageIndex, repository: i64, root: &Path, bytes: &[u8]) -> Res
     db.conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS git_tracked_paths(
              repository INTEGER NOT NULL,path_key TEXT NOT NULL,relative_path TEXT NOT NULL,
-             stage INTEGER NOT NULL,excluded INTEGER NOT NULL,
+             stage INTEGER NOT NULL,mode INTEGER NOT NULL,excluded INTEGER NOT NULL,
              PRIMARY KEY(repository,path_key,stage));
          CREATE INDEX IF NOT EXISTS git_tracked_excluded ON git_tracked_paths(repository,excluded);",
     )?;
@@ -127,12 +127,13 @@ fn compare(db: &StorageIndex, repository: i64, root: &Path, bytes: &[u8]) -> Res
         )?;
         ensure!(!ambiguous, "storage_git_index_ambiguous_case");
         tx.execute(
-            "INSERT INTO git_tracked_paths VALUES(?1,?2,?3,?4,?5)",
+            "INSERT INTO git_tracked_paths(repository,path_key,relative_path,stage,mode,excluded) VALUES(?1,?2,?3,?4,?5,?6)",
             params![
                 repository,
                 path_key,
                 relative,
                 stage,
+                mode,
                 i64::from(matches!(mode, 0o160000 | 0o040000))
             ],
         )?;
@@ -162,6 +163,63 @@ fn compare(db: &StorageIndex, repository: i64, root: &Path, bytes: &[u8]) -> Res
         untracked,
         conflicts,
     })
+}
+
+/// Join only registrations and paths already observed by this job. Deferring this pass until
+/// all candidates finish makes the relationship independent of candidate discovery order.
+pub(super) fn annotate_submodules(
+    db: &StorageIndex,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
+    use std::sync::atomic::Ordering;
+
+    let indexed: bool = db.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='git_tracked_paths')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !indexed {
+        return Ok(());
+    }
+    let mut registered = db.conn.prepare(
+        "SELECT t.repository,n.id,n.path,n.protection FROM git_tracked_paths t
+         JOIN git_registered_nodes parent ON parent.node=t.repository
+         JOIN git_observed_paths observed ON observed.path_key=t.path_key
+         JOIN nodes n ON n.id=observed.node AND n.kind='directory'
+         JOIN git_registered_nodes child ON child.node=n.id
+         WHERE t.stage=0 AND t.mode=?1 AND n.id<>t.repository",
+    )?;
+    for row in registered.query_map([0o160000u32], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })? {
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
+        let (parent, child, path, raw) = row?;
+        if !db.is_descendant(&format!("n{child}"), &format!("n{parent}"))?
+            || !matches!(git_metadata::runtime_node(db, Path::new(&path)), Ok(Some(id)) if id == child)
+        {
+            continue;
+        }
+        let mut reasons: Vec<StorageEvidence> = serde_json::from_str(&raw)?;
+        if reasons.iter().any(|reason| reason.code == "submodule") {
+            continue;
+        }
+        reasons.push(evidence(
+            "submodule",
+            "A verified parent cached index registers this observed repository path as a stage-zero gitlink",
+        ));
+        db.conn.execute(
+            "UPDATE nodes SET protection=?1 WHERE id=?2",
+            params![serde_json::to_string(&reasons)?, child],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

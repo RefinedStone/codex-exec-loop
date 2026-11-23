@@ -1,4 +1,4 @@
-//! Native boundary regressions for observed runtime roots and owned-file cleanup.
+//! Native boundary regressions for observed repository evidence and owned-file cleanup.
 use super::*;
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -113,5 +113,140 @@ fn storage_analysis_cleanup_preserves_file_created_after_validation() {
     assert!(
         dir.is_dir(),
         "the foreign file prevents removal of its parent"
+    );
+}
+
+fn fixture_git(root: &Path, args: &[&str]) {
+    let mut command = crate::git_subprocess::command(["-C"]);
+    command.arg(root).args(args);
+    let output = crate::subprocess::command_output_with_timeout(
+        &mut command,
+        "storage registration fixture Git",
+        std::time::Duration::from_secs(5),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+fn fixture_commit(root: &Path) {
+    fixture_git(root, &["add", "."]);
+    fixture_git(
+        root,
+        &[
+            "-c",
+            "user.name=Storage Fixture",
+            "-c",
+            "user.email=storage@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    );
+}
+
+#[test]
+fn storage_analysis_submodule_requires_registered_parent_gitlink() {
+    let fixture = Fixture::new();
+    let upstream = fixture.base.join("upstream-child");
+    fs::create_dir(&upstream).unwrap();
+    fixture_git(&upstream, &["init", "-q"]);
+    fs::write(upstream.join("tracked.txt"), "child fixture").unwrap();
+    fixture_commit(&upstream);
+
+    fixture_git(&fixture.source, &["init", "-q"]);
+    fs::write(fixture.source.join("tracked.txt"), "parent fixture").unwrap();
+    fixture_commit(&fixture.source);
+    fixture_git(
+        &fixture.source,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "--quiet",
+            upstream.to_str().unwrap(),
+            "registered-child",
+        ],
+    );
+    // This repository has a genuine .git pointer into .git/modules, but the parent
+    // index does not register its working directory as a gitlink.
+    let lookalike = fixture.source.join("unregistered-child");
+    let lookalike_metadata = fixture.source.join(".git/modules/unregistered-child");
+    fixture_git(
+        &fixture.source,
+        &[
+            "init",
+            "-q",
+            "--separate-git-dir",
+            lookalike_metadata.to_str().unwrap(),
+            lookalike.to_str().unwrap(),
+        ],
+    );
+    // A separate Git directory needs an explicit main-worktree registration.
+    // The checkout remains genuine, but no parent gitlink points to it.
+    fixture_git(
+        &lookalike,
+        &["config", "core.worktree", lookalike.to_str().unwrap()],
+    );
+    fs::write(lookalike.join("tracked.txt"), "unregistered fixture").unwrap();
+    fixture_commit(&lookalike);
+    let index_before = fs::read(fixture.source.join(".git/index")).unwrap();
+
+    let adapter = fixture.adapter();
+    scan(&adapter, "submodule-registration");
+    let db = index::StorageIndex::open(&fixture.index.join("submodule-registration")).unwrap();
+    for (name, expected) in [("registered-child", true), ("unregistered-child", false)] {
+        let id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM nodes WHERE parent=1 AND name=?1 AND kind='directory'",
+                [name],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let node = adapter
+            .get_node("submodule-registration", &format!("n{id}"), None)
+            .unwrap();
+        assert!(
+            node.protection
+                .iter()
+                .any(|reason| reason.code == "main_checkout"),
+            "{name} must pass Git metadata and worktree-registration verification: {:?}",
+            node.protection
+        );
+        assert_eq!(
+            node.protection
+                .iter()
+                .any(|reason| reason.code == "submodule"),
+            expected,
+            "{name}: {:?}",
+            node.protection
+        );
+        let gitlinks: u64 = db
+            .conn
+            .query_row(
+                "SELECT count(*) FROM git_tracked_paths WHERE repository=1 AND relative_path=?1 AND stage=0 AND mode=?2",
+                rusqlite::params![name,0o160000u32],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(gitlinks, u64::from(expected));
+    }
+    assert_eq!(
+        fs::read(fixture.source.join(".git/index")).unwrap(),
+        index_before,
+        "observation must preserve the parent index"
+    );
+    let root = adapter
+        .get_node("submodule-registration", "n1", None)
+        .unwrap();
+    assert!(
+        !root
+            .protection
+            .iter()
+            .any(|reason| reason.code == "submodule")
     );
 }

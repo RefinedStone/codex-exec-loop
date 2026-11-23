@@ -21,6 +21,7 @@ enum Event {
 }
 
 pub(super) struct ScanControl<'a> {
+    pub root_volume_binding: native::RootVolumeBinding,
     pub cancelled: &'a AtomicBool,
     pub progress: &'a (dyn Fn(ScanProgress) + Sync),
     pub runtime_probe: Option<&'a super::StorageRuntimeProbe>,
@@ -34,6 +35,7 @@ pub(super) fn scan(
     control: ScanControl<'_>,
 ) -> Result<()> {
     let ScanControl {
+        root_volume_binding,
         cancelled,
         progress,
         runtime_probe,
@@ -45,6 +47,7 @@ pub(super) fn scan(
     if root_meta.issue.is_some() || !root_meta.directory {
         return Err(anyhow!("storage_unverified_root"));
     }
+    native::verify_root_volume(&root_meta, &request.volume_id, root_volume_binding)?;
     db.conn.execute(
         "UPDATE nodes SET object_key=?1 WHERE id=1",
         [root_meta.identity.clone()],
