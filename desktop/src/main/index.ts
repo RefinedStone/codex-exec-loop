@@ -37,10 +37,12 @@ import { executePullRequest, executePush, planPullRequest, planPush } from "./gi
 import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks";
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
 import { readGitHubSummary, readProject, readReviewPrompt } from "./githubService";
-import { JiraService } from "./jiraService";
+import { ProviderCredentialMigration } from "./providerCredentialMigration";
+import { LegacyCredentialFiles } from "./providerLegacy";
+import { createProviderMigrationSource } from "./providerMigrationSource";
 import { openIssueAutomationPolicyFile } from "./issueAutomationPolicyFile";
 import { IssueConfirmationQueue, IssueConfirmationService } from "./issueConfirmationService";
-import { LinearService, isLinearIssueUrl } from "./linearService";
+import { isLinearIssueUrl } from "../shared/providerLinks";
 import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
 import { VaultRestoreWindows } from "./vaultRestoreWindow";
@@ -53,6 +55,11 @@ if (process.env.AKRA_DESKTOP_USER_DATA) {
 }
 
 const connections = new Map<number, GatewayConnection>();
+const providerOperations = new Map<number, Set<AbortController>>();
+function invalidateProviderOperations(owner: number): void {
+  for (const operation of providerOperations.get(owner) ?? []) operation.abort();
+  providerOperations.delete(owner);
+}
 const issueConfirmations = new Map<number, IssueConfirmationService>();
 const issueConfirmationQueue = new IssueConfirmationQueue();
 /** 원격 호스트(plan 25)의 접속이다. 키는 `창 id:호스트 id` 이다. renderer 가 열라고 한 것만 있다. */
@@ -79,9 +86,13 @@ const browserAgents = new BrowserAgentService({
   },
 }, (callbacks) => new BrowserAgentTransport({ command: resolveGatewayExecutable(repositoryRoot()), ...callbacks }));
 const browserSettingsPath = () => join(app.getPath("userData"), "browser-settings.json");
-// userData 는 위에서 정한 뒤이다. 토큰은 safeStorage 로 암호화한다.
-const jira = new JiraService(app.getPath("userData"), safeStorage);
-const linear = new LinearService(app.getPath("userData"), safeStorage);
+// Legacy ciphertext is read only by main after a private helper prepares its exact Gateway profile.
+const providerCredentials = new ProviderCredentialMigration({
+  files: new LegacyCredentialFiles(app.getPath("userData")),
+  secrets: safeStorage,
+  source: createProviderMigrationSource({ executable: () => resolveGatewayExecutable(repositoryRoot()) }),
+  openExternal: url => shell.openExternal(url),
+});
 // 스킬 출처 장부, 스냅샷, 복구 저널은 userData 에 둔다 (#2383). 원본은 인증 없이 공개 GitHub 에서만 읽는다.
 const skills = new SkillService({
   dataDir: join(app.getPath("userData"), "skill-sources"),
@@ -233,7 +244,10 @@ function attachGatewayConnection(contents: WebContents, host?: string): void {
       }
     },
     onState: (state) => {
-      if (!host) issueConfirmations.get(contents.id)?.invalidate();
+      if (!host) {
+        issueConfirmations.get(contents.id)?.invalidate();
+        invalidateProviderOperations(contents.id);
+      }
       if (!contents.isDestroyed()) {
         contents.send(stateChannel, ...prefix, state);
       }
@@ -422,11 +436,13 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
   window.on("close", () => {
     issueConfirmations.get(contentsId)?.invalidate();
     vaultRestores.lockOpenedBy(contentsId, "window_closed");
+    invalidateProviderOperations(contentsId);
   });
   contents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
       issueConfirmations.get(contentsId)?.invalidate();
       vaultRestores.lockOpenedBy(contentsId, "renderer_changed");
+  invalidateProviderOperations(contentsId);
     }
   });
   contents.once("destroyed", () => {
@@ -461,6 +477,7 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
  * views must be released by owner before attaching the replacement renderer. */
 function closeRendererResources(contentsId: number): void {
   vaultRestores.lockOpenedBy(contentsId, "renderer_changed");
+  invalidateProviderOperations(contentsId);
   issueConfirmations.get(contentsId)?.invalidate();
   issueConfirmations.delete(contentsId);
   terminals.closeAllOf(contentsId);
@@ -664,45 +681,32 @@ ipcMain.handle(IPC_CHANNELS.githubSummary, () => readGitHubSummary());
 ipcMain.handle(IPC_CHANNELS.githubReviewPrompt, (_event, url: unknown) => readReviewPrompt(url));
 ipcMain.handle(IPC_CHANNELS.githubProject, (_event, project: unknown) => readProject(project));
 ipcMain.handle(IPC_CHANNELS.githubRepository, (_event, cwd: unknown) => readGitHubRepository(cwd));
-ipcMain.handle(IPC_CHANNELS.jiraStatus, () => jira.status());
-async function changeJira(action: () => Promise<unknown>): Promise<unknown> {
-  // Typed lifecycle notification only. Gateway JSON-RPC stays in the renderer.
-  const notify = () => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send(IPC_CHANNELS.jiraChanged);
-    }
-  };
-  try {
-    const pending = action();
-    notify();
-    return await pending;
-  } finally {
-    notify();
-  }
+function requireProviderSender(event: IpcMainInvokeEvent): number {
+  if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame ||
+    !connections.has(event.sender.id)) throw new Error("연결 요청을 보낸 앱 창을 확인할 수 없습니다.");
+  return event.sender.id;
 }
-ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => changeJira(() => jira.connect(request)));
-ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => changeJira(() => jira.disconnect()));
-ipcMain.handle(IPC_CHANNELS.jiraCurrentVersion, (_event, request: unknown) => jira.currentVersion(request));
-ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
-ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
-function requireLinearSender(event: IpcMainInvokeEvent): void {
-  if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame)
-    throw new Error("Linear 요청을 보낸 창을 확인할 수 없습니다.");
+async function providerAction<T>(event: IpcMainInvokeEvent, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const owner = requireProviderSender(event);
+  const controller = new AbortController();
+  const operations = providerOperations.get(owner) ?? new Set<AbortController>();
+  providerOperations.set(owner, operations);
+  operations.add(controller);
+  try { return await work(controller.signal); }
+  finally { operations.delete(controller); if (operations.size === 0 && providerOperations.get(owner) === operations) providerOperations.delete(owner); }
 }
-ipcMain.handle(IPC_CHANNELS.linearStatus, (event) => { requireLinearSender(event); return linear.status(); });
-ipcMain.handle(IPC_CHANNELS.linearConnect, (event, token: unknown) => { requireLinearSender(event); return linear.connect(token); });
-ipcMain.handle(IPC_CHANNELS.linearDisconnect, (event) => { requireLinearSender(event); return linear.disconnect(); });
-ipcMain.handle(IPC_CHANNELS.linearSummary, (event, filters: unknown, refresh: unknown) => {
-  requireLinearSender(event);
-  if (typeof refresh !== "boolean") throw new Error("Linear 새로 고침 요청이 올바르지 않습니다.");
-  return linear.summary(filters, refresh);
+ipcMain.handle(IPC_CHANNELS.providerLegacyStatus, (event, provider: unknown) => {
+  requireProviderSender(event);
+  return providerCredentials.legacyStatus(provider);
 });
-ipcMain.handle(IPC_CHANNELS.linearIssuePrompt, (event, id: unknown) => { requireLinearSender(event); return linear.issuePrompt(id); });
-ipcMain.handle(IPC_CHANNELS.linearOpenExternal, async (event, url: unknown) => {
-  requireLinearSender(event);
-  if (typeof url !== "string" || !isLinearIssueUrl(url)) throw new Error("Linear 이슈 주소만 열 수 있습니다.");
-  await shell.openExternal(url);
-});
+ipcMain.handle(IPC_CHANNELS.providerMigrateLegacy, (event, request: unknown) =>
+  providerAction(event, signal => providerCredentials.migrateLegacy(request, signal)));
+ipcMain.handle(IPC_CHANNELS.providerPrepareDisconnect, (event, request: unknown) =>
+  providerAction(event, signal => providerCredentials.prepareLegacyDisconnect(request, signal)));
+ipcMain.handle(IPC_CHANNELS.providerCleanupLegacy, (event, request: unknown) =>
+  providerAction(event, signal => providerCredentials.cleanupLegacy(request, signal)));
+ipcMain.handle(IPC_CHANNELS.providerOpenExternal, (event, request: unknown) =>
+  providerAction(event, signal => providerCredentials.openExternal(request, signal)));
 // 스킬 파일은 main 만 쓴다 (#2383). 적용과 롤백은 main 이 경로와 커밋을 보여 주고 확인한다. renderer 가 확인을 건너뛸 수 없다.
 function requireSkillSender(event: IpcMainInvokeEvent): void {
   if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) throw new Error("스킬 요청을 보낸 창을 확인할 수 없습니다.");
@@ -754,16 +758,14 @@ ipcMain.handle(IPC_CHANNELS.dotsSetEnabled, (_event, enabled: unknown) => {
   setDotsCloudEnabled(enabled === true);
   return isDotsCloudEnabled();
 });
-// renderer 가 보낸 주소는 github.com, Notion, 연결된 Jira 사이트의 티켓만 기본 브라우저로 연다.
+// Jira 업무 패널의 링크는 별도의 Gateway 검증 경로를 쓴다.
 ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
   if (typeof url !== "string") return;
   if (url.startsWith("https://github.com/") || isNotionPageUrl(url) || isLinearIssueUrl(url)) {
     void shell.openExternal(url);
     return;
   }
-  void jira.isSiteUrl(url).then(async (allowed) => {
-    if (allowed) await shell.openExternal(url);
-  });
+
 });
 
 ipcMain.handle(IPC_CHANNELS.appFocused, () => BrowserWindow.getFocusedWindow() !== null);

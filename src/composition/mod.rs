@@ -30,3 +30,5 @@ pub(crate) mod repository_observer;
 pub(crate) mod storage_extension;
 pub(crate) mod task_evidence;
 mod task_evidence_outbox;
+
+pub(crate) mod provider_credentials;

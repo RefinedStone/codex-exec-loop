@@ -281,6 +281,15 @@ jobs:
             'composition::issue_collection::restart_registry_tests::' \
             'composition::repository_kernel::restart_tests::' \
             'adapter::inbound::gateway::restart::tests::' \
+            'provider_credentials' \
+            'provider_work' \
+            'provider_http' \
+            'provider_key_store' \
+            'native_credential_prompt' \
+            'provider_credential_prompt' \
+            'provider_credential_migration' \
+            'private_ipc::credential' \
+            'private_ipc::owner' \
             'stable_user_data_root::tests::' \
             'sqlite_issue_automation_store::private_store::tests::' \
             'adapter::outbound::vault_key_store::' \

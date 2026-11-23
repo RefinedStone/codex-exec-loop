@@ -367,12 +367,22 @@ pub(crate) fn open_or_create_strict(
     files: DatabaseFiles,
     synchronous: Synchronous,
 ) -> Result<PrivateConnection> {
+    open_or_create_strict_with_busy_timeout(runtime, files, synchronous, Duration::from_secs(5))
+}
+
+/// A profile owner lock must reject a live owner without waiting or repairing its files.
+pub(crate) fn open_or_create_strict_with_busy_timeout(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+    busy_timeout: Duration,
+) -> Result<PrivateConnection> {
     open_database_with_mode(
         runtime,
         files,
         synchronous,
         true,
-        Duration::from_secs(5),
+        busy_timeout,
         DatabaseOpenMode::StrictCreate,
     )
 }

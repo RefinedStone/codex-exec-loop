@@ -36,3 +36,9 @@ pub(crate) mod tech_blog_worker;
 pub mod telegram;
 
 pub mod storage_analysis;
+
+pub(crate) mod native_credential_prompt;
+
+pub mod provider_key_store;
+
+pub(crate) mod provider_http;

@@ -1,4 +1,4 @@
-export type LinearStatus = { connected: false } | { connected: true; viewerName: string };
+import type { ProviderConnectionBridge } from "./providerCredentials";
 
 export interface LinearIssue {
   readonly id: string;
@@ -28,10 +28,7 @@ export interface LinearSummary {
   readonly limit: 30;
 }
 
-export interface LinearBridge {
-  status(): Promise<LinearStatus>;
-  connect(token: string): Promise<LinearStatus>;
-  disconnect(): Promise<LinearStatus>;
+export interface LinearBridge extends ProviderConnectionBridge {
   summary(filters: LinearFilters, refresh: boolean): Promise<LinearSummary>;
   issuePrompt(id: string): Promise<string>;
   openExternal(url: string): Promise<void>;

@@ -30,7 +30,8 @@ struct MethodEnvelope {
 
 pub(super) fn route_client_text(text: &str) -> ClientTextRoute {
     // 대부분의 메시지는 `akra/` 를 포함하지 않으므로 JSON 을 해석하지 않고 바로 전달한다.
-    if !text.contains(AKRA_METHOD_PREFIX) {
+    // Escaped JSON method names still belong to the same credential/recording boundary.
+    if !text.contains(AKRA_METHOD_PREFIX) && !text.contains('\\') {
         return ClientTextRoute::Forward;
     }
     let Ok(envelope) = serde_json::from_str::<MethodEnvelope>(text) else {
