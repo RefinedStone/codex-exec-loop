@@ -11,6 +11,8 @@ export const KERNEL_METHOD = {
   "command_confirmed": "akra/kernel/command_confirmed",
   "query": "akra/kernel/query",
   "event": "akra/kernel/event",
+  "extensions/attach": "akra/kernel/extensions/attach",
+  "extensions/detach": "akra/kernel/extensions/detach",
   "extensions/list": "akra/kernel/extensions/list",
   "extensions/call": "akra/kernel/extensions/call",
   "extensions/changed": "akra/kernel/extensions/changed",
@@ -128,13 +130,29 @@ export type Evidence = { readonly "at": number; readonly "delivery": Delivery; r
 
 export type EvidenceSource = ("browser" | "stream" | "callback" | "coordinator");
 
-export type ExtensionCall = { readonly "action": string; readonly "extension": string; readonly "input": unknown; readonly "kernel": string; readonly "version": number; };
+export type ExtensionAttachRequest = { readonly "client_name": string; readonly "scope": ExtensionScope; };
 
-export type ExtensionChanged = { readonly "extension": string; readonly "kernel": string; };
+export type ExtensionAttachResponse = { readonly "generation": string; readonly "kernel": string; readonly "scope": ExtensionScope; };
+
+export type ExtensionCall = { readonly "action": string; readonly "extension": string; readonly "idempotency_key"?: (string | null); readonly "input": unknown; readonly "kernel": string; readonly "version": number; };
+
+export type ExtensionCatalogEntry = { readonly "actions": Array<string>; readonly "api_version": number; readonly "compatibility_reason"?: (string | null); readonly "compatible": boolean; readonly "desired_enabled": boolean; readonly "enabled": boolean; readonly "error"?: (string | null); readonly "generation": string; readonly "id": string; readonly "label": string; readonly "lifecycle": ExtensionLifecycle; readonly "operations": Array<ExtensionOperation>; readonly "panel": string; readonly "permissions": Array<string>; readonly "registration_errors": Array<string>; readonly "revision": number; readonly "scope": ExtensionScope; readonly "sequence": number; readonly "version": number; };
+
+export type ExtensionCatalogItem = (ExtensionCatalogEntry | ExtensionManifest);
+
+export type ExtensionChanged = { readonly "extension": string; readonly "generation"?: (string | null); readonly "job_id"?: (string | null); readonly "kernel": string; readonly "resync"?: (boolean | null); readonly "revision"?: (number | null); readonly "sequence"?: (number | null); };
+
+export type ExtensionLifecycle = ("disabled" | "enabled" | "disabling" | "error");
 
 export type ExtensionManifest = { readonly "actions": Array<string>; readonly "enabled": boolean; readonly "id": string; readonly "label": string; readonly "panel": string; readonly "permissions": Array<string>; readonly "scope": string; readonly "version": number; };
 
-export type ExtensionScope = { readonly "kernel": string; };
+export type ExtensionOperation = { readonly "input_schema": unknown; readonly "kind": ExtensionOperationKind; readonly "name": string; readonly "output_schema": unknown; readonly "progress_schema"?: unknown; };
+
+export type ExtensionOperationKind = ("query" | "command" | "job");
+
+export type ExtensionScope = ("repository" | "local_user");
+
+export type ExtensionScope2 = { readonly "kernel": string; };
 
 export type Fallback = { readonly "at": number; readonly "from": string; readonly "reason": EndReason; readonly "to": string; };
 

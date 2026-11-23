@@ -124,6 +124,7 @@ pub(crate) mod delegation_store_port;
 pub mod issue_creation_provenance_port;
 pub mod issue_form_repository_port;
 
+pub(crate) mod extension_state_store_port;
 pub mod issue_work_steering_port;
 pub(crate) mod vault_native_confirmation_port;
 pub(crate) mod vault_restore_workspace_port;

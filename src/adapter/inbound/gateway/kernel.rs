@@ -8,6 +8,8 @@
 //! `detach` 와 다시 붙기는 그 스레드가 끝날 때까지 기다린 뒤 답한다. 그래서 떼어 낸다는 답 뒤에는 이벤트가 오지
 //! 않고, 다시 붙어도 이벤트가 두 번 오지 않는다. 커널은 클라이언트가 모두 떠나도 남는다 (§3.4).
 
+mod extensions;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -92,6 +94,7 @@ impl KernelRequests {
             kernels,
             outbox,
             attached: None,
+            local_extension: None,
             connection_id: random_id(16).unwrap_or_default(),
             confirmation: None,
             delegations,
@@ -153,6 +156,7 @@ struct KernelSession {
     kernels: Arc<RepositoryKernelRegistry>,
     outbox: mpsc::Sender<Message>,
     attached: Option<AttachedKernel>,
+    local_extension: Option<extensions::AttachedExtension>,
     connection_id: String,
     confirmation: Option<ConfirmationRegistration>,
     delegations: Arc<Delegations>,
@@ -248,68 +252,6 @@ impl KernelSession {
             }),
         };
         response_text(id, result)
-    }
-
-    async fn extension(
-        &mut self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, KernelProtocolError> {
-        use crate::adapter::inbound::kernel_protocol::{
-            METHOD_EXTENSION_CHANGED, METHOD_EXTENSION_LIST,
-            extensions::{ExtensionCall, ExtensionChanged, ExtensionScope},
-        };
-        let (kernel, request) = if method == METHOD_EXTENSION_LIST {
-            let scope: ExtensionScope = parse_params(params)?;
-            (scope.kernel, None)
-        } else {
-            let call: ExtensionCall = parse_params(params)?;
-            (call.kernel.clone(), Some(call))
-        };
-        let attached = self.attached()?;
-        if attached.kernel != kernel {
-            return Err(unavailable("저장소 연결이 바뀌었습니다.".into()));
-        }
-        let host = self
-            .kernels
-            .extensions(&attached.kernel)
-            .map_err(|e| unavailable(e.to_string()))?;
-        if let Some(attached) = &mut self.attached
-            && attached.extension_events.is_none()
-        {
-            let mut events = host.subscribe();
-            let outbox = self.outbox.clone();
-            let change = Message::text(
-                json!({"jsonrpc":"2.0", "method":METHOD_EXTENSION_CHANGED,
-                "params":ExtensionChanged{kernel:attached.kernel.clone(), extension:"akra.tech-blog".into()}})
-                .to_string(),
-            );
-            attached.extension_events = Some(tokio::spawn(async move {
-                while !matches!(
-                    events.recv().await,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed)
-                ) {
-                    if outbox.send(change.clone()).await.is_err() {
-                        break;
-                    }
-                }
-            }));
-        }
-        let Some(request) = request else {
-            return to_result(
-                host.catalog()
-                    .await
-                    .map_err(|e| unavailable(format!("{e:#}")))?,
-            );
-        };
-        host.call(
-            &request.extension,
-            request.version,
-            &request.action,
-            request.input,
-        )
-        .await
-        .map_err(|e| unavailable(format!("{e:#}")))
     }
 
     async fn attach(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
@@ -1226,6 +1168,7 @@ mod tests {
                 confirmation: None,
                 delegations: Default::default(),
                 attached: Some(attached),
+                local_extension: None,
             };
             let response = session
                 .command(json!({
@@ -1282,6 +1225,7 @@ mod tests {
             connection_id: "c".repeat(32),
             confirmation: None,
             delegations: Default::default(),
+            local_extension: None,
             attached: Some(AttachedKernel {
                 kernel: "test".into(),
                 extension_events: None,
