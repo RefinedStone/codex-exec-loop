@@ -6,6 +6,7 @@ import { formatBytes, formatRatio, ratioWidth } from "./storageNumbers";
 
 export function StorageTree({ model, focusRequest }: { model: StorageExplorer; focusRequest: number }) {
   const elements = useRef(new Map<string, HTMLDivElement>());
+  const appliedFocusRequest = useRef(0);
   const rows = useMemo(() => {
     const result: { node: StorageNode; depth: number }[] = [];
     const visited = new Set<string>();
@@ -22,7 +23,9 @@ export function StorageTree({ model, focusRequest }: { model: StorageExplorer; f
   }, [model.nodes, model.pages, model.expanded, model.snapshot]);
   const focus = (id: string) => { model.select(id); elements.current.get(id)?.focus(); };
   useEffect(() => {
-    if (focusRequest && model.selectedId) elements.current.get(model.selectedId)?.focus();
+    if (!focusRequest || appliedFocusRequest.current === focusRequest || !model.selectedId) return;
+    const element = elements.current.get(model.selectedId);
+    if (element) { appliedFocusRequest.current = focusRequest; element.focus(); }
   }, [focusRequest, model.selectedId, rows]);
   const keyDown = (event: KeyboardEvent, node: StorageNode, index: number) => {
     if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;

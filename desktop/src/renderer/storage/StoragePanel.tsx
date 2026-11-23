@@ -128,7 +128,7 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
     handledEvidence.current = evidence.id;
     clearStorageEvidence(evidence.id);
     const life = model.scope.current, interaction = model.interaction.current, basis = model.snapshot;
-    const valid = () => model.scope.current === life && model.interaction.current === interaction
+    const valid = () => handledEvidence.current === evidence.id && model.scope.current === life && model.interaction.current === interaction
       && model.currentSnapshot.current?.id === basis.id && model.currentSnapshot.current.revision === basis.revision
       && useUiStore.getState().navigationRevision === evidence.navigationRevision
       && shareLifetime.current.threadId === evidence.threadId && shareLifetime.current.scopeKey === scopeKey;
