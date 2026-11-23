@@ -10,20 +10,20 @@ async fn local_extension_attachment_does_not_replace_repository_and_two_clients_
     let mut second = connect_kernel_client(kernels.clone()).await;
     let repository =
         attach_kernel(&mut first, "repo", &folder.workspace()).await["result"]["kernel"].clone();
-    let local = kernel_request(
-        &mut first,
-        "local",
-        "akra/kernel/extensions/attach",
-        json!({"scope":"local_user","client_name":"local"}),
-    )
-    .await;
-    let other = kernel_request(
-        &mut second,
-        "local",
-        "akra/kernel/extensions/attach",
-        json!({"scope":"local_user","client_name":"other"}),
-    )
-    .await;
+    let (local, other) = tokio::join!(
+        kernel_request(
+            &mut first,
+            "local",
+            "akra/kernel/extensions/attach",
+            json!({"scope":"local_user","client_name":"local"}),
+        ),
+        kernel_request(
+            &mut second,
+            "local",
+            "akra/kernel/extensions/attach",
+            json!({"scope":"local_user","client_name":"other"}),
+        )
+    );
     assert_eq!(
         local["result"]["kernel"], other["result"]["kernel"],
         "{local} {other}"
@@ -123,5 +123,132 @@ async fn machine_cli_transport_uses_the_catalog_schema_and_same_host() {
     .await;
     assert!(invalid.is_err());
     let _ = client.close(None).await;
+    kernels.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn machine_cli_and_desktop_receive_the_same_extension_rejections() {
+    use crate::domain::kernel_extension::ExtensionCallRejection;
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut desktop = connect_kernel_client(kernels.clone()).await;
+    let mut cli = connect_kernel_client(kernels.clone()).await;
+    let attached = kernel_request(
+        &mut desktop,
+        "attach",
+        "akra/kernel/extensions/attach",
+        json!({"scope":"local_user","client_name":"rejection-comparison"}),
+    )
+    .await;
+    let host = attached["result"]["kernel"].clone();
+    for (name, extension, version, input) in [
+        ("disabled", "akra.example", 1, json!({"text":"hello"})),
+        ("missing", "akra.missing", 1, json!({"text":"hello"})),
+        ("version", "akra.example", 2, json!({"text":"hello"})),
+        ("invalid", "akra.example", 1, json!({"text":9})),
+    ] {
+        let call = json!({"extension":extension,"version":version,"action":"echo","input":input});
+        let cli_error = extension_gateway_client::request_over_socket(
+            &mut cli,
+            "local_user",
+            "",
+            Some(call.clone()),
+        )
+        .await
+        .unwrap_err();
+        let mut params = call;
+        params["kernel"] = host.clone();
+        let desktop_reply =
+            kernel_request(&mut desktop, name, "akra/kernel/extensions/call", params).await;
+        let cli_error = cli_error
+            .downcast_ref::<ExtensionCallRejection>()
+            .expect("typed Gateway rejection");
+        assert_eq!(
+            serde_json::to_value(cli_error).unwrap(),
+            desktop_reply["error"],
+            "{name}"
+        );
+    }
+    let _ = desktop.close(None).await;
+    let _ = cli.close(None).await;
+    kernels.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn local_job_survives_repository_switch_detach_and_client_reconnect() {
+    let a = KernelTestFolder::new(&format!("extension-a-{:032x}", rand::random::<u128>()));
+    let b = KernelTestFolder::new(&format!("extension-b-{:032x}", rand::random::<u128>()));
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut client = connect_kernel_client(kernels.clone()).await;
+    let repository_a =
+        attach_kernel(&mut client, "a", &a.workspace()).await["result"]["kernel"].clone();
+    let local = kernel_request(
+        &mut client,
+        "local",
+        "akra/kernel/extensions/attach",
+        json!({"scope":"local_user","client_name":"scope-lifetime"}),
+    )
+    .await["result"]["kernel"]
+        .clone();
+    let enabled = kernel_request(
+        &mut client,
+        "enable",
+        "akra/kernel/extensions/call",
+        json!({
+            "kernel":local,"extension":"akra.example","version":1,"action":"configure",
+            "input":{"enabled":true,"expected_revision":0}
+        }),
+    )
+    .await;
+    assert_eq!(enabled["result"]["enabled"], true, "{enabled}");
+    let job = kernel_request(
+        &mut client,
+        "start",
+        "akra/kernel/extensions/call",
+        json!({
+            "kernel":local,"extension":"akra.example","version":1,"action":"count",
+            "input":{"steps":100,"delay_ms":25},"idempotency_key":"scope-switch"
+        }),
+    )
+    .await;
+    let id = job["result"]["id"]
+        .as_str()
+        .expect("durable job ID")
+        .to_owned();
+    let repository_b =
+        attach_kernel(&mut client, "b", &b.workspace()).await["result"]["kernel"].clone();
+    assert_ne!(repository_a, repository_b);
+    let observed = kernel_request(&mut client,"job","akra/kernel/extensions/call",json!({
+        "kernel":local,"extension":"akra.example","version":1,"action":"job","input":{"job_id":id}
+    })).await;
+    assert_eq!(observed["result"]["id"], id, "{observed}");
+    let detached = kernel_request(
+        &mut client,
+        "detach",
+        "akra/kernel/extensions/detach",
+        json!({"kernel":local}),
+    )
+    .await;
+    assert!(detached["result"].is_object(), "{detached}");
+    let _ = client.close(None).await;
+    let mut reconnected = connect_kernel_client(kernels.clone()).await;
+    let attached = kernel_request(
+        &mut reconnected,
+        "local",
+        "akra/kernel/extensions/attach",
+        json!({"scope":"local_user","client_name":"reconnected"}),
+    )
+    .await;
+    assert_eq!(attached["result"]["kernel"], local);
+    let observed = kernel_request(&mut reconnected,"job","akra/kernel/extensions/call",json!({
+        "kernel":local,"extension":"akra.example","version":1,"action":"job","input":{"job_id":id}
+    })).await;
+    assert_eq!(observed["result"]["id"], id, "{observed}");
+    assert!(matches!(
+        observed["result"]["state"].as_str(),
+        Some("queued" | "running" | "completed")
+    ));
+    let _ = reconnected.close(None).await;
     kernels.shutdown();
 }

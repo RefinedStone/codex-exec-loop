@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 mod example;
+#[cfg(test)]
+mod tests;
 
 pub(crate) fn registrations(scope: ExtensionScope) -> Vec<ExtensionRegistration> {
     vec![example::registration(scope)]
