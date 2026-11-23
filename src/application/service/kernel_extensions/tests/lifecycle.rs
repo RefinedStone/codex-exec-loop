@@ -179,3 +179,83 @@ fn cleanup_failure_stays_visible_and_disable_can_retry_before_reenable() {
     enable(&host);
     assert!(host.catalog()[0].enabled);
 }
+
+#[test]
+fn retention_cleanup_racing_disable_finishes_once_and_allows_reenable() {
+    let handler = Arc::new(TestHandler::default());
+    handler.release.store(true, Ordering::Release);
+    let store = Arc::new(MemoryStore::default());
+    let host = service(store.clone(), handler.clone());
+    enable(&host);
+    let answer = call(&host, "work", json!({"text":"retained"}), Some("retained")).unwrap();
+    let id = answer["id"].as_str().unwrap();
+    wait_until(|| {
+        host.job("akra.test", id).unwrap().state == ExtensionJobState::Completed
+            && Arc::strong_count(&host) == 1
+    });
+    {
+        let mut state = host.lock();
+        let mut next = state.durable.clone();
+        next.jobs.get_mut(id).unwrap().result_expires_at_ms = 1;
+        host.persist(&mut state, next).unwrap();
+    }
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    *handler.cleanup_barriers.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let sweeping = host.clone();
+    let sweep = std::thread::spawn(move || sweeping.reap_expired());
+    wait_until(|| handler.cleanup_entered.load(Ordering::Acquire) == 1);
+    entered.wait();
+
+    struct ReleaseCleanup(Arc<std::sync::Barrier>);
+    impl Drop for ReleaseCleanup {
+        fn drop(&mut self) {
+            self.0.wait();
+        }
+    }
+    let release_cleanup = ReleaseCleanup(release);
+    let revision = host.catalog()[0].revision;
+    call(
+        &host,
+        "configure",
+        json!({"enabled":false,"expected_revision":revision}),
+        None,
+    )
+    .unwrap();
+    // The main thread and blocked sweep are the only owners once the disable
+    // worker has observed the existing cleanup claim and returned. It must not
+    // finish later and hide the missing sweep finalization in this regression.
+    wait_until(|| Arc::strong_count(&host) == 2);
+    assert_eq!(host.catalog()[0].lifecycle, ExtensionLifecycle::Disabling);
+    assert_eq!(handler.cleanup_entered.load(Ordering::Acquire), 1);
+    assert!(
+        call(
+            &host,
+            "configure",
+            json!({"enabled":true,"expected_revision":revision+1}),
+            None,
+        )
+        .is_err()
+    );
+    drop(release_cleanup);
+    sweep.join().unwrap().unwrap();
+
+    assert_eq!(host.catalog()[0].lifecycle, ExtensionLifecycle::Disabled);
+    assert_eq!(
+        store.load().unwrap().activations["akra.test"].lifecycle,
+        ExtensionLifecycle::Disabled
+    );
+    assert_eq!(
+        host.job("akra.test", id).unwrap().cleanup,
+        ExtensionCleanupState::Complete
+    );
+    assert!(host.lock().cleanup_claims.is_empty());
+    host.reap_expired().unwrap();
+    assert_eq!(handler.cleanup_entered.load(Ordering::Acquire), 1);
+    assert_eq!(handler.cleanups.lock().unwrap().len(), 1);
+    enable(&host);
+    assert_eq!(
+        call(&host, "echo", json!({"text":"enabled again"}), None).unwrap()["text"],
+        "enabled again"
+    );
+}

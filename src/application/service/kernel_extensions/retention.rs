@@ -44,6 +44,9 @@ impl ExtensionService {
         for job in expired {
             if self.registry.get(&job.extension).is_ok() {
                 self.cleanup_job(&context, &job)?;
+                // Disable may have returned while this sweep owned the cleanup claim.
+                // Re-evaluate only the terminal condition, without retrying any callback.
+                self.finish_disable_if_clean(&job.extension)?;
             }
         }
         let mut state = self.lock();

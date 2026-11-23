@@ -144,4 +144,67 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn extension_cli_keeps_explicit_blog_version_two_in_the_request_body() {
+        for (action, input) in [
+            ("generate", json!({"commits":["a".repeat(40)]})),
+            ("seen", json!({"id":"article"})),
+            (
+                "revise",
+                json!({"id":"article","revision":2,"instruction":"근거를 설명해 주세요"}),
+            ),
+            ("review", json!({"id":"article","revision":2})),
+            ("restore", json!({"id":"article","revision":2})),
+            ("export", json!({"id":"article","revision":2})),
+        ] {
+            let encoded = input.to_string();
+            let parsed = parse(&words(&[
+                "call",
+                "akra.tech-blog",
+                action,
+                "--version",
+                "2",
+                "--scope",
+                "repository",
+                "--workspace",
+                "fixture",
+                "--input",
+                &encoded,
+                "--json",
+            ]))
+            .unwrap();
+            assert_eq!(parsed.scope, "repository");
+            assert_eq!(parsed.workspace, "fixture");
+            assert_eq!(
+                parsed.call.unwrap(),
+                json!({
+                    "extension":"akra.tech-blog","version":2,"action":action,
+                    "input":input,"idempotency_key":null
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn extension_cli_keeps_version_one_default_for_other_extensions() {
+        for (extension, action, input) in [
+            ("akra.example", "echo", json!({"text":"hello"})),
+            ("akra.storage-analysis", "jobs", json!({})),
+        ] {
+            let encoded = input.to_string();
+            let parsed = parse(&words(&[
+                "call", extension, action, "--input", &encoded, "--json",
+            ]))
+            .unwrap();
+            assert_eq!(parsed.scope, "local_user");
+            assert_eq!(
+                parsed.call.unwrap(),
+                json!({
+                    "extension":extension,"version":1,"action":action,
+                    "input":input,"idempotency_key":null
+                })
+            );
+        }
+    }
 }
