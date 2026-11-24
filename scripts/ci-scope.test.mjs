@@ -136,7 +136,7 @@ test("portable native selectors cover host verification through the actual Windo
   const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
   const windowsStep = workflow.match(/- name: Run Windows portable validation[\s\S]*?(?=\n      - name:)/)?.[0] || "";
   assert.match(windowsStep, /shell: bash/);
-  assert.match(windowsStep, /run: bash scripts\/check_windows_portable\.sh/);
+  assert.match(windowsStep, /run: node scripts\/ci-performance\.mjs run windows-portable -- bash scripts\/check_windows_portable\.sh/);
   for (const filter of [
     "task_evidence_artifact::tests::",
     "sqlite_planning_authority_adapter::tests::task_evidence::",
@@ -157,7 +157,7 @@ test("portable native selectors cover host verification through the actual Windo
     "adapter::outbound::git::task_verification::tests::",
     "parallel_mode::tests::pool::lease::task_verification::",
   ]) {
-    assert.ok(windows.includes(`run_contract '${filter}'`), `Windows Bash omits ${filter}`);
+    assert.ok(windows.includes(`'${filter}'`), `Windows Bash omits ${filter}`);
     assert.ok(powershell.includes(`"${filter}"`), `PowerShell omits ${filter}`);
     assert.ok(workflow.includes(`'${filter}'`), `macOS omits ${filter}`);
   }
