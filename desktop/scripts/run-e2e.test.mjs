@@ -156,3 +156,52 @@ test("detached Electron-style descendants stop without touching an unrelated pro
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
   assert.doesNotThrow(() => process.kill(unrelated.pid, 0), "unrelated detached process remains alive");
 });
+
+test("fast detached parent exit bounds inherited output pipes", { skip: process.platform !== "linux" }, async (t) => {
+  const childSource = [
+    'const fs = require("node:fs");',
+    'const stat = fs.readFileSync("/proc/self/stat", "utf8");',
+    'const birth = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\\s+/)[19];',
+    'fs.writeFileSync(process.env.E2E_ORPHAN_IDENTITY, JSON.stringify({ pid: process.pid, birth }));',
+    'console.log("fast detached fixture");',
+    // A broken runner still lets the fixture terminate instead of hanging the test worker.
+    'setTimeout(() => process.exit(0), 10000);',
+  ].join("\n");
+  const specSource = [
+    'import { spawn } from "node:child_process";',
+    'import { existsSync } from "node:fs";',
+    'setInterval(() => {',
+    '  if (!existsSync(process.env.E2E_RELEASE_PARENT)) return;',
+    '  const child = spawn(process.execPath, ["-e", ' + JSON.stringify(childSource) + '], { detached: true, stdio: "inherit" });',
+    '  child.unref();',
+    '  process.exit(0);',
+    '}, 5);',
+  ].join("\n");
+  const root = fixture(t, { "a.mjs": specSource, "b.mjs": passingSource });
+  const releasePath = join(root, "release-parent");
+  const identityPath = join(root, "orphan.json");
+  let detached;
+  t.after(() => {
+    if (!detached) return;
+    try {
+      const stat = readFileSync("/proc/" + detached.pid + "/stat", "utf8");
+      const birth = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/)[19];
+      if (birth === detached.birth) process.kill(detached.pid, "SIGKILL");
+    } catch (error) {
+      if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
+    }
+  });
+  const started = performance.now();
+  const running = runE2e({ desktopRoot: root, env: { ...process.env,
+    E2E_RELEASE_PARENT: releasePath, E2E_ORPHAN_IDENTITY: identityPath }, nodeArgs: [] });
+  // runE2e has synchronously taken its first process sample before returning here.
+  writeFileSync(releasePath, "go");
+  const result = await running;
+  detached = JSON.parse(readFileSync(identityPath, "utf8"));
+  assert.ok(performance.now() - started < 7000, "inherited pipes have a bounded drain");
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.report.status, "failed");
+  assert.deepEqual(result.report.results.map(item => item.status), ["failed", "not_run"]);
+  assert.match(result.report.results[0].cleanupError, /output pipes did not close within 3 seconds/);
+  assert.match(readFileSync(join(result.report.outputDir, result.report.results[0].log), "utf8"), /fast detached fixture/);
+});
