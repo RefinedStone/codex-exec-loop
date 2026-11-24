@@ -40,32 +40,23 @@ fn reviewed_source() -> (
 #[test]
 fn autonomous_pr_readiness_requires_known_passing_checks_and_clean_mergeability() {
     let (record, ready) = reviewed_source();
-    assert!(pull_request_readiness_error(&ready, &record, "prerelease", true, true).is_none());
+    assert!(pull_request_readiness_error(&ready, &record, "prerelease", true).is_none());
     for checks in [None, Some(false)] {
         let mut pull_request = ready.clone();
         pull_request.required_checks_passed = checks;
-        let reason = pull_request_readiness_error(&pull_request, &record, "prerelease", true, true)
+        let reason = pull_request_readiness_error(&pull_request, &record, "prerelease", true)
             .expect("unknown or failed required checks must block Auto");
         assert!(reason.contains("required checks"), "{reason}");
     }
     for mergeability in [None, Some("UNKNOWN"), Some("DIRTY"), Some("BLOCKED")] {
         let mut pull_request = ready.clone();
         pull_request.merge_state_status = mergeability.map(str::to_owned);
-        let reason = pull_request_readiness_error(&pull_request, &record, "prerelease", true, true)
+        let reason = pull_request_readiness_error(&pull_request, &record, "prerelease", true)
             .expect("only explicit CLEAN is usable for Auto");
         assert!(reason.contains("CLEAN"), "{reason}");
     }
 }
 
-#[test]
-fn legacy_autonomous_prs_without_status_checks_keep_the_previous_readiness_contract() {
-    let (record, mut pull_request) = reviewed_source();
-    pull_request.required_checks_passed = None;
-    pull_request.merge_state_status = Some("UNKNOWN".into());
-    assert!(
-        pull_request_readiness_error(&pull_request, &record, "prerelease", true, false,).is_none()
-    );
-}
 #[test]
 fn autonomous_pr_readiness_preserves_the_frozen_head_and_target() {
     let (record, ready) = reviewed_source();
@@ -73,7 +64,7 @@ fn autonomous_pr_readiness_preserves_the_frozen_head_and_target() {
         let mut pull_request = ready.clone();
         pull_request.head_commit_sha = head;
         assert!(
-            pull_request_readiness_error(&pull_request, &record, "prerelease", true, true)
+            pull_request_readiness_error(&pull_request, &record, "prerelease", true)
                 .unwrap()
                 .contains("frozen source commit")
         );
@@ -81,7 +72,7 @@ fn autonomous_pr_readiness_preserves_the_frozen_head_and_target() {
     let mut pull_request = ready;
     pull_request.base_branch = "other-base".into();
     assert!(
-        pull_request_readiness_error(&pull_request, &record, "prerelease", true, true)
+        pull_request_readiness_error(&pull_request, &record, "prerelease", true)
             .unwrap()
             .contains("targets")
     );
@@ -91,19 +82,19 @@ fn autonomous_pr_readiness_preserves_the_frozen_head_and_target() {
 fn lack_of_process_opt_in_requires_human_approval_of_the_exact_source() {
     let (record, mut pull_request) = reviewed_source();
     assert!(
-        pull_request_readiness_error(&pull_request, &record, "prerelease", false, false)
+        pull_request_readiness_error(&pull_request, &record, "prerelease", false)
             .unwrap()
             .contains("APPROVED")
     );
     pull_request.review_decision = Some("APPROVED".into());
     pull_request.approved_review_commit_shas = vec!["b".repeat(40)];
     assert!(
-        pull_request_readiness_error(&pull_request, &record, "prerelease", false, false)
+        pull_request_readiness_error(&pull_request, &record, "prerelease", false)
             .unwrap()
             .contains("frozen source commit")
     );
     pull_request.approved_review_commit_shas = vec![record.source_commit_sha.clone()];
     assert!(
-        pull_request_readiness_error(&pull_request, &record, "prerelease", false, false).is_none()
+        pull_request_readiness_error(&pull_request, &record, "prerelease", false).is_none()
     );
 }

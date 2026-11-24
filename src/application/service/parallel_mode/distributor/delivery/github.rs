@@ -634,16 +634,13 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
         .map(|target| target.integration_branch.clone())
         .unwrap_or_else(|| "unknown".to_string());
     record.pull_request_url = Some(pull_request.url.clone());
-    let (requires_human_review, requires_auto_delivery) = match work_order_delivery_gate(
+    let requires_human_review = match work_order_delivery_gate(
         planning_authority,
         &resolution.context.repo_root,
         record,
         PlanningWorkPermitStage::Integrate,
     ) {
-        Ok(permit) => (
-            permit.requires_human_review(),
-            permit.requires_auto_delivery(),
-        ),
+        Ok(permit) => permit.requires_human_review(),
         Err(detail) => {
             return block_distributor_queue_record(
                 planning_authority,
@@ -662,7 +659,6 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
         record,
         &integration_branch,
         autonomous_delivery,
-        requires_auto_delivery,
     ) {
         return block_distributor_queue_record(
             planning_authority,
@@ -811,16 +807,13 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
     )? {
         return Ok(IntegrationPushReadiness::Blocked(notice));
     }
-    let (requires_human_review, requires_auto_delivery) = match work_order_delivery_gate(
+    let requires_human_review = match work_order_delivery_gate(
         planning_authority,
         &resolution.context.repo_root,
         record,
         PlanningWorkPermitStage::Integrate,
     ) {
-        Ok(permit) => (
-            permit.requires_human_review(),
-            permit.requires_auto_delivery(),
-        ),
+        Ok(permit) => permit.requires_human_review(),
         Err(detail) => {
             return block_distributor_queue_record(
                 planning_authority,
@@ -840,7 +833,6 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
         record,
         &target.integration_branch,
         autonomous_delivery,
-        requires_auto_delivery,
     ) {
         return block_distributor_queue_record(
             planning_authority,
@@ -863,7 +855,6 @@ fn pull_request_readiness_error(
     record: &ParallelModeDistributorQueueRecord,
     integration_branch: &str,
     autonomous_delivery: bool,
-    requires_auto_delivery: bool,
 ) -> Option<String> {
     if !pull_request.state.eq_ignore_ascii_case("open") {
         return Some(format!(
@@ -916,21 +907,19 @@ fn pull_request_readiness_error(
             short_sha(&source_commit_sha)
         ));
     }
-    // Issue Auto adds a strict provider gate. Preserve the legacy autonomous PR fallback
-    // behavior for repositories that do not publish status checks.
-    if requires_auto_delivery {
-        if pull_request.merge_state_status.as_deref() != Some("CLEAN") {
-            return Some(format!(
-                "pull request #{} merge state is not explicitly CLEAN",
-                pull_request.number
-            ));
-        }
-        if pull_request.required_checks_passed != Some(true) {
-            return Some(format!(
-                "pull request #{} required checks are failing or unknown",
-                pull_request.number
-            ));
-        }
+    // Every autonomous integration path requires explicit provider mergeability and
+    // passing required checks; this is also the pre-push gate for the legacy fallback.
+    if pull_request.merge_state_status.as_deref() != Some("CLEAN") {
+        return Some(format!(
+            "pull request #{} merge state is not explicitly CLEAN",
+            pull_request.number
+        ));
+    }
+    if pull_request.required_checks_passed != Some(true) {
+        return Some(format!(
+            "pull request #{} required checks are failing or unknown",
+            pull_request.number
+        ));
     }
     None
 }
