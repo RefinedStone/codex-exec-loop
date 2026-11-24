@@ -29,7 +29,7 @@ protection or GitHub required checks.
 
 ## CI Contract
 
-- `Fast Gate` aggregates CI scope, Rust lint/architecture when selected, Node/Admin when selected,
+- `Fast Gate` aggregates CI scope, Rust lint/architecture when selected, Node/Admin and every Desktop screen-test shard when selected,
   and explicit smoke scope. It intentionally leaves the long Rust test and portable-platform jobs
   outside merge admission.
 - `CI Gate` continues to aggregate every job selected for a pull request and remains the required
