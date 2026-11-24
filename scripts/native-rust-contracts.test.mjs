@@ -103,14 +103,18 @@ test("runtime loader paths preserve caller directories and macOS fallback defaul
   assert.ok(mac.DYLD_FALLBACK_LIBRARY_PATH.endsWith("/Users/test/lib:/usr/local/lib:/usr/lib"));
 });
 
-test("Windows portable entrypoint retains the complete 83-filter inventory", () => {
+test("Windows portable entrypoint retains the complete 108-filter inventory", () => {
   const shell = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
   const filters = [...shell.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1]);
-  assert.equal(filters.length, 83);
-  assert.equal(new Set(filters).size, 83);
+  assert.equal(filters.length, 108);
+  assert.equal(new Set(filters).size, 108);
   assert.ok(filters.includes("process_liveness::tests::"));
   assert.ok(filters.includes("application::service::evidence_vault_unlock::"));
   assert.ok(filters.includes("host_owned_worker_commit_"));
+  assert.ok(filters.includes("provider_credentials"));
+  assert.ok(filters.includes("provider_http"));
+  assert.ok(filters.includes("adapter::outbound::jira::issue_source::tests::"));
+  assert.ok(filters.includes("application::service::issue_collection::tests::jira::"));
   assert.match(shell, /cargo check --locked --all-features/);
   assert.match(shell, /run_native_rust_contracts\.mjs/);
 });

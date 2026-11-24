@@ -50,7 +50,7 @@ pub(super) fn observation(
     let description = fields
         .get("description")
         .ok_or(IssueSourceFailure::MalformedResponse)?;
-    let (body, unsupported) = if description.is_null() {
+    let (mut body, unsupported) = if description.is_null() {
         (String::new(), false)
     } else {
         let unsupported_shape = bounded_adf(description)?;
@@ -60,10 +60,17 @@ pub(super) fn observation(
             unsupported_shape || !converted.unsupported.is_empty(),
         )
     };
-    if body.len() > 1024 * 1024 {
-        return Err(IssueSourceFailure::MalformedResponse);
+    let oversized = body.len() > 1024 * 1024;
+    let remote_field_hash = IssueFieldHash::of_fields(&title, &body);
+    let mut problems = if oversized {
+        vec![IssueSourceContentProblem::OversizedContent]
+    } else {
+        required_problems(editmeta, fields, &body)?
+    };
+    if oversized {
+        // Keep the remote comparison hash but never persist or disclose the oversized body.
+        body.clear();
     }
-    let mut problems = required_problems(editmeta, fields, &body)?;
     if unsupported {
         problems.push(IssueSourceContentProblem::UnsupportedAdf);
     }
@@ -84,24 +91,34 @@ pub(super) fn observation(
         project_scope: repository.project_scope.clone(),
     };
     let basis = IssueComparisonBasis {
-        field_hash: IssueFieldHash::of_fields(&title, &body),
+        field_hash: remote_field_hash,
         provider_updated_at: updated,
     };
     let mut spans = secret_spans(IssueTextField::Title, &title);
     spans.extend(secret_spans(IssueTextField::Body, &body));
-    let content = match plan_issue_masking(&title, &body, &spans, &disclosure.policy) {
-        Ok(plan) => IssueSourceContent::Shared(IssueAutomationSnapshot {
-            basis,
-            shared_copy: plan.shared_copy,
-            policy_version: disclosure.policy_version.clone(),
-        }),
-        Err(IssueMaskingBlocked::NeedsUserConfirmation { .. }) => IssueSourceContent::Withheld {
+    let content = if oversized {
+        IssueSourceContent::Withheld {
             basis,
             policy_version: disclosure.policy_version.clone(),
             reason: IssueContentWithheldReason::UserConfirmationRequired,
-        },
-        Err(IssueMaskingBlocked::InvalidSpan { .. }) => {
-            return Err(IssueSourceFailure::MalformedResponse);
+        }
+    } else {
+        match plan_issue_masking(&title, &body, &spans, &disclosure.policy) {
+            Ok(plan) => IssueSourceContent::Shared(IssueAutomationSnapshot {
+                basis,
+                shared_copy: plan.shared_copy,
+                policy_version: disclosure.policy_version.clone(),
+            }),
+            Err(IssueMaskingBlocked::NeedsUserConfirmation { .. }) => {
+                IssueSourceContent::Withheld {
+                    basis,
+                    policy_version: disclosure.policy_version.clone(),
+                    reason: IssueContentWithheldReason::UserConfirmationRequired,
+                }
+            }
+            Err(IssueMaskingBlocked::InvalidSpan { .. }) => {
+                return Err(IssueSourceFailure::MalformedResponse);
+            }
         }
     };
     let raw_labels = fields
