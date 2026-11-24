@@ -69,7 +69,10 @@ fn separate_git_dir_checkout_resolves_as_its_own_primary_checkout() {
     let metadata = root.join("git-metadata");
     let metadata_text = git_path(&metadata);
     git(&workspace, &["init", "--separate-git-dir", &metadata_text]);
-    git(&workspace, &["config", "user.email", "restart-fixture@example.invalid"]);
+    git(
+        &workspace,
+        &["config", "user.email", "restart-fixture@example.invalid"],
+    );
     git(&workspace, &["config", "user.name", "Restart Fixture"]);
     std::fs::write(workspace.join("README"), "separate git dir fixture\n").unwrap();
     git(&workspace, &["add", "README"]);
@@ -531,6 +534,7 @@ fn missing_restart_checkout_is_pruned_from_the_registry() {
     assert!(f.registry.list().unwrap().is_empty());
     kernels.shutdown();
 }
+
 #[test]
 fn replaced_restart_checkout_is_pruned_without_transferring_authority() {
     let f = Fixture::new();
@@ -547,9 +551,14 @@ fn replaced_restart_checkout_is_pruned_without_transferring_authority() {
         RepositoryRestartOutcome::Unsupported
     );
     assert!(f.registry.list().unwrap().is_empty());
-    assert!(!Path::new(&f.workspace).join(".git/akra-repository-id").exists());
+    assert!(
+        !Path::new(&f.workspace)
+            .join(".git/akra-repository-id")
+            .exists()
+    );
     kernels.shutdown();
 }
+
 #[test]
 fn a_stopped_registry_refuses_restore_before_resolving_the_workspace() {
     let kernels = RepositoryKernelRegistry::default();

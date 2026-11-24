@@ -23,10 +23,11 @@ pub(crate) mod native_client_runtime;
 pub(crate) mod native_terminal_event_ingress;
 mod pr_review;
 pub(crate) mod production;
+pub(crate) mod provider_credentials;
 pub(crate) mod repository_extensions;
 pub(crate) mod repository_kernel;
 pub(crate) mod repository_observer;
-pub(crate) mod provider_credentials;
+
 pub(crate) mod storage_extension;
 pub(crate) mod task_delivery_evidence;
 pub(crate) mod task_evidence;
