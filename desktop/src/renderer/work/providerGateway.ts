@@ -224,7 +224,12 @@ function identifier(value: unknown): string {
   if (!/^[A-Za-z0-9_-]+$/.test(result)) throw new ProviderGatewayError("corrupt");
   return result;
 }
-function parsePrompt(value: unknown): string { return text(publicRecord(value, ["text"]).text, 20_000); }
+function parsePrompt(value: unknown): string {
+  const prompt = publicRecord(value, ["text"]).text;
+  // The Gateway clips Rust chars() (Unicode scalar values), not UTF-16 code units.
+  if (typeof prompt !== "string" || Array.from(prompt).length > 20_000) throw new ProviderGatewayError("corrupt");
+  return prompt;
+}
 function parseJiraSummary(value: unknown): JiraSummary {
   const raw = publicRecord(value, ["siteUrl", "issues"]);
   const siteUrl = text(raw.siteUrl, 2_048);
