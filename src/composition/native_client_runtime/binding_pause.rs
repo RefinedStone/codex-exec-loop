@@ -39,11 +39,13 @@ impl NativeClientRuntime {
                     if let Some(observer) = &mut self.issue_observer {
                         observer.request_sync(now);
                     }
-                    self.drain_binding_pause_outbox(now);
                 }
                 Ok(false) => {}
                 Err(_) => tracing::warn!("binding pause recovery remains pending"),
             }
+            // A poll may commit its command and then fail while verifying the receipt.
+            // Drain the durable outbox even when poll cannot report that completion.
+            self.drain_binding_pause_outbox(now);
         }
         if self
             .binding_pause_outbox_deadline
