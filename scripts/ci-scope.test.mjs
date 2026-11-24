@@ -127,7 +127,7 @@ test("stacked codex pull requests use their own base and the ordinary full CI ga
   const plan = classifyChangedPaths([".github/workflows/native-pr-checks.yml"]);
   assert.equal(plan.full, true);
   assert.deepEqual(evaluateGate(plan, { scope: "success", rust_tests: "success", rust_lint: "success",
-    node_surfaces: "failure", portable_native: "success" }), [{ job: "node_surfaces", result: "failure" }]);
+    node_surfaces: "failure", desktop_e2e: "success", portable_native: "success" }), [{ job: "node_surfaces", result: "failure" }]);
 });
 
 test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {
