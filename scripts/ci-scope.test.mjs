@@ -186,6 +186,7 @@ test("the fast gate waits for policy checks but leaves long jobs post-admission"
       rust_tests: "in_progress",
       rust_lint: "success",
       node_surfaces: "success",
+      desktop_e2e: "success",
       portable_native: "in_progress",
       smoke_check: "skipped",
     },
@@ -211,4 +212,36 @@ test("executable client validation tools under docs select the Node gate", () =>
     assert.equal(plan.rust, false, path);
   }
   assert.equal(classifyChangedPaths(["docs/plan/17-akra-desktop/README.md"]).docs_only, true);
+});
+
+
+test("both gates require all selected Desktop shards to succeed", () => {
+  const plan = { rust: false, node: true, portable: false, smoke: false };
+  for (const evaluate of [evaluateGate, evaluateFastGate]) {
+    const complete = { scope: "success", node_surfaces: "success", desktop_e2e: "success" };
+    assert.deepEqual(evaluate(plan, complete), []);
+    for (const result of ["failure", "cancelled", "skipped", undefined]) {
+      assert.deepEqual(evaluate(plan, { ...complete, desktop_e2e: result }),
+        [{ job: "desktop_e2e", result }]);
+    }
+    assert.deepEqual(evaluate({ ...plan, node: false }, { scope: "success", desktop_e2e: "skipped" }), []);
+  }
+});
+
+test("the CLI gates read the Desktop shard result and reject a missing result", () => {
+  for (const command of ["gate", "fast-gate"]) {
+    const env = { ...process.env, AKRA_CI_NODE_REQUIRED: "true", AKRA_CI_NODE_RESULT: "success",
+      AKRA_CI_SCOPE_RESULT: "success", AKRA_CI_RUST_REQUIRED: "false",
+      AKRA_CI_PORTABLE_REQUIRED: "false", AKRA_CI_SMOKE_REQUIRED: "false" };
+    delete env.GITHUB_OUTPUT;
+    delete env.GITHUB_STEP_SUMMARY;
+    for (const desktopResult of ["success", undefined]) {
+      if (desktopResult) env.AKRA_CI_DESKTOP_RESULT = desktopResult;
+      else delete env.AKRA_CI_DESKTOP_RESULT;
+      const result = spawnSync(process.execPath,
+        [fileURLToPath(new URL("./ci-scope.mjs", import.meta.url)), command], { env, encoding: "utf8" });
+      assert.equal(result.status, desktopResult ? 0 : 1, result.stderr);
+      if (!desktopResult) assert.match(result.stderr, /desktop_e2e: missing/);
+    }
+  }
 });
