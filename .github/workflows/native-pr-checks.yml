@@ -65,7 +65,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/native-confirmation-build-options.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -314,7 +314,7 @@ jobs:
         if: matrix.target != 'x86_64-pc-windows-msvc'
         env:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
-        run: node scripts/check_native_confirmation_process.mjs
+        run: node scripts/check_native_confirmation_process.mjs --all-features --target "${{ matrix.target }}" --timings
 
   smoke_check:
     name: Rust Smoke Check
