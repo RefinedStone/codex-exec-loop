@@ -63,7 +63,11 @@ custom harness, benchmark, cross-execution은 지원하지 않고 오류로 끝�
 
 정규화된 목록은 package ID + target kind + target name으로 바이너리를 구분한다.
 누락된 integration binary, 중복 이름, ignored 변경, 테스트 추가/삭제, 기본 필터 제외,
-샤드 누락/중복, commit/toolchain/host/target/features/profile 불일치를 거절한다.
+샤드 누락/중복과 사용자가 선언한 commit/toolchain/host/target/features/profile metadata 불일치를 거절한다.
+이 context 비교는 선언된 값의 동일성 검사이며 실제 빌드 옵션을 검증하거나 증명하지 않는다.
+잘못 작성한 같은 context를 양쪽 자료에 붙이면 목록이 같더라도 그 오류는 감지하지 못한다.
+실제 실행 명령과 feature/target/profile 및 빌드 관련 환경변수, rustc -vV 결과, Cargo artifact JSON과
+nextest 원본 목록을 함께 보존하여 동일한 빌드 조건인지는 별도로 대조해야 한다.
 목록이 같다는 것은 실행 통과 증거가 아니다. doctest는 비교 목록에 포함되지 않는다.
 
 ### 선택적 비교 재현
@@ -111,7 +115,8 @@ doctest는 별도로 실행한다. 모델 턴을 요구하는 ignored probe는 �
 ## 근거
 
 - [nextest 목록과 JSON 출력](https://nexte.st/docs/listing/)
-- [nextest 목록 스키마](https://nexte.st/rustdoc/nextest_metadata/struct.TestListSummary.html)
+- [nextest JSON 구조와 공식 예제](https://nexte.st/docs/machine-readable/list/)
+- [nextest TestListSummary 타입](https://nexte.st/rustdoc/nextest_metadata/struct.TestListSummary)
 - [프로세스별 시험 실행](https://nexte.st/docs/design/why-process-per-test/)
 - [샤딩](https://nexte.st/docs/ci-features/partitioning/)
 - [doctest 별도 실행 안내](https://nexte.st/docs/running/)
