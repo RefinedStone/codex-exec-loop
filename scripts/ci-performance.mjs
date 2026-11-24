@@ -18,7 +18,8 @@ export function distribution(values) {
 export function summarizeWorkflow(run, jobs) {
   const rows = jobs.map((job) => ({
     name: job.name, url: job.html_url, status: job.status, conclusion: job.conclusion,
-    seconds: job.status === "completed" ? elapsed(job.started_at, job.completed_at) : null,
+    seconds: job.status === "completed"
+      ? elapsed(job.started_at, job.completed_at) ?? (job.conclusion === "skipped" ? 0 : null) : null,
     steps: (job.steps ?? []).map((step) => ({
       name: step.name, conclusion: step.conclusion,
       seconds: step.status === "completed" ? elapsed(step.started_at, step.completed_at) : null,
@@ -27,23 +28,33 @@ export function summarizeWorkflow(run, jobs) {
   const gate = jobs.find((job) => job.name === "CI Gate");
   const completed = jobs.filter((job) => job.status === "completed" && job.completed_at);
   const incompleteJobs = jobs.filter((job) => job.status !== "completed").length;
+  const missingDurationJobs = rows.filter((job) => job.status === "completed" && job.seconds === null).length;
+  const durationsComplete = incompleteJobs === 0 && missingDurationJobs === 0;
   const last = completed.map((job) => job.completed_at).sort().at(-1);
   return {
     url: run.html_url, commit: run.head_sha, attempt: run.run_attempt,
     status: run.status, conclusion: run.conclusion,
-    gateSeconds: gate?.status === "completed" ? elapsed(run.run_started_at ?? run.created_at, gate.completed_at) : null,
-    workflowSeconds: run.status === "completed" && !incompleteJobs ? elapsed(run.run_started_at ?? run.created_at, last) : null,
+    gateSeconds: gate?.status === "completed" && gate.conclusion === "success"
+      ? elapsed(run.run_started_at ?? run.created_at, gate.completed_at) : null,
+    workflowSeconds: run.status === "completed" && durationsComplete
+      ? elapsed(run.run_started_at ?? run.created_at, last) : null,
     // Occupied job time is a proxy, not GitHub's rounded/billed runner minutes.
-    runnerSeconds: rows.reduce((sum, row) => sum + (row.seconds ?? 0), 0),
-    incompleteJobs, jobs: rows,
+    runnerSeconds: durationsComplete ? rows.reduce((sum, row) => sum + row.seconds, 0) : null,
+    incompleteJobs, missingDurationJobs, jobs: rows,
   };
 }
 export function compareSamples(samples) {
   const groups = new Map();
   for (const sample of samples) {
-    const { environment, scenario } = sample;
-    if (sample.status !== "completed" || sample.conclusion !== "success" || !Number.isFinite(sample.gateSeconds) || !Number.isFinite(sample.runnerSeconds)) {
-      throw new Error("performance comparisons require complete successful samples with both elapsed and runner time");
+    const { cohort, environment, scenario } = sample;
+    if (sample.status !== "completed" || sample.conclusion !== "success"
+      || sample.incompleteJobs !== 0 || sample.missingDurationJobs !== 0
+      || ["gateSeconds", "workflowSeconds", "runnerSeconds"]
+        .some((field) => !Number.isFinite(sample[field]) || sample[field] < 0)) {
+      throw new Error("performance comparisons require complete successful samples with all job durations and elapsed/runner time");
+    }
+    if (typeof cohort !== "string" || !cohort.trim()) {
+      throw new Error("each sample needs an explicit cohort, such as baseline or candidate");
     }
     if (!environment || !scenario || !["cold", "cache-reuse", "unchanged", "source-change"].includes(scenario)) {
       throw new Error("each sample needs environment and a cold/cache-reuse/unchanged/source-change scenario");
@@ -51,13 +62,13 @@ export function compareSamples(samples) {
     for (const field of ["runner", "architecture", "toolchain", "features", "profile", "target"]) {
       if (typeof environment[field] !== "string" || !environment[field]) throw new Error(`missing environment.${field}`);
     }
-    const key = JSON.stringify([scenario, ...["runner", "architecture", "toolchain", "features", "profile", "target"].map((field) => environment[field])]);
-    const group = groups.get(key) ?? { scenario, environment, samples: [] };
+    const key = JSON.stringify([cohort, scenario, ...["runner", "architecture", "toolchain", "features", "profile", "target"].map((field) => environment[field])]);
+    const group = groups.get(key) ?? { cohort, scenario, environment, samples: [] };
     group.samples.push(sample);
     groups.set(key, group);
   }
   return [...groups.values()].map((group) => ({
-    scenario: group.scenario, environment: group.environment,
+    cohort: group.cohort, scenario: group.scenario, environment: group.environment,
     gateSeconds: distribution(group.samples.map((sample) => sample.gateSeconds)),
     runnerSeconds: distribution(group.samples.map((sample) => sample.runnerSeconds)),
     evidence: group.samples.map(({ url, commit, attempt }) => ({ url, commit, attempt })),
@@ -84,24 +95,31 @@ export function createCargoObserver() {
     finish() { if (pending) line(pending); pending = ""; },
   };
 }
-export async function measure(label, command, args, { directory = process.env.AKRA_CI_MEASUREMENTS || "artifacts/ci-performance" } = {}) {
+export async function measure(label, command, args, {
+  directory = process.env.AKRA_CI_MEASUREMENTS || "artifacts/ci-performance",
+  spawnCommand = spawn, signalSource = process,
+} = {}) {
   if (!label || !command) throw new Error("run requires a label and command after --");
   const start = new Date();
   const clock = performance.now();
   const observers = [createCargoObserver(), createCargoObserver()];
-  const child = spawn(command, args, { stdio: ["inherit", "pipe", "pipe"], shell: false });
+  const child = spawnCommand(command, args, { stdio: ["inherit", "pipe", "pipe"], shell: false });
   child.stdout.on("data", (chunk) => { process.stdout.write(chunk); observers[0].feed(chunk.toString()); });
   child.stderr.on("data", (chunk) => { process.stderr.write(chunk); observers[1].feed(chunk.toString()); });
-  const forward = (signal) => { if (!child.killed) child.kill(signal); };
+  let requestedSignal;
+  const forward = (signal) => {
+    requestedSignal ??= signal;
+    if (!child.killed) child.kill(signal);
+  };
   const interrupt = () => forward("SIGINT");
   const terminate = () => forward("SIGTERM");
-  process.on("SIGINT", interrupt);
-  process.on("SIGTERM", terminate);
+  signalSource.on("SIGINT", interrupt);
+  signalSource.on("SIGTERM", terminate);
   let spawnError;
   child.on("error", (error) => { spawnError = error.message; });
   const result = await new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal })));
-  process.removeListener("SIGINT", interrupt);
-  process.removeListener("SIGTERM", terminate);
+  signalSource.removeListener("SIGINT", interrupt);
+  signalSource.removeListener("SIGTERM", terminate);
   observers.forEach((observer) => observer.finish());
   const cargo = {
     compilingUnits: observers.reduce((sum, observer) => sum + observer.state.compilingUnits, 0),
@@ -109,10 +127,13 @@ export async function measure(label, command, args, { directory = process.env.AK
     finished: observers.flatMap((observer) => observer.state.finished),
     testResults: observers.flatMap((observer) => observer.state.testResults),
   };
+  // A child may handle termination and exit zero; the cancelled measurement still fails.
+  const signalExitCode = (signal) => signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1;
+  const exitCode = requestedSignal ? signalExitCode(requestedSignal) : result.code ?? signalExitCode(result.signal);
   const record = {
     schema: 1, label, command, startedAt: start.toISOString(), finishedAt: new Date().toISOString(),
     seconds: (performance.now() - clock) / 1000,
-    exitCode: result.code, signal: result.signal, spawnError, cargo,
+    exitCode, childExitCode: result.code, signal: result.signal, requestedSignal, spawnError, cargo,
     commit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
     job: process.env.GITHUB_JOB, os: process.env.RUNNER_OS || process.platform, architecture: process.env.RUNNER_ARCH || process.arch,
     toolchain: process.env.RUSTUP_TOOLCHAIN, runnerImage: process.env.ImageOS, runnerImageVersion: process.env.ImageVersion,
@@ -121,7 +142,7 @@ export async function measure(label, command, args, { directory = process.env.AK
   mkdirSync(directory, { recursive: true });
   appendFileSync(join(directory, "steps.jsonl"), JSON.stringify(record) + "\n");
   if (spawnError) console.error(spawnError);
-  return result.code ?? (result.signal === "SIGINT" ? 130 : result.signal === "SIGTERM" ? 143 : 1);
+  return exitCode;
 }
 function report(directory) {
   const path = join(directory, "steps.jsonl");
