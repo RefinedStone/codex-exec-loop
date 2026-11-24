@@ -94,7 +94,5 @@ fn lack_of_process_opt_in_requires_human_approval_of_the_exact_source() {
             .contains("frozen source commit")
     );
     pull_request.approved_review_commit_shas = vec![record.source_commit_sha.clone()];
-    assert!(
-        pull_request_readiness_error(&pull_request, &record, "prerelease", false).is_none()
-    );
+    assert!(pull_request_readiness_error(&pull_request, &record, "prerelease", false).is_none());
 }
