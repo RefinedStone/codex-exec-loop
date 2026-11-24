@@ -66,7 +66,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -311,35 +311,23 @@ jobs:
         shell: bash
         run: node scripts/ci-performance.mjs run native-check -- cargo check --locked --all-features --lib --bins --timings --target "${{ matrix.target }}"
 
-      - name: Test native process identity
+      - name: Prepare and run native contract tests
         if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
-        run: >-
-          node scripts/ci-performance.mjs run native-contract -- cargo test --locked --all-features --lib --timings --target "${{ matrix.target }}"
-          process_liveness::tests:: -- --nocapture
-
-      - name: Test native executable format validation
-        if: matrix.target != 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: >-
-          node scripts/ci-performance.mjs run native-contract -- cargo test --locked --all-features --lib --timings --target "${{ matrix.target }}"
-          trusted_executable::tests::native_ -- --nocapture
-
-      - name: Test native Vault key initialization and private storage
-        if: matrix.target != 'x86_64-pc-windows-msvc'
-        shell: bash
+        env:
+          AKRA_CI_TARGET: ${{ matrix.target }}
+          AKRA_CI_FEATURES: all
         run: |
-          set -euo pipefail
-          for filter in \
+          node scripts/ci-performance.mjs run native-contracts -- \
+            node scripts/run_native_rust_contracts.mjs --all-features \
+            --target "${{ matrix.target }}" --timings -- \
+            'process_liveness::tests::' \
+            'trusted_executable::tests::native_' \
             'private_sqlite::tests::' \
             'stable_user_data_root::tests::' \
             'sqlite_issue_automation_store::private_store::tests::' \
             'adapter::outbound::vault_key_store::' \
             'application::service::evidence_vault_unlock::'
-          do
-            node scripts/ci-performance.mjs run native-contract -- cargo test --locked --all-features --lib --timings --target "${{ matrix.target }}" \
-              "${filter}" -- --nocapture
-          done
 
       - name: Summarize CI measurements
         if: always()
