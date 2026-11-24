@@ -145,7 +145,8 @@ fn evaluate_observation(input: &IssueTriageInput<'_>) -> Result<Evaluation, Issu
                 IssueTriageReasonCode::RequiredSectionMissing
             }
             IssueSourceContentProblem::UnsupportedAdf
-            | IssueSourceContentProblem::UnsupportedRequiredField => {
+            | IssueSourceContentProblem::UnsupportedRequiredField
+            | IssueSourceContentProblem::OversizedContent => {
                 IssueTriageReasonCode::UnsupportedContent
             }
         });

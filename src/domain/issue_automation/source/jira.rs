@@ -15,6 +15,7 @@ pub enum IssueSourceContentProblem {
     UnsupportedAdf,
     UnsupportedRequiredField,
     MissingRequiredField,
+    OversizedContent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

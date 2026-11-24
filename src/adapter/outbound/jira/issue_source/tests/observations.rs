@@ -63,6 +63,27 @@ fn unsupported_nodes_and_marks_are_typed_even_without_an_unsupported_text_marker
 }
 
 #[test]
+fn oversized_issue_body_becomes_needs_info_without_aborting_the_observation() {
+    let text = "x".repeat(1024 * 1024 + 1);
+    let mut value = issue("10041", "APP-41");
+    value["fields"]["description"] = json!({
+        "type": "doc",
+        "version": 1,
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+    });
+
+    let current = parse(value, editmeta()).expect("oversized content remains an issue observation");
+    assert_eq!(
+        current.content_problems,
+        vec![IssueSourceContentProblem::OversizedContent]
+    );
+    let IssueSourceContent::Withheld { basis, .. } = current.content else {
+        panic!("oversized content must not be shared")
+    };
+    assert_ne!(basis.field_hash, IssueFieldHash::of_fields("title", ""));
+}
+
+#[test]
 fn unsupported_or_missing_required_fields_are_not_an_execution_ready_empty_template() {
     let mut unsupported = editmeta();
     unsupported["fields"]["customfield_123"] = json!({"required":true,"name":"Approval","schema":{"type":"array","custom":"plugin:approvers"}});
