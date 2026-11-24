@@ -86,3 +86,9 @@ Fixture는 cache boundary 변화, source snapshot 갱신, 저장 허용 이벤�
 - [사용 중인 cache action의 save 입력](https://github.com/actions/cache/blob/caa296126883cff596d87d8935842f9db880ef25/save/action.yml)
 - [Cache scope·version·immutable key 설명](https://github.com/actions/cache/blob/caa296126883cff596d87d8935842f9db880ef25/README.md)
 - [GitHub cache 접근 범위](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache)
+
+## 계측 증거의 현재성
+
+복원된 target에 이전 Cargo timings HTML이 남을 수 있으므로 검증 전에 cargo-timings 디렉터리만 정리합니다.
+컴파일 산출물과 dependency/incremental cache는 보존합니다. symlink/junction으로 연결된 target은 순회하지 않습니다.
+이후 artifact의 timings는 이번 실행에서 생성된 자료이며, 단계별 JSON과 함께 확인합니다.

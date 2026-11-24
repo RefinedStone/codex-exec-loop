@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -73,6 +73,28 @@ export function cacheObservation(policy, phase, env = process.env) {
     saveAllowed: policy.saveAllowed, boundary: policy.boundary, caches,
     sizeScanMilliseconds: Math.round(performance.now() - started) };
 }
+
+/** Clear only restored diagnostics so a new artifact cannot claim old Cargo timings. */
+export function clearRestoredTimings(targetDirectory) {
+  let children;
+  try {
+    if (lstatSync(targetDirectory).isSymbolicLink()) return [];
+    children = readdirSync(targetDirectory, { withFileTypes: true });
+  }
+  catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  const candidates = [join(targetDirectory, "cargo-timings"),
+    ...children.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => join(targetDirectory, entry.name, "cargo-timings"))];
+  const removed = [];
+  for (const path of candidates) {
+    try { lstatSync(path); }
+    catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    rmSync(path, { recursive: true, force: true });
+    removed.push(path);
+  }
+  return removed;
+}
+
 function outputs(policy, outputPath) {
   if (!outputPath) return;
   const values = {
@@ -112,6 +134,9 @@ export function main(args, env = process.env) {
     writeFileSync(policyPath, JSON.stringify(policy, null, 2) + "\n");
     outputs(policy, env.GITHUB_OUTPUT);
     console.log(JSON.stringify(policy, null, 2));
+  } else if (args[0] === "clear-timings") {
+    const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+    console.log(JSON.stringify({ removedDiagnostics: clearRestoredTimings(policy.target.paths[0]) }));
   } else if (args[0] === "record" && args.length === 2) {
     const policy = JSON.parse(readFileSync(policyPath, "utf8"));
     const record = cacheObservation(policy, args[1], env);
@@ -123,6 +148,6 @@ export function main(args, env = process.env) {
     appendFileSync(join(directory, "cache-summary.md"), markdown);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, markdown);
     console.log(markdown);
-  } else throw new Error("usage: ci-cache.mjs plan | record <restored|complete>");
+  } else throw new Error("usage: ci-cache.mjs plan | clear-timings | record <restored|complete>");
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2));

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { cacheObservation, createCachePolicy, directorySize, maySaveCache } from "./ci-cache.mjs";
+import { cacheObservation, clearRestoredTimings, createCachePolicy, directorySize, maySaveCache } from "./ci-cache.mjs";
 
 const input = {
   os: "Linux", architecture: "X64", lane: "rust-tests", features: "default", profile: "dev/test",
@@ -85,4 +85,22 @@ test("restore observations distinguish exact, fallback, missing and unavailable 
   assert.equal(fallback.caches.target.saveOutcome, "skipped");
   assert.equal(fallback.caches.registry.hit, "unavailable");
   assert.throws(() => cacheObservation(policy, "invalid"));
+});
+
+test("old Cargo timings are removed while compiled files and linked targets stay intact", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "akra-cache-timings-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const target = join(root, "target");
+  const external = join(root, "external");
+  for (const path of [join(target, "cargo-timings"), join(target, "native", "cargo-timings"),
+    join(target, "native", "debug", "deps"), join(external, "cargo-timings")]) mkdirSync(path, { recursive: true });
+  writeFileSync(join(target, "cargo-timings", "old.html"), "old");
+  writeFileSync(join(target, "native", "debug", "deps", "keep.rlib"), "compiled");
+  writeFileSync(join(external, "cargo-timings", "keep.html"), "external");
+  symlinkSync(external, join(target, "linked"), process.platform === "win32" ? "junction" : "dir");
+  assert.equal(clearRestoredTimings(target).length, 2);
+  assert.equal(existsSync(join(target, "cargo-timings")), false);
+  assert.equal(readFileSync(join(target, "native", "debug", "deps", "keep.rlib"), "utf8"), "compiled");
+  assert.equal(readFileSync(join(external, "cargo-timings", "keep.html"), "utf8"), "external");
+  assert.deepEqual(clearRestoredTimings(join(root, "missing")), []);
 });
