@@ -67,7 +67,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs scripts/ci-cache.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -128,6 +128,10 @@ jobs:
           key: ${{ steps.rust_cache_policy.outputs.target-key }}
           restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
           fail-on-cache-miss: false
+
+      - name: Clear restored Cargo timing diagnostics
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache.mjs clear-timings
 
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
@@ -255,6 +259,10 @@ jobs:
           key: ${{ steps.rust_cache_policy.outputs.target-key }}
           restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
           fail-on-cache-miss: false
+
+      - name: Clear restored Cargo timing diagnostics
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache.mjs clear-timings
 
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
@@ -458,6 +466,10 @@ jobs:
           restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
           fail-on-cache-miss: false
 
+      - name: Clear restored Cargo timing diagnostics
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache.mjs clear-timings
+
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
         continue-on-error: true
@@ -616,6 +628,10 @@ jobs:
           key: ${{ steps.rust_cache_policy.outputs.target-key }}
           restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
           fail-on-cache-miss: false
+
+      - name: Clear restored Cargo timing diagnostics
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache.mjs clear-timings
 
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
