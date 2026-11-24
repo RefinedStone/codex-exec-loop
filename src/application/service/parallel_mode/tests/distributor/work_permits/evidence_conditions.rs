@@ -314,6 +314,7 @@ fn work_order_integration_evidence_wait_can_yield_after_a_blocked_recheck() {
         )
         .unwrap();
 
+    fs::create_dir_all(repo.pool_root()).expect("pool root should exist before queue persistence");
     let mut work_order = integration_wait_record("work-order-a", &workspace);
     work_order.evidence_binding = Some(
         crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryBinding {

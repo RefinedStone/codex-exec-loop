@@ -575,7 +575,10 @@ jobs:
             'trusted_executable::fingerprint::tests::' \
             'subprocess::controlled::tests::' \
             'adapter::outbound::git::task_verification::tests::' \
-            'parallel_mode::tests::pool::lease::task_verification::' \n            'application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::' \n            'application::service::post_turn_evaluation::tests::automatic_verification::' \n            'application::service::parallel_mode::tests::automatic_verification::'
+            'parallel_mode::tests::pool::lease::task_verification::' \
+            'application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::' \
+            'application::service::post_turn_evaluation::tests::automatic_verification::' \
+            'application::service::parallel_mode::tests::automatic_verification::'
 
       - name: Test the built macOS confirmation process
         if: matrix.target != 'x86_64-pc-windows-msvc'

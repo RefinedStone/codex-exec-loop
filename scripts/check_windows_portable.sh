@@ -64,7 +64,7 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_evidence::' \
   'application::service::parallel_mode::tests::distributor::evidence_gate::' \
   'application::service::parallel_mode::tests::distributor::work_permits::evidence_conditions::' \
-  'adapter::outbound::github::automation::tests::frozen_integration::' \n  'application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::' \n  'application::service::post_turn_evaluation::tests::automatic_verification::' \n  'application::service::parallel_mode::tests::automatic_verification::' \
+  'adapter::outbound::github::automation::tests::frozen_integration::' \
   'application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::' \
   'application::service::post_turn_evaluation::tests::automatic_verification::' \
   'application::service::parallel_mode::tests::automatic_verification::'
