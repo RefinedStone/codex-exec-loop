@@ -38,18 +38,126 @@ export function e2ePlan(desktopRoot, env = process.env, argv = []) {
     timingSource: timingsPath ?? null, outputDir: resolve(desktopRoot, outputDir), list };
 }
 
-function stopChildTree(child, signal) {
-  if (!child.pid) return;
-  if (process.platform === "win32") {
-    // 실행 중인 이 시험의 자식 트리만 정리한다.
-    if (child.exitCode === null && child.signalCode === null) {
-      const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, encoding: "utf8", timeout: 5000 });
-      if (result.error) throw result.error;
-      if (result.status !== 0 && child.exitCode === null) child.kill();
+// Playwright starts Electron in a separate POSIX session. The spec's process group
+// alone therefore does not contain every owned process. Keep birth identities while
+// the spec is alive; never use a process-name match or blindly signal a saved PID.
+function posixProcessSnapshot() {
+  const result = new Map();
+  if (process.platform === "linux") {
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = readFileSync("/proc/" + entry + "/stat", "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+        const pid = Number(entry);
+        result.set(pid, { pid, ppid: Number(fields[1]), pgid: Number(fields[2]),
+          birth: fields[19], state: fields[0] });
+      } catch (error) {
+        if (!["ENOENT", "ESRCH", "EACCES"].includes(error.code)) throw error;
+      }
     }
   } else {
-    try { process.kill(-child.pid, signal); }
-    catch (error) { if (error.code !== "ESRCH") throw error; }
+    const listed = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,pgid=,lstart="], {
+      encoding: "utf8", timeout: 1000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" },
+    });
+    if (listed.error || listed.status !== 0) throw listed.error ?? new Error("could not inspect owned E2E processes");
+    for (const line of listed.stdout.split("\n")) {
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+      if (match) {
+        const pid = Number(match[1]);
+        result.set(pid, { pid, ppid: Number(match[2]), pgid: Number(match[3]), birth: match[4] });
+      }
+    }
+  }
+  return result;
+}
+
+function trackPosixProcesses(child) {
+  const owned = new Map();
+  let failure;
+  const same = (left, right) => left && right && left.pid === right.pid
+    && left.birth === right.birth && left.pgid === right.pgid;
+  function observe() {
+    const snapshot = posixProcessSnapshot();
+    const live = new Set();
+    const root = snapshot.get(child.pid);
+    if (!owned.has(child.pid) && child.exitCode === null && child.signalCode === null && root) {
+      owned.set(child.pid, root);
+    }
+    for (const [pid, identity] of owned) {
+      if (same(identity, snapshot.get(pid))) live.add(pid);
+    }
+    // Previously seen descendants may already have been reparented after the spec exits.
+    // Linux birth ticks keep ownership without trusting a recycled PID.
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const [pid, identity] of snapshot) {
+        if (live.has(identity.ppid) && !live.has(pid)) {
+          owned.set(pid, identity); live.add(pid); changed = true;
+        }
+      }
+    }
+    return { snapshot, live };
+  }
+  function inspect() {
+    try { return observe(); }
+    catch (error) { failure = String(error); return { snapshot: new Map(), live: new Set() }; }
+  }
+  inspect();
+  const monitor = setInterval(inspect, 1000);
+  monitor.unref();
+  function stop(signal, includeRoot = true) {
+    const { snapshot, live } = inspect();
+    for (const pid of [...live].filter(pid => includeRoot || pid !== child.pid).sort((a, b) => (a === child.pid) - (b === child.pid))) {
+      if (pid === child.pid && (child.exitCode !== null || child.signalCode !== null)) continue;
+      const identity = owned.get(pid);
+      const current = snapshot.get(pid);
+      if (!same(identity, current) || current.state === "Z") continue;
+      if (process.platform !== "linux" && pid !== child.pid) {
+        // ps start dates have second precision. Require a current chain to the
+        // still-owned ChildProcess; an orphan's old PID is not enough on Darwin.
+        let ancestor = current;
+        const visited = new Set();
+        while (ancestor && ancestor.pid !== child.pid && !visited.has(ancestor.pid)) {
+          visited.add(ancestor.pid); ancestor = snapshot.get(ancestor.ppid);
+        }
+        if (!ancestor || child.exitCode !== null || child.signalCode !== null) {
+          failure = "could not safely identify a reparented E2E process";
+          continue;
+        }
+      }
+      const fresh = posixProcessSnapshot().get(pid);
+      if (!same(identity, fresh)) continue;
+      try { process.kill(pid, signal); }
+      catch (error) { if (error.code !== "ESRCH") failure = String(error); }
+    }
+  }
+  return {
+    stop,
+    async finish() {
+      clearInterval(monitor);
+      const deadline = performance.now() + 2000;
+      for (;;) {
+        try { stop("SIGKILL", false); }
+        catch (error) { failure = String(error); break; }
+        const { snapshot, live } = inspect();
+        const remaining = [...live].filter(pid => pid !== child.pid && snapshot.get(pid)?.state !== "Z");
+        if (!remaining.length) break;
+        if (performance.now() >= deadline) { failure ??= "owned E2E processes did not stop within 2 seconds"; break; }
+        await new Promise(resolveWait => setTimeout(resolveWait, 50));
+      }
+      return failure;
+    },
+  };
+}
+
+function stopWindowsChildTree(child) {
+  if (child.pid && child.exitCode === null && child.signalCode === null) {
+    const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      windowsHide: true, encoding: "utf8", timeout: 5000,
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0 && child.exitCode === null) child.kill();
   }
 }
 
@@ -59,15 +167,21 @@ async function executeSpec({ desktopRoot, spec, env, signal, logPath, nodeArgs }
   let spawnError;
   let cleanupError;
   let killTimer;
+  let rootKillTimer;
   const child = spawn(process.execPath, [...nodeArgs, join(desktopRoot, "test", "e2e", spec)], {
     cwd: desktopRoot, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true,
   });
-  const stop = (kind) => {
-    try { stopChildTree(child, kind); }
+  const tracker = process.platform === "win32" ? null : trackPosixProcesses(child);
+  const stop = (kind, includeRoot = true) => {
+    try { if (tracker) tracker.stop(kind, includeRoot); else stopWindowsChildTree(child); }
     catch (error) { cleanupError = String(error); }
   };
   const scheduleKill = () => {
-    if (!killTimer) killTimer = setTimeout(() => stop("SIGKILL"), 2000);
+    if (!killTimer) killTimer = setTimeout(() => {
+      stop("SIGKILL", false);
+      // Let the spec reap its terminated descendants before the final fallback.
+      rootKillTimer = setTimeout(() => stop("SIGKILL"), 100);
+    }, 2000);
   };
   const abort = () => { stop("SIGTERM"); scheduleKill(); };
   signal?.addEventListener("abort", abort, { once: true });
@@ -77,12 +191,16 @@ async function executeSpec({ desktopRoot, spec, env, signal, logPath, nodeArgs }
   child.stderr.on("data", tee(process.stderr));
   child.once("error", (error) => { spawnError = String(error); });
   child.once("exit", () => {
-    // 정상 종료 뒤 남은 Electron 하위 프로세스도 이 시험의 process group에서만 정리한다.
+    // 관찰한 소유 신원을 통해 별도 session의 Electron도 정리한다.
     if (process.platform !== "win32") { stop("SIGTERM"); scheduleKill(); }
   });
   const outcome = await new Promise((resolveResult) => child.once("close", (code, childSignal) => resolveResult({ code, signal: childSignal })));
-  if (process.platform !== "win32") stop("SIGKILL");
   clearTimeout(killTimer);
+  clearTimeout(rootKillTimer);
+  if (tracker) {
+    const trackedError = await tracker.finish();
+    cleanupError ??= trackedError;
+  }
   signal?.removeEventListener("abort", abort);
   closeSync(log);
   return { durationMs: Math.round(performance.now() - started), exitCode: outcome.code, signal: outcome.signal,
