@@ -26,9 +26,9 @@ pub(crate) mod production;
 pub(crate) mod repository_extensions;
 pub(crate) mod repository_kernel;
 pub(crate) mod repository_observer;
+pub(crate) mod provider_credentials;
 
 pub(crate) mod storage_extension;
 pub(crate) mod task_evidence;
 mod task_evidence_outbox;
 pub(crate) mod task_verification;
-pub(crate) mod provider_credentials;
