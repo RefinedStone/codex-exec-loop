@@ -37,6 +37,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  AKRA_CI_MEASUREMENTS: artifacts/ci-performance
+  AKRA_CI_PROFILE: dev/test
 
 jobs:
   scope:
@@ -65,7 +67,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -89,6 +91,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install measurement runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
 
@@ -106,7 +113,23 @@ jobs:
             ${{ runner.os }}-rust-
 
       - name: Run Rust tests
-        run: cargo test --locked
+        run: node scripts/ci-performance.mjs run rust-tests -- cargo test --locked --timings
+
+      - name: Summarize CI measurements
+        if: always()
+        run: node scripts/ci-performance.mjs report
+
+      - name: Preserve CI measurements and Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-performance-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            artifacts/ci-performance
+            target/cargo-timings
+            target/*/cargo-timings
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Set up Node for the native confirmation process check
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -127,6 +150,11 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+
+      - name: Install measurement runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
@@ -156,13 +184,29 @@ jobs:
           fi
 
       - name: Check TUI architecture
-        run: bash scripts/check_tui_layering.sh
+        run: node scripts/ci-performance.mjs run architecture -- bash scripts/check_tui_layering.sh
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
       - name: Run Rust clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: node scripts/ci-performance.mjs run clippy -- cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Summarize CI measurements
+        if: always()
+        run: node scripts/ci-performance.mjs report
+
+      - name: Preserve CI measurements and Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-performance-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            artifacts/ci-performance
+            target/cargo-timings
+            target/*/cargo-timings
+          if-no-files-found: warn
+          retention-days: 14
 
   node_surfaces:
     name: Node and Admin Surfaces
@@ -186,7 +230,7 @@ jobs:
             desktop/package-lock.json
 
       - name: Run Node and admin checks
-        run: bash scripts/check_node_surfaces.sh
+        run: node scripts/ci-performance.mjs run node-admin -- bash scripts/check_node_surfaces.sh
 
       # Akra Desktop screen tests drive the built Electron app against the fake gateway (no codex, no turns).
       # The Node checks above install desktop dependencies without the Electron binary, so fetch it here.
@@ -201,10 +245,26 @@ jobs:
           CI: "true"
           XDG_CURRENT_DESKTOP: GNOME
         run: |
-          dbus-run-session -- bash -euo pipefail -c '
+          node scripts/ci-performance.mjs run desktop-e2e -- dbus-run-session -- bash -euo pipefail -c '
             printf "%s" "akra-ci-fixture-keyring" | gnome-keyring-daemon --unlock --components=secrets
             xvfb-run --auto-servernum npm --prefix desktop run e2e
           '
+
+      - name: Summarize CI measurements
+        if: always()
+        run: node scripts/ci-performance.mjs report
+
+      - name: Preserve CI measurements and Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-performance-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            artifacts/ci-performance
+            target/cargo-timings
+            target/*/cargo-timings
+          if-no-files-found: warn
+          retention-days: 14
 
   portable_native:
     name: Portable Rust Check (${{ matrix.label }})
@@ -228,6 +288,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install measurement runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
         with:
@@ -248,25 +313,25 @@ jobs:
       - name: Run Windows portable validation
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
-        run: bash scripts/check_windows_portable.sh
+        run: node scripts/ci-performance.mjs run windows-portable -- bash scripts/check_windows_portable.sh
 
       - name: Check native target
         if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
-        run: cargo check --locked --all-features --lib --bins --target "${{ matrix.target }}"
+        run: node scripts/ci-performance.mjs run native-check -- cargo check --locked --all-features --lib --bins --timings --target "${{ matrix.target }}"
 
       - name: Test native process identity
         if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: >-
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
+          node scripts/ci-performance.mjs run native-contract -- cargo test --locked --all-features --lib --timings --target "${{ matrix.target }}"
           process_liveness::tests:: -- --nocapture
 
       - name: Test native executable format validation
         if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: >-
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
+          node scripts/ci-performance.mjs run native-contract -- cargo test --locked --all-features --lib --timings --target "${{ matrix.target }}"
           trusted_executable::tests::native_ -- --nocapture
 
       - name: Test native Vault keys, private storage and task evidence
@@ -286,7 +351,7 @@ jobs:
             'parallel_mode::tests::pool::lease::task_evidence::' \
             'worker_evidence::'
           do
-            cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
+            node scripts/ci-performance.mjs run native-contract -- cargo test --locked --all-features --lib --timings --target "${{ matrix.target }}" \
               "${filter}" -- --nocapture
           done
 
@@ -302,6 +367,22 @@ jobs:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
         run: node scripts/check_native_confirmation_process.mjs
 
+      - name: Summarize CI measurements
+        if: always()
+        run: node scripts/ci-performance.mjs report
+
+      - name: Preserve CI measurements and Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-performance-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            artifacts/ci-performance
+            target/cargo-timings
+            target/*/cargo-timings
+          if-no-files-found: warn
+          retention-days: 14
+
   smoke_check:
     name: Rust Smoke Check
     needs: scope
@@ -313,6 +394,11 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+
+      - name: Install measurement runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
@@ -331,7 +417,23 @@ jobs:
             ${{ runner.os }}-rust-
 
       - name: Check native smoke target
-        run: cargo check --locked --all-features --lib --bins
+        run: node scripts/ci-performance.mjs run smoke-check -- cargo check --locked --all-features --lib --bins --timings
+
+      - name: Summarize CI measurements
+        if: always()
+        run: node scripts/ci-performance.mjs report
+
+      - name: Preserve CI measurements and Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-performance-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            artifacts/ci-performance
+            target/cargo-timings
+            target/*/cargo-timings
+          if-no-files-found: warn
+          retention-days: 14
 
   fast_gate:
     name: Fast Gate
