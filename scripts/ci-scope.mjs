@@ -171,7 +171,7 @@ export function evaluateGate(plan, results) {
     required.push(["rust_tests", results.rust_tests], ["rust_lint", results.rust_lint]);
   }
   if (plan.node) {
-    required.push(["node_surfaces", results.node_surfaces]);
+    required.push(["node_surfaces", results.node_surfaces], ["desktop_e2e", results.desktop_e2e]);
   }
   if (plan.portable) {
     required.push(["portable_native", results.portable_native]);
@@ -188,7 +188,7 @@ export function evaluateFastGate(plan, results) {
     required.push(["rust_lint", results.rust_lint]);
   }
   if (plan.node) {
-    required.push(["node_surfaces", results.node_surfaces]);
+    required.push(["node_surfaces", results.node_surfaces], ["desktop_e2e", results.desktop_e2e]);
   }
   if (plan.smoke) {
     required.push(["smoke_check", results.smoke_check]);
@@ -252,6 +252,7 @@ function gateInputs() {
     rust_tests: process.env.AKRA_CI_RUST_TESTS_RESULT,
     rust_lint: process.env.AKRA_CI_RUST_LINT_RESULT,
     node_surfaces: process.env.AKRA_CI_NODE_RESULT,
+    desktop_e2e: process.env.AKRA_CI_DESKTOP_RESULT,
     portable_native: process.env.AKRA_CI_PORTABLE_RESULT,
     smoke_check: process.env.AKRA_CI_SMOKE_RESULT,
   };
