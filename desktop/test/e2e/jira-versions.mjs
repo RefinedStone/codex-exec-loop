@@ -21,7 +21,7 @@ const endpoint = fake.uniqueTestEndpoint();
 const server = createServer();
 const sockets = new WebSocketServer({ server });
 const userData = await mkdtemp(join(tmpdir(), "akra-jira-versions-"));
-const evidence = join(desktopDir, "../.omo/evidence/jira-versions");
+const evidence = process.env.AKRA_E2E_ARTIFACT_DIR ?? join(desktopDir, "../.omo/evidence/jira-versions");
 await mkdir(evidence, { recursive: true });
 const resource = {
   kind: "jira", key: "sample.atlassian.net/ABC-123",

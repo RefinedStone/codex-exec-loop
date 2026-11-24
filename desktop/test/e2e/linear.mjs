@@ -12,7 +12,7 @@ const desktop = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
 const fake = await import(pathToFileURL(join(desktop, "test/fake-gateway/fakeGateway.ts")).href);
 const userData = await mkdtemp(join(tmpdir(), "akra-linear-"));
-const evidence = join(desktop, "../.omo/evidence/linear");
+const evidence = process.env.AKRA_E2E_ARTIFACT_DIR ?? join(desktop, "../.omo/evidence/linear");
 await mkdir(evidence, { recursive: true });
 const ids = {
   one: "11111111-1111-4111-8111-111111111111", two: "22222222-2222-4222-8222-222222222222",
