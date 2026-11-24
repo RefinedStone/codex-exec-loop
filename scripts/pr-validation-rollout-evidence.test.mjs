@@ -209,3 +209,19 @@ test("the Markdown report labels projections and the approval boundary", () => {
   assert.match(markdown, /Ruleset change: \*\*approval_required\*\*/);
   assert.match(markdown, /no intentionally broken merge/);
 });
+
+test("projected Fast Gate includes every desktop shard and rejects partial screen evidence", () => {
+  const project = (screens) => {
+    const input = passingInput();
+    input.pulls[0].preMergeJobs.push(...screens);
+    return buildRolloutEvidence(input).sample.rows[0].preMerge.fastGate;
+  };
+  const first = completedJob("Desktop Screen Tests (1/2)", 200);
+  const second = completedJob("Desktop Screen Tests (2/2)", 250);
+  assert.equal(project([first, second]).seconds, 250);
+  for (const conclusion of ["failure", "cancelled", "skipped"]) {
+    assert.equal(project([first, { ...second, conclusion }]), null);
+  }
+  assert.equal(project([first]), null);
+  assert.equal(project([first, first]), null);
+});

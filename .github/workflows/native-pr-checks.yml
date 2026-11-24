@@ -367,26 +367,11 @@ jobs:
             assets/admin/game/package-lock.json
             desktop/package-lock.json
 
+      - name: Check desktop E2E runner contracts
+        run: node --test desktop/scripts/run-e2e.test.mjs
+
       - name: Run Node and admin checks
         run: node scripts/ci-performance.mjs run node-admin -- bash scripts/check_node_surfaces.sh
-
-      # Akra Desktop screen tests drive the built Electron app against the fake gateway (no codex, no turns).
-      # The Node checks above install desktop dependencies without the Electron binary, so fetch it here.
-      - name: Install Electron runtime for desktop screen tests
-        run: |
-          node desktop/node_modules/electron/install.js
-          sudo apt-get update
-          sudo apt-get install -y xvfb gnome-keyring dbus-x11
-
-      - name: Run desktop screen tests
-        env:
-          CI: "true"
-          XDG_CURRENT_DESKTOP: GNOME
-        run: |
-          node scripts/ci-performance.mjs run desktop-e2e -- dbus-run-session -- bash -euo pipefail -c '
-            printf "%s" "akra-ci-fixture-keyring" | gnome-keyring-daemon --unlock --components=secrets
-            xvfb-run --auto-servernum npm --prefix desktop run e2e
-          '
 
       - name: Summarize CI measurements
         if: always()
@@ -401,6 +386,61 @@ jobs:
             artifacts/ci-performance
             target/cargo-timings
             target/*/cargo-timings
+          if-no-files-found: warn
+          retention-days: 14
+
+  desktop_e2e:
+    name: Desktop Screen Tests (${{ matrix.shard }}/2)
+    needs: scope
+    if: needs.scope.outputs.node == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies and runtime
+        run: |
+          npm --prefix desktop ci
+          sudo apt-get update
+          sudo apt-get install -y xvfb gnome-keyring dbus-x11
+
+      - name: Run desktop screen tests
+        env:
+          CI: "true"
+          XDG_CURRENT_DESKTOP: GNOME
+          AKRA_E2E_SHARD: ${{ matrix.shard }}/2
+        run: |
+          node scripts/ci-performance.mjs run desktop-e2e-${{ matrix.shard }} -- dbus-run-session -- bash -euo pipefail -c '
+            printf "%s" "akra-ci-fixture-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            xvfb-run --auto-servernum npm --prefix desktop run e2e
+          '
+
+      - name: Summarize CI measurements
+        if: always()
+        run: node scripts/ci-performance.mjs report
+
+      - name: Upload desktop screen test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-e2e-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: |
+            desktop/test-results/e2e/
+            artifacts/ci-performance/
           if-no-files-found: warn
           retention-days: 14
 
@@ -706,6 +746,7 @@ jobs:
       - scope
       - rust_lint
       - node_surfaces
+      - desktop_e2e
       - smoke_check
     if: always() && github.event_name != 'push'
     runs-on: ubuntu-latest
@@ -725,6 +766,7 @@ jobs:
         env:
           AKRA_CI_NODE_REQUIRED: ${{ needs.scope.outputs.node }}
           AKRA_CI_NODE_RESULT: ${{ needs.node_surfaces.result }}
+          AKRA_CI_DESKTOP_RESULT: ${{ needs.desktop_e2e.result }}
           AKRA_CI_RUST_LINT_RESULT: ${{ needs.rust_lint.result }}
           AKRA_CI_RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
           AKRA_CI_SCOPE_RESULT: ${{ needs.scope.result }}
@@ -739,6 +781,7 @@ jobs:
       - rust_tests
       - rust_lint
       - node_surfaces
+      - desktop_e2e
       - portable_native
       - smoke_check
     if: always()
@@ -759,6 +802,7 @@ jobs:
         env:
           AKRA_CI_NODE_REQUIRED: ${{ needs.scope.outputs.node }}
           AKRA_CI_NODE_RESULT: ${{ needs.node_surfaces.result }}
+          AKRA_CI_DESKTOP_RESULT: ${{ needs.desktop_e2e.result }}
           AKRA_CI_PORTABLE_REQUIRED: ${{ needs.scope.outputs.portable }}
           AKRA_CI_PORTABLE_RESULT: ${{ needs.portable_native.result }}
           AKRA_CI_RUST_LINT_RESULT: ${{ needs.rust_lint.result }}
@@ -776,6 +820,7 @@ jobs:
       - rust_tests
       - rust_lint
       - node_surfaces
+      - desktop_e2e
       - portable_native
       - smoke_check
     if: always() && needs.scope.outputs.postmerge == 'true'
@@ -796,6 +841,7 @@ jobs:
         env:
           AKRA_CI_NODE_REQUIRED: ${{ needs.scope.outputs.node }}
           AKRA_CI_NODE_RESULT: ${{ needs.node_surfaces.result }}
+          AKRA_CI_DESKTOP_RESULT: ${{ needs.desktop_e2e.result }}
           AKRA_CI_PORTABLE_REQUIRED: ${{ needs.scope.outputs.portable }}
           AKRA_CI_PORTABLE_RESULT: ${{ needs.portable_native.result }}
           AKRA_CI_RUST_LINT_RESULT: ${{ needs.rust_lint.result }}

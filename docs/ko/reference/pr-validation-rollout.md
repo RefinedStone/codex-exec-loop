@@ -29,7 +29,7 @@ Admin Validation Rail은 실제 mode를 `OFF`, `SHADOW`, `REMEDIATION`으로 표
 
 ## CI 계약
 
-- `Fast Gate`는 CI scope, 선택된 Rust lint/architecture, 선택된 Node/Admin, 명시적 smoke를
+- `Fast Gate`는 CI scope, 선택된 Rust lint/architecture, 선택된 Node/Admin 및 모든 Desktop 화면 시험 shard, 명시적 smoke를
   집계합니다. 긴 Rust 전체 테스트와 portable platform 검증은 merge admission에서 제외합니다.
 - `CI Gate`는 PR에 선택된 모든 job을 계속 집계하며, 별도 사용자 승인 전까지 Ruleset required
   context로 유지됩니다.
