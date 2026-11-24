@@ -98,21 +98,86 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
 
-      - name: Restore Rust test cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Prepare Rust cache policy
+        id: rust_cache_policy
+        env:
+          AKRA_CI_CACHE_LANE: rust-tests
+          AKRA_CI_TARGET: host
+          AKRA_CI_FEATURES: default
+          AKRA_CI_CACHE_MANIFEST_HASH: ${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config*') }}
+          AKRA_CI_CACHE_LOCK_HASH: ${{ hashFiles('**/Cargo.lock') }}
+        run: node scripts/ci-cache.mjs plan
+
+      - name: Restore Rust registry cache
+        id: restore_registry
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-rust-tests-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
-          restore-keys: |
-            ${{ runner.os }}-rust-tests-
-            ${{ runner.os }}-rust-
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.registry-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Restore Rust target cache
+        id: restore_target
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Record restored Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+        run: node scripts/ci-cache.mjs record restored
 
       - name: Run Rust tests
         run: node scripts/ci-performance.mjs run rust-tests -- cargo test --locked --timings
+
+      - name: Save Rust registry cache
+        id: save_registry
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_registry.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+
+      - name: Save Rust target cache
+        id: save_target
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+
+      - name: Record complete Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_REGISTRY_SAVE: ${{ steps.save_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+          AKRA_CI_CACHE_TARGET_SAVE: ${{ steps.save_target.outcome }}
+        run: node scripts/ci-cache.mjs record complete
 
       - name: Summarize CI measurements
         if: always()
@@ -152,18 +217,49 @@ jobs:
         with:
           components: clippy,rustfmt
 
-      - name: Restore Rust lint cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Prepare Rust cache policy
+        id: rust_cache_policy
+        env:
+          AKRA_CI_CACHE_LANE: rust-lint
+          AKRA_CI_TARGET: host
+          AKRA_CI_FEATURES: all
+          AKRA_CI_CACHE_MANIFEST_HASH: ${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config*') }}
+          AKRA_CI_CACHE_LOCK_HASH: ${{ hashFiles('**/Cargo.lock') }}
+        run: node scripts/ci-cache.mjs plan
+
+      - name: Restore Rust registry cache
+        id: restore_registry
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-rust-lint-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
-          restore-keys: |
-            ${{ runner.os }}-rust-lint-
-            ${{ runner.os }}-rust-
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.registry-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Restore Rust target cache
+        id: restore_target
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Record restored Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+        run: node scripts/ci-cache.mjs record restored
 
       - name: Ensure shell tooling
         shell: bash
@@ -182,6 +278,40 @@ jobs:
 
       - name: Run Rust clippy
         run: node scripts/ci-performance.mjs run clippy -- cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Save Rust registry cache
+        id: save_registry
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_registry.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+
+      - name: Save Rust target cache
+        id: save_target
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+
+      - name: Record complete Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_REGISTRY_SAVE: ${{ steps.save_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+          AKRA_CI_CACHE_TARGET_SAVE: ${{ steps.save_target.outcome }}
+        run: node scripts/ci-cache.mjs record complete
 
       - name: Summarize CI measurements
         if: always()
@@ -289,17 +419,49 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Restore portable Rust cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Prepare Rust cache policy
+        id: rust_cache_policy
+        env:
+          AKRA_CI_CACHE_LANE: portable
+          AKRA_CI_TARGET: ${{ matrix.target }}
+          AKRA_CI_FEATURES: all
+          AKRA_CI_CACHE_MANIFEST_HASH: ${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config*') }}
+          AKRA_CI_CACHE_LOCK_HASH: ${{ hashFiles('**/Cargo.lock') }}
+        run: node scripts/ci-cache.mjs plan
+
+      - name: Restore Rust registry cache
+        id: restore_registry
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-${{ matrix.target }}-portable-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-portable-
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.registry-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Restore Rust target cache
+        id: restore_target
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Record restored Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+        run: node scripts/ci-cache.mjs record restored
 
       - name: Run Windows portable validation
         if: matrix.target == 'x86_64-pc-windows-msvc'
@@ -328,6 +490,40 @@ jobs:
             'sqlite_issue_automation_store::private_store::tests::' \
             'adapter::outbound::vault_key_store::' \
             'application::service::evidence_vault_unlock::'
+
+      - name: Save Rust registry cache
+        id: save_registry
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_registry.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+
+      - name: Save Rust target cache
+        id: save_target
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+
+      - name: Record complete Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_REGISTRY_SAVE: ${{ steps.save_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+          AKRA_CI_CACHE_TARGET_SAVE: ${{ steps.save_target.outcome }}
+        run: node scripts/ci-cache.mjs record complete
 
       - name: Summarize CI measurements
         if: always()
@@ -365,21 +561,86 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
 
-      - name: Restore Rust smoke cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Prepare Rust cache policy
+        id: rust_cache_policy
+        env:
+          AKRA_CI_CACHE_LANE: smoke
+          AKRA_CI_TARGET: host
+          AKRA_CI_FEATURES: all
+          AKRA_CI_CACHE_MANIFEST_HASH: ${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config*') }}
+          AKRA_CI_CACHE_LOCK_HASH: ${{ hashFiles('**/Cargo.lock') }}
+        run: node scripts/ci-cache.mjs plan
+
+      - name: Restore Rust registry cache
+        id: restore_registry
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-rust-smoke-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-v1
-          restore-keys: |
-            ${{ runner.os }}-rust-smoke-
-            ${{ runner.os }}-rust-
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.registry-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Restore Rust target cache
+        id: restore_target
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+          restore-keys: ${{ steps.rust_cache_policy.outputs.target-prefix }}
+          fail-on-cache-miss: false
+
+      - name: Record restored Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+        run: node scripts/ci-cache.mjs record restored
 
       - name: Check native smoke target
         run: node scripts/ci-performance.mjs run smoke-check -- cargo check --locked --all-features --lib --bins --timings
+
+      - name: Save Rust registry cache
+        id: save_registry
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_registry.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
+          key: ${{ steps.rust_cache_policy.outputs.registry-key }}
+
+      - name: Save Rust target cache
+        id: save_target
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.rust_cache_policy.outputs.target-directory }}
+          key: ${{ steps.rust_cache_policy.outputs.target-key }}
+
+      - name: Record complete Rust cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_REGISTRY_SAVE: ${{ steps.save_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+          AKRA_CI_CACHE_TARGET_SAVE: ${{ steps.save_target.outcome }}
+        run: node scripts/ci-cache.mjs record complete
 
       - name: Summarize CI measurements
         if: always()
