@@ -120,33 +120,54 @@ pub(super) fn commit(
         }
         value.observation.clone()
     };
-    match value.operation {
-        TaskDeliveryEvidenceOperation::Effect { .. } if !observation.allows_delivery() => {
-            queue.queue_state = ParallelModeQueueItemState::Blocked;
-            queue.integration_state = "blocked".into();
-            queue.evidence_wait = Some(observation.stage);
-            queue.integration_note = format!(
-                "task evidence waiting: {} / {}",
-                observation.stage.label(),
-                observation
-                    .reasons
-                    .first()
-                    .copied()
-                    .unwrap_or(TaskDeliveryEvidenceReason::CriteriaNotMet)
-                    .label()
-            );
+    let integration_source_mismatch_is_operator_block = observation.mode
+        == TaskEvidenceDeliveryMode::Enforce
+        && observation.stage == TaskEvidenceDeliveryStage::Integrate
+        && observation
+            .reasons
+            .contains(&TaskDeliveryEvidenceReason::IntegrationSourceMismatch);
+    if integration_source_mismatch_is_operator_block {
+        // The frozen source was integrated against a different base/tree. Re-reading the same
+        // immutable queue record cannot make that proof valid; require an operator to rebase and
+        // obtain fresh host evidence instead of creating an endlessly rechecked typed wait.
+        queue.queue_state = ParallelModeQueueItemState::Blocked;
+        queue.integration_state = "blocked".into();
+        queue.evidence_wait = None;
+        queue.retry_not_before = None;
+        queue.recovery_note = Some(
+            "operator must rebase the integration source and obtain fresh host evidence".into(),
+        );
+        queue.integration_note =
+            "operator required: integration source changed after dispatch; rebase and revalidate before delivery".into();
+    } else {
+        match value.operation {
+            TaskDeliveryEvidenceOperation::Effect { .. } if !observation.allows_delivery() => {
+                queue.queue_state = ParallelModeQueueItemState::Blocked;
+                queue.integration_state = "blocked".into();
+                queue.evidence_wait = Some(observation.stage);
+                queue.integration_note = format!(
+                    "task evidence waiting: {} / {}",
+                    observation.stage.label(),
+                    observation
+                        .reasons
+                        .first()
+                        .copied()
+                        .unwrap_or(TaskDeliveryEvidenceReason::CriteriaNotMet)
+                        .label()
+                );
+            }
+            TaskDeliveryEvidenceOperation::Recheck if observation.allows_delivery() => {
+                queue.queue_state = ParallelModeQueueItemState::Queued;
+                queue.integration_state = "queued".into();
+                queue.evidence_wait = None;
+                queue.retry_not_before = None;
+                queue.recovery_note =
+                    Some("task evidence wait rearmed for current delivery checks".into());
+                queue.integration_note =
+                    "task evidence wait cleared; queued for current delivery checks".into();
+            }
+            _ => {}
         }
-        TaskDeliveryEvidenceOperation::Recheck if observation.allows_delivery() => {
-            queue.queue_state = ParallelModeQueueItemState::Queued;
-            queue.integration_state = "queued".into();
-            queue.evidence_wait = None;
-            queue.retry_not_before = None;
-            queue.recovery_note =
-                Some("task evidence wait rearmed for current delivery checks".into());
-            queue.integration_note =
-                "task evidence wait cleared; queued for current delivery checks".into();
-        }
-        _ => {}
     }
     let changed = queue != current.queue;
     if changed {

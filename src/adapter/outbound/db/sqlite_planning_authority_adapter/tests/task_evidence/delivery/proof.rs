@@ -143,8 +143,66 @@ fn queued_source_accepts_the_verified_tree_after_host_commit_without_requiring_o
     assert!(!blocked.effect_allowed);
     assert_eq!(blocked.observation.source, approved.source);
     assert_eq!(
+        blocked.updated_queue.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert_eq!(blocked.updated_queue.evidence_wait, None);
+    assert!(
+        blocked
+            .updated_queue
+            .integration_note
+            .contains("operator required"),
+        "an immutable source mismatch must not become an automatically rechecked evidence wait"
+    );
+}
+
+#[test]
+fn an_existing_integration_evidence_wait_with_source_mismatch_becomes_an_operator_block() {
+    let f = DeliveryFixture::new_inner("delivery-evidence-source-mismatch-recheck", true);
+    f.claim();
+
+    let mut queue = f.queue();
+    queue.integration_base_commit_sha = Some("c".repeat(40));
+    queue.integration_commit_sha = Some("e".repeat(40));
+    queue.pull_request_number = Some(123);
+    f.base
+        .adapter
+        .upsert_runtime_distributor_queue_record(&f.base.workspace, &queue)
+        .unwrap();
+
+    let mut initial = host_passes(&f);
+    initial.stage = TaskEvidenceDeliveryStage::Integrate;
+    initial.reasons = vec![TaskDeliveryEvidenceReason::EvidenceMissing];
+    initial.source.as_mut().unwrap().integration = Some(TaskEvidenceIntegrationResult {
+        base_commit_sha: "c".repeat(40),
+        result_commit_sha: "e".repeat(40),
+        result_tree_sha: "f".repeat(40),
+    });
+    let blocked = f.commit(initial, f.effect()).unwrap();
+    assert_eq!(
         blocked.updated_queue.evidence_wait,
         Some(TaskEvidenceDeliveryStage::Integrate)
+    );
+    f.release();
+
+    let mut mismatch = blocked.observation;
+    mismatch.reasons = vec![TaskDeliveryEvidenceReason::IntegrationSourceMismatch];
+    let result = f
+        .commit(mismatch, TaskDeliveryEvidenceOperation::Recheck)
+        .unwrap();
+
+    assert!(!result.effect_allowed);
+    assert_eq!(
+        result.updated_queue.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert_eq!(result.updated_queue.evidence_wait, None);
+    assert!(
+        result
+            .updated_queue
+            .integration_note
+            .contains("operator required"),
+        "rechecking an integration base that moved after dispatch must not rearm the same wait"
     );
 }
 

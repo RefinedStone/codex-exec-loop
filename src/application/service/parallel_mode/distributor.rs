@@ -61,6 +61,23 @@ use self::work_permits::{
     WorkOrderPermitWaitRecheck, block_if_work_order_permit_denied, recheck_work_order_permit_wait,
     select_permitted_queue_head, work_order_delivery_gate, work_order_permit_decision,
 };
+
+#[cfg(test)]
+pub(super) fn test_select_permitted_queue_head(
+    authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    evidence_gate: &dyn TaskDeliveryEvidenceGatePort,
+    context: &mut PoolRuntimeContext,
+    allow_cleanup_probe: bool,
+) -> Result<Option<usize>, String> {
+    select_permitted_queue_head(
+        authority,
+        runtime,
+        evidence_gate,
+        context,
+        allow_cleanup_probe,
+    )
+}
 use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitStage;
 mod queue_keys;
 mod snapshot;

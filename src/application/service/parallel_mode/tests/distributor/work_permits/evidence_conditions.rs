@@ -214,3 +214,134 @@ fn a_new_human_review_requirement_or_missing_preflight_cannot_reuse_autonomous_p
 }
 
 mod source_range;
+
+struct NeverRearmEvidenceWait;
+
+impl TaskDeliveryEvidenceGatePort for NeverRearmEvidenceWait {
+    fn evaluate(
+        &self,
+        _: &str,
+        record: &PlanningAuthorityDistributorQueueRecord,
+        _: TaskEvidenceDeliveryStage,
+        _: Option<&TaskDeliveryEvidenceIntegration>,
+        _: &TaskDeliveryEvidenceOperation,
+    ) -> Result<TaskDeliveryEvidenceDecision, String> {
+        Ok(TaskDeliveryEvidenceDecision {
+            updated_queue: record.clone(),
+            allowed: false,
+            reason: Some(crate::domain::planning::delivery_evidence::TaskDeliveryEvidenceReason::EvidenceMissing),
+        })
+    }
+}
+
+fn integration_wait_record(
+    queue_item_id: &str,
+    workspace: &str,
+) -> PlanningAuthorityDistributorQueueRecord {
+    let mut record: PlanningAuthorityDistributorQueueRecord =
+        serde_json::from_value(serde_json::json!({
+            "queue_item_id": queue_item_id,
+            "session_key": format!("session-{queue_item_id}"),
+            "agent_id": format!("agent-{queue_item_id}"),
+            "task_id": format!("task-{queue_item_id}"),
+            "task_title": queue_item_id,
+            "branch_name": format!("agent-{queue_item_id}"),
+            "worktree_path": workspace,
+            "commit_sha": "a".repeat(40),
+            "validation_summary": "validated",
+            "authority_refresh_outcome": "done",
+            "queue_state": "blocked",
+            "integration_note": "task evidence waiting: integrate / evidence missing",
+            "enqueued_at": "2026-11-23T12:00:00Z",
+            "updated_at": "2026-11-23T12:00:00Z"
+        }))
+        .unwrap();
+    record.evidence_wait = Some(TaskEvidenceDeliveryStage::Integrate);
+    record
+}
+
+#[test]
+fn legacy_integration_evidence_wait_keeps_the_shared_worktree_queue_head() {
+    let repo = TempGitRepo::new("legacy-integration-evidence-wait");
+    let workspace = repo.workspace_dir();
+    let runtime = test_parallel_runtime();
+    let authority = NoopPlanningAuthorityPort::default().with_canonical_repo_root(&workspace);
+    let mut context =
+        crate::application::service::parallel_mode::pool::load_pool_runtime_context_with_runtime(
+            &runtime, &authority, &workspace,
+        )
+        .unwrap();
+
+    let mut legacy = integration_wait_record("legacy-a", &workspace);
+    legacy.evidence_binding = None;
+
+    let mut next = legacy.clone();
+    next.queue_item_id = "legacy-b".into();
+    next.session_key = "session-b".into();
+    next.agent_id = "agent-b".into();
+    next.task_id = "task-b".into();
+    next.task_title = "Legacy B".into();
+    next.branch_name = "agent-b".into();
+    next.commit_sha = "b".repeat(40);
+    next.queue_state = crate::domain::parallel_mode::ParallelModeQueueItemState::Queued;
+    next.evidence_wait = None;
+    next.integration_note = "queued".into();
+    context.distributor_queue_records = vec![legacy.clone(), next];
+
+    let selected =
+        crate::application::service::parallel_mode::distributor::test_select_permitted_queue_head(
+            &authority,
+            &runtime,
+            &NeverRearmEvidenceWait,
+            &mut context,
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(selected, Some(0));
+    assert_eq!(context.distributor_queue_records[0], legacy);
+}
+
+#[test]
+fn work_order_integration_evidence_wait_can_yield_after_a_blocked_recheck() {
+    let repo = TempGitRepo::new("work-order-integration-evidence-wait");
+    let workspace = repo.workspace_dir();
+    let runtime = test_parallel_runtime();
+    let authority = NoopPlanningAuthorityPort::default().with_canonical_repo_root(&workspace);
+    let mut context =
+        crate::application::service::parallel_mode::pool::load_pool_runtime_context_with_runtime(
+            &runtime, &authority, &workspace,
+        )
+        .unwrap();
+
+    let mut work_order = integration_wait_record("work-order-a", &workspace);
+    work_order.evidence_binding = Some(
+        crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryBinding {
+            scope: crate::domain::planning::evidence::TaskEvidenceScope {
+                task_id: work_order.task_id.clone(),
+                scope_id: "scope-a".into(),
+                acceptance_revision: 1,
+                criteria_sha256: "a".repeat(64),
+            },
+            lease_generation: "lease-a".into(),
+        },
+    );
+    let mut next = integration_wait_record("work-order-b", &workspace);
+    next.queue_state = crate::domain::parallel_mode::ParallelModeQueueItemState::Queued;
+    next.evidence_wait = None;
+    next.evidence_binding = None;
+    next.integration_note = "queued".into();
+    context.distributor_queue_records = vec![work_order, next];
+
+    let selected =
+        crate::application::service::parallel_mode::distributor::test_select_permitted_queue_head(
+            &authority,
+            &runtime,
+            &NeverRearmEvidenceWait,
+            &mut context,
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(selected, Some(1));
+}

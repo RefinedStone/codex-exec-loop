@@ -119,3 +119,145 @@ fn rechecking_a_wait_is_never_an_external_effect_authorization() {
     assert!(!decision.allowed);
     assert!(fixture.last().satisfied());
 }
+
+#[test]
+fn an_enforce_wait_cannot_be_downgraded_by_a_second_observe_process() {
+    let mut fixture = Fixture::new(TaskEvidenceDeliveryMode::Enforce);
+    fixture.change(|snapshot| {
+        snapshot.task.as_mut().unwrap().host_verifications.clear();
+    });
+    assert!(!fixture.effect().unwrap().allowed);
+    let enforced = fixture.last();
+    assert_eq!(enforced.mode, TaskEvidenceDeliveryMode::Enforce);
+
+    fixture.change(|snapshot| {
+        snapshot.queue.queue_state =
+            crate::domain::parallel_mode::ParallelModeQueueItemState::Blocked;
+        snapshot.queue.evidence_wait = Some(TaskEvidenceDeliveryStage::Push);
+        snapshot.queue.evidence_observations = vec![enforced];
+        snapshot.queue.integration_note = "task evidence waiting: push / evidence missing".into();
+    });
+    fixture.service.mode = Ok(TaskEvidenceDeliveryMode::Observe);
+    let queue = fixture.repository.snapshot.lock().unwrap().queue.clone();
+
+    let decision = fixture
+        .service
+        .evaluate(
+            "/repo",
+            &queue,
+            TaskEvidenceDeliveryStage::Push,
+            None,
+            &TaskDeliveryEvidenceOperation::Recheck,
+        )
+        .unwrap();
+
+    assert!(!decision.allowed);
+    assert_eq!(decision.updated_queue, queue);
+    assert_eq!(fixture.last().mode, TaskEvidenceDeliveryMode::Enforce);
+}
+
+#[test]
+fn stale_permit_and_preservation_keep_typed_waits_without_failing_other_queue_items() {
+    for preserve in [false, true] {
+        let fixture = Fixture::new(TaskEvidenceDeliveryMode::Enforce);
+        fixture.change(|snapshot| {
+            snapshot.queue.queue_state =
+                crate::domain::parallel_mode::ParallelModeQueueItemState::Blocked;
+            snapshot.queue.evidence_wait = Some(TaskEvidenceDeliveryStage::Push);
+            snapshot.queue.integration_note =
+                "task evidence waiting: push / evidence missing".into();
+            snapshot.requires_preservation = preserve;
+            if !preserve {
+                snapshot.permit = crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitDecision::Denied(
+                    crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkPermitBlockReason::Stale,
+                );
+            }
+        });
+        let queue = fixture.repository.snapshot.lock().unwrap().queue.clone();
+
+        let decision = fixture
+            .service
+            .evaluate(
+                "/repo",
+                &queue,
+                TaskEvidenceDeliveryStage::Push,
+                None,
+                &TaskDeliveryEvidenceOperation::Recheck,
+            )
+            .unwrap();
+
+        assert!(!decision.allowed);
+        assert_eq!(decision.updated_queue, queue);
+        assert_eq!(fixture.repository.commits.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn recheck_commit_fences_are_classified_as_wait_or_fresh_snapshot_retry() {
+    for (error, retry) in [
+        (TaskDeliveryEvidenceError::ControlDenied, false),
+        (TaskDeliveryEvidenceError::ClaimLost, false),
+        (TaskDeliveryEvidenceError::Conflict, true),
+        (TaskDeliveryEvidenceError::Invalid, false),
+    ] {
+        let fixture = Fixture::new(TaskEvidenceDeliveryMode::Enforce);
+        fixture.change(|snapshot| {
+            snapshot.queue.queue_state =
+                crate::domain::parallel_mode::ParallelModeQueueItemState::Blocked;
+            snapshot.queue.evidence_wait = Some(TaskEvidenceDeliveryStage::Push);
+            snapshot.queue.integration_note =
+                "task evidence waiting: push / evidence missing".into();
+        });
+        *fixture.repository.commit_error.lock().unwrap() = Some(error);
+        let queue = fixture.repository.snapshot.lock().unwrap().queue.clone();
+
+        let result = fixture.service.evaluate(
+            "/repo",
+            &queue,
+            TaskEvidenceDeliveryStage::Push,
+            None,
+            &TaskDeliveryEvidenceOperation::Recheck,
+        );
+
+        if retry {
+            assert!(
+                result.unwrap_err().starts_with("evidence_retry:"),
+                "{error:?} must request a fresh queue snapshot"
+            );
+        } else if matches!(error, TaskDeliveryEvidenceError::Invalid) {
+            assert!(
+                result.unwrap_err().starts_with("evidence_unavailable:"),
+                "invalid evidence state must fail closed rather than retry forever"
+            );
+        } else {
+            let decision = result.unwrap();
+            assert!(!decision.allowed);
+            assert_eq!(decision.updated_queue, queue);
+        }
+    }
+}
+
+#[test]
+fn a_queue_revision_change_during_recheck_requests_a_fresh_snapshot() {
+    let fixture = Fixture::new(TaskEvidenceDeliveryMode::Enforce);
+    let queue = fixture.repository.snapshot.lock().unwrap().queue.clone();
+    let changed = queue.clone();
+    fixture.change(|snapshot| {
+        snapshot.queue.updated_at = "2026-11-23T12:01:00Z".into();
+    });
+
+    let result = fixture.service.evaluate(
+        "/repo",
+        &queue,
+        TaskEvidenceDeliveryStage::Push,
+        None,
+        &TaskDeliveryEvidenceOperation::Recheck,
+    );
+
+    assert!(result.unwrap_err().starts_with("evidence_retry:"));
+    assert_ne!(
+        fixture.repository.snapshot.lock().unwrap().queue,
+        changed,
+        "the concurrent queue update must remain authoritative"
+    );
+}

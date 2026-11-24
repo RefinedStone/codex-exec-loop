@@ -68,6 +68,7 @@ impl Fixture {
             commits: AtomicUsize::new(0),
             on_second: Mutex::new(None),
             on_commit: Mutex::new(None),
+            commit_error: Mutex::new(None),
             observations: Mutex::new(Vec::new()),
         });
         let runtime = Arc::new(Runtime {
@@ -222,6 +223,7 @@ pub(super) struct Repository {
     pub commits: AtomicUsize,
     pub on_second: Mutex<Option<Hook>>,
     pub on_commit: Mutex<Option<Hook>>,
+    pub commit_error: Mutex<Option<TaskDeliveryEvidenceError>>,
     pub observations: Mutex<Vec<TaskDeliveryEvidenceObservation>>,
 }
 
@@ -238,7 +240,9 @@ impl TaskDeliveryEvidenceRepositoryPort for Repository {
             hook();
         }
         let snapshot = self.snapshot.lock().unwrap().clone();
-        anyhow::ensure!(snapshot.queue == *expected, "queue changed");
+        if snapshot.queue != *expected {
+            return Err(TaskDeliveryEvidenceError::Conflict.into());
+        }
         Ok(snapshot)
     }
     fn commit_delivery_evidence_observation(
@@ -249,6 +253,9 @@ impl TaskDeliveryEvidenceRepositoryPort for Repository {
         self.commits.fetch_add(1, Ordering::SeqCst);
         if let Some(hook) = self.on_commit.lock().unwrap().take() {
             hook();
+        }
+        if let Some(error) = self.commit_error.lock().unwrap().take() {
+            return Err(error.into());
         }
         let snapshot = self.snapshot.lock().unwrap();
         anyhow::ensure!(*snapshot == commit.expected, "authority CAS failed");
