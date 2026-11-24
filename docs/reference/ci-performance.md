@@ -5,7 +5,9 @@
 ## 수집 범위
 
 `Native PR Checks`는 기존 검사 명령을 `scripts/ci-performance.mjs run`으로 감싼다.
-명령의 종료 코드를 그대로 전달하고, 출력은 기존 Actions 로그에 남긴다. 별도 시험을 추가로 실행하지 않는다.
+명령의 실패 종료 코드를 전달하고, 출력은 기존 Actions 로그에 남긴다. 별도 시험을 추가로 실행하지 않는다.
+wrapper가 SIGINT/SIGTERM을 받으면 자식이 정리 후 0으로 끝나도 각각 130/143을 반환한다.
+기록의 exitCode는 wrapper 결과이며 childExitCode와 requestedSignal에 원래 종료와 취소 요청을 따로 남긴다.
 각 job의 artifact에는 명령별 시작/종료와 경과 시간, 실제 Cargo `Compiling` 줄 수,
 `Finished` 빌드 요약과 `test result` 실행 요약, commit/run/attempt, runner OS/아키텍처,
 toolchain과 feature/target/profile 조건을 기록한다. Cargo HTML timings도 가능한 빌드에서 함께 보존한다.
@@ -60,13 +62,16 @@ node scripts/ci-performance.mjs summarize run.json jobs.json summary.json
 ```
 
 `RUN_ID`와 `ATTEMPT`는 실제 실행으로 교체한다. 마지막 시도와 예전 시도의 jobs를 합치지 않는다.
-`summary.json`은 CI Gate 도달 시간과 runner 시간 합, job/step 상세, 누락 job 수를 분리한다.
-실행 중이거나 CI Gate가 없으면 해당 경과는 `null`이고 성공으로 간주하지 않는다.
+`summary.json`은 CI Gate 도달 시간과 runner 시간 합, job/step 상세, 미완료 job 수와 duration 누락 수를 분리한다.
+실행 중이거나 성공한 CI Gate가 없으면 해당 경과는 `null`이고 성공으로 간주하지 않는다.
+미완료 job 또는 시작·종료 시간이 빠진 실행 job이 있으면 runner 합계도 `null`이다.
+실행되지 않은 skipped job만 0으로 처리하며, 불완전한 표본은 비교 명령에서 거부한다.
 
 여러 summary에 다음 metadata를 붙여 JSON 배열 `samples.json`으로 보존한 뒤 비교한다.
 
 ```json
 {
+  "cohort": "baseline",
   "scenario": "cache-reuse",
   "environment": {
     "runner": "macos-15",
@@ -83,7 +88,10 @@ node scripts/ci-performance.mjs summarize run.json jobs.json summary.json
 node scripts/ci-performance.mjs compare samples.json comparison.json
 ```
 
-도구는 같은 조건과 scenario끼리만 묶어 표본 수, 중앙값, 최솟값·최댓값과 실행 URL/commit/attempt를 남긴다.
+cohort에는 개선 전 `baseline`, 개선 후 `candidate`처럼 명시적인 비교 집단을 지정한다.
+cohort가 없으면 비교를 거부한다. 서로 다른 cohort는 같은 환경·scenario여도 한 중앙값으로 섞지 않는다.
+도구는 같은 cohort·환경·scenario끼리만 묶어 표본 수, 중앙값, 최솟값·최댓값과 실행 URL/commit/attempt를 남긴다.
+summary의 gate/workflow/runner 시간과 미완료·duration 누락 개수를 함께 보존해야 한다.
 실패·중단된 실행을 빠른 성공 표본으로 섞지 않는다. 작은 소스 변경의 정확한 patch도 함께 보존한다.
 캐시 hit/miss, 크기·복원·저장 시간, compiled unit 수, runner 사용량과 실패율을 같이 비교한다.
 
