@@ -229,17 +229,17 @@ impl RepositoryKernelRegistry {
             match SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(
                 &target.workspace_root,
             ) {
-            Ok(Some(location)) => location,
-            Ok(None) => {
-                registry.unregister(&candidate.repository_key)?;
-                return Ok(RepositoryRestartOutcome::Unsupported);
-            }
-            Err(error) if is_permanently_invalid_restart_candidate(&error) => {
-                registry.unregister(&candidate.repository_key)?;
-                return Ok(RepositoryRestartOutcome::Unsupported);
-            }
-            Err(error) => return Err(error),
-        };
+                Ok(Some(location)) => location,
+                Ok(None) => {
+                    registry.unregister(&candidate.repository_key)?;
+                    return Ok(RepositoryRestartOutcome::Unsupported);
+                }
+                Err(error) if is_permanently_invalid_restart_candidate(&error) => {
+                    registry.unregister(&candidate.repository_key)?;
+                    return Ok(RepositoryRestartOutcome::Unsupported);
+                }
+                Err(error) => return Err(error),
+            };
         self.restore_registered_location(candidate, target, location, registry, recover)
     }
 
