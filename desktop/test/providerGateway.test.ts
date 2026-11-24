@@ -107,6 +107,19 @@ describe("provider Gateway facade", () => {
     expect(h.calls.filter(call => call.method.endsWith("/summary"))).toHaveLength(2);
   });
 
+  it("accepts a Gateway-clipped prompt with 20,000 Unicode scalar values", async () => {
+    const h = harness();
+    const prompt = "a".repeat(19_918) + "😀".repeat(82);
+    expect(Array.from(prompt)).toHaveLength(20_000);
+    expect(prompt.length).toBe(20_082);
+    h.respond(method => method.endsWith("/state") ? structuredClone(h.state) : { text: prompt });
+    await expect(h.facade.linear.issuePrompt("issue-1")).resolves.toBe(prompt);
+
+    const oversized = prompt + "x";
+    h.respond(method => method.endsWith("/state") ? structuredClone(h.state) : { text: oversized });
+    await expect(h.facade.linear.issuePrompt("issue-1")).rejects.toMatchObject({ reason: "corrupt" });
+  });
+
   it("keeps cached and in-flight reads through same-revision cancelled reconnect phases", async () => {
     const h = harness(); await h.facade.linear.status();
     const detail = deferred<unknown>();
