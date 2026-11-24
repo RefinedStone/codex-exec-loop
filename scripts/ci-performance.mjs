@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
+
+const elapsed = (start, end) => {
+  const milliseconds = Date.parse(end) - Date.parse(start);
+  return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds / 1000 : null;
+};
+export function distribution(values) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return { samples: 0, median: null, minimum: null, maximum: null };
+  const middle = Math.floor(sorted.length / 2);
+  return { samples: sorted.length, median: sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2,
+    minimum: sorted[0], maximum: sorted.at(-1) };
+}
+export function summarizeWorkflow(run, jobs) {
+  const rows = jobs.map((job) => ({
+    name: job.name, url: job.html_url, status: job.status, conclusion: job.conclusion,
+    seconds: job.status === "completed" ? elapsed(job.started_at, job.completed_at) : null,
+    steps: (job.steps ?? []).map((step) => ({
+      name: step.name, conclusion: step.conclusion,
+      seconds: step.status === "completed" ? elapsed(step.started_at, step.completed_at) : null,
+    })),
+  }));
+  const gate = jobs.find((job) => job.name === "CI Gate");
+  const completed = jobs.filter((job) => job.status === "completed" && job.completed_at);
+  const incompleteJobs = jobs.filter((job) => job.status !== "completed").length;
+  const last = completed.map((job) => job.completed_at).sort().at(-1);
+  return {
+    url: run.html_url, commit: run.head_sha, attempt: run.run_attempt,
+    status: run.status, conclusion: run.conclusion,
+    gateSeconds: gate?.status === "completed" ? elapsed(run.run_started_at ?? run.created_at, gate.completed_at) : null,
+    workflowSeconds: run.status === "completed" && !incompleteJobs ? elapsed(run.run_started_at ?? run.created_at, last) : null,
+    // Occupied job time is a proxy, not GitHub's rounded/billed runner minutes.
+    runnerSeconds: rows.reduce((sum, row) => sum + (row.seconds ?? 0), 0),
+    incompleteJobs, jobs: rows,
+  };
+}
+export function compareSamples(samples) {
+  const groups = new Map();
+  for (const sample of samples) {
+    const { environment, scenario } = sample;
+    if (sample.status !== "completed" || sample.conclusion !== "success" || !Number.isFinite(sample.gateSeconds) || !Number.isFinite(sample.runnerSeconds)) {
+      throw new Error("performance comparisons require complete successful samples with both elapsed and runner time");
+    }
+    if (!environment || !scenario || !["cold", "cache-reuse", "unchanged", "source-change"].includes(scenario)) {
+      throw new Error("each sample needs environment and a cold/cache-reuse/unchanged/source-change scenario");
+    }
+    for (const field of ["runner", "architecture", "toolchain", "features", "profile", "target"]) {
+      if (typeof environment[field] !== "string" || !environment[field]) throw new Error(`missing environment.${field}`);
+    }
+    const key = JSON.stringify([scenario, ...["runner", "architecture", "toolchain", "features", "profile", "target"].map((field) => environment[field])]);
+    const group = groups.get(key) ?? { scenario, environment, samples: [] };
+    group.samples.push(sample);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => ({
+    scenario: group.scenario, environment: group.environment,
+    gateSeconds: distribution(group.samples.map((sample) => sample.gateSeconds)),
+    runnerSeconds: distribution(group.samples.map((sample) => sample.runnerSeconds)),
+    evidence: group.samples.map(({ url, commit, attempt }) => ({ url, commit, attempt })),
+  }));
+}
+export function createCargoObserver() {
+  const state = { compilingUnits: 0, freshUnits: 0, finished: [], testResults: [] };
+  let pending = "";
+  const line = (text) => {
+    const clean = text.replace(/\x1b\[[0-9;]*m/g, "").trim();
+    if (/^Compiling\s/.test(clean)) state.compilingUnits += 1;
+    if (/^Fresh\s/.test(clean)) state.freshUnits += 1;
+    if (/^Finished\s/.test(clean)) state.finished.push(clean);
+    if (/^test result:/.test(clean)) state.testResults.push(clean);
+  };
+  return {
+    state,
+    feed(chunk) {
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop();
+      lines.forEach(line);
+    },
+    finish() { if (pending) line(pending); pending = ""; },
+  };
+}
+export async function measure(label, command, args, { directory = process.env.AKRA_CI_MEASUREMENTS || "artifacts/ci-performance" } = {}) {
+  if (!label || !command) throw new Error("run requires a label and command after --");
+  const start = new Date();
+  const clock = performance.now();
+  const observers = [createCargoObserver(), createCargoObserver()];
+  const child = spawn(command, args, { stdio: ["inherit", "pipe", "pipe"], shell: false });
+  child.stdout.on("data", (chunk) => { process.stdout.write(chunk); observers[0].feed(chunk.toString()); });
+  child.stderr.on("data", (chunk) => { process.stderr.write(chunk); observers[1].feed(chunk.toString()); });
+  const forward = (signal) => { if (!child.killed) child.kill(signal); };
+  const interrupt = () => forward("SIGINT");
+  const terminate = () => forward("SIGTERM");
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", terminate);
+  let spawnError;
+  child.on("error", (error) => { spawnError = error.message; });
+  const result = await new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal })));
+  process.removeListener("SIGINT", interrupt);
+  process.removeListener("SIGTERM", terminate);
+  observers.forEach((observer) => observer.finish());
+  const cargo = {
+    compilingUnits: observers.reduce((sum, observer) => sum + observer.state.compilingUnits, 0),
+    freshUnits: observers.reduce((sum, observer) => sum + observer.state.freshUnits, 0),
+    finished: observers.flatMap((observer) => observer.state.finished),
+    testResults: observers.flatMap((observer) => observer.state.testResults),
+  };
+  const record = {
+    schema: 1, label, command, startedAt: start.toISOString(), finishedAt: new Date().toISOString(),
+    seconds: (performance.now() - clock) / 1000,
+    exitCode: result.code, signal: result.signal, spawnError, cargo,
+    commit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
+    job: process.env.GITHUB_JOB, os: process.env.RUNNER_OS || process.platform, architecture: process.env.RUNNER_ARCH || process.arch,
+    toolchain: process.env.RUSTUP_TOOLCHAIN, runnerImage: process.env.ImageOS, runnerImageVersion: process.env.ImageVersion,
+    target: process.env.AKRA_CI_TARGET, features: process.env.AKRA_CI_FEATURES, profile: process.env.AKRA_CI_PROFILE || "dev/test",
+  };
+  mkdirSync(directory, { recursive: true });
+  appendFileSync(join(directory, "steps.jsonl"), JSON.stringify(record) + "\n");
+  if (spawnError) console.error(spawnError);
+  return result.code ?? (result.signal === "SIGINT" ? 130 : result.signal === "SIGTERM" ? 143 : 1);
+}
+function report(directory) {
+  const path = join(directory, "steps.jsonl");
+  const records = existsSync(path) ? readFileSync(path, "utf8").trim().split(/\r?\n/).filter(Boolean).map(JSON.parse) : [];
+  const lines = [
+    "## CI measurements", "",
+    "| Command group | Seconds | Compiled units | Exit |", "|---|---:|---:|---:|",
+    ...records.map((record) => `| ${record.label} | ${record.seconds.toFixed(2)} | ${record.cargo.compilingUnits} | ${record.exitCode ?? record.signal ?? "error"} |`),
+    "", "Command wall time includes build and execution. Cargo Finished/test-result lines and HTML timings separate those costs.",
+    "Cache restore/save and job duration come from the Actions jobs API; compiled units are observed Cargo log lines, not cache hit percentages.", "",
+  ];
+  const markdown = lines.join("\n");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "summary.md"), markdown);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
+  console.log(markdown);
+}
+function save(path, data) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
+}
+export async function main(args) {
+  if (args[0] === "run") {
+    const divider = args.indexOf("--");
+    if (divider !== 2) throw new Error("usage: run <label> -- <command> [args...]");
+    process.exitCode = await measure(args[1], args[3], args.slice(4));
+  } else if (args[0] === "report") {
+    report(args[1] ?? process.env.AKRA_CI_MEASUREMENTS ?? "artifacts/ci-performance");
+  } else if (args[0] === "summarize") {
+    const [runPath, jobsPath, output] = args.slice(1);
+    const run = JSON.parse(readFileSync(runPath, "utf8"));
+    const payload = JSON.parse(readFileSync(jobsPath, "utf8"));
+    const jobs = Array.isArray(payload) ? payload.flatMap((page) => page.jobs ?? page) : payload.jobs;
+    if (!Array.isArray(jobs) || !output) throw new Error("usage: summarize <run.json> <jobs.json> <output.json>");
+    // Jobs must be fetched for this exact run attempt, not mixed retry attempts.
+    save(output, summarizeWorkflow(run, jobs));
+  } else if (args[0] === "compare") {
+    const [input, output] = args.slice(1);
+    if (!input || !output) throw new Error("usage: compare <samples.json> <comparison.json>");
+    save(output, compareSamples(JSON.parse(readFileSync(input, "utf8"))));
+  } else {
+    throw new Error("usage: ci-performance.mjs <run|report|summarize|compare>");
+  }
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main(process.argv.slice(2));
+}
