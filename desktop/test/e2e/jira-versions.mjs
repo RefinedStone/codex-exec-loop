@@ -62,7 +62,7 @@ gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APPROVAL_
 });
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: gateway.endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
 delete env.ELECTRON_RUN_AS_NODE;
-const app = await electron.launch({ executablePath: require("electron"), args: [desktop], env });
+const app = await electron.launch({ executablePath: require("electron"), args: [desktopDir], env });
 try {
   await app.evaluate(({ net, ipcMain }) => {
     for (const channel of ["akra:github-summary", "akra:github-repository"]) ipcMain.removeHandler(channel);
