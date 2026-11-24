@@ -4,7 +4,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { compareSamples, createCargoObserver, distribution, summarizeWorkflow } from "./ci-performance.mjs";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { compareSamples, createCargoObserver, distribution, measure, summarizeWorkflow } from "./ci-performance.mjs";
 
 test("workflow latency is not the sum of parallel runner time", () => {
   const job = (name, start, end) => ({ name, started_at: start, completed_at: end, status: "completed", conclusion: "success", steps: [] });
@@ -26,14 +28,23 @@ test("median and range distinguish missing samples", () => {
   assert.deepEqual(distribution([5, 1, 4, 2]), { samples: 4, median: 3, minimum: 1, maximum: 5 });
   assert.deepEqual(distribution([null, undefined]), { samples: 0, median: null, minimum: null, maximum: null });
 });
-test("comparison separates cache scenarios and environment and rejects failed samples", () => {
+test("comparison separates cohorts, cache scenarios and environment and rejects failed samples", () => {
   const environment = { runner: "macos-15", architecture: "arm64", toolchain: "1.95.0", features: "all", profile: "test", target: "aarch64-apple-darwin" };
-  const sample = { environment, scenario: "cold", gateSeconds: 20, runnerSeconds: 50, status: "completed", conclusion: "success" };
+  const sample = { cohort: "baseline", environment, scenario: "cold", gateSeconds: 20, workflowSeconds: 21,
+    runnerSeconds: 50, incompleteJobs: 0, missingDurationJobs: 0, status: "completed", conclusion: "success" };
   const groups = compareSamples([sample, { ...sample, gateSeconds: 30 }, { ...sample, scenario: "cache-reuse" },
-    { ...sample, environment: { ...environment, features: "default" } }]);
-  assert.equal(groups.length, 3);
+    { ...sample, environment: { ...environment, features: "default" } },
+    { ...sample, cohort: "candidate", gateSeconds: 10 }]);
+  assert.equal(groups.length, 4);
   assert.equal(groups[0].gateSeconds.samples, 2);
   assert.equal(groups[0].gateSeconds.median, 25);
+  assert.equal(groups[0].cohort, "baseline");
+  assert.equal(groups[3].cohort, "candidate");
+  assert.equal(groups[3].gateSeconds.median, 10);
+  assert.throws(() => compareSamples([{ ...sample, cohort: undefined }]), /cohort/);
+  assert.throws(() => compareSamples([{ ...sample, incompleteJobs: 1 }]), /successful/);
+  assert.throws(() => compareSamples([{ ...sample, missingDurationJobs: 1 }]), /successful/);
+  assert.throws(() => compareSamples([{ ...sample, runnerSeconds: -1 }]), /successful/);
   assert.throws(() => compareSamples([{ ...sample, conclusion: "failure" }]), /successful/);
   assert.throws(() => compareSamples([{ ...sample, environment: {} }]), /environment.runner/);
 });
@@ -58,5 +69,67 @@ test("measurement preserves command failure and records it without executing she
     assert.equal(record.exitCode, 7);
     assert.equal(record.cargo.compilingUnits, 1);
     assert.ok(record.seconds >= 0);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("incomplete and missing job durations cannot become complete performance samples", () => {
+  const run = { run_started_at: "2026-11-24T00:00:00Z", status: "completed", conclusion: "success" };
+  const gate = { name: "CI Gate", status: "completed", conclusion: "success",
+    started_at: "2026-11-24T00:00:10Z", completed_at: "2026-11-24T00:00:20Z" };
+  const metadata = { cohort: "baseline", scenario: "cold",
+    environment: { runner: "macos-15", architecture: "arm64", toolchain: "1.95.0",
+      features: "all", profile: "test", target: "aarch64-apple-darwin" } };
+  for (const worker of [
+    { name: "Rust", status: "in_progress" },
+    { name: "Rust", status: "completed", conclusion: "success" },
+    { name: "Rust", status: "completed", conclusion: "success",
+      started_at: "2026-11-24T00:00:10Z", completed_at: "2026-11-24T00:00:00Z" },
+  ]) {
+    const summary = summarizeWorkflow(run, [gate, worker]);
+    assert.equal(summary.runnerSeconds, null);
+    assert.equal(summary.workflowSeconds, null);
+    assert.equal(summary.incompleteJobs + summary.missingDurationJobs, 1);
+    assert.throws(() => compareSamples([{ ...summary, ...metadata }]), /successful/);
+  }
+  const skipped = summarizeWorkflow(run, [gate, { name: "Optional", status: "completed", conclusion: "skipped" }]);
+  assert.equal(skipped.runnerSeconds, 10);
+  assert.equal(skipped.missingDurationJobs, 0);
+  assert.equal(compareSamples([{ ...skipped, ...metadata }]).length, 1);
+  const skippedGate = summarizeWorkflow(run, [{ ...gate, conclusion: "skipped" }]);
+  assert.equal(skippedGate.gateSeconds, null);
+});
+
+test("measurement cancellation cannot become success when the child handles a signal and exits zero", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "akra-ci-cancel-"));
+  try {
+    for (const [signal, expectedExit] of [["SIGTERM", 143], ["SIGINT", 130]]) {
+      const signalSource = new EventEmitter();
+      const output = join(directory, signal);
+      const code = await measure("cancelled-fixture", "fake-child", [], {
+        directory: output,
+        signalSource,
+        spawnCommand() {
+          const child = new EventEmitter();
+          child.stdout = new PassThrough();
+          child.stderr = new PassThrough();
+          child.killed = false;
+          child.kill = (requested) => {
+            assert.equal(requested, signal);
+            child.killed = true;
+            setImmediate(() => child.emit("close", 0, null));
+            return true;
+          };
+          setImmediate(() => signalSource.emit(signal));
+          return child;
+        },
+      });
+      assert.equal(code, expectedExit);
+      const record = JSON.parse(readFileSync(join(output, "steps.jsonl"), "utf8"));
+      assert.equal(record.exitCode, expectedExit);
+      assert.equal(record.childExitCode, 0);
+      assert.equal(record.requestedSignal, signal);
+      assert.equal(signalSource.listenerCount("SIGTERM"), 0);
+      assert.equal(signalSource.listenerCount("SIGINT"), 0);
+    }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
