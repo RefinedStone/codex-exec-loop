@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -111,4 +112,47 @@ test("cancellation terminates the owned child tree and records unrun specs", asy
   assert.equal(result.report.status, "cancelled");
   assert.deepEqual(result.report.results.map((item) => item.status), ["cancelled", "not_run"]);
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+});
+
+
+test("detached Electron-style descendants stop without touching an unrelated process", { skip: process.platform === "win32" }, async (t) => {
+  const childSource = 'const fs = require("node:fs"); process.on("SIGTERM", () => {}); fs.writeFileSync(process.env.E2E_DETACHED_READY, String(process.pid)); setInterval(() => {}, 1000);';
+  const specSource = [
+    'import { spawn } from "node:child_process";',
+    'import { writeFileSync } from "node:fs";',
+    'process.on("SIGTERM", () => {});',
+    'const child = spawn(process.execPath, ["-e", ' + JSON.stringify(childSource) + '], { detached: true, stdio: "ignore" });',
+    'child.once("exit", () => process.exit(0));',
+    'writeFileSync(process.env.E2E_FIXTURE_PID, String(child.pid));',
+    'setInterval(() => {}, 1000);',
+  ].join("\n");
+  const root = fixture(t, { "a.mjs": specSource, "b.mjs": passingSource });
+  const pidPath = join(root, "detached.pid");
+  const readyPath = join(root, "detached.ready");
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+  t.after(async () => {
+    if (unrelated.exitCode === null && unrelated.signalCode === null) {
+      const exited = new Promise(resolveExit => unrelated.once("exit", resolveExit));
+      unrelated.kill("SIGKILL");
+      await exited;
+    }
+    if (existsSync(pidPath)) {
+      const pid = Number(readFileSync(pidPath, "utf8"));
+      try { process.kill(pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+    }
+  });
+  const controller = new AbortController();
+  const running = runE2e({ desktopRoot: root, env: { ...process.env,
+    E2E_FIXTURE_PID: pidPath, E2E_DETACHED_READY: readyPath }, nodeArgs: [], signal: controller.signal });
+  const deadline = Date.now() + 5000;
+  while (!existsSync(readyPath) && Date.now() < deadline) await new Promise(resolveWait => setTimeout(resolveWait, 20));
+  controller.abort();
+  const result = await running;
+  assert.ok(existsSync(readyPath), "detached descendant installed its SIGTERM handler");
+  const pid = Number(readFileSync(pidPath, "utf8"));
+  assert.equal(result.exitCode, 130);
+  assert.equal(result.report.results[0].cleanupError, undefined);
+  assert.deepEqual(result.report.results.map(item => item.status), ["cancelled", "not_run"]);
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  assert.doesNotThrow(() => process.kill(unrelated.pid, 0), "unrelated detached process remains alive");
 });
