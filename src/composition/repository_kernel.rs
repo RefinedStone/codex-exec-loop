@@ -172,6 +172,16 @@ pub(crate) struct RepositoryKernelRegistry {
     restart_runtime: Option<RestartRuntimeFactory>,
 }
 
+fn is_permanently_invalid_restart_candidate(error: &anyhow::Error) -> bool {
+    let missing_workspace = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    });
+    let replaced_repository = format!("{error:#}")
+        .contains("restart workspace has no existing repository incarnation");
+    missing_workspace || replaced_repository
+}
 impl RepositoryKernelRegistry {
     /// Restore one discovered repository without creating a client. The registry is only a locator.
     pub(crate) fn restore_registered(
@@ -197,17 +207,40 @@ impl RepositoryKernelRegistry {
         recover: impl FnOnce(&str) -> Result<Arc<IssueCollectionService>>,
     ) -> Result<RepositoryRestartOutcome> {
         self.ensure_running()?;
-        let Some(target) = production::issue_automation_restart_target(&candidate.workspace_root)?
-        else {
-            return Ok(RepositoryRestartOutcome::Unsupported);
+        let target = match production::issue_automation_restart_target(&candidate.workspace_root) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                registry.unregister(&candidate.repository_key)?;
+                return Ok(RepositoryRestartOutcome::Unsupported);
+            }
+            Err(error) if is_permanently_invalid_restart_candidate(&error) => {
+                registry.unregister(&candidate.repository_key)?;
+                return Ok(RepositoryRestartOutcome::Unsupported);
+            }
+            Err(error) => return Err(error),
         };
         if target.repository_key != candidate.repository_key {
-            bail!("registered repository identity no longer matches its checkout");
+            // The path now points at another clone. Retire only this stale locator; never
+            // transfer the old repository's authority or intent to the replacement clone.
+            registry.unregister(&candidate.repository_key)?;
+            return Ok(RepositoryRestartOutcome::Unsupported);
         }
-        let location = SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(
-            &target.workspace_root,
-        )?
-        .context("registered repository no longer has an existing Git identity")?;
+        let location = match
+            SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(
+                &target.workspace_root,
+            )
+        {
+            Ok(Some(location)) => location,
+            Ok(None) => {
+                registry.unregister(&candidate.repository_key)?;
+                return Ok(RepositoryRestartOutcome::Unsupported);
+            }
+            Err(error) if is_permanently_invalid_restart_candidate(&error) => {
+                registry.unregister(&candidate.repository_key)?;
+                return Ok(RepositoryRestartOutcome::Unsupported);
+            }
+            Err(error) => return Err(error),
+        };
         self.restore_registered_location(candidate, target, location, registry, recover)
     }
 
@@ -222,7 +255,8 @@ impl RepositoryKernelRegistry {
         if location.repository_identity != target.repository_key
             || location.canonical_repo_root != target.workspace_root
         {
-            bail!("repository identity changed before the restart lock was acquired");
+            registry.unregister(&candidate.repository_key)?;
+            return Ok(RepositoryRestartOutcome::Unsupported);
         }
         let entry = self.entry(&target.repository_key)?;
         let mut kernel = entry.lock();

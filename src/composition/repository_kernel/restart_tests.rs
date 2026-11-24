@@ -57,6 +57,42 @@ fn discovery_reads_existing_identity_without_initializing_missing_or_replaced_re
 }
 
 #[test]
+fn separate_git_dir_checkout_resolves_as_its_own_primary_checkout() {
+    let root = crate::test_utils::platform_safe_temp_dir().join(format!(
+        "akra-restart-separate-git-dir-{}-{:016x}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    crate::private_directory::ensure_private_directory(&root).unwrap();
+    let workspace = root.join("repository");
+    std::fs::create_dir(&workspace).unwrap();
+    let metadata = root.join("git-metadata");
+    let metadata_text = git_path(&metadata);
+    git(&workspace, &["init", "--separate-git-dir", &metadata_text]);
+    git(&workspace, &["config", "user.email", "restart-fixture@example.invalid"]);
+    git(&workspace, &["config", "user.name", "Restart Fixture"]);
+    std::fs::write(workspace.join("README"), "separate git dir fixture\n").unwrap();
+    git(&workspace, &["add", "README"]);
+    git(&workspace, &["commit", "-qm", "fixture"]);
+
+    let workspace_text = workspace.display().to_string();
+    let prepared =
+        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&workspace_text).unwrap();
+    let location = SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(
+        &workspace_text,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        location.canonical_repo_root,
+        workspace.canonicalize().unwrap().display().to_string()
+    );
+    assert_eq!(location.repository_identity, prepared.repository_identity);
+
+    std::fs::remove_dir_all(&root).unwrap();
+    let _ = std::fs::remove_dir_all(&prepared.runtime_dir);
+}
+#[test]
 fn no_client_boot_collects_and_coordinates_once_across_restart_without_model_turns() {
     let f = Fixture::new();
     f.select(IssueAutonomyLevel::Gated);
@@ -479,6 +515,41 @@ fn concurrent_attach_reuses_the_clientless_kernel_instead_of_building_another() 
     f.no_model_turns();
 }
 
+#[test]
+fn missing_restart_checkout_is_pruned_from_the_registry() {
+    let f = Fixture::new();
+    f.registry.register(&f.candidate).unwrap();
+    std::fs::remove_dir_all(&f.workspace).unwrap();
+
+    let kernels = f.kernels();
+    assert_eq!(
+        kernels
+            .restore_registered(&f.candidate, f.registry.as_ref())
+            .unwrap(),
+        RepositoryRestartOutcome::Unsupported
+    );
+    assert!(f.registry.list().unwrap().is_empty());
+    kernels.shutdown();
+}
+#[test]
+fn replaced_restart_checkout_is_pruned_without_transferring_authority() {
+    let f = Fixture::new();
+    f.registry.register(&f.candidate).unwrap();
+    std::fs::remove_dir_all(&f.workspace).unwrap();
+    std::fs::create_dir(&f.workspace).unwrap();
+    initialize_git(Path::new(&f.workspace));
+
+    let kernels = f.kernels();
+    assert_eq!(
+        kernels
+            .restore_registered(&f.candidate, f.registry.as_ref())
+            .unwrap(),
+        RepositoryRestartOutcome::Unsupported
+    );
+    assert!(f.registry.list().unwrap().is_empty());
+    assert!(!Path::new(&f.workspace).join(".git/akra-repository-id").exists());
+    kernels.shutdown();
+}
 #[test]
 fn a_stopped_registry_refuses_restore_before_resolving_the_workspace() {
     let kernels = RepositoryKernelRegistry::default();
