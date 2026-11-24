@@ -122,7 +122,7 @@ function trackPosixProcesses(child) {
           visited.add(ancestor.pid); ancestor = snapshot.get(ancestor.ppid);
         }
         if (!ancestor || child.exitCode !== null || child.signalCode !== null) {
-          failure = "could not safely identify a reparented E2E process";
+          // Allow normal teardown to finish; only a survivor at the final deadline fails cleanup.
           continue;
         }
       }
@@ -168,6 +168,7 @@ async function executeSpec({ desktopRoot, spec, env, signal, logPath, nodeArgs }
   let cleanupError;
   let killTimer;
   let rootKillTimer;
+  let closeTimer;
   const child = spawn(process.execPath, [...nodeArgs, join(desktopRoot, "test", "e2e", spec)], {
     cwd: desktopRoot, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true,
   });
@@ -190,11 +191,22 @@ async function executeSpec({ desktopRoot, spec, env, signal, logPath, nodeArgs }
   child.stdout.on("data", tee(process.stdout));
   child.stderr.on("data", tee(process.stderr));
   child.once("error", (error) => { spawnError = String(error); });
-  child.once("exit", () => {
-    // 관찰한 소유 신원을 통해 별도 session의 Electron도 정리한다.
-    if (process.platform !== "win32") { stop("SIGTERM"); scheduleKill(); }
+  const outcome = await new Promise((resolveResult) => {
+    child.once("close", (code, childSignal) => resolveResult({ code, signal: childSignal }));
+    child.once("exit", (code, childSignal) => {
+      // 관찰한 소유 신원을 통해 별도 session의 Electron도 정리한다.
+      if (process.platform !== "win32") { stop("SIGTERM"); scheduleKill(); }
+      // A descendant can inherit these pipes and reparent before the first sample.
+      // Bound the drain without guessing an orphan PID or signalling another group.
+      closeTimer = setTimeout(() => {
+        cleanupError ??= "spec output pipes did not close within 3 seconds after exit";
+        child.stdout.destroy();
+        child.stderr.destroy();
+        resolveResult({ code, signal: childSignal });
+      }, 3000);
+    });
   });
-  const outcome = await new Promise((resolveResult) => child.once("close", (code, childSignal) => resolveResult({ code, signal: childSignal })));
+  clearTimeout(closeTimer);
   clearTimeout(killTimer);
   clearTimeout(rootKillTimer);
   if (tracker) {
