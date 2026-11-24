@@ -150,6 +150,9 @@ jobs:
       - name: Run Rust tests
         run: node scripts/ci-performance.mjs run rust-tests -- cargo test --locked --timings
 
+      - name: Test the built native confirmation process
+        run: node scripts/ci-performance.mjs run native-confirmation -- node scripts/check_native_confirmation_process.mjs --timings
+
       - name: Save Rust registry cache
         id: save_registry
         if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_registry.outputs.cache-hit != 'true'
@@ -199,14 +202,6 @@ jobs:
             target/*/cargo-timings
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Set up Node for the native confirmation process check
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 22
-
-      - name: Test the built native confirmation process
-        run: node scripts/check_native_confirmation_process.mjs
 
   rust_lint:
     name: Rust Lint and Architecture
@@ -557,17 +552,11 @@ jobs:
             'parallel_mode::tests::pool::lease::task_evidence::' \
             'worker_evidence::'
 
-      - name: Set up Node for the macOS confirmation process check
-        if: matrix.target != 'x86_64-pc-windows-msvc'
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 22
-
       - name: Test the built macOS confirmation process
         if: matrix.target != 'x86_64-pc-windows-msvc'
         env:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
-        run: node scripts/check_native_confirmation_process.mjs --all-features --target "${{ matrix.target }}" --timings
+        run: node scripts/ci-performance.mjs run native-confirmation -- node scripts/check_native_confirmation_process.mjs --all-features --target "${{ matrix.target }}" --timings
 
       - name: Save Rust registry cache
         id: save_registry

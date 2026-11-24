@@ -2,8 +2,16 @@
 
 관련: #2690, #2313. 기본 화면 시험 목록은 여전히
 `desktop/test/e2e/*.mjs`에서 자동 발견한다. 수동 제외 목록은
-`desktop/scripts/e2e-specs.mjs`의 기존 두 항목만 유지한다.
+`desktop/scripts/e2e-specs.mjs`의 기존 세 항목을 유지한다:
+`browserAutomation.mjs`, `browserBridge.mjs`, `storage-service-roundtrip.mjs`.
+마지막 항목은 컴파일된 Rust fixture가 필요하므로 `e2e:storage-service` 별도 경로를 유지한다.
 새 파일은 별도 목록 편집 없이 다음 실행에 포함된다.
+
+최신 기준 `prerelease@99238e87`의 최상위 `.mjs`는 33개이며 수동 제외 3개를 뺀
+기본 시험은 30개다. 시간 표본이 없는 초기 두 shard는 15개씩 실행한다.
+새 기본 시험 `extension-lifecycle.mjs`, `storage-analysis.mjs`, `storage-live.mjs`,
+`storage-restoration.mjs`도 모두 포함한다. 이 개수는 해당 기준의 인벤토리이며
+새 시험이 추가되어도 목록과 분배는 자동으로 갱신된다.
 
 ## 실행과 분배
 
