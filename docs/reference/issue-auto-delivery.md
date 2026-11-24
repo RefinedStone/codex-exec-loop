@@ -23,6 +23,11 @@ Auto의 Start·Delivery·Merge도 각 단계의 현재 정책을 따른다. Spec
 Plan의 기존 사람·timeout arbiter 정책도 유지한다. Auto 선택이나 작업자의 완료 보고는
 Spec 승인 또는 새로운 Done 증명이 아니다. 전역 병렬 실행은 따로 켜야 한다.
 
+## 기존 Start 승인과 업그레이드
+
+이전 버전의 관찰값에는 검증된 저장소 공개 범위와 정규 `owner/name` 좌표가 없을 수 있습니다. 업그레이드 후 첫 정상 재조회에서 이 값이 새로 확인되면 triage fingerprint와 gate revision이 변경됩니다. 따라서 이전 revision에 묶인 Propose/Gated Start 승인은 새 근거에 대한 승인으로 재사용하지 않으며, 사용자는 Native 확인으로 Start를 다시 승인해야 합니다. 이는 저장소 공개 범위·출처 identity를 확인하지 않은 과거 승인으로 Auto 권한이 승격되는 것을 막기 위한 의도된 보안 경계입니다.
+
+레거시 관찰값이 계속 `Unknown`/누락 상태인 동안에는 해당 필드를 fingerprint 직렬화에서 생략해 기존 evidence hash를 보존합니다. 신뢰된 값이 실제로 확인된 시점에만 gate revision이 바뀝니다. 회귀는 `repository_visibility_and_rename_change_gate_basis_without_changing_the_body_hash`와 `legacy_unknown_repository_metadata_retains_the_original_canonical_and_v1_body_hashes`에서 확인합니다.
 ## 전달 권한
 
 조정기는 Start 근거와 실제 frozen diff 판정을 구분한다. Delivery·Merge가 모두 현재 Auto이고
