@@ -90,6 +90,16 @@ pub(super) fn can_probe_evidence_wait_cleanup(record: &ParallelModeDistributorQu
         && record.integration_commit_sha.is_some()
 }
 
+/// Legacy integration shares one worktree. A blocked legacy integration must keep its
+/// queue position; yielding it can leave an unpublished cherry-pick in that shared worktree.
+pub(super) fn is_legacy_integration_evidence_wait(
+    record: &ParallelModeDistributorQueueRecord,
+) -> bool {
+    is_evidence_wait(record)
+        && record.evidence_wait == Some(TaskEvidenceDeliveryStage::Integrate)
+        && record.evidence_binding.is_none()
+}
+
 pub(super) fn recheck_evidence_wait(
     runtime: &dyn ParallelModeRuntimePort,
     gate: &dyn TaskDeliveryEvidenceGatePort,
@@ -110,20 +120,28 @@ pub(super) fn recheck_evidence_wait(
             })
         })
         .flatten();
-    let decision = gate.evaluate(
+    let decision = match gate.evaluate(
         repo_root,
         record,
         stage,
         integration.as_ref(),
         &TaskDeliveryEvidenceOperation::Recheck,
-    )?;
+    ) {
+        Ok(decision) => decision,
+        Err(detail) if detail.starts_with("evidence_retry:") => {
+            return Ok(WorkOrderPermitWaitRecheck::Retry(detail));
+        }
+        Err(detail) => return Err(detail),
+    };
     // Recheck's allowed is always false. Only the durable typed-wait CAS can rearm a row.
     *record = decision.updated_queue;
     super::store::mirror_distributor_queue_record(runtime, pool_root, record)?;
     if is_evidence_wait(record) {
         return Ok(WorkOrderPermitWaitRecheck::Waiting);
     }
-    if record.queue_state == ParallelModeQueueItemState::Queued && record.evidence_wait.is_none() {
+    if record.evidence_wait.is_none() {
+        // An Enforce integration source mismatch is converted to a durable operator block.
+        // It is no longer a typed evidence wait and must not be automatically rearmed.
         return Ok(WorkOrderPermitWaitRecheck::NotWaiting);
     }
     Ok(WorkOrderPermitWaitRecheck::Retry(

@@ -49,6 +49,24 @@ impl TaskDeliveryEvidenceService {
         Self { dependencies, mode }
     }
 
+    fn effective_mode(
+        record: &PlanningAuthorityDistributorQueueRecord,
+        stage: TaskEvidenceDeliveryStage,
+        configured: TaskEvidenceDeliveryMode,
+    ) -> TaskEvidenceDeliveryMode {
+        // Delivery mode is captured in the durable stage observation. A second process
+        // configured with Observe must not downgrade a wait created under Enforce.
+        if record.evidence_wait == Some(stage)
+            && record.evidence_observations.iter().any(|observation| {
+                observation.stage == stage && observation.mode == TaskEvidenceDeliveryMode::Enforce
+            })
+        {
+            TaskEvidenceDeliveryMode::Enforce
+        } else {
+            configured
+        }
+    }
+
     fn observe(
         &self,
         snapshot: &StoredTaskDeliveryEvidence,
@@ -123,10 +141,12 @@ impl TaskDeliveryEvidenceGatePort for TaskDeliveryEvidenceService {
         integration: Option<&TaskDeliveryEvidenceIntegration>,
         operation: &TaskDeliveryEvidenceOperation,
     ) -> Result<TaskDeliveryEvidenceDecision, String> {
-        let mode = *self.mode.as_ref().map_err(|_| {
+        let configured_mode = *self.mode.as_ref().map_err(|_| {
             "evidence_unavailable: the effective delivery evidence policy could not be resolved"
                 .to_owned()
         })?;
+        let mode = Self::effective_mode(record, stage, configured_mode);
+        let is_recheck = matches!(operation, TaskDeliveryEvidenceOperation::Recheck);
         let location = self
             .dependencies
             .authority
@@ -145,17 +165,42 @@ impl TaskDeliveryEvidenceGatePort for TaskDeliveryEvidenceService {
         ) {
             return Err("evidence_unavailable: delivery belongs to another repository".into());
         }
-        let snapshot = self
-            .dependencies
-            .repository
-            .load_delivery_evidence(&self.dependencies.workspace, record, stage)
-            .map_err(|_| {
-                "evidence_unavailable: exact delivery authority could not be read".to_owned()
-            })?;
-        if snapshot.queue != *record
-            || snapshot.requires_preservation
-            || snapshot.permit.blocked_reason().is_some()
-        {
+        let snapshot = match self.dependencies.repository.load_delivery_evidence(
+            &self.dependencies.workspace,
+            record,
+            stage,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error)
+                if is_recheck
+                    && error
+                        .downcast_ref::<TaskDeliveryEvidenceError>()
+                        .is_some_and(|error| *error == TaskDeliveryEvidenceError::Conflict) =>
+            {
+                return Err(
+                    "evidence_retry: queue changed while the typed wait was being rechecked".into(),
+                );
+            }
+            Err(_) => {
+                return Err(
+                    "evidence_unavailable: exact delivery authority could not be read".into(),
+                );
+            }
+        };
+        if snapshot.queue != *record {
+            return Err(if is_recheck {
+                "evidence_retry: queue changed while the typed wait was being rechecked".into()
+            } else {
+                "evidence_stale: queue changed before the delivery effect was authorized".into()
+            });
+        }
+        if snapshot.requires_preservation || snapshot.permit.blocked_reason().is_some() {
+            if is_recheck {
+                return Ok(waiting_recheck_decision(
+                    record,
+                    TaskDeliveryEvidenceReason::EvidenceStale,
+                ));
+            }
             return Err(
                 "evidence_stale: current task authority does not permit this delivery".into(),
             );
@@ -168,19 +213,60 @@ impl TaskDeliveryEvidenceGatePort for TaskDeliveryEvidenceService {
             return Err("evidence_stale: integration review requirements changed after the final pull request check".into());
         }
         let observation = self.observe(&snapshot, stage, integration, mode);
-        let committed = self.dependencies.repository.commit_delivery_evidence_observation(
-            &self.dependencies.workspace,
-            &TaskDeliveryEvidenceObservationCommit {
-                expected: snapshot,
-                operation: operation.clone(),
-                observation,
+        let committed = match self
+            .dependencies
+            .repository
+            .commit_delivery_evidence_observation(
+                &self.dependencies.workspace,
+                &TaskDeliveryEvidenceObservationCommit {
+                    expected: snapshot,
+                    operation: operation.clone(),
+                    observation,
+                },
+            ) {
+            Ok(committed) => committed,
+            Err(error) if is_recheck => match error.downcast_ref::<TaskDeliveryEvidenceError>() {
+                Some(
+                    TaskDeliveryEvidenceError::ControlDenied | TaskDeliveryEvidenceError::ClaimLost,
+                ) => {
+                    return Ok(waiting_recheck_decision(
+                        record,
+                        TaskDeliveryEvidenceReason::EvidenceUnavailable,
+                    ));
+                }
+                Some(TaskDeliveryEvidenceError::Conflict) => {
+                    return Err(format!("evidence_retry: {}", error));
+                }
+                _ => {
+                    return Err(
+                            "evidence_unavailable: delivery authority could not commit the wait recheck"
+                                .into(),
+                        );
+                }
             },
-        ).map_err(|_| "evidence_stale: delivery authority changed before the final observation was committed".to_owned())?;
+            Err(_) => {
+                return Err(
+                    "evidence_stale: delivery authority changed before the final observation was committed"
+                        .into(),
+                );
+            }
+        };
         Ok(TaskDeliveryEvidenceDecision {
             updated_queue: committed.updated_queue,
             allowed: committed.effect_allowed,
             reason: committed.observation.reasons.first().copied(),
         })
+    }
+}
+
+fn waiting_recheck_decision(
+    record: &PlanningAuthorityDistributorQueueRecord,
+    reason: TaskDeliveryEvidenceReason,
+) -> TaskDeliveryEvidenceDecision {
+    TaskDeliveryEvidenceDecision {
+        updated_queue: record.clone(),
+        allowed: false,
+        reason: Some(reason),
     }
 }
 

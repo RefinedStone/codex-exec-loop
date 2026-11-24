@@ -108,6 +108,10 @@ pub(super) fn select_permitted_queue_head(
         if allow_cleanup_probe && super::evidence::can_probe_evidence_wait_cleanup(&record) {
             return Ok(Some(index));
         }
+        if super::evidence::is_legacy_integration_evidence_wait(&record) {
+            context.distributor_queue_records[index] = record;
+            return Ok(Some(index));
+        }
         match recheck_evidence_wait(
             runtime,
             evidence_gate,
