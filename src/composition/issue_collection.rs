@@ -366,7 +366,6 @@ pub(crate) fn build_autonomy_with_restart_registry(
         .with_restart_registry(
             restart_registry,
             super::production::issue_automation_restart_target,
-        )
         ),
     )
 }
