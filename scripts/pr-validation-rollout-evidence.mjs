@@ -72,8 +72,17 @@ function fastGateDuration(run, jobs) {
   const actual = gateDuration(run, jobs, "Fast Gate");
   if (actual) return { ...actual, source: "actual" };
 
+  const screenPattern = /^Desktop Screen Tests \((\d+)\/(\d+)\)$/;
+  const screens = jobs.filter((job) => screenPattern.test(job.name));
+  if (screens.some((job) => job.conclusion !== "skipped")) {
+    const shards = screens.map((job) => screenPattern.exec(job.name).slice(1).map(Number));
+    const count = shards[0][1];
+    if (screens.length !== count || new Set(shards.map(([index]) => index)).size !== count
+      || shards.some(([index, total]) => total !== count || index < 1 || index > count)
+      || screens.some((job) => job.conclusion !== "success")) return null;
+  }
   const selected = jobs.filter(
-    (job) => FAST_JOB_NAMES.has(job.name) && job.conclusion !== "skipped",
+    (job) => (FAST_JOB_NAMES.has(job.name) || screenPattern.test(job.name)) && job.conclusion !== "skipped",
   );
   if (selected.length === 0 || selected.some((job) => job.conclusion !== "success")) {
     return null;
