@@ -1,7 +1,9 @@
 # Rust 시험 목록 보존과 nextest 검토
 
 이 문서는 [#2690](https://github.com/RefinedStone/codex-exec-loop/issues/2690) 4단계의
-**도입 검토 결과**다. 검토 기준은 prerelease@70966a27f27429f9134e467c98b7b09a9894e39d다.
+**도입 검토 결과**다. 최초 조사 기준은 prerelease@70966a27f27429f9134e467c98b7b09a9894e39d다.
+최종 통합 기준인 prerelease@99238e8792b25312d2f1c6ad3e5a0954f1fe05c3에서 manifest와
+필수 시험 경로 변경을 다시 대조했다. 아래 경로표는 이 재검토와 최종 통합의 빌드 옵션을 반영한다.
 기본 실행기는 cargo test --locked로 유지한다. nextest 및 Rust 샤딩의 기본 도입은 보류한다.
 
 ## 현재 실행 경로
@@ -11,16 +13,32 @@
 | Linux unit, binary unit, integration | native-pr-checks.yml의 rust_tests: cargo test --locked | 기본 feature, test profile, 전체 기본 target |
 | Architecture | Cargo integration 중 tests/architecture_boundaries.rs 및 lint job의 check_tui_layering.sh | 소스 경계 검사 둘 다 유지 |
 | Doctest | cargo test --locked의 문서 시험 단계 | nextest 도입 시 cargo test --locked --doc 별도 실행 |
-| Windows native | scripts/check_windows_portable.sh | Windows target, all-features, 선택 계약 필터, native ACL/프로세스/Vault |
-| macOS native | workflow의 portable_native | macOS target, all-features, 선택 계약 필터 |
-| ignored/manual | 소스의 #[ignore] | --ignored 또는 --include-ignored 자동 활성화 금지 |
+| Windows native | scripts/check_windows_portable.sh | Windows target, all-features, 계약 필터 30개, native ACL/프로세스/Vault/증거 저장 |
+| macOS native | workflow의 portable_native | macOS target, all-features, 계약 필터 12개 |
+| Native confirmation helper | Linux rust_tests와 macOS portable_native의 scripts/check_native_confirmation_process.mjs | 각 경로에서 built akra-gateway와 정확히 1개 ignored helper 시험; Linux default, macOS all-features 및 native target |
+| 일반 ignored/manual | 소스의 #[ignore] | 일반 목록·샤드에서 --ignored 또는 --include-ignored 일괄 활성화 금지; 위 필수 helper는 별도 명시 경로 유지 |
 | 전체 로컬 POSIX gate | scripts/check_native_pr.sh | Cargo, clippy, Node, architecture 경로 유지 |
 
 현재 root integration target은 architecture_boundaries, binary_entrypoints,
 issue_automation_policy_invariants, issue_automation_policy_schema, kernel_cli,
 native_validation_scripts, repository_hygiene, tui_terminal_disconnect다. 이는
 소스 파일 목록이며 OS/feature별 실제 시험 개수는 아니다.
-후속 native 스택이 합쳐지면 그 스크립트도 이 경로표와 함께 비교해야 한다.
+
+Windows 30개와 macOS 12개는 선택 필터 수이며 개별 시험 수가 아니다. 99238e87에는 양쪽의
+필수 필터로 task_evidence_artifact::tests::,
+sqlite_planning_authority_adapter::tests::task_evidence::,
+parallel_worker_commit::tree_snapshot::tests::,
+parallel_mode::tests::pool::lease::task_evidence::, worker_evidence::가 추가돼 있다.
+Windows에는 filesystem::issue_publish_intent_journal::와
+gateway::tests::issue_shared_copy_flow::도 포함된다. 최종 통합은 이 필터를 모두 보존한다.
+
+Native confirmation 스크립트와 Linux/macOS workflow 경로는 70966a27 조사 당시에는 없었지만
+99238e87 prerelease에는 이미 존재한다. 최종 통합은 이 검사를 유지하고 Gateway 빌드와
+helper 시험에 같은 feature, target, profile, target-directory 옵션을 전달한다.
+해당 시험의 전체 이름은
+adapter::inbound::gateway::tests::human_confirmation::native_process::native_helper_process_confirms_replays_and_revokes_on_eof다.
+스크립트는 --ignored --exact로 이 시험만 실행하고 통과 개수가 정확히 1인지 확인한다.
+일반 ignored 시험의 자동 활성화와 구분하며, native 계약 runner나 nextest 목록 비교로 대체하지 않는다.
 
 ## 보류 근거와 재개 조건
 
@@ -45,12 +63,14 @@ src/test_utils/pr_review_loopback.rs는 임의 포트 바인딩을 사용하지�
 다음 증거가 있어야 기본 도입을 검토한다.
 
 1. Cargo와 nextest의 unit/binary/integration 이름 및 ignored 상태가 일치한다.
-2. 모든 기본 시험이 샤드 합집합에 정확히 한 번 나타나고 ignored 시험은 선택되지 않는다.
-3. doctest와 각 OS의 native 경로가 유지되고 필수 job/shard의 실패·취소·누락이 gate를 실패시킨다.
+2. 모든 기본 시험이 샤드 합집합에 정확히 한 번 나타나고 일반 샤드에서 ignored 시험은 선택되지 않는다.
+3. doctest, 각 OS의 native 계약, 별도 confirmation helper 경로가 유지되고
+   필수 job/shard의 실패·취소·누락이 gate를 실패시킨다.
 4. 같은 runner/toolchain/features/profile에서 compile과 execution을 나눈 반복 표본이 있다.
 5. cold, warm, unchanged, 작은 변경 조건별 중앙값·범위와 runner 총사용 시간을 비교한다.
 
-이번 변경에서는 nextest 설치, 전체 Rust 실행, 성능 반복 측정, 필수 CI 설정 변경을 하지 않았다.
+이 4단계 검토에서는 nextest 설치, 전체 Rust 실행, 성능 반복 측정, 필수 CI 설정 변경을 하지 않았다.
+99238e87 재검토도 소스 대조로 수행했으며 추가 시험이나 CI 조회를 실행하지 않았다.
 비교 자료가 없으므로 성능 향상과 안정성 통과를 선언하지 않는다.
 
 ## 목록 비교 도구
@@ -68,7 +88,8 @@ custom harness, benchmark, cross-execution은 지원하지 않고 오류로 끝�
 잘못 작성한 같은 context를 양쪽 자료에 붙이면 목록이 같더라도 그 오류는 감지하지 못한다.
 실제 실행 명령과 feature/target/profile 및 빌드 관련 환경변수, rustc -vV 결과, Cargo artifact JSON과
 nextest 원본 목록을 함께 보존하여 동일한 빌드 조건인지는 별도로 대조해야 한다.
-목록이 같다는 것은 실행 통과 증거가 아니다. doctest는 비교 목록에 포함되지 않는다.
+목록이 같다는 것은 실행 통과 증거가 아니다. doctest는 비교 목록에 포함되지 않으며,
+ignored로 나열된 native confirmation helper의 별도 실행 성공도 이 도구가 검증하지 않는다.
 
 ### 선택적 비교 재현
 
@@ -109,8 +130,9 @@ node scripts/ci-rust-test-inventory.mjs compare \
 각각 넣은 목록도 정규화한 뒤 compare의 뒤에 두 inventory 경로를 전달한다.
 도구는 nextest 해시를 복제하지 않고 실제 nextest가 선택한 항목을 확인한다.
 skipped suite가 있는 목록은 전수 목록을 증명하지 못하므로 오류 처리한다.
-성능 실험에서는 기존 Cargo와 nextest의 실행 시간을 비교하되 ignored 시험을 활성화하지 않으며,
-doctest는 별도로 실행한다. 모델 턴을 요구하는 ignored probe는 이 절차의 대상이 아니다.
+성능 실험에서는 기존 Cargo와 nextest의 기본 실행 시간을 비교하되 일반 ignored 시험을
+활성화하지 않는다. doctest와 기존 필수 native confirmation helper는 각각 별도 경로로 유지한다.
+모델 턴을 요구하는 ignored probe는 이 절차의 대상이 아니다.
 
 ## 근거
 

@@ -2,7 +2,9 @@
 
 - 관련: [CI 성능 Epic #2690](https://github.com/RefinedStone/codex-exec-loop/issues/2690),
   [조건부 Issue Automation 추출 #2569](https://github.com/RefinedStone/codex-exec-loop/issues/2569)
-- 조사 기준: prerelease@70966a27f27429f9134e467c98b7b09a9894e39d
+- 최초 조사 기준: prerelease@70966a27f27429f9134e467c98b7b09a9894e39d
+- 최종 통합 재검토 기준: prerelease@99238e8792b25312d2f1c6ad3e5a0954f1fe05c3.
+  최초 조사 이후 manifest, 의존 방향과 필수 native 검사 변경을 대조했다.
 - 결정: **Workspace 전환과 crate 추출을 보류한다.** 기존 모듈 경계를 유지하고,
   계측 및 빌드 조건 정리 뒤에 실제 편집 패턴의 재컴파일 자료로 재검토한다.
 - 이 기록은 구조 검토 결과다. crate 분리, 성능 개선, 플랫폼 검증을 완료했다는 뜻이 아니다.
@@ -19,6 +21,11 @@ Cargo.toml에는 dev line-table debug, dependency debug 제거, 별도 debugging
 이미 있다. CI는 CARGO_INCREMENTAL=0을 쓰며 로컬 dev profile은 incremental=true다.
 작은 소스 변경은 해당 crate의 Cargo 컴파일 단위를 다시 만들 수 있지만, 로컬 rustc 증분
 컴파일의 실제 재사용량을 소스 줄 수만으로 판단할 수는 없다. 빌드·시험·링크 비용을 분리한다.
+
+99238e87 재검토에서도 단일 package와 기존 feature/profile 구조는 유지된다. 다만
+jsonschema가 dev-dependencies에서 일반 dependencies로 이동했고 windows-sys의
+Win32_System_WindowsProgramming feature가 추가됐다. 이전 소스의 빌드 시간과 최종
+통합 소스의 시간을 같은 의존 조건으로 취급하지 않는다. 이 변화로 분리 효과를 측정한 것은 아니다.
 
 [#2690 기준 실행](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45231960486)은
 다른 커밋 c63bec6e59b8c20e7247eb2ba597376d24805369에서 관측됐다. macOS feature 불일치와
@@ -45,10 +52,15 @@ Cargo.toml에는 dev line-table debug, dependency debug 제거, 별도 debugging
   RecordedKernelEvent 및 이슈 이벤트 기록을 읽어 timeline을 투영한다.
 - src/domain/kernel_event.rs는 issue_automation::collection의 IssueCollectionMode와
   issue_automation::execution의 IssueExecutionIntegration/IssueExecutionProgress를 사용한다.
-  동시에 domain::planning과 kernel_spec도 참조한다.
+  동시에 domain::planning과 kernel_spec도 참조한다. 99238e87에서는 새
+  IssueDecisionArbiterFinished 이벤트가 issue_automation::arbiter의
+  IssueArbiterFinishedOutcome까지 직접 참조하므로 이 순환 경계는 해소되지 않았다.
 - issue_automation/source.rs는 issue_policy, triage.rs와 triage/basis.rs는
   issue_validation, triage/criteria.rs와 triage/paths.rs는 issue_markdown을 참조한다.
 - issue_coordinator.rs와 issue_triage.rs는 여러 issue_* service와 ports를 조합한다.
+- 99238e87의 IssueWorkExecutionPort는 IssueDeliveryDiff를 사용하고
+  frozen_delivery_source/delivery_diff 계약을 추가했다. 추출 시 실제 diff의 소유권과
+  host 검증을 포함한 이 port 계약도 함께 보존해야 한다.
 
 따라서 issue_automation 디렉터리를 그대로 새 crate로 이동하고 root에 대한 의존을 남길 수 없다.
 추출을 시작한다면 다음 둘 중 필요한 범위를 먼저 결정한다.
@@ -66,7 +78,8 @@ Cargo.toml에는 dev line-table debug, dependency debug 제거, 별도 debugging
 
 현재 production 구현은 src/composition/issue_work_execution.rs의
 AkraIssueWorkExecutionAdapter다. 테스트의 FakeExecution, AnswerExecution,
-InterruptedSubmission을 두 번째 production 실행기로 세지 않는다.
+InterruptedSubmission을 두 번째 production 실행기로 세지 않는다. 99238e87의 delivery
+기능은 기존 Akra adapter의 계약 확장이며, 이 변경으로 두 번째 실행기가 추가된 것은 아니다.
 추후 추출 때는 실제 두 번째 adapter가 같은 port 계약 시험을 통과해야 한다.
 
 tests/architecture_boundaries.rs의 issue_automation_stays_independent_and_stores_only_shared_issue_types
@@ -111,7 +124,12 @@ cargo test --locked --lib --no-run --timings
 
 scripts/package_native_release.sh는 root manifest 및 codex-exec-loop-native 이름을 사용하고,
 release-native-assets.yml은 Cargo 버전과 배포 산출물을 연결한다. Workspace 변경 시 이
-계약과 npm launcher/platform 패키지의 이름을 함께 검증한다. build cache 키도 전체
+계약과 npm launcher/platform 패키지의 이름을 함께 검증한다. 99238e87에서 유지할 native
+범위는 Windows 계약 필터 30개, macOS 계약 필터 12개이며, Linux/macOS의
+scripts/check_native_confirmation_process.mjs는 각 경로에서 별도 ignored helper 시험
+정확히 1개를 실행한다. 필터 개수는 개별 시험 개수가 아니다. 추출 뒤에도 이 경로와
+Gateway 실행 파일 및 helper 시험의 동일한 feature/target/profile 조건을 보존한다.
+build cache 키도 전체
 workspace manifest/lockfile/toolchain을 다루어야 한다.
 
 ## 이번 결정의 검증과 제한
