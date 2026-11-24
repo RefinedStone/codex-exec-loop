@@ -82,7 +82,7 @@ report가 남으며 전체 정상 완료가 기록되지 않는다.
 Desktop E2E는 Node/Admin 검사와 분리한 두 개의 `desktop_e2e` matrix job으로
 실행한다. 각 job은 Node 의존성과 Electron·xvfb·DBus/keyring을 준비하고
 위 shard 명령을 실행한다. `fail-fast: false`를 사용해 다른 shard의 진단을 보존한다.
-`CI Gate`와 `Post-Merge Gate`는 모든 필수 shard의 성공을 요구해야 하며
+`Fast Gate`, `CI Gate`, `Post-Merge Gate`는 모든 필수 shard의 성공을 요구하며
 실패·취소·누락을 통과로 처리해서는 안 된다. 로그는 `if: always()`인 artifact
 업로드 단계로 수집한다.
 
@@ -92,6 +92,7 @@ Desktop E2E는 Node/Admin 검사와 분리한 두 개의 `desktop_e2e` matrix jo
 node --test desktop/scripts/run-e2e.test.mjs
 ```
 
+실제 전체 Desktop E2E는 이 작업의 로컬 단계에서 실행하지 않았다.
 이 변경의 로컬 검증은 fake Node 프로세스로 목록, 분배, 격리, 실패·취소 처리를
 확인한다. 전체 화면 시험의 전후 성능·불안정성은 이 검증으로 입증하지 않는다.
 #2690에 기록된 17분 37초는 이전 한 번의 CI 화면 시험 단계 관측이다.
