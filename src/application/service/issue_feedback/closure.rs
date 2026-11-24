@@ -55,9 +55,15 @@ impl IssueFeedbackService {
             else {
                 return Ok(());
             };
-            let observed = self
+            let observed = match self
                 .provider
-                .read_jira_close_transition(issue, &actor, mapping)?;
+                .read_jira_close_transition(issue, &actor, mapping)
+            {
+                Ok(observed) => observed,
+                // A missing transition or additional required Jira fields must not prevent
+                // the independent status-comment effect from being synchronized.
+                Err(_) => return Ok(()),
+            };
             if observed.issue != *issue
                 || !matches!(snapshot.item.current.as_ref(), Some(IssueSourceRead::Observed(source))
                 if source.jira.as_ref().is_some_and(|jira| jira.status_id == observed.target.from_status_id))
