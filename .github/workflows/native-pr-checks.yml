@@ -67,7 +67,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs
 
       - name: Classify validation scope
         id: classify
