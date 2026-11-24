@@ -178,8 +178,8 @@ fn is_permanently_invalid_restart_candidate(error: &anyhow::Error) -> bool {
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
     });
-    let replaced_repository = format!("{error:#}")
-        .contains("restart workspace has no existing repository incarnation");
+    let replaced_repository =
+        format!("{error:#}").contains("restart workspace has no existing repository incarnation");
     missing_workspace || replaced_repository
 }
 impl RepositoryKernelRegistry {
@@ -225,11 +225,10 @@ impl RepositoryKernelRegistry {
             registry.unregister(&candidate.repository_key)?;
             return Ok(RepositoryRestartOutcome::Unsupported);
         }
-        let location = match
-            SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(
+        let location =
+            match SqlitePlanningAuthorityAdapter::resolve_existing_repository_kernel_location(
                 &target.workspace_root,
-            )
-        {
+            ) {
             Ok(Some(location)) => location,
             Ok(None) => {
                 registry.unregister(&candidate.repository_key)?;

@@ -106,14 +106,10 @@ impl SqlitePlanningAuthorityAdapter {
             .context("restart workspace Git top-level could not be resolved")?;
         let git_dir = git_stdout(workspace_dir, &["rev-parse", "--git-dir"])
             .context("restart workspace Git directory could not be resolved")?;
-        let toplevel = canonicalize_best_effort(&absolutize_path(
-            &workspace_root,
-            Path::new(&toplevel),
-        ));
-        let git_dir = canonicalize_best_effort(&absolutize_path(
-            &workspace_root,
-            Path::new(&git_dir),
-        ));
+        let toplevel =
+            canonicalize_best_effort(&absolutize_path(&workspace_root, Path::new(&toplevel)));
+        let git_dir =
+            canonicalize_best_effort(&absolutize_path(&workspace_root, Path::new(&git_dir)));
         // A separate-git-dir checkout is the primary checkout even though its .git entry is
         // a file outside the common directory. Only linked worktrees need the worktree-list scan.
         let primary = if git_dir.starts_with(common_dir.join("worktrees")) {

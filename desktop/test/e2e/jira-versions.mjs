@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
+import { createServer } from "node:http";
+import { WebSocketServer } from "ws";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -7,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { _electron as electron } from "playwright-core";
 
-const desktop = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
 const table = fake.loadReplayTable(fake.APPROVAL_THREAD_LIST_RECORDING);
@@ -21,7 +23,6 @@ const userData = await mkdtemp(join(tmpdir(), "akra-jira-versions-"));
 const evidence = process.env.AKRA_E2E_ARTIFACT_DIR ?? join(desktopDir, "../.omo/evidence/jira-versions");
 const threadId = fake.loadReplayTable(fake.APPROVAL_THREAD_LIST_RECORDING).get("thread/list").result.data[0].id;
 await mkdir(evidence, { recursive: true });
-const threadId = fake.loadReplayTable(fake.APPROVAL_THREAD_LIST_RECORDING).get("thread/list").result.data[0].id;
 const resource = {
   kind: "jira", key: "sample.atlassian.net/ABC-123",
   url: "https://sample.atlassian.net/browse/ABC-123", title: "ABC-123",
