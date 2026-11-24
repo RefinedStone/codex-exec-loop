@@ -1432,7 +1432,7 @@ cat "{root}/full-page.json"
         .fetch_paginated_array::<PullRequestLocatorResponse>("/repos/acme/widgets/pulls")
         .expect_err("an exact-full-page stream must fail instead of returning a partial snapshot");
 
-    assert!(error.to_string().contains("pagination remained full"));
+    assert!(format!("{error:#}").contains("pagination remained full"));
     assert!(error.to_string().contains("refusing an incomplete"));
     let request_count = fs::read_to_string(&log_path)
         .expect("curl log should be readable")
