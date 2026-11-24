@@ -74,6 +74,7 @@ pub(super) fn test_select_permitted_queue_head(
         authority,
         runtime,
         evidence_gate,
+        None,
         context,
         allow_cleanup_probe,
     )
