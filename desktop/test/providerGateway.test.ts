@@ -196,6 +196,17 @@ describe("provider Gateway facade", () => {
     expect(h.calls.find(call => call.method.endsWith("/operation"))?.params.operationId).toBe(connect.params.operationId);
   });
 
+  it("counts prompt limits in Unicode scalar values like the Rust Gateway", async () => {
+    const h = harness();
+    const prompt = "😀".repeat(20_000);
+    h.respond(method => method.endsWith("/state") ? structuredClone(h.state) : { text: prompt });
+    await expect(h.facade.linear.issuePrompt("issue-id")).resolves.toBe(prompt);
+
+    const tooLong = prompt + "x";
+    h.respond(method => method.endsWith("/state") ? structuredClone(h.state) : { text: tooLong });
+    await expect(h.facade.linear.issuePrompt("issue-id")).rejects.toMatchObject({ reason: "corrupt" });
+  });
+
   it("keeps a 140-second native prompt deadline above the Gateway owner deadline", async () => {
     vi.useFakeTimers();
     const h = harness(disconnected());
