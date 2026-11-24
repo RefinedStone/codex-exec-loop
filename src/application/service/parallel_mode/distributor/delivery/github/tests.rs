@@ -62,14 +62,9 @@ fn legacy_autonomous_prs_without_status_checks_keep_the_previous_readiness_contr
     let (record, mut pull_request) = reviewed_source();
     pull_request.required_checks_passed = None;
     pull_request.merge_state_status = Some("UNKNOWN".into());
-    assert!(pull_request_readiness_error(
-        &pull_request,
-        &record,
-        "prerelease",
-        true,
-        false,
-    )
-    .is_none());
+    assert!(
+        pull_request_readiness_error(&pull_request, &record, "prerelease", true, false,).is_none()
+    );
 }
 #[test]
 fn autonomous_pr_readiness_preserves_the_frozen_head_and_target() {
@@ -108,5 +103,7 @@ fn lack_of_process_opt_in_requires_human_approval_of_the_exact_source() {
             .contains("frozen source commit")
     );
     pull_request.approved_review_commit_shas = vec![record.source_commit_sha.clone()];
-    assert!(pull_request_readiness_error(&pull_request, &record, "prerelease", false, false).is_none());
+    assert!(
+        pull_request_readiness_error(&pull_request, &record, "prerelease", false, false).is_none()
+    );
 }

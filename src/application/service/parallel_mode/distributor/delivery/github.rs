@@ -640,7 +640,10 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
         record,
         PlanningWorkPermitStage::Integrate,
     ) {
-        Ok(permit) => (permit.requires_human_review(), permit.requires_auto_delivery()),
+        Ok(permit) => (
+            permit.requires_human_review(),
+            permit.requires_auto_delivery(),
+        ),
         Err(detail) => {
             return block_distributor_queue_record(
                 planning_authority,
@@ -814,7 +817,10 @@ pub(super) fn distributor_recheck_pull_request_before_integration_push(
         record,
         PlanningWorkPermitStage::Integrate,
     ) {
-        Ok(permit) => (permit.requires_human_review(), permit.requires_auto_delivery()),
+        Ok(permit) => (
+            permit.requires_human_review(),
+            permit.requires_auto_delivery(),
+        ),
         Err(detail) => {
             return block_distributor_queue_record(
                 planning_authority,
