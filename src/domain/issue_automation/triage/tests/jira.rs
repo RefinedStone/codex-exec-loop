@@ -86,7 +86,7 @@ fn unsupported_jira_pr_lookup_keeps_unknown_and_opens_only_explicit_human_start(
         let assessment = assess(&source, &jira_policy(mode), None);
         assert_eq!(assessment.eligibility(), IssueTriageEligibility::Unknown);
         assert_eq!(assessment.readiness(), IssueTriageReadiness::Ready);
-        assert!(assessment.requires_jira_human_start_review());
+        assert!(assessment.requires_provider_human_start_review());
         assert!(!ready_for_start(&assessment));
         assert!(!policy_start(&assessment));
         let can_review = mode >= IssueAutomationAutonomy::Propose;
@@ -146,7 +146,7 @@ fn jira_pr_review_never_covers_other_unknowns_or_unsupported_content() {
         }
         let assessment = assess(&current, &policy, None);
         assert!(
-            !assessment.requires_jira_human_start_review(),
+            !assessment.requires_provider_human_start_review(),
             "case {case}"
         );
         assert!(!ready_for_human_start(&assessment), "case {case}");

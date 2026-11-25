@@ -5,9 +5,10 @@ use crate::domain::issue_automation::policy::{
     ISSUE_AUTOMATION_POLICY_SCHEMA_VERSION, IssueAutomationAdditionalHumanRule,
     IssueAutomationCloseWhen, IssueAutomationGate, IssueAutomationGateAction,
     IssueAutomationHumanRule, IssueAutomationJiraBinding, IssueAutomationJiraCloseTransition,
-    IssueAutomationPolicyValueError, IssueAutomationRiskRule, IssueAutomationSelectionMode,
-    IssueAutomationTrustedActor, MAX_ISSUE_AUTOMATION_TIMEOUT_SECONDS, validate_gate_action,
-    validate_glob, validate_repository, validate_text_value,
+    IssueAutomationLinearBinding, IssueAutomationLinearCloseState, IssueAutomationPolicyValueError,
+    IssueAutomationRiskRule, IssueAutomationSelectionMode, IssueAutomationTrustedActor,
+    MAX_ISSUE_AUTOMATION_TIMEOUT_SECONDS, validate_gate_action, validate_glob, validate_repository,
+    validate_text_value,
 };
 
 use super::{IssueAutomationPolicyBlocked, IssueAutomationPolicyScope};
@@ -36,6 +37,82 @@ pub(super) struct PolicyLayer {
 pub(super) struct BindingLayer {
     pub github: Option<GitHubBindingLayer>,
     pub jira: Option<JiraBindingLayer>,
+    pub linear: Option<LinearBindingLayer>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LinearBindingLayer {
+    pub team_id: Option<String>,
+    pub expected_viewer_id: Option<String>,
+    pub mode: Option<IssueAutomationAutonomy>,
+    pub close_state: Option<IssueAutomationLinearCloseState>,
+}
+
+impl LinearBindingLayer {
+    pub(super) fn has_scope(&self) -> bool {
+        self.team_id.is_some() || self.expected_viewer_id.is_some()
+    }
+
+    pub(super) fn binding(&self) -> IssueAutomationLinearBinding {
+        IssueAutomationLinearBinding {
+            team_id: self.team_id.clone().unwrap_or_default(),
+            expected_viewer_id: self.expected_viewer_id.clone().unwrap_or_default(),
+            mode: self.mode.unwrap_or(IssueAutomationAutonomy::Observe),
+            close_state: None,
+        }
+    }
+}
+
+/// A project may narrow a user's state grant, but cannot move it to another team or account.
+pub(super) fn validate_linear_layers(
+    user: &PolicyLayer,
+    project: &PolicyLayer,
+) -> Result<(), IssueAutomationPolicyBlocked> {
+    let user = user
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.linear.as_ref());
+    let project = project
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.linear.as_ref());
+    if let Some(user) = user.filter(|linear| linear.close_state.is_some()) {
+        if !user.has_scope() {
+            return Err(IssueAutomationPolicyBlocked::invalid(
+                IssueAutomationPolicyScope::User,
+                invalid(
+                    "binding.linear.close_state",
+                    "explicit_user_source_scope_required",
+                ),
+            ));
+        }
+        if let Some(project) = project.filter(|linear| linear.has_scope()) {
+            let granted = user.binding();
+            let requested = project.binding();
+            if granted.team_id != requested.team_id
+                || granted.expected_viewer_id != requested.expected_viewer_id
+            {
+                return Err(IssueAutomationPolicyBlocked::invalid(
+                    IssueAutomationPolicyScope::Project,
+                    invalid("binding.linear.close_state", "state_grant_scope_changed"),
+                ));
+            }
+        }
+    }
+    if let Some(requested) = project.and_then(|linear| linear.close_state.as_ref()) {
+        let granted = user.and_then(|linear| linear.close_state.as_ref());
+        if granted.is_none_or(|granted| !requested.restricts(granted)) {
+            return Err(IssueAutomationPolicyBlocked::invalid(
+                IssueAutomationPolicyScope::Project,
+                invalid(
+                    "binding.linear.close_state",
+                    "project_cannot_expand_state_grant",
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -308,6 +385,19 @@ fn validate(layer: &PolicyLayer) -> Result<(), IssueAutomationPolicyValueError> 
         }
         if let Some(transition) = &jira.close_transition {
             transition.validate()?;
+        }
+    }
+    if let Some(linear) = layer
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.linear.as_ref())
+    {
+        // The team and the account form one explicit selection; never combine two halves.
+        if linear.has_scope() {
+            linear.binding().validate()?;
+        }
+        if let Some(close) = &linear.close_state {
+            close.validate()?;
         }
     }
     if let Some(arbiter) = &layer.arbiter {

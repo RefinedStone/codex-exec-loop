@@ -946,3 +946,62 @@ fn saves_require_a_persisted_sqlite_revision_and_cannot_acknowledge_insert_as_a_
         1
     );
 }
+
+#[test]
+fn version_fourteen_widens_only_the_provider_check_and_keeps_rows() {
+    let fixture = Fixture::new("linear-provider-check");
+    let (binding, issue) = fixture.insert();
+    {
+        // Rebuild the exact version 14 provider text over the current tables.
+        let connection = Connection::open(fixture.database()).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "schema_version", |row| row.get(0))
+            .unwrap();
+        connection
+            .pragma_update(None, "writable_schema", true)
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE sqlite_master SET sql = replace(sql, ?1, ?2) WHERE type = 'table'",
+                params![super::PROVIDER_CHECK, super::LEGACY_PROVIDER_CHECK],
+            )
+            .unwrap();
+        connection
+            .pragma_update(None, "schema_version", version + 1)
+            .unwrap();
+        connection
+            .pragma_update(None, "writable_schema", false)
+            .unwrap();
+        connection.pragma_update(None, "user_version", 14).unwrap();
+        super::validate_schema_version(&connection, 14).unwrap();
+        assert!(super::validate_schema(&connection).is_err());
+    }
+    let reopened = fixture.adapter();
+    assert_eq!(
+        reopened
+            .get_issue(fixture.cwd(), issue.reference())
+            .unwrap()
+            .unwrap(),
+        issue
+    );
+    let linear = IssueAutomationBinding::new(
+        IssueAutomationBindingId::new("linear-binding").unwrap(),
+        IssueProvider::Linear,
+        "linear.app",
+        "6f1c1a52-0000-4000-8000-00000000a001",
+        binding.project_scope().clone(),
+    )
+    .unwrap();
+    assert!(
+        reopened
+            .insert_binding(fixture.cwd(), &linear)
+            .unwrap()
+            .inserted
+    );
+    let connection = Connection::open(fixture.database()).unwrap();
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, super::SCHEMA_VERSION);
+    super::validate_schema(&connection).unwrap();
+}

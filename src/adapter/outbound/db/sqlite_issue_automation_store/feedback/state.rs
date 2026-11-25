@@ -346,11 +346,20 @@ pub(super) fn permits_new_write(
     let IssueSourceContent::Shared(shared) = &observed.content else {
         return false;
     };
-    if intent.issue.provider == crate::domain::issue_work::IssueProvider::Jira
-        && !matches!((observed.jira.as_ref(), intent.connection.as_ref()), (Some(jira), Some(connection))
-            if jira.connection.profile_id == connection.profile_id
-                && jira.connection.connection_id == connection.connection_id
-                && jira.connection.revision == connection.revision)
+    let observed_connection = match intent.issue.provider {
+        crate::domain::issue_work::IssueProvider::Jira => {
+            observed.jira.as_ref().map(|jira| &jira.connection)
+        }
+        crate::domain::issue_work::IssueProvider::Linear => {
+            observed.linear.as_ref().map(|linear| &linear.connection)
+        }
+        crate::domain::issue_work::IssueProvider::GitHub => None,
+    };
+    if intent.issue.provider != crate::domain::issue_work::IssueProvider::GitHub
+        && !matches!((observed_connection, intent.connection.as_ref()), (Some(observed), Some(connection))
+            if observed.profile_id == connection.profile_id
+                && observed.connection_id == connection.connection_id
+                && observed.revision == connection.revision)
     {
         return false;
     }

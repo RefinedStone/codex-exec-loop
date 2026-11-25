@@ -100,6 +100,7 @@ impl Fixture {
         IssueSourceObservation {
             content_problems: vec![],
             jira: None,
+            linear: None,
             repository_visibility: Default::default(),
             repository_name_with_owner: None,
             creation_provenance:
@@ -145,6 +146,7 @@ impl Fixture {
             let page = IssueDiscoveryPage {
                 jira_connection: None,
                 jira_binding: None,
+                linear: None,
                 repository,
                 observations: observations.to_vec(),
                 next_cursor: None,

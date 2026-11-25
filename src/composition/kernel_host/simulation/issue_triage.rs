@@ -165,6 +165,7 @@ impl SimIssueSource {
         IssueSourceObservation {
             content_problems: vec![],
             jira: None,
+            linear: None,
             repository_visibility:
                 crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
             repository_name_with_owner: Some("owner/repository".into()),
@@ -234,6 +235,7 @@ impl IssueSourcePort for SimIssueSource {
         Ok(IssueDiscoveryPage {
             jira_connection: None,
             jira_binding: None,
+            linear: None,
             repository,
             observations: vec![self.observation(issue, &request.disclosure)],
             next_cursor: None,

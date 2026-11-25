@@ -57,6 +57,36 @@ pub(super) fn validate_policy(
             ));
         }
     }
+    if let Some(linear) = &policy.binding.linear {
+        if policy.binding.jira.is_some() {
+            return Err(invalid(
+                "binding.linear",
+                "one_issue_source_binding_required",
+            ));
+        }
+        linear.validate()?;
+        if linear.mode > policy.authority.autonomy_cap {
+            return Err(invalid("binding.linear.mode", "exceeds_autonomy_cap"));
+        }
+        if policy.feedback.transition && linear.close_state.is_none() {
+            return Err(invalid(
+                "binding.linear.close_state",
+                "explicit_user_state_change_required",
+            ));
+        }
+        if policy.feedback.labels {
+            return Err(invalid(
+                "feedback.labels",
+                "linear_label_writes_unsupported",
+            ));
+        }
+        if policy.close.when == IssueAutomationCloseWhen::ProviderLink {
+            return Err(invalid(
+                "close.when",
+                "linear_provider_link_closure_unsupported",
+            ));
+        }
+    }
     validate_labels(&policy.labels)?;
     for label in &policy.select.labels_any {
         validate_text_value(label, "select.labels_any")?;

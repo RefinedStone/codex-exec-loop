@@ -13,7 +13,7 @@ use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-pub(super) struct JiraCollectionContext {
+pub(super) struct ConnectedSourceContext {
     pub policy: IssueAutomationPolicyService,
     pub credentials: Option<Arc<dyn ProviderCredentialReadPort>>,
     pub claims: Arc<dyn IssueSourceClaimPort>,
@@ -62,34 +62,37 @@ pub(crate) fn binding_for_source(
 }
 
 impl IssueCollectionService {
-    pub(super) fn jira_selection(
+    /// A repository opts in to exactly one connected source; otherwise GitHub collection runs.
+    pub(super) fn connected_selection(
         &self,
-    ) -> std::result::Result<Option<(IssueAutomationJiraBinding, String)>, IssueCollectionFailure>
-    {
-        let Some(context) = &self.jira else {
+    ) -> std::result::Result<Option<super::ConnectedSelection>, IssueCollectionFailure> {
+        let Some(context) = &self.connected else {
             return Ok(None);
         };
         let policy = context
             .policy
             .resolve(&self.workspace_dir)
             .map_err(|_| IssueCollectionFailure::PolicyUnavailable)?;
-        let Some(binding) = policy.policy.binding.jira else {
-            return Ok(None);
+        let version = policy.version;
+        let selection = match (policy.policy.binding.jira, policy.policy.binding.linear) {
+            (Some(binding), _) => super::ConnectedSelection::Jira { binding, version },
+            (None, Some(binding)) => super::ConnectedSelection::Linear { binding, version },
+            (None, None) => return Ok(None),
         };
         if context.credentials.is_none() {
             return Err(IssueCollectionFailure::Source(
                 IssueSourceFailure::ProviderUnavailable,
             ));
         }
-        Ok(Some((binding, policy.version)))
+        Ok(Some(selection))
     }
 
     fn current_jira(
         &self,
         expected_version: &str,
-    ) -> Result<(&JiraCollectionContext, IssueAutomationJiraBinding)> {
+    ) -> Result<(&ConnectedSourceContext, IssueAutomationJiraBinding)> {
         let context = self
-            .jira
+            .connected
             .as_ref()
             .context("Jira collection is unavailable")?;
         let policy = context.policy.resolve(&self.workspace_dir)?;
@@ -219,14 +222,14 @@ impl IssueCollectionService {
         Ok(())
     }
 
-    pub(super) fn claim_known_jira_issue(&self, issue: &IssueReference) -> Result<bool> {
-        if issue.provider != IssueProvider::Jira {
+    pub(super) fn claim_known_connected_issue(&self, issue: &IssueReference) -> Result<bool> {
+        if !matches!(issue.provider, IssueProvider::Jira | IssueProvider::Linear) {
             return Ok(false);
         }
         let context = self
-            .jira
+            .connected
             .as_ref()
-            .context("Jira source ownership is unavailable")?;
+            .context("connected source ownership is unavailable")?;
         let repository = IssueSourceRepository::from_reference(issue);
         let binding = binding_for_source(
             &self.workspace_dir,
@@ -320,7 +323,7 @@ fn validate_connection(
     Ok(())
 }
 
-fn validate_observation(
+pub(super) fn validate_observation(
     observation: &IssueSourceObservation,
     binding: &IssueAutomationBinding,
     disclosure: &str,

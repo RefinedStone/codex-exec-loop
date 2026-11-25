@@ -29,6 +29,7 @@ fn observation(fixture: &Fixture) -> IssueSourceObservation {
     IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         creation_provenance:
@@ -75,6 +76,7 @@ fn observe(fixture: &Fixture, observation: IssueSourceObservation) -> StoredIssu
     let page = IssueDiscoveryPage {
         jira_connection: None,
         jira_binding: None,
+        linear: None,
         repository,
         observations: vec![observation],
         next_cursor: None,

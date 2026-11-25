@@ -98,6 +98,7 @@ impl Fixture {
         IssueSourceObservation {
             content_problems: vec![],
             jira: None,
+            linear: None,
             repository_visibility:
                 crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
             repository_name_with_owner: Some("owner/repository".into()),
@@ -144,6 +145,7 @@ impl Fixture {
             let page = IssueDiscoveryPage {
                 jira_connection: None,
                 jira_binding: None,
+                linear: None,
                 repository,
                 observations: observations.to_vec(),
                 next_cursor: None,

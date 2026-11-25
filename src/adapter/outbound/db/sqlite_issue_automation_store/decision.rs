@@ -29,7 +29,7 @@ pub(super) const SCHEMA: &str = r#"
 CREATE TABLE issue_decision_requests (
     decision_id TEXT COLLATE BINARY NOT NULL,
     workspace_dir TEXT COLLATE BINARY NOT NULL,
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,

@@ -25,7 +25,7 @@ CREATE TABLE issue_collection_control (
 
 pub const OBSERVATIONS_SCHEMA: &str = r#"
 CREATE TABLE issue_source_observations (
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,

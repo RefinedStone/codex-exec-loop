@@ -248,6 +248,7 @@ pub(super) fn scope_bytes(scope: &VaultRecordScope) -> Vec<u8> {
     let provider = match issue.provider {
         IssueProvider::GitHub => "github",
         IssueProvider::Jira => "jira",
+        IssueProvider::Linear => "linear",
     };
     let field = match scope.field {
         VaultRecordField::Title => "title",
@@ -281,6 +282,7 @@ fn creation_scope_bytes(scope: &VaultCreationRecordScope) -> Vec<u8> {
     let provider = match repository.provider {
         IssueProvider::GitHub => "github",
         IssueProvider::Jira => "jira",
+        IssueProvider::Linear => "linear",
     };
     let field = match scope.field {
         VaultRecordField::Title => "title",

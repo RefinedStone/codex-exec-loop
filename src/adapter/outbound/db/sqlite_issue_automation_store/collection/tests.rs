@@ -30,6 +30,7 @@ fn observed(fixture: &Fixture, id: &str, body: &str) -> IssueSourceObservation {
     IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         creation_provenance:
@@ -98,6 +99,7 @@ fn page(
     IssueDiscoveryPage {
         jira_connection: None,
         jira_binding: None,
+        linear: None,
         next_cursor: after.map(|after| {
             IssueDiscoveryCursor::new(
                 repository.clone(),

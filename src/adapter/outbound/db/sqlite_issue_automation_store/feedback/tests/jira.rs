@@ -40,6 +40,7 @@ fn setup(fixture: &Fixture) -> IssueReference {
         repository_name_with_owner: None,
         issue: tracked.reference().clone(),
         web: None,
+        linear: None,
         jira: Some(IssueSourceJiraMetadata {
             key: "APP-1".into(),
             url: "https://example.atlassian.net/browse/APP-1".into(),

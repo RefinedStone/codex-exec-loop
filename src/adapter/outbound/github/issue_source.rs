@@ -243,6 +243,7 @@ impl IssueSourcePort for GithubIssueSourceAdapter {
             repository,
             jira_connection: None,
             jira_binding: None,
+            linear: None,
             observations,
             next_cursor,
             scanned_count,
@@ -365,6 +366,7 @@ fn observation(
         issue,
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_name_with_owner: Some(repository_name_with_owner),
         repository_visibility: match remote_repository.visibility {
             RepositoryVisibility::Private => IssueRepositoryVisibility::Private,

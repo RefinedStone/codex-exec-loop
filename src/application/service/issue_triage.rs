@@ -512,6 +512,7 @@ fn issue_key(issue: &IssueReference) -> (&str, &str, &str, &str, &str) {
     let provider = match issue.provider {
         IssueProvider::GitHub => "github",
         IssueProvider::Jira => "jira",
+        IssueProvider::Linear => "linear",
     };
     (
         provider,

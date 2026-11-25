@@ -119,6 +119,7 @@ fn close_intent(snapshot: &IssueFeedbackSnapshot, id: &str) -> IssueFeedbackInte
                 .as_str()
                 .into(),
             jira_transition: None,
+            linear_state: None,
             previous_event_id: None,
         },
     )

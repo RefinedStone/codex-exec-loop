@@ -407,6 +407,7 @@ impl Fixture {
             decision_id: "human-close-1".into(),
             previous_event_id: snapshot.previous_event_id,
             jira_transition: Some(snapshot.target),
+            linear_state: None,
         };
         intent.validate().unwrap();
         intent

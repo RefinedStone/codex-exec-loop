@@ -128,6 +128,7 @@ fn resolve_with_provenance(
     let user = layer::parse(user_toml, IssueAutomationPolicyScope::User)?;
     let project = layer::parse(project_toml, IssueAutomationPolicyScope::Project)?;
     layer::validate_jira_layers(&user, &project)?;
+    layer::validate_linear_layers(&user, &project)?;
     let (mut policy, origins) = merge::merge(user, project);
     policy.normalize();
     policy.validate().map_err(|error| {

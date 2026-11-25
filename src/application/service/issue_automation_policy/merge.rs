@@ -26,11 +26,36 @@ pub(super) fn merge(
         .binding
         .as_ref()
         .is_some_and(|binding| binding.jira.is_some());
+    // Linear도 같다. 사용자 파일의 팀 좌표는 저장소 파일이 binding.linear를 선택해야 연결한다.
+    let linear_selected = project
+        .binding
+        .as_ref()
+        .is_some_and(|binding| binding.linear.is_some());
     let mut policy = IssueAutomationPolicy::builtin();
     let mut origins = PolicyProvenance::default();
-    apply_common(&mut policy, &user, Scope::User, jira_selected, &mut origins);
+    let user_selection = SourceSelection {
+        jira: jira_selected,
+        linear: linear_selected,
+    };
+    let project_selection = SourceSelection {
+        jira: true,
+        linear: true,
+    };
+    apply_common(
+        &mut policy,
+        &user,
+        Scope::User,
+        user_selection,
+        &mut origins,
+    );
     apply_user_grants(&mut policy, &user, &mut origins);
-    apply_common(&mut policy, &project, Scope::Project, true, &mut origins);
+    apply_common(
+        &mut policy,
+        &project,
+        Scope::Project,
+        project_selection,
+        &mut origins,
+    );
     restrict_with_project(&mut policy, &project, &mut origins);
     // 어느 layer도 명시하지 않았을 때만 최종 실행 라벨로 선택 기본값을 만든다.
     // 명시한 빈 목록과 이름 변경 전의 명시 목록은 그대로 유지한다.
@@ -46,7 +71,17 @@ pub(super) fn merge(
     if policy.binding.jira.is_some() {
         origins.cap("binding.jira.mode", "authority.autonomy_cap");
     }
+    if policy.binding.linear.is_some() {
+        origins.cap("binding.linear.mode", "authority.autonomy_cap");
+    }
     (policy, origins)
+}
+
+/// Which connected-source coordinates of a layer may be applied.
+#[derive(Clone, Copy)]
+struct SourceSelection {
+    jira: bool,
+    linear: bool,
 }
 
 /// 일반 leaf는 project > user > builtin이다. 보호와 사람 필수 조건은 항상 더한다.
@@ -54,7 +89,7 @@ fn apply_common(
     policy: &mut IssueAutomationPolicy,
     layer: &PolicyLayer,
     scope: Scope,
-    jira_selected: bool,
+    selection: SourceSelection,
     origins: &mut PolicyProvenance,
 ) {
     assign(
@@ -85,7 +120,7 @@ fn apply_common(
         .binding
         .as_ref()
         .and_then(|binding| binding.jira.as_ref())
-        .filter(|_| jira_selected)
+        .filter(|_| selection.jira)
     {
         let selected = policy.binding.jira.get_or_insert_with(|| jira.binding());
         if jira.has_scope() {
@@ -109,6 +144,32 @@ fn apply_common(
             &mut selected.mode,
             jira.mode,
             "binding.jira.mode",
+            scope,
+            origins,
+        );
+    }
+    if let Some(linear) = layer
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.linear.as_ref())
+        .filter(|_| selection.linear)
+    {
+        let selected = policy
+            .binding
+            .linear
+            .get_or_insert_with(|| linear.binding());
+        if linear.has_scope() {
+            let scope_values = linear.binding();
+            selected.team_id = scope_values.team_id;
+            selected.expected_viewer_id = scope_values.expected_viewer_id;
+            for key in ["team_id", "expected_viewer_id"] {
+                origins.replace(&format!("binding.linear.{key}"), scope);
+            }
+        }
+        assign(
+            &mut selected.mode,
+            linear.mode,
+            "binding.linear.mode",
             scope,
             origins,
         );
@@ -211,6 +272,16 @@ fn apply_user_grants(
     {
         jira.close_transition = Some(transition);
         origins.replace("binding.jira.close_transition", Scope::User);
+    }
+    if let Some(close) = user
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.linear.as_ref())
+        .and_then(|linear| linear.close_state.clone())
+        && let Some(linear) = &mut policy.binding.linear
+    {
+        linear.close_state = Some(close);
+        origins.replace("binding.linear.close_state", Scope::User);
     }
     if let Some(arbiter) = &user.arbiter {
         assign(
@@ -325,6 +396,21 @@ fn restrict_with_project(
         jira.close_transition = Some(transition);
         origins.combine(
             "binding.jira.close_transition",
+            Scope::Project,
+            Resolution::Intersection,
+        );
+    }
+    if let Some(close) = project
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.linear.as_ref())
+        .and_then(|linear| linear.close_state.clone())
+        && let Some(linear) = &mut policy.binding.linear
+    {
+        // Cross-layer validation has established the exact target and subset relationship.
+        linear.close_state = Some(close);
+        origins.combine(
+            "binding.linear.close_state",
             Scope::Project,
             Resolution::Intersection,
         );

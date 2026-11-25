@@ -50,6 +50,7 @@ fn observed(issue: &IssueReference) -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility:
             crate::domain::issue_automation::source::IssueRepositoryVisibility::Private,
         repository_name_with_owner: Some("sample/widgets".into()),

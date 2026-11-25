@@ -62,7 +62,7 @@ pub(super) fn calculate(
         && evaluation.eligibility == IssueTriageEligibility::Eligible
         && evaluation.readiness == IssueTriageReadiness::Ready;
     let human_start_only = evaluation.effective_mode >= IssueAutomationAutonomy::Propose
-        && super::jira_human_start_review(
+        && super::provider_human_start_review(
             basis,
             evaluation.eligibility,
             evaluation.readiness,
@@ -101,7 +101,7 @@ pub(super) fn observe(
     policy: &IssueAutomationPolicy,
 ) -> IssueTriageObservation {
     use IssueObservationDisposition as Disposition;
-    let human_start_only = super::jira_human_start_review(
+    let human_start_only = super::provider_human_start_review(
         basis,
         evaluation.eligibility,
         evaluation.readiness,
@@ -119,7 +119,8 @@ pub(super) fn observe(
         (_, IssueTriageReadiness::NeedsInfo)
             if evaluation
                 .reasons
-                .contains(&IssueTriageReasonCode::JiraPullRequestLookupUnsupported) =>
+                .iter()
+                .any(|reason| reason.is_pull_request_lookup_unsupported()) =>
         {
             Disposition::NeedsInfo
         }
@@ -215,21 +216,27 @@ pub(super) fn validate_record(
     let enabled = record.effective_mode >= IssueAutomationAutonomy::Propose
         && record.eligibility == IssueTriageEligibility::Eligible
         && record.readiness == IssueTriageReadiness::Ready;
-    let human_start_only = super::jira_human_start_review(
+    let human_start_only = super::provider_human_start_review(
         &record.basis,
         record.eligibility,
         record.readiness,
         &record.reasons,
     );
+    if record.reasons.iter().any(|reason| {
+        reason.is_pull_request_lookup_unsupported()
+            && IssueTriageReasonCode::pull_request_lookup_unsupported(record.basis.issue.provider)
+                != Some(*reason)
+    }) {
+        return Err(invalid());
+    }
     if record
         .reasons
-        .contains(&IssueTriageReasonCode::JiraPullRequestLookupUnsupported)
-        && (record.basis.issue.provider != crate::domain::issue_work::IssueProvider::Jira
-            || matches!(
-                record.basis.source,
-                IssueTriageSourceState::NotYetObserved | IssueTriageSourceState::Unknown
-            )
-            || record.eligibility == IssueTriageEligibility::Eligible)
+        .iter()
+        .any(|reason| reason.is_pull_request_lookup_unsupported())
+        && (matches!(
+            record.basis.source,
+            IssueTriageSourceState::NotYetObserved | IssueTriageSourceState::Unknown
+        ) || record.eligibility == IssueTriageEligibility::Eligible)
     {
         return Err(invalid());
     }
@@ -322,7 +329,7 @@ fn validate_observation(record: &PersistedIssueTriageAssessment) -> Result<(), I
     use IssueObservationDisposition as Disposition;
     let eligible_ready = record.eligibility == IssueTriageEligibility::Eligible
         && record.readiness == IssueTriageReadiness::Ready;
-    let human_start_only = super::jira_human_start_review(
+    let human_start_only = super::provider_human_start_review(
         &record.basis,
         record.eligibility,
         record.readiness,
@@ -367,7 +374,8 @@ fn validate_observation(record: &PersistedIssueTriageAssessment) -> Result<(), I
                 || (record.eligibility == IssueTriageEligibility::Unknown
                     && record
                         .reasons
-                        .contains(&IssueTriageReasonCode::JiraPullRequestLookupUnsupported)))
+                        .iter()
+                        .any(|reason| reason.is_pull_request_lookup_unsupported())))
                 && record.readiness == IssueTriageReadiness::NeedsInfo
         }
         Disposition::Unknown => {

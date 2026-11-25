@@ -161,10 +161,17 @@ fn eligibility(
 ) -> IssueTriageEligibility {
     let mut excluded = false;
     let mut unknown = false;
-    let jira_metadata_valid = observation.issue.provider
-        != crate::domain::issue_work::IssueProvider::Jira
-        || (observation.jira.is_some() && observation.validate_repository_metadata().is_ok());
-    if !jira_metadata_valid {
+    use crate::domain::issue_work::IssueProvider;
+    let provider_metadata_valid = match observation.issue.provider {
+        IssueProvider::GitHub => true,
+        IssueProvider::Jira => {
+            observation.jira.is_some() && observation.validate_repository_metadata().is_ok()
+        }
+        IssueProvider::Linear => {
+            observation.linear.is_some() && observation.validate_repository_metadata().is_ok()
+        }
+    };
+    if !provider_metadata_valid {
         unknown = true;
     }
     if observation.remote_state == IssueRemoteState::Closed {
@@ -214,16 +221,26 @@ fn eligibility(
     if observation.assignees.completeness != IssueMetadataCompleteness::Complete {
         unknown = true;
     }
-    let unsupported_pr_lookup = observation.issue.provider
-        == crate::domain::issue_work::IssueProvider::Jira
-        && jira_metadata_valid
-        && observation.linked_pull_request == IssuePrPresence::Unknown
-        && observation.jira.as_ref().is_some_and(|jira| {
+    let provider_lookup_unsupported = match observation.issue.provider {
+        IssueProvider::GitHub => false,
+        IssueProvider::Jira => observation.jira.as_ref().is_some_and(|jira| {
             jira.pull_request_lookup == JiraPullRequestLookup::Unsupported
                 && jira.validate_for(&observation.issue).is_ok()
-        });
-    if unsupported_pr_lookup {
-        reasons.push(IssueTriageReasonCode::JiraPullRequestLookupUnsupported);
+        }),
+        // Linear's attachments depend on an optional integration and cannot prove absence.
+        IssueProvider::Linear => observation
+            .linear
+            .as_ref()
+            .is_some_and(|linear| linear.validate_for(&observation.issue).is_ok()),
+    };
+    let unsupported_pr_lookup = provider_metadata_valid
+        && observation.linked_pull_request == IssuePrPresence::Unknown
+        && provider_lookup_unsupported;
+    if unsupported_pr_lookup
+        && let Some(reason) =
+            IssueTriageReasonCode::pull_request_lookup_unsupported(observation.issue.provider)
+    {
+        reasons.push(reason);
     } else if observation.linked_pull_request == IssuePrPresence::Unknown {
         unknown = true;
     }

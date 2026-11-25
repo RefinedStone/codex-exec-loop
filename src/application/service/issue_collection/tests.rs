@@ -16,6 +16,7 @@ use crate::domain::issue_automation::{IssueAutomationSnapshot, IssueAutomationSt
 use crate::domain::issue_work::{IssueComparisonBasis, IssueFieldHash, IssueSharedCopy};
 
 mod jira;
+mod linear;
 
 struct Fixture {
     root: PathBuf,
@@ -195,6 +196,7 @@ fn observation(
     IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         creation_provenance:
@@ -254,6 +256,7 @@ fn page(request: &IssueDiscoveryRequest, ids: &[&str], after: Option<&str>) -> I
     IssueDiscoveryPage {
         jira_connection: None,
         jira_binding: None,
+        linear: None,
         repository,
         observations,
         next_cursor,

@@ -29,6 +29,7 @@ pub mod mcp_hub;
 pub mod github;
 // jira 는 Jira Cloud 이슈의 안정 ID, 본문, 필수 필드를 읽고 (#2433), 승인한 공유본으로 제목과 본문을 고친다 (#2434).
 pub mod jira;
+pub mod linear;
 // telegram은 inbound bot runner가 사용할 Telegram HTTP API 경계를 구현한다.
 pub(crate) mod extension_gateway_client;
 pub(crate) mod native_vault_confirmation;

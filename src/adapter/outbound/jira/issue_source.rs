@@ -273,6 +273,7 @@ impl JiraIssueSourceAdapter {
             repository: repository.clone(),
             jira_connection: Some(lease.reference),
             jira_binding: Some(self.binding.clone()),
+            linear: None,
             observations,
             next_cursor,
             scanned_count,

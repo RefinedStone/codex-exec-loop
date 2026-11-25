@@ -6,6 +6,7 @@ fn jira_key_is_preserved_by_the_immutable_nonclosing_work_link() {
         let link = PlanningWorkLinkReference {
             url: format!("https://example.atlassian.net/browse/{key}"),
             close_on_merge: false,
+            branch_hint: None,
         };
         link.validate().unwrap();
         assert_eq!(link.jira_issue_key(), Some(key));
@@ -43,6 +44,7 @@ fn jira_key_extraction_rejects_noncanonical_or_injected_links_without_reinterpre
         let link = PlanningWorkLinkReference {
             url: url.into(),
             close_on_merge: false,
+            branch_hint: None,
         };
         assert_eq!(link.jira_issue_key(), None, "{url}");
         assert_eq!(
@@ -154,7 +156,8 @@ fn work_link_rejects_instruction_injection_and_noncanonical_closing_targets() {
         assert!(
             PlanningWorkLinkReference {
                 url: url.into(),
-                close_on_merge: true
+                close_on_merge: true,
+                branch_hint: None,
             }
             .validate()
             .is_err(),
@@ -165,8 +168,50 @@ fn work_link_rejects_instruction_injection_and_noncanonical_closing_targets() {
         PlanningWorkLinkReference {
             url: "https://github.com/acme/project/issues/7".into(),
             close_on_merge: true,
+            branch_hint: None,
         }
         .validate()
         .is_ok()
     );
+}
+
+#[test]
+fn a_linear_branch_hint_is_display_metadata_of_a_canonical_nonclosing_link() {
+    let link = PlanningWorkLinkReference {
+        url: "https://linear.app/example/issue/ENG-7".into(),
+        close_on_merge: false,
+        branch_hint: Some("operator/eng-7-keep".into()),
+    };
+    link.validate().unwrap();
+    assert_eq!(link.linear_issue_identifier(), Some("ENG-7"));
+    assert_eq!(link.branch_hint(), Some("operator/eng-7-keep"));
+    assert_eq!(link.jira_issue_key(), None);
+    // Legacy JSON without the field reads back unchanged.
+    let legacy: PlanningWorkLinkReference =
+        serde_json::from_str(r#"{"url":"https://github.com/acme/project/issues/7"}"#).unwrap();
+    assert_eq!(legacy.branch_hint, None);
+    assert!(
+        !serde_json::to_string(&legacy)
+            .unwrap()
+            .contains("branch_hint")
+    );
+    for invalid in [
+        PlanningWorkLinkReference {
+            branch_hint: Some("../main".into()),
+            ..link.clone()
+        },
+        PlanningWorkLinkReference {
+            url: "https://github.com/acme/project/issues/7".into(),
+            ..link.clone()
+        },
+    ] {
+        assert!(invalid.validate().is_err());
+        assert_eq!(invalid.branch_hint(), None);
+    }
+    let slugged = PlanningWorkLinkReference {
+        url: "https://linear.app/example/issue/ENG-7/title-slug".into(),
+        branch_hint: None,
+        ..link
+    };
+    assert_eq!(slugged.linear_issue_identifier(), None);
 }

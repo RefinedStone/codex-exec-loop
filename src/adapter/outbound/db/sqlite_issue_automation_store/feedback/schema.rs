@@ -8,7 +8,7 @@ use crate::domain::issue_work::{IssueProjectScope, IssueReference};
 pub(super) const STATE_TABLE: &str = "issue_feedback_state";
 pub(super) const STATE_SCHEMA: &str = r#"
 CREATE TABLE issue_feedback_state (
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,
@@ -24,7 +24,7 @@ pub(super) const INTENT_TABLE: &str = "issue_feedback_intents";
 pub(super) const INTENT_SCHEMA: &str = r#"
 CREATE TABLE issue_feedback_intents (
     intent_id TEXT COLLATE BINARY NOT NULL,
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,
@@ -44,7 +44,7 @@ pub(super) const OUTBOX_TABLE: &str = "issue_feedback_outbox";
 pub(super) const OUTBOX_SCHEMA: &str = r#"
 CREATE TABLE issue_feedback_outbox (
     event_id TEXT COLLATE BINARY NOT NULL,
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,
@@ -67,7 +67,7 @@ CREATE TABLE issue_feedback_outbox (
 pub(super) const GRANT_TABLE: &str = "issue_feedback_grant_entries";
 pub(super) const GRANT_SCHEMA: &str = r#"
 CREATE TABLE issue_feedback_grant_entries (
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,

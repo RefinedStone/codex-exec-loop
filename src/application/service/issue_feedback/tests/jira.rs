@@ -178,6 +178,7 @@ fn jira_missing_transition_ack_stays_unknown_even_when_the_same_account_closed_i
             from_status_id: "1".into(),
             to_status_id: "3".into(),
         }),
+        linear_state: None,
     };
     record.state = IssueFeedbackIntentState::Sent;
     record.validate().unwrap();

@@ -198,7 +198,7 @@ fn service_with_policy(
     origin.unavailable.store(true, Ordering::SeqCst);
     fixture
         .service(source, origin, Arc::default())
-        .with_jira_collection(
+        .with_connected_source_collection(
             IssueAutomationPolicyService::new(policy),
             Some(credentials),
             claims,

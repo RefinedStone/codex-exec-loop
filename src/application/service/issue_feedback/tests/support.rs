@@ -103,6 +103,7 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
     let source = IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: issue.clone(),

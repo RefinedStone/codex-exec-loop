@@ -128,6 +128,7 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         | ReasonCode::HumanSelectionRequired
         | ReasonCode::AutoRepositoryRestricted
         | ReasonCode::JiraPullRequestLookupUnsupported
+        | ReasonCode::LinearPullRequestLookupUnsupported
         | ReasonCode::AlreadyClaimed
         | ReasonCode::TitleMissing
         | ReasonCode::RequiredSectionMissing

@@ -5,7 +5,7 @@ use crate::domain::issue_automation::source::{
     IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
     IssueRepositoryVisibility, IssueSourceActor, IssueSourceActorKind, IssueSourceContent,
     IssueSourceContentProblem, IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
-    JiraIssueStatusCategory, JiraPullRequestLookup,
+    JiraIssueStatusCategory, JiraPullRequestLookup, LinearIssueStateType,
 };
 use crate::domain::issue_validation::{IssueFieldFormat, IssueRequirements};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
@@ -59,7 +59,18 @@ struct CanonicalObservation<'a> {
     content_problems: Vec<IssueSourceContentProblem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     jira: Option<CanonicalJira<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linear: Option<CanonicalLinear<'a>>,
     content: CanonicalContent<'a>,
+}
+
+/// The provider branch suggestion is part of the approved work, so a change needs a new approval.
+#[derive(Serialize)]
+struct CanonicalLinear<'a> {
+    identifier: &'a str,
+    state_id: &'a str,
+    state_type: LinearIssueStateType,
+    branch_name: &'a str,
 }
 
 #[derive(Serialize)]
@@ -268,6 +279,12 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
             status_id: &jira.status_id,
             status_category: jira.status_category,
             pull_request_lookup: jira.pull_request_lookup,
+        }),
+        linear: observation.linear.as_ref().map(|linear| CanonicalLinear {
+            identifier: &linear.identifier,
+            state_id: &linear.state_id,
+            state_type: linear.state_type,
+            branch_name: &linear.branch_name,
         }),
         content,
     }

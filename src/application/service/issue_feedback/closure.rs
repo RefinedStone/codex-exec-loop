@@ -45,7 +45,34 @@ impl IssueFeedbackService {
         if !actor_matches_snapshot(&actor, snapshot) {
             return Ok(());
         }
-        let (previous_event_id, jira_transition) = if issue.provider == IssueProvider::Jira {
+        let mut linear_state = None;
+        let (previous_event_id, jira_transition) = if issue.provider == IssueProvider::Linear {
+            let Some(mapping) = automation
+                .policy
+                .binding
+                .linear
+                .as_ref()
+                .and_then(|binding| binding.close_state.as_ref())
+            else {
+                return Ok(());
+            };
+            let observed = match self
+                .provider
+                .read_linear_close_state(issue, &actor, mapping)
+            {
+                Ok(observed) => observed,
+                // An unavailable target state must not block the independent status comment.
+                Err(_) => return Ok(()),
+            };
+            if observed.issue != *issue
+                || !matches!(snapshot.item.current.as_ref(), Some(IssueSourceRead::Observed(source))
+                if source.linear.as_ref().is_some_and(|linear| linear.state_id == observed.target.from_state_id))
+            {
+                return Ok(());
+            }
+            linear_state = Some(observed.target);
+            (observed.previous_event_id, None)
+        } else if issue.provider == IssueProvider::Jira {
             let Some(mapping) = automation
                 .policy
                 .binding
@@ -94,6 +121,7 @@ impl IssueFeedbackService {
                 decision_id: approval.request.id().as_str().to_owned(),
                 previous_event_id,
                 jira_transition,
+                linear_state,
             },
             recorded_at: format!("unix-ms:{now_unix_ms}"),
         };
@@ -112,6 +140,7 @@ impl IssueFeedbackService {
             integration_sha,
             decision_id,
             jira_transition,
+            linear_state,
             ..
         } = &intent.operation
         else {
@@ -119,9 +148,21 @@ impl IssueFeedbackService {
         };
         policy.close.when == IssueAutomationCloseWhen::Integration
             && policy.feedback.transition
-            && match (intent.issue.provider, jira_transition.as_ref()) {
-                (IssueProvider::GitHub, None) => true,
-                (IssueProvider::Jira, Some(target)) => policy
+            && match (
+                intent.issue.provider,
+                jira_transition.as_ref(),
+                linear_state.as_ref(),
+            ) {
+                (IssueProvider::GitHub, None, None) => true,
+                (IssueProvider::Linear, None, Some(target)) => policy
+                    .binding
+                    .linear
+                    .as_ref()
+                    .and_then(|binding| binding.close_state.as_ref())
+                    .is_some_and(|mapping| {
+                        mapping.permits(&target.from_state_id, &target.to_state_id)
+                    }),
+                (IssueProvider::Jira, Some(target), None) => policy
                     .binding
                     .jira
                     .as_ref()

@@ -308,6 +308,7 @@ fn work_order_replay_preserves_its_publication_reference_and_rejects_scope_chang
     original.link_reference = Some(PlanningWorkLinkReference {
         url: "https://github.com/acme/project/issues/7".into(),
         close_on_merge: false,
+        branch_hint: None,
     });
     let first = service(&repository)
         .register_work_order(original.clone())

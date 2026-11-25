@@ -346,7 +346,8 @@
         "provider": {
           "enum": [
             "github",
-            "jira"
+            "jira",
+            "linear"
           ]
         },
         "server_id": {

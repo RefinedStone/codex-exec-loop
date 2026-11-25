@@ -21,7 +21,7 @@ const WAIT_TABLE: &str = "issue_start_budget_waits";
 const WAIT_SCHEMA: &str = r#"
 CREATE TABLE issue_start_budget_waits (
     workspace_dir TEXT COLLATE BINARY NOT NULL,
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,

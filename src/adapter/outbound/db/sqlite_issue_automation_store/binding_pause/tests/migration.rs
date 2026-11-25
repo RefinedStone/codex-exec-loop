@@ -107,7 +107,10 @@ fn version_thirteen_migration_preserves_old_rows_and_receipts_and_seeds_only_ope
     let connection = Connection::open(fixture.database()).unwrap();
     assert_eq!(
         super::super::super::schema_identity(&connection).unwrap(),
-        (super::super::super::APPLICATION_ID, 14)
+        (
+            super::super::super::APPLICATION_ID,
+            super::super::super::SCHEMA_VERSION
+        )
     );
     super::super::super::validate_schema(&connection).unwrap();
 }

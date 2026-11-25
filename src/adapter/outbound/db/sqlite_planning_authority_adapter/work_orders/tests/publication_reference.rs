@@ -20,6 +20,7 @@ fn reference() -> PlanningWorkLinkReference {
     PlanningWorkLinkReference {
         url: URL.into(),
         close_on_merge: false,
+        branch_hint: None,
     }
 }
 
@@ -276,6 +277,7 @@ fn legacy_publication_reference_rejects_identity_and_authority_changes() {
     let invalid = PlanningWorkLinkReference {
         url: "https://github.com/acme/project/issues/7\ninjected".into(),
         close_on_merge: false,
+        branch_hint: None,
     };
     for rejected in [&closing, &invalid] {
         assert!(register_replay(&workspace, ORIGIN, Some(rejected)).is_err());

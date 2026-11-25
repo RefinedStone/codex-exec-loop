@@ -240,7 +240,7 @@ fn build_with_runtime_services(
             Arc::new(GitIssueCollectionOriginAdapter::new()),
             IssuePolicyService::new(validation_source),
         )
-        .with_jira_collection(
+        .with_connected_source_collection(
             IssueAutomationPolicyService::new(Arc::new(
                 FilesystemIssueAutomationPolicySourceAdapter::new(),
             )),

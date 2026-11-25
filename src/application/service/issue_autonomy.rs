@@ -93,6 +93,8 @@ pub(crate) fn projection(
                 } else if requested > cap {
                     Some(if effective.policy.binding.jira.is_some() && requested > IssueAutomationAutonomy::Propose {
                         "Jira Cloud는 연결된 PR의 부재를 확인할 수 없어 Propose와 사람 승인만 지원합니다.".to_owned()
+                    } else if effective.policy.binding.linear.is_some() && requested > IssueAutomationAutonomy::Propose {
+                        "Linear는 연결된 PR의 부재를 확인할 수 없어 Propose와 사람 승인만 지원합니다.".to_owned()
                     } else {
                         "사용자 정책의 자율 수준 상한을 넘을 수 없습니다.".to_owned()
                     })

@@ -18,6 +18,7 @@ mod feedback;
 mod jira;
 mod jira_source;
 mod linear;
+mod linear_issue;
 
 const RESPONSE_LIMIT: usize = 8 << 20;
 const VERSION_RESPONSE_LIMIT: usize = 64 << 10;
@@ -417,6 +418,18 @@ impl ProviderHttpAdapter {
         cancelled: &AtomicBool,
         deadline: Instant,
     ) -> CredentialResult<Value> {
+        self.linear_graphql(token, query, variables, None, cancelled, deadline)
+    }
+    /// A mutation passes its one-shot admission; the transport checks it at the sole send.
+    fn linear_graphql(
+        &self,
+        token: &SecretToken,
+        query: &'static str,
+        variables: Value,
+        send_authorization: Option<Arc<dyn ProviderMutationAuthorizationPort>>,
+        cancelled: &AtomicBool,
+        deadline: Instant,
+    ) -> CredentialResult<Value> {
         let value = self
             .transport
             .read(
@@ -424,7 +437,7 @@ impl ProviderHttpAdapter {
                     url: LINEAR_ENDPOINT.to_owned(),
                     method: HttpMethod::Post,
                     expected: ExpectedResponse::Json(200),
-                    send_authorization: None,
+                    send_authorization,
                     preserve_client_errors: false,
                     query: vec![],
                     body: Some(json!({"query":query,"variables":variables})),

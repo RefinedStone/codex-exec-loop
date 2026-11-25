@@ -1,7 +1,10 @@
 use crate::domain::issue_automation::feedback::{
-    IssueFeedbackConnection, IssueFeedbackIntent, IssueFeedbackJiraTransition, IssueFeedbackReceipt,
+    IssueFeedbackConnection, IssueFeedbackIntent, IssueFeedbackJiraTransition,
+    IssueFeedbackLinearState, IssueFeedbackReceipt,
 };
-use crate::domain::issue_automation::policy::IssueAutomationJiraCloseTransition;
+use crate::domain::issue_automation::policy::{
+    IssueAutomationJiraCloseTransition, IssueAutomationLinearCloseState,
+};
 use crate::domain::issue_automation::source::IssueSourceLabel;
 use crate::domain::issue_work::IssueReference;
 use anyhow::Result;
@@ -62,6 +65,13 @@ pub struct IssueFeedbackJiraTransitionSnapshot {
     pub previous_event_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueFeedbackLinearStateSnapshot {
+    pub issue: IssueReference,
+    pub target: IssueFeedbackLinearState,
+    pub previous_event_id: Option<String>,
+}
+
 /// 원격 읽기/단일 쓰기 경계다. 재전송·정책·일지 전이는 service가 소유한다.
 pub trait IssueFeedbackPort: Send + Sync {
     fn actor_id(&self, issue: &IssueReference) -> Result<String>;
@@ -78,6 +88,14 @@ pub trait IssueFeedbackPort: Send + Sync {
         _mapping: &IssueAutomationJiraCloseTransition,
     ) -> Result<IssueFeedbackJiraTransitionSnapshot> {
         anyhow::bail!("Jira status transition is unsupported")
+    }
+    fn read_linear_close_state(
+        &self,
+        _issue: &IssueReference,
+        _actor: &IssueFeedbackActorContext,
+        _mapping: &IssueAutomationLinearCloseState,
+    ) -> Result<IssueFeedbackLinearStateSnapshot> {
+        anyhow::bail!("Linear state change is unsupported")
     }
     fn read_label(&self, issue: &IssueReference, name: &str) -> Result<IssueFeedbackLabelSnapshot>;
     fn read_closure(&self, _issue: &IssueReference) -> Result<IssueFeedbackClosureSnapshot> {
