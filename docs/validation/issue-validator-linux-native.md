@@ -25,7 +25,7 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux::
 cargo test --locked --lib adapter::outbound::issue_code_validator::linux:: -- --ignored --test-threads=1 --nocapture
 ```
 
-`.github/workflows/linux-validator-native.yml`은 Ubuntu 24.04 disposable CI에 배포판 bubblewrap/Python을 설치하고 위 실제 native suite를 실행한다. 제품은 설치·sudo를 호출하지 않는다. CI도 sysctl, AppArmor profile, namespace 옵션을 완화하지 않는다. 환경이 제공하지 못하는 격리는 실패로 남긴다.
+`.github/workflows/linux-validator-native.yml`은 Ubuntu 22.04 disposable CI에 upstream bubblewrap 0.13.1을 고정 설치하고 위 실제 native suite를 실행한다. 공식 release archive의 SHA-256 `0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d`를 확인한 뒤 빌드하며, `/usr/bin/bwrap`는 root 소유 0755 non-setuid다. Python과 빌드 도구는 배포판 패키지를 사용한다. 제품은 설치·sudo를 호출하지 않는다. CI도 sysctl, AppArmor profile, namespace 옵션을 완화하지 않는다. 환경이 제공하지 못하는 격리는 실패로 남긴다.
 
 ## 이번 확인 상태
 
@@ -38,3 +38,11 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux:: -- --
 - 실제 Ubuntu native CI 결과는 PR에서 확인하며, 성공한 exact head와 환경이 확보되기 전에는 #2722 완료나 Linux 지원 승격을 선언하지 않는다.
 
 이 변경만으로 모든 Linux 배포판이나 cgroup 전체 자원 quota를 지원한다고 선언하지 않는다. 실제 native suite가 성공한 정확한 환경만 검증된 프로필로 기록한다.
+
+### Ubuntu 24.04 기본 호스트의 실제 차단
+
+첫 [native 실행](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45656033639)은 kernel `7.0.0-1017-azure`, 배포판 bubblewrap `0.9.0-1ubuntu0.3`, 일반 사용자에서 **0 passed / 5 failed / 0 ignored**였다. 모두 `NotRun(IsolationUnavailable)`였으며 필수 검증기의 service 게시 관문도 차단됐다.
+
+후속 [고정 no-op 진단](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45658718652)은 kernel `7.0.0-1018-aws`에서 같은 강제 namespace와 no-new-privileges 조건을 사용했고 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`로 종료됐다. 읽기 전용 확인에서 `apparmor_restrict_unprivileged_userns=1`, `unprivileged_userns_clone=1`이 관찰됐다. 이 값만으로 특정 정책이 원인이라고 단정하지 않고, 해당 기본 호스트에서 필수 네트워크 격리를 구성하지 못한 결과로 기록한다.
+
+호스트 보안 정책을 바꾸지 않고 지원 후보를 Ubuntu 22.04와 고정 upstream bubblewrap 0.13.1 조합으로 분리해 확인한다. Ubuntu 24.04 결과를 통과로 바꾸거나 미지원 실행을 우회하지 않는다.
