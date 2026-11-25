@@ -156,7 +156,7 @@ fn offline_issue_policy_query_reads_current_policy_without_creating_runtime_stat
     assert_eq!(ready["type"], "issue_automation_policy");
     assert_eq!(ready["status"], "ready");
     assert_eq!(ready["workspace"], kernel.workspace);
-    assert_eq!(ready["settings"].as_array().unwrap().len(), 74);
+    assert_eq!(ready["settings"].as_array().unwrap().len(), 75);
 
     *source.0.lock().unwrap() = Some("[authority]\nautonomy_cap = \"UNSHARED_QUERY_INPUT\"".into());
     let blocked = query();
