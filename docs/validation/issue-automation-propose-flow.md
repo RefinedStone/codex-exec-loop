@@ -42,9 +42,11 @@ Rust 회귀는 실제 helper 구현·private IPC·Gateway 검증·SQLite를 한 
 
 ## 플랫폼과 실행 준비
 
-실제 publication journal이 사용하는 [PrivateRuntimeLease](../../src/adapter/outbound/filesystem/private_runtime_lease.rs)는 Unix 전용이다. Unix에서는 경로·소유자·권한·파일 신원을 검사하고 process-shared lock을 잡지만, `cfg(not(unix))` 구현은 `the issue persistence lease is unavailable on this platform`으로 거절한다. **현재 Windows native의 실제 issue publication 경로는 미지원**이다. Windows native에서 이 결합 회귀를 시도했을 때도 같은 경계에서 차단됐다.
+초기 고정 실행본 `b7de0bcd`까지의 publication journal은 [PrivateRuntimeLease](../../src/adapter/outbound/filesystem/private_runtime_lease.rs)의 Unix 구현을 사용했고, 당시 Windows 실제 경로는 미지원이었다. 아래 초기 Windows 차단 기록은 그 소스에 대한 기록이다.
 
-[parallel_mode tests 등록부](../../src/application/service/parallel_mode/tests.rs)의 결합 suite는 `#[cfg(unix)]`로 제한하며 Unix 환경에서 검증한다. 실제 publication lease를 fake로 바꾸어 Windows에서 통과시키지 않는다.
+현재 후속 기준 `48b6d49a344890fa53fc2c046694e55484b00156`의 [IssuePublishIntentJournalAdapter](../../src/adapter/outbound/filesystem/issue_publish_intent_journal.rs)는 Windows에서 별도 `windows::PublicationLease`와 private SQLite transaction을 사용한다. 따라서 현재 제품 전체에 Windows publication이 없다고 설명하면 안 된다. 이 변경만으로 실제 Propose 전체 흐름이 검증된 것은 아니다.
+
+[parallel_mode tests 등록부](../../src/application/service/parallel_mode/tests.rs)의 이 결합 suite는 현재도 `#[cfg(unix)]`이므로 Unix에서 검증한다. 이번 live 시험은 승인된 Linux 고정 실행본·시험 base를 유지하며 Windows 실행으로 바꾸지 않는다.
 
 다음 WSL Ubuntu 준비 상태는 확인했다. 이는 실행 호스트 준비 정보이며 결합 시험의 통과 기록은 아니다.
 
@@ -349,3 +351,27 @@ cargo test --locked --all-features --lib -- \
 Linux의 첫 실행에는 Windows PATH 54개가 상속돼 파일 검증이 오래 걸렸다. 138개 통과·1개 미완료 상태에서 시험 프로세스만 정상 종료하고 환경 중단으로 보관했다. 소스는 바꾸지 않고 Linux 전용 PATH로 재실행해 139개가 모두 통과했다. 최종 빌드도 같은 Linux 전용 PATH를 사용했다.
 
 최종 로그는 `C:/dev/akra-queue/analysis/issue-2555-gate-serialization-rust.log`, `issue-2555-gate-serialization-full.log`, `issue-2555-gate-serialization-linux-r2.log`에 있다. [재현·복구 메타데이터](issue-2555-live-gate-starvation.json)에 두 실행 파일 SHA-256과 수정 전후의 관측을 기록했다. 임시 진단 Gateway는 종료했고 실제 창에는 정식 동결 실행본을 연결했다. 이 query 확인을 실제 사람 승인이나 모델 → PR → 댓글 성공으로 확대하지 않는다.
+
+## 후속 작업 시 실제 준비 상태 재확인
+
+새 기능 작업과 별도로, 이미 승인받은 #2644 단일 시험을 공개 query와 GitHub 읽기로 다시 확인했다. 실행 범위와 고정 실행본은 확장하지 않았다.
+
+| 확인 | 관찰 |
+| --- | --- |
+| 시험 clone | `b7de0bcdc2411f90ee33768fa23f988eba598374`, clean |
+| 원격 시험 base | `codex/issue-2555-live-base-20261122`가 같은 `b7de0bcd`를 가리킴 |
+| 실행 바이너리 | `akra` SHA-256 `d8a0200810b0f208c540bb9aa72d004f25167b9bded365af8b28b547c685af24`, `akra-gateway` `134827655dbf5b3086ca80df93caa406ece0f88c9bf598ebdab27de05a640342`; 기존 동결 manifest와 일치 |
+| Desktop 소스 | `ad5f7509f318c2272c7e6becd9f310342c7769c7`, clean. 기존 Electron과 빌드 entry 존재 |
+| Planning | revision 4, active/proposed/skipped task 각각 0 |
+| 실행 풀 | disabled, 실행 worker 0 |
+| #2644 | Open, 단일 시험 라벨 유지, 연결 PR absent, GitHub 댓글 0 |
+| 시작 결정 | 열린 Start 질문 1개, revision 1, 결정 이력 0. 자동화 제어는 held/cancelled/taken_over 모두 false |
+| 정책 | Propose, 단일 선택 라벨, trusted actor 고정, max_running/max_started_per_day/max_attempts 각각 1 |
+| 외부 쓰기 | comment=true, labels=false, transition=false, close=never |
+| 추가 리뷰 모델 | `feature_bindings.pr_review = off` |
+
+이번 확인은 `planning`, `parallel`, `issue_automation_policy`, `issue_automation`, 정확한 IssueEventReference의 `issue`, `feature_bindings` 공개 query를 사용했다. GitHub의 #2644 상태·댓글 수와 시험 remote ref도 다시 읽었다. task 등록, proof 생성·주입, DB 수정, 모델 요청, 시험 PR·댓글 쓰기는 수행하지 않았다.
+
+**남은 시작점은 제품의 정식 native Start 응답이다.** 기존 모델 실행 허가는 이미 확보되어 있으므로 일반 작업 허가를 다시 요구하지 않는다. 그러나 제품이 보관하는 Human 결정은 private helper의 정식 native 확인으로 생성해야 한다. 그 후 같은 시험 workspace의 실행 풀을 명시적으로 켜고, 위 성공 기준의 task·단일 파일·시험 base PR·같은 상태 댓글과 실제 모델 호출 수를 확인한다. 자동 승인 대역이나 이번 개발 PR을 실모델 시험의 성공 증거로 세지 않는다.
+
+이 재확인 기록은 #2555의 실제 모델 → PR → 댓글 완료를 의미하지 않으며, 해당 이슈는 실제 증거가 확보될 때까지 열린 상태로 유지한다.
