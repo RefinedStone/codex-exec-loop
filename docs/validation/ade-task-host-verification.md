@@ -28,3 +28,14 @@
 ## 후속 확인
 
 PR CI의 전체 검증 결과를 별도로 확인한다. 실제 모델 실행, 실제 OS 복원 인증, task의 delivery/merge 판정은 이 화면 회귀의 검증 범위가 아니다.
+
+## 작업 작성 PR과의 통합 검증
+
+#2727의 작업 작성 기능 위로 이 PR을 재배치했다. `App.tsx`와 `KernelPanel.tsx`는 작업 편집 진입과 호스트 검증 요청을 모두 전달하며, `onEditTasks`의 연결 및 기존 attached 조건을 보존한다. #2738의 결과 조회와 #2736의 이슈 완료 기준 채택을 함께 넣는 merge preview도 충돌 없이 통과했다.
+
+검증한 코드 head는 `848060e1548db5182a2f18eebc05ff45f911a614`이다. 재배치 과정에서의 코드 차이는 두 화면의 prop 합성에 한정되며 독립 리뷰를 받았다.
+
+- Windows Admin gate의 typecheck와 변경 회귀는 통과했으나 전체 Vitest는 기존 Git fixture의 5초 timeout 및 연쇄 실패로 exit 1이었다. 최초 결과는 1218 passed / 5 failed / 7 skipped, 같은 소스의 직렬 재시도는 1217 passed / 6 failed / 7 skipped였다. 실패는 Git 파일 동작·hunk·branch·publish fixture이며 변경한 화면 모듈의 실패는 없었다. timeout이나 기존 fixture는 바꾸지 않았다.
+
+- 같은 코드의 `npm run e2e`: 전체 기본 31개 spec의 runner exit 0. `kernel-panel.mjs`와 `task-authoring.mjs`도 통과했으며 기존 Windows terminal 내부 검사는 skip됐다. 보고서: `desktop/test-results/e2e/restack-20261125/shard-1-of-1-PQooce/report.json`.
+- Desktop production build와 Admin offline asset policy가 통과했다. 실제 모델 호출은 없었다.
