@@ -267,14 +267,14 @@ async fn the_next_request_after_a_complete_response_is_valid_while_flush_is_pend
     let (client, server) = tokio::io::duplex(128 * 1024);
     let (input, output) = tokio::io::split(server);
     let mut client = BufReader::new(client);
+    let services = fixture.services();
     let task = tokio::spawn(run_test_io(
         input,
         DelayedFlush {
             inner: output,
             gate: gate.clone(),
         },
-        fixture.services(),
-        SESSION_LIFETIME,
+        move || Arc::new(DesktopVaultRestoreService::new(services, SESSION_LIFETIME)),
     ));
     send(&mut client, &prepare_request()).await;
     assert_eq!(response(&mut client).await["result"]["kind"], "prepared");
