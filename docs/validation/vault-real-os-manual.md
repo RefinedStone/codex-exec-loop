@@ -16,7 +16,7 @@ Test-only ManualCredentialFixture는 랜덤 신규 service 이름과 별도 임�
 
 ## 실제 OS 실행
 
-같은 revision에서 cargo build --locked --bin akra-gateway를 수행한다. Windows의 `AKRA_MANUAL_GATEWAY_EXE`에는 해당 빌드 원본의 절대 경로를 지정한다. 수동 fixture는 OS credential에 접근하기 전에 저장소 밖 private 임시 디렉터리에 원본을 복사한다. 공유 읽기만 허용한 원본 handle, 새 파일 생성, 현재 사용자 전용 ACL, SHA-256 동일성, 기존 실행 파일 신뢰 검사와 native 형식 검사를 모두 통과한 사본만 실행한다. 저장소 안 빌드 원본을 직접 실행하도록 제품의 신뢰 검사를 완화하지 않는다. 외부 임시 경로가 신뢰 검사에 실패하면 중단한다. 다른 OS는 실제 native adapter를 호출한다. 환경 변수를 지정하는 것은 실제 OS 승인 대신 사용되는 값이 아니다.
+같은 revision에서 cargo build --locked --bin akra-gateway를 수행한다. Windows의 `AKRA_MANUAL_GATEWAY_EXE`에는 해당 빌드 원본의 절대 경로를 지정한다. 수동 fixture는 OS credential에 접근하기 전에 현재 프로세스의 OS 토큰으로 조회한 사용자 프로필 바로 아래에 새로운 임의 이름의 private 디렉터리를 만들고 원본을 복사한다. Windows의 `Temp`나 `LocalAppData`는 다른 주체에게 수정 권한이 있을 수 있으므로 실행 파일의 부모 경로로 사용하지 않는다. 기존 부모 디렉터리의 ACL은 변경하지 않으며, 프로필 조상이 신뢰 검사에 통과하지 못하면 해당 경로를 포함한 오류로 중단한다. 공유 읽기만 허용한 원본 handle, 새 파일 생성, 현재 사용자 전용 ACL, SHA-256 동일성, 기존 실행 파일 신뢰 검사와 native 형식 검사를 모두 통과한 사본만 실행한다. 저장소 안 빌드 원본을 직접 실행하도록 제품의 신뢰 검사를 완화하지 않는다. 외부 임시 경로가 신뢰 검사에 실패하면 중단한다. 다른 OS는 실제 native adapter를 호출한다. 환경 변수를 지정하는 것은 실제 OS 승인 대신 사용되는 값이 아니다.
 
 Windows PowerShell (폐기 사용자에서만):
 

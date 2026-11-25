@@ -11,12 +11,21 @@ mod windows_helper;
 struct Folder(PathBuf);
 impl Folder {
     fn new() -> Self {
-        let path = crate::test_utils::platform_safe_temp_dir().join(format!(
+        #[cfg(windows)]
+        let parent = windows_helper::fixture_parent()
+            .expect("resolve the OS user's profile for a private manual fixture");
+        #[cfg(not(windows))]
+        let parent = crate::test_utils::platform_safe_temp_dir();
+        let path = parent.join(format!(
             "akra-vault-manual-fixture-{:032x}",
             rand::random::<u128>()
         ));
-        crate::private_directory::ensure_private_directory(&path).unwrap();
-        Self(std::fs::canonicalize(path).unwrap())
+        // A collision must not change permissions on, or delete, an existing path.
+        std::fs::create_dir(&path).expect("create a fresh manual fixture directory");
+        let mut folder = Self(path);
+        crate::private_directory::ensure_private_directory(&folder.0).unwrap();
+        folder.0 = std::fs::canonicalize(&folder.0).unwrap();
+        folder
     }
 }
 impl Drop for Folder {
