@@ -19,6 +19,8 @@
 - `src/core`가 headless app command, effect, completion, event, snapshot을 조정합니다.
 - CLI, Admin, Telegram, automation adapter는 planning이나 parallel 정책을 별도로 구현하지 않고
   application service를 공유합니다.
+- Akra Desktop(`desktop/`, Electron)은 `akra-gateway`의 클라이언트입니다. 소스에서 실행하는 개발판이며
+  네이티브 archive나 npm 패키지에 들어 있지 않습니다.
 
 ## 운영 화면
 
@@ -379,9 +381,9 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 
 ## Gateway 데몬
 
-`akra-gateway` 는 로컬 클라이언트(계획 중인 Akra Desktop)를 Gateway 가 소유한 `codex app-server` 에
-중계하는 상주 데몬이다. [Akra Desktop 계획](../../plan/17-akra-desktop/README.md)의 P1 이다. 데스크톱 앱은
-아직 출시되지 않았다.
+`akra-gateway` 는 로컬 클라이언트(Akra Desktop, kernel CLI)를 Gateway 가 소유한 `codex app-server` 에
+중계하는 상주 데몬이다. [Akra Desktop 계획](../../plan/17-akra-desktop/README.md)의 P1 이다. Akra Desktop
+(`desktop/`)은 소스에서 실행하는 개발판이며 설치 패키지는 아직 없다.
 
 - 접속 주소: unix 는 `$AKRA_HOME/run/gateway.sock` (디렉터리 `0700`, 소켓 `0600`). Windows 는 named pipe
   `\\.\pipe\akra-gateway-<사용자 SID>` 이고, 사용자 전용 보안 설명자, 첫 인스턴스 생성, 원격 거부를 쓴다.

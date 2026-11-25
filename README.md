@@ -15,6 +15,8 @@ primary surface; CLI, Admin, Telegram, and automation adapters reuse the same ap
 | Surface | Current role |
 | --- | --- |
 | Native TUI | Ratatui/Crossterm alternate-screen fullscreen shell with an app-owned transcript viewport, sessions, planning, queue, review, activity, and parallel inspection |
+| Gateway daemon | `akra-gateway` relays local clients to a Gateway-owned `codex app-server` and hosts the repository kernel |
+| Akra Desktop | Electron client in `desktop/` over `akra-gateway`. Development build only: run it from source (`npm --prefix desktop ci`, then `npm --prefix desktop run dev`); no packaged release yet |
 | Core runtime | Headless command/effect/completion/snapshot flow for startup, sessions, turns, streams, and post-turn evaluation |
 | Planning | SQLite authority with staged planning artifacts under `.codex-exec-loop/planning/` |
 | Parallel mode | Three guarded worktree slots, worker leases, official completion refresh, reviewed GitHub delivery, integration, and cleanup |

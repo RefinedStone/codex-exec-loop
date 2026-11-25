@@ -14,6 +14,8 @@ Akra는 시작 진단, 세션 재개, 프롬프트 스트리밍, 승인된 plann
 | 화면 | 현재 역할 |
 | --- | --- |
 | 네이티브 TUI | Ratatui/Crossterm alternate-screen fullscreen shell. 앱 소유 transcript viewport, 세션, planning, queue, review, activity, parallel inspection을 제공합니다. |
+| Gateway daemon | `akra-gateway`가 로컬 클라이언트를 Gateway 소유 `codex app-server`에 연결하고 저장소 kernel을 실행합니다. |
+| Akra Desktop | `desktop/`의 Electron 클라이언트로 `akra-gateway`에 연결합니다. 개발판만 있습니다. 소스에서 실행합니다(`npm --prefix desktop ci` 후 `npm --prefix desktop run dev`). 설치 패키지는 아직 없습니다. |
 | Core runtime | 시작, 세션, turn 제출, stream, 완료, post-turn 평가를 위한 headless command/effect/completion/snapshot 흐름입니다. |
 | Planning | SQLite 권한 저장소와 `.codex-exec-loop/planning/` 아래의 staged planning 산출물을 사용합니다. |
 | Parallel mode | 보호된 worktree 3개, worker lease, 공식 완료 갱신, 검토된 GitHub 전달, 통합, 정리를 관리합니다. |
