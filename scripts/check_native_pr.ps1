@@ -85,6 +85,10 @@ function Invoke-NodeAdminChecks {
         "scripts/pr-validation-approval-package.test.mjs"
     )
 
+    Invoke-ExternalStep "Windows Vault manual launcher contracts" "node" @(
+        "--test", "scripts/windows-vault-live.test.mjs"
+    )
+
     Invoke-ExternalStep "admin browser behavior tests" "node" @(
         "--test", "assets/admin/scripts/*.test.mjs"
     )

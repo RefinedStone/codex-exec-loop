@@ -40,7 +40,8 @@ node --test \
   scripts/agent-plan.test.mjs \
   scripts/npm-audit-gate.test.mjs \
   scripts/pr-validation-approval-package.test.mjs \
-  scripts/pr-validation-rollout-evidence.test.mjs
+  scripts/pr-validation-rollout-evidence.test.mjs \
+  scripts/windows-vault-live.test.mjs
 
 printf '\n==> admin browser behavior tests\n'
 node --test assets/admin/scripts/*.test.mjs
