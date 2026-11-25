@@ -518,7 +518,9 @@ fn finish_open(
         .context("failed to open private SQLite database")?;
     connection.busy_timeout(busy_timeout)?;
     guard.verify_identity()?;
-    let mode = connection.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))?;
+    let mode = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+        .context("failed to load private SQLite schema and journal mode")?;
     if !mode.eq_ignore_ascii_case("delete") {
         bail!("private SQLite database requires DELETE rollback journaling")
     }
@@ -1215,7 +1217,12 @@ mod platform {
 
     fn secure_file(path: &Path, file: &File) -> Result<()> {
         retry_identity(|| validate_windows_path_identity(path, file, false))?;
-        set_windows_private_acl(file, false)?;
+        // A live rollback journal can be inspected by several processes. Reapplying the
+        // same ACL changes its metadata and races their identity snapshots while a
+        // writer holds SQLite locks. Normalize an inherited journal once, then read only.
+        if validate_windows_private_owner_and_acl(path, file).is_err() {
+            set_windows_private_acl(file, false)?;
+        }
         verify_file(path, file)
     }
 

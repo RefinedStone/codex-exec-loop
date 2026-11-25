@@ -701,3 +701,41 @@ fn existing_only_hot_journal_subprocess_probe() {
     std::io::stdout().flush().unwrap();
     std::process::exit(0);
 }
+
+#[cfg(windows)]
+#[test]
+fn verifying_a_private_live_journal_does_not_rewrite_its_metadata() {
+    let fixture = RuntimeFixture::new();
+    let mut opened = open(&fixture.0, FILES, Synchronous::Extra).unwrap();
+    let (connection, guard) = opened.parts();
+    connection
+        .execute_batch("CREATE TABLE retained(value INTEGER);")
+        .unwrap();
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    transaction
+        .execute("INSERT INTO retained VALUES(7)", [])
+        .unwrap();
+    // Normalize the journal created by SQLite once, then verify without any SQL writes.
+    guard.verify_identity().unwrap();
+    let journal = std::fs::File::open(fixture.0.join(FILES.rollback_journal)).unwrap();
+    let before = crate::private_fs::windows_file_identity_snapshot(&journal).unwrap();
+    // Keep the two metadata observations in distinct Windows clock ticks.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    guard.verify_identity().unwrap();
+    let after = crate::private_fs::windows_file_identity_snapshot(&journal).unwrap();
+    assert_eq!(
+        before, after,
+        "journal verification must not change a live writer's metadata"
+    );
+    drop(journal);
+    transaction.commit().unwrap();
+    guard.verify_identity().unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT value FROM retained", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        7
+    );
+}
