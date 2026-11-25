@@ -712,7 +712,11 @@ impl TelegramBotRunner {
             .issue_answer_port
             .as_ref()
             .context("telegram issue answer port is not configured")?;
-        let outcome = port.answer(decision_id, option)?;
+        // 실행 오류의 글에는 로컬 경로가 있을 수 있다. 로그에만 남기고 Telegram 에는 failed 만 보낸다.
+        let outcome = port.answer(decision_id, option).unwrap_or_else(|error| {
+            eprintln!("telegram bot failed to answer issue decision {decision_id}: {error:#}");
+            TelegramIssueAnswerOutcome::Failed
+        });
         Ok(match outcome {
             TelegramIssueAnswerOutcome::Answered => format!(
                 "answered: 결정 {decision_id} 에 {option} 을 기록했습니다. 기록의 출처는 agent (akra-telegram) 입니다."

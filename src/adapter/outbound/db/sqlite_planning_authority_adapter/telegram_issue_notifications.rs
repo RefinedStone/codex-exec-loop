@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::application::port::outbound::telegram_issue_notification_port::{
     TelegramIssueNotificationEnd, TelegramIssueNotificationLedgerPort,
@@ -13,6 +13,37 @@ const MAX_INTENT_KEY_BYTES: usize = 512;
 // 끝난 intent 는 cursor 뒤의 사건이므로 다시 읽히지 않는다. 최근 행만 남긴다.
 const FINISHED_NOTIFICATION_RETENTION: i64 = 4096;
 
+/*
+ * 표는 `ensure_schema` 가 아니라 여기서 만든다 (kernel_events 와 같다). 현재 판의 기존 DB 는 `ensure_schema` 가
+ * DDL 전에 끝나고, schema version 을 올리면 이전 binary 가 이 DB 를 열지 못한다.
+ */
+fn open_ledger(adapter_workspace: &str) -> Result<Connection> {
+    let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+        adapter_workspace,
+    )?;
+    let connection = open_authority_connection(&location)?;
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS telegram_issue_notification_cursors (
+                stream_key TEXT PRIMARY KEY,
+                after_sequence INTEGER NOT NULL CHECK (after_sequence >= 0),
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS telegram_issue_notifications (
+                stream_key TEXT NOT NULL,
+                intent_key TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                delivery_state TEXT NOT NULL
+                    CHECK (delivery_state IN ('sending', 'sent', 'unknown')),
+                claimed_at TEXT NOT NULL,
+                finished_at TEXT,
+                PRIMARY KEY (stream_key, intent_key, chat_id)
+            );",
+        )
+        .context("failed to ensure the Telegram issue notification tables")?;
+    Ok(connection)
+}
+
 impl TelegramIssueNotificationLedgerPort for SqlitePlanningAuthorityAdapter {
     fn recover_issue_notifications(
         &self,
@@ -20,8 +51,7 @@ impl TelegramIssueNotificationLedgerPort for SqlitePlanningAuthorityAdapter {
         stream_key: &str,
     ) -> Result<Option<i64>> {
         validate_key(stream_key, MAX_STREAM_KEY_BYTES)?;
-        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let mut connection = open_authority_connection(&location)?;
+        let mut connection = open_ledger(workspace_dir)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open Telegram issue notification recovery")?;
@@ -59,8 +89,7 @@ impl TelegramIssueNotificationLedgerPort for SqlitePlanningAuthorityAdapter {
         if after < 0 {
             bail!("Telegram issue notification cursor must be non-negative");
         }
-        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let connection = open_authority_connection(&location)?;
+        let connection = open_ledger(workspace_dir)?;
         // 기록이 초기화되면 cursor 는 뒤로 간다. 그래서 MAX 로 묶지 않는다.
         connection
             .execute(
@@ -84,8 +113,7 @@ impl TelegramIssueNotificationLedgerPort for SqlitePlanningAuthorityAdapter {
     ) -> Result<bool> {
         validate_key(stream_key, MAX_STREAM_KEY_BYTES)?;
         validate_key(intent_key, MAX_INTENT_KEY_BYTES)?;
-        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let connection = open_authority_connection(&location)?;
+        let connection = open_ledger(workspace_dir)?;
         let inserted = connection
             .execute(
                 "INSERT OR IGNORE INTO telegram_issue_notifications
@@ -111,8 +139,7 @@ impl TelegramIssueNotificationLedgerPort for SqlitePlanningAuthorityAdapter {
             TelegramIssueNotificationEnd::Sent => "sent",
             TelegramIssueNotificationEnd::Unknown => "unknown",
         };
-        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let mut connection = open_authority_connection(&location)?;
+        let mut connection = open_ledger(workspace_dir)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open Telegram issue notification completion")?;
@@ -187,6 +214,17 @@ mod tests {
         let workspace = path.to_string_lossy().into_owned();
         let stream = "bot-id:42";
         let ledger = SqlitePlanningAuthorityAdapter::new();
+        // 이전 binary 가 같은 schema version 으로 만든 DB 이다. 새 표가 없어도 처음 쓸 때 만든다.
+        let location =
+            SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
+                .unwrap();
+        open_authority_connection(&location)
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE IF EXISTS telegram_issue_notification_cursors;
+                 DROP TABLE IF EXISTS telegram_issue_notifications;",
+            )
+            .unwrap();
         assert_eq!(
             ledger
                 .recover_issue_notifications(&workspace, stream)
@@ -232,9 +270,6 @@ mod tests {
                 "{intent}"
             );
         }
-        let location =
-            SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
-                .unwrap();
         let state: String = open_authority_connection(&location)
             .unwrap()
             .query_row(

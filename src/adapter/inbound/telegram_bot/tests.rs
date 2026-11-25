@@ -2630,6 +2630,21 @@ fn whoami_exposes_sender_and_both_allowlist_decisions_for_group_setup() {
  * IA8-3: `/decide` is a thin remote form of the kernel `answer_issue_decision` command. The fake
  * port stands in for the kernel and returns each outcome the runner must report.
  */
+struct FailingIssueAnswerPort;
+
+impl crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerPort
+    for FailingIssueAnswerPort
+{
+    fn answer(
+        &self,
+        _decision_id: &str,
+        _option: &str,
+    ) -> Result<crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerOutcome>
+    {
+        bail!("cannot select workspace `/private/local/path`")
+    }
+}
+
 struct FakeIssueAnswerPort {
     outcome: crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerOutcome,
     answers: Arc<Mutex<Vec<(String, String)>>>,
@@ -2756,4 +2771,22 @@ fn runner_delivers_issue_notifications_to_allowed_chats_after_each_poll() {
         *delivered.lock().unwrap(),
         vec![("test-stream".to_string(), vec![42, 43])]
     );
+}
+
+#[test]
+fn runner_hides_the_local_error_text_of_a_failed_decision_answer() {
+    let (_gateway, runner) = build_runner(&[42]);
+    let runner = runner.with_issue_answer_port(FailingIssueAnswerPort);
+    let reply = runner
+        .handle_message(&TelegramInboundMessage {
+            message_id: 1,
+            chat_id: 42,
+            sender_user_id: Some(42),
+            text: Some("/decide decision-1 start".to_string()),
+            sender_display_name: None,
+        })
+        .unwrap()
+        .unwrap();
+    assert!(reply.starts_with("failed:"), "{reply}");
+    assert!(!reply.contains("/private/local/path"), "{reply}");
 }
