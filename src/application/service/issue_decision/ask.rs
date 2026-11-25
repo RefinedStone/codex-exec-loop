@@ -10,6 +10,7 @@ use crate::application::port::inbound::stored_command_port::{
 use crate::domain::issue_automation::IssueAutomationState;
 use crate::domain::issue_automation::agent_question::{
     AGENT_QUESTION_OPTION_EFFECT, IssueAgentAsk, MAX_OPEN_AGENT_QUESTIONS_PER_ISSUE,
+    WORKER_REPLY_OPTION,
 };
 use crate::domain::issue_automation::decision::{
     IssueDecisionKind, IssueDecisionOption, IssueDecisionSubject, IssueDecisionTimeout,
@@ -127,6 +128,14 @@ impl IssueDecisionService {
             .policy
             .resolve(&self.workspace_dir)
             .map_err(|_| policy_unavailable())?;
+        // `reply` belongs to the free-text awaiting_user card; its answer always needs a note.
+        if request
+            .options
+            .iter()
+            .any(|option| option.id == WORKER_REPLY_OPTION)
+        {
+            bail!("the option id `{WORKER_REPLY_OPTION}` is reserved");
+        }
         let effect = shared_text(AGENT_QUESTION_OPTION_EFFECT, &policy)?;
         let options = request
             .options

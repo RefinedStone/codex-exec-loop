@@ -147,6 +147,12 @@ fn a_question_without_a_running_issue_conversation_opens_nothing() {
     let decisions = asking(&h, &execution);
     *execution.ask.lock().unwrap() = None;
     assert!(decisions.ask(request(QUESTION), &cli()).is_err());
+    let mut reserved = request(QUESTION);
+    reserved.options[0].id = "reply".into();
+    assert!(
+        asking(&h, &execution).ask(reserved, &cli()).is_err(),
+        "`reply` stays the note-only awaiting_user option"
+    );
     let mut anonymous = cli();
     anonymous.caller = None;
     assert!(
