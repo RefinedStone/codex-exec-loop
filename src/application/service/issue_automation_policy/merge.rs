@@ -21,11 +21,16 @@ pub(super) fn merge(
             .select
             .as_ref()
             .is_some_and(|select| select.labels_any.is_some());
+    // 사용자 파일의 Jira 좌표는 허가 범위일 뿐이다. 저장소 파일이 binding.jira를 선택해야 연결한다.
+    let jira_selected = project
+        .binding
+        .as_ref()
+        .is_some_and(|binding| binding.jira.is_some());
     let mut policy = IssueAutomationPolicy::builtin();
     let mut origins = PolicyProvenance::default();
-    apply_common(&mut policy, &user, Scope::User, &mut origins);
+    apply_common(&mut policy, &user, Scope::User, jira_selected, &mut origins);
     apply_user_grants(&mut policy, &user, &mut origins);
-    apply_common(&mut policy, &project, Scope::Project, &mut origins);
+    apply_common(&mut policy, &project, Scope::Project, true, &mut origins);
     restrict_with_project(&mut policy, &project, &mut origins);
     // 어느 layer도 명시하지 않았을 때만 최종 실행 라벨로 선택 기본값을 만든다.
     // 명시한 빈 목록과 이름 변경 전의 명시 목록은 그대로 유지한다.
@@ -49,6 +54,7 @@ fn apply_common(
     policy: &mut IssueAutomationPolicy,
     layer: &PolicyLayer,
     scope: Scope,
+    jira_selected: bool,
     origins: &mut PolicyProvenance,
 ) {
     assign(
@@ -79,6 +85,7 @@ fn apply_common(
         .binding
         .as_ref()
         .and_then(|binding| binding.jira.as_ref())
+        .filter(|_| jira_selected)
     {
         let selected = policy.binding.jira.get_or_insert_with(|| jira.binding());
         if jira.has_scope() {

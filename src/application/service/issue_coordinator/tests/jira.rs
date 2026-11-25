@@ -41,6 +41,7 @@ fn harness(edit: impl FnOnce(&mut IssueSourceObservation)) -> Harness {
         edit(value);
     });
     *h.policy.text.lock().unwrap() = JIRA_POLICY.into();
+    *h.policy.project.lock().unwrap() = Some("[binding.jira]\n".into());
     run(&h.triage);
     h
 }

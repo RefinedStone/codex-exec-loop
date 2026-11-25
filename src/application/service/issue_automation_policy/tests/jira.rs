@@ -48,7 +48,12 @@ fn project_can_only_narrow_the_explicit_user_transition_for_the_same_source() {
         scope(),
         transition()
     );
-    let base = resolve_issue_automation_policy(Some(&user), None).unwrap();
+    // 사용자 파일만으로는 다른 저장소가 Jira 출처를 상속하지 않는다.
+    let unselected = resolve_issue_automation_policy(Some(&user), None).unwrap();
+    assert!(unselected.policy.binding.jira.is_none());
+    assert_eq!(unselected.policy.selected_provider(), IssueProvider::GitHub);
+    let base = resolve_issue_automation_policy(Some(&user), Some("[binding.jira]\nmode='propose'"))
+        .unwrap();
     assert_eq!(
         base.policy
             .binding

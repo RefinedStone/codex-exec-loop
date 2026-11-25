@@ -58,6 +58,7 @@ impl JiraFixture {
     fn new() -> Self {
         let base = Fixture::new(true, false);
         *base.policy.user.lock().unwrap() = JIRA_POLICY.into();
+        *base.policy.project.lock().unwrap() = Some("[binding.jira]\n".into());
         let mut issue = issue();
         issue.provider = IssueProvider::Jira;
         issue.server_id = "cloud-1".into();

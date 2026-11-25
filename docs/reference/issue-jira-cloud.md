@@ -73,6 +73,8 @@ when = "never"
 JQL에는 필터만 적는다. `ORDER BY`는 허용하지 않으며 adapter가 고정 project와 `updated` 기반
 정렬·페이지 처리를 붙인다. 일부 출처 좌표를 지정한 파일은 site/cloud/project/account/JQL을
 모두 제공해야 한다. 이미 사용자 파일에 전체 좌표가 있으면 저장소 파일은 mode만 제한할 수 있다.
+저장소 파일에 `[binding.jira]`가 없으면 사용자 파일의 Jira 좌표를 그 저장소에 적용하지 않는다.
+사용자 좌표를 그대로 쓰려면 저장소 파일에 빈 `[binding.jira]` 또는 mode만 적는다.
 사용자 파일의 신뢰 목록에 없는 작성자를 저장소 파일의 목록만으로 추가할 수 없고, 저장소의
 `comment = true`만으로 사용자 허락을 만들 수 없다.
 

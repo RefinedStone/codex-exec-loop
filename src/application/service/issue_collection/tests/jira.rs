@@ -45,7 +45,7 @@ impl IssueAutomationPolicySourcePort for JiraPolicy {
         Ok(Some(self.text.lock().unwrap().clone()))
     }
     fn load_project_policy_toml(&self, _: &str) -> Result<Option<String>> {
-        Ok(None)
+        Ok(Some("[binding.jira]\n".into()))
     }
 }
 
