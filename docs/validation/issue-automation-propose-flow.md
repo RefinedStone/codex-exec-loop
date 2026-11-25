@@ -372,6 +372,12 @@ Linux의 첫 실행에는 Windows PATH 54개가 상속돼 파일 검증이 오�
 
 이번 확인은 `planning`, `parallel`, `issue_automation_policy`, `issue_automation`, 정확한 IssueEventReference의 `issue`, `feature_bindings` 공개 query를 사용했다. GitHub의 #2644 상태·댓글 수와 시험 remote ref도 다시 읽었다. task 등록, proof 생성·주입, DB 수정, 모델 요청, 시험 PR·댓글 쓰기는 수행하지 않았다.
 
-**남은 시작점은 제품의 정식 native Start 응답이다.** 기존 모델 실행 허가는 이미 확보되어 있으므로 일반 작업 허가를 다시 요구하지 않는다. 그러나 제품이 보관하는 Human 결정은 private helper의 정식 native 확인으로 생성해야 한다. 그 후 같은 시험 workspace의 실행 풀을 명시적으로 켜고, 위 성공 기준의 task·단일 파일·시험 base PR·같은 상태 댓글과 실제 모델 호출 수를 확인한다. 자동 승인 대역이나 이번 개발 PR을 실모델 시험의 성공 증거로 세지 않는다.
+**제품의 정식 native Start 응답과 아래 런타임 경고 확인이 남아 있다.** 기존 모델 실행 허가는 이미 확보되어 있으므로 일반 작업 허가를 다시 요구하지 않는다. 그러나 제품이 보관하는 Human 결정은 private helper의 정식 native 확인으로 생성해야 한다. 그 후 같은 시험 workspace의 실행 풀을 명시적으로 켜고, 위 성공 기준의 task·단일 파일·시험 base PR·같은 상태 댓글과 실제 모델 호출 수를 확인한다. 자동 승인 대역이나 이번 개발 PR을 실모델 시험의 성공 증거로 세지 않는다.
 
 이 재확인 기록은 #2555의 실제 모델 → PR → 댓글 완료를 의미하지 않으며, 해당 이슈는 실제 증거가 확보될 때까지 열린 상태로 유지한다.
+
+### 실제 Desktop 창 재개와 런타임 경고
+
+동결한 Linux Desktop을 같은 Linux 사용자와 시험 전용 `AKRA_HOME`·`AKRA_DESKTOP_USER_DATA`로 다시 실행했다. launch 인수에 sandbox 해제·remote debugging 옵션을 추가하지 않았으며, Windows의 WSLg 창을 직접 캡처해 화면 표시를 확인했다. 실행한 Electron 프로세스들이 정확한 시험 profile의 파일을 열고 있는 것도 확인했다. Native Start 응답이나 실행 풀 활성화는 수행하지 않았다.
+
+화면에는 생성 프로토콜 기준 `codex 0.159.0`과 연결 Gateway의 `codex-cli 0.146.0` 사이 버전 경고가 표시됐다. 창 표시를 실제 모델 호환성 검증으로 해석하지 않으며, live 실행 전 이 경고의 영향과 정식 native Start 경로를 확인해야 한다. 이 준비 과정에서 모델 요청이나 시험 PR·댓글 작성은 하지 않았다.
