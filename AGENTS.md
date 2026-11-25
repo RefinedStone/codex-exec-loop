@@ -14,8 +14,9 @@
   the full gate, so the broad scripts below run only when the planner prints them or the user asks.
 - Before each commit, run `git diff --check`, and `cargo fmt --all` when Rust changed (again after
   any scripted edit).
-- `desktop/` is outside the planner and CI: when it changed, also run
-  `cd desktop && npm run check && npx vitest run`, and `npm run e2e` for UI changes.
+- `desktop/` is in the planner's Node scope: the printed `check_node_surfaces` runs its typecheck,
+  unit tests, and build, and CI also runs `Desktop Screen Tests`. Run `cd desktop && npm run e2e`
+  locally for UI changes.
 - Unless the user asks to hold locally, finish reviewable changes with
   `commit -> push -> PR(prerelease) -> CI Gate -> rebase merge -> worktree cleanup`.
 

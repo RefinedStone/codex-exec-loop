@@ -24,6 +24,8 @@ an explicitly proposed document, not here.
   composition-owned `NativeClientRuntime` gives the TUI one typed `CoreInput` dispatch boundary.
 - CLI, Admin, Telegram, and automation adapters reuse application services instead of owning
   separate planning or parallel policy.
+- Akra Desktop (`desktop/`, Electron) is a client of `akra-gateway`. It is a development build that
+  runs from source; it is not part of the native archives or npm packages.
 
 ## Operator Surfaces
 
@@ -679,9 +681,9 @@ parallel, Git, or GitHub authority.
 
 ## Gateway Daemon
 
-`akra-gateway` is a resident daemon that relays local clients (the planned Akra Desktop) to a
-Gateway-owned `codex app-server`. It is P1 of [the Akra Desktop plan](../plan/17-akra-desktop/README.md);
-the desktop app itself is not shipped yet.
+`akra-gateway` is a resident daemon that relays local clients (Akra Desktop and the kernel CLI) to a
+Gateway-owned `codex app-server`. It is P1 of [the Akra Desktop plan](../plan/17-akra-desktop/README.md).
+Akra Desktop (`desktop/`) runs from source as a development build; it has no packaged release yet.
 
 - Endpoint: unix `$AKRA_HOME/run/gateway.sock` (directory `0700`, socket `0600`); Windows named pipe
   `\\.\pipe\akra-gateway-<user SID>` with an owner-only security descriptor, first-instance creation, and
