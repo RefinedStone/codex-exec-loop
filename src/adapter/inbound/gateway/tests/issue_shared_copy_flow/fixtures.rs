@@ -276,6 +276,10 @@ impl World {
         self.github.0.lock().unwrap().copy.clone()
     }
 
+    pub fn edit_remote_body(&self, body: &str) {
+        self.github.0.lock().unwrap().copy.body = body.to_string();
+    }
+
     pub fn runtime(&self) -> PathBuf {
         let location = SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(
             self.workspace.to_str().unwrap(),
@@ -323,6 +327,11 @@ impl World {
         update: Arc<dyn IssueUpdatePort>,
         journal: Arc<dyn crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort>,
     ) -> Session {
+        let handoff = crate::application::service::issue_handoff::IssueHandoffService::new(
+            snapshot.clone(),
+            Arc::new(FilesystemIssuePolicySourceAdapter::new()),
+        )
+        .with_publish_journal(journal.clone(), |cwd| Ok(cwd.to_string()));
         let publisher = IssueJournaledPublishService::new(
             snapshot.clone(),
             update,
@@ -343,6 +352,7 @@ impl World {
         ))));
         let services = GatewayServices {
             issue_drafts: Some(Arc::new(drafts)),
+            issue_handoff: Some(Arc::new(handoff)),
             ..Default::default()
         };
         let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);

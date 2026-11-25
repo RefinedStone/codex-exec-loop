@@ -323,3 +323,56 @@ mod commit_failures;
 
 #[cfg(windows)]
 mod delayed_workers;
+
+#[test]
+fn handoff_uses_confirmed_journal_and_holds_unconfirmed_or_edited_copies() {
+    run_isolated(
+        "handoff_uses_confirmed_journal_and_holds_unconfirmed_or_edited_copies",
+        async {
+            let world = World::new();
+            let mut session = world.start().await;
+            let ordinary = session.call("akra/issue/handoffCopy", world.target()).await;
+            assert_eq!(
+                ordinary["result"]["sharedCopy"]["title"], "Old synthetic title",
+                "{ordinary}"
+            );
+            let request = publish_request(&world, &mut session, public_text(), true).await;
+            let confirmed = session.call("akra/issue/publish", request).await;
+            assert_eq!(confirmed["result"]["status"], "confirmed", "{confirmed}");
+            session.close().await;
+            let mut session = world.start().await;
+            let handoff = session.call("akra/issue/handoffCopy", world.target()).await;
+            assert_eq!(
+                handoff["result"]["sharedCopy"]["body"],
+                public_text()["body"],
+                "{handoff}"
+            );
+            let private = "synthetic local span reinserted by an external editor";
+            world.edit_remote_body(private);
+            let withheld = session.call("akra/issue/handoffCopy", world.target()).await;
+            assert!(withheld["error"].is_object(), "{withheld}");
+            assert!(!withheld.to_string().contains(private));
+            world.edit_remote_body(public_text()["body"].as_str().unwrap());
+            let next =
+                json!({"title":"Next approved title", "body":"Next approved body", "spans":[]});
+            let request = publish_request(&world, &mut session, next, true).await;
+            world.set_behavior(fixtures::WriteBehavior::LostResponse {
+                applied: false,
+                fail_reads: true,
+            });
+            let pending = session.call("akra/issue/publish", request).await;
+            assert_eq!(
+                pending["result"]["status"], "needs_confirmation",
+                "{pending}"
+            );
+            let failed = session.call("akra/issue/handoffCopy", world.target()).await;
+            assert!(failed["error"].is_object(), "{failed}");
+            world.recover_reads(false);
+            let pending = session.call("akra/issue/handoffCopy", world.target()).await;
+            assert!(pending["error"].is_object(), "{pending}");
+            assert_eq!(world.writes(), 2);
+            assert_eq!(world.counts(), ApiCalls::default());
+            session.close().await;
+        },
+    );
+}

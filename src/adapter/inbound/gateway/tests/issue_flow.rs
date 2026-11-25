@@ -311,10 +311,10 @@ impl World {
             None => drafts,
         };
         let drafts = Arc::new(drafts);
-        let handoff = Arc::new(IssueHandoffService::new(
-            self.github.clone(),
-            Arc::new(ProjectFiles),
-        ));
+        let handoff = Arc::new(
+            IssueHandoffService::new(self.github.clone(), Arc::new(ProjectFiles))
+                .with_publish_journal(Arc::new(self.journal()), |cwd| Ok(cwd.to_string())),
+        );
         let recorder = Arc::new(GatewayRecorder::create(&self.root.join("recording")).unwrap());
         let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
         let services = GatewayServices {
@@ -754,7 +754,7 @@ async fn an_external_edit_and_a_copied_marker_hold_the_restore_until_the_user_re
         restored.body.expose()
     );
 
-    // 다른 사람이 평문 비밀값을 게시본에 다시 넣었다. 복원은 보류하고, 인계의 답은 그 값을 가린다.
+    // 외부 편집은 복원과 승인된 판의 인계를 모두 보류한다.
     world.github.edit_externally(7, |copy| {
         copy.body.push_str(&format!("\npassword={SECRET}\n"));
     });
@@ -765,16 +765,9 @@ async fn an_external_edit_and_a_copied_marker_hold_the_restore_until_the_user_re
     let handoff = world
         .call(&mut process, "akra/issue/handoffCopy", target(7))
         .await;
-    assert!(
-        handoff["result"]["sharedCopy"]["body"]
-            .as_str()
-            .unwrap()
-            .contains("Edited by someone else"),
-        "{handoff}"
-    );
+    assert!(handoff["error"].is_object(), "{handoff}");
 
-    // 인계 서비스는 일지의 승인한 해시를 받으면 그 뒤에 바뀐 이슈를 거절한다. Gateway 는 아직 이 해시를 주지
-    // 않는다 (아래의 `#[ignore]` 시험).
+    // A reconnect authorizes local restoration only, not AI hand-off.
     let approved = world
         .journal()
         .load(CWD)
@@ -1014,7 +1007,6 @@ async fn a_restorable_publish_is_held_without_a_write_when_the_key_store_fails()
 }
 
 #[tokio::test]
-#[ignore = "#2428 gap: the Gateway passes `approved: None` to the hand-off, so it does not refuse an issue that changed after its approved publish"]
 async fn the_gateway_hand_off_refuses_an_issue_edited_after_its_approved_publish() {
     let mut world = World::new("handoff-approved", &[7]);
     let mut process = world.start().await;
@@ -1022,6 +1014,10 @@ async fn the_gateway_hand_off_refuses_an_issue_edited_after_its_approved_publish
         .publish(&mut process, 7, local_text("New title"))
         .await;
     assert_eq!(published["result"]["status"], "confirmed", "{published}");
+    let unchanged = world
+        .call(&mut process, "akra/issue/handoffCopy", target(7))
+        .await;
+    assert!(unchanged["result"]["sharedCopy"].is_object(), "{unchanged}");
     world.github.edit_externally(7, |copy| {
         copy.body.push_str("\nEdited by someone else.\n");
     });
@@ -1031,6 +1027,7 @@ async fn the_gateway_hand_off_refuses_an_issue_edited_after_its_approved_publish
         .await;
 
     assert!(handoff["error"].is_object(), "{handoff}");
+    world.assert_no_plaintext_left(&mut process).await;
 }
 
 fn readiness_text() -> Value {
