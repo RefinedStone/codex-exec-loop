@@ -605,6 +605,13 @@ impl KernelSession {
     async fn query(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
         let attached = self.attached()?;
         let request: QueryRequest = parse_params(params)?;
+        if matches!(&request.query, KernelQuery::ListTasks {}) {
+            let workspace = attached.issue_workspace.clone();
+            let tasks = blocking(move || crate::composition::planning_task_list::query(&workspace))
+                .await?
+                .map_err(|_| unavailable("planning task authority is unavailable".into()))?;
+            return to_result(KernelQueryAnswer::ListTasks(tasks));
+        }
         if let Some(query) = request.query.task_evidence_request()? {
             let workspace = attached.issue_workspace.clone();
             let evidence =

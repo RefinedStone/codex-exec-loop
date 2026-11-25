@@ -21,6 +21,7 @@ pub(crate) mod kernel_host;
 pub(crate) mod kernel_routed_planning_admin;
 pub(crate) mod native_client_runtime;
 pub(crate) mod native_terminal_event_ingress;
+pub(crate) mod planning_task_list;
 mod pr_review;
 pub(crate) mod production;
 pub(crate) mod provider_credentials;

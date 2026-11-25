@@ -254,6 +254,15 @@ grant is cached.
 - Tasks can carry user-owned acceptance criteria and a host-managed acceptance revision. The existing
   Kernel/admin mutation path applies planning revision CAS; worker task tools read criteria but cannot
   edit them. Legacy task documents remain readable. See [the acceptance contract](task-acceptance.md).
+- Desktop can turn selected conversation text into an editable task draft. Explicit confirmation saves
+  it as `awaiting_user`; opening or editing the draft does not start a model turn. The kernel panel's
+  task editor also opens persisted tasks, including completed and cancelled tasks.
+- The `list_tasks` kernel query reuses the existing planning-tool snapshot read and returns editable
+  fields with the same planning revision. Updates preserve fields outside the editor and use that
+  revision for compare-and-set. In-progress tasks remain protected by the host.
+- A lost task-save reply is recovered through the original command key and operation record. Successful
+  task mutations record only task ID and planning revision. Recovery is read-only; missing, expired,
+  legacy or interrupted records leave the outcome unresolved and never create another task.
   Criteria storage does not execute validation or change the existing delivery gates.
 - `prepare_evidence` / `record_evidence` bind worker-reported results to the current acceptance scope,
   running lease, host-observed Git tree and a bounded private artifact. `task_evidence` and the

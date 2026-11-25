@@ -274,6 +274,28 @@ pub enum StoredCommandResult {
     },
 }
 
+impl StoredCommandResult {
+    /// 완료 사건에 공개할 task 좌표만 고른다. 명령 원문은 포함하지 않는다.
+    pub(crate) fn task_mutation_record(
+        &self,
+    ) -> Option<crate::domain::kernel_event::TaskMutationRecord> {
+        match self {
+            Self::TaskCreated {
+                task_id,
+                planning_revision,
+            }
+            | Self::TaskUpdated {
+                task_id,
+                planning_revision,
+            } => Some(crate::domain::kernel_event::TaskMutationRecord {
+                task_id: task_id.clone(),
+                planning_revision: *planning_revision,
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// 저장 명령이 아무것도 바꾸지 않고 거절되었다. 이유 코드와 사람이 읽는 글이다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredCommandRejection {

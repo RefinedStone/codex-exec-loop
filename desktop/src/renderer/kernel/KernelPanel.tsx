@@ -263,10 +263,11 @@ function KernelBody({
   );
 }
 
-export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread }: {
+export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onEditTasks }: {
   onRefresh(): Promise<void>;
   onSetParallelEnabled(enabled: boolean): Promise<void>;
   onOpenThread(threadId: string): void;
+  onEditTasks?(): void;
 }) {
   const kernel = useDesktopStore((state) => state.kernel);
   const folders = useDesktopStore((state) => state.folders);
@@ -288,6 +289,7 @@ export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread }: {
             {folderName(kernel.workspace)}
           </span>
         )}
+        {onEditTasks && <button type="button" onClick={onEditTasks} disabled={kernel.phase !== "attached"} data-testid="kernel-edit-tasks">작업 편집</button>}
         <button type="button" onClick={refresh} disabled={kernel.phase !== "attached" || refreshing}>
           {refreshing ? "읽는 중…" : "새로 고침"}
         </button>

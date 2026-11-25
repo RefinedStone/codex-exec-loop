@@ -388,7 +388,10 @@ impl KernelCommandPort for CommandOnlyKernel {
                 thread_id: descriptor.thread_id,
                 reason: rejection.reason,
             },
-            WorkEnd::Done(_) => KernelEvent::CommandCompleted {
+            WorkEnd::Done(result) => KernelEvent::CommandCompleted {
+                task_mutation: result
+                    .as_ref()
+                    .and_then(StoredCommandResult::task_mutation_record),
                 op_id,
                 thread_id: descriptor.thread_id,
                 result: OperationEnd::Done,
@@ -396,6 +399,7 @@ impl KernelCommandPort for CommandOnlyKernel {
                 detail: None,
             },
             WorkEnd::Failed(error) => KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id,
                 thread_id: descriptor.thread_id,
                 result: OperationEnd::Failed,
@@ -491,6 +495,11 @@ impl CommandOnlyKernel {
         inspect: impl FnOnce(&str) -> Option<IssueAutomationPolicyInspection>,
     ) -> Result<Value> {
         let query: KernelQuery = serde_json::from_value(input)?;
+        if matches!(&query, KernelQuery::ListTasks {}) {
+            return Ok(serde_json::to_value(KernelQueryAnswer::ListTasks(
+                super::planning_task_list::query(&self.workspace)?,
+            ))?);
+        }
         if let Some(evidence_query) = query.task_evidence_request().map_err(protocol_error)? {
             return Ok(serde_json::to_value(KernelQueryAnswer::TaskEvidence(
                 super::task_evidence::query(&self.workspace, &evidence_query)?,
@@ -992,6 +1001,7 @@ mod tests {
                 record(
                     op_id + 1,
                     KernelEvent::CommandCompleted {
+                        task_mutation: None,
                         op_id,
                         thread_id: String::new(),
                         result,
@@ -1590,5 +1600,95 @@ mod tests {
             .query(json!({"type":"operation","op_id":999}), true)
             .unwrap();
         assert_eq!(unknown["state"], "unknown");
+    }
+    #[test]
+    fn task_authoring_snapshot_and_receipt_survive_reply_loss_without_duplicate_create() {
+        let (_directory, kernel) = fixture();
+        let input = json!({"type":"create_task", "task":{
+            "title":"Chosen text", "description":"Keep the full selected content",
+            "status":"awaiting_user", "base_priority":17,
+            "dynamic_priority_delta":2, "priority_reason":"operator choice",
+            "acceptance":[{"id":"criterion-1","scenario":"Visible result","channel":"screen","essential":true}]
+        }});
+        let created = kernel
+            .command(
+                KernelCommandKind::CreateTask,
+                input.clone(),
+                Some("task-authoring-key".into()),
+            )
+            .unwrap();
+        let id = created["result"]["task_id"].as_str().unwrap();
+        let revision = created["result"]["planning_revision"].as_i64().unwrap();
+        let first = kernel.query(json!({"type":"list_tasks"}), false).unwrap();
+        assert_eq!(first["available"], true);
+        assert_eq!(first["planning_revision"], revision);
+        assert_eq!(first["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(first["tasks"][0]["task_id"], id);
+        assert_eq!(
+            first["tasks"][0]["fields"]["description"],
+            "Keep the full selected content"
+        );
+        assert_eq!(first["tasks"][0]["fields"]["base_priority"], 17);
+        assert_eq!(first["tasks"][0]["fields"]["dynamic_priority_delta"], 2);
+        assert_eq!(
+            first["tasks"][0]["fields"]["priority_reason"],
+            "operator choice"
+        );
+        assert_eq!(
+            first["tasks"][0]["fields"]["acceptance"],
+            input["task"]["acceptance"]
+        );
+        assert_eq!(first["tasks"][0]["acceptance_revision"], 1);
+
+        let reopened = CommandOnlyKernel {
+            workspace: kernel.workspace.clone(),
+            caller: CALLER_CLI,
+        };
+        let replay = reopened
+            .command(
+                KernelCommandKind::CreateTask,
+                input,
+                Some("task-authoring-key".into()),
+            )
+            .unwrap();
+        assert_eq!(replay["operation"]["replayed"], true);
+        assert_eq!(replay["operation"]["op_id"], created["operation"]["op_id"]);
+        assert!(replay.get("result").is_none());
+        let operation = reopened
+            .query(
+                json!({"type":"operation","op_id":replay["operation"]["op_id"]}),
+                false,
+            )
+            .unwrap();
+        let receipt = operation["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["event"]["kind"] == "command_completed")
+            .unwrap();
+        assert_eq!(receipt["event"]["task_mutation"]["task_id"], id);
+        assert_eq!(
+            receipt["event"]["task_mutation"]["planning_revision"],
+            revision
+        );
+        assert_eq!(
+            reopened.query(json!({"type":"list_tasks"}), false).unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn task_authoring_completed_event_without_task_metadata_stays_readable() {
+        let event: KernelEvent = serde_json::from_value(json!({
+            "kind":"command_completed", "op_id":1, "thread_id":"", "result":"done"
+        }))
+        .unwrap();
+        assert!(matches!(
+            event,
+            KernelEvent::CommandCompleted {
+                task_mutation: None,
+                ..
+            }
+        ));
     }
 }

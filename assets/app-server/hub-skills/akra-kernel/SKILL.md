@@ -102,6 +102,7 @@ akra kernel issue ask_issue_decision --workspace <repository checkout> --branch 
 - `akra kernel query auto_follow --json`: The automatic follow-up settings. They are the same for every thread.
 - `akra kernel query thread_activity --json`: The threads that still have work: a running turn, a pending approval, or automatic follow-up.
 - `akra kernel query planning --json`: The planning queue and the first bounded page of current task evidence when available. Follow task_evidence.next_task_id with the task_evidence query to read later tasks.
+- `akra kernel query list_tasks --json`: Read all persisted tasks, including completed and cancelled tasks, with their editable fields and the planning revision from the same authority snapshot. This reuses the planning-tool list_tasks read and never starts work.
 - `akra kernel query task_evidence --json`: Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.
 - `akra kernel query parallel --json`: The parallel mode state: pool, agents, merge queue, and pull request validation.
 - `akra kernel query history --json`: A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.

@@ -1,0 +1,12 @@
+.task-editor-dialog { width: min(680px, calc(100vw - 48px)); max-height: calc(100vh - 48px); box-sizing: border-box; overflow: auto; border: 1px solid var(--border); border-radius: 12px; padding: 20px; background: var(--bg); color: var(--text); }
+.task-editor-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.task-editor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.task-editor-header h2 { margin: 0; }
+.task-editor-workspace { overflow-wrap: anywhere; }
+.task-editor-dialog > label, .task-editor-fields { display: grid; gap: 8px; }
+.task-editor-dialog select, .task-editor-dialog textarea, .task-editor-dialog input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; }
+.task-editor-fields { border: 0; padding: 16px 0 0; margin: 0; min-width: 0; }
+.task-editor-source { margin-top: 12px; }
+.task-editor-source blockquote { margin: 12px 0; padding-left: 12px; border-left: 2px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.task-editor-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.conversation-task-action { display: flex; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); }

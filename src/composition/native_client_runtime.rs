@@ -1575,6 +1575,7 @@ impl NativeClientRuntime {
                 (_, Some(reason)) => self.reject_command(op_id, "", reason),
                 (StoredCommandEnd::Failed(detail), None) => {
                     self.record_kernel_events(vec![KernelEvent::CommandCompleted {
+                        task_mutation: None,
                         op_id,
                         thread_id: String::new(),
                         result: OperationEnd::Failed,
@@ -1582,8 +1583,12 @@ impl NativeClientRuntime {
                         detail: Some(detail.clone()),
                     }]);
                 }
-                (StoredCommandEnd::Finished(_), None) => {
+                (StoredCommandEnd::Finished(outcome), None) => {
                     self.record_kernel_events(vec![KernelEvent::CommandCompleted {
+                        task_mutation: match outcome {
+                            StoredCommandOutcome::Done(result) => result.task_mutation_record(),
+                            _ => None,
+                        },
                         op_id,
                         thread_id: String::new(),
                         result: OperationEnd::Done,
@@ -3612,6 +3617,7 @@ pub(crate) mod tests {
         let (mut restarted, _turns) = recording_runtime_for_test();
         restarted.attach_kernel_event_log(log.clone(), "/workspace");
         let lost = KernelEvent::CommandCompleted {
+            task_mutation: None,
             op_id: 1,
             thread_id: "thread-1".to_string(),
             result: OperationEnd::Lost,
@@ -3971,9 +3977,11 @@ pub(crate) mod tests {
                 KernelEvent::CommandCompleted {
                     result: OperationEnd::Done,
                     detail: None,
+                    task_mutation: Some(task_mutation),
                     ..
                 },
             ] if command == "update_task" && caller.as_deref() == Some("akra-admin")
+                && task_mutation.task_id == "task-1" && task_mutation.planning_revision == 8
         ));
 
         // A refusal of the executor is a rejection of the command: the receipt and the record name the reason.
