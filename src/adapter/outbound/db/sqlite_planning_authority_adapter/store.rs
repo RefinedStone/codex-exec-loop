@@ -252,23 +252,6 @@ pub(super) fn ensure_schema(
             CREATE INDEX IF NOT EXISTS idx_telegram_update_inbox_stream_state_id
                 ON telegram_update_inbox(stream_key, update_state, update_id DESC);
 
-            CREATE TABLE IF NOT EXISTS telegram_issue_notification_cursors (
-                stream_key TEXT PRIMARY KEY,
-                after_sequence INTEGER NOT NULL CHECK (after_sequence >= 0),
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS telegram_issue_notifications (
-                stream_key TEXT NOT NULL,
-                intent_key TEXT NOT NULL,
-                chat_id INTEGER NOT NULL,
-                delivery_state TEXT NOT NULL
-                    CHECK (delivery_state IN ('sending', 'sent', 'unknown')),
-                claimed_at TEXT NOT NULL,
-                finished_at TEXT,
-                PRIMARY KEY (stream_key, intent_key, chat_id)
-            );
-
             CREATE INDEX IF NOT EXISTS idx_planning_tasks_status_priority_updated
                 ON planning_tasks(status, combined_priority, updated_at);
             CREATE INDEX IF NOT EXISTS idx_planning_tasks_direction
