@@ -21,6 +21,38 @@ pub(super) fn confirm(
     let Ok(program) = trusted_self() else {
         return Outcome::Unavailable;
     };
+    confirm_program(&program, request, cancelled, deadline)
+}
+
+/// The manual test uses the actual akra-gateway binary, not the libtest binary.
+/// This is not reachable from any shipping request or environment override.
+#[cfg(test)]
+pub(crate) fn confirm_for_manual_fixture(
+    executable: &Path,
+    request: &VaultNativeConfirmationRequest,
+    cancelled: &AtomicBool,
+    deadline: Instant,
+) -> Outcome {
+    let Ok(cwd) = std::env::current_dir() else {
+        return Outcome::Unavailable;
+    };
+    let Ok(program) =
+        crate::trusted_executable::validate_absolute(executable, &cwd).and_then(|path| {
+            crate::trusted_executable::validate_native_executable(&path)?;
+            Ok(path)
+        })
+    else {
+        return Outcome::Unavailable;
+    };
+    confirm_program(&program, request, cancelled, deadline)
+}
+
+fn confirm_program(
+    program: &Path,
+    request: &VaultNativeConfirmationRequest,
+    cancelled: &AtomicBool,
+    deadline: Instant,
+) -> Outcome {
     let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
         return Outcome::Cancelled;
     };
@@ -37,7 +69,7 @@ pub(super) fn confirm(
     if cancelled.load(Ordering::SeqCst) || Instant::now() >= deadline {
         return Outcome::Cancelled;
     }
-    let Ok(mut child) = crate::subprocess::spawn_without_console(&mut command_for(&program)) else {
+    let Ok(mut child) = crate::subprocess::spawn_without_console(&mut command_for(program)) else {
         return Outcome::Unavailable;
     };
     let (Some(input), Some(output)) = (child.take_stdin(), child.take_stdout()) else {

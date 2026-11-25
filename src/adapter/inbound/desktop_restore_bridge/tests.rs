@@ -4,6 +4,8 @@ use crate::application::port::inbound::vault_restore_session_port::{
     MAX_VIEWING_SESSION as SESSION_LIFETIME, VaultRestoreSessionFailure, VaultRestoreSessionHold,
     VaultRestoreSessionPrepared,
 };
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+mod manual_os;
 mod reconnect;
 mod restore_completion;
 use crate::application::port::outbound::evidence_vault_port::{
@@ -312,6 +314,16 @@ fn issue() -> IssueReference {
     }
 }
 fn seed(store: &dyn EvidenceVaultStorePort) -> (String, String) {
+    let seed_unlock = EvidenceVaultUnlockService::new(Arc::new(
+        FakeVaultKeyStoreAdapter::with_key(VaultKey::new(vec![7; 32])),
+    ));
+    seed_with(store, issue(), seed_unlock.sealing_key().unwrap())
+}
+fn seed_with(
+    store: &dyn EvidenceVaultStorePort,
+    issue: IssueReference,
+    key: crate::application::port::outbound::evidence_vault_port::VaultRecordKey,
+) -> (String, String) {
     let sensitive = |field, text: &str, secret: &str| {
         let start = text.find(secret).unwrap();
         IssueSensitiveSpan {
@@ -339,11 +351,6 @@ fn seed(store: &dyn EvidenceVaultStorePort) -> (String, String) {
         VaultBindingCommitPolicy, VaultBindingCommitRequest, VaultBindingCommitResult,
         VaultBindingFields,
     };
-    // 암호문 준비는 별도 fake로 수행한다. 실제 native 경로의 Keys는 초기화를 금지한다.
-    let seed_unlock = EvidenceVaultUnlockService::new(Arc::new(
-        FakeVaultKeyStoreAdapter::with_key(VaultKey::new(vec![7; 32])),
-    ));
-    let key = seed_unlock.sealing_key().unwrap();
     let mut fields = VaultBindingFields::default();
     for field in restorable_fields(&outcome.masked_spans) {
         match field.field {
@@ -353,7 +360,7 @@ fn seed(store: &dyn EvidenceVaultStorePort) -> (String, String) {
     }
     let binding = store
         .begin_binding(VaultRecordLoadRequest {
-            scope: VaultRecordScope::current_version(issue()),
+            scope: VaultRecordScope::current_version(issue),
             key,
         })
         .unwrap();
