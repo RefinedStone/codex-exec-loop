@@ -66,6 +66,30 @@ fn arbiter_settings_preserve_legacy_defaults_and_projects_only_tighten_user_limi
 }
 
 #[test]
+fn telegram_notification_is_a_user_grant_a_project_can_only_remove_and_not_part_of_the_version() {
+    let on = "[feedback]\ntelegram = true";
+    let off = "[feedback]\ntelegram = false";
+    let telegram = |user: Option<&str>, project: Option<&str>| {
+        resolve_issue_automation_policy(user, project)
+            .unwrap()
+            .policy
+            .feedback
+            .telegram
+    };
+    assert!(!telegram(None, None));
+    assert!(telegram(Some(on), None));
+    assert!(!telegram(None, Some(on)));
+    assert!(!telegram(Some(on), Some(off)));
+    // 알림은 권한이 아니다. 켜도 정책 판이 같으므로 열린 결정이 낡지 않는다.
+    assert_eq!(
+        resolve_issue_automation_policy(Some(on), None)
+            .unwrap()
+            .version,
+        resolve_issue_automation_policy(None, None).unwrap().version
+    );
+}
+
+#[test]
 fn arbiter_policy_rejects_invalid_units_confidence_and_unknown_capabilities() {
     for field in [
         "min_confidence=10001",

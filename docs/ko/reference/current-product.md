@@ -228,6 +228,19 @@ Observe/Propose의 수집만으로는 기존 idle 종료를 막지 않습니다.
 보존하고, 다른 바인딩과 일반 작업은 계속 진행합니다. 실행 중인 worker turn을 강제 종료했다는
 의미는 아니며, client 없이 Gateway를 다시 시작하는 기능은 #2561 범위입니다.
 
+### Telegram 결정 알림과 답
+
+IA8-3 ([#2568](https://github.com/RefinedStone/codex-exec-loop/issues/2568))은 기존 `akra telegram`
+runner 로 결정 요청, 중재자의 결정, 작업 실패를 알리고 `/decide <decision_id> <option>` 으로 답을
+받습니다. 사용자 정책의 `feedback.telegram` 만 알림을 켭니다. 저장소 정책은 끌 수만 있습니다.
+이 값은 정책 판에 들어가지 않으므로 켜도 열린 결정이 낡지 않습니다.
+
+- 알림에는 식별자와 닫힌 enum 이름만 들어갑니다. 이슈의 제목, 본문, 질문 글, 경로, 오류 글은 넣지 않습니다.
+- 알림 intent 는 저장소 authority store 에 bot stream 과 chat 마다 한 번 기록합니다. 재시작해도 다시 보내지 않습니다.
+  전송 실패나 전송 중 종료는 `unknown` 으로 남고 다시 보내지 않습니다 (at-most-once).
+- 답은 kernel 명령 `answer_issue_decision` 이고 `caller` 는 `akra-telegram` 입니다. Desktop 확인이 없으므로
+  `by: agent` 로 기록되며 `human` 관문을 통과하지 못합니다 (Q-IA11). 판이 바뀐 요청의 답은 `superseded` 로 알립니다.
+
 ## 이슈 실행 추적 화면
 
 IA4-4 ([#2554](https://github.com/RefinedStone/codex-exec-loop/issues/2554))는 기존 이슈 상세에

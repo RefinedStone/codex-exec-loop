@@ -1418,7 +1418,7 @@ mod tests {
         assert_eq!(answer["type"], "issue_automation_policy");
         assert_eq!(answer["status"], "ready");
         assert_eq!(answer["workspace"], workspace);
-        assert_eq!(answer["settings"].as_array().unwrap().len(), 73);
+        assert_eq!(answer["settings"].as_array().unwrap().len(), 74);
         assert_eq!(answer["files"].as_array().unwrap().len(), 2);
         assert!(
             turns.lock().unwrap().is_empty(),

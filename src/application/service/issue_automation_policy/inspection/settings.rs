@@ -158,6 +158,11 @@ pub(super) fn from_policy(
         "상태 전이 쓰기 허용",
         &policy.feedback.transition,
     )?;
+    settings.add(
+        "feedback.telegram",
+        "Telegram 알림 허용",
+        &policy.feedback.telegram,
+    )?;
     settings.add("close.when", "외부 이슈를 닫는 조건", &policy.close.when)?;
     settings.add("protection.paths", "보호 경로", &policy.protection.paths)?;
     settings.add(

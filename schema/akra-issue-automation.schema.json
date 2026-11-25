@@ -206,6 +206,10 @@
         "transition": {
           "type": "boolean",
           "description": "사용자 허가 AND 저장소 제한. 사용자 기본 false, 저장소 생략은 상속. 저장소 true만으로는 허가되지 않는다."
+        },
+        "telegram": {
+          "type": "boolean",
+          "description": "결정 요청·중재자 결정·실패의 Telegram 알림. 사용자 허가 AND 저장소 제한. 기본 false. 정책 판에 넣지 않는다."
         }
       }
     },

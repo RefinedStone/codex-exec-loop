@@ -213,6 +213,9 @@ pub struct IssueAutomationFeedback {
     pub comment: bool,
     pub labels: bool,
     pub transition: bool,
+    /// Telegram 알림 (IA8-3). 알림은 권한이 아니므로 정책 판에 넣지 않는다. 켜도 열린 결정이 낡지 않는다.
+    #[serde(skip)]
+    pub telegram: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

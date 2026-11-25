@@ -47,6 +47,8 @@ pub mod issue_binding_admission;
 pub mod issue_binding_pause;
 pub mod issue_interactions;
 pub mod issue_triage;
+// Telegram 의 이슈 결정 알림이다 (IA8-3).
+pub mod telegram_issue_notification;
 // issue_validation 은 초안 검증과 게시 관문이다. 둘 다 같은 domain 규칙을 부른다 (#2418).
 pub mod issue_validation;
 // issue_review 는 검증된 공유 초안을 모델에 보내고 구조화된 권고를 돌려준다 (#2430).

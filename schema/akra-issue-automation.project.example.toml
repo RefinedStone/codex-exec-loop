@@ -59,6 +59,7 @@ max_attempts = 2
 comment = false
 labels = false
 transition = false
+telegram = false
 
 [close]
 when = "never"

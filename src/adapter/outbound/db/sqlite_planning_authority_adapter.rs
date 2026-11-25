@@ -80,6 +80,8 @@ mod task_evidence;
 mod work_orders;
 // Telegram control-plane polling cursor와 update idempotency inbox를 영속화한다.
 mod telegram_update_ledger;
+// Telegram 이슈 알림의 kernel 기록 cursor 와 intent 장부이다 (IA8-3).
+mod telegram_issue_notifications;
 // Telegram bot id별 머신 전역 runner ownership과 canonical workspace binding을 영속화한다.
 mod telegram_global_runner_lease;
 // workspace path를 canonical repo root와 authority DB 위치로 해석하는 모듈이다.

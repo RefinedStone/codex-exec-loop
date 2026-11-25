@@ -2625,3 +2625,135 @@ fn whoami_exposes_sender_and_both_allowlist_decisions_for_group_setup() {
         );
     }
 }
+
+/*
+ * IA8-3: `/decide` is a thin remote form of the kernel `answer_issue_decision` command. The fake
+ * port stands in for the kernel and returns each outcome the runner must report.
+ */
+struct FakeIssueAnswerPort {
+    outcome: crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerOutcome,
+    answers: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerPort
+    for FakeIssueAnswerPort
+{
+    fn answer(
+        &self,
+        decision_id: &str,
+        option: &str,
+    ) -> Result<crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerOutcome>
+    {
+        self.answers
+            .lock()
+            .unwrap()
+            .push((decision_id.to_string(), option.to_string()));
+        Ok(self.outcome)
+    }
+}
+
+type DeliveredNotifications = Arc<Mutex<Vec<(String, Vec<i64>)>>>;
+
+struct FakeIssueNotifications(DeliveredNotifications);
+
+impl crate::application::port::inbound::telegram_issue_port::TelegramIssueNotificationPort
+    for FakeIssueNotifications
+{
+    fn deliver(&self, stream_key: &str, chat_ids: &[i64]) -> Result<usize> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((stream_key.to_string(), chat_ids.to_vec()));
+        Ok(0)
+    }
+}
+
+fn decide(
+    outcome: crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerOutcome,
+    chat_id: i64,
+) -> (Option<String>, Vec<(String, String)>) {
+    let (_gateway, runner) = build_runner(&[42]);
+    let answers = Arc::new(Mutex::new(Vec::new()));
+    let runner = runner.with_issue_answer_port(FakeIssueAnswerPort {
+        outcome,
+        answers: answers.clone(),
+    });
+    let reply = runner
+        .handle_message(&TelegramInboundMessage {
+            message_id: 1,
+            chat_id,
+            sender_user_id: Some(chat_id),
+            text: Some("/decide decision-1 start".to_string()),
+            sender_display_name: None,
+        })
+        .unwrap();
+    let answers = answers.lock().unwrap().clone();
+    (reply, answers)
+}
+
+#[test]
+fn parse_message_maps_decide_to_one_decision_and_option() {
+    assert_eq!(
+        parse_message(Some("/decide@AkraBot decision-1 start")),
+        TelegramParsedMessage::Command(TelegramInboundCommand::Decide {
+            decision_id: "decision-1".to_string(),
+            option: "start".to_string(),
+        })
+    );
+    for text in [
+        "/decide",
+        "/decide decision-1",
+        "/decide decision-1 start now",
+    ] {
+        assert_eq!(
+            parse_message(Some(text)),
+            TelegramParsedMessage::Error("사용법: /decide <decision_id> <option>".to_string()),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn runner_reports_each_decision_answer_outcome_and_superseded_by_name() {
+    use crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerOutcome;
+    use crate::domain::kernel_spec::ReasonCode;
+
+    let (reply, answers) = decide(TelegramIssueAnswerOutcome::Superseded, 42);
+    assert_eq!(
+        answers,
+        vec![("decision-1".to_string(), "start".to_string())]
+    );
+    assert!(reply.unwrap().starts_with("superseded:"));
+
+    let (reply, _) = decide(TelegramIssueAnswerOutcome::Answered, 42);
+    assert!(reply.unwrap().contains("agent (akra-telegram)"));
+
+    let (reply, _) = decide(
+        TelegramIssueAnswerOutcome::Rejected(ReasonCode::HumanConfirmationRequired),
+        42,
+    );
+    let reply = reply.unwrap();
+    assert!(reply.starts_with("human_confirmation_required:"), "{reply}");
+    assert!(reply.contains("사람 확인의 증거가 아닙니다"), "{reply}");
+}
+
+#[test]
+fn runner_rejects_a_decision_answer_from_a_chat_outside_the_allowlist() {
+    use crate::application::port::inbound::telegram_issue_port::TelegramIssueAnswerOutcome;
+
+    let (reply, answers) = decide(TelegramIssueAnswerOutcome::Answered, 777);
+    assert!(answers.is_empty());
+    assert!(reply.unwrap().contains("허용되지 않은 chat_id"));
+}
+
+#[test]
+fn runner_delivers_issue_notifications_to_allowed_chats_after_each_poll() {
+    let (_gateway, mut runner) = build_runner(&[42, 43]);
+    let delivered = Arc::new(Mutex::new(Vec::new()));
+    runner.issue_notifications = Some(Arc::new(FakeIssueNotifications(delivered.clone())));
+    runner.run_poll_cycle(None).unwrap();
+    assert_eq!(
+        *delivered.lock().unwrap(),
+        vec![("test-stream".to_string(), vec![42, 43])]
+    );
+}

@@ -113,6 +113,8 @@ pub mod startup_probe_port;
 pub mod telegram_bot_port;
 // Telegram global runner lease는 bot id별 update stream을 머신 전체에서 한 workspace에 묶는다.
 pub mod telegram_global_runner_lease_port;
+// telegram issue notification port 는 이슈 알림의 cursor, intent 장부, 결정 조회이다 (IA8-3).
+pub mod telegram_issue_notification_port;
 // telegram update ledger port는 workspace별 polling cursor와 명령 idempotency를 영속화한다.
 pub mod telegram_update_ledger_port;
 

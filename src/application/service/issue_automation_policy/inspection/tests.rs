@@ -95,7 +95,7 @@ fn inspection_preserves_resolve_hash_and_never_displays_comments_or_missing_path
     );
     assert_eq!(source.user_reads.load(Ordering::SeqCst), 1);
     assert_eq!(source.project_reads.load(Ordering::SeqCst), 1);
-    assert_eq!(settings.len(), 73);
+    assert_eq!(settings.len(), 74);
     assert_eq!(
         settings
             .iter()
