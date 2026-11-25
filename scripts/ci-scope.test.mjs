@@ -176,7 +176,7 @@ test("portable native selectors cover immutable evidence policy and the delivery
     "composition::kernel_host::simulation::issue_decision::human_confirmation::autonomy::",
     "sqlite_issue_automation_store::autonomy::tests::",
     "application::service::issue_coordinator::tests::auto_delivery::",
-    "application::service::issue_coordinator::tests::autonomy::auto::",
+    "application::service::issue_coordinator::tests::autonomy::",
     "adapter::inbound::kernel_protocol::issue_autonomy::",
     "sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_review::auto_delivery::",
     "sqlite_planning_authority_adapter::work_orders::tests::permits::delivery_evidence::",
@@ -188,6 +188,33 @@ test("portable native selectors cover immutable evidence policy and the delivery
     assert.ok(windows.includes(`'${filter}'`), `Windows Bash omits ${filter}`);
     assert.ok(powershell.includes(`"${filter}"`), `PowerShell omits ${filter}`);
     assert.ok(workflow.includes(`'${filter}'`), `macOS omits ${filter}`);
+  }
+});
+
+test("portable native selectors retain restart recovery and cover Auto once", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
+  const windows = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
+  const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
+  const macosStep = workflow.match(/node scripts\/run_native_rust_contracts\.mjs[\s\S]*?(?=\n      - name:)/)?.[0] || "";
+  const powershellStep = powershell.match(/function Invoke-WindowsPortableChecks[\s\S]*?(?=\nPush-Location)/)?.[0] || "";
+  const selectors = [
+    ["Windows Bash", [...windows.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1])],
+    ["PowerShell", [...powershellStep.matchAll(/^\s+"([^"\r\n]+::[^"\r\n]*)",?\r?$/gm)].map((match) => match[1])],
+    ["macOS", [...macosStep.matchAll(/'([^'\r\n]+::[^'\r\n]*)'/g)].map((match) => match[1])],
+  ];
+  for (const testPath of [
+    "private_sqlite::tests::",
+    "sqlite_issue_automation_restart_registry::tests::",
+    "application::service::issue_coordinator::tests::autonomy::restart_registry::",
+    "application::service::issue_coordinator::tests::autonomy::auto::",
+    "composition::issue_collection::restart_registry_tests::",
+    "composition::repository_kernel::restart_tests::",
+    "adapter::inbound::gateway::restart::tests::",
+  ]) {
+    for (const [platform, filters] of selectors) {
+      assert.equal(filters.filter((filter) => testPath.includes(filter)).length, 1,
+        `${platform} must cover ${testPath} through exactly one group`);
+    }
   }
 });
 
