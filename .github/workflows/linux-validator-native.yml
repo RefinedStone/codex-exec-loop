@@ -42,6 +42,28 @@ jobs:
           test ! -u /usr/bin/bwrap
           stat -c '%U %a %n' /usr/bin/bwrap
           # No sysctl changes, AppArmor unloading, namespace try flags, or fallback.
+      - name: Diagnose the exact required namespace boundary with a fixed no-op
+        shell: bash
+        run: |
+          for setting in /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/kernel/unprivileged_userns_clone /proc/sys/user/max_user_namespaces; do
+            if test -r "$setting"; then
+              printf '%s=' "$setting"
+              cat "$setting"
+            fi
+          done
+          args=(--unshare-user --disable-userns --assert-userns-disabled
+                --unshare-pid --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup
+                --cap-drop ALL --die-with-parent --new-session --clearenv
+                --setenv PATH /usr/bin:/bin --setenv TMPDIR /tmp)
+          for directory in /usr/bin /usr/lib /usr/lib64 /bin /lib /lib64; do
+            if test -e "$directory"; then
+              stat -Lc '%U %a %n' "$directory"
+              args+=(--ro-bind "$directory" "$directory")
+            fi
+          done
+          args+=(--dev /dev --remount-ro /dev --size 16777216 --tmpfs /tmp
+                 --remount-ro / --chdir /tmp -- /bin/true)
+          /usr/bin/setpriv --no-new-privs /usr/bin/env -i /usr/bin/bwrap "${args[@]}"
       - name: Run real isolation and publication gate evidence
         run: |
           cargo test --locked --lib 'adapter::outbound::issue_code_validator::linux::' -- --ignored --test-threads=1 --nocapture
