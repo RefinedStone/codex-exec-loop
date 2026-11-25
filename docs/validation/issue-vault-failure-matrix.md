@@ -15,7 +15,7 @@
 | Windows 신규 생성 후 장애 | #2702 real Windows creation journal + 합성 원격 | 선행 PR 병합 후 통합 |
 | 외부 수정 뒤 AI 인계 | #2701 scoped handoff | 선행 PR 병합 후 통합 |
 
-추가 시험은 두 개 독립 Gateway/전용 pipe 세션을 열어 동시 요청 또는 늦은 응답을 검증한다. 실제 GitHub, OS 키, 원문, 모델을 사용하지 않는다. 안전한 fixture에서 기존 회귀를 반복하되, 디스크를 가득 채우거나 사용자 프로세스를 종료하지 않는다. physical power-loss / ENOSPC / real keyring을 실행하지 않았다면 완료로 표시하지 않는다.
+추가 시험은 두 개 독립 Gateway/전용 pipe 세션을 열어 동시 요청 또는 늦은 응답을 검증한다. 원문 창 취소 회귀는 pipe 종료와 별개로 취소된 blocking restore 전체의 반환 신호를 기다린 뒤 원격 읽기 횟수를 검사한다. 실제 GitHub, OS 키, 원문, 모델을 사용하지 않는다. 안전한 fixture에서 기존 회귀를 반복하되, 디스크를 가득 채우거나 사용자 프로세스를 종료하지 않는다. physical power-loss / ENOSPC / real keyring을 실행하지 않았다면 완료로 표시하지 않는다.
 
 검증 명령:
 
