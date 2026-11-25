@@ -114,16 +114,11 @@ impl IssueObserver {
                     && !cancel.is_cancelled()
                     && let Some(comments) = service.comment_command_service()
                 {
-                    let receipts = comments.poll(cancel, at)?;
-                    if !receipts.is_empty() {
-                        committed(
-                            receipts
-                                .into_iter()
-                                .map(Box::new)
-                                .map(IssueObserverCommittedFact::Intervened)
-                                .collect(),
-                        );
-                    }
+                    comments.poll(cancel, at, &|receipt| {
+                        committed(vec![IssueObserverCommittedFact::Intervened(Box::new(
+                            receipt,
+                        ))]);
+                    })?;
                 }
                 if !outcome.discarded
                     && !cancel.is_cancelled()

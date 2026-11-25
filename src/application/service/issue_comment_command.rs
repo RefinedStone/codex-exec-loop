@@ -55,17 +55,18 @@ impl IssueCommentCommandService {
         }
     }
 
-    /// 새로 바뀐 보류의 영수증을 돌려준다. 한 이슈의 읽기 실패는 다른 이슈를 막지 않는다.
+    /// 새로 바뀐 보류의 영수증은 commit gate 안에서 `committed` 로 바로 넘긴다. 뒤의 실패나 취소가 확정 사실을 버리지 않는다.
+    /// 한 이슈의 읽기 실패는 다른 이슈를 막지 않는다.
     pub fn poll(
         &self,
         cancel: &IssueCollectionCancellation,
         at_unix_ms: u64,
-    ) -> Result<Vec<IssueInterventionReceipt>> {
+        committed: &(dyn Fn(IssueInterventionReceipt) + Send + Sync),
+    ) -> Result<()> {
         let context = comment_context(at_unix_ms);
         let trusted = self.trusted_actor_ids();
-        let mut receipts = Vec::new();
         if trusted.is_empty() {
-            return Ok(receipts);
+            return Ok(());
         }
         let mut after = None;
         loop {
@@ -74,7 +75,7 @@ impl IssueCommentCommandService {
                 .read_triage_batch(&self.workspace, after.as_ref(), 100)?;
             for item in batch.items {
                 if cancel.is_cancelled() {
-                    return Ok(receipts);
+                    return Ok(());
                 }
                 if !is_open_tracked_github_issue(&item) {
                     continue;
@@ -92,18 +93,19 @@ impl IssueCommentCommandService {
                     if !trusted.contains(&command.author_id) {
                         continue;
                     }
-                    let receipt =
-                        cancel.commit_if_active(|| self.process(&item.issue, command, &context))?;
-                    match receipt {
-                        None => return Ok(receipts),
-                        Some(Some(receipt)) if receipt.changed => receipts.push(receipt),
-                        Some(_) => {}
+                    if cancel
+                        .commit_if_active(|| {
+                            self.process(&item.issue, command, &context, committed)
+                        })?
+                        .is_none()
+                    {
+                        return Ok(());
                     }
                 }
             }
             after = batch.next_after;
             if after.is_none() {
-                return Ok(receipts);
+                return Ok(());
             }
         }
     }
@@ -134,13 +136,14 @@ impl IssueCommentCommandService {
         issue: &IssueReference,
         command: IssueCommentCommand,
         context: &StoredCommandContext,
-    ) -> Result<Option<IssueInterventionReceipt>> {
+        committed: &(dyn Fn(IssueInterventionReceipt) + Send + Sync),
+    ) -> Result<()> {
         if self
             .records
             .issue_comment_command(&self.workspace, issue, &command.comment_id)?
             .is_some()
         {
-            return Ok(None);
+            return Ok(());
         }
         let mut record = IssueCommentCommandRecord {
             issue: issue.clone(),
@@ -149,7 +152,6 @@ impl IssueCommentCommandService {
             kind: command.kind,
             intervention_command_id: None,
         };
-        let mut receipt = None;
         if command.kind == IssueCommentCommandKind::Hold {
             let command_id = issue_comment_intervention_command_id(&record.comment_id);
             let request = IssueInterventionRequest {
@@ -158,17 +160,19 @@ impl IssueCommentCommandService {
                 action: IssueInterventionAction::Hold,
             };
             match self.interventions.intervene(request, context) {
-                Ok(applied) => receipt = Some(applied),
+                // 기록이 실패해도 재시도는 changed=false 를 받는다. 그래서 바뀐 영수증은 지금 넘긴다.
+                Ok(applied) if applied.changed => committed(applied),
+                Ok(_) => {}
                 Err(_) => {
                     tracing::warn!("an issue comment hold was not applied; the next cycle retries");
-                    return Ok(None);
+                    return Ok(());
                 }
             }
             record.intervention_command_id = Some(command_id);
         }
         self.records
             .record_issue_comment_command(&self.workspace, &record)?;
-        Ok(receipt)
+        Ok(())
     }
 }
 
