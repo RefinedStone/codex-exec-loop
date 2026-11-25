@@ -38,6 +38,8 @@ AKRA_MANUAL_VAULT_PROFILE=isolated-disposable cargo test --locked --lib adapter:
 
 ## 별도 실제 Desktop UI 검증
 
+Windows의 실제 제품 창은 [수동 실행기와 증거 수집 절차](windows-vault-live-launcher.md)를 사용한다. 폐기 OS 사용자 SID와 sandbox 이슈를 확인한 뒤 같은 SHA의 visible Electron·production helper를 실행하고, 같은 프로필 재시작과 canary 파일 검사를 기록한다. 실행기 준비나 단위 시험 통과만으로 #2724의 실제 OS 검증을 완료 처리하지 않는다.
+
 위 시험은 Electron renderer나 실제 GitHub 조회를 포함하지 않는다. disposable profile에서 제품 빌드를 사용하여 다음 결과를 직접 확인하고 증거를 기록한다. 실제 원격 연결이 필요하면 명시적 승인 후 별도 샌드박스 GitHub 계정과 테스트 이슈로만 실시한다. 승인 전에는 임의의 실제 계정에 연결하지 않는다.
 
 1. 이슈 원문 보기에서 OS 확인 취소와 승인; 승인 전 원문이 나타나지 않는지 확인.
