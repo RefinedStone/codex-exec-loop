@@ -1,6 +1,7 @@
 {
   "name": "@refinedstone/akra-desktop",
   "version": "0.0.0-development",
+  "productName": "Akra ADE",
   "private": true,
   "description": "Akra Desktop: Electron client for akra-gateway (docs/plan/17-akra-desktop)",
   "main": "out/main/index.js",
