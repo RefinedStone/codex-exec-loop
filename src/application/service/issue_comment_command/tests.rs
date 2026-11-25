@@ -183,8 +183,19 @@ impl Fixture {
     }
 
     fn poll(&self) -> Result<Vec<IssueInterventionReceipt>> {
-        self.service()
-            .poll(&IssueCollectionCancellation::new(), 1_795_000_000_000)
+        let (result, receipts) = self.poll_delivering();
+        result.map(|()| receipts)
+    }
+
+    /// 실패한 주기도 그 전에 commit gate 안에서 넘긴 영수증을 함께 돌려준다.
+    fn poll_delivering(&self) -> (Result<()>, Vec<IssueInterventionReceipt>) {
+        let delivered = Mutex::new(Vec::new());
+        let result = self.service().poll(
+            &IssueCollectionCancellation::new(),
+            1_795_000_000_000,
+            &|receipt| delivered.lock().unwrap().push(receipt),
+        );
+        (result, delivered.into_inner().unwrap())
     }
 
     fn comment(&self, id: &str, author: &str, kind: IssueCommentCommandKind) {
@@ -369,7 +380,11 @@ fn a_stop_after_the_hold_reuses_the_same_intervention_without_a_second_change() 
         .records
         .fail_next_record
         .store(true, Ordering::SeqCst);
-    assert!(fixture.poll().is_err());
+    let (result, delivered) = fixture.poll_delivering();
+    assert!(result.is_err());
+    // 확정된 보류는 뒤의 기록 실패와 무관하게 이미 넘어갔다. 재시도는 changed=false 라 다시 넘기지 않는다.
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].action, "hold_issue");
     assert_eq!(fixture.record("IC_hold"), None);
 
     assert!(fixture.poll().unwrap().is_empty());
