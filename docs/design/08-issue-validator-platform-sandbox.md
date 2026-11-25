@@ -36,3 +36,7 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux::tests:
 추가 출시 전 실증: network namespace와 root 밖 파일/쓰기 차단, timeout 및 detach 자식 제거, cgroup 집계 자원 제한 필요성, 배포판별 root-owned 경로 및 실제 필수 검증기 게시 차단. Native 실증 없는 상태에서 Windows/Linux 전체 지원 완료로 표시하지 않는다. Windows의 실제 AppContainer 실행/격리·네트워크·Job·해시 검증과 정책 통합은 남아 있다.
 
 참고: [bubblewrap upstream man page](https://github.com/containers/bubblewrap/blob/main/bwrap.xml), [Debian bwrap(1)](https://manpages.debian.org/trixie/bubblewrap/bwrap.1.en.html).
+
+## Native 증거의 후속 검증
+
+#2722의 추가 native canary, 실제 게시 관문 회귀와 환경별 실행 상태는 [Linux native 검증 기록](../validation/issue-validator-linux-native.md)에 구분한다. 지원 프로필의 실제 통과 전까지 위 제약과 미지원 판정을 유지한다.
