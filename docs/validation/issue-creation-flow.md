@@ -50,7 +50,7 @@ GitHub의 `clientMutationId`는 상관관계를 확인하는 값으로 사용한
 | --- | --- |
 | 생성 서비스 | 메모리 journal·원격·Vault 대역으로 승인 결합, 응답 유실, 중복 클릭·재시작, 수동 URL 검증, 원문 동결, 복원 재시도 |
 | GitHub 어댑터 | 실제 GitHub 호출 없이 GraphQL 인자, 대상 검증, 오류 재전송 금지 |
-| 파일 journal | Unix에서 영속 재개, 두 어댑터의 lease, 손상·별칭·변조 경계 |
+| 파일 journal | Unix 파일 journal과 Windows private SQLite, 별도 writer reservation, 조회 전용 provenance, 프로세스 종료 이후 재개, 손상·별칭·변조 경계 |
 | Vault staging | Unix에서 scope 분리, 키·인증 검증, 기존 이슈 레코드와의 호환 |
 | Gateway | 생성 6개 메서드의 원격 클라이언트 차단, 민감 요청·오류응답 비녹화 |
 | Desktop | 타입 검사, 단위 테스트, fake Gateway를 사용하는 Electron E2E |
@@ -59,7 +59,7 @@ GitHub의 `clientMutationId`는 상관관계를 확인하는 값으로 사용한
 
 ## 현재 한계
 
-- 실제 파일 journal과 Vault는 기존 secure_fs 지원 범위인 Unix에서만 동작한다. Windows에서는 안전한 저장 구현이 준비되지 않았으므로 생성 요청 전에 차단한다. Windows 컴파일·서비스 대역 검증을 실제 Windows 영속 생성 지원으로 해석하면 안 된다.
+- Windows에서는 #2702의 private SQLite journal과 #2688의 Vault 저장소를 사용한다. 예약 DB와 본문 DB를 분리해 Sent를 먼저 커밋하며, 기존 JSONL/lock 또는 지원하지 않는 schema는 자동 이전하지 않고 거절한다. 실제 원격 생성·전원 단절·OS 키 저장소를 포함한 검증은 별도로 필요하다.
 - 기존 Desktop 복원 창의 `VaultRestoreSource` 연결은 이 변경의 범위에 포함되지 않는다. 생성 결과의 복원 연결 완료는 Vault 링크 상태이며 원문 열람 창 구현 완료를 뜻하지 않는다.
 - 생성 의도 사이에 의도적으로 새 시도를 시작하면 이전 원격 생성과 중복될 수 있다. 이 선택을 자동화하지 않는다.
 - 전원 단절, 실제 OS 키 저장소, 실제 GitHub 네트워크 장애는 대역 기반 테스트의 보장 범위를 벗어난다.
