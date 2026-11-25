@@ -442,3 +442,5 @@ fn lost_response_recovers_by_stable_id_with_real_windows_journal_and_vault() {
     assert!(!serde_json::to_string(&records).unwrap().contains(raw));
     assert_eq!(publication.load(&fixture.workspace()).unwrap().len(), 1);
 }
+
+mod processes;
