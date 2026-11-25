@@ -131,12 +131,22 @@ fn copy() -> IssueSharedCopy {
 fn absent_provenance_is_read_only_and_sent_is_visible_under_reservation() {
     let fixture = Fixture::new();
     let adapter = fixture.adapter();
+    assert!(
+        adapter
+            .read_records(&fixture.workspace())
+            .unwrap()
+            .is_empty()
+    );
     let empty = adapter.load(&fixture.source()).unwrap();
     assert!(!empty.unresolved && empty.created_issue_ids.is_empty());
     assert!(!fixture.runtime().join(JOURNAL_NAME).exists());
     let mut tx = adapter.begin(&fixture.workspace()).unwrap();
     let sent = fixture.sent();
     tx.save(&sent).unwrap();
+    assert_eq!(
+        adapter.read_records(&fixture.workspace()).unwrap(),
+        vec![sent.clone()]
+    );
     assert!(adapter.load(&fixture.source()).unwrap().unresolved);
     assert!(Transaction::open(fixture.runtime(), fixture.workspace(), Duration::ZERO).is_err());
     drop(tx);

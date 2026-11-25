@@ -331,7 +331,10 @@ impl World {
             snapshot.clone(),
             Arc::new(FilesystemIssuePolicySourceAdapter::new()),
         )
-        .with_publish_journal(journal.clone(), |cwd| Ok(cwd.to_string()));
+        .with_publish_journal(journal.clone(), |cwd| {
+            Ok(std::fs::canonicalize(cwd)?.to_str().unwrap().to_string())
+        })
+        .with_creation_journal(crate::composition::production::build_issue_creation_journal());
         let publisher = IssueJournaledPublishService::new(
             snapshot.clone(),
             update,

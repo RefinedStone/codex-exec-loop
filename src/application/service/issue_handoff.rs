@@ -6,11 +6,13 @@ use super::issue_policy::resolve_issue_policy;
 use crate::application::port::inbound::issue_handoff_port::{
     IssueHandoffPort, IssueHandoffRequest,
 };
+use crate::application::port::outbound::issue_creation_journal_port::IssueCreationJournalPort;
 use crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort;
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueSnapshotPort, IssueSnapshotResolveRequest,
 };
+use crate::domain::issue_creation::{IssueCreationIntentRecord, IssueCreationIntentState};
 use crate::domain::issue_masking::{IssueTextField, plan_issue_masking};
 use crate::domain::issue_policy::IssueDisclosureTarget;
 use crate::domain::issue_publish_intent::{IssuePublishIntentRecord, IssuePublishIntentState};
@@ -33,6 +35,7 @@ pub struct IssueHandoffService {
     snapshots: Arc<dyn IssueSnapshotPort>,
     policy_source: Arc<dyn IssuePolicySourcePort>,
     journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
+    creation_journal: Option<Arc<dyn IssueCreationJournalPort>>,
     resolve_workspace: Option<Box<WorkspaceResolver>>,
 }
 
@@ -45,8 +48,14 @@ impl IssueHandoffService {
             snapshots,
             policy_source,
             journal: None,
+            creation_journal: None,
             resolve_workspace: None,
         }
+    }
+
+    pub fn with_creation_journal(mut self, journal: Arc<dyn IssueCreationJournalPort>) -> Self {
+        self.creation_journal = Some(journal);
+        self
     }
 
     /// Scoped hand-off reads the same private journal as the publisher.
@@ -95,6 +104,45 @@ fn approved_publication(
         bail!("the issue has no unambiguous confirmed shared copy for hand-off");
     }
     Ok(Some(latest.approved_hash.clone()))
+}
+
+/// Shared-copy-only creations never need Vault adoption, but still own their approval.
+fn approved_creation(
+    records: &[IssueCreationIntentRecord],
+    issue: &IssueReference,
+) -> Result<Option<IssueFieldHash>> {
+    let mut confirmed = None;
+    for record in records
+        .iter()
+        .filter(|record| record.repository.contains(issue))
+    {
+        let Some(created) = &record.created else {
+            if record.state.may_have_been_sent() {
+                bail!("the issue creation needs confirmation before hand-off");
+            }
+            continue;
+        };
+        if created.issue != *issue {
+            continue;
+        }
+        let approved = record
+            .approved
+            .as_ref()
+            .context("the issue creation has no approved shared copy for hand-off")?;
+        if record.state != IssueCreationIntentState::Confirmed
+            || record.write_response_mismatch
+            || approved.approval.repository != record.repository
+            || approved.approval.intent_id != record.intent_id
+            || record.observed_hash.as_ref() != Some(&approved.approval.shared_copy_hash)
+            || IssueFieldHash::of_fields(&approved.shared_copy.title, &approved.shared_copy.body)
+                != approved.approval.shared_copy_hash
+            || confirmed.is_some()
+        {
+            bail!("the issue creation has no unambiguous confirmed shared copy for hand-off");
+        }
+        confirmed = Some(approved.approval.shared_copy_hash.clone());
+    }
+    Ok(confirmed)
 }
 
 impl IssueHandoffPort for IssueHandoffService {
@@ -151,7 +199,20 @@ impl IssueHandoffPort for IssueHandoffService {
             let records = journal
                 .load(workspace_dir.as_deref().expect("scoped journal"))
                 .map_err(|_| anyhow!("the issue hand-off publication state is unavailable"))?;
-            if let Some(approved) = approved_publication(&records, &snapshot.issue)?
+            let approved = match approved_publication(&records, &snapshot.issue)? {
+                // A later confirmed update supersedes the creation's original hash.
+                Some(approved) => Some(approved),
+                None => {
+                    let creations = self
+                        .creation_journal
+                        .as_ref()
+                        .context("the issue hand-off creation journal is unavailable")?
+                        .read_records(workspace_dir.as_deref().expect("scoped journal"))
+                        .map_err(|_| anyhow!("the issue hand-off creation state is unavailable"))?;
+                    approved_creation(&creations, &snapshot.issue)?
+                }
+            };
+            if let Some(approved) = approved
                 && snapshot.verified_shared_copy(&approved).is_none()
             {
                 bail!(
