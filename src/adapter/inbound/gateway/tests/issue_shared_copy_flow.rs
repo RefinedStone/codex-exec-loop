@@ -320,6 +320,8 @@ fn configured_templates_and_required_external_validators_remain_blocked() {
 
 #[cfg(windows)]
 mod commit_failures;
+#[cfg(windows)]
+mod storage_failures;
 
 #[cfg(windows)]
 mod delayed_workers;
