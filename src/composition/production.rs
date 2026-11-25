@@ -115,7 +115,7 @@ use crate::domain::github_review::GithubPullRequestTarget;
 mod delivery_evidence;
 pub(crate) use delivery_evidence::task_delivery_evidence_for_workspace;
 
-const APP_SERVER_CLIENT_NAME: &str = "codex-exec-loop-native";
+const APP_SERVER_CLIENT_NAME: &str = "akra-native";
 const AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR: &str = "AKRA_APP_SERVER_PROMPT_LOG";
 
 pub(crate) fn build_kernel_command_port(

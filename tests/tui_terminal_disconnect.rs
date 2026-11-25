@@ -115,7 +115,7 @@ fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File) -> ChildGuard {
         .env("AKRA_HOME", &fixture.akra_home)
         .env("CODEX_HOME", &fixture.codex_home)
         .env("AKRA_APP_SERVER_PROMPT_LOG", "0")
-        .env("CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART", "0")
+        .env("AKRA_SHOW_STARTUP_VISUAL", "0")
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::piped());

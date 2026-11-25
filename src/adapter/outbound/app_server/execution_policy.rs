@@ -12,11 +12,8 @@ use super::protocol::{ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeVa
  * 설정을 분리한다.
  */
 const APPROVAL_POLICY_ENV_VAR: &str = "AKRA_APP_SERVER_APPROVAL_POLICY";
-const LEGACY_APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
 const APPROVALS_REVIEWER_ENV_VAR: &str = "AKRA_APP_SERVER_APPROVALS_REVIEWER";
-const LEGACY_APPROVALS_REVIEWER_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER";
 const SANDBOX_MODE_ENV_VAR: &str = "AKRA_APP_SERVER_SANDBOX_MODE";
-const LEGACY_SANDBOX_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE";
 const AUTO_REVIEW_WARNING: &str = "automatic approval review is explicitly enabled; it may approve app-server tool requests without operator confirmation";
 const APPROVAL_POLICY_ALLOWED_VALUES: &str = "untrusted, on-request, or never";
 const APPROVALS_REVIEWER_ALLOWED_VALUES: &str = "user, auto-review, or guardian-subagent (legacy)";
@@ -87,18 +84,9 @@ impl AppServerExecutionPolicy {
      * 적용하므로 한 실행 중에 env var가 바뀌어도 active adapter policy가 흔들리지 않는다.
      */
     pub(super) fn from_environment() -> Self {
-        let approval_policy_value = crate::configuration::renamed_env_var(
-            APPROVAL_POLICY_ENV_VAR,
-            LEGACY_APPROVAL_POLICY_ENV_VAR,
-        );
-        let approvals_reviewer_value = crate::configuration::renamed_env_var(
-            APPROVALS_REVIEWER_ENV_VAR,
-            LEGACY_APPROVALS_REVIEWER_ENV_VAR,
-        );
-        let sandbox_mode_value = crate::configuration::renamed_env_var(
-            SANDBOX_MODE_ENV_VAR,
-            LEGACY_SANDBOX_MODE_ENV_VAR,
-        );
+        let approval_policy_value = std::env::var(APPROVAL_POLICY_ENV_VAR).ok();
+        let approvals_reviewer_value = std::env::var(APPROVALS_REVIEWER_ENV_VAR).ok();
+        let sandbox_mode_value = std::env::var(SANDBOX_MODE_ENV_VAR).ok();
         let policy = Self::from_env_values(
             approval_policy_value.as_deref(),
             approvals_reviewer_value.as_deref(),
@@ -204,21 +192,18 @@ fn invalid_execution_policy_warnings(
     let candidates = [
         (
             APPROVAL_POLICY_ENV_VAR,
-            LEGACY_APPROVAL_POLICY_ENV_VAR,
             approval_policy_value,
             APPROVAL_POLICY_ALLOWED_VALUES,
             parse_approval_policy_value(approval_policy_value).is_some(),
         ),
         (
             APPROVALS_REVIEWER_ENV_VAR,
-            LEGACY_APPROVALS_REVIEWER_ENV_VAR,
             approvals_reviewer_value,
             APPROVALS_REVIEWER_ALLOWED_VALUES,
             parse_approvals_reviewer_value(approvals_reviewer_value).is_some(),
         ),
         (
             SANDBOX_MODE_ENV_VAR,
-            LEGACY_SANDBOX_MODE_ENV_VAR,
             sandbox_mode_value,
             SANDBOX_MODE_ALLOWED_VALUES,
             parse_sandbox_mode_value(sandbox_mode_value).is_some(),
@@ -227,16 +212,14 @@ fn invalid_execution_policy_warnings(
 
     candidates
         .into_iter()
-        .filter_map(
-            |(environment_variable, legacy_variable, value, allowed_values, is_valid)| {
-                let is_nonempty = value.is_some_and(|value| !value.trim().is_empty());
-                (is_nonempty && !is_valid).then(|| {
-                    format!(
-                        "invalid {environment_variable} (or legacy {legacy_variable}); expected {allowed_values}; using product default"
-                    )
-                })
-            },
-        )
+        .filter_map(|(environment_variable, value, allowed_values, is_valid)| {
+            let is_nonempty = value.is_some_and(|value| !value.trim().is_empty());
+            (is_nonempty && !is_valid).then(|| {
+                format!(
+                    "invalid {environment_variable}; expected {allowed_values}; using product default"
+                )
+            })
+        })
         .collect()
 }
 
@@ -288,9 +271,7 @@ fn parse_sandbox_mode_value(value: Option<&str>) -> Option<SandboxModeValue> {
 mod tests {
     use super::{
         APPROVAL_POLICY_ENV_VAR, APPROVALS_REVIEWER_ENV_VAR, AUTO_REVIEW_WARNING,
-        AppServerExecutionPolicy, LEGACY_APPROVAL_POLICY_ENV_VAR,
-        LEGACY_APPROVALS_REVIEWER_ENV_VAR, LEGACY_SANDBOX_MODE_ENV_VAR, SANDBOX_MODE_ENV_VAR,
-        invalid_execution_policy_warnings,
+        AppServerExecutionPolicy, SANDBOX_MODE_ENV_VAR, invalid_execution_policy_warnings,
     };
     use crate::adapter::outbound::app_server::protocol::{
         ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue,
@@ -439,21 +420,9 @@ mod tests {
          */
         assert_eq!(APPROVAL_POLICY_ENV_VAR, "AKRA_APP_SERVER_APPROVAL_POLICY");
         assert_eq!(
-            LEGACY_APPROVAL_POLICY_ENV_VAR,
-            "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY"
-        );
-        assert_eq!(
             APPROVALS_REVIEWER_ENV_VAR,
             "AKRA_APP_SERVER_APPROVALS_REVIEWER"
         );
-        assert_eq!(
-            LEGACY_APPROVALS_REVIEWER_ENV_VAR,
-            "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER"
-        );
         assert_eq!(SANDBOX_MODE_ENV_VAR, "AKRA_APP_SERVER_SANDBOX_MODE");
-        assert_eq!(
-            LEGACY_SANDBOX_MODE_ENV_VAR,
-            "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE"
-        );
     }
 }

@@ -4,6 +4,12 @@
  * process-level 오류 출력과 exit code 변환만 책임진다.
  */
 fn main() -> std::process::ExitCode {
+    if let Err(error) =
+        codex_exec_loop_native::configuration::reject_removed_environment_variables()
+    {
+        eprintln!("{error:#}");
+        return std::process::ExitCode::FAILURE;
+    }
     let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
     tracing::info!(
         cwd = ?std::env::current_dir().ok(),

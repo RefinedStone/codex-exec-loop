@@ -5,6 +5,12 @@
  */
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    if let Err(error) =
+        codex_exec_loop_native::configuration::reject_removed_environment_variables()
+    {
+        eprintln!("{error:#}");
+        return std::process::ExitCode::FAILURE;
+    }
     // Private credential helpers never initialize recording/tracing or print a raw error.
     let args: Vec<String> = std::env::args().skip(1).collect();
     if matches!(args.as_slice(), [command] if command == "provider-credential-prompt" || command == "provider-credential-migration")
