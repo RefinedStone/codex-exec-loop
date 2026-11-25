@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::application::port::inbound::stored_command_port::{
     AskIssueDecisionOption, AskIssueDecisionRequest,
 };
-use crate::domain::issue_automation::agent_question::MAX_AGENT_QUESTION_BYTES;
+use crate::domain::issue_automation::agent_question::{
+    MAX_AGENT_QUESTION_BYTES, WORKER_REPLY_OPTION,
+};
 use crate::domain::issue_automation::arbiter::IssueArbiterWaitReason;
 use crate::domain::issue_automation::decision::{
     IssueDecisionFact, IssueDecisionKind, IssueDecisionState, IssueDecisionTimeout,
@@ -164,6 +166,7 @@ pub(super) fn ask_input(
         || !(2..=MAX_ISSUE_DECISION_OPTIONS).contains(&options.len())
         || options.iter().any(|option| {
             !valid_identifier(&option.id, MAX_ISSUE_DECISION_OPTION_BYTES)
+                || option.id == WORKER_REPLY_OPTION
                 || !valid_text(&option.label, 256)
                 || !ids.insert(option.id.as_str())
         })

@@ -83,7 +83,7 @@ akra kernel issue ask_issue_decision --workspace <repository checkout> --branch 
   --options '[{"id":"a","label":"Keep A"},{"id":"b","label":"Move to B"}]' --recommended a --json
 ```
 
-- Use 2 to 32 options. The question and labels become a shared copy for a person: never put secrets in them.
+- Use 2 to 32 options; the option id `reply` is reserved. The question and labels become a shared copy for a person: never put secrets in them.
 - `--workspace` is the repository checkout (the first line of `git worktree list`). A slot worktree cannot attach the kernel.
 - After the command answers, end the turn. The task waits as `awaiting_user`; the answer arrives once in this thread.
 - Sending the same question again returns the same decision. `issue_question_limit` means a question is already open: do not ask again.
