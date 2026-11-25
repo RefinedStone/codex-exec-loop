@@ -5,6 +5,7 @@ use crate::application::port::inbound::vault_restore_session_port::{
     VaultRestoreSessionPrepared,
 };
 mod reconnect;
+mod restore_completion;
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultKey, VaultPlaintext, VaultRecordLoadRequest,
     VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
@@ -386,15 +387,13 @@ fn restore_request() -> Value {
 async fn run_test_io<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     input: R,
     output: W,
-    dependencies: DesktopVaultRestoreDependencies,
-    duration: Duration,
+    make_port: impl FnOnce() -> Arc<dyn VaultRestoreSessionPort>,
 ) -> io::Result<()> {
     let mut frames = Frames::new(input);
     let Some((id, request)) = first_request(&mut frames).await else {
         return Ok(());
     };
-    let port = Arc::new(DesktopVaultRestoreService::new(dependencies, duration));
-    session(frames, output, id, request, port).await
+    session(frames, output, id, request, make_port()).await
 }
 fn start(
     services: DesktopVaultRestoreDependencies,
@@ -403,11 +402,19 @@ fn start(
     BufReader<DuplexStream>,
     tokio::task::JoinHandle<io::Result<()>>,
 ) {
+    start_with_port(move || Arc::new(DesktopVaultRestoreService::new(services, duration)))
+}
+fn start_with_port(
+    make_port: impl FnOnce() -> Arc<dyn VaultRestoreSessionPort> + Send + 'static,
+) -> (
+    BufReader<DuplexStream>,
+    tokio::task::JoinHandle<io::Result<()>>,
+) {
     let (client, server) = tokio::io::duplex(128 * 1024);
     let (input, output) = tokio::io::split(server);
     (
         BufReader::new(client),
-        tokio::spawn(run_test_io(input, output, services, duration)),
+        tokio::spawn(run_test_io(input, output, make_port)),
     )
 }
 async fn send(client: &mut BufReader<DuplexStream>, value: &Value) {
@@ -975,7 +982,9 @@ async fn direct_port_cancellation_does_not_wait_for_prompt_or_revive_late_approv
 #[tokio::test]
 async fn closing_one_private_window_during_key_lookup_does_not_revive_it_or_cancel_another() {
     let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
-    let (mut a, task_a) = start(fixture.services(), SESSION_LIFETIME);
+    let (observed_a, completion_a) =
+        restore_completion::RestoreCompletionPort::observe(session_port(&fixture));
+    let (mut a, task_a) = start_with_port(move || observed_a);
     let (mut b, task_b) = start(fixture.services(), SESSION_LIFETIME);
     send(&mut a, &prepare_request()).await;
     assert_eq!(response(&mut a).await["result"]["kind"], "prepared");
@@ -999,6 +1008,19 @@ async fn closing_one_private_window_during_key_lookup_does_not_revive_it_or_canc
     assert_eq!(restored["result"]["body"], BODY);
     no_more_output(&mut b).await;
     task_b.await.unwrap().unwrap();
+    // Wait for all of A's restore work, not only its pipe or key lookup, before
+    // asserting that the cancelled window had no late remote side effects.
+    let cancelled_a = tokio::time::timeout(Duration::from_secs(3), completion_a)
+        .await
+        .expect("cancelled restore worker must finish")
+        .expect("restore worker must report its outcome");
+    assert_eq!(
+        cancelled_a,
+        Err(VaultRestoreSessionFailure {
+            reason: VaultRestoreSessionHold::Locked,
+            can_reconnect: false,
+        })
+    );
     // The cancelled A cannot read remote data; B has its own live grant.
     assert_eq!(fixture.remote.reads.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.keys.stores.load(Ordering::SeqCst), 0);
