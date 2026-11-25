@@ -3,9 +3,9 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::issue_automation::source::{
     IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
-    IssueRepositoryVisibility, IssueSourceActor, IssueSourceActorKind, IssueSourceContent,
-    IssueSourceContentProblem, IssueSourceFailure, IssueSourceObservation, IssueSourceRead,
-    JiraIssueStatusCategory, JiraPullRequestLookup, LinearIssueStateType,
+    IssueRepositoryVisibility, IssueSourceActor, IssueSourceActorKind, IssueSourceBoardColumn,
+    IssueSourceContent, IssueSourceContentProblem, IssueSourceFailure, IssueSourceObservation,
+    IssueSourceRead, JiraIssueStatusCategory, JiraPullRequestLookup, LinearIssueStateType,
 };
 use crate::domain::issue_validation::{IssueFieldFormat, IssueRequirements};
 use crate::domain::issue_work::{IssueFieldHash, IssueReference};
@@ -61,6 +61,9 @@ struct CanonicalObservation<'a> {
     jira: Option<CanonicalJira<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     linear: Option<CanonicalLinear<'a>>,
+    // 보드 열은 선택 판정의 입력이다. 보드가 없는 관찰은 예전 지문을 그대로 유지한다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    board: Option<&'a IssueSourceBoardColumn>,
     content: CanonicalContent<'a>,
 }
 
@@ -286,6 +289,7 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
             state_type: linear.state_type,
             branch_name: linear.branch_name.as_deref(),
         }),
+        board: observation.board.as_ref(),
         content,
     }
 }

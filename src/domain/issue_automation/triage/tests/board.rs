@@ -116,3 +116,42 @@ fn a_board_without_a_column_condition_does_not_filter() {
     let result = run(Some(&source()), &policy, None).expect("no column condition");
     assert_eq!(result.eligibility(), IssueTriageEligibility::Eligible);
 }
+
+#[test]
+fn a_board_only_change_makes_a_new_storable_assessment() {
+    let policy = board_policy();
+    let first = run(
+        Some(&with_board("PVTSSF_status", item(Some("done")))),
+        &policy,
+        None,
+    )
+    .expect("other column");
+    // 열만 옮긴 경우와 읽지 못한 보드가 복구된 경우 모두 새 판정이다.
+    for (before, after) in [
+        (first.clone(), item(Some("ready"))),
+        (
+            run(
+                Some(&with_board(
+                    "PVTSSF_status",
+                    IssueSourceBoardRead::Unavailable,
+                )),
+                &policy,
+                None,
+            )
+            .expect("unreadable board"),
+            item(Some("ready")),
+        ),
+    ] {
+        let current = with_board("PVTSSF_status", after);
+        let next = run(Some(&current), &policy, Some(&before)).expect("moved column");
+        assert_ne!(next.input_fingerprint(), before.input_fingerprint());
+        assert_eq!(next.eligibility(), IssueTriageEligibility::Eligible);
+        next.validate_successor(Some(&before))
+            .expect("the store accepts the successor");
+        assert!(
+            before
+                .validate_current(&issue(), Some(&current), false)
+                .is_err()
+        );
+    }
+}
