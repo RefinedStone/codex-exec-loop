@@ -12,6 +12,8 @@ use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference
 mod processes;
 mod publication;
 mod safety;
+#[cfg(windows)]
+mod storage_failures;
 
 struct Fixture {
     root: PathBuf,
