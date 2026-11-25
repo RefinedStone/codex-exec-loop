@@ -66,6 +66,34 @@ impl IssueCreationJournalPort for IssueCreationJournalAdapter {
         }
     }
 
+    fn read_records(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Vec<crate::domain::issue_creation::IssueCreationIntentRecord>> {
+        let workspace = self.canonical_workspace(workspace_dir)?;
+        let runtime = (self.resolve_runtime_dir)(&workspace)?;
+        // Read committed data without waiting for the remote creation writer.
+        #[cfg(unix)]
+        let records = unix::read_validated_records(&runtime)?;
+        #[cfg(windows)]
+        let records = windows::read_validated_records(&runtime)?;
+        #[cfg(not(any(unix, windows)))]
+        let records = {
+            match std::fs::symlink_metadata(runtime.join("issue-create-intents.jsonl")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                _ => bail!("the creation provenance journal cannot be safely inspected"),
+            }
+        };
+        if records.iter().any(
+            |record: &crate::domain::issue_creation::IssueCreationIntentRecord| {
+                record.repository.project_scope.workspace_dir != workspace
+            },
+        ) {
+            bail!("the creation provenance journal belongs to another workspace")
+        }
+        Ok(records)
+    }
+
     fn begin(&self, workspace_dir: &str) -> Result<Box<dyn IssueCreationJournalTransaction + '_>> {
         let workspace = self.canonical_workspace(workspace_dir)?;
         let runtime = (self.resolve_runtime_dir)(&workspace)?;
@@ -108,32 +136,13 @@ impl crate::application::port::outbound::issue_creation_provenance_port::IssueCr
         if workspace != repository.project_scope.workspace_dir {
             bail!("the creation provenance workspace identity changed")
         }
-        let runtime = (self.resolve_runtime_dir)(&workspace)?;
-        // 생성은 Sent를 영속화한 뒤에만 원격으로 보낸다. 읽기는 atomic journal
-        // snapshot만 사용하므로 원격 요청 동안 잡힌 writer lease를 기다리지 않는다.
-        #[cfg(unix)]
-        let records = unix::read_validated_records(&runtime)?;
-        #[cfg(windows)]
-        let records = windows::read_validated_records(&runtime)?;
-        #[cfg(not(any(unix, windows)))]
-        let records = {
-            match std::fs::symlink_metadata(runtime.join("issue-create-intents.jsonl")) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                // 이 플랫폼에는 안전한 생성 journal 읽기 구현이 없다.
-                // 파일이 있으면 없다고 간주하거나 일반 파일 읽기로 우회하지 않는다.
-                _ => bail!("the creation provenance journal cannot be safely inspected"),
-            }
-        };
+        let records = self.read_records(&workspace)?;
         let mut snapshot = IssueCreationProvenanceSnapshot {
             repository: repository.clone(),
             created_issue_ids: std::collections::BTreeSet::new(),
             unresolved: false,
         };
         for record in records {
-            let record: crate::domain::issue_creation::IssueCreationIntentRecord = record;
-            if record.repository.project_scope.workspace_dir != workspace {
-                bail!("the creation provenance journal belongs to another workspace")
-            }
             if record.repository.provider != repository.provider
                 || record.repository.server_id != repository.server_id
                 || record.repository.repository_id != repository.repository_id

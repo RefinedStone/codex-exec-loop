@@ -204,6 +204,27 @@ impl IssueUpdatePort for GithubDouble {
     }
 }
 
+struct NoCreatedIssues;
+
+impl crate::application::port::outbound::issue_creation_journal_port::IssueCreationJournalPort
+    for NoCreatedIssues
+{
+    fn canonical_workspace(&self, cwd: &str) -> Result<String> {
+        Ok(cwd.to_string())
+    }
+
+    fn read_records(
+        &self,
+        _: &str,
+    ) -> Result<Vec<crate::domain::issue_creation::IssueCreationIntentRecord>> {
+        Ok(Vec::new())
+    }
+
+    fn begin(&self, _: &str) -> Result<Box<dyn crate::application::port::outbound::issue_creation_journal_port::IssueCreationJournalTransaction + '_>>{
+        unreachable!("hand-off never acquires the creation writer lease")
+    }
+}
+
 /// 프로젝트의 정책 파일과 템플릿 파일의 대역이다. 사용자 파일은 없다.
 struct ProjectFiles;
 
@@ -313,7 +334,8 @@ impl World {
         let drafts = Arc::new(drafts);
         let handoff = Arc::new(
             IssueHandoffService::new(self.github.clone(), Arc::new(ProjectFiles))
-                .with_publish_journal(Arc::new(self.journal()), |cwd| Ok(cwd.to_string())),
+                .with_publish_journal(Arc::new(self.journal()), |cwd| Ok(cwd.to_string()))
+                .with_creation_journal(Arc::new(NoCreatedIssues)),
         );
         let recorder = Arc::new(GatewayRecorder::create(&self.root.join("recording")).unwrap());
         let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
