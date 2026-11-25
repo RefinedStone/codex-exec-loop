@@ -573,8 +573,8 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
 | --- | --- | --- | --- | --- |
 | GitHub Issues | `gh api graphql`. 발견: 선택 조건의 열린 이슈, `updatedAt` 커서. 재동기화: node ID 로 한 건 | 댓글, 라벨, 담당자. 닫기는 §12.2 | `gh` 로그인. Gateway 에서 된다 | 첫 번째 |
 | GitHub Projects | 보드의 열과 필드 | `issue_board_field_port` (있음) | `read:project` | 뒤 |
-| Jira Cloud | JQL, `updated` 커서 | 댓글, 전이 | Gateway OS 키 저장소 (§13.1, #2562) | 출처 adapter는 뒤 |
-| Linear | GraphQL, `updatedAt` | 댓글, 상태 | Gateway OS 키 저장소 (§13.1, #2562) | 출처 adapter는 뒤 |
+| Jira Cloud | JQL, `updated` 커서 | 댓글, 전이 | Gateway OS 키 저장소 (§13.1, #2562) | 있음 (#2563, [reference](../reference/issue-jira-cloud.md)) |
+| Linear | GraphQL, `updatedAt` 창과 `endCursor` | 댓글, 상태 | Gateway OS 키 저장소 (§13.1, #2562) | 있음 (#2564, [reference](../reference/issue-linear.md)) |
 
 - 수집은 폴링이다. 기본 주기는 5분이다. "지금 동기화" 명령이 있다. 실패하면 간격을 늘린다.
 - webhook 은 받지 않는다. 로컬 데몬은 공개 주소가 없다.
@@ -830,6 +830,14 @@ PR #2638은 선행 [PR #2637](https://github.com/RefinedStone/codex-exec-loop/pu
 `prerelease`에 반영됐다. 검증 결과는 해당 PR의 실행 SHA별 증거에 기록한다.
 IA4 전체의 완료 기준은 후속 조각까지 포함한다.
 
+### IA7 조각 상태
+
+| 조각 | 상태 | 계약과 남은 범위 |
+| --- | --- | --- |
+| IA7-1 · #2562 | PR [#2686](https://github.com/RefinedStone/codex-exec-loop/pull/2686) · prerelease 반영 | Jira·Linear 자격 증명의 Gateway 소유 (§13.1) |
+| IA7-2 · #2563 | PR [#2689](https://github.com/RefinedStone/codex-exec-loop/pull/2689) · prerelease 반영 | Jira Cloud 출처·댓글·전이. [reference](../reference/issue-jira-cloud.md) |
+| IA7-3 · #2564 | 리뷰 대기 | Linear 팀 바인딩·GraphQL 발견과 재동기화·댓글·완료 상태 변경·`branchName` 브랜치 힌트. 공식 MCP 대신 GraphQL 직접 호출. [reference](../reference/issue-linear.md) |
+
 ### IA8 조각 상태
 
 | 조각 | 상태 | 계약과 남은 범위 |
@@ -928,7 +936,8 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
   가리킨 자리 (`orchestrator_loop.rs`, `distributor/delivery/github.rs` 의 `pull_request_readiness_error`) 만 읽었다.
 - 닫는 키워드의 동작. GitHub 문서의 내용이다. 이 저장소에서 따로 시험하지 않았다.
 - GitHub GraphQL 로 "누가 라벨을 붙였는가"를 읽는 비용 (timeline 조회)과 요청 한도.
-- Jira 의 전이 API 와 Linear 의 상태 쓰기 API. 기억 기준이다. 구현 전에 공식 문서를 본다.
+- Jira 의 전이 API 와 Linear 의 상태 쓰기 API. 구현 때 공식 문서와 공개 스키마로 확인했다 (#2563, #2564). 실제 계정으로
+  호출하지 않았다.
 - 런타임 호스트에 마감 출처 하나를 더하는 크기.
 - `issue_*` 기록이 kernel 기록의 보존 한도 (최근 10,000건) 에 주는 영향.
 - `account/rateLimits/*`. Akra 는 아직 이것을 부르지 않는다 (plan 23 §4).

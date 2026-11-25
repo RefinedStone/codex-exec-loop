@@ -122,6 +122,9 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'application::port::outbound::planning_work_order_repository_port::tests::jira_' \
   'application::service::parallel_mode::tests::pool::lease::malformed_jira_branch_keys_' \
   'application::service::parallel_mode::distributor::delivery::github::tests::jira_pr_metadata_' \
+  'adapter::outbound::linear::' \
+  'application::service::issue_collection::tests::linear::' \
+  'application::service::issue_automation_policy::tests::linear::' \
   'provider_key_store' \
   'native_credential_prompt' \
   'provider_credential_prompt' \

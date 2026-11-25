@@ -288,6 +288,8 @@ Jira Cloud 이슈 수집과 피드백은 명시적인 Cloud/project/account/저�
 작업 시작은 Propose와 Native Human 확인으로 제한하며, PR 조회 미지원은 Unknown으로 유지한다.
 구성 예제, description 템플릿, 선택적인 숫자 ID 전이와 토큰 교체 계약은
 [Jira Cloud 이슈 자동화](issue-jira-cloud.md)를 따른다.
+Linear는 저장소 파일이 선택한 팀만 수집하고 같은 Propose·Native Human Start 상한을 쓴다.
+`branchName`은 슬롯 브랜치의 힌트이며, 구성과 계약은 [Linear 이슈 자동화](issue-linear.md)를 따른다.
 
 Implementation scope: IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551)),
 on the [#2638 PR branch](https://github.com/RefinedStone/codex-exec-loop/pull/2638).

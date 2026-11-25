@@ -28,6 +28,12 @@ transition/목표 상태와 동일한 출처에서만 저장소가 시작 상태
 `close.when = "provider_link"`는 지원하지 않는다. 유효한 사용자·저장소 TOML과 description
 템플릿은 [Jira Cloud 구성](../reference/issue-jira-cloud.md)에 정리한다.
 
+Linear는 선택적인 `binding.linear`에 `team_id`와 `expected_viewer_id`를 명시한다. 저장소 파일이
+`[binding.linear]`를 적어야 사용자 좌표를 그 저장소에 적용한다. Linear가 선택되면 GitHub 수집 mode는
+Off이고 유효 실행 상한은 Propose다. 완료 상태 변경은 사용자 파일의 `close_state`(시작 상태 ID 집합과
+목표 상태 ID)로만 허락하며 저장소는 같은 팀에서 시작 상태를 좁힐 수만 있다. `binding.jira`와 함께 쓰면
+정책 오류다. 예제는 [Linear 구성](../reference/issue-linear.md)에 정리한다.
+
 추가 사람 확인 규칙은 labels_any 또는 paths_any 중 하나 이상과 적용 gates를 요구한다. 두 선택 조건을 함께 적으면 OR다. 실제 매칭·판정은 후속 조각에서 이 typed 정책을 사용한다.
 
 ## 기본값과 교차 검증

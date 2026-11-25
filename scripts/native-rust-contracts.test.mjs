@@ -106,9 +106,9 @@ test("runtime loader paths preserve caller directories and macOS fallback defaul
 test("Windows portable entrypoint retains the complete inventory including Vault restore", () => {
   const shell = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
   const filters = [...shell.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1]);
-  assert.equal(filters.length, 119);
+  assert.equal(filters.length, 122);
   assert.ok(filters.includes("filesystem::issue_creation_journal::"));
-  assert.equal(new Set(filters).size, 119);
+  assert.equal(new Set(filters).size, 122);
   assert.ok(filters.includes("process_liveness::tests::"));
   assert.ok(filters.includes("application::service::evidence_vault_unlock::"));
   for (const filter of [

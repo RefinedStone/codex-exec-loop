@@ -142,6 +142,8 @@ Jira Cloud는 명시적인 Cloud/project/account/저장소 바인딩과 Propose�
 사용합니다. PR 조회 미지원은 Unknown으로 남기며 댓글과 선택적인 상태 전이는 별도 권한을
 검사합니다. 실제 TOML 예제와 description 템플릿, 토큰 교체 계약은
 [Jira Cloud 이슈 자동화](../../reference/issue-jira-cloud.md)를 참고하세요.
+Linear는 저장소 파일이 선택한 팀만 수집하고 같은 Propose·Native Human Start 상한을 사용합니다.
+`branchName`은 슬롯 브랜치의 힌트입니다. [Linear 이슈 자동화](../../reference/issue-linear.md)를 참고하세요.
 
 적용 범위는 IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551))의
 [PR #2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638)입니다.
