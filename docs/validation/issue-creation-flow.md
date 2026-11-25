@@ -57,14 +57,16 @@ GitHub의 `clientMutationId`는 상관관계를 확인하는 값으로 사용한
 
 모델 turn과 실제 원격 이슈 생성은 검증에 사용하지 않는다. 플랫폼과 실행한 검증 결과는 PR에 기록한다.
 
-### Windows 복구 증거의 범위 (#2710 리뷰 반영)
+### Windows 복구 증거의 범위
 
-- `windows::tests::forced_process_exit_releases_lease_but_preserves_sent`는 **Sent 커밋이 끝난 뒤** 자식을 종료한다. 커밋된 기록 유지와 예약 해제를 확인하며, payload 커밋 도중 종료/hot-journal 복구나 전원 단절 검증은 아니다.
-- `windows::tests::lost_response_recovers_by_stable_id_with_real_windows_journal_and_vault`는 합성 원격에 생성이 적용된 뒤 응답을 잃고, 실제 Windows journal과 Vault를 재조립해 재전송 없이 안정 ID로 확정하는 경로를 확인한다. 실제 프로세스를 원격 생성 직후 강제 종료하는 시나리오는 별도 검증이 필요하다.
-- `issue_creation::tests::concurrency::competing_publishers_cannot_let_late_creation_adoption_replace_a_newer_original`와 `issue_creation::tests::scope::a_publish_from_another_workspace_scope_blocks_late_creation_adoption`는 늦은 생성 연결이 새 게시를 덮지 않는 기존 서비스 회귀다. 이 증거를 Windows 다중 프로세스 저장소 통합 검증과 동일하게 취급하지 않는다.
+- `windows::tests::forced_process_exit_releases_lease_but_preserves_sent`는 Sent 커밋 이후 자식 종료와 reservation 해제를 검사하는 저장소 단위 회귀다.
+- `windows::tests::lost_response_recovers_by_stable_id_with_real_windows_journal_and_vault`는 같은 프로세스의 서비스 재조립으로 응답 유실·안정 ID 확인·실제 Windows Vault 연결을 검사한다.
+- `windows::tests::processes::remote_applied_creation_survives_worker_termination_without_duplicate_posts`는 부모 프로세스의 TCP 합성 공급자가 생성 적용을 끝내고 응답을 보류한 지점에서 실제 생성 worker를 강제 종료한다. journal의 durable `Sent`와 안정 ID 부재를 확인한 뒤 두 새 worker가 같은 의도를 다시 열고 기존 승인 클릭·재조회·명시적 URL 확인을 수행한다. 실제 Windows journal/Vault와 재암호화된 복원 연결, provenance 확정을 확인하며 공급자의 생성 횟수는 한 번이다. 원문은 journal에 남지 않는다.
+- `windows::tests::processes::concurrent_update_retains_its_original_when_creation_returns_late`는 생성 응답을 기다리는 worker와 독립 수정 worker가 같은 Windows 저장소를 사용한다. 수정 worker가 같은 공개문에 대한 **다른 원문**을 먼저 확정한 뒤 생성 응답을 돌려준다. 늦은 생성 연결과 또 다른 프로세스의 재확인은 새 원문을 덮지 않으며 publication 순서도 추가하지 않는다. 생성 1회·수정 1회만 관측한다.
 
-상위 완료 조건에서 원격 생성 직후 강제 종료와 Windows에서의 생성/수정 경합을 완료로 표시하려면 해당 플랫폼의 집중 실행 증거를 추가해야 한다. 위 시험의 존재와 실제 실행 결과를 구분해 PR에 기록한다.
+프로세스 통합 fixture는 기존 게시의 `issue_shared_copy_flow/delayed_workers.rs`와 같은 부모 소유 TCP 공급자·독립 worker 수명 패턴을 사용한다. 현재 Windows native/portable inventory의 `filesystem::issue_creation_journal::` 필터가 부모 회귀를 실행하고, ignored worker entry는 부모가 명시적으로 호출한다. 테스트 코드 존재와 실제 실행 결과는 구분해 PR에 기록한다.
 
+이 증거는 원격 적용 직후/응답 전의 프로세스 종료와 실제 Windows 생성·수정 경합을 다룬다. SQLite payload 커밋 도중 종료, 전원 단절, 실제 GitHub 네트워크 장애, OS 키 저장소 검증을 증명하지 않는다. 키·이슈·원문은 합성 데이터이며 실제 사용자 계정이나 모델을 호출하지 않는다.
 
 ## 현재 한계
 
