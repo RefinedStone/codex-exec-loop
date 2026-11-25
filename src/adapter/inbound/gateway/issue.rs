@@ -73,7 +73,8 @@ fn respond(handoff: &dyn IssueHandoffPort, id: Value, method: &str, text: &str) 
             &format!("the params of `{method}` are not valid"),
         );
     };
-    // shortcut: 승인한 공유본의 기록이 아직 없어 `approved` 는 항상 없다. 게시 의도 기록(#2424)이 생기면 그 해시를 준다.
+    // The service reads the scoped publication journal. The client cannot
+    // supply a hash and call it an approval.
     match handoff.handoff_copy(IssueHandoffRequest {
         locator: params.locator,
         workspace_dir: params.cwd,
