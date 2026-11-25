@@ -14,6 +14,45 @@ use crate::private_fs::{
     validate_windows_trusted_executable_path_identity,
 };
 
+/// Temp/LocalAppData can grant other principals mutation rights. Query the
+/// actual OS profile and create only our random private child directly below it.
+pub(super) fn fixture_parent() -> Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::UI::Shell::GetUserProfileDirectoryW;
+
+    let mut raw_token = std::ptr::null_mut();
+    // SAFETY: the pseudo process handle is valid and the output pointer is live.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw_token) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("open the manual fixture user token");
+    }
+    // SAFETY: OpenProcessToken returned an owned handle; this guard closes it.
+    let token = unsafe { OwnedHandle::from_raw_handle(raw_token) };
+    let mut length = 0_u32;
+    // SAFETY: the documented null-buffer query returns the required UTF-16 size.
+    unsafe { GetUserProfileDirectoryW(token.as_raw_handle(), std::ptr::null_mut(), &mut length) };
+    ensure!(
+        length > 1,
+        "the OS profile query did not return a path size"
+    );
+    let mut buffer = vec![0_u16; length as usize];
+    // SAFETY: the buffer has the reported length and the token remains open.
+    if unsafe { GetUserProfileDirectoryW(token.as_raw_handle(), buffer.as_mut_ptr(), &mut length) }
+        == 0
+    {
+        return Err(std::io::Error::last_os_error()).context("read the manual fixture OS profile");
+    }
+    let end = buffer
+        .iter()
+        .position(|value| *value == 0)
+        .context("OS profile path was not terminated")?;
+    let profile = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..end]));
+    ensure!(profile.is_absolute(), "OS profile path must be absolute");
+    Ok(profile)
+}
+
 pub(super) fn stage(source: &Path, directory: &Path, cwd: &Path) -> Result<PathBuf> {
     ensure!(
         source.is_absolute(),
