@@ -20,6 +20,7 @@
 - `npm run check`: 통과.
 - 변경 회귀 및 기존 Git 두 파일: `npx vitest run test/taskVerificationActions.test.ts test/kernelConnection.test.ts test/gitPublish.test.ts test/gitStatus.test.ts --maxWorkers=1` — 95 passed, 1 skipped.
 - 빌드한 Electron의 `test/e2e/kernel-panel.mjs`: 40 assertions 통과. 요청 좌표, 접수/실행 결과 분리, 완료 event 재조회, 미실행/중단/오래된 결과/누락 artifact를 확인했다.
+- 전체 Electron E2E: 자동 선정 30개 spec을 두 shard로 실행하여 모두 exit 0. Windows terminal 내부 검사는 기존 정책에 따라 skip됐다. 이번 화면 변경의 kernel-panel 40개 단언은 실제 Electron·fake Gateway로 수행했다.
 - `git diff --check`: 통과.
 - planner가 지정한 `powershell -File scripts/check_native_pr.ps1 -Mode Admin`을 실행했다. 전체 Desktop 테스트 중 기존 실제 Git fixture가 병렬 실행에서 5초 제한을 간헐적으로 초과했다. 같은 실패 파일은 위 직렬 실행에서 통과했다. 이 결과를 전체 gate 성공으로 표시하지 않는다.
 - 초기 환경의 `rg` PATH 누락은 전용 도구 경로로 해결했다. 저장소 검사 스크립트와 테스트 제한 시간은 변경하지 않았다.
