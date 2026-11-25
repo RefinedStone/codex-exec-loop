@@ -66,6 +66,7 @@ pub(crate) mod trusted_executable;
  * app-server shell을 시작한다. 그래서 bin target들은 이름이 달라도 동일한 실행 정책을 공유한다.
  */
 pub fn run() -> anyhow::Result<i32> {
+    configuration::reject_removed_environment_variables()?;
     let invocation = configuration::ParsedInvocation::parse(std::env::args_os().skip(1))?;
     /*
      * Configuration inspection is explicitly non-mutating.  Dispatch it before

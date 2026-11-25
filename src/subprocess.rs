@@ -26,7 +26,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
  *   it. No user-mode instruction can run in the spawn-to-assignment interval.
  */
 
-pub(crate) const SUBPROCESS_TIMEOUT_ENV: &str = "CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS";
+pub(crate) const SUBPROCESS_TIMEOUT_ENV: &str = "AKRA_SUBPROCESS_TIMEOUT_SECS";
 const DEFAULT_SUBPROCESS_TIMEOUT_SECS: u64 = 30;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const DEFAULT_MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;

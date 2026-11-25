@@ -113,8 +113,8 @@ trust boundary를 복원합니다. 값이 없거나 정확히 `0`이면 permissi
 잘못된 설정으로 startup을 거부합니다.
 
 제한된 배포는 `AKRA_APP_SERVER_APPROVAL_POLICY`, `AKRA_APP_SERVER_APPROVALS_REVIEWER`,
-`AKRA_APP_SERVER_SANDBOX_MODE`로 권한을 낮출 수 있습니다(새 이름이 없으면 이전
-`CODEX_EXEC_LOOP_APP_SERVER_*` 이름도 동작합니다). Approval을 다시 켠 경우에만
+`AKRA_APP_SERVER_SANDBOX_MODE`로 권한을 낮출 수 있습니다. 이전
+`CODEX_EXEC_LOOP_APP_SERVER_*` 이름이 남아 있으면 이름을 바꾸라는 오류로 시작을 멈춥니다. Approval을 다시 켠 경우에만
 상호작용 가능한 main conversation이 검토 가능한 명령 또는 제한된 추가 권한 요청에 답할 수
 있습니다. `Y`는 한 번 승인하고 `N`/`Esc`는 거부하며 `Enter`는 아무 동작도 하지 않습니다. Timeout,
 interrupt, disconnect, 잘못된 payload, 검토할 수 없는 file-change 요청, unattended worker는 모두

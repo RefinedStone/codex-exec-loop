@@ -305,7 +305,7 @@ TMUX
 chmod 600 "$tmux_config"
 
 launch_command="$(printf \
-  'while test ! -e %q; do sleep 0.01; done; exec /usr/bin/env -i HOME=%q USERPROFILE=%q USER=akra-capture LOGNAME=akra-capture SHELL=/bin/bash AKRA_HOME=%q CODEX_HOME=%q PATH=%q LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=tmux-256color AKRA_APP_SERVER_PROMPT_LOG=0 AKRA_CAPTURE_SYNTHETIC=1 CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART=0 CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=scrollback CODEX_EXEC_LOOP_HISTORY_INSERT_MODE=standard %q' \
+  'while test ! -e %q; do sleep 0.01; done; exec /usr/bin/env -i HOME=%q USERPROFILE=%q USER=akra-capture LOGNAME=akra-capture SHELL=/bin/bash AKRA_HOME=%q CODEX_HOME=%q PATH=%q LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=tmux-256color AKRA_APP_SERVER_PROMPT_LOG=0 AKRA_CAPTURE_SYNTHETIC=1 AKRA_SHOW_STARTUP_VISUAL=0 CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=scrollback CODEX_EXEC_LOOP_HISTORY_INSERT_MODE=standard %q' \
   "$launch_gate" "$isolated_home" "$isolated_home" "$akra_home" "$codex_home" \
   "$capture_path" "$binary")"
 pane_target="$(tmux -L "$socket_name" -f "$tmux_config" new-session -d -P -F '#{pane_id}' \
@@ -782,7 +782,7 @@ const artifact = {
     overrides: {
       CODEX_EXEC_LOOP_INLINE_HISTORY_MODE: 'scrollback',
       CODEX_EXEC_LOOP_HISTORY_INSERT_MODE: 'standard',
-      CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART: '0',
+      AKRA_SHOW_STARTUP_VISUAL: '0',
       AKRA_APP_SERVER_PROMPT_LOG: '0',
       WT_SESSION: 'unset',
       traceVariables: 'unset',
@@ -795,9 +795,9 @@ const artifact = {
         'AKRA_APP_SERVER_PROMPT_LOG',
         'AKRA_CAPTURE_SYNTHETIC',
         'AKRA_HOME',
+        'AKRA_SHOW_STARTUP_VISUAL',
         'CODEX_EXEC_LOOP_HISTORY_INSERT_MODE',
         'CODEX_EXEC_LOOP_INLINE_HISTORY_MODE',
-        'CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART',
         'CODEX_HOME',
         'HOME',
         'LANG',
