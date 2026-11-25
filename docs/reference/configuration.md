@@ -74,15 +74,15 @@ Environment values remain above TOML until removed. The resolver records the win
 
 | Setting group | Accepted existing variables |
 | --- | --- |
-| TUI | CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL; legacy CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART; CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY; legacy CODEX_EXEC_LOOP_PLANNER_VISIBILITY |
-| GitHub | CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS; AKRA_GITHUB_PUSH_REMOTE; AKRA_GITHUB_PR_MODE |
+| TUI | AKRA_SHOW_STARTUP_VISUAL; legacy CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL, CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART; AKRA_PLANNING_WORKER_VISIBILITY; legacy CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY, CODEX_EXEC_LOOP_PLANNER_VISIBILITY |
+| GitHub | AKRA_GITHUB_POLL_INTERVAL_SECS; legacy CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS; AKRA_GITHUB_PUSH_REMOTE; AKRA_GITHUB_PR_MODE |
 | Parallel | AKRA_PARALLEL_INTEGRATION_BRANCH |
-| App-server | CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS; AKRA_APP_SERVER_PROMPT_LOG |
-| Subprocess | CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS |
+| App-server | AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS; legacy CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS; AKRA_APP_SERVER_PROMPT_LOG |
+| Subprocess | AKRA_SUBPROCESS_TIMEOUT_SECS; legacy CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS |
 | Diagnostics | AKRA_TRACE; AKRA_TRACE_SPANS; AKRA_TRACE_MAX_FILES; AKRA_TRACE_MAX_FILE_BYTES; AKRA_TRACE_MAX_TOTAL_BYTES; AKRA_TOKIO_CONSOLE |
 | Admin | AKRA_ADMIN_GRAPHIC_ENABLED; AKRA_ADMIN_GRAPHIC_POLL_MS |
 
-CODEX_EXEC_LOOP_GITHUB_PR, RUST_LOG, and AKRA_TRACE_FILE keep their existing specialized contracts and appear as diagnostic shadowing rather than TOML keys. Legacy repository Git values remain compatible below project TOML: akra.githubPushRemote, akra.githubPrMode, and akra.parallelIntegrationBranch.
+AKRA_GITHUB_PR (legacy CODEX_EXEC_LOOP_GITHUB_PR), RUST_LOG, and AKRA_TRACE_FILE keep their existing specialized contracts and appear as diagnostic shadowing rather than TOML keys. Renamed variables (#2588) follow one rule: when the `AKRA_*` name is set, Akra uses it even if its value is empty or invalid, and reads the `CODEX_EXEC_LOOP_*` name only when the new name is absent. When both are set with different values, `akra config doctor` reports that the legacy name is ignored. The legacy names have no removal date yet. Legacy repository Git values remain compatible below project TOML: akra.githubPushRemote, akra.githubPrMode, and akra.parallelIntegrationBranch.
 
 ## Persistence, conversation, and safety
 

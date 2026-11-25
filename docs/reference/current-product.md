@@ -231,9 +231,9 @@ path before spawn. Set `AKRA_REQUIRE_TRUSTED_CODEX_EXECUTABLE=1` to restore the 
 trust boundary and block that exposure. An absent value or exact `0` keeps the permissive default,
 while any other value rejects startup as invalid configuration.
 
-Deployments can opt down with `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY`,
-`CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER`, and
-`CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE`. When approvals are enabled, only the interactive main
+Deployments can opt down with `AKRA_APP_SERVER_APPROVAL_POLICY`,
+`AKRA_APP_SERVER_APPROVALS_REVIEWER`, and `AKRA_APP_SERVER_SANDBOX_MODE` (legacy
+`CODEX_EXEC_LOOP_APP_SERVER_*` names still work when the new name is absent). When approvals are enabled, only the interactive main
 conversation can answer a reviewable command or bounded additional permission request. `Y`
 accepts once; `N`/`Esc` declines; `Enter` is inert. Timeout, interrupt, disconnect, invalid
 payloads, uninspectable file-change requests, and unattended workers fail closed. No session-wide

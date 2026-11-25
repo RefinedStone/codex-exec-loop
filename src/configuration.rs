@@ -532,6 +532,52 @@ pub fn current_process_config() -> Option<&'static ResolvedAkraConfig> {
     INSTALLED_CONFIG.get()
 }
 
+/// 이름을 바꾼 환경 변수의 (새 이름, 이전 이름) 쌍이다 (#2588).
+/// 새 이름이 있으면 값이 비었거나 틀려도 새 이름을 쓴다. 이전 이름은 새 이름이 없을 때만 읽는다.
+pub(crate) const RENAMED_ENVIRONMENT_VARIABLES: [(&str, &str); 9] = [
+    (
+        "AKRA_SHOW_STARTUP_VISUAL",
+        "CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL",
+    ),
+    (
+        "AKRA_PLANNING_WORKER_VISIBILITY",
+        "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY",
+    ),
+    (
+        "AKRA_GITHUB_POLL_INTERVAL_SECS",
+        "CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS",
+    ),
+    ("AKRA_GITHUB_PR", "CODEX_EXEC_LOOP_GITHUB_PR"),
+    (
+        "AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS",
+        "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS",
+    ),
+    (
+        "AKRA_SUBPROCESS_TIMEOUT_SECS",
+        "CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS",
+    ),
+    (
+        "AKRA_APP_SERVER_APPROVAL_POLICY",
+        "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY",
+    ),
+    (
+        "AKRA_APP_SERVER_APPROVALS_REVIEWER",
+        "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER",
+    ),
+    (
+        "AKRA_APP_SERVER_SANDBOX_MODE",
+        "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE",
+    ),
+];
+
+/// 새 이름의 값을 읽고, 새 이름이 없을 때만 이전 이름의 값을 읽는다.
+pub(crate) fn renamed_env_var(current: &str, legacy: &str) -> Option<String> {
+    match std::env::var(current) {
+        Err(std::env::VarError::NotPresent) => std::env::var(legacy).ok(),
+        value => value.ok(),
+    }
+}
+
 /// Return the installed snapshot rebound to an explicitly selected workspace.
 /// A missing process snapshot keeps test and standalone fallback paths intact.
 pub(crate) fn current_process_config_for_workspace(
@@ -2575,6 +2621,7 @@ impl EnvironmentConfigAdapter {
         let mut adapter = Self::default();
         adapter.add_startup_visual(
             &[
+                "AKRA_SHOW_STARTUP_VISUAL",
                 "CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL",
                 "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART",
             ],
@@ -2582,6 +2629,7 @@ impl EnvironmentConfigAdapter {
         )?;
         adapter.add_planning_worker_visibility(
             &[
+                "AKRA_PLANNING_WORKER_VISIBILITY",
                 "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY",
                 "CODEX_EXEC_LOOP_PLANNER_VISIBILITY",
             ],
@@ -2589,7 +2637,10 @@ impl EnvironmentConfigAdapter {
         )?;
         adapter.add_unsigned(
             SettingKey::GithubReviewPollIntervalSecs,
-            &["CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS"],
+            &[
+                "AKRA_GITHUB_POLL_INTERVAL_SECS",
+                "CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS",
+            ],
             reader,
         )?;
         adapter.add_text(
@@ -2609,7 +2660,10 @@ impl EnvironmentConfigAdapter {
         )?;
         adapter.add_unsigned(
             SettingKey::AppServerResponseTimeoutSecs,
-            &["CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS"],
+            &[
+                "AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS",
+                "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS",
+            ],
             reader,
         )?;
         adapter.add_bool(
@@ -2619,7 +2673,10 @@ impl EnvironmentConfigAdapter {
         )?;
         adapter.add_unsigned(
             SettingKey::SubprocessTimeoutSecs,
-            &["CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS"],
+            &[
+                "AKRA_SUBPROCESS_TIMEOUT_SECS",
+                "CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS",
+            ],
             reader,
         )?;
         adapter.add_diagnostics_trace(&["AKRA_TRACE"], reader)?;
@@ -2654,11 +2711,27 @@ impl EnvironmentConfigAdapter {
             &["AKRA_ADMIN_GRAPHIC_POLL_MS"],
             reader,
         )?;
-        for variable in ["RUST_LOG", "AKRA_TRACE_FILE", "CODEX_EXEC_LOOP_GITHUB_PR"] {
+        for variable in [
+            "RUST_LOG",
+            "AKRA_TRACE_FILE",
+            "AKRA_GITHUB_PR",
+            "CODEX_EXEC_LOOP_GITHUB_PR",
+        ] {
             if reader(variable)?.is_some() {
                 adapter
                     .shadow_descriptions
                     .push(format!("{variable} is active outside TOML"));
+            }
+        }
+        for (current, legacy) in RENAMED_ENVIRONMENT_VARIABLES {
+            let (Some(current_value), Some(legacy_value)) = (reader(current)?, reader(legacy)?)
+            else {
+                continue;
+            };
+            if current_value != legacy_value {
+                adapter
+                    .shadow_descriptions
+                    .push(format!("{legacy} is ignored because {current} is set"));
             }
         }
         Ok(adapter)
@@ -3270,6 +3343,39 @@ mod tests {
                 if variable == "CODEX_EXEC_LOOP_PLANNER_VISIBILITY"
         ));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn renamed_environment_variable_wins_over_its_legacy_name_and_reports_the_conflict() {
+        let adapter = EnvironmentConfigAdapter::from_values(&[
+            ("AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS", "42"),
+            ("CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS", "7"),
+            ("CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS", "9"),
+        ])
+        .expect("renamed and legacy values should parse");
+
+        let (timeout, variable) = &adapter.values[&SettingKey::AppServerResponseTimeoutSecs];
+        assert_eq!(*timeout, SettingValue::Unsigned(42));
+        assert_eq!(variable, "AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS");
+        let (_, legacy_variable) = &adapter.values[&SettingKey::SubprocessTimeoutSecs];
+        assert_eq!(legacy_variable, "CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS");
+        assert!(adapter.shadow_descriptions.contains(&format!(
+            "{} is ignored because {} is set",
+            "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS",
+            "AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS"
+        )));
+    }
+
+    #[test]
+    fn renamed_environment_variable_does_not_fall_back_when_its_value_is_invalid() {
+        let error = EnvironmentConfigAdapter::from_values(&[
+            ("AKRA_SUBPROCESS_TIMEOUT_SECS", "soon"),
+            ("CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS", "9"),
+        ])
+        .err()
+        .expect("an invalid new value must not fall back to the legacy value");
+
+        assert!(format!("{error:#}").contains("AKRA_SUBPROCESS_TIMEOUT_SECS"));
     }
 
     #[test]

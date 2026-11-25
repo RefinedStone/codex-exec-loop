@@ -1,6 +1,8 @@
 // Startup-time switch for exposing raw planning worker diagnostics in TUI surfaces.
 // Runtime code reads it once so a session has stable visibility semantics.
-const PLANNING_WORKER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY";
+const PLANNING_WORKER_VISIBILITY_ENV_VAR: &str = "AKRA_PLANNING_WORKER_VISIBILITY";
+const PREVIOUS_PLANNING_WORKER_VISIBILITY_ENV_VAR: &str =
+    "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY";
 const LEGACY_PLANNING_WORKER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
 
 // Visibility policy for planning worker internals.
@@ -20,9 +22,11 @@ impl PlanningWorkerVisibility {
                 config.config.tui.planning_worker_visibility.as_str(),
             ));
         }
-        let value = std::env::var(PLANNING_WORKER_VISIBILITY_ENV_VAR)
-            .or_else(|_| std::env::var(LEGACY_PLANNING_WORKER_VISIBILITY_ENV_VAR))
-            .ok();
+        let value = crate::configuration::renamed_env_var(
+            PLANNING_WORKER_VISIBILITY_ENV_VAR,
+            PREVIOUS_PLANNING_WORKER_VISIBILITY_ENV_VAR,
+        )
+        .or_else(|| std::env::var(LEGACY_PLANNING_WORKER_VISIBILITY_ENV_VAR).ok());
         Self::from_env_value(value.as_deref())
     }
 

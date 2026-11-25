@@ -43,7 +43,8 @@ const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
 const MIN_TRANSCRIPT_PANEL_HEIGHT: u16 = 12;
 const MAX_SHELL_TAIL_HEIGHT: u16 = 10;
-const STARTUP_VISUAL_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL";
+const STARTUP_VISUAL_ENV_VAR: &str = "AKRA_SHOW_STARTUP_VISUAL";
+const PREVIOUS_STARTUP_VISUAL_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL";
 const LEGACY_STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
 
 /*
@@ -420,7 +421,10 @@ fn startup_visual_enabled_from_environment() -> bool {
     if let Some(config) = crate::configuration::current_process_config() {
         return config.config.tui.show_startup_visual;
     }
-    let current_value = std::env::var(STARTUP_VISUAL_ENV_VAR).ok();
+    let current_value = crate::configuration::renamed_env_var(
+        STARTUP_VISUAL_ENV_VAR,
+        PREVIOUS_STARTUP_VISUAL_ENV_VAR,
+    );
     let legacy_value = std::env::var(LEGACY_STARTUP_ASCII_ART_ENV_VAR).ok();
     startup_visual_enabled_from_values(current_value.as_deref(), legacy_value.as_deref())
 }
