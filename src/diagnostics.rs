@@ -66,11 +66,11 @@ where
 macro_rules! akra_event {
     ($level:expr, $message:literal $(, $key:ident = $value:expr)* $(,)?) => {{
         if tracing::enabled!(
-            target: "codex_exec_loop_native::diagnostics::akra_event",
+            target: "akra_ade::diagnostics::akra_event",
             $level
         ) {
             tracing::event!(
-                target: "codex_exec_loop_native::diagnostics::akra_event",
+                target: "akra_ade::diagnostics::akra_event",
                 $level,
                 pid = std::process::id(),
                 event = $message,

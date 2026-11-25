@@ -11,7 +11,7 @@ fn main() {
      * 정상 종료 코드는 그대로 전달하고, 오류만 `{:#}` chain으로 펼쳐 사람이 bootstrap 실패 지점을
      * 바로 볼 수 있게 한다.
      */
-    let exit_code = match codex_exec_loop_native::run() {
+    let exit_code = match akra_ade::run() {
         Ok(exit_code) => exit_code,
         Err(error) => {
             eprintln!("{error:#}");

@@ -240,7 +240,7 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     let title = AkraTheme::title_line("Confirm Exit", "");
     let lines = vec![
         Line::from("You are already at the shell home."),
-        Line::from("Exit codex-exec-loop?"),
+        Line::from("Exit Akra ADE?"),
         Line::from(""),
         AkraTheme::key_line("y: exit    n: stay"),
     ];

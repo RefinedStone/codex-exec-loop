@@ -5,9 +5,7 @@
  */
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    if let Err(error) =
-        codex_exec_loop_native::configuration::reject_removed_environment_variables()
-    {
+    if let Err(error) = akra_ade::configuration::reject_removed_environment_variables() {
         eprintln!("{error:#}");
         return std::process::ExitCode::FAILURE;
     }
@@ -15,18 +13,16 @@ async fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if matches!(args.as_slice(), [command] if command == "provider-credential-prompt" || command == "provider-credential-migration")
     {
-        return match codex_exec_loop_native::adapter::inbound::gateway::run_with_args(args).await {
+        return match akra_ade::adapter::inbound::gateway::run_with_args(args).await {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(_) => std::process::ExitCode::FAILURE,
         };
     }
     #[cfg(windows)]
-    if let Some(exit) =
-        codex_exec_loop_native::adapter::inbound::vault_native_confirmation::run_if_requested()
-    {
+    if let Some(exit) = akra_ade::adapter::inbound::vault_native_confirmation::run_if_requested() {
         return exit;
     }
-    let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
+    let _diagnostics_guards = akra_ade::diagnostics::init_from_env();
     #[cfg(windows)]
     attach_windowless_console();
     tracing::info!(
@@ -35,7 +31,7 @@ async fn main() -> std::process::ExitCode {
         arg_count = std::env::args_os().count(),
         "akra_gateway_process_started"
     );
-    let exit_code = match codex_exec_loop_native::adapter::inbound::gateway::run_from_env().await {
+    let exit_code = match akra_ade::adapter::inbound::gateway::run_from_env().await {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("{error:#}");

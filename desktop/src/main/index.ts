@@ -406,7 +406,7 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     height: dotQuery ? 680 : BLUEPRINT ? 900 : 800,
     ...(restored ?? {}),
     ...(dotQuery ? { minWidth: 340, minHeight: 420 } : {}),
-    title: BLUEPRINT ? "Akra Desktop Blueprint" : "Akra Desktop",
+    title: BLUEPRINT ? "Akra ADE Blueprint" : "Akra ADE",
     show: false,
     ...(inset ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: windowButtonPosition(null) } : {}),
     webPreferences: {

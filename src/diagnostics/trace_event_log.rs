@@ -20,7 +20,7 @@ use crate::private_fs::{
     validate_windows_path_identity, validate_windows_private_owner_and_acl,
 };
 
-pub(crate) const AKRA_EVENT_TARGET: &str = "codex_exec_loop_native::diagnostics::akra_event";
+pub(crate) const AKRA_EVENT_TARGET: &str = "akra_ade::diagnostics::akra_event";
 const TRACE_MAX_FILES_ENV_VAR: &str = "AKRA_TRACE_MAX_FILES";
 const DEFAULT_TRACE_MAX_FILES: usize = 7;
 const MAX_TRACE_MAX_FILES: usize = 365;
@@ -1803,10 +1803,13 @@ fn trace_settings_from_value(value: &str) -> Option<TraceSettings> {
     match normalized.as_str() {
         "planning" => Some(planning_trace_settings()),
         "full" => Some(full_trace_settings()),
-        _ => EnvFilter::try_new(trimmed).ok().map(|_| TraceSettings {
-            filter: trimmed.to_string(),
-            span_mode: TraceSpanMode::None,
-        }),
+        _ => {
+            let filter = with_current_crate_target(trimmed);
+            EnvFilter::try_new(&filter).ok().map(|_| TraceSettings {
+                filter,
+                span_mode: TraceSpanMode::None,
+            })
+        }
     }
 }
 
@@ -1832,12 +1835,15 @@ fn apply_rust_log_override_from_value(
 fn trace_filter_from_rust_log_value(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trace_value_is_disabled(trimmed) {
-        None
-    } else if EnvFilter::try_new(trimmed).is_ok() {
-        Some(trimmed.to_string())
-    } else {
-        None
+        return None;
     }
+    let filter = with_current_crate_target(trimmed);
+    EnvFilter::try_new(&filter).is_ok().then_some(filter)
+}
+
+/// crate 이름이 `akra_ade`로 바뀌기 전의 filter 값도 같은 module target을 가리키게 한다 (#2587).
+fn with_current_crate_target(filter: &str) -> String {
+    filter.replace("codex_exec_loop_native", env!("CARGO_CRATE_NAME"))
 }
 
 fn concise_trace_settings() -> TraceSettings {
@@ -1862,17 +1868,17 @@ fn full_trace_settings() -> TraceSettings {
 }
 
 fn concise_trace_filter() -> String {
-    format!("{AKRA_EVENT_TARGET}=debug,codex_exec_loop_native=debug,warn")
+    format!("{AKRA_EVENT_TARGET}=debug,akra_ade=debug,warn")
 }
 
 fn planning_trace_filter() -> String {
     format!(
         "{AKRA_EVENT_TARGET}=debug,\
-         codex_exec_loop_native::application::service::planning=trace,\
-         codex_exec_loop_native::adapter::inbound::tui::app::turn_submission_runtime::post_turn_execution=trace,\
-         codex_exec_loop_native::adapter::outbound::app_server::planning_worker=trace,\
-         codex_exec_loop_native::adapter::outbound::app_server=debug,\
-         codex_exec_loop_native=info,warn"
+         akra_ade::application::service::planning=trace,\
+         akra_ade::adapter::inbound::tui::app::turn_submission_runtime::post_turn_execution=trace,\
+         akra_ade::adapter::outbound::app_server::planning_worker=trace,\
+         akra_ade::adapter::outbound::app_server=debug,\
+         akra_ade=info,warn"
     )
 }
 
@@ -2081,14 +2087,12 @@ mod tests {
 
     #[test]
     fn trace_custom_filter_falls_back_to_spanless_mode() {
-        let settings = trace_settings_from_value(
-            "codex_exec_loop_native::adapter::outbound::app_server=debug",
-        )
-        .expect("custom filter should be enabled");
+        let settings = trace_settings_from_value("akra_ade::adapter::outbound::app_server=debug")
+            .expect("custom filter should be enabled");
 
         assert_eq!(
             settings.filter,
-            "codex_exec_loop_native::adapter::outbound::app_server=debug"
+            "akra_ade::adapter::outbound::app_server=debug"
         );
         assert_eq!(settings.span_mode, TraceSpanMode::None);
     }
@@ -2144,12 +2148,16 @@ mod tests {
     #[test]
     fn rust_log_filter_uses_env_filter_semantics_without_enabling_disabled_values() {
         assert_eq!(
-            trace_filter_from_rust_log_value("codex_exec_loop_native=trace"),
-            Some("codex_exec_loop_native=trace".to_string())
+            trace_filter_from_rust_log_value("akra_ade=trace"),
+            Some("akra_ade=trace".to_string())
         );
         assert_eq!(
-            trace_filter_from_rust_log_value("  codex_exec_loop_native=debug  "),
-            Some("codex_exec_loop_native=debug".to_string())
+            trace_filter_from_rust_log_value("  akra_ade=debug  "),
+            Some("akra_ade=debug".to_string())
+        );
+        assert_eq!(
+            trace_filter_from_rust_log_value("codex_exec_loop_native::adapter=debug"),
+            Some("akra_ade::adapter=debug".to_string())
         );
         assert_eq!(trace_filter_from_rust_log_value("off"), None);
         assert_eq!(trace_filter_from_rust_log_value(""), None);
@@ -2322,7 +2330,7 @@ mod tests {
         let settings = with_trace_values(
             &[
                 ("AKRA_TRACE", None),
-                ("RUST_LOG", Some("codex_exec_loop_native=trace")),
+                ("RUST_LOG", Some("akra_ade=trace")),
                 ("AKRA_TRACE_SPANS", None),
                 ("AKRA_TRACE_FILE", None),
                 ("AKRA_TOKIO_CONSOLE", None),
@@ -2338,7 +2346,7 @@ mod tests {
         let settings = with_trace_values(
             &[
                 ("AKRA_TRACE", Some("full")),
-                ("RUST_LOG", Some("codex_exec_loop_native::adapter=debug")),
+                ("RUST_LOG", Some("akra_ade::adapter=debug")),
                 ("AKRA_TRACE_SPANS", None),
                 ("AKRA_TRACE_FILE", None),
                 ("AKRA_TOKIO_CONSOLE", None),
@@ -2347,7 +2355,7 @@ mod tests {
         )
         .expect("AKRA_TRACE full should remain enabled");
 
-        assert_eq!(settings.filter, "codex_exec_loop_native::adapter=debug");
+        assert_eq!(settings.filter, "akra_ade::adapter=debug");
         assert_eq!(settings.span_mode, TraceSpanMode::Full);
     }
 

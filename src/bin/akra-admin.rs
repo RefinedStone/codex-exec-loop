@@ -5,13 +5,11 @@
  */
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    if let Err(error) =
-        codex_exec_loop_native::configuration::reject_removed_environment_variables()
-    {
+    if let Err(error) = akra_ade::configuration::reject_removed_environment_variables() {
         eprintln!("{error:#}");
         return std::process::ExitCode::FAILURE;
     }
-    let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
+    let _diagnostics_guards = akra_ade::diagnostics::init_from_env();
     tracing::info!(
         cwd = ?std::env::current_dir().ok(),
         debug_assertions = cfg!(debug_assertions),
@@ -23,8 +21,7 @@ async fn main() -> std::process::ExitCode {
      * 모두 수행된다. bin wrapper는 그 결과를 process contract로만 변환해 systemd나 shell script가
      * startup 실패를 일반 code 1로 감지하게 한다.
      */
-    let exit_code = match codex_exec_loop_native::adapter::inbound::admin_api::run_from_env().await
-    {
+    let exit_code = match akra_ade::adapter::inbound::admin_api::run_from_env().await {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("{error:#}");

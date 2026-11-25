@@ -4,13 +4,11 @@
  * process-level 오류 출력과 exit code 변환만 책임진다.
  */
 fn main() -> std::process::ExitCode {
-    if let Err(error) =
-        codex_exec_loop_native::configuration::reject_removed_environment_variables()
-    {
+    if let Err(error) = akra_ade::configuration::reject_removed_environment_variables() {
         eprintln!("{error:#}");
         return std::process::ExitCode::FAILURE;
     }
-    let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
+    let _diagnostics_guards = akra_ade::diagnostics::init_from_env();
     tracing::info!(
         cwd = ?std::env::current_dir().ok(),
         debug_assertions = cfg!(debug_assertions),
@@ -21,7 +19,7 @@ fn main() -> std::process::ExitCode {
      * run_from_env()는 local workspace에 묶인 planning control service를 만들고 long-polling loop를
      * 시작한다. bootstrap 오류와 runner 오류는 모두 anyhow chain으로 올라오므로 여기서 한 번만 출력한다.
      */
-    let exit_code = match codex_exec_loop_native::adapter::inbound::telegram_bot::run_from_env() {
+    let exit_code = match akra_ade::adapter::inbound::telegram_bot::run_from_env() {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("{error:#}");

@@ -1,5 +1,5 @@
 //! 사용자/프로젝트 파일을 공개 resolver에 넣어 정책 병합의 경계 조합을 검증한다.
-use codex_exec_loop_native::application::service::issue_automation_policy::{
+use akra_ade::application::service::issue_automation_policy::{
     IssueAutomationPolicyBlocked, IssueAutomationPolicyScope, ResolvedIssueAutomationPolicy,
     resolve_issue_automation_policy,
 };
