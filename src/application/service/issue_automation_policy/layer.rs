@@ -233,6 +233,7 @@ pub(super) struct SelectionLayer {
     pub mode: Option<IssueAutomationSelectionMode>,
     pub labels_any: Option<Vec<String>>,
     pub trusted_actors: Option<Vec<IssueAutomationTrustedActor>>,
+    pub comment_commands: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]

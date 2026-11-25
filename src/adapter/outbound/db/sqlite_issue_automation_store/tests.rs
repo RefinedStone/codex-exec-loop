@@ -61,7 +61,14 @@ pub(super) fn make_pre_auto_schema(connection: &Connection) {
     ).unwrap();
 }
 
+pub(super) fn make_pre_comment_command_schema(connection: &Connection) {
+    connection
+        .execute_batch("DROP TABLE issue_comment_commands;")
+        .unwrap();
+}
+
 pub(super) fn make_pre_binding_pause_schema(connection: &Connection) {
+    make_pre_comment_command_schema(connection);
     connection
         .execute_batch(
             "DROP TABLE issue_binding_pause_work_fences;

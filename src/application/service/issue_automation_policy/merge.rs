@@ -377,6 +377,15 @@ fn apply_user_grants(
         policy.select.trusted_actors = actors.clone();
         origins.replace("select.trusted_actors", Scope::User);
     }
+    assign(
+        &mut policy.select.comment_commands,
+        user.select
+            .as_ref()
+            .and_then(|selection| selection.comment_commands),
+        "select.comment_commands",
+        Scope::User,
+        origins,
+    );
 }
 
 /// 프로젝트는 cap/budget의 min, feedback의 AND, trusted actor의 교집합만 만든다.
@@ -529,6 +538,14 @@ fn restrict_with_project(
             Scope::Project,
             Resolution::Intersection,
         );
+    }
+    if let Some(enabled) = project
+        .select
+        .as_ref()
+        .and_then(|selection| selection.comment_commands)
+    {
+        policy.select.comment_commands &= enabled;
+        origins.combine("select.comment_commands", Scope::Project, Resolution::And);
     }
 }
 

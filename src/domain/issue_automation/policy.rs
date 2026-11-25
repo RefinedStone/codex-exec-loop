@@ -126,6 +126,9 @@ pub struct IssueAutomationSelection {
     /// LabelsAny에서 빈 목록은 선택 대상 없음이다. AllOpen은 별도의 명시적 선택이다.
     pub labels_any: Vec<String>,
     pub trusted_actors: Vec<IssueAutomationTrustedActor>,
+    /// 신뢰하는 행위자의 이슈 댓글 명령을 읽는다 (IA8-2). 기본은 꺼짐이고 꺼짐은 기존 정책 바이트를 지킨다.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub comment_commands: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -310,6 +313,7 @@ impl IssueAutomationPolicy {
                 mode: IssueAutomationSelectionMode::LabelsAny,
                 labels_any: IssueAutomationLabels::default().selection_labels(),
                 trusted_actors: Vec::new(),
+                comment_commands: false,
             },
             classify: IssueAutomationClassification { rule: Vec::new() },
             gates: IssueAutomationPolicyGates::default(),

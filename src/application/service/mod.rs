@@ -24,6 +24,7 @@ pub mod manual_prompt_preparation;
 pub mod mcp_hub;
 // issue_handoff 는 원격 이슈를 AI 전달 정책으로 가려 인계의 공유본을 만든다 (#2428).
 pub mod issue_collection;
+pub mod issue_comment_command;
 pub mod issue_coordinator;
 pub mod issue_feedback;
 pub mod issue_handoff;

@@ -182,7 +182,7 @@ impl GithubIssueFeedbackAdapter {
         Ok(response.node)
     }
 
-    fn read_comments(&self, issue: &IssueReference) -> Result<Vec<graphql::Comment>> {
+    pub(super) fn read_comments(&self, issue: &IssueReference) -> Result<Vec<graphql::Comment>> {
         let mut pages = Pages::default();
         let mut after: Option<String> = None;
         let mut comments = Vec::new();

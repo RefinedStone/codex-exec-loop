@@ -42,6 +42,7 @@ pub mod issue_board_field_port;
 // issue update port 는 기존 이슈의 제목과 본문을 고친다. 승인한 게시 경로만 쓴다 (#2423).
 pub mod issue_update_port;
 // issue publish intent journal port 는 게시 의도 일지의 경계이다 (#2424).
+pub mod issue_comment_command_port;
 pub mod issue_feedback_port;
 pub mod issue_feedback_store_port;
 pub mod issue_publish_intent_journal_port;

@@ -504,6 +504,33 @@ The value is not part of the policy version, so enabling it does not supersede o
 - **Evidence.** A Telegram answer carries no Desktop confirmation, so the kernel records it as
   `by: agent`. It cannot pass a `human` gate; the reply is `human_confirmation_required` (Q-IA11).
 
+## Issue Comment Commands
+
+IA8-2 ([#2567](https://github.com/RefinedStone/codex-exec-loop/issues/2567)) reads `/akra hold`,
+`/akra release`, `/akra retriage`, and `/akra approve` from GitHub issue comments. Comments are
+not read by default. The user policy must set `select.comment_commands = true`; a repository
+policy can only turn it off. Only comments by a GitHub user account in the user-file
+`select.trusted_actors` list are considered.
+
+A comment is a command only when its whole body is one of the four commands. Other comment text is
+not interpreted or stored. An edited comment is never a command, because another account may have
+edited it; post a new comment instead. Each processed command is recorded once in the private issue
+SQLite ledger by the issue's stable identity and the comment ID. The comment body is not stored.
+
+A running agent can post comments with the user's `gh` login, so a user-account comment is not
+human-confirmation evidence:
+
+| Command | Result |
+| --- | --- |
+| `hold` | Applied at the next collection cycle through the existing hold intervention, before triage and start. It revokes work permits and records `issue_held`. |
+| `release`, `retriage` | Recorded as a request only. They could reopen execution, so a person must issue them again from Desktop. |
+| `approve` | Recorded only. It never answers a decision and never passes a `human` gate. |
+
+The hold uses the deterministic intervention command ID `issue-comment:<comment ID>`. If the process
+stops after the hold but before the comment record, the next cycle reuses that intervention receipt
+without a second change. A removed trusted actor's later comments are ignored. Comments from
+another, independent account are also not human evidence in this slice.
+
 ## Issue Integration and External Closure
 
 IA4-3 ([#2553](https://github.com/RefinedStone/codex-exec-loop/issues/2553)) keeps trusted

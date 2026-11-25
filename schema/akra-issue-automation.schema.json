@@ -90,6 +90,10 @@
             "$ref": "#/$defs/trusted_actor"
           },
           "description": "사용자가 신뢰한 (provider, server_id, actor_id) 삼중항. 저장소 목록은 교집합으로만 제한한다. 생략은 상속, []는 모두 제외. 로그인 이름은 허용하지 않는다."
+        },
+        "comment_commands": {
+          "type": "boolean",
+          "description": "기본 false. true이면 trusted_actors가 쓴 GitHub 이슈 댓글의 /akra hold|release|retriage|approve만 읽는다. 저장소 파일은 AND로 끄기만 한다. 댓글은 사람 확인의 증거가 아니며 hold만 바로 적용한다."
         }
       }
     },

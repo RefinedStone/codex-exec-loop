@@ -18,6 +18,7 @@ use crate::domain::issue_automation::feedback::{
 use crate::domain::issue_work::IssueReference;
 
 mod closure;
+mod commands;
 mod comments;
 mod graphql;
 mod labels;

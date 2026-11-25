@@ -2087,11 +2087,16 @@ impl NativeClientRuntime {
     fn record_issue_committed(&mut self, committed: Vec<IssueObserverCommittedFact>) {
         let records = committed
             .into_iter()
-            .map(|fact| match fact {
-                IssueObserverCommittedFact::Tracked(fact) => {
-                    KernelEvent::issue_tracked(&fact.issue, fact.binding_id.as_str(), fact.revision)
+            .flat_map(|fact| match fact {
+                IssueObserverCommittedFact::Intervened(receipt) => {
+                    KernelEvent::issue_intervened(&receipt)
                 }
-                IssueObserverCommittedFact::Coordinated(fact) => match *fact {
+                IssueObserverCommittedFact::Tracked(fact) => vec![KernelEvent::issue_tracked(
+                    &fact.issue,
+                    fact.binding_id.as_str(),
+                    fact.revision,
+                )],
+                IssueObserverCommittedFact::Coordinated(fact) => vec![match *fact {
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::FeedbackPosted(event) =>
                         KernelEvent::issue_feedback_posted(&event),
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::Triaged(fact) => KernelEvent::issue_triaged(
@@ -2129,14 +2134,14 @@ impl NativeClientRuntime {
                             observation_revision: Some(observation_revision),
                             revision,
                         },
-                },
-                IssueObserverCommittedFact::Triaged(fact) => KernelEvent::issue_triaged(
+                }],
+                IssueObserverCommittedFact::Triaged(fact) => vec![KernelEvent::issue_triaged(
                     &fact.issue,
                     fact.binding_id.as_str(),
                     fact.revision,
                     fact.gate_revision,
                     &fact.policy_version,
-                ),
+                )],
             })
             .collect::<Vec<_>>();
         for record in records {

@@ -47,6 +47,7 @@ mod arbiter;
 mod autonomy;
 mod binding_pause;
 mod collection;
+mod comment_command;
 mod coordinator;
 mod decision;
 mod decision_deadlines;
@@ -66,8 +67,9 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 /// Version 15 only widens the provider CHECK for Linear (#2564). No row changes.
+/// Version 16 adds the issue comment command ledger (#2567).
 const PROVIDER_CHECK: &str = "CHECK (provider IN ('github', 'jira', 'linear'))";
 const LEGACY_PROVIDER_CHECK: &str = "CHECK (provider IN ('github', 'jira'))";
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
@@ -1017,7 +1019,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=14) => {
+            (APPLICATION_ID, version @ 1..=15) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -1069,7 +1071,10 @@ fn ensure_schema(
                 if version < 14 {
                     binding_pause::create_schema(transaction)?;
                 }
-                widen_provider_checks(transaction)?;
+                if version < 15 {
+                    widen_provider_checks(transaction)?;
+                }
+                comment_command::create_schema(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -1104,6 +1109,7 @@ fn ensure_schema(
                 decision_deadlines::create_schema(transaction)?;
                 arbiter::create_schema(transaction)?;
                 binding_pause::create_schema(transaction)?;
+                comment_command::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -1215,6 +1221,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 14 {
         expected.extend(binding_pause::schema_objects());
+    }
+    if version >= 16 {
+        expected.push((comment_command::TABLE, comment_command::SCHEMA));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {
