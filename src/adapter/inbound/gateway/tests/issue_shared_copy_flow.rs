@@ -376,3 +376,87 @@ fn handoff_uses_confirmed_journal_and_holds_unconfirmed_or_edited_copies() {
         },
     );
 }
+
+#[test]
+fn independently_opened_editors_cannot_overwrite_a_newer_confirmed_copy() {
+    run_isolated(
+        "independently_opened_editors_cannot_overwrite_a_newer_confirmed_copy",
+        async {
+            let world = World::new();
+            let mut first = world.start().await;
+            let mut second = world.start().await;
+            let first_text = public_text();
+            let second_text =
+                json!({"title":"Second synthetic title","body":"Second synthetic body"});
+            let request_a = publish_request(&world, &mut first, first_text.clone(), false).await;
+            let request_b = publish_request(&world, &mut second, second_text.clone(), false).await;
+            assert_eq!(request_a["editBasis"], request_b["editBasis"]);
+            let (a, b) = tokio::join!(
+                first.call("akra/issue/publish", request_a),
+                second.call("akra/issue/publish", request_b)
+            );
+            assert_eq!(world.writes(), 1, "{a} / {b}");
+            let (confirmed, stale, winner) = if a["result"]["status"] == "confirmed" {
+                (&a, &b, &first_text)
+            } else {
+                (&b, &a, &second_text)
+            };
+            assert_eq!(confirmed["result"]["status"], "confirmed", "{confirmed}");
+            assert_eq!(stale["result"]["status"], "conflict", "{stale}");
+            assert_eq!(world.remote_copy().title, winner["title"].as_str().unwrap());
+            assert_eq!(world.remote_copy().body, winner["body"].as_str().unwrap());
+            assert_eq!(world.counts(), ApiCalls::default());
+            first.close().await;
+            second.close().await;
+            let mut reopened = world.start().await;
+            let recovered = reopened.call("akra/issue/recheck", world.target()).await;
+            assert!(recovered["result"].is_object(), "{recovered}");
+            assert_eq!(world.writes(), 1);
+            reopened.close().await;
+        },
+    );
+}
+
+#[test]
+fn two_editors_with_an_uncertain_publish_share_one_durable_intent() {
+    run_isolated(
+        "two_editors_with_an_uncertain_publish_share_one_durable_intent",
+        async {
+            let world = World::new();
+            world.set_behavior(fixtures::WriteBehavior::LostResponse {
+                applied: false,
+                fail_reads: false,
+            });
+            let mut first = world.start().await;
+            let mut second = world.start().await;
+            let request_a = publish_request(&world, &mut first, public_text(), false).await;
+            let request_b = publish_request(&world, &mut second, public_text(), false).await;
+            let (a, b) = tokio::join!(
+                first.call("akra/issue/publish", request_a.clone()),
+                second.call("akra/issue/publish", request_b)
+            );
+            assert_eq!(a["result"]["status"], "needs_confirmation", "{a}");
+            assert_eq!(b["result"]["status"], "needs_confirmation", "{b}");
+            let intent = a["result"]["intent"]["intentId"].clone();
+            assert!(intent.is_string());
+            assert_eq!(b["result"]["intent"]["intentId"], intent);
+            assert_eq!(world.writes(), 1);
+            first.close().await;
+            second.close().await;
+            let mut reopened = world.start().await;
+            let repeated = reopened.call("akra/issue/publish", request_a).await;
+            assert_eq!(repeated["result"]["intent"]["intentId"], intent);
+            assert_eq!(world.writes(), 1);
+            world.recover_reads(true);
+            let confirmed = reopened.call("akra/issue/recheck", world.target()).await;
+            assert_eq!(
+                confirmed["result"]["intent"]["state"], "confirmed",
+                "{confirmed}"
+            );
+            assert_eq!(confirmed["result"]["intent"]["intentId"], intent);
+            assert_eq!(world.writes(), 1);
+            assert_eq!(world.counts(), ApiCalls::default());
+            reopened.close().await;
+        },
+    );
+}
