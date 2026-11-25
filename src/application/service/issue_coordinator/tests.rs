@@ -187,6 +187,7 @@ impl IssuePolicySourcePort for ValidationPolicy {
 
 struct MutableAutomationPolicy {
     text: Mutex<String>,
+    project: Mutex<Option<String>>,
     unavailable: AtomicBool,
 }
 
@@ -194,6 +195,7 @@ impl MutableAutomationPolicy {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             text: Mutex::new(AUTO_POLICY.to_string()),
+            project: Mutex::new(None),
             unavailable: AtomicBool::new(false),
         })
     }
@@ -207,7 +209,7 @@ impl IssueAutomationPolicySourcePort for MutableAutomationPolicy {
         Ok(Some(self.text.lock().unwrap().clone()))
     }
     fn load_project_policy_toml(&self, _: &str) -> Result<Option<String>> {
-        Ok(None)
+        Ok(self.project.lock().unwrap().clone())
     }
 }
 
