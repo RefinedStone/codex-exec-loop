@@ -979,6 +979,7 @@ fn version_fourteen_widens_only_the_provider_check_and_keeps_rows() {
         connection
             .pragma_update(None, "writable_schema", false)
             .unwrap();
+        make_pre_comment_command_schema(&connection);
         connection.pragma_update(None, "user_version", 14).unwrap();
         super::validate_schema_version(&connection, 14).unwrap();
         assert!(super::validate_schema(&connection).is_err());

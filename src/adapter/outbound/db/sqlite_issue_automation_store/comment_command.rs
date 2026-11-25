@@ -214,7 +214,7 @@ mod tests {
         );
         let connection = Connection::open(fixture.database()).unwrap();
         super::super::tests::make_pre_comment_command_schema(&connection);
-        connection.pragma_update(None, "user_version", 14).unwrap();
+        connection.pragma_update(None, "user_version", 15).unwrap();
         drop(connection);
         assert!(
             fixture
