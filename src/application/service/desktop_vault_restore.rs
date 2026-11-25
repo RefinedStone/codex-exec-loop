@@ -510,6 +510,19 @@ fn validate_issue(issue: &IssueReference) -> Result<(), Hold> {
             && workspace.as_bytes()[0].is_ascii_alphabetic()
             && workspace.as_bytes()[1] == b':'
             && b"/\\".contains(&workspace.as_bytes()[2]));
+    #[cfg(windows)]
+    let absolute = absolute || {
+        use std::path::{Component, Path, Prefix};
+
+        // Canonical Windows scopes keep this prefix. Never rewrite the encrypted record identity.
+        let path = Path::new(workspace);
+        path.is_absolute()
+            && matches!(
+                path.components().next(),
+                Some(Component::Prefix(prefix))
+                    if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
+            )
+    };
     if issue.provider != IssueProvider::GitHub
         || issue.server_id != "github.com"
         || !node_id(&issue.repository_id)
@@ -572,3 +585,6 @@ fn restore_hold(reason: VaultRestoreHold) -> Hold {
         VaultRestoreHold::MappingRejected => Hold::MappingRejected,
     }
 }
+
+#[cfg(all(windows, test))]
+mod windows_tests;

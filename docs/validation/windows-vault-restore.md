@@ -134,3 +134,26 @@ Windows Full/Portable과 Bash portable 스크립트에 파일·binding·backup·
 Desktop 소스와 화면은 변경하지 않았습니다. 이번 기록은 기존 전용 창의 Windows native 연결과
 실제 파일·프로세스 경계 검증이며, 앞서 명시한 실제 OS 확인창·사용자 키 저장소의 수동 통합
 시험을 대신하지 않습니다. PR의 Linux·macOS·Windows 결과와 `CI Gate`는 최신 head의 Checks에 기록합니다.
+
+## 2026-11-25 통합 검수
+
+최신 `prerelease@353192ade`와 통합하면서 기존 provider credential helper와 단일 Rust 시험 실행기 구조를 유지했습니다.
+독립 검수에서 Desktop 세션의 절대경로 검사가 실제 Windows canonical scope인 `\\?\C:\...`를 거절하는 연결 오류를 발견했습니다.
+Windows의 `VerbatimDisk` 절대경로를 추가로 인정하고, 이후 canonical workspace와 요청 scope의 완전 일치 검사를 유지했습니다.
+암호문 scope 문자열을 정규화하거나 다른 저장소 이름으로 대체하지 않습니다.
+
+회귀 3개는 canonical 드라이브 경로 수용, 상대·UNC·장치 경로 거절, 실제 Git 저장소와 `VaultRestoreWorkspaceAdapter`를 연결한
+`DesktopVaultRestoreService::prepare` 성공을 확인합니다. 통합 시험은 별칭 scope의 거절, 키 조회·생성 0회, Vault 및 repository identity 파일 무생성도 검사합니다.
+Windows Full/Portable에는 해당 서비스 회귀 필터를 포함했습니다.
+
+통합 후 동일 작업 디렉터리의 Windows Full gate가 종료 코드 0으로 통과했습니다.
+
+| 검사 | 2026-11-25 관측 결과 |
+| --- | --- |
+| Windows Rust 계약 시험 | 85개 묶음에서 740개 통과, 실패 0개; 직접 실행하지 않는 자식 프로세스 fixture 1개 제외 |
+| Desktop Vitest | 1,195개 통과, 기존 7개 제외; 시험 파일 80개 통과, 1개 제외 |
+| Desktop 타입 검사·빌드, Rust 제품 컴파일·Clippy | 통과 |
+| `cargo fmt --all`, `git diff --check` | 통과 |
+
+실제 OS 대화상자·사용자 키 저장소를 결합한 수동 검증의 제한은 위와 동일합니다.
+요청된 전달 순서는 PR 생성 → rebase merge → 머지 커밋의 CI 확인이며, CI 결과는 해당 PR과 workflow 실행에 남깁니다.
