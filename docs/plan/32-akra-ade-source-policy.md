@@ -28,7 +28,7 @@
 | 대상 | 식별자 | 라이선스 선언 | 상태 |
 | --- | --- | --- | --- |
 | Git tag `v1.0.0` ~ `v1.3.5` (19개) | 각 tag의 tree | LICENSE 파일 없음. 루트 `package.json`, `npm/package.json`, `Cargo.toml`에 license 필드 없음 | 확인됨 (tag마다 `git ls-tree`와 manifest 확인) |
-| GitHub Release `codex-exec-loop-native v1.0.0` ~ `v1.3.5` | 최신 `v1.3.5`, 2026-06-20 | archive 구성 스크립트에 LICENSE·고지 파일 포함 단계 없음 | 스크립트 기준 확인됨. 게시된 archive 내부는 열어 보지 않음 |
+| GitHub Release `codex-exec-loop-native v1.0.0` ~ `v1.3.5` | 최신 `v1.3.5`, 2026-06-20 | `v1.3.5` 시점의 archive 구성 스크립트에는 LICENSE·고지 단계가 없음. 커밋 `fbfcc0286`(2026-07-10)부터 Galmuri 고지만 포함 | 스크립트 기준 확인됨. 게시된 archive 내부는 열어 보지 않음 |
 | npm `@refinedstone/akra` | 1.2.6, 1.2.7, 1.2.8, 1.2.9, 1.3.0, 1.3.1, 1.3.3, 1.3.5 (+ 플랫폼 접미사 버전) | registry의 `license` 필드 비어 있음 | 1.3.5는 확인됨. 나머지는 범위 조회 결과가 비어 있음 |
 | 루트 `package.json` `"license": "ISC"` | 최초 커밋 `92690fe50` (2026-07-06, `chore(test): add playwright scaffold`) | ISC | 확인됨. `prerelease`에만 있고 `main`과 모든 릴리스 tag에는 없음. tag `start-revision`(2026-07-11)에도 있음 |
 | npm 배포 대상 | `.github/workflows/release-native-assets.yml`, `npm/scripts/stage-npm-packages.mjs` | staging이 만드는 `@refinedstone/akra` manifest에 license 필드 없음 | 확인됨. workflow는 `npm/` staging 결과만 배포하고 루트 manifest는 배포하지 않는다 |
@@ -61,7 +61,7 @@
 | Galmuri 11 폰트 v2.40.3 | `assets/admin/fonts/` | SIL OFL 1.1 | 원문 `LICENSE-Galmuri.txt`와 README 있음 |
 | PixiJS | `assets/admin/game/akra-diorama.js`, `assets/admin/game/scripts/promote-build.mjs` | MIT | 파일 머리에 저작권·허락 문구 있음 |
 | Codex app-server protocol 생성물 | `schema/`, `desktop/src/shared/protocol/generated/` | upstream `openai/codex` 기준 | 생성물에 필요한 고지는 **확인 못 함** |
-| Rust 의존성 | `Cargo.lock` 477개 package | 모두 허용형 계열: MIT/Apache-2.0 이중 (약 290), MIT (118), Unicode-3.0 (18), CDLA-Permissive-2.0 (3), ISC, Zlib, BSD, Unlicense, MIT-0, WTFPL, BSL-1.0 선택 | 배포 archive에 제3자 고지 파일 없음. **L2·R1에서 고쳐야 할 공백** |
+| Rust 의존성 | `Cargo.lock` 477개 package | 모두 허용형 계열: MIT/Apache-2.0 이중 (약 290), MIT (118), Unicode-3.0 (18), CDLA-Permissive-2.0 (3), ISC, Zlib, BSD, Unlicense, MIT-0, WTFPL, BSL-1.0 선택 | 배포 archive에 Rust crate 고지 없음 (Galmuri 고지만 있음). **L2에서 고쳐야 할 공백** |
 | Desktop npm 의존성 | `desktop/package-lock.json` | — | 해당 없음 (Desktop 배포판 없음) |
 
 Rust 수치는 `cargo metadata` 전체 lock 기준이다. 실제 배포 바이너리에 들어가는 package만 따로
