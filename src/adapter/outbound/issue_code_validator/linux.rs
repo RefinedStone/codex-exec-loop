@@ -172,26 +172,8 @@ fn sandbox_command(program: &Path, validator: &Path) -> io::Result<Command> {
             Err(error) => return Err(error),
         }
     }
+    mount_workspace(&mut command, validator);
     command
-        .arg("--ro-bind")
-        .arg(validator)
-        .arg("/validator")
-        .args([
-            "--dev",
-            "/dev",
-            "--size",
-            "16777216",
-            "--tmpfs",
-            "/tmp",
-            "--remount-ro",
-            "/",
-            "--chdir",
-            "/tmp",
-            "--",
-            "/bin/sh",
-            "-c",
-            SHELL_ENTRY,
-        ])
         .env_clear()
         .current_dir("/")
         .stdout(Stdio::piped())
@@ -230,6 +212,34 @@ fn sandbox_command(program: &Path, validator: &Path) -> io::Result<Command> {
         });
     }
     Ok(command)
+}
+
+fn mount_workspace(command: &mut Command, validator: &Path) {
+    command
+        .arg("--ro-bind")
+        .arg(validator)
+        .arg("/validator")
+        .args([
+            "--dev",
+            "/dev",
+            // --dev creates its own tmpfs, including /dev/shm. The root
+            // remount below is non-recursive; freeze this mount explicitly.
+            // Device bind mounts remain usable, but ordinary files cannot be made.
+            "--remount-ro",
+            "/dev",
+            "--size",
+            "16777216",
+            "--tmpfs",
+            "/tmp",
+            "--remount-ro",
+            "/",
+            "--chdir",
+            "/tmp",
+            "--",
+            "/bin/sh",
+            "-c",
+            SHELL_ENTRY,
+        ]);
 }
 
 pub(super) fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
@@ -331,6 +341,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn device_filesystem_is_read_only_before_the_bounded_workspace_is_mounted() {
+        let mut command = Command::new(BWRAP);
+        mount_workspace(&mut command, Path::new("/staged-validator"));
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_str().unwrap())
+            .collect::<Vec<_>>();
+        let devices = arguments
+            .windows(2)
+            .position(|arguments| arguments == ["--dev", "/dev"])
+            .unwrap();
+        let read_only_devices = arguments
+            .windows(2)
+            .position(|arguments| arguments == ["--remount-ro", "/dev"])
+            .unwrap();
+        let workspace = arguments
+            .windows(4)
+            .position(|arguments| arguments == ["--size", "16777216", "--tmpfs", "/tmp"])
+            .unwrap();
+        let read_only_root = arguments
+            .windows(2)
+            .position(|arguments| arguments == ["--remount-ro", "/"])
+            .unwrap();
+        assert!(devices < read_only_devices);
+        assert!(read_only_devices < workspace);
+        assert!(workspace < read_only_root);
+    }
+
+    #[test]
     fn launcher_setup_failure_cannot_become_a_validator_pass_or_rejection() {
         for code in [Some(0), Some(1), Some(2), None] {
             assert_eq!(
@@ -400,7 +439,26 @@ mod tests {
         fs::write(&outside, b"synthetic outside value").unwrap();
         let source = workspace.0.join("source");
         let script = format!(
-            "#!/bin/sh\n[ -z \"$HOME\" ] || exit 3\n[ ! -e /proc/self ] || exit 4\n[ ! -e '{}' ] || exit 5\n[ ! -e /run/user ] || exit 6\n[ ! -w /validator ] || exit 7\ngrep -q title || exit 8\necho 'rejected by fixture'\nexit 1\n",
+            r#"#!/bin/sh
+[ -z "$HOME" ] || exit 3
+[ ! -e /proc/self ] || exit 4
+[ ! -e '{}' ] || exit 5
+[ ! -e /run/user ] || exit 6
+[ ! -w /validator ] || exit 7
+if (: > /dev/akra-validator-probe) 2>/dev/null; then exit 9; fi
+written=0
+for path in /dev/shm/akra-validator-a /dev/shm/akra-validator-b; do
+    if dd if=/dev/zero of="$path" bs=1048576 count=12 2>/dev/null; then
+        written=$((written + 1))
+    fi
+done
+[ "$written" -eq 0 ] || exit 10
+printf 'workspace probe' > /tmp/akra-validator-probe || exit 11
+printf '' > /dev/null || exit 12
+grep -q title || exit 8
+echo 'rejected by fixture'
+exit 1
+"#,
             outside.display()
         );
         fs::write(&source, &script).unwrap();
