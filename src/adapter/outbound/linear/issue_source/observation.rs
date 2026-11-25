@@ -28,10 +28,11 @@ pub(super) fn observation(
     }
     let url = canonical_linear_issue_url(&text(&value["url"], 2048)?, &identifier)
         .ok_or(IssueSourceFailure::MalformedResponse)?;
-    let branch_name = text(&value["branchName"], MAX_LINEAR_BRANCH_NAME_BYTES)?;
-    if !valid_linear_branch_name(&branch_name) {
-        return Err(IssueSourceFailure::MalformedResponse);
-    }
+    // Only a hint: a workspace branch format outside the Git-safe subset is dropped.
+    let branch_name = value["branchName"]
+        .as_str()
+        .filter(|name| name.len() <= MAX_LINEAR_BRANCH_NAME_BYTES && valid_linear_branch_name(name))
+        .map(str::to_owned);
     let updated = text(&value["updatedAt"], 64)?;
     chrono::DateTime::parse_from_rfc3339(&updated)
         .map_err(|_| IssueSourceFailure::MalformedResponse)?;

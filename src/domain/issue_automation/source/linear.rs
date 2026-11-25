@@ -55,7 +55,8 @@ pub struct IssueSourceLinearMetadata {
     pub state_id: String,
     pub state_type: LinearIssueStateType,
     /// Provider suggestion only. It never names an owned slot, lease or existing worktree.
-    pub branch_name: String,
+    /// An unsafe provider value is dropped; it never blocks the rest of the team.
+    pub branch_name: Option<String>,
     pub connection: ConnectionRef,
 }
 
@@ -69,7 +70,10 @@ impl IssueSourceLinearMetadata {
             || canonical_linear_issue_url(&self.url, &self.identifier).as_deref()
                 != Some(self.url.as_str())
             || !valid_linear_id(&self.state_id)
-            || !valid_linear_branch_name(&self.branch_name)
+            || self
+                .branch_name
+                .as_deref()
+                .is_some_and(|name| !valid_linear_branch_name(name))
             || self.connection.provider != Provider::Linear
             || !valid_profile_id(&self.connection.profile_id)
             || !valid_connection_id(&self.connection.connection_id)
