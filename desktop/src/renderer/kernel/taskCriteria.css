@@ -1,0 +1,7 @@
+.task-criteria { display: grid; gap: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+.task-criteria label { display: grid; gap: 6px; }
+.task-criteria textarea, .task-criteria select { width: 100%; box-sizing: border-box; }
+.task-criterion { display: grid; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.task-criterion small { overflow-wrap: anywhere; }
+.task-criterion-options { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.task-criterion-options label { display: flex; align-items: center; gap: 6px; }
