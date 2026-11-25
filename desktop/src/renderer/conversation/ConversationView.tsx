@@ -7,6 +7,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import type { TurnStatus } from "../../shared/protocol/generated/v2/TurnStatus";
 import { Icon, type IconName } from "../design/icons";
+import type { TaskDraftSource } from "../kernel/TaskEditor";
 import { useConversationStore } from "../session/desktopStore";
 import { openPanel, useUiStore } from "../session/uiStore";
 import { copyText } from "./copyText";
@@ -212,7 +213,7 @@ const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
   const blocks = useMemo(() => turnBlocks(turn.items), [turn.items]);
   const changedFiles = useMemo(() => turnDiffFiles(turn.diff, turn.items), [turn.diff, turn.items]);
   return (
-    <article className="turn" data-testid="turn" data-status={turn.status}>
+    <article className="turn" data-testid="turn" data-turn-id={turn.id} data-status={turn.status}>
       {blocks.map((block) => (
         <Block key={block.id} block={block} turnStatus={turn.status} />
       ))}
@@ -264,18 +265,43 @@ function findRanges(root: HTMLElement, needle: string): Range[] {
 }
 
 /** 스레드마다 새로 만든다. 스크롤 자리와 "이전 턴" 읽기의 상태(읽는 중, 오류)가 다른 스레드로 넘어가지 않는다. */
-export function ConversationView({ onLoadOlder }: { onLoadOlder(): Promise<void> }) {
+interface ConversationViewProps {
+  onLoadOlder(): Promise<void>;
+  onDraftTask?(source: TaskDraftSource): void;
+}
+export function ConversationView({ onLoadOlder, onDraftTask }: ConversationViewProps) {
   const openThreadId = useConversationStore((state) => state.openThreadId);
   if (!openThreadId) {
     return <p className="muted empty">왼쪽에서 스레드를 고르세요.</p>;
   }
-  return <ThreadConversation key={openThreadId} onLoadOlder={onLoadOlder} />;
+  return <ThreadConversation key={openThreadId} threadId={openThreadId} onLoadOlder={onLoadOlder} onDraftTask={onDraftTask} />;
 }
 
-function ThreadConversation({ onLoadOlder }: { onLoadOlder(): Promise<void> }) {
+function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: ConversationViewProps & { threadId: string }) {
   const transcript = useConversationStore((state) => state.transcript);
   const transcriptError = useConversationStore((state) => state.transcriptError);
   const scrollRef = useRef<HTMLElement>(null);
+  const [taskSelection, setTaskSelection] = useState<TaskDraftSource | null>(null);
+  useEffect(() => {
+    if (!onDraftTask) return;
+    const changed = () => {
+      const root = scrollRef.current;
+      const selection = window.getSelection();
+      if (!root || !selection || selection.isCollapsed || !selection.rangeCount
+        || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) {
+        setTaskSelection(null);
+        return;
+      }
+      const text = selection.toString().trim();
+      if (!text || text.length > 32_768) { setTaskSelection(null); return; }
+      const range = selection.getRangeAt(0);
+      const turnIds = [...root.querySelectorAll<HTMLElement>("[data-turn-id]")]
+        .filter((turn) => range.intersectsNode(turn)).map((turn) => turn.dataset.turnId!);
+      setTaskSelection({ text, threadId, turnIds });
+    };
+    document.addEventListener("selectionchange", changed);
+    return () => document.removeEventListener("selectionchange", changed);
+  }, [onDraftTask, threadId]);
   // 스레드를 새로 열면 맨 아래(최근 턴)부터 보여 준다.
   const followBottom = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
@@ -403,6 +429,13 @@ function ThreadConversation({ onLoadOlder }: { onLoadOlder(): Promise<void> }) {
 
   return (
     <div className="conversation-wrap">
+      {onDraftTask && <div className="conversation-task-action">
+        <button type="button" disabled={!taskSelection} data-testid="draft-task-from-selection"
+          onMouseDown={(event) => event.preventDefault()} onClick={() => taskSelection && onDraftTask(taskSelection)}>
+          선택한 내용으로 작업 만들기
+        </button>
+        <span className="muted">대화에서 필요한 부분을 선택하세요.</span>
+      </div>}
       {findOpen && (
         <div className="find-bar" role="search" data-testid="find-bar">
           <input

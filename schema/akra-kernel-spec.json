@@ -2935,6 +2935,36 @@
       }
     },
     {
+      "name": "list_tasks",
+      "summary": "Read all persisted tasks, including completed and cancelled tasks, with their editable fields and the planning revision from the same authority snapshot. This reuses the planning-tool list_tasks read and never starts work.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "list_tasks",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/PlanningTaskList",
+        "properties": {
+          "type": {
+            "const": "list_tasks",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_evidence",
       "summary": "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.",
       "input": {
@@ -4412,6 +4442,16 @@
           },
           "result": {
             "$ref": "#/$defs/OperationEnd"
+          },
+          "task_mutation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskMutationRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "thread_id": {
             "type": "string"
@@ -12246,6 +12286,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "type": {
+              "const": "list_tasks",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "after_task_id": {
               "maxLength": 4096,
               "minLength": 1,
@@ -12626,6 +12679,19 @@
           "properties": {
             "type": {
               "const": "planning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PlanningTaskList",
+          "properties": {
+            "type": {
+              "const": "list_tasks",
               "type": "string"
             }
           },
@@ -13539,6 +13605,16 @@
             },
             "result": {
               "$ref": "#/$defs/OperationEnd"
+            },
+            "task_mutation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TaskMutationRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "thread_id": {
               "type": "string"
@@ -15065,6 +15141,56 @@
       ],
       "type": "object"
     },
+    "PlanningTaskDetails": {
+      "properties": {
+        "acceptance_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fields": {
+          "$ref": "#/$defs/TaskFields"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "fields",
+        "acceptance_revision",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "PlanningTaskList": {
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "planning_revision": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/PlanningTaskDetails"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "available",
+        "tasks"
+      ],
+      "type": "object"
+    },
     "PlanningTaskStatus": {
       "enum": [
         "ready",
@@ -16036,6 +16162,22 @@
       },
       "required": [
         "title"
+      ],
+      "type": "object"
+    },
+    "TaskMutationRecord": {
+      "properties": {
+        "planning_revision": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "planning_revision"
       ],
       "type": "object"
     },

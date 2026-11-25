@@ -240,6 +240,7 @@ impl CoreController {
             None => self
                 .conversation_turn
                 .record_kernel_event(KernelEvent::CommandCompleted {
+                    task_mutation: None,
                     op_id,
                     thread_id,
                     result: kernel_event::OperationEnd::Failed,
@@ -267,6 +268,7 @@ impl CoreController {
         // 실패의 원인을 기록에 싣는다. 명령을 보낸 입구가 그 글을 사용자에게 보인다 (plan 18 K4-9a).
         self.conversation_turn
             .record_kernel_event(KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: operation.op_id,
                 thread_id: operation.thread_id,
                 result,
@@ -2360,6 +2362,7 @@ fn command_completed(
     reason: kernel_event::ReasonCode,
 ) -> Option<KernelEvent> {
     Some(KernelEvent::CommandCompleted {
+        task_mutation: None,
         op_id: op_id?,
         thread_id: thread_id.to_string(),
         result,
@@ -10830,6 +10833,7 @@ mod tests {
         assert_eq!(
             records,
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 7,
                 thread_id: "thread-beta".to_string(),
                 result: kernel_event::OperationEnd::Failed,
@@ -10859,6 +10863,7 @@ mod tests {
         assert_eq!(
             records,
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 7,
                 thread_id: "thread-beta".to_string(),
                 result: OperationEnd::Failed,
@@ -10876,6 +10881,7 @@ mod tests {
         assert_eq!(
             records,
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 8,
                 thread_id: "thread-beta".to_string(),
                 result: OperationEnd::Done,
@@ -11045,6 +11051,7 @@ mod tests {
         assert_eq!(
             controller.take_kernel_records(),
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 8,
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,
@@ -11065,6 +11072,7 @@ mod tests {
         assert_eq!(
             controller.take_kernel_records(),
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 7,
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Done,
@@ -11092,6 +11100,7 @@ mod tests {
         assert_eq!(
             controller.take_kernel_records(),
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 7,
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,

@@ -30,6 +30,7 @@ import {
   transcriptFromThread,
 } from "../conversation/transcript";
 import { KernelConnection, type IssueDecisionAttention, type KernelInterest } from "../kernel/kernelConnection";
+import { TaskAuthoringController } from "../kernel/taskAuthoring";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "../kernel/issueInteractions";
 import { KERNEL_METHOD, type IssueAutomationModeRecord, type IssueEventReference } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
@@ -192,6 +193,9 @@ export class DesktopSession {
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
   /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
   private readonly kernel: KernelConnection;
+  readonly taskAuthoring: TaskAuthoringController;
+  private taskAuthoringEpoch = 0;
+  private taskAuthoringWorkspace: string | null = null;
 
   constructor(
     private readonly bridge: SessionBridge,
@@ -202,6 +206,12 @@ export class DesktopSession {
     private readonly readOnly = false,
   ) {
     this.client = new JsonRpcClient((text) => bridge.send(text));
+    this.taskAuthoring = new TaskAuthoringController(this.client, () => {
+      const kernel = this.store.getKernel();
+      return { workspace: kernel.workspace, kernel: kernel.kernel,
+        attached: !this.readOnly && this.connected && kernel.phase === "attached",
+        epoch: this.taskAuthoringEpoch };
+    });
     this.chatHistory = readOnly && bridge.chatHistory ? new ChatHistory(this.client, store) : undefined;
     this.batcher = new FrameBatcher((batch) => this.store.updateTranscript((transcript) => applyNotifications(transcript, batch)), scheduler);
     this.client.setServerRequestHandler((method, params, id) => this.handleServerRequest(method, params, id));
@@ -225,6 +235,7 @@ export class DesktopSession {
         } else {
           this.chatHistory?.disconnected();
           this.invalidateConversation();
+          this.taskAuthoringEpoch++;
           this.client.reset(state.phase);
           this.kernel.connectionChanged(false);
           // 끊긴 접속의 승인 요청에는 답할 수 없다. 다시 구독하면 app-server 가 다시 보낸다 (replay).
@@ -245,12 +256,17 @@ export class DesktopSession {
     this.batcher.clear();
     this.chatHistory?.invalidate(null);
     this.kernel.connectionChanged(false);
+    this.taskAuthoringEpoch++;
     this.client.reset("closed");
     this.dropPendingApprovals();
   }
 
   /** 커널 패널이 보여 줄 폴더를 정한다. 그 폴더의 저장소 커널에 붙고, null 이면 뗀다. */
   showKernel(workspace: string | null, interests: readonly KernelInterest[] = ["overview"]): Promise<void> {
+    if (this.taskAuthoringWorkspace !== workspace) {
+      this.taskAuthoringWorkspace = workspace;
+      this.taskAuthoringEpoch++;
+    }
     return this.kernel.show(workspace, interests);
   }
 

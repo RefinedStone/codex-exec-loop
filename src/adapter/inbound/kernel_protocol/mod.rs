@@ -61,6 +61,8 @@ pub use task_evidence::{
     TaskEvidenceReceiptState, TaskEvidenceSourceKind, TaskEvidenceSourceState, TaskEvidenceState,
     TaskEvidenceTaskState,
 };
+mod task_list;
+pub use task_list::{PlanningTaskDetails, PlanningTaskList};
 mod task_verification;
 pub use task_verification::{TaskVerificationReceiptState, TaskVerificationState};
 
@@ -1929,6 +1931,8 @@ pub enum KernelQuery {
     AutoFollow {},
     ThreadActivity {},
     Planning {},
+    /// 기존 list_tasks의 원본 필드와 같은 snapshot revision을 읽는다. 실행하지 않는다.
+    ListTasks {},
     TaskEvidence {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(length(min = 1, max = 256))]
@@ -2049,6 +2053,7 @@ impl KernelQuery {
             Self::Planning {} => KernelQueryAnswer::Planning(PlanningState::from_core(
                 &snapshot.planning_parallel.planning_runtime,
             )),
+            Self::ListTasks {} => KernelQueryAnswer::ListTasks(PlanningTaskList::unavailable()),
             Self::TaskEvidence { .. } => {
                 KernelQueryAnswer::TaskEvidence(TaskEvidenceState::unavailable())
             }
@@ -2118,6 +2123,8 @@ spec_names! {
             "The threads that still have work: a running turn, a pending approval, or automatic follow-up.";
         Planning => "planning",
             "The planning queue and the first bounded page of current task evidence when available. Follow task_evidence.next_task_id with the task_evidence query to read later tasks.";
+        ListTasks => "list_tasks",
+            "Read all persisted tasks, including completed and cancelled tasks, with their editable fields and the planning revision from the same authority snapshot. This reuses the planning-tool list_tasks read and never starts work.";
         TaskEvidence => "task_evidence",
             "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.";
         Parallel => "parallel",
@@ -2175,6 +2182,7 @@ pub enum KernelQueryAnswer {
         threads: Vec<ThreadActivity>,
     },
     Planning(PlanningState),
+    ListTasks(PlanningTaskList),
     TaskEvidence(TaskEvidenceState),
     Parallel(ParallelState),
     /// 사건 하나는 `sequence`, `recorded_at`, `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).

@@ -20,6 +20,7 @@ import { useWorkingTree, type WorkingTree, workingTreeCounts, WorkingTreePanel }
 import { Icon } from "./design/icons";
 import { useResizableWidth } from "./design/useResizableWidth";
 import { KernelPanel } from "./kernel/KernelPanel";
+import { TaskEditor, type TaskDraftSource } from "./kernel/TaskEditor";
 import { IssuePanel } from "./kernel/IssuePanel";
 import type { IssueDecisionAttention, KernelInterest } from "./kernel/kernelConnection";
 import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
@@ -534,6 +535,15 @@ export function App() {
     : panel === "issues" ? "issues" : panel === "kernel" ? "overview" : "issue_attention";
   const kernelPhase = useDesktopStore((state) => state.kernel.phase);
   const attachedWorkspace = useDesktopStore((state) => state.kernel.workspace);
+  const [taskEditor, setTaskEditor] = useState<{ workspace: string; source?: TaskDraftSource } | null>(null);
+  const openTaskEditor = useCallback((source?: TaskDraftSource) => {
+    if (!session.current || !attachedWorkspace || kernelPhase !== "attached") return;
+    session.current.taskAuthoring.beginDraft(attachedWorkspace);
+    setTaskEditor({ workspace: attachedWorkspace, source });
+  }, [attachedWorkspace, kernelPhase]);
+  useEffect(() => {
+    if (taskEditor && kernelWorkspace !== taskEditor.workspace) setTaskEditor(null);
+  }, [kernelWorkspace, taskEditor]);
   const kernelMessage = useDesktopStore((state) => state.kernel.message);
   const panelMaximized = useUiStore((state) => state.panelMaximized);
   useEffect(() => {
@@ -790,7 +800,8 @@ export function App() {
             {view === "thread" && (
               <>
                 <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} />
-                <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
+                <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()}
+                  onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined} />
                 {/* 스레드마다 새로 만든다. 전송 중 표시와 오류가 다른 스레드의 입력창으로 넘어가지 않는다. 초안은 `uiStore` 에 남는다. */}
                 <Composer key={openThreadId ?? ""} actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
               </>
@@ -832,7 +843,8 @@ export function App() {
                 skills={{ cwd: openCwd ?? null, connected, skills: window.akra.skills, listCodexSkills, onSkillsChanged }} />}
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
-                onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread} />}
+                onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread}
+                onEditTasks={() => openTaskEditor()} />}
               {panel === "issues" && (
                 <IssuePanel
                   key={kernelWorkspace}
@@ -882,6 +894,9 @@ export function App() {
         if (path) { showView("home"); useUiStore.setState({ homeCwd: path }); }
       }}/>}
       <ZoomNotice />
+      {taskEditor && session.current && <TaskEditor key={taskEditor.workspace}
+        workspace={taskEditor.workspace} source={taskEditor.source} controller={session.current.taskAuthoring}
+        onClose={() => setTaskEditor(null)} onSaved={() => { void session.current?.refreshKernel(); }} />}
       <Toasts />
     </div>
   );

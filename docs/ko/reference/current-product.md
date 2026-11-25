@@ -131,6 +131,14 @@ fail-closed입니다. 세션 전체 grant는 저장하지 않습니다.
 - Queue-idle 동작은 승인된 direction authority를 따릅니다.
 - Admin/API intake는 검증된 `ready` task 하나를 만들며 `in_progress` task를 중단하지 않습니다.
 - `akra planning-tool`은 automation caller의 구조화된 list/create/update 경계입니다.
+- Desktop에서 선택한 대화 내용을 작업 초안으로 열고 제목·설명·완료 기준을 검토한 뒤 확정합니다.
+  새 작업은 `awaiting_user`로 저장하며 초안 열기와 저장은 모델 턴을 시작하지 않습니다.
+- 커널 패널의 작업 편집은 완료·취소된 작업도 포함합니다. `list_tasks` 조회는 기존 planning-tool의
+  같은 원본 snapshot과 planning revision을 재사용합니다. 수정하지 않은 필드는 보존하고 CAS로
+  저장하며, 진행 중 작업의 보호는 호스트에서 계속 검사합니다.
+- 저장 응답을 잃으면 원 명령 키와 operation 기록을 읽어 task ID를 확인합니다. 성공 기록에는
+  task ID와 planning revision만 남깁니다. 복구는 읽기 전용이며 기록 누락·보존 만료·옛 형식·중단으로
+  결과를 확정할 수 없을 때는 미확정으로 유지하고 작업을 다시 만들지 않습니다.
 - Hidden planning worker는 활성 app-server 실행 profile을 상속합니다. Developer 계약은 계속
   planning-only이며 host가 구조화 명령을 검증하고 적용합니다.
 

@@ -188,6 +188,13 @@ pub struct KernelCommandDescriptor {
 /// 기록에 남기는 호출자 이름의 최대 길이이다. 이름은 클라이언트가 정하므로 길이를 막는다.
 pub const CALLER_NAME_MAX_CHARS: usize = 64;
 
+/// 사용자 task 편집의 결과 좌표다. 원문과 완료 기준은 기록하지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskMutationRecord {
+    pub task_id: String,
+    pub planning_revision: i64,
+}
+
 /// 명령의 영수증이다 (plan 19 Q3-6). `op_id` 는 그 명령을 받은 기록의 sequence 이다. 진행은 그 뒤의 기록이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperationReceipt {
@@ -407,6 +414,9 @@ pub enum KernelEvent {
         /// 성공한 명령과 이유 코드로 끝난 명령에는 없다.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
+        /// 같은 멱등 키로 재접속한 클라이언트가 원 task를 찾는 좌표다. 옛 기록에는 없다.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_mutation: Option<TaskMutationRecord>,
     },
     /*
      * 저장소의 git 상태가 지난 관찰과 다르다 (plan 20 §4.1). 커널은 주기적으로 본다. 그래서 관찰 사이의 변화
@@ -1128,6 +1138,7 @@ pub fn restart_closures(events: &[KernelEvent]) -> Vec<KernelEvent> {
         let open = states.get(op_id).is_some_and(|state| !state.is_end());
         if open && !queued.contains(op_id) {
             closures.push(KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: *op_id,
                 thread_id: thread_id.clone(),
                 result: OperationEnd::Lost,
@@ -1211,6 +1222,7 @@ pub fn turn_events_between(before: &[ThreadTurn], after: &[ThreadTurn]) -> Vec<K
         .filter_map(|turn| Some((turn, turn.op_id?)))
         .filter(|(_, op_id)| !after.iter().any(|other| other.op_id == Some(*op_id)))
         .map(|(turn, op_id)| KernelEvent::CommandCompleted {
+            task_mutation: None,
             op_id,
             thread_id: turn.thread_id.clone(),
             result: OperationEnd::Failed,
@@ -1616,6 +1628,7 @@ mod tests {
         assert_eq!(
             restart_closures(&records),
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 4,
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Lost,
@@ -1670,6 +1683,7 @@ mod tests {
         assert_eq!(
             turn_events_between(&submitting, &[]),
             vec![KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 7,
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,
@@ -1737,6 +1751,7 @@ mod tests {
             ),
             (
                 KernelEvent::CommandCompleted {
+                    task_mutation: None,
                     op_id: 7,
                     thread_id: "thread-1".to_string(),
                     result: OperationEnd::Failed,
@@ -1782,6 +1797,7 @@ mod tests {
                 &[
                     received_command(4, "steer_turn"),
                     KernelEvent::CommandCompleted {
+                        task_mutation: None,
                         op_id: 4,
                         thread_id: "thread-1".to_string(),
                         result: OperationEnd::Done,
@@ -1821,6 +1837,7 @@ mod tests {
                 turn_ended("turn-1", TurnEndOutcome::Lost, Some(1)),
                 turn_ended("turn-auto", TurnEndOutcome::Lost, None),
                 KernelEvent::CommandCompleted {
+                    task_mutation: None,
                     op_id: 2,
                     thread_id: "thread-1".to_string(),
                     result: OperationEnd::Lost,
@@ -2003,6 +2020,7 @@ mod tests {
                 reason: ReasonCode::NoMatchingTurn,
             },
             KernelEvent::CommandCompleted {
+                task_mutation: None,
                 op_id: 7,
                 thread_id: "thread-1".to_string(),
                 result: OperationEnd::Failed,

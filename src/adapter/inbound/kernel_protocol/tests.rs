@@ -844,7 +844,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 19);
+    assert_eq!(queries.len(), 20);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Delegations {},
         KernelQuery::Delegation { id: "job-1".into() },
@@ -857,6 +857,7 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},
         KernelQuery::Planning {},
+        KernelQuery::ListTasks {},
         KernelQuery::TaskEvidence {
             task_ids: None,
             after_task_id: None,
@@ -2379,6 +2380,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             reason: ReasonCode::Busy,
         },
         Record::CommandCompleted {
+            task_mutation: None,
             op_id: 7,
             thread_id: "thread-1".to_string(),
             result: crate::domain::kernel_event::OperationEnd::Failed,
@@ -2568,6 +2570,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},
         KernelQuery::Planning {},
+        KernelQuery::ListTasks {},
         KernelQuery::TaskEvidence {
             task_ids: None,
             after_task_id: None,
