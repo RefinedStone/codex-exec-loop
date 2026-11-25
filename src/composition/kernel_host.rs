@@ -644,6 +644,7 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             | StoredCommandResult::IssueAutonomyChanged { .. }
             | StoredCommandResult::IssueBindingPauseRequested { .. }
             | StoredCommandResult::IssueDecisionResolved { .. }
+            | StoredCommandResult::IssueDecisionRequested { .. }
             | StoredCommandResult::IssueIntervened { .. },
         ) => {
             return None;

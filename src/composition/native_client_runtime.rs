@@ -1453,6 +1453,7 @@ impl NativeClientRuntime {
                 | StoredCommand::SetIssueAutonomy { .. }
                 | StoredCommand::SetIssueBindingPaused { .. }
                 | StoredCommand::AnswerIssueDecision { .. }
+                | StoredCommand::AskIssueDecision { .. }
                 | StoredCommand::InterveneIssue { .. }
         );
         let is_binding_pause_command =
@@ -1517,6 +1518,11 @@ impl NativeClientRuntime {
                 changed: true,
                 catalog_revision,
                 ..
+            }
+            | StoredCommandResult::IssueDecisionRequested {
+                fact,
+                changed: true,
+                catalog_revision,
             },
         )) = &end
         {

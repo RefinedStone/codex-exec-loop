@@ -281,7 +281,8 @@ pub(crate) fn build_decisions(
             store,
             triage,
             IssuePolicyService::new(policy),
-        ),
+        )
+        .with_execution(build_execution(workspace_dir)),
     )
 }
 

@@ -246,6 +246,7 @@ impl KernelCommandPort for CommandOnlyKernel {
     ) -> Result<Value> {
         let sensitive_error = match input.get("type").and_then(Value::as_str) {
             Some("answer_issue_decision") => Some("invalid issue decision answer parameters"),
+            Some("ask_issue_decision") => Some("invalid issue question parameters"),
             Some("steer_issue") => Some("invalid issue steer parameters"),
             _ => None,
         };
@@ -320,6 +321,7 @@ impl KernelCommandPort for CommandOnlyKernel {
                 && matches!(
                     command.as_ref(),
                     StoredCommand::AnswerIssueDecision { .. }
+                        | StoredCommand::AskIssueDecision { .. }
                         | StoredCommand::InterveneIssue { .. }
                         | StoredCommand::SetIssueAutonomy { .. }
                         | StoredCommand::PrepareEvidence { .. }
@@ -435,6 +437,20 @@ impl KernelCommandPort for CommandOnlyKernel {
             completed.push(record(
                 sequence,
                 KernelEvent::issue_decision_resolved(fact, *catalog_revision),
+            ));
+        }
+        if let WorkEnd::Done(Some(StoredCommandResult::IssueDecisionRequested {
+            fact,
+            changed: true,
+            catalog_revision,
+        })) = &end
+        {
+            let sequence = completed_sequence
+                .checked_add(1)
+                .context("kernel event sequence exhausted")?;
+            completed.push(record(
+                sequence,
+                KernelEvent::issue_decision_requested(fact, *catalog_revision),
             ));
         }
         if let WorkEnd::Done(Some(StoredCommandResult::IssueIntervened { receipt })) = &end {

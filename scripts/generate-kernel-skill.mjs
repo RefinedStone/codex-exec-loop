@@ -37,7 +37,30 @@ const lines = [
 for (const command of spec.commands) {
   lines.push(`| \`akra kernel ${command.scope} ${command.name} --json\` | ${command.effect} | ${command.summary} |`);
 }
-lines.push("", "Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.", "", "## Queries", "");
+lines.push(
+  "",
+  "Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.",
+  "",
+  "## Ask a person during issue work",
+  "",
+  "A worker on an issue work order asks a choice question with `ask_issue_decision`. Do not pass an issue number:",
+  "the kernel finds the issue and this thread from the running lease of `--branch`.",
+  "",
+  "```sh",
+  "akra kernel issue ask_issue_decision --workspace <repository checkout> --branch \"$(git branch --show-current)\" \\",
+  "  --question 'Keep format A or move to B?' \\",
+  "  --options '[{\"id\":\"a\",\"label\":\"Keep A\"},{\"id\":\"b\",\"label\":\"Move to B\"}]' --recommended a --json",
+  "```",
+  "",
+  "- Use 2 to 32 options. The question and labels become a shared copy for a person: never put secrets in them.",
+  "- `--workspace` is the repository checkout (the first line of `git worktree list`). A slot worktree cannot attach the kernel.",
+  "- After the command answers, end the turn. The task waits as `awaiting_user`; the answer arrives once in this thread.",
+  "- Sending the same question again returns the same decision. `issue_question_limit` means a question is already open: do not ask again.",
+  "- The asking connection cannot answer its own question (`own_issue_question`). A person answers it in Desktop.",
+  "",
+  "## Queries",
+  "",
+);
 for (const query of spec.queries) {
   lines.push(`- \`akra kernel query ${query.name} --json\`: ${query.summary}`);
 }

@@ -197,6 +197,20 @@ impl StoredCommandService {
                     catalog_revision: answer.commit.catalog_revision,
                 })
             }
+            StoredCommand::AskIssueDecision { request } => {
+                let context = context
+                    .ok_or_else(|| anyhow::anyhow!("agent questions require server context"))?;
+                let commit = self
+                    .decisions
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("issue decisions are unavailable"))?
+                    .ask(request, context)?;
+                Ok(StoredCommandResult::IssueDecisionRequested {
+                    fact: Box::new(commit.record.request.fact()),
+                    changed: commit.changed,
+                    catalog_revision: commit.catalog_revision,
+                })
+            }
             StoredCommand::SetIssueAutomationMode { mode } => {
                 let change = self
                     .issues
@@ -317,6 +331,9 @@ impl StoredCommandService {
             Ok(result) => Ok(StoredCommandOutcome::Done(result)),
             // 낡은 revision 과 잡힌 guard 는 실패가 아니라 거절이다. 아무것도 바뀌지 않았다.
             Err(error) => {
+                if let Some(rejection) = error.downcast_ref::<StoredCommandRejection>() {
+                    return Ok(StoredCommandOutcome::Rejected(rejection.clone()));
+                }
                 if error.downcast_ref::<crate::domain::planning::evidence::TaskEvidenceError>()
                     == Some(&crate::domain::planning::evidence::TaskEvidenceError::HumanConfirmationRequired)
                 {

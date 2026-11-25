@@ -2,11 +2,15 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::application::port::inbound::stored_command_port::{
+    AskIssueDecisionOption, AskIssueDecisionRequest,
+};
+use crate::domain::issue_automation::agent_question::MAX_AGENT_QUESTION_BYTES;
 use crate::domain::issue_automation::arbiter::IssueArbiterWaitReason;
 use crate::domain::issue_automation::decision::{
     IssueDecisionFact, IssueDecisionKind, IssueDecisionState, IssueDecisionTimeout,
     MAX_ISSUE_DECISION_ID_BYTES, MAX_ISSUE_DECISION_NOTE_BYTES, MAX_ISSUE_DECISION_OPTION_BYTES,
-    StoredIssueDecision,
+    MAX_ISSUE_DECISION_OPTIONS, StoredIssueDecision,
 };
 use crate::domain::issue_automation::delivery::{
     IssueDeliveryDiffVerdict, IssueDeliveryRiskReason,
@@ -144,6 +148,59 @@ pub(super) fn validate_answer_input(
         ));
     }
     Ok(())
+}
+
+/// 에이전트 질문의 입력 모양이다. 글의 공유본 처리는 서비스가 한다. 원문을 오류에 넣지 않는다.
+pub(super) fn ask_input(
+    branch: String,
+    question: String,
+    options: Vec<IssueQuestionOptionFields>,
+    recommended: Option<String>,
+) -> Result<AskIssueDecisionRequest, KernelProtocolError> {
+    let invalid = || KernelProtocolError::invalid_params("invalid issue question");
+    let mut ids = std::collections::BTreeSet::new();
+    if !valid_identifier(&branch, 256)
+        || !valid_text(&question, MAX_AGENT_QUESTION_BYTES)
+        || !(2..=MAX_ISSUE_DECISION_OPTIONS).contains(&options.len())
+        || options.iter().any(|option| {
+            !valid_identifier(&option.id, MAX_ISSUE_DECISION_OPTION_BYTES)
+                || !valid_text(&option.label, 256)
+                || !ids.insert(option.id.as_str())
+        })
+        || recommended.as_deref().is_some_and(|id| !ids.contains(id))
+    {
+        return Err(invalid());
+    }
+    Ok(AskIssueDecisionRequest {
+        branch,
+        question,
+        options: options
+            .into_iter()
+            .map(|option| AskIssueDecisionOption {
+                id: option.id,
+                label: option.label,
+            })
+            .collect(),
+        recommended,
+    })
+}
+
+/// 에이전트 질문의 선택지 하나이다. 효과는 서버가 고정한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueQuestionOptionFields {
+    #[schemars(length(min = 1, max = 128), regex(pattern = super::NON_BLANK))]
+    pub id: String,
+    #[schemars(length(min = 1, max = 256), regex(pattern = super::NON_BLANK))]
+    pub label: String,
+}
+
+fn valid_text(value: &str, maximum_bytes: usize) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= maximum_bytes
+        && !value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
 }
 
 fn valid_identifier(value: &str, maximum_bytes: usize) -> bool {

@@ -21,6 +21,8 @@ use crate::domain::issue_automation::policy::IssueAutomationGateAction;
 use crate::domain::issue_automation::work_control::{IssueWorkControl, IssueWorkControlAction};
 use std::sync::atomic::AtomicUsize;
 
+mod agent_ask;
+
 const REPLY: &str = "기존 작업의 계약을 유지하고 검증 결과를 확인해 주세요.";
 
 struct AnswerExecution {
@@ -29,6 +31,13 @@ struct AnswerExecution {
     receipt: Mutex<Option<IssueWorkAnswerReceipt>>,
     polls: AtomicUsize,
     lose_first_ack: AtomicBool,
+    ask: Mutex<
+        Option<(
+            String,
+            crate::domain::issue_automation::agent_question::IssueAgentAsk,
+        )>,
+    >,
+    awaited: Mutex<Vec<crate::domain::issue_automation::agent_question::IssueAgentAsk>>,
 }
 
 impl AnswerExecution {
@@ -39,6 +48,8 @@ impl AnswerExecution {
             receipt: Mutex::new(None),
             polls: AtomicUsize::new(0),
             lose_first_ack: AtomicBool::new(false),
+            ask: Mutex::new(None),
+            awaited: Mutex::new(Vec::new()),
         })
     }
 }
@@ -111,6 +122,28 @@ impl IssueWorkExecutionPort for AnswerExecution {
             bail!("simulated lost reply ACK");
         }
         Ok(receipt)
+    }
+    fn asking_worker(
+        &self,
+        _: &str,
+        branch: &str,
+    ) -> Result<
+        Option<(
+            String,
+            crate::domain::issue_automation::agent_question::IssueAgentAsk,
+        )>,
+    > {
+        assert_eq!(branch, agent_ask::BRANCH);
+        Ok(self.ask.lock().unwrap().clone())
+    }
+    fn await_question(
+        &self,
+        _: &str,
+        _: &str,
+        ask: &crate::domain::issue_automation::agent_question::IssueAgentAsk,
+    ) -> Result<bool> {
+        self.awaited.lock().unwrap().push(ask.clone());
+        Ok(true)
     }
     fn question_answer_receipt(
         &self,

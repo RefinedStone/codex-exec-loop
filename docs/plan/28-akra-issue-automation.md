@@ -842,7 +842,11 @@ IA4 전체의 완료 기준은 후속 조각까지 포함한다.
 
 | 조각 | 상태 | 계약과 남은 범위 |
 | --- | --- | --- |
+| IA8-1 · #2566 | 구현 PR · 리뷰 대기 | 에이전트의 `ask_issue_decision`. branch → lease·thread → 작업 지시 → 이슈. 질문을 열면 그 task 는 `awaiting_user` 가 되고 턴이 끝난다. 답은 IA4-1 의 재개 claim 으로 같은 thread 에 한 번 간다. 이슈마다 열린 질문 1개, 초과는 `issue_question_limit`. 질문한 연결의 답은 `own_issue_question`. [reference](../reference/current-product.md#issue-automation-execution) |
 | IA8-3 · #2568 | 구현 PR · 리뷰 대기 | Telegram 결정 요청·중재자 결정·실패 알림 (`feedback.telegram`, 기본 꺼짐), `/decide` 답. 알림은 식별자만 싣고 intent 마다 한 번 (at-most-once, 결과 모름은 다시 보내지 않음). Telegram 답은 `by: agent` 이고 `human` 관문을 통과하지 못한다 (Q-IA11). 원격 message ID 기록과 Telegram 버튼은 범위 밖. [reference](../reference/current-product.md#issue-decision-telegram-notifications) |
+
+결정 (IA8-1, 2026-11-25): 질문이 열려 있는 동안 턴은 끝낸다. 명령은 바로 답하고 task 는 기존
+`awaiting_user` 의 보존과 재개 경로를 쓴다. 도구 호출이 사람의 답까지 턴을 붙잡지 않는다.
 
 ## 18. 조각의 완료 기준
 

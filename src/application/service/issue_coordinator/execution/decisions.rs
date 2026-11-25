@@ -8,11 +8,15 @@ use crate::application::port::outbound::issue_work_execution_port::{
 use crate::application::service::issue_collection::IssueCollectionCancellation;
 use crate::application::service::issue_decision::shared_text;
 use crate::domain::issue_automation::IssueAutomationState;
+use crate::domain::issue_automation::agent_question::{
+    IssueAgentAsk, agent_question_reply, agent_question_targets,
+};
+use crate::domain::issue_automation::collection::IssueCollectionItem;
 use crate::domain::issue_automation::coordinator::IssueWorkCheckpoint;
 use crate::domain::issue_automation::decision::{
     IssueDecisionAnswerBy, IssueDecisionBasis, IssueDecisionDefinition, IssueDecisionId,
-    IssueDecisionKind, IssueDecisionOption, IssueDecisionSharedText, IssueDecisionState,
-    IssueDecisionSubject, IssueDecisionTimeout,
+    IssueDecisionKind, IssueDecisionOption, IssueDecisionRequest, IssueDecisionSharedText,
+    IssueDecisionState, IssueDecisionSubject, IssueDecisionTimeout,
 };
 use crate::domain::issue_automation::execution::{
     IssueExecutionQuestion, IssueExecutionRecord, IssueExecutionState,
@@ -24,6 +28,10 @@ use crate::domain::issue_automation::execution_answer::{
 use crate::domain::issue_automation::policy::IssueAutomationGate;
 
 use super::super::{IssueCoordinatorFact, IssueCoordinatorService, Reporter};
+
+/// shortcut: the store returns at most 20 closed cards for one basis. An older answered agent
+/// question then falls back to the awaiting_user card; page the history if that becomes common.
+const ASKED_HISTORY: u16 = 20;
 
 pub(super) fn reconcile(
     service: &IssueCoordinatorService,
@@ -89,28 +97,35 @@ pub(super) fn reconcile(
     if basis.field_hash.as_ref() != Some(&work.order.field_hash) {
         return Ok(());
     }
-    let id = question_decision_id(work, question, &basis)?;
-    let definition = question_definition(work, question, basis)?;
-    let Some(commit) = cancel.commit_if_active(|| {
-        service
-            .decisions
-            .ensure_request_at(id.clone(), definition, now_unix_ms)
-    })?
-    else {
-        return Ok(());
+    // An agent question opened by ask_issue_decision owns this wait; no second card opens.
+    let asked = asked_decision(service, work, question, &item)?;
+    let request = match asked {
+        Some(request) => request,
+        None => {
+            let id = question_decision_id(work, question, &basis)?;
+            let definition = question_definition(work, question, basis)?;
+            let Some(commit) = cancel.commit_if_active(|| {
+                service
+                    .decisions
+                    .ensure_request_at(id.clone(), definition, now_unix_ms)
+            })?
+            else {
+                return Ok(());
+            };
+            if commit.record.request.id() != &id {
+                // The definition deduplicates on question_id; the generated ID additionally binds
+                // thread, task and generation. An old human answer cannot approve changed coordinates.
+                bail!("the stored decision belongs to another worker question identity");
+            }
+            if commit.changed {
+                committed(vec![IssueCoordinatorFact::Decision {
+                    fact: commit.record.request.fact(),
+                    revision: commit.catalog_revision,
+                }]);
+            }
+            commit.record.request
+        }
     };
-    if commit.record.request.id() != &id {
-        // The definition deduplicates on question_id; the generated ID additionally binds
-        // thread, task and generation. An old human answer cannot approve changed coordinates.
-        bail!("the stored decision belongs to another worker question identity");
-    }
-    if commit.changed {
-        committed(vec![IssueCoordinatorFact::Decision {
-            fact: commit.record.request.fact(),
-            revision: commit.catalog_revision,
-        }]);
-    }
-    let request = &commit.record.request;
     if !execution_enabled
         || cancel.is_cancelled()
         || request.state() != IssueDecisionState::Answered
@@ -118,13 +133,11 @@ pub(super) fn reconcile(
         return Ok(());
     }
     let Some(answer) = request.answer().filter(|answer| {
-        answer.by == IssueDecisionAnswerBy::Human
-            && answer.confirmation.is_some()
-            && answer.option == "reply"
+        answer.by == IssueDecisionAnswerBy::Human && answer.confirmation.is_some()
     }) else {
         return Ok(());
     };
-    let Some(note) = &answer.note else {
+    let Some(message) = agent_question_reply(request.definition(), answer) else {
         return Ok(());
     };
     // A response to Spec does not renew the original Start authorization.
@@ -138,8 +151,8 @@ pub(super) fn reconcile(
         .policy
         .resolve(&service.workspace)
         .map_err(|_| anyhow!("the current answer disclosure policy is unavailable"))?;
-    let shared = shared_text(note.as_str(), &policy)?;
-    if shared.as_str() != note.as_str() {
+    let shared = shared_text(&message, &policy)?;
+    if shared.as_str() != message {
         // The stored human decision approved a different disclosed payload.
         bail!("the confirmed worker answer no longer matches its disclosure policy");
     }
@@ -274,6 +287,35 @@ fn save_receipt(
         )
     })?;
     Ok(())
+}
+
+/// Open agent questions come from the same catalog snapshot; answered ones from recent history.
+fn asked_decision(
+    service: &IssueCoordinatorService,
+    work: &IssueWorkCheckpoint,
+    question: &IssueExecutionQuestion,
+    item: &IssueCollectionItem,
+) -> Result<Option<IssueDecisionRequest>> {
+    let owned = |request: &IssueDecisionRequest| {
+        let definition = request.definition();
+        IssueAgentAsk::from_definition(definition).is_some()
+            && definition.basis.work_order_id.as_deref() == Some(work.order.work_order_id.as_str())
+            && agent_question_targets(definition, question)
+    };
+    if let Some(open) = item
+        .open_decisions
+        .iter()
+        .map(|decision| &decision.request)
+        .find(|request| owned(request))
+    {
+        return Ok(Some(open.clone()));
+    }
+    Ok(service
+        .store
+        .closed_issue_decisions(&service.workspace, &work.order.issue, ASKED_HISTORY)?
+        .into_iter()
+        .map(|decision| decision.request)
+        .find(|request| request.state() == IssueDecisionState::Answered && owned(request)))
 }
 
 fn question_decision_id(

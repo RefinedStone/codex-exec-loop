@@ -233,6 +233,32 @@ pub trait IssueWorkExecutionPort: Send + Sync {
         Ok(false)
     }
 
+    /// 이 branch 에서 지금 실행 중인 이슈 작업의 (work_order_id, 좌표)이다.
+    /// lease·thread 가 하나가 아니거나 이미 대기 중이면 None 이다.
+    fn asking_worker(
+        &self,
+        _workspace: &str,
+        _branch: &str,
+    ) -> Result<
+        Option<(
+            String,
+            crate::domain::issue_automation::agent_question::IssueAgentAsk,
+        )>,
+    > {
+        Ok(None)
+    }
+
+    /// 그 좌표의 task 를 awaiting_user 로 둔다. 턴이 끝나도 thread 와 worktree 가 남는다.
+    /// lease generation 이 바뀌었으면 false 이다. 이미 기다리는 task 는 true 이다.
+    fn await_question(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _ask: &crate::domain::issue_automation::agent_question::IssueAgentAsk,
+    ) -> Result<bool> {
+        anyhow::bail!("agent questions are unavailable")
+    }
+
     /// Read-only, uniquely attributable worker conversation. Never creates or resumes a turn.
     fn conversation_thread_id(
         &self,

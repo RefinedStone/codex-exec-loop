@@ -494,6 +494,64 @@ pub(super) fn mark_awaiting_user_detail(
         ));
 }
 
+/// An agent question parks the asking task while its turn is still running. The existing
+/// preserve path then keeps the thread and worktree when that turn ends (IA8-1).
+pub(super) fn mark_question_waiting(
+    workspace: &str,
+    expected: &ParallelModeSlotLeaseSnapshot,
+) -> Result<bool> {
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace)?;
+    let mut connection = open_authority_connection(&location)?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current = load_lease(&tx, &expected.slot_id)?;
+    if !current.is_some_and(|lease| {
+        lease.same_generation_as(expected)
+            && lease.state == crate::domain::parallel_mode::ParallelModeSlotLeaseState::Running
+    }) {
+        return Ok(false);
+    }
+    let snapshot = load_task_authority_snapshot_from_connection(&tx)?
+        .context("planning tasks are unavailable")?;
+    let mut candidate = snapshot.task_authority.clone();
+    let Some(task) = candidate
+        .tasks
+        .iter_mut()
+        .find(|task| task.id == expected.task_id)
+    else {
+        return Ok(false);
+    };
+    match task.status {
+        TaskStatus::AwaitingUser => return Ok(true),
+        TaskStatus::InProgress => {}
+        _ => return Ok(false),
+    }
+    task.status = TaskStatus::AwaitingUser;
+    task.last_updated_by = TaskActor::System;
+    task.updated_at = Utc::now().to_rfc3339();
+    runtime_projection::ensure_no_admin_authority_mutation_guard(&tx, "agent question", None)?;
+    let directions = load_direction_catalog_from_connection(&tx)?
+        .context("planning directions are unavailable")?;
+    let projection = PriorityQueueService::new().build_projection(&directions, &candidate)?;
+    SqlitePlanningAuthorityAdapter::write_task_authority_change_in_transaction(
+        &tx,
+        &location,
+        PlanningTaskAuthorityCommit {
+            observed_planning_revision: Some(snapshot.planning_revision),
+            task_authority: &candidate,
+            queue_projection: &projection,
+        },
+        Some(&snapshot.task_authority),
+        Some(PlanningTaskAuthorityMutationAudit {
+            task_ids: std::slice::from_ref(&expected.task_id),
+            legacy_source_turn_id: None,
+            provenance: &TaskMutationProvenance::default(),
+        }),
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
 pub(super) fn preserve_waiting(
     workspace: &str,
     expected: &ParallelModeSlotLeaseSnapshot,

@@ -85,6 +85,22 @@ pub struct StoredDirectionFields {
     pub state: Option<DirectionState>,
 }
 
+/// 실행 중인 에이전트의 질문이다. 대상 이슈와 답할 thread 는 서버가 그 branch 의 lease 에서 찾는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskIssueDecisionRequest {
+    /// 질문하는 worktree 의 현재 Git branch 이다.
+    pub branch: String,
+    pub question: String,
+    pub options: Vec<AskIssueDecisionOption>,
+    pub recommended: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskIssueDecisionOption {
+    pub id: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
     SetIssueBindingPaused {
@@ -112,6 +128,9 @@ pub enum StoredCommand {
         decision_id: String,
         option: String,
         note: Option<String>,
+    },
+    AskIssueDecision {
+        request: AskIssueDecisionRequest,
     },
     SetIssueAutomationMode {
         mode: IssueCollectionMode,
@@ -169,6 +188,7 @@ impl StoredCommand {
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
+            Self::AskIssueDecision { .. } => KernelCommandKind::AskIssueDecision,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
             Self::UpdateTask { .. } => KernelCommandKind::UpdateTask,
             Self::DeleteTask { .. } => KernelCommandKind::DeleteTask,
@@ -205,6 +225,12 @@ pub enum StoredCommandResult {
     IssueDecisionResolved {
         fact: Box<IssueDecisionFact>,
         outcome: IssueDecisionOutcome,
+        changed: bool,
+        catalog_revision: u64,
+    },
+    /// 에이전트 질문이 열렸다. 같은 질문의 재전송은 `changed: false` 로 같은 결정을 돌려준다.
+    IssueDecisionRequested {
+        fact: Box<IssueDecisionFact>,
         changed: bool,
         catalog_revision: u64,
     },
@@ -256,6 +282,15 @@ pub struct StoredCommandRejection {
     /// 값에 닿은 뒤에 답한다 (plan 18 K4-9d).
     pub planning_revision: Option<i64>,
 }
+
+/// 서비스가 이 값을 오류로 돌려주면 실행기는 실패가 아니라 거절로 답한다.
+impl std::fmt::Display for StoredCommandRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for StoredCommandRejection {}
 
 impl From<&PlanningMutationRefusal> for StoredCommandRejection {
     fn from(refusal: &PlanningMutationRefusal) -> Self {

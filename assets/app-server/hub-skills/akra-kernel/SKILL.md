@@ -54,6 +54,7 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel issue set_issue_autonomy --json` | write | Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result. |
 | `akra kernel issue set_issue_binding_paused --json` | write | Request a durable pause or resume for one issue binding. The response confirms acceptance; only a completed receipt confirms that in-flight effects have drained. Resuming requires an exact current Desktop human confirmation. Requires a running kernel; other bindings and ordinary tasks continue. |
 | `akra kernel issue answer_issue_decision --json` | write | Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt. |
+| `akra kernel issue ask_issue_decision --json` | write | Open one choice question from the running issue worker to a person. The server finds the issue and the thread from the running lease of `branch` (the asking worktree's current Git branch); the question text and labels pass the shared-copy policy. The task then waits as awaiting_user: end the turn after the command answers. A person's answer arrives once in the same thread. Resending the same question returns the same decision; another question beyond the open limit is rejected. |
 | `akra kernel issue hold_issue --json` | write | Hold one issue work order and revoke its unused work permits. Running turns are preserved. Reuse command_id to recover the same intervention receipt. |
 | `akra kernel issue release_issue --json` | write | Release one issue hold. Previously revoked permits stay revoked until fresh approval and gate checks. Reuse command_id to recover the same intervention receipt. |
 | `akra kernel issue steer_issue --json` | write | Queue guidance before execution, or steer the linked running thread once. An unknown delivery is not retried automatically. Reuse command_id to recover the same intervention receipt. |
@@ -70,6 +71,23 @@ Use `akra kernel history --after <sequence> --wait --json` to wait for records.
 | `akra kernel delegation retry_delegation --json` | write | Create a new job for a safely retryable delegation. Reuse the request idempotency key for the same retry. |
 
 Pass input fields as `--field value`. Use the input schema from `describe` for required fields and types.
+
+## Ask a person during issue work
+
+A worker on an issue work order asks a choice question with `ask_issue_decision`. Do not pass an issue number:
+the kernel finds the issue and this thread from the running lease of `--branch`.
+
+```sh
+akra kernel issue ask_issue_decision --workspace <repository checkout> --branch "$(git branch --show-current)" \
+  --question 'Keep format A or move to B?' \
+  --options '[{"id":"a","label":"Keep A"},{"id":"b","label":"Move to B"}]' --recommended a --json
+```
+
+- Use 2 to 32 options. The question and labels become a shared copy for a person: never put secrets in them.
+- `--workspace` is the repository checkout (the first line of `git worktree list`). A slot worktree cannot attach the kernel.
+- After the command answers, end the turn. The task waits as `awaiting_user`; the answer arrives once in this thread.
+- Sending the same question again returns the same decision. `issue_question_limit` means a question is already open: do not ask again.
+- The asking connection cannot answer its own question (`own_issue_question`). A person answers it in Desktop.
 
 ## Queries
 

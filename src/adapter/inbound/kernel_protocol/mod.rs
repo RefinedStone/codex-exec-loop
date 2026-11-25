@@ -333,6 +333,7 @@ impl CommandRequest {
             | KernelCommand::SetIssueAutonomy { .. }
             | KernelCommand::SetIssueBindingPaused { .. }
             | KernelCommand::AnswerIssueDecision { .. }
+            | KernelCommand::AskIssueDecision { .. }
             | KernelCommand::HoldIssue { .. }
             | KernelCommand::ReleaseIssue { .. }
             | KernelCommand::SteerIssue { .. }
@@ -495,6 +496,12 @@ pub enum CommandResult {
         catalog_revision: u64,
         reason: Option<ReasonCode>,
     },
+    /// 에이전트 질문이 열렸다. `changed: false` 는 같은 질문의 재전송이다.
+    IssueDecisionRequested {
+        decision: Box<IssueDecisionFactRecord>,
+        changed: bool,
+        catalog_revision: u64,
+    },
     TaskCreated {
         task_id: String,
         planning_revision: i64,
@@ -576,6 +583,15 @@ impl CommandResult {
                     .then_some(ReasonCode::DecisionSuperseded),
                 decision: Box::new(fact.as_ref().into()),
                 outcome,
+                changed,
+                catalog_revision,
+            },
+            StoredCommandResult::IssueDecisionRequested {
+                fact,
+                changed,
+                catalog_revision,
+            } => Self::IssueDecisionRequested {
+                decision: Box::new(fact.as_ref().into()),
                 changed,
                 catalog_revision,
             },
@@ -671,6 +687,7 @@ impl CommandResult {
             KernelCommandKind::SetIssueAutonomy => Some("issue_autonomy_changed"),
             KernelCommandKind::SetIssueBindingPaused => Some("issue_binding_pause_requested"),
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
+            KernelCommandKind::AskIssueDecision => Some("issue_decision_requested"),
             KernelCommandKind::HoldIssue
             | KernelCommandKind::ReleaseIssue
             | KernelCommandKind::SteerIssue
@@ -1016,6 +1033,19 @@ pub enum KernelCommand {
         #[schemars(length(max = 4096))]
         note: Option<String>,
     },
+    /// 실행 중인 이슈 작업의 에이전트가 선택형 질문을 연다. 이슈와 thread 는 서버가 branch 의 lease 에서 찾는다.
+    AskIssueDecision {
+        /// 질문하는 worktree 의 현재 Git branch 이다 (`git branch --show-current`).
+        #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
+        branch: String,
+        #[schemars(length(min = 1, max = 2048), regex(pattern = NON_BLANK))]
+        question: String,
+        #[schemars(length(min = 2, max = 32))]
+        options: Vec<issue_decision::IssueQuestionOptionFields>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
+        recommended: Option<String>,
+    },
     HoldIssue {
         issue: crate::domain::kernel_event::IssueEventReference,
         #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
@@ -1302,6 +1332,7 @@ impl KernelCommand {
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
+            Self::AskIssueDecision { .. } => KernelCommandKind::AskIssueDecision,
             Self::HoldIssue { .. } => KernelCommandKind::HoldIssue,
             Self::ReleaseIssue { .. } => KernelCommandKind::ReleaseIssue,
             Self::SteerIssue { .. } => KernelCommandKind::SteerIssue,
@@ -1339,6 +1370,7 @@ impl KernelCommand {
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
             | Self::AnswerIssueDecision { .. }
+            | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }
             | Self::ReleaseIssue { .. }
             | Self::SteerIssue { .. }
@@ -1467,6 +1499,19 @@ impl KernelCommand {
                 decision_id,
                 option,
                 note,
+            },
+            StoredCommand::AskIssueDecision { request } => Self::AskIssueDecision {
+                branch: request.branch,
+                question: request.question,
+                options: request
+                    .options
+                    .into_iter()
+                    .map(|option| issue_decision::IssueQuestionOptionFields {
+                        id: option.id,
+                        label: option.label,
+                    })
+                    .collect(),
+                recommended: request.recommended,
             },
         }
     }
@@ -1663,6 +1708,14 @@ impl KernelCommand {
                     note,
                 }
             }
+            Self::AskIssueDecision {
+                branch,
+                question,
+                options,
+                recommended,
+            } => StoredCommand::AskIssueDecision {
+                request: issue_decision::ask_input(branch, question, options, recommended)?,
+            },
             Self::SetIssueAutonomy { command_id, level } => {
                 issue_autonomy::validate_input(&command_id)?;
                 StoredCommand::SetIssueAutonomy { command_id, level }
@@ -1813,6 +1866,7 @@ impl KernelCommand {
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
             | Self::AnswerIssueDecision { .. }
+            | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }
             | Self::ReleaseIssue { .. }
             | Self::SteerIssue { .. }

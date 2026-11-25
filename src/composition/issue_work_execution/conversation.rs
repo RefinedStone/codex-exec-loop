@@ -3,8 +3,10 @@ use anyhow::{Result, bail};
 
 use super::AkraIssueWorkExecutionAdapter;
 use super::observation::{self, ObservedExecution};
+use crate::domain::issue_automation::agent_question::IssueAgentAsk;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState,
 };
 use crate::domain::planning::TaskStatus;
 
@@ -17,6 +19,97 @@ pub(super) fn thread_id(
         return Ok(None);
     };
     select(&current)
+}
+
+/// The worker knows its branch. One lease names the task; its work order names the issue.
+pub(super) fn asking_worker(
+    adapter: &AkraIssueWorkExecutionAdapter,
+    workspace: &str,
+    branch: &str,
+) -> Result<Option<(String, IssueAgentAsk)>> {
+    let runtime = adapter.authority.load_runtime_projections(workspace)?;
+    let mut leases = runtime
+        .slot_leases
+        .values()
+        .filter(|lease| lease.branch_name == branch);
+    let (Some(lease), None) = (leases.next(), leases.next()) else {
+        return Ok(None);
+    };
+    let Some(order) = adapter
+        .repository
+        .load_work_order_for_task(workspace, &lease.task_id)?
+    else {
+        return Ok(None);
+    };
+    Ok(
+        asking_task(adapter, workspace, &order.work_order_id, &lease.task_id)?
+            .map(|ask| (order.work_order_id, ask)),
+    )
+}
+
+/// The asking task must be the active task with one running lease and one attributable thread.
+fn asking_task(
+    adapter: &AkraIssueWorkExecutionAdapter,
+    workspace: &str,
+    work_order_id: &str,
+    task_id: &str,
+) -> Result<Option<IssueAgentAsk>> {
+    let Some(current) = observation::load(adapter, workspace, work_order_id)? else {
+        return Ok(None);
+    };
+    current.observation.validate().map_err(anyhow::Error::msg)?;
+    // A waiting question already ended its turn; only a running turn can ask.
+    if current.observation.active_task_id.as_deref() != Some(task_id)
+        || current.observation.question.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(lease) = running_lease(&current, task_id) else {
+        return Ok(None);
+    };
+    let Some(thread_id) = from_current_lease(&current, lease)? else {
+        return Ok(None);
+    };
+    Ok(lease
+        .lease_generation
+        .clone()
+        .map(|lease_generation| IssueAgentAsk {
+            task_id: task_id.to_owned(),
+            thread_id,
+            lease_generation,
+        }))
+}
+
+pub(super) fn await_question(
+    adapter: &AkraIssueWorkExecutionAdapter,
+    workspace: &str,
+    work_order_id: &str,
+    ask: &IssueAgentAsk,
+) -> Result<bool> {
+    let Some(current) = observation::load(adapter, workspace, work_order_id)? else {
+        return Ok(false);
+    };
+    let Some(lease) = running_lease(&current, &ask.task_id)
+        .filter(|lease| lease.lease_generation.as_deref() == Some(ask.lease_generation.as_str()))
+    else {
+        return Ok(false);
+    };
+    adapter
+        .authority
+        .mark_worker_awaiting_question(workspace, lease)
+}
+
+fn running_lease<'a>(
+    current: &'a ObservedExecution,
+    task_id: &str,
+) -> Option<&'a ParallelModeSlotLeaseSnapshot> {
+    let mut leases = current
+        .runtime
+        .slot_leases
+        .values()
+        .filter(|lease| lease.task_id == task_id);
+    let lease = leases.next()?;
+    (leases.next().is_none() && lease.state == ParallelModeSlotLeaseState::Running).then_some(lease)
 }
 
 fn select(current: &ObservedExecution) -> Result<Option<String>> {

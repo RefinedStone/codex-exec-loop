@@ -113,6 +113,8 @@ spec_names! {
             "Request a durable pause or resume for one issue binding. The response confirms acceptance; only a completed receipt confirms that in-flight effects have drained. Resuming requires an exact current Desktop human confirmation. Requires a running kernel; other bindings and ordinary tasks continue.";
         AnswerIssueDecision => "answer_issue_decision",
             "Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
+        AskIssueDecision => "ask_issue_decision",
+            "Open one choice question from the running issue worker to a person. The server finds the issue and the thread from the running lease of `branch` (the asking worktree's current Git branch); the question text and labels pass the shared-copy policy. The task then waits as awaiting_user: end the turn after the command answers. A person's answer arrives once in the same thread. Resending the same question returns the same decision; another question beyond the open limit is rejected.";
         HoldIssue => "hold_issue",
             "Hold one issue work order and revoke its unused work permits. Running turns are preserved. Reuse command_id to recover the same intervention receipt.";
         ReleaseIssue => "release_issue",
@@ -304,6 +306,10 @@ spec_names! {
             "This action requires a current Desktop human confirmation. A client name or confirmation boolean is not evidence. Read the current state and ask the user in Desktop.";
         DecisionSuperseded => "decision_superseded",
             "The decision basis differs from the current issue assessment. The request was closed without applying the submitted answer; read the issue for current open decisions.";
+        IssueQuestionLimit => "issue_question_limit",
+            "The issue already has the maximum number of open agent questions. Nothing was asked. Do not ask again: end the turn and wait for the open question's answer in this thread, or read the issue for its open decisions.";
+        OwnIssueQuestion => "own_issue_question",
+            "The connection that opened this agent question cannot answer it. A person answers it in Desktop.";
         IssueAutomationOff => "issue_automation_off",
             "Issue collection is off. No source read was scheduled. Read issue_automation and decide whether to enable observe before sending sync_issues again.";
     }
@@ -420,6 +426,7 @@ impl KernelCommandKind {
             | Self::SetIssueAutonomy
             | Self::SetIssueBindingPaused
             | Self::AnswerIssueDecision
+            | Self::AskIssueDecision
             | Self::HoldIssue
             | Self::ReleaseIssue
             | Self::SteerIssue
@@ -506,11 +513,23 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::HumanConfirmationRequired],
             ),
-            Self::SetIssueAutonomy | Self::SetIssueBindingPaused | Self::AnswerIssueDecision => (
+            Self::SetIssueAutonomy | Self::SetIssueBindingPaused => (
                 CommandScope::Issue,
                 Write,
                 Keyed,
                 &[Reason::HumanConfirmationRequired],
+            ),
+            Self::AnswerIssueDecision => (
+                CommandScope::Issue,
+                Write,
+                Keyed,
+                &[Reason::HumanConfirmationRequired, Reason::OwnIssueQuestion],
+            ),
+            Self::AskIssueDecision => (
+                CommandScope::Issue,
+                Write,
+                Keyed,
+                &[Reason::IssueQuestionLimit],
             ),
             Self::HoldIssue
             | Self::ReleaseIssue
@@ -599,6 +618,7 @@ impl KernelCommandKind {
                 | Self::SetIssueAutomationMode
                 | Self::SetIssueAutonomy
                 | Self::AnswerIssueDecision
+                | Self::AskIssueDecision
                 | Self::HoldIssue
                 | Self::ReleaseIssue
                 | Self::SteerIssue

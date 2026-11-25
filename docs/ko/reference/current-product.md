@@ -181,6 +181,19 @@ Linear는 저장소 파일이 선택한 팀만 수집하고 같은 Propose·Nati
 않습니다. “내 대화로 열기”는 확인된 현재 thread나 공유본 초안을 열며, 내가 맡기와 턴 전송은 별도 행동입니다.
 대화의 신원이 모호하면 열 수 없는 상태로 둡니다.
 
+실행 중인 이슈 worker는 `akra kernel issue ask_issue_decision`으로 선택형 질문을 직접 열 수 있습니다
+(IA8-1, [#2566](https://github.com/RefinedStone/codex-exec-loop/issues/2566)). 명령은 worktree의 현재
+branch, 질문, 2~32개의 선택지, 선택적 권고를 받습니다. 이슈 번호는 받지 않습니다. 서버가 그 branch의
+실행 lease, thread, 작업 지시의 이슈를 찾습니다. 질문과 선택지 이름은 다른 결정과 같은 공유본 정책을
+지나고, 선택지의 효과 문장은 고정입니다. 명령은 질문한 연결을 기록하고 `agent_question` 결정 카드를 열며,
+그 lease generation의 task를 `awaiting_user`로 둡니다. worker는 이어서 턴을 끝냅니다. 기존 보존 경로가
+thread와 worktree를 남기며, 그 대기에는 두 번째 awaiting_user 카드를 열지 않습니다. 같은 질문을 다시
+보내면 같은 카드를 돌려줍니다. 이슈마다 열린 에이전트 질문은 하나입니다. 다른 질문은
+`issue_question_limit`과 그 `next`로 거절합니다. 질문한 연결은 자기 질문에 답하지 못하며
+(`own_issue_question`), 모든 답에는 검증된 사람 확인이 필요합니다. 답은 위의 재개 claim으로 같은 thread에
+한 번 전달되며, 질문·고른 선택지·선택적 공유 설명으로 이루어집니다. 생성된 `akra-kernel` skill이 사용법을
+설명합니다.
+
 신뢰된 통합은 변경할 수 없는 작업 사실입니다. 실행 진행을 `done`으로 고정하고, 외부 이슈의 열림·닫힘은
 따로 둡니다. 이후 `observe_again` 복구는 이 상태와 최초 통합 신원을 보존하면서 통합 후 검증을 다시
 관찰합니다. 새 구현 task를 만들지 않으며, 통합 후 큐 복구는 차단합니다. 한도 소진으로 `failed`였던
