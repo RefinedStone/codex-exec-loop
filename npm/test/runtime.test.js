@@ -29,7 +29,7 @@ test("resolveBinaryPath uses local vendor fallback", () => {
     "vendor",
     "x86_64-unknown-linux-gnu",
     "akra",
-    "codex-exec-loop-native",
+    "akra-ade",
   );
   fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
   fs.writeFileSync(binaryPath, "");
@@ -60,7 +60,7 @@ test("resolveBinaryPath prefers installed optional dependency", () => {
     "vendor",
     "x86_64-unknown-linux-gnu",
     "akra",
-    "codex-exec-loop-native",
+    "akra-ade",
   );
 
   fs.mkdirSync(path.dirname(binaryPath), { recursive: true });

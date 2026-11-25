@@ -1,5 +1,5 @@
 {
-  "$id": "urn:codex-exec-loop-native:app-server-protocol:server-request:snapshot",
+  "$id": "urn:akra-ade:app-server-protocol:server-request:snapshot",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "AbsolutePathBuf": {

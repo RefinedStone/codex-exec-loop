@@ -175,7 +175,7 @@ jobs:
             --tag "${GITHUB_REF_NAME}" \
             --repo "${GH_REPO}" \
             --expected-commit "${GITHUB_SHA}" \
-            --title "codex-exec-loop-native ${GITHUB_REF_NAME}" \
+            --title "Akra ADE ${GITHUB_REF_NAME}" \
             --notes "Automated native/npm release for ${GITHUB_REF_NAME}." \
             --asset-dir release-assets
 

@@ -40,9 +40,9 @@ node "${repo_root}/scripts/normalize_codex_app_server_schema.mjs" \
   --output="${output}" \
   --source-cli="${source_cli_version}" \
   --generated-at="${generated_at}" \
-  --schema-id="urn:codex-exec-loop-native:app-server-protocol:v2:snapshot" \
+  --schema-id="urn:akra-ade:app-server-protocol:v2:snapshot" \
   --schema-version="v2" \
-  --description="Checked-in Codex app-server protocol snapshot pinned by codex-exec-loop-native for startup diagnostics and adapter contract verification." \
+  --description="Checked-in Codex app-server protocol snapshot pinned by akra-ade for startup diagnostics and adapter contract verification." \
   --source-artifact="codex_app_server_protocol.v2.schemas.json"
 
 node "${repo_root}/scripts/normalize_codex_app_server_schema.mjs" \
@@ -50,7 +50,7 @@ node "${repo_root}/scripts/normalize_codex_app_server_schema.mjs" \
   --output="${server_request_output}" \
   --source-cli="${source_cli_version}" \
   --generated-at="${generated_at}" \
-  --schema-id="urn:codex-exec-loop-native:app-server-protocol:server-request:snapshot" \
+  --schema-id="urn:akra-ade:app-server-protocol:server-request:snapshot" \
   --schema-version="server-request" \
   --description="Checked-in Codex app-server server-request snapshot used to keep client request handling and explicit decline behavior aligned with the installed protocol." \
   --source-artifact="ServerRequest.json"

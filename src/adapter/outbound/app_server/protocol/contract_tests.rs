@@ -1682,7 +1682,7 @@ fn schema_snapshot_carries_provenance_and_reviewable_format() {
     let schema = schema_root();
     assert_eq!(
         schema.pointer("/$id").and_then(Value::as_str),
-        Some("urn:codex-exec-loop-native:app-server-protocol:v2:snapshot")
+        Some("urn:akra-ade:app-server-protocol:v2:snapshot")
     );
     assert_eq!(schema.get("version").and_then(Value::as_str), Some("v2"));
     assert_eq!(
@@ -1725,7 +1725,7 @@ fn server_request_schema_snapshot_carries_provenance_and_reviewable_format() {
     let schema = server_request_schema_root();
     assert_eq!(
         schema.pointer("/$id").and_then(Value::as_str),
-        Some("urn:codex-exec-loop-native:app-server-protocol:server-request:snapshot")
+        Some("urn:akra-ade:app-server-protocol:server-request:snapshot")
     );
     assert_eq!(
         schema.get("version").and_then(Value::as_str),

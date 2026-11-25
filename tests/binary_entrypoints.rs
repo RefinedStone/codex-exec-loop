@@ -11,7 +11,7 @@ use std::thread;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
-const DEFAULT_BIN: &str = env!("CARGO_BIN_EXE_codex-exec-loop-native");
+const DEFAULT_BIN: &str = env!("CARGO_BIN_EXE_akra-ade");
 const AKRA_BIN: &str = env!("CARGO_BIN_EXE_akra");
 const ADMIN_BIN: &str = env!("CARGO_BIN_EXE_akra-admin");
 const TELEGRAM_BIN: &str = env!("CARGO_BIN_EXE_akra-telegram");

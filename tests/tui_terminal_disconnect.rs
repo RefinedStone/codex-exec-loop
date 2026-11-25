@@ -99,7 +99,7 @@ fn set_nonblocking(file: &File) -> io::Result<()> {
 fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File) -> ChildGuard {
     let stdin = slave.try_clone().expect("PTY stdin should clone");
     let stdout = slave.try_clone().expect("PTY stdout should clone");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_codex-exec-loop-native"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_akra-ade"));
     command
         .current_dir(&fixture.workspace)
         .env_clear()

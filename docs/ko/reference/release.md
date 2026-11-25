@@ -18,9 +18,9 @@
 
 ```text
 dist/native/
-  codex-exec-loop-native-<version>-<target>/
-  codex-exec-loop-native-<version>-<target>.tar.gz
-  codex-exec-loop-native-<version>-<target>.tar.gz.sha256
+  akra-ade-<version>-<target>/
+  akra-ade-<version>-<target>.tar.gz
+  akra-ade-<version>-<target>.tar.gz.sha256
 ```
 
 Bundle에는 native binary, launcher, app-server skill, `scripts/gh-akra.sh`, `README.md`,
@@ -34,8 +34,8 @@ Rust binary를 선택해 실행하기만 합니다.
 
 ```bash
 ./scripts/verify_native_release.sh \
-  --archive dist/native/codex-exec-loop-native-<version>-<target>.tar.gz \
-  --bundle-dir dist/native/codex-exec-loop-native-<version>-<target> \
+  --archive dist/native/akra-ade-<version>-<target>.tar.gz \
+  --bundle-dir dist/native/akra-ade-<version>-<target> \
   --version <version> \
   --target <target> \
   --profile release
