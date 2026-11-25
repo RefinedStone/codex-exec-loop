@@ -20,7 +20,7 @@ concurrency:
 jobs:
   native:
     name: Native Linux validator boundaries
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
       - name: Check out repository
@@ -29,12 +29,23 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
-      - name: Install distribution runtime on this disposable CI machine
+      - name: Install pinned upstream runtime on this disposable CI machine
+        shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap python3
+          sudo apt-get install --no-install-recommends -y meson ninja-build libcap-dev libselinux1-dev pkg-config gcc python3
+          build_root="$(mktemp -d "$RUNNER_TEMP/akra-bwrap.XXXXXX")"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$build_root/bubblewrap.tar.xz" \
+            https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz
+          printf '0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  %s\n' "$build_root/bubblewrap.tar.xz" | sha256sum --check -
+          tar --extract --file "$build_root/bubblewrap.tar.xz" --directory "$build_root" --no-same-owner
+          meson setup "$build_root/build" "$build_root/bubblewrap-0.13.1" --prefix=/usr -Dman=disabled -Dtests=false
+          meson compile -C "$build_root/build"
+          sudo install -o root -g root -m 0755 "$build_root/build/bwrap" /usr/bin/bwrap
       - name: Record native prerequisites without changing host security policy
         run: |
+          git rev-parse HEAD
           id -u
           uname -sr
           /usr/bin/bwrap --version
