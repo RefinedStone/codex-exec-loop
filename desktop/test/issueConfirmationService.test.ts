@@ -359,3 +359,52 @@ it.each([{ paused: true }, { resume_basis: {} }, { proof_id: "forged" }, { expec
   expect(() => h.service.confirmBindingResume({ workspace: REQUEST.workspace, commandId: "resume-1", bindingId: "binding-1", expectedRevision: 8, key: REQUEST.key, ...extra })).toThrow();
   expect(h.createHelper).not.toHaveBeenCalled();
 });
+
+const WAIVER = {
+  workspace: REQUEST.workspace, taskId: "task-1", criterionId: "criterion with spaces",
+  scopeId: "a".repeat(64), expectedAcceptanceRevision: 3,
+  reason: "면제 사유 원문 fixture", requestId: "waiver-1", key: REQUEST.key,
+};
+
+it.each([true, false])("waiver proof requires native approval=%s and preserves exact coordinates and reason", async (approved) => {
+  const h = harness();
+  const pending = h.service.confirmCriterionWaiver(WAIVER);
+  await h.untilDialog();
+  expect(h.helper.approve).not.toHaveBeenCalled();
+  h.native.resolve(approved);
+  expect(await pending).toEqual(approved ? { cancelled: false, response: { processed: true } } : { cancelled: true });
+  expect(h.submitted()).toHaveLength(approved ? 1 : 0);
+  expect(h.rpc.request.mock.calls.find(([method]) => method === "akra/kernel/confirmation/prepare")?.[1]).toEqual({
+    request: { command: { type: "waive_criterion", task_id: WAIVER.taskId, criterion_id: WAIVER.criterionId,
+      scope_id: WAIVER.scopeId, expected_acceptance_revision: WAIVER.expectedAcceptanceRevision,
+      reason: WAIVER.reason, request_id: WAIVER.requestId }, idempotency_key: WAIVER.key },
+  });
+  if (approved) expect(h.helper.approve).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { by: "human" }, { proof_id: "forged" }, { confirmation: {} }, { expectedAcceptanceRevision: 0 },
+  { expectedAcceptanceRevision: Number.MAX_SAFE_INTEGER + 1 }, { scopeId: "a".repeat(64) + "\n" },
+  { taskId: " task" }, { criterionId: " " }, { reason: "   " }, { reason: "가".repeat(1366) },
+])("rejects untrusted waiver input before native helper creation: %j", (extra) => {
+  const h = harness();
+  expect(() => h.service.confirmCriterionWaiver({ ...WAIVER, ...extra })).toThrow();
+  expect(h.createHelper).not.toHaveBeenCalled();
+});
+
+it("keeps a submitted waiver with lost response unknown without leaking private reason or proof", async () => {
+  const h = harness();
+  const original = h.rpc.request.getMockImplementation()!;
+  h.rpc.request.mockImplementation(async (method, params) => {
+    if (method === "akra/kernel/command_confirmed") throw new Error(WAIVER.reason + PROOF.proof_id);
+    return original(method, params);
+  });
+  const pending = h.service.confirmCriterionWaiver(WAIVER);
+  await h.untilDialog();
+  h.native.resolve(true);
+  const result = await pending;
+  expect(result).toEqual({ cancelled: false, outcome: "unknown" });
+  expect(JSON.stringify(result)).not.toContain(WAIVER.reason);
+  expect(JSON.stringify(result)).not.toContain(PROOF.proof_id);
+  expect(h.submitted()).toHaveLength(1);
+});

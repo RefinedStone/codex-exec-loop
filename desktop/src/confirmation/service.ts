@@ -45,6 +45,11 @@ export class IssueConfirmationService {
     return this.enqueue(request.workspace, request.command);
   }
 
+  confirmCriterionWaiver(input: unknown): Promise<IssueConfirmationResponse> {
+    const request = criterionWaiverRequest(input);
+    return this.enqueue(request.workspace, request.command);
+  }
+
   invalidate(): void {
     this.generation++;
     this.active?.abort();
@@ -194,6 +199,25 @@ function bindingResumeRequest(value: unknown): { workspace: string; command: Com
     command: { type: "set_issue_binding_paused", command_id: value.commandId, binding_id: value.bindingId, paused: false, expected_revision: value.expectedRevision },
     idempotency_key: value.key,
   } };
+}
+
+
+function criterionWaiverRequest(value: unknown): { workspace: string; command: CommandRequest } {
+  if (!isRecord(value) || !onlyFields(value, ["workspace", "taskId", "criterionId", "scopeId", "expectedAcceptanceRevision", "reason", "requestId", "key"])
+    || !workspace(value.workspace) || !token(value.key, 128) || !token(value.requestId, 128)
+    || !evidenceIdentifier(value.taskId) || !evidenceIdentifier(value.criterionId)
+    || typeof value.scopeId !== "string" || value.scopeId.length !== 64 || !/^[a-f0-9]{64}$/.test(value.scopeId)
+    || typeof value.expectedAcceptanceRevision !== "number" || !Number.isSafeInteger(value.expectedAcceptanceRevision) || value.expectedAcceptanceRevision < 1
+    || !boundedText(value.reason, 4096) || !value.reason.trim()) throw failure();
+  return { workspace: value.workspace, command: {
+    command: { type: "waive_criterion", task_id: value.taskId, criterion_id: value.criterionId, scope_id: value.scopeId,
+      expected_acceptance_revision: value.expectedAcceptanceRevision, reason: value.reason, request_id: value.requestId },
+    idempotency_key: value.key,
+  } };
+}
+
+function evidenceIdentifier(value: unknown): value is string {
+  return boundedText(value, 4096) && value.trim() === value;
 }
 
 function workspace(value: unknown): value is string {

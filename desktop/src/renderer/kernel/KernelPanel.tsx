@@ -4,8 +4,7 @@ import { useState } from "react";
 
 import { useDesktopStore } from "../session/desktopStore";
 import type { KernelView, ParallelControlView, PlanningEvidenceFreshness } from "./kernelConnection";
-import { TaskEvidenceView, type TaskEvidenceViewProps } from "./TaskEvidenceView";
-import type { TaskVerificationActions } from "./TaskVerificationView";
+import { TaskEvidenceView, type TaskEvidenceViewProps, type TaskEvidenceActions } from "./TaskEvidenceView";
 import type { ParallelAgent, ParallelState, PlanningState, PlanningTask, ThreadActivity } from "./protocol";
 import { WORKER_STATUS_LABEL, WORKER_STEP, workerStatus, type WorkerStatus } from "./workerStatus";
 import { folderName } from "../sidebar/threadStatus";
@@ -65,7 +64,7 @@ function TaskRow({ task, snapshot, freshness, ...actions }: { task: PlanningTask
   );
 }
 
-function PlanningSection({ planning, freshness, ...actions }: { planning: PlanningState | null; freshness: PlanningEvidenceFreshness } & TaskVerificationActions) {
+function PlanningSection({ planning, freshness, ...actions }: { planning: PlanningState | null; freshness: PlanningEvidenceFreshness } & TaskEvidenceActions) {
   if (!planning) {
     return <p className="muted">읽는 중…</p>;
   }
@@ -208,12 +207,13 @@ function KernelBody({
   onSetParallelEnabled,
   onOpenThread,
   onRequestVerification,
+  onWaiveCriterion,
 }: {
   kernel: KernelView;
   threadTitle(threadId: string): string;
   onSetParallelEnabled(enabled: boolean): Promise<void>;
   onOpenThread(threadId: string): void;
-} & TaskVerificationActions) {
+} & TaskEvidenceActions) {
   if (kernel.workspace === null) {
     return <p className="muted work-section">스레드를 열면 그 폴더의 저장소 커널을 보여 줍니다.</p>;
   }
@@ -260,18 +260,19 @@ function KernelBody({
       <section className="work-section">
         <h3>planning 큐</h3>
         <PlanningSection planning={kernel.planning} freshness={kernel.planningEvidenceFreshness}
-          verificationRequests={kernel.taskVerificationRequests} onRequestVerification={kernel.phase === "attached" ? onRequestVerification : undefined} />
+          verificationRequests={kernel.taskVerificationRequests} onRequestVerification={kernel.phase === "attached" ? onRequestVerification : undefined}
+          waiverRequests={kernel.taskCriterionWaiverRequests} onWaiveCriterion={kernel.phase === "attached" ? onWaiveCriterion : undefined} />
       </section>
     </div>
   );
 }
 
-export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onEditTasks, onRequestVerification }: {
+export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onEditTasks, onRequestVerification, onWaiveCriterion }: {
   onRefresh(): Promise<void>;
   onSetParallelEnabled(enabled: boolean): Promise<void>;
   onOpenThread(threadId: string): void;
   onEditTasks?(): void;
-} & TaskVerificationActions) {
+} & TaskEvidenceActions) {
   const kernel = useDesktopStore((state) => state.kernel);
   const folders = useDesktopStore((state) => state.folders);
   const [refreshing, setRefreshing] = useState(false);
@@ -297,7 +298,7 @@ export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onE
           {refreshing ? "읽는 중…" : "새로 고침"}
         </button>
       </div>
-      <KernelBody kernel={kernel} threadTitle={threadTitle} onSetParallelEnabled={onSetParallelEnabled} onOpenThread={onOpenThread} onRequestVerification={onRequestVerification} />
+      <KernelBody kernel={kernel} threadTitle={threadTitle} onSetParallelEnabled={onSetParallelEnabled} onOpenThread={onOpenThread} onRequestVerification={onRequestVerification} onWaiveCriterion={onWaiveCriterion} />
     </aside>
   );
 }
