@@ -266,7 +266,11 @@ impl ParallelModeService {
             self.parallel_runtime.as_ref(),
             &context.repo_root,
             &idle_slot.slot_id,
-            &request.task_slug,
+            // Linear's branchName is a readable suggestion inside Akra's owned slot prefix.
+            work_link
+                .as_ref()
+                .and_then(|link| link.branch_hint())
+                .unwrap_or(&request.task_slug),
             &request.task_id,
             &request.task_title,
             work_link.as_ref().and_then(|link| link.jira_issue_key()),

@@ -183,6 +183,7 @@ fn observation(issue: &IssueReference) -> IssueSourceObservation {
     IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         issue: issue.clone(),
         repository_visibility: IssueRepositoryVisibility::Private,
         repository_name_with_owner: None,

@@ -77,11 +77,19 @@ pub struct IssueDiscoveryPage {
     /// The exact binding used by this operation, including its search predicate.
     /// A later policy read cannot relabel a page produced by another binding.
     pub jira_binding: Option<crate::domain::issue_automation::policy::IssueAutomationJiraBinding>,
+    /// The exact Linear credential generation and team binding used by this operation.
+    pub linear: Option<LinearDiscoveryOperation>,
     pub observations: Vec<IssueSourceObservation>,
     /// 이 페이지의 처리와 장부 저장이 끝난 뒤에만 다음 커서를 저장한다.
     pub next_cursor: Option<IssueDiscoveryCursor>,
     /// 로컬 라벨 필터로 결과가 비어도 검사한 페이지와 다음 위치는 남는다.
     pub scanned_count: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearDiscoveryOperation {
+    pub connection: crate::domain::provider_credentials::ConnectionRef,
+    pub binding: crate::domain::issue_automation::policy::IssueAutomationLinearBinding,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

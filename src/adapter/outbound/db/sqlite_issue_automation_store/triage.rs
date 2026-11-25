@@ -30,7 +30,7 @@ CREATE TABLE issue_automation_catalog (
 "#;
 pub(super) const ASSESSMENTS_SCHEMA: &str = r#"
 CREATE TABLE issue_triage_assessments (
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,

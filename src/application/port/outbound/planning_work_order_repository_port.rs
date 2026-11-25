@@ -35,6 +35,9 @@ pub struct PlanningWorkLinkReference {
     pub url: String,
     #[serde(default)]
     pub close_on_merge: bool,
+    /// Provider branch suggestion (Linear `branchName`). It names no slot, lease or worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_hint: Option<String>,
 }
 
 impl PlanningWorkLinkReference {
@@ -50,7 +53,33 @@ impl PlanningWorkLinkReference {
         .then_some(key)
     }
 
+    /// Display metadata from an immutable canonical Linear link; this grants no provider action.
+    pub fn linear_issue_identifier(&self) -> Option<&str> {
+        self.validate().ok()?;
+        if self.close_on_merge {
+            return None;
+        }
+        let identifier = self.url.rsplit_once("/issue/")?.1;
+        (crate::domain::issue_automation::source::canonical_linear_issue_url(&self.url, identifier)
+            .as_deref()
+            == Some(self.url.as_str()))
+        .then_some(identifier)
+    }
+
+    /// Display/branch metadata from an immutable validated link; this grants no provider action.
+    pub fn branch_hint(&self) -> Option<&str> {
+        self.validate().ok()?;
+        self.branch_hint.as_deref()
+    }
+
     pub fn validate(&self) -> Result<()> {
+        if self.branch_hint.as_deref().is_some_and(|hint| {
+            self.close_on_merge
+                || !self.url.starts_with("https://linear.app/")
+                || !crate::domain::issue_automation::source::valid_linear_branch_name(hint)
+        }) {
+            bail!("invalid publication branch hint");
+        }
         if self.url.len() > 4096
             || self
                 .url

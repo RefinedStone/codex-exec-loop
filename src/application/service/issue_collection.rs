@@ -36,6 +36,44 @@ pub const ISSUE_DISCOVERY_PAGE_SIZE: u16 = 25;
 pub const ISSUE_RESYNC_BATCH_SIZE: u16 = 10;
 const MODE_CAS_ATTEMPTS: usize = 3;
 pub(crate) mod jira;
+mod linear;
+
+/// One explicitly selected connected source and the policy version that selected it.
+pub(super) enum ConnectedSelection {
+    Jira {
+        binding: crate::domain::issue_automation::policy::IssueAutomationJiraBinding,
+        version: String,
+    },
+    Linear {
+        binding: crate::domain::issue_automation::policy::IssueAutomationLinearBinding,
+        version: String,
+    },
+}
+
+impl ConnectedSelection {
+    fn repository(&self, workspace_dir: &str) -> IssueSourceRepository {
+        let (provider, server_id, repository_id) = match self {
+            Self::Jira { binding, .. } => (
+                IssueProvider::Jira,
+                binding.cloud_id.clone(),
+                binding.project_id.clone(),
+            ),
+            Self::Linear { binding, .. } => (
+                IssueProvider::Linear,
+                crate::domain::issue_automation::source::LINEAR_SERVER_ID.to_owned(),
+                binding.team_id.clone(),
+            ),
+        };
+        IssueSourceRepository {
+            provider,
+            server_id,
+            repository_id,
+            project_scope: IssueProjectScope {
+                workspace_dir: workspace_dir.to_owned(),
+            },
+        }
+    }
+}
 
 /// 서로 독립적인 저장 장부를 조립하는 동안 사실이 바뀌었다. 조회 전체만 한 번 다시 읽는다.
 #[derive(Debug)]
@@ -129,7 +167,8 @@ pub struct IssueCollectionService {
     autonomy: Option<Arc<super::issue_autonomy::IssueAutonomyService>>,
     interactions: Option<Arc<super::issue_interactions::IssueInteractionsService>>,
     binding_pause: Option<Arc<super::issue_binding_pause::IssueBindingPauseService>>,
-    jira: Option<jira::JiraCollectionContext>,
+    /// Policy, Gateway credentials and profile claims shared by Jira and Linear sources.
+    connected: Option<jira::ConnectedSourceContext>,
 }
 
 impl IssueCollectionService {
@@ -152,11 +191,11 @@ impl IssueCollectionService {
             autonomy: None,
             interactions: None,
             binding_pause: None,
-            jira: None,
+            connected: None,
         }
     }
 
-    pub fn with_jira_collection(
+    pub fn with_connected_source_collection(
         mut self,
         policy: super::issue_automation_policy::IssueAutomationPolicyService,
         credentials: Option<Arc<dyn crate::application::port::outbound::provider_credentials_port::ProviderCredentialReadPort>>,
@@ -164,7 +203,7 @@ impl IssueCollectionService {
             dyn crate::application::port::outbound::issue_source_claim_port::IssueSourceClaimPort,
         >,
     ) -> Self {
-        self.jira = Some(jira::JiraCollectionContext {
+        self.connected = Some(jira::ConnectedSourceContext {
             policy,
             credentials,
             claims,
@@ -517,11 +556,11 @@ impl IssueCollectionService {
         if !self.may_read(&progress.projection.state, cancel)? {
             return self.discard(progress);
         }
-        let jira_selection = match self.jira_selection() {
+        let connected_selection = match self.connected_selection() {
             Ok(selection) => selection,
             Err(reason) => return self.finish(progress, cancel, at_unix_ms, Some(reason)),
         };
-        let origin = if jira_selection.is_some() {
+        let origin = if connected_selection.is_some() {
             None
         } else {
             match self.origin.github_origin(&self.workspace_dir) {
@@ -574,15 +613,8 @@ impl IssueCollectionService {
                     repository_id: binding.repository_id().to_string(),
                     project_scope: binding.project_scope().clone(),
                 });
-        let invalid_repository = if let Some((binding, _)) = &jira_selection {
-            let expected = IssueSourceRepository {
-                provider: IssueProvider::Jira,
-                server_id: binding.cloud_id.clone(),
-                repository_id: binding.project_id.clone(),
-                project_scope: IssueProjectScope {
-                    workspace_dir: self.workspace_dir.clone(),
-                },
-            };
+        let invalid_repository = if let Some(selected) = &connected_selection {
+            let expected = selected.repository(&self.workspace_dir);
             let mismatched = repository.as_ref().is_some_and(|saved| saved != &expected);
             repository = Some(expected);
             mismatched
@@ -640,10 +672,10 @@ impl IssueCollectionService {
                 }
             }
         }
-        let request = if jira_selection.is_some() {
+        let request = if connected_selection.is_some() {
             IssueDiscoveryRequest {
                 target: IssueDiscoveryTarget::Repository(
-                    repository.expect("explicit Jira repository"),
+                    repository.expect("explicit connected source repository"),
                 ),
                 selection,
                 cursor: progress.projection.state.discovery_cursor.clone(),
@@ -686,8 +718,21 @@ impl IssueCollectionService {
                     if let Some(lease) = &publication_lease {
                         lease.verify_identity()?;
                     }
-                    if let Some((_, version)) = &jira_selection {
-                        self.claim_jira_page(&request, &mut page, &progress.projection, version)?;
+                    match &connected_selection {
+                        Some(ConnectedSelection::Jira { version, .. }) => self.claim_jira_page(
+                            &request,
+                            &mut page,
+                            &progress.projection,
+                            version,
+                        )?,
+                        Some(ConnectedSelection::Linear { version, .. }) => self
+                            .claim_linear_page(
+                                &request,
+                                &mut page,
+                                &progress.projection,
+                                version,
+                            )?,
+                        None => {}
                     }
                     let result = self
                         .store
@@ -731,9 +776,9 @@ impl IssueCollectionService {
             if let Some(lease) = &publication_lease {
                 lease.verify_identity()?;
             }
-            if jira_selection.is_some()
+            if connected_selection.is_some()
                 && !cancel
-                    .commit_if_active(|| self.claim_known_jira_issue(reference))?
+                    .commit_if_active(|| self.claim_known_connected_issue(reference))?
                     .unwrap_or(false)
             {
                 reads.push(IssueSourceRead::Unknown {
@@ -753,8 +798,14 @@ impl IssueCollectionService {
             if let Some(lease) = &publication_lease {
                 lease.verify_identity()?;
             }
-            if let Some((_, version)) = &jira_selection {
-                self.validate_jira_resync(&batch.targets, &mut reads, version)?;
+            match &connected_selection {
+                Some(ConnectedSelection::Jira { version, .. }) => {
+                    self.validate_jira_resync(&batch.targets, &mut reads, version)?
+                }
+                Some(ConnectedSelection::Linear { version, .. }) => {
+                    self.validate_linear_resync(&batch.targets, &mut reads, version)?
+                }
+                None => {}
             }
             for read in &reads {
                 if let IssueSourceRead::Unknown { reason, .. } = read {

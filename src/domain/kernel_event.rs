@@ -214,6 +214,7 @@ pub struct IssueEventReference {
 pub enum IssueEventProvider {
     GitHub,
     Jira,
+    Linear,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -227,6 +228,7 @@ impl From<IssueProvider> for IssueEventProvider {
         match value {
             IssueProvider::GitHub => Self::GitHub,
             IssueProvider::Jira => Self::Jira,
+            IssueProvider::Linear => Self::Linear,
         }
     }
 }
@@ -236,6 +238,7 @@ impl From<IssueEventProvider> for IssueProvider {
         match value {
             IssueEventProvider::GitHub => Self::GitHub,
             IssueEventProvider::Jira => Self::Jira,
+            IssueEventProvider::Linear => Self::Linear,
         }
     }
 }

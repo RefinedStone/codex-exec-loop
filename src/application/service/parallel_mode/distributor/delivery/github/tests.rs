@@ -106,6 +106,7 @@ fn jira_pr_metadata_uses_the_frozen_link_key_and_never_a_closing_keyword() {
     record.link_reference = Some(PlanningWorkLinkReference {
         url: "https://example.atlassian.net/browse/AKRA_CORE-42".into(),
         close_on_merge: false,
+        branch_hint: None,
     });
     assert_eq!(
         build_distributor_pull_request_title(&record),

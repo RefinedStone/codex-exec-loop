@@ -16,6 +16,7 @@ use crate::domain::issue_work::{
 mod arbiter;
 mod auto;
 mod jira;
+mod linear;
 
 const AUTOMATION_VERSION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DISCLOSURE_VERSION: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
@@ -49,6 +50,7 @@ fn source() -> IssueSourceRead {
     IssueSourceRead::Observed(Box::new(IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: IssueRepositoryVisibility::Private,
         repository_name_with_owner: Some("refinedstone/codex-exec-loop".into()),
         creation_provenance:

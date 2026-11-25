@@ -930,11 +930,10 @@ queue record의 task_id보다 title을 쓰는 이유는 GitHub PR 목록에서 �
 빠르게 구분해야 하기 때문이다.
 */
 fn build_distributor_pull_request_title(record: &ParallelModeDistributorQueueRecord) -> String {
-    match record
-        .link_reference
-        .as_ref()
-        .and_then(|link| link.jira_issue_key())
-    {
+    match record.link_reference.as_ref().and_then(|link| {
+        link.jira_issue_key()
+            .or_else(|| link.linear_issue_identifier())
+    }) {
         Some(key) => format!("[{key}] supersession: {}", record.task_title.trim()),
         None => format!("supersession: {}", record.task_title.trim()),
     }

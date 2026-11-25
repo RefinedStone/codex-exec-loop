@@ -1,7 +1,9 @@
-//! Profile-wide stable Jira ownership. Claims are retained across cancellation and restart.
+//! Profile-wide stable Jira and Linear ownership. Claims are retained across cancellation and restart.
 use crate::application::port::outbound::issue_source_claim_port::IssueSourceClaimPort;
 use crate::domain::issue_automation::IssueAutomationBindingId;
+use crate::domain::issue_automation::source::LINEAR_SERVER_ID;
 use crate::domain::issue_work::{IssueProvider, IssueReference};
+use crate::domain::provider_work::valid_linear_id;
 use crate::private_sqlite::{DatabaseFiles, Synchronous};
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -103,24 +105,41 @@ fn read_owner(
 }
 
 fn validate(issue: &IssueReference, binding: &IssueAutomationBindingId) -> Result<()> {
-    ensure!(
-        issue.provider == IssueProvider::Jira,
-        "only Jira uses profile source claims"
-    );
-    ensure!(
-        !issue.server_id.is_empty()
-            && issue.server_id.len() <= 64
-            && issue
-                .server_id
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'-'),
-        "invalid Jira cloud identity"
-    );
-    for value in [&issue.repository_id, &issue.issue_id] {
-        ensure!(
-            !value.is_empty() && value.len() <= 64 && value.bytes().all(|c| c.is_ascii_digit()),
-            "invalid Jira stable identity"
-        );
+    // The shared table keys (cloud_id, issue_id): a Jira cloud ID never contains '.', so the
+    // fixed Linear server cannot collide with it.
+    match issue.provider {
+        IssueProvider::Jira => {
+            ensure!(
+                !issue.server_id.is_empty()
+                    && issue.server_id.len() <= 64
+                    && issue
+                        .server_id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-'),
+                "invalid Jira cloud identity"
+            );
+            for value in [&issue.repository_id, &issue.issue_id] {
+                ensure!(
+                    !value.is_empty()
+                        && value.len() <= 64
+                        && value.bytes().all(|c| c.is_ascii_digit()),
+                    "invalid Jira stable identity"
+                );
+            }
+        }
+        IssueProvider::Linear => {
+            ensure!(
+                issue.server_id == LINEAR_SERVER_ID,
+                "invalid Linear server identity"
+            );
+            for value in [&issue.repository_id, &issue.issue_id] {
+                ensure!(
+                    value.len() <= 64 && valid_linear_id(value),
+                    "invalid Linear stable identity"
+                );
+            }
+        }
+        IssueProvider::GitHub => anyhow::bail!("GitHub does not use profile source claims"),
     }
     let workspace = &issue.project_scope.workspace_dir;
     ensure!(

@@ -7,9 +7,11 @@ use crate::domain::issue_work::IssueProvider;
 use super::IssueAutomationAutonomy;
 
 mod jira;
+mod linear;
 mod validation;
 
 pub use jira::{IssueAutomationJiraBinding, IssueAutomationJiraCloseTransition};
+pub use linear::{IssueAutomationLinearBinding, IssueAutomationLinearCloseState};
 
 pub use validation::IssueAutomationPolicyValueError;
 pub(crate) use validation::{
@@ -60,6 +62,9 @@ pub struct IssueAutomationPolicyBinding {
     /// Omission preserves the existing GitHub policy's canonical bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jira: Option<IssueAutomationJiraBinding>,
+    /// One explicit Linear team replaces GitHub discovery for this checkout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear: Option<IssueAutomationLinearBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -295,6 +300,7 @@ impl IssueAutomationPolicy {
                     mode: IssueAutomationAutonomy::Observe,
                 },
                 jira: None,
+                linear: None,
             },
             authority: IssueAutomationAuthority {
                 autonomy_cap: IssueAutomationAutonomy::Propose,
@@ -345,6 +351,15 @@ impl IssueAutomationPolicy {
                 normalize_set(&mut transition.from_status_ids);
             }
         }
+        if let Some(linear) = &mut self.binding.linear {
+            linear.mode = linear
+                .mode
+                .min(self.authority.autonomy_cap)
+                .min(IssueAutomationAutonomy::Propose);
+            if let Some(close) = &mut linear.close_state {
+                normalize_set(&mut close.from_state_ids);
+            }
+        }
         normalize_set(&mut self.select.labels_any);
         self.select.trusted_actors.sort_by(|left, right| {
             (
@@ -380,16 +395,21 @@ impl IssueAutomationPolicy {
     pub fn selected_provider(&self) -> IssueProvider {
         if self.binding.jira.is_some() {
             IssueProvider::Jira
+        } else if self.binding.linear.is_some() {
+            IssueProvider::Linear
         } else {
             IssueProvider::GitHub
         }
     }
 
     pub fn mode_for_provider(&self, provider: IssueProvider) -> IssueAutomationAutonomy {
-        match (provider, &self.binding.jira) {
-            (IssueProvider::Jira, Some(jira)) => jira.mode.min(IssueAutomationAutonomy::Propose),
-            (IssueProvider::GitHub, None) => self.binding.github.mode,
-            _ => IssueAutomationAutonomy::Off,
+        if provider != self.selected_provider() {
+            return IssueAutomationAutonomy::Off;
+        }
+        match (&self.binding.jira, &self.binding.linear) {
+            (Some(jira), _) => jira.mode.min(IssueAutomationAutonomy::Propose),
+            (None, Some(linear)) => linear.mode.min(IssueAutomationAutonomy::Propose),
+            (None, None) => self.binding.github.mode,
         }
     }
 
@@ -398,7 +418,7 @@ impl IssueAutomationPolicy {
     }
 
     pub fn selected_autonomy_cap(&self) -> IssueAutomationAutonomy {
-        if self.binding.jira.is_some() {
+        if self.binding.jira.is_some() || self.binding.linear.is_some() {
             self.authority
                 .autonomy_cap
                 .min(IssueAutomationAutonomy::Propose)
@@ -410,6 +430,8 @@ impl IssueAutomationPolicy {
     pub fn set_selected_mode(&mut self, mode: IssueAutomationAutonomy) {
         if let Some(jira) = &mut self.binding.jira {
             jira.mode = mode.min(IssueAutomationAutonomy::Propose);
+        } else if let Some(linear) = &mut self.binding.linear {
+            linear.mode = mode.min(IssueAutomationAutonomy::Propose);
         } else {
             self.binding.github.mode = mode;
         }
@@ -425,6 +447,7 @@ fn provider_name(provider: IssueProvider) -> &'static str {
     match provider {
         IssueProvider::GitHub => "github",
         IssueProvider::Jira => "jira",
+        IssueProvider::Linear => "linear",
     }
 }
 

@@ -21,6 +21,7 @@ fn reference(close_on_merge: bool) -> PlanningWorkLinkReference {
     PlanningWorkLinkReference {
         url: "https://github.com/RefinedStone/codex-exec-loop/issues/2553".into(),
         close_on_merge,
+        branch_hint: None,
     }
 }
 
@@ -80,6 +81,7 @@ fn jira_work_link_reaches_the_real_lease_and_pr_without_close_authority() {
     let link = PlanningWorkLinkReference {
         url: "https://example.atlassian.net/browse/AKRA_CORE-42".into(),
         close_on_merge: false,
+        branch_hint: None,
     };
     let fixture = WorkPermitDeliveryFixture::with_link_reference(
         "jira-key-delivery",
@@ -125,6 +127,38 @@ fn jira_work_link_reaches_the_real_lease_and_pr_without_close_authority() {
             "ensure-pr:{POOL_BASELINE_BRANCH}:{}",
             fixture.lease.branch_name
         )));
+}
+
+#[test]
+fn linear_branch_name_becomes_the_real_lease_branch_inside_the_owned_slot_prefix() {
+    let link = PlanningWorkLinkReference {
+        url: "https://linear.app/example/issue/ENG-7".into(),
+        close_on_merge: false,
+        branch_hint: Some("operator/eng-7-keep-the-description".into()),
+    };
+    let fixture = WorkPermitDeliveryFixture::with_link_reference(
+        "linear-branch-delivery",
+        FakeGithubAutomationPort::ready(),
+        Some(&link),
+    );
+    assert!(
+        fixture
+            .lease
+            .branch_name
+            .starts_with("akra-agent/slot-1/operator-eng-7-keep-the-description-")
+    );
+    assert!(fixture.repo.branch_exists(&fixture.lease.branch_name));
+    let queue = queue_record(&fixture);
+    assert_eq!(queue.link_reference.as_ref(), Some(&link));
+    grant_delivery(&fixture);
+    fixture.process();
+    assert_eq!(
+        *fixture.github.pull_request_titles.lock().unwrap(),
+        vec![format!("[ENG-7] supersession: {}", queue.task_title.trim())]
+    );
+    let bodies = fixture.github.pull_request_bodies.lock().unwrap();
+    assert!(bodies[0].ends_with(&format!("Issue: {}", link.url)));
+    assert!(!bodies[0].contains("Closes "));
 }
 
 #[test]

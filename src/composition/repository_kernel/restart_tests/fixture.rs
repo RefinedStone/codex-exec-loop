@@ -121,6 +121,7 @@ impl IssueSourcePort for Source {
         Ok(IssueDiscoveryPage {
             jira_connection: None,
             jira_binding: None,
+            linear: None,
             repository: IssueSourceRepository::from_reference(&observation.issue),
             observations: vec![observation],
             next_cursor: None,
@@ -283,6 +284,7 @@ impl Fixture {
         let observation = IssueSourceObservation {
             content_problems: vec![],
             jira: None,
+            linear: None,
             issue: IssueReference {
                 provider: IssueProvider::GitHub,
                 server_id: "github.com".into(),

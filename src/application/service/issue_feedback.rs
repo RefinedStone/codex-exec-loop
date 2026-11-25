@@ -338,12 +338,18 @@ fn actor_matches_snapshot(
     let Some(IssueSourceRead::Observed(observed)) = snapshot.item.current.as_ref() else {
         return false;
     };
-    let (Some(jira), Some(connection)) = (observed.jira.as_ref(), actor.connection.as_ref()) else {
+    let observed_connection = match snapshot.item.issue.provider {
+        IssueProvider::Jira => observed.jira.as_ref().map(|jira| &jira.connection),
+        IssueProvider::Linear => observed.linear.as_ref().map(|linear| &linear.connection),
+        IssueProvider::GitHub => None,
+    };
+    let (Some(observed), Some(connection)) = (observed_connection, actor.connection.as_ref())
+    else {
         return false;
     };
-    connection.profile_id == jira.connection.profile_id
-        && connection.connection_id == jira.connection.connection_id
-        && connection.revision == jira.connection.revision
+    connection.profile_id == observed.profile_id
+        && connection.connection_id == observed.connection_id
+        && connection.revision == observed.revision
 }
 
 fn snapshot_allows_write(snapshot: &IssueFeedbackSnapshot) -> bool {

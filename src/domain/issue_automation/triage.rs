@@ -148,10 +148,11 @@ pub enum IssueTriageReasonCode {
     BudgetExhausted,
     AutoRepositoryRestricted,
     JiraPullRequestLookupUnsupported,
+    LinearPullRequestLookupUnsupported,
 }
 
 impl IssueTriageReasonCode {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::NotYetObserved,
         Self::SourceUnavailable,
         Self::MetadataIncomplete,
@@ -180,7 +181,30 @@ impl IssueTriageReasonCode {
         Self::BudgetExhausted,
         Self::AutoRepositoryRestricted,
         Self::JiraPullRequestLookupUnsupported,
+        Self::LinearPullRequestLookupUnsupported,
     ];
+
+    /// The connected provider cannot prove that no linked pull request exists.
+    pub fn pull_request_lookup_unsupported(
+        provider: crate::domain::issue_work::IssueProvider,
+    ) -> Option<Self> {
+        match provider {
+            crate::domain::issue_work::IssueProvider::Jira => {
+                Some(Self::JiraPullRequestLookupUnsupported)
+            }
+            crate::domain::issue_work::IssueProvider::Linear => {
+                Some(Self::LinearPullRequestLookupUnsupported)
+            }
+            crate::domain::issue_work::IssueProvider::GitHub => None,
+        }
+    }
+
+    pub const fn is_pull_request_lookup_unsupported(self) -> bool {
+        matches!(
+            self,
+            Self::JiraPullRequestLookupUnsupported | Self::LinearPullRequestLookupUnsupported
+        )
+    }
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -212,6 +236,7 @@ impl IssueTriageReasonCode {
             Self::BudgetExhausted => "budget_exhausted",
             Self::AutoRepositoryRestricted => "auto_repository_restricted",
             Self::JiraPullRequestLookupUnsupported => "jira_pull_request_lookup_unsupported",
+            Self::LinearPullRequestLookupUnsupported => "linear_pull_request_lookup_unsupported",
         }
     }
 }
@@ -304,8 +329,8 @@ impl IssueTriageAssessment {
 
     /// The provider cannot establish PR absence. Only a current native Human Start
     /// approval can accept this explicit limitation; automatic eligibility stays Unknown.
-    pub fn requires_jira_human_start_review(&self) -> bool {
-        jira_human_start_review(
+    pub fn requires_provider_human_start_review(&self) -> bool {
+        provider_human_start_review(
             &self.record.basis,
             self.record.eligibility,
             self.record.readiness,
@@ -422,22 +447,23 @@ pub fn triage_issue(
     Ok(result)
 }
 
-fn jira_human_start_review(
+fn provider_human_start_review(
     basis: &IssueTriageBasis,
     eligibility: IssueTriageEligibility,
     readiness: IssueTriageReadiness,
     reasons: &[IssueTriageReasonCode],
 ) -> bool {
     use IssueTriageReasonCode as Reason;
-    basis.issue.provider == crate::domain::issue_work::IssueProvider::Jira
-        && basis.source == IssueTriageSourceState::Shared
+    let Some(lookup) = Reason::pull_request_lookup_unsupported(basis.issue.provider) else {
+        return false;
+    };
+    basis.source == IssueTriageSourceState::Shared
         && eligibility == IssueTriageEligibility::Unknown
         && readiness == IssueTriageReadiness::Ready
-        && reasons.contains(&Reason::JiraPullRequestLookupUnsupported)
+        && reasons.contains(&lookup)
         // A future unknown reason is closed until it has an explicit Human contract.
-        && reasons.iter().all(|reason| matches!(reason,
-            Reason::JiraPullRequestLookupUnsupported
-                | Reason::HighRisk
+        && reasons.iter().all(|reason| *reason == lookup || matches!(reason,
+            Reason::HighRisk
                 | Reason::HeldOrManual
                 | Reason::ProtectedPath
                 | Reason::PolicyHumanRequired

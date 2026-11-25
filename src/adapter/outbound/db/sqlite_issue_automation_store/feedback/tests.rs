@@ -49,6 +49,7 @@ fn seed(fixture: &Fixture, issue_id: &str) -> IssueReference {
     let observed = IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: tracked.reference().clone(),

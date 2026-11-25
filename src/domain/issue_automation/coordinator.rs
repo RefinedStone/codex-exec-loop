@@ -369,7 +369,7 @@ pub fn ready_for_start(assessment: &IssueTriageAssessment) -> bool {
 /// unsupported PR lookup. Unknown source or any additional unknown fact stays closed.
 pub fn ready_for_human_start(assessment: &IssueTriageAssessment) -> bool {
     ready_for_start(assessment)
-        || (assessment.requires_jira_human_start_review()
+        || (assessment.requires_provider_human_start_review()
             && assessment.effective_mode() >= IssueAutomationAutonomy::Propose
             && assessment.gates().iter().any(|gate| {
                 gate.gate == IssueAutomationGate::Start

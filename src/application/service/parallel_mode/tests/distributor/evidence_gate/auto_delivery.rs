@@ -155,6 +155,7 @@ fn seed_issue_task(repo: &TempGitRepo, store: &SqlitePlanningAuthorityAdapter) {
             let reference = PlanningWorkLinkReference {
                 url: format!("https://github.com/{SOURCE_REPOSITORY}/issues/2560"),
                 close_on_merge: false,
+                branch_hint: None,
             };
             let result = store
                 .register_work_order(

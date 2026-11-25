@@ -117,6 +117,7 @@ fn prepare_with_default_answer(
     let observation = IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         issue: tracked.reference().clone(),

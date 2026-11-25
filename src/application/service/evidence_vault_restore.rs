@@ -237,6 +237,7 @@ fn reconnect_identity(
         match basis.issue.provider {
             IssueProvider::GitHub => "github",
             IssueProvider::Jira => "jira",
+            IssueProvider::Linear => "linear",
         },
         &basis.issue.server_id,
         &basis.issue.repository_id,

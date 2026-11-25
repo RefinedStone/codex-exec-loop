@@ -66,14 +66,17 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
+/// Version 15 only widens the provider CHECK for Linear (#2564). No row changes.
+const PROVIDER_CHECK: &str = "CHECK (provider IN ('github', 'jira', 'linear'))";
+const LEGACY_PROVIDER_CHECK: &str = "CHECK (provider IN ('github', 'jira'))";
 const BINDINGS_TABLE: &str = "issue_automation_bindings";
 const ISSUES_TABLE: &str = "tracked_issues";
 
 const BINDINGS_SCHEMA: &str = r#"
 CREATE TABLE issue_automation_bindings (
     binding_id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     workspace_dir TEXT COLLATE BINARY NOT NULL,
@@ -85,7 +88,7 @@ CREATE TABLE issue_automation_bindings (
 
 const ISSUES_SCHEMA: &str = r#"
 CREATE TABLE tracked_issues (
-    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira')),
+    provider TEXT COLLATE BINARY NOT NULL CHECK (provider IN ('github', 'jira', 'linear')),
     server_id TEXT COLLATE BINARY NOT NULL,
     repository_id TEXT COLLATE BINARY NOT NULL,
     issue_id TEXT COLLATE BINARY NOT NULL,
@@ -1014,7 +1017,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=13) => {
+            (APPLICATION_ID, version @ 1..=14) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -1063,7 +1066,10 @@ fn ensure_schema(
                 if version < 12 {
                     arbiter::create_schema(transaction)?;
                 }
-                binding_pause::create_schema(transaction)?;
+                if version < 14 {
+                    binding_pause::create_schema(transaction)?;
+                }
+                widen_provider_checks(transaction)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -1105,6 +1111,29 @@ fn ensure_schema(
             _ => bail!("the issue automation database identity or schema version is unsupported"),
         }
     })
+}
+
+/// Widening an IN-list CHECK relaxes a constraint and leaves every stored row valid, so the
+/// documented `writable_schema` procedure applies (sqlite.org/lang_altertable.html#otheralter).
+/// Rebuilding the referenced tables would rewrite their foreign keys instead.
+fn widen_provider_checks(connection: &Connection) -> Result<()> {
+    let schema_version: i64 =
+        connection.pragma_query_value(None, "schema_version", |row| row.get(0))?;
+    connection.pragma_update(None, "writable_schema", true)?;
+    let updated = connection.execute(
+        "UPDATE sqlite_master SET sql = replace(sql, ?1, ?2)
+         WHERE type = 'table' AND instr(sql, ?1) > 0",
+        params![LEGACY_PROVIDER_CHECK, PROVIDER_CHECK],
+    );
+    let bumped = connection.pragma_update(None, "schema_version", schema_version + 1);
+    connection.pragma_update(None, "writable_schema", false)?;
+    updated?;
+    bumped?;
+    let check: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if check != "ok" {
+        bail!("the issue automation database failed its integrity check")
+    }
+    Ok(())
 }
 
 fn schema_identity(connection: &Connection) -> Result<(i64, i64)> {
@@ -1194,7 +1223,10 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
         };
         let stored_name: String = row.get(0)?;
         let stored_schema: String = row.get(1)?;
-        if stored_name != name || normalized_schema(&stored_schema) != normalized_schema(schema) {
+        let stored = normalized_schema(&stored_schema);
+        let legacy = version < 15
+            && stored == normalized_schema(&schema.replace(PROVIDER_CHECK, LEGACY_PROVIDER_CHECK));
+        if stored_name != name || (stored != normalized_schema(schema) && !legacy) {
             bail!("the issue automation database schema does not match its version")
         }
     }

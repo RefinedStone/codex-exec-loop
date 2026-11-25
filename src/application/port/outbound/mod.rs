@@ -148,6 +148,7 @@ pub(crate) mod vault_restore_workspace_port;
 pub mod storage_analysis_port;
 
 pub mod jira_issue_source_api_port;
+pub mod linear_issue_api_port;
 pub mod provider_credential_mutation_port;
 pub mod provider_credentials_port;
 

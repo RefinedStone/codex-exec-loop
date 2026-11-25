@@ -329,6 +329,7 @@ impl Source {
         IssueSourceObservation {
             content_problems: vec![],
             jira: None,
+            linear: None,
             repository_visibility: Default::default(),
             repository_name_with_owner: None,
             creation_provenance: IssueCreationProvenance::Unattributed,
@@ -395,6 +396,7 @@ impl IssueSourcePort for Source {
         Ok(IssueDiscoveryPage {
             jira_connection: None,
             jira_binding: None,
+            linear: None,
             repository,
             observations: vec![self.observation(issue, &request.disclosure)],
             next_cursor: None,

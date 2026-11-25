@@ -17,6 +17,11 @@ pub use jira::{
     IssueSourceContentProblem, IssueSourceJiraMetadata, JiraIssueStatusCategory,
     JiraPullRequestLookup,
 };
+mod linear;
+pub use linear::{
+    IssueSourceLinearMetadata, LINEAR_SERVER_ID, LinearIssueStateType,
+    MAX_LINEAR_BRANCH_NAME_BYTES, canonical_linear_issue_url, valid_linear_branch_name,
+};
 
 pub const ISSUE_SOURCE_CURSOR_VERSION: u32 = 1;
 pub const MAX_ISSUE_SOURCE_PAGE_SIZE: u16 = 100;
@@ -415,6 +420,9 @@ pub struct IssueSourceObservation {
     /// Jira display/workflow facts and the exact credential generation that observed them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jira: Option<IssueSourceJiraMetadata>,
+    /// Linear display/workflow facts and the exact credential generation that observed them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear: Option<IssueSourceLinearMetadata>,
     /// 과거 관찰에 없으면 비공개로 추정하지 않는다. 현재 관찰만 자동 전달의 근거가 된다.
     #[serde(default)]
     pub repository_visibility: IssueRepositoryVisibility,
@@ -457,6 +465,16 @@ impl IssueSourceObservation {
                 && self.linked_pull_request != IssuePrPresence::Unknown)
                 || ((jira.status_category == JiraIssueStatusCategory::Done)
                     != (self.remote_state == IssueRemoteState::Closed))
+            {
+                return Err(IssueSourceFailure::MalformedResponse);
+            }
+        }
+        if let Some(linear) = &self.linear {
+            linear.validate_for(&self.issue)?;
+            // Linear's API cannot prove that no pull request exists for an issue.
+            if self.jira.is_some()
+                || self.linked_pull_request != IssuePrPresence::Unknown
+                || linear.state_type.closed() != (self.remote_state == IssueRemoteState::Closed)
             {
                 return Err(IssueSourceFailure::MalformedResponse);
             }

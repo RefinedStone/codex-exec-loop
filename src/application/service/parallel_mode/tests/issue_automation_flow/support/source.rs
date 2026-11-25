@@ -45,6 +45,7 @@ impl FlowSource {
         let observed = IssueSourceObservation {
             content_problems: vec![],
             jira: None,
+            linear: None,
             repository_visibility: Default::default(),
             repository_name_with_owner: None,
             issue: issue.clone(),
@@ -140,6 +141,7 @@ impl IssueSourcePort for FlowSource {
         Ok(IssueDiscoveryPage {
             jira_connection: None,
             jira_binding: None,
+            linear: None,
             repository,
             observations,
             next_cursor: None,

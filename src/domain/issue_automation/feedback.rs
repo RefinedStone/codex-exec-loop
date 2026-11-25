@@ -32,7 +32,10 @@ fn validate_hash(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 pub fn validate_feedback_issue(issue: &IssueReference) -> Result<(), &'static str> {
-    if !matches!(issue.provider, IssueProvider::GitHub | IssueProvider::Jira) {
+    if !matches!(
+        issue.provider,
+        IssueProvider::GitHub | IssueProvider::Jira | IssueProvider::Linear
+    ) {
         return Err("unsupported feedback provider");
     }
     for value in [
@@ -48,7 +51,40 @@ pub fn validate_feedback_issue(issue: &IssueReference) -> Result<(), &'static st
             validate_jira_feedback_id(value)?;
         }
     }
+    if issue.provider == IssueProvider::Linear {
+        if issue.server_id != super::source::LINEAR_SERVER_ID {
+            return Err("invalid Linear feedback server");
+        }
+        for value in [&issue.repository_id, &issue.issue_id] {
+            validate_linear_feedback_id(value)?;
+        }
+    }
     Ok(())
+}
+
+pub fn validate_linear_feedback_id(value: &str) -> Result<(), &'static str> {
+    if value.len() > 64 || !crate::domain::provider_work::valid_linear_id(value) {
+        return Err("invalid Linear feedback identity");
+    }
+    Ok(())
+}
+
+/// A Linear workflow state change the user granted and the adapter observed as current.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueFeedbackLinearState {
+    pub from_state_id: String,
+    pub to_state_id: String,
+}
+impl IssueFeedbackLinearState {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        validate_linear_feedback_id(&self.from_state_id)?;
+        validate_linear_feedback_id(&self.to_state_id)?;
+        if self.from_state_id == self.to_state_id {
+            return Err("Linear close must change state");
+        }
+        Ok(())
+    }
 }
 
 pub fn validate_jira_feedback_id(value: &str) -> Result<(), &'static str> {
@@ -181,6 +217,8 @@ pub enum IssueFeedbackOperation {
         previous_event_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         jira_transition: Option<IssueFeedbackJiraTransition>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        linear_state: Option<IssueFeedbackLinearState>,
     },
 }
 impl std::fmt::Debug for IssueFeedbackOperation {
@@ -277,7 +315,9 @@ impl IssueFeedbackIntent {
         }
         validate_feedback_id(&self.actor_id)?;
         match (self.issue.provider, self.connection.as_ref()) {
-            (IssueProvider::Jira, Some(connection)) => connection.validate()?,
+            (IssueProvider::Jira | IssueProvider::Linear, Some(connection)) => {
+                connection.validate()?
+            }
             (IssueProvider::GitHub, None) => {}
             _ => return Err("feedback connection does not match its provider"),
         }
@@ -324,7 +364,7 @@ impl IssueFeedbackIntent {
                 previous_event_id,
             } => {
                 if self.issue.provider != IssueProvider::GitHub {
-                    return Err("Jira labels are unsupported");
+                    return Err("provider labels are unsupported");
                 }
                 validate_label(label)?;
                 if let Some(id) = previous_event_id {
@@ -336,7 +376,7 @@ impl IssueFeedbackIntent {
                 owned_event_id,
             } => {
                 if self.issue.provider != IssueProvider::GitHub {
-                    return Err("Jira labels are unsupported");
+                    return Err("provider labels are unsupported");
                 }
                 validate_label(label)?;
                 validate_feedback_id(owned_event_id)?;
@@ -347,10 +387,16 @@ impl IssueFeedbackIntent {
                 decision_id,
                 previous_event_id,
                 jira_transition,
+                linear_state,
             } => {
-                match (self.issue.provider, jira_transition.as_ref()) {
-                    (IssueProvider::Jira, Some(target)) => target.validate()?,
-                    (IssueProvider::GitHub, None) => {}
+                match (
+                    self.issue.provider,
+                    jira_transition.as_ref(),
+                    linear_state.as_ref(),
+                ) {
+                    (IssueProvider::Jira, Some(target), None) => target.validate()?,
+                    (IssueProvider::Linear, None, Some(target)) => target.validate()?,
+                    (IssueProvider::GitHub, None, None) => {}
                     _ => return Err("feedback close target does not match its provider"),
                 }
                 validate_feedback_id(integration_record_id)?;

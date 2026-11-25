@@ -56,6 +56,28 @@ pub(super) fn from_policy(
             &jira.close_transition,
         )?;
     }
+    if let Some(linear) = &policy.binding.linear {
+        settings.add(
+            "binding.linear.team_id",
+            "Linear 팀 안정 ID",
+            &linear.team_id,
+        )?;
+        settings.add(
+            "binding.linear.expected_viewer_id",
+            "Linear 계정 안정 ID",
+            &linear.expected_viewer_id,
+        )?;
+        settings.add(
+            "binding.linear.mode",
+            "Linear 요청 자율 수준의 효과값",
+            &linear.mode,
+        )?;
+        settings.add(
+            "binding.linear.close_state",
+            "사용자가 허용한 Linear 완료 상태 변경",
+            &linear.close_state,
+        )?;
+    }
     settings.add(
         "authority.autonomy_cap",
         "자율 수준 상한",

@@ -65,6 +65,7 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
     let source = IssueSourceRead::Observed(Box::new(IssueSourceObservation {
         content_problems: vec![],
         jira: None,
+        linear: None,
         repository_visibility: Default::default(),
         repository_name_with_owner: None,
         creation_provenance: IssueCreationProvenance::Unattributed,

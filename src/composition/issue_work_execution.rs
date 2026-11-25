@@ -186,9 +186,16 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
         if workspace != order.scope || workspace != order.issue.project_scope.workspace_dir {
             bail!("the issue work belongs to another workspace");
         }
-        // 선택적 hint/profile은 이 첫 slice에서 지정하지 않는다. 실제 지원 없이 조용히 무시하지 않는다.
-        if order.branch_hint.is_some() || order.profile.is_some() {
+        // profile은 아직 지원하지 않는다. branch hint는 Linear의 branchName만 받는다.
+        // 실제 지원 없이 조용히 무시하지 않는다.
+        if order.profile.is_some()
+            || (order.branch_hint.is_some()
+                && order.issue.provider != crate::domain::issue_work::IssueProvider::Linear)
+        {
             bail!("issue work branch/profile hints are not supported");
+        }
+        if order.branch_hint.is_some() && order.link_reference.is_none() {
+            bail!("a branch hint requires the immutable issue link");
         }
         let link_reference = order
             .link_reference
@@ -196,6 +203,7 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
             .map(|url| PlanningWorkLinkReference {
                 url: url.clone(),
                 close_on_merge: order.provider_link,
+                branch_hint: order.branch_hint.clone(),
             });
         if order.provider_link && link_reference.is_none() {
             bail!("close.when: provider_link requires an issue link");

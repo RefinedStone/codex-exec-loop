@@ -162,6 +162,7 @@ pub(super) fn observation(
             pull_request_lookup: JiraPullRequestLookup::Unsupported,
             connection: connection.clone(),
         }),
+        linear: None,
         repository_visibility: IssueRepositoryVisibility::Unknown,
         repository_name_with_owner: None,
         web: None,

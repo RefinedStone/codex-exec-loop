@@ -407,6 +407,7 @@ impl VaultBindingCommitRequest {
         let provider = match issue.provider {
             IssueProvider::GitHub => "github",
             IssueProvider::Jira => "jira",
+            IssueProvider::Linear => "linear",
         };
         for part in [
             "akra-evidence-vault-binding-v1",

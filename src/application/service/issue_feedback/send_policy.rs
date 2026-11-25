@@ -9,6 +9,8 @@ use crate::application::service::issue_automation_policy::IssueAutomationPolicyS
 use crate::application::service::issue_autonomy::resolve_runtime_policy;
 use crate::domain::issue_automation::IssueAutomationAutonomy;
 use crate::domain::issue_automation::policy::IssueAutomationCloseWhen;
+use crate::domain::issue_automation::source::LINEAR_SERVER_ID;
+use crate::domain::issue_work::IssueProvider;
 
 pub(crate) fn validate_send_policy(
     workspace: &str,
@@ -27,11 +29,19 @@ pub(crate) fn validate_send_policy(
     ensure!(
         policy.selected_provider() == intent.issue.provider
             && policy.mode_for_provider(intent.issue.provider) != IssueAutomationAutonomy::Off
-            && policy.binding.jira.as_ref().is_some_and(|binding| {
-                binding.cloud_id == intent.issue.server_id
-                    && binding.project_id == intent.issue.repository_id
-                    && binding.expected_account_id == intent.actor_id
-            })
+            && match intent.issue.provider {
+                IssueProvider::Jira => policy.binding.jira.as_ref().is_some_and(|binding| {
+                    binding.cloud_id == intent.issue.server_id
+                        && binding.project_id == intent.issue.repository_id
+                        && binding.expected_account_id == intent.actor_id
+                }),
+                IssueProvider::Linear => policy.binding.linear.as_ref().is_some_and(|binding| {
+                    intent.issue.server_id == LINEAR_SERVER_ID
+                        && binding.team_id == intent.issue.repository_id
+                        && binding.expected_viewer_id == intent.actor_id
+                }),
+                IssueProvider::GitHub => false,
+            }
             && current.version == intent.automation_policy_version
             && issue_policy_version(&sharing) == intent.disclosure_policy_version,
         "feedback policy changed before send"
@@ -54,6 +64,21 @@ pub(crate) fn validate_send_policy(
                         mapping.transition_id == target.transition_id
                             && mapping.to_status_id == target.to_status_id
                             && mapping.from_status_ids.contains(&target.from_status_id)
+                    })
+        }
+        IssueFeedbackOperation::CloseIssue {
+            linear_state: Some(target),
+            ..
+        } => {
+            policy.feedback.transition
+                && policy.close.when == IssueAutomationCloseWhen::Integration
+                && policy
+                    .binding
+                    .linear
+                    .as_ref()
+                    .and_then(|binding| binding.close_state.as_ref())
+                    .is_some_and(|mapping| {
+                        mapping.permits(&target.from_state_id, &target.to_state_id)
                     })
         }
         _ => false,

@@ -45,4 +45,17 @@ describe("automation issue links", () => {
     await expect(h.open(url)).rejects.toThrow("현재 Jira 연결");
     expect(h.openGitHub).not.toHaveBeenCalled();
   });
+  it("opens a Linear issue only through the current Linear connection", async () => {
+    const h = harness(connected("linear"));
+    const url = "https://linear.app/example/issue/ENG-7";
+    await h.open(url);
+    expect(h.request).toHaveBeenCalledWith("akra/providerCredentials/state", { provider: "linear" });
+    expect(h.openExternal).toHaveBeenCalledWith({ connection: reference("linear"), url });
+    const missing = harness(disconnected("linear"));
+    await expect(missing.open(url)).rejects.toThrow("현재 Linear 연결");
+    const malformed = harness(connected("linear"));
+    await expect(malformed.open("https://linear.app/example/issue/../ENG-7")).rejects.toThrow("현재 Linear 연결");
+    expect(missing.openExternal).not.toHaveBeenCalled();
+    expect(malformed.openExternal).not.toHaveBeenCalled();
+  });
 });

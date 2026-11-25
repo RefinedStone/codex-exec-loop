@@ -288,6 +288,8 @@ spec_names! {
             "Auto is limited to proposals when the current source repository is public or its verified visibility and identity are unavailable.";
         JiraPullRequestLookupUnsupported => "jira_pull_request_lookup_unsupported",
             "The Jira provider cannot establish whether a linked pull request exists; only an exact Human start approval may accept that limitation when every other prerequisite is known.";
+        LinearPullRequestLookupUnsupported => "linear_pull_request_lookup_unsupported",
+            "The Linear provider cannot establish whether a linked pull request exists; only an exact Human start approval may accept that limitation when every other prerequisite is known.";
         BudgetExhausted => "budget_exhausted",
             "A zero static budget cap prevents an automatic start and requires a person to review the budget.";
         ModeOff => "mode_off",
@@ -859,6 +861,7 @@ mod tests {
                 "human_selection_required",
                 "auto_repository_restricted",
                 "jira_pull_request_lookup_unsupported",
+                "linear_pull_request_lookup_unsupported",
                 "budget_exhausted",
                 "mode_off",
                 "observation_only",

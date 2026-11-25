@@ -603,9 +603,13 @@ impl IssueCoordinatorService {
         match action {
             IssueCoordinatorAction::OpenDecision => {
                 let mut definition = start_definition(&item.issue, basis)?;
-                if assessment.requires_jira_human_start_review() {
+                if assessment.requires_provider_human_start_review() {
                     definition.question = IssueDecisionSharedText::new_shared(
-                        "Jira에서 연결된 PR 유무를 확인할 수 없습니다. 직접 확인한 뒤 이 이슈 작업을 시작할까요?",
+                        if item.issue.provider == crate::domain::issue_work::IssueProvider::Linear {
+                            "Linear에서 연결된 PR 유무를 확인할 수 없습니다. 직접 확인한 뒤 이 이슈 작업을 시작할까요?"
+                        } else {
+                            "Jira에서 연결된 PR 유무를 확인할 수 없습니다. 직접 확인한 뒤 이 이슈 작업을 시작할까요?"
+                        },
                     )?;
                     definition.options[0].effect = IssueDecisionSharedText::new_shared(
                         "진행 중인 PR이나 중복 작업이 없는지 직접 확인한 후 시작을 승인합니다. 이 확인은 현재 이슈 판의 작업 시작에만 적용되며 자동 시작이나 자동 통합을 허용하지 않습니다.",
@@ -1363,12 +1367,17 @@ impl IssueCoordinatorService {
                 handoff: snapshot.shared_copy.clone(),
                 acceptance,
                 scope: self.workspace.clone(),
-                branch_hint: None,
+                // A provider suggestion only; the slot allocator still owns the real branch.
+                branch_hint: observation
+                    .linear
+                    .as_ref()
+                    .map(|linear| linear.branch_name.clone()),
                 link_reference: observation
                     .web
                     .as_ref()
                     .map(|web| web.url.clone())
-                    .or_else(|| observation.jira.as_ref().map(|jira| jira.url.clone())),
+                    .or_else(|| observation.jira.as_ref().map(|jira| jira.url.clone()))
+                    .or_else(|| observation.linear.as_ref().map(|linear| linear.url.clone())),
                 provider_link: self
                     .triage
                     .provider_link_for_policy(&basis.policy_version)?,
