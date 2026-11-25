@@ -62,7 +62,12 @@ pub use task_evidence::{
     TaskEvidenceTaskState,
 };
 mod task_list;
+mod task_result;
 pub use task_list::{PlanningTaskDetails, PlanningTaskList};
+pub use task_result::{
+    TaskResultDelivery, TaskResultDispatchBlock, TaskResultPrRelation, TaskResultPullRequest,
+    TaskResultReadStatus, TaskResultSession, TaskResultState, TaskResultWorkOrder,
+};
 mod task_verification;
 pub use task_verification::{TaskVerificationReceiptState, TaskVerificationState};
 
@@ -1933,6 +1938,11 @@ pub enum KernelQuery {
     Planning {},
     /// 기존 list_tasks의 원본 필드와 같은 snapshot revision을 읽는다. 실행하지 않는다.
     ListTasks {},
+    /// A task ID selects stored execution, evidence and immutable PR correlations.
+    TaskResult {
+        #[schemars(length(min = 1, max = 4096), regex(pattern = NON_BLANK))]
+        task_id: String,
+    },
     TaskEvidence {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(length(min = 1, max = 256))]
@@ -1990,6 +2000,15 @@ pub struct QueryRequest {
 }
 
 impl KernelQuery {
+    pub fn task_result_id(&self) -> Result<Option<&str>, KernelProtocolError> {
+        if let Self::TaskResult { task_id } = self {
+            crate::domain::planning::evidence::validate_evidence_identifier(task_id)
+                .map_err(|_| KernelProtocolError::invalid_params("invalid task_result identity"))?;
+            return Ok(Some(task_id));
+        }
+        Ok(None)
+    }
+
     pub fn task_evidence_request(
         &self,
     ) -> Result<
@@ -2054,6 +2073,9 @@ impl KernelQuery {
                 &snapshot.planning_parallel.planning_runtime,
             )),
             Self::ListTasks {} => KernelQueryAnswer::ListTasks(PlanningTaskList::unavailable()),
+            Self::TaskResult { task_id } => KernelQueryAnswer::TaskResult(Box::new(
+                TaskResultState::unavailable(task_id.clone()),
+            )),
             Self::TaskEvidence { .. } => {
                 KernelQueryAnswer::TaskEvidence(TaskEvidenceState::unavailable())
             }
@@ -2125,6 +2147,8 @@ spec_names! {
             "The planning queue and the first bounded page of current task evidence when available. Follow task_evidence.next_task_id with the task_evidence query to read later tasks.";
         ListTasks => "list_tasks",
             "Read all persisted tasks, including completed and cancelled tasks, with their editable fields and the planning revision from the same authority snapshot. This reuses the planning-tool list_tasks read and never starts work.";
+        TaskResult => "task_result",
+            "Read one exact persisted task ID with stored execution, delivery, host evidence and immutable work-order/PR lineage. Completed and cancelled tasks remain queryable after delivery-queue pruning. Missing or unavailable lineage is explicit; the query never starts work or infers external issue closure.";
         TaskEvidence => "task_evidence",
             "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.";
         Parallel => "parallel",
@@ -2183,6 +2207,7 @@ pub enum KernelQueryAnswer {
     },
     Planning(PlanningState),
     ListTasks(PlanningTaskList),
+    TaskResult(Box<TaskResultState>),
     TaskEvidence(TaskEvidenceState),
     Parallel(ParallelState),
     /// 사건 하나는 `sequence`, `recorded_at`, `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).

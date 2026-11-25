@@ -264,6 +264,12 @@ grant is cached.
   task mutations record only task ID and planning revision. Recovery is read-only; missing, expired,
   legacy or interrupted records leave the outcome unresolved and never create another task.
   Criteria storage does not execute validation or change the existing delivery gates.
+- Desktop task details also accept an exact task ID and read stored execution, delivery and PR results.
+  The `task_result` query reuses the full task snapshot and existing authority records. Immutable
+  validation sources and explicit remediation correlations keep completed tasks linked after queue
+  pruning; titles and branches are never join keys. Related tasks open separately. Task status,
+  host verification, worker reports, PR merge evidence and unknown external-issue closure are distinct
+  facts. Missing lineage, unavailable reads and changed repository connections remain explicit.
 - `prepare_evidence` / `record_evidence` bind worker-reported results to the current acceptance scope,
   running lease, host-observed Git tree and a bounded private artifact. `task_evidence` and the
   optional first page in `planning` distinguish current, stale, waived and unavailable observations.

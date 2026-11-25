@@ -2,6 +2,7 @@ import { JsonRpcError } from "../rpc/jsonRpcClient";
 import { KERNEL_ERROR, KERNEL_METHOD, type CommandRequest, type CommandResponse, type KernelQueryAnswer, type TaskFields } from "./protocol";
 
 export type TaskListAnswer = Extract<KernelQueryAnswer, { type: "list_tasks" }>;
+export type TaskResultAnswer = Extract<KernelQueryAnswer, { type: "task_result" }>;
 type OperationAnswer = Extract<KernelQueryAnswer, { type: "operation" }>;
 type HistoryAnswer = Extract<KernelQueryAnswer, { type: "history" }>;
 export type TaskSaveOutcome =
@@ -70,6 +71,21 @@ export class TaskAuthoringController {
     if (answer.type !== "list_tasks" || !answer.available || answer.planning_revision === null) {
       throw new Error("작업 원본을 읽을 수 없습니다. 저장소 상태를 확인하고 다시 읽으세요.");
     }
+    return answer;
+  }
+
+  resultScope(workspace: string): string | null {
+    const context = this.context();
+    return context.attached && context.workspace === workspace && context.kernel
+      ? JSON.stringify([workspace, context.kernel, context.epoch]) : null;
+  }
+
+  async readResult(workspace: string, taskId: string): Promise<TaskResultAnswer> {
+    const before = this.requireContext(workspace);
+    const answer = await this.bounded(this.rpc.request<TaskResultAnswer>(KERNEL_METHOD.query, { query: { type: "task_result", task_id: taskId } }));
+    this.requireSameContext(before);
+    if (answer.type !== "task_result" || answer.task_id !== taskId
+      || (answer.status === "available" && answer.task?.task_id !== taskId)) throw new Error("요청한 작업 ID의 결과를 확인하지 못했습니다.");
     return answer;
   }
 

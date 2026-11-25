@@ -2965,6 +2965,43 @@
       }
     },
     {
+      "name": "task_result",
+      "summary": "Read one exact persisted task ID with stored execution, delivery, host evidence and immutable work-order/PR lineage. Completed and cancelled tasks remain queryable after delivery-queue pruning. Missing or unavailable lineage is explicit; the query never starts work or infers external issue closure.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "task_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/TaskResultState",
+        "properties": {
+          "type": {
+            "const": "task_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_evidence",
       "summary": "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.",
       "input": {
@@ -12299,6 +12336,26 @@
         {
           "additionalProperties": false,
           "properties": {
+            "task_id": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "after_task_id": {
               "maxLength": 4096,
               "minLength": 1,
@@ -12692,6 +12749,19 @@
           "properties": {
             "type": {
               "const": "list_tasks",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TaskResultState",
+          "properties": {
+            "type": {
+              "const": "task_result",
               "type": "string"
             }
           },
@@ -15823,6 +15893,119 @@
       ],
       "type": "object"
     },
+    "TaskDeliveryCriterionObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskDeliveryEvidenceReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receipt_event_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/TaskDeliveryCriterionState"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "TaskDeliveryCriterionState": {
+      "enum": [
+        "host_passed",
+        "waived",
+        "blocked"
+      ],
+      "type": "string"
+    },
+    "TaskDeliveryEvidenceObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "criteria": {
+          "items": {
+            "$ref": "#/$defs/TaskDeliveryCriterionObservation"
+          },
+          "type": "array"
+        },
+        "evidence_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/TaskEvidenceDeliveryMode"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/TaskDeliveryEvidenceReason"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceDeliverySource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "$ref": "#/$defs/TaskEvidenceDeliveryStage"
+        }
+      },
+      "required": [
+        "stage",
+        "mode",
+        "evidence_revision",
+        "criteria",
+        "reasons",
+        "observed_at"
+      ],
+      "type": "object"
+    },
+    "TaskDeliveryEvidenceReason": {
+      "enum": [
+        "criteria_missing",
+        "criteria_not_met",
+        "evidence_missing",
+        "evidence_stale",
+        "evidence_unavailable",
+        "integration_source_mismatch",
+        "auto_requires_enforce",
+        "auto_requires_machine_criterion"
+      ],
+      "type": "string"
+    },
     "TaskEvidenceArtifact": {
       "additionalProperties": false,
       "properties": {
@@ -15841,6 +16024,55 @@
       ],
       "type": "object"
     },
+    "TaskEvidenceDeliveryMode": {
+      "enum": [
+        "observe",
+        "enforce"
+      ],
+      "type": "string"
+    },
+    "TaskEvidenceDeliverySource": {
+      "additionalProperties": false,
+      "properties": {
+        "base_commit_sha": {
+          "type": "string"
+        },
+        "base_tree_sha": {
+          "type": "string"
+        },
+        "integration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceIntegrationResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_commit_sha": {
+          "type": "string"
+        },
+        "source_tree_sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_commit_sha",
+        "base_tree_sha",
+        "source_commit_sha",
+        "source_tree_sha"
+      ],
+      "type": "object"
+    },
+    "TaskEvidenceDeliveryStage": {
+      "enum": [
+        "push",
+        "pull_request",
+        "integrate"
+      ],
+      "type": "string"
+    },
     "TaskEvidenceError": {
       "enum": [
         "invalid",
@@ -15855,6 +16087,26 @@
         "human_confirmation_required"
       ],
       "type": "string"
+    },
+    "TaskEvidenceIntegrationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "base_commit_sha": {
+          "type": "string"
+        },
+        "result_commit_sha": {
+          "type": "string"
+        },
+        "result_tree_sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_commit_sha",
+        "result_commit_sha",
+        "result_tree_sha"
+      ],
+      "type": "object"
     },
     "TaskEvidencePreparedState": {
       "additionalProperties": false,
@@ -16178,6 +16430,362 @@
       "required": [
         "task_id",
         "planning_revision"
+      ],
+      "type": "object"
+    },
+    "TaskResultDelivery": {
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "evidence_available": {
+          "type": "boolean"
+        },
+        "evidence_observations": {
+          "items": {
+            "$ref": "#/$defs/TaskDeliveryEvidenceObservation"
+          },
+          "type": "array"
+        },
+        "evidence_wait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskEvidenceDeliveryStage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "integration_commit_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "integration_state": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pull_request_number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "queue_item_id": {
+          "type": "string"
+        },
+        "source_commit_sha": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "queue_item_id",
+        "state",
+        "branch",
+        "source_commit_sha",
+        "integration_state",
+        "evidence_available",
+        "evidence_observations",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "TaskResultDispatchBlock": {
+      "properties": {
+        "blocked_at": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "blocked_at"
+      ],
+      "type": "object"
+    },
+    "TaskResultPrRelation": {
+      "enum": [
+        "source",
+        "remediation"
+      ],
+      "type": "string"
+    },
+    "TaskResultPullRequest": {
+      "properties": {
+        "blocker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "integration_evidence_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "integration_method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "merge_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_action": {
+          "type": "string"
+        },
+        "number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "relation": {
+          "$ref": "#/$defs/TaskResultPrRelation"
+        },
+        "source_task_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "successor_record_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": "string"
+        },
+        "work_order_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "source_task_id",
+        "relation",
+        "number",
+        "url",
+        "state",
+        "phase",
+        "reason",
+        "next_action"
+      ],
+      "type": "object"
+    },
+    "TaskResultReadStatus": {
+      "enum": [
+        "available",
+        "missing",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "TaskResultSession": {
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "completion_state": {
+          "type": "string"
+        },
+        "delivery_outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_key": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "worker_validation_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_key",
+        "agent_id",
+        "branch",
+        "state",
+        "completion_state",
+        "worker_validation_summary",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "TaskResultState": {
+      "properties": {
+        "deliveries": {
+          "items": {
+            "$ref": "#/$defs/TaskResultDelivery"
+          },
+          "type": "array"
+        },
+        "dispatch_blocks": {
+          "items": {
+            "$ref": "#/$defs/TaskResultDispatchBlock"
+          },
+          "type": "array"
+        },
+        "evidence": {
+          "$ref": "#/$defs/TaskEvidenceState"
+        },
+        "lineage_available": {
+          "type": "boolean"
+        },
+        "planning_revision": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pr_lineage_complete": {
+          "type": "boolean"
+        },
+        "pull_requests": {
+          "items": {
+            "$ref": "#/$defs/TaskResultPullRequest"
+          },
+          "type": "array"
+        },
+        "runtime_available": {
+          "type": "boolean"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/TaskResultSession"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskResultReadStatus"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanningTaskDetails"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "work_order": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskResultWorkOrder"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "status",
+        "runtime_available",
+        "lineage_available",
+        "pr_lineage_complete",
+        "sessions",
+        "dispatch_blocks",
+        "deliveries",
+        "pull_requests",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "TaskResultWorkOrder": {
+      "properties": {
+        "close_on_merge": {
+          "type": "boolean"
+        },
+        "external_reference_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "related_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "work_order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_order_id",
+        "related_task_ids",
+        "close_on_merge"
       ],
       "type": "object"
     },

@@ -844,7 +844,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 20);
+    assert_eq!(queries.len(), 21);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Delegations {},
         KernelQuery::Delegation { id: "job-1".into() },
@@ -858,6 +858,9 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::ThreadActivity {},
         KernelQuery::Planning {},
         KernelQuery::ListTasks {},
+        KernelQuery::TaskResult {
+            task_id: "task-1".into(),
+        },
         KernelQuery::TaskEvidence {
             task_ids: None,
             after_task_id: None,
@@ -2571,6 +2574,9 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         KernelQuery::ThreadActivity {},
         KernelQuery::Planning {},
         KernelQuery::ListTasks {},
+        KernelQuery::TaskResult {
+            task_id: "task-1".into(),
+        },
         KernelQuery::TaskEvidence {
             task_ids: None,
             after_task_id: None,

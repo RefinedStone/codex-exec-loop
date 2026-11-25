@@ -10,3 +10,6 @@
 .task-editor-source blockquote { margin: 12px 0; padding-left: 12px; border-left: 2px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
 .task-editor-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .conversation-task-action { display: flex; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+
+.task-editor-id-lookup { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.task-editor-id-lookup input { min-width: 160px; flex: 1; }

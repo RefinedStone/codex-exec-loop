@@ -612,6 +612,15 @@ impl KernelSession {
                 .map_err(|_| unavailable("planning task authority is unavailable".into()))?;
             return to_result(KernelQueryAnswer::ListTasks(tasks));
         }
+        if let Some(task_id) = request.query.task_result_id()? {
+            let workspace = attached.issue_workspace.clone();
+            let task_id = task_id.to_owned();
+            let result =
+                blocking(move || crate::composition::task_result::query(&workspace, &task_id))
+                    .await?
+                    .map_err(|_| unavailable("task result authority is unavailable".into()))?;
+            return to_result(KernelQueryAnswer::TaskResult(Box::new(result)));
+        }
         if let Some(query) = request.query.task_evidence_request()? {
             let workspace = attached.issue_workspace.clone();
             let evidence =

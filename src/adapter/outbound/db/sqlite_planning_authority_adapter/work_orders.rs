@@ -211,6 +211,10 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         validation_links::load(workspace_dir, validation_record_key)
     }
 
+    fn task_validation_record_keys(&self, workspace: &str, task_id: &str) -> Result<Vec<String>> {
+        validation_links::task_keys(workspace, task_id)
+    }
+
     fn work_order_validation_record_keys(
         &self,
         workspace_dir: &str,
