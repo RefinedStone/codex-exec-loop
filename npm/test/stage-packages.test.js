@@ -47,6 +47,7 @@ function createArchive(
   const bundleRoot = path.join(releaseAssetsDir, rootName);
   fs.mkdirSync(bundleRoot, { recursive: true });
   writeFile(path.join(bundleRoot, config.binaryName), "binary");
+  writeFile(path.join(bundleRoot, "LICENSE"), "fixture project license\n");
   writeFile(
     path.join(
       bundleRoot,
@@ -231,6 +232,12 @@ test("stage-npm-packages copies only runtime assets into platform vendors", () =
       assert.equal(packageJson.version, `0.1.0-${config.packageVersionSuffix}`);
       assert.deepEqual(packageJson.os, [config.os]);
       assert.deepEqual(packageJson.cpu, [config.cpu]);
+      assert.equal(packageJson.license, "SEE LICENSE IN LICENSE");
+      assert(
+        fs.existsSync(
+          path.join(outDir, "platforms", config.packageAlias, "LICENSE"),
+        ),
+      );
     }
 
     const mainPackageJson = JSON.parse(
@@ -238,6 +245,8 @@ test("stage-npm-packages copies only runtime assets into platform vendors", () =
     );
     assert.equal(mainPackageJson.name, "@refinedstone/akra");
     assert.equal(mainPackageJson.version, "0.1.0");
+    assert.equal(mainPackageJson.license, "SEE LICENSE IN LICENSE");
+    assert(fs.existsSync(path.join(outDir, "main", "LICENSE")));
     assert.deepEqual(
       mainPackageJson.optionalDependencies,
       Object.fromEntries(

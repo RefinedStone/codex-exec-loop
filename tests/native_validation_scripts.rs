@@ -1379,6 +1379,8 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
     .expect("fixture manifest should be written");
     fs::write(repo.join("README.md"), "fixture readme\n")
         .expect("fixture readme should be written");
+    fs::write(repo.join("LICENSE"), "fixture license\n")
+        .expect("fixture license should be written");
     fs::write(
         repo.join("docs/plan/13-native-packaging-and-operator-runbook.md"),
         "fixture operator runbook\n",
@@ -1419,6 +1421,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
                 "add",
                 "Cargo.toml",
                 "README.md",
+                "LICENSE",
                 "docs",
                 "scripts/gh-akra.sh",
                 "assets",
@@ -1572,6 +1575,11 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
         assert!(
             names.iter().any(|name| name == &font_license_path),
             "embedded admin font license must ship in every native archive"
+        );
+        let project_license_path = format!("{}/LICENSE", first.package_name);
+        assert!(
+            names.iter().any(|name| name == &project_license_path),
+            "the project license must ship in every native archive"
         );
         for entry in entries {
             assert_eq!(

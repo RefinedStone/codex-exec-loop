@@ -1,0 +1,70 @@
+Akra ADE Source License 1.0
+
+Copyright (c) 2026 akra dev studio. All rights reserved.
+
+This is a source-available license. It is not an open source license.
+
+1. Scope
+
+This license applies to the Akra ADE source code, documentation, and
+release artifacts in this repository, starting with the commit that adds
+this file. Copies published before that commit keep the terms that applied
+to them when they were published. Third-party components keep their own
+licenses (see section 7).
+
+2. Use that is permitted
+
+You may, at no charge and without asking:
+
+  a. read the source code and fork this repository on GitHub;
+  b. build and run unmodified copies, for personal use and for business use;
+  c. modify the source code for your own non-commercial use, if you do not
+     distribute the modified version;
+  d. make, use, and share settings, repository extensions, skills, and other
+     works that run with Akra ADE but do not contain its source code;
+  e. use the output that Akra ADE produces for you.
+
+3. Use that is not permitted
+
+You may not do the following:
+
+  a. distribute, publish, sublicense, or otherwise make available a modified
+     version or a derivative work of Akra ADE, in source or binary form;
+  b. use a modified version or a derivative work for a commercial purpose,
+     including use inside a business;
+  c. remove or change this license or any copyright notice.
+
+4. Use that needs prior written permission
+
+You need prior written permission from the licensor to:
+
+  a. redistribute unmodified copies, other than a GitHub fork of this
+     repository;
+  b. sell, rent, or offer Akra ADE as a hosted service;
+  c. use the names "Akra" or "Akra ADE", or their logos, for another product.
+
+To ask for permission, open an issue in this repository. Permission is valid
+only when the licensor gives it in writing.
+
+5. Contributions
+
+The licensor does not accept external pull requests until contribution terms
+are published in CONTRIBUTING.md. Bug reports and suggestions in issues are
+welcome.
+
+6. Termination
+
+If you break these terms, your rights under this license end automatically.
+
+7. Third-party components
+
+Third-party components keep their own licenses. The THIRD_PARTY_NOTICES
+directory lists them. This license does not limit any right that those
+licenses give you.
+
+8. No warranty and no liability
+
+Akra ADE is provided "as is", without warranty of any kind, express or
+implied. To the extent the law permits, the licensor is not liable for any
+claim, damage, or other liability that comes from the software or from its
+use.

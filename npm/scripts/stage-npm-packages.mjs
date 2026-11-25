@@ -72,6 +72,14 @@ function copyDir(sourceDir, destinationDir) {
   }
 }
 
+// Every published package carries the project license that its manifest points to (#2586).
+function copyProjectLicense(licensePath, packageDir) {
+  if (!fs.existsSync(licensePath) || !fs.lstatSync(licensePath).isFile()) {
+    throw new Error(`Project license is missing: ${licensePath}`);
+  }
+  fs.copyFileSync(licensePath, path.join(packageDir, "LICENSE"));
+}
+
 function copyRuntimeAssets(bundleRoot, vendorDir) {
   const runtimeSkillAssets = path.join(
     bundleRoot,
@@ -163,6 +171,7 @@ function stagePlatformPackage({
     }
     copyRuntimeAssets(bundleRoot, vendorDir);
     copyDir(sourceScriptsPath, path.join(vendorDir, "scripts"));
+    copyProjectLicense(path.join(bundleRoot, "LICENSE"), packageDir);
 
     writeJson(path.join(packageDir, "package.json"), {
       name: publishedPackageName,
@@ -170,7 +179,8 @@ function stagePlatformPackage({
       description: `Platform binary for akra (${config.os} ${config.cpu})`,
       os: [config.os],
       cpu: [config.cpu],
-      files: ["vendor"],
+      license: "SEE LICENSE IN LICENSE",
+      files: ["vendor", "LICENSE"],
       repository: {
         type: "git",
         url: "git+https://github.com/RefinedStone/codex-exec-loop.git",
@@ -206,6 +216,7 @@ function stageMainPackage({ outDir, packageVersion }) {
     path.join(packageRoot, "README.md"),
     path.join(mainDir, "README.md"),
   );
+  copyProjectLicense(path.join(packageRoot, "..", "LICENSE"), mainDir);
 
   const basePackageJson = JSON.parse(
     fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),

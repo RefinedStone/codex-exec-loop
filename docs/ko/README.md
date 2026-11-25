@@ -132,6 +132,16 @@ bash scripts/check_native_pr.sh
 저장소 구조, architecture gate, worktree 규칙, GitHub 전달 순서는
 [개발 및 전달 가이드](reference/development.md)에 있습니다.
 
+## 이용조건
+
+Akra ADE는 소스 공개형(source-available)이며 오픈소스가 아닙니다.
+[Akra ADE Source License](../../LICENSE)에 따라 수정하지 않은 원본은 개인·업무용으로 빌드하고
+실행할 수 있고, 자기 비상업적 목적으로 수정할 수 있습니다. 수정본을 배포하거나 상업적으로 이용할 수
+없습니다. 재배포에는 akra dev studio의 서면 허락이 필요합니다. 제3자 구성요소는 각자의 라이선스를
+따릅니다([THIRD_PARTY_NOTICES](../../THIRD_PARTY_NOTICES/README.md)). 이용조건을 추가하기 전에
+게시된 릴리스는 이전 조건을 유지합니다. 이슈와 허락 요청은 [CONTRIBUTING.md](../../CONTRIBUTING.md)를
+참고하세요.
+
 ## 문서
 
 - [문서 지도](docs-map.md)
