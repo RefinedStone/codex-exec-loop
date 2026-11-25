@@ -583,6 +583,80 @@ mod restart_registry_tests {
     }
 
     #[test]
+    fn production_registry_assembly_keeps_binding_pause_on_the_shared_admission() {
+        use crate::application::service::issue_binding_admission::IssueBindingAdmission;
+        use crate::domain::issue_automation::{IssueAutomationBinding, IssueAutomationBindingId};
+        use crate::domain::issue_work::{IssueProjectScope, IssueProvider};
+
+        let fixture = Fixture::new();
+        fixture.registry.register(&fixture.entry).unwrap();
+        let admission = Arc::new(IssueBindingAdmission::new());
+        let collection = build_with_admission_and_restart_registry(
+            &fixture.workspace,
+            admission.clone(),
+            fixture.registry.clone(),
+        );
+        collection
+            .autonomy_service()
+            .unwrap()
+            .recover_before_runtime()
+            .unwrap();
+        assert!(fixture.registry.list().unwrap().is_empty());
+
+        let store = collection.automation_store();
+        let first = IssueAutomationBindingId::new("restart-binding-first").unwrap();
+        let second = IssueAutomationBindingId::new("restart-binding-second").unwrap();
+        for (id, repository) in [(&first, "repository-first"), (&second, "repository-second")] {
+            let binding = IssueAutomationBinding::new(
+                id.clone(),
+                IssueProvider::GitHub,
+                "github.com",
+                repository,
+                IssueProjectScope {
+                    workspace_dir: fixture.workspace.clone(),
+                },
+            )
+            .unwrap();
+            store.insert_binding(&fixture.workspace, &binding).unwrap();
+        }
+        let pause = collection.binding_pause_service().unwrap();
+        pause.recover_before_runtime().unwrap();
+        let generation = admission.capture(&first).unwrap();
+        let guard = admission.acquire(&first, generation).unwrap();
+        let accepted = pause
+            .set(
+                "restart-pause-first".into(),
+                first.clone(),
+                true,
+                generation,
+                None,
+            )
+            .unwrap();
+        assert!(accepted.receipt.is_none());
+        assert!(admission.capture(&first).is_err());
+        assert_eq!(admission.capture(&second).unwrap(), 0);
+        assert!(!pause.poll().unwrap());
+        assert!(
+            store
+                .get_issue_binding_pause_command(&fixture.workspace, "restart-pause-first")
+                .unwrap()
+                .unwrap()
+                .receipt
+                .is_none(),
+            "the collection must not complete Pause while the shared owner still has a guard"
+        );
+        drop(guard);
+        assert!(pause.poll().unwrap());
+        let stored = store
+            .issue_binding_pause_state(&fixture.workspace, &first)
+            .unwrap();
+        assert!(stored.paused);
+        assert!(stored.pending.is_none());
+        assert_eq!(stored, pause.state(&first).unwrap());
+        assert_eq!(admission.capture(&second).unwrap(), 0);
+    }
+
+    #[test]
     fn production_assembly_and_state_queries_do_not_create_restart_discovery() {
         let fixture = Fixture::new();
         let collection = build_with_restart_registry(&fixture.workspace, fixture.registry.clone());

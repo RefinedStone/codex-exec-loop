@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 
 mod fixture;
+mod integration;
 mod process;
 use fixture::*;
 

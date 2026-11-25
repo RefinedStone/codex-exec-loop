@@ -395,7 +395,8 @@ mandatory in both cases. Auto cannot skip an unavailable or disabled PR workflow
 [Auto delivery contract](issue-auto-delivery.md) for authority and compatibility details.
 
 Selecting Auto does not enable the global parallel pool or grant Spec approval. Binding-wide
-pause uses the separate runtime contract below; unattended Gateway startup remains #2561 work.
+pause uses the separate runtime contract below. Gateway startup restores confirmed Gated/Auto
+repositories through the shared recovery path described in [Gateway restart](issue-automation-restart.md).
 
 ### Binding Pause / Resume
 

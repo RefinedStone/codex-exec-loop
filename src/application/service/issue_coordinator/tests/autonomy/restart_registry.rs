@@ -6,6 +6,8 @@ use crate::application::port::outbound::{
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
 
+mod auto_integration;
+
 #[derive(Default)]
 struct RegistryState {
     entries: BTreeMap<String, IssueAutomationRestartEntry>,

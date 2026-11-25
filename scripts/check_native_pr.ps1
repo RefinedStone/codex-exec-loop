@@ -205,7 +205,6 @@ function Invoke-WindowsPortableChecks {
         "composition::kernel_host::simulation::issue_decision::human_confirmation::autonomy::",
         "sqlite_issue_automation_store::autonomy::tests::",
         "application::service::issue_coordinator::tests::auto_delivery::",
-        "application::service::issue_coordinator::tests::autonomy::auto::",
         "adapter::inbound::kernel_protocol::issue_autonomy::",
         "domain::issue_automation::arbiter::tests::arbiter_input_fingerprints_reject_missing_or_unbounded_provenance",
         "domain::issue_automation::arbiter::tests::arbiter_legacy_input_json_keeps_its_bytes_until_a_binding_generation_exists",
