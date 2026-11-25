@@ -69,6 +69,18 @@ try {
   await page.getByTestId("settings-font-ui").getByRole("button", { name: "UI 글자 크기 줄이기" }).click();
   check("the UI size moves the UI tokens together", (await token(page, "--text-m")) === "12px" && (await token(page, "--text-s")) === "11px");
 
+  // 확대: 사이드바는 설정 창에서만 바꾼다. 사이드바만 커지고 본문은 그대로이다 (#2628).
+  const sidebarWidth = () => page.getByTestId("folders").evaluate((element) => element.getBoundingClientRect().width);
+  const widthBefore = await sidebarWidth();
+  await page.getByTestId("settings-zoom-scope").selectOption("sidebar");
+  await page.getByTestId("settings-zoom").getByRole("button", { name: "사이드바 확대 늘리기" }).click();
+  check("the settings zoom names its scope", (await page.getByTestId("settings-zoom-value").textContent()) === "110%");
+  await page.waitForFunction((width) => document.querySelector('[data-testid="folders"]').getBoundingClientRect().width > width, widthBefore, { timeout: 5_000 }).catch(() => undefined);
+  const zooms = await page.evaluate(() => window.akra.zoom.get());
+  check("the settings zoom changes only the chosen scope", (await sidebarWidth()) > widthBefore && zooms.sidebar === 1.1 && zooms.thread === undefined, JSON.stringify(zooms));
+  await page.getByTestId("settings-zoom-value").click();
+  check("clicking the zoom value resets the scope", (await page.getByTestId("settings-zoom-value").textContent()) === "100%");
+
   // 알림과 잠자기 방지.
   await page.getByTestId("settings-notify-mode").locator('[data-value="always"]').click();
   await page.getByTestId("settings-notify-sound").uncheck();

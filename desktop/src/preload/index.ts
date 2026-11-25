@@ -2,6 +2,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { GitHunkAction, GitHunkDiff } from "../shared/gitHunks";
 import type { BrowserAgentState } from "../shared/browserAgent";
+import type { ZoomDirection, ZoomFactors, ZoomScope } from "../shared/zoom";
 
 import {
   type AkraBridge,
@@ -218,11 +219,12 @@ const bridge: AkraBridge = {
   },
   isAppFocused: () => ipcRenderer.invoke(IPC_CHANNELS.appFocused) as Promise<boolean>,
   zoom: {
-    get(): Promise<number> {
-      return ipcRenderer.invoke(IPC_CHANNELS.zoomGet) as Promise<number>;
+    get(): Promise<ZoomFactors> {
+      return ipcRenderer.invoke(IPC_CHANNELS.zoomGet) as Promise<ZoomFactors>;
     },
-    step: (direction) => ipcRenderer.send(IPC_CHANNELS.zoomStep, direction),
-    onChanged: (listener) => listen<[number]>(IPC_CHANNELS.zoomChanged, listener),
+    step: (scope, direction) => ipcRenderer.send(IPC_CHANNELS.zoomStep, scope, direction),
+    onChanged: (listener) => listen<[ZoomFactors, ZoomScope, boolean]>(IPC_CHANNELS.zoomChanged, listener),
+    onCommand: (listener) => listen<[ZoomDirection]>(IPC_CHANNELS.zoomCommand, listener),
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),

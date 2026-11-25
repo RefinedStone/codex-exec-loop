@@ -1,4 +1,4 @@
-// 화면 시험 (plan 26 U1): 확대와 저장, 확대 뒤 브라우저 패널의 자리, 이동 기록, 대화 안 찾기, 이전 프롬프트 불러오기,
+// 화면 시험 (plan 26 U1, #2626): 영역별 확대와 저장, 옛 확대 값 옮기기, 탭을 확대한 뒤 브라우저 패널의 자리, 이동 기록, 대화 안 찾기, 이전 프롬프트 불러오기,
 // 창 자리 저장. 실제 codex 와 턴은 쓰지 않는다 (가짜 Gateway). userData 는 임시 폴더를 쓴다.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -40,29 +40,63 @@ const check = (name, ok, detail = "") => {
 };
 const savedState = () => JSON.parse(readFileSync(join(userData, "window-state.json"), "utf8"));
 
+// 옛 판이 남긴 파일이다: 앱 전체 175%. 새 판은 본문 보기로만 옮긴다.
+writeFileSync(join(userData, "window-state.json"), JSON.stringify({ zoom: 1.75, bounds: null, maximized: false }));
 const app = await electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env });
 try {
   const page = await app.firstWindow();
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
-  const clickMenu = (id) => app.evaluate(({ Menu }, itemId) => Menu.getApplicationMenu()?.getMenuItemById(itemId)?.click(), id);
-  const zoomIs = (factor) => page.waitForFunction(async (expected) => Math.abs((await window.akra.zoom.get()) - expected) < 0.001 && Math.abs(window.devicePixelRatio / expected - Math.round(window.devicePixelRatio / expected)) < 0.02, factor, { timeout: 5_000 }).then(() => true, () => false);
+  // 메뉴 항목을 이 창에서 누른 것처럼 부른다. main 은 메뉴의 확대를 누른 창에 맡긴다.
+  const clickMenu = (id) => app.evaluate(({ BrowserWindow, Menu }, itemId) => Menu.getApplicationMenu()?.getMenuItemById(itemId)?.click(undefined, BrowserWindow.getAllWindows()[0]), id);
+  const zoomOf = (scope) => page.evaluate(async (key) => (await window.akra.zoom.get())[key] ?? 1, scope);
+  const zoomIs = (scope, factor) => page.waitForFunction(async ([key, expected]) => Math.abs(((await window.akra.zoom.get())[key] ?? 1) - expected) < 0.001, [scope, factor], { timeout: 5_000 }).then(() => true, () => false);
+  const box = (testId) => page.getByTestId(testId).evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+  });
+  const cssZoom = (selector) => page.locator(selector).first().evaluate((element) => getComputedStyle(element).zoom);
+  const sidebarBefore = await box("folders");
+  const topBarBefore = await box("gateway-info");
+  const pixelRatio = await page.evaluate(() => window.devicePixelRatio);
 
-  // 확대: 메뉴 → 모든 창에 적용 → 배율 표시 → 저장.
+  // 옛 판의 앱 전체 175% 는 본문 보기로만 옮겨 왔다. 사이드바와 위 막대는 100% 이다 (#2627).
+  check("an old single zoom moves to the body views", (await zoomOf("home")) === 1.75 && (await zoomOf("thread")) === 1.75 && (await zoomOf("sidebar")) === 1, JSON.stringify(savedState()));
+  check("the body view is zoomed with CSS", (await cssZoom(".main-view")) === "1.75");
+  check("the page itself stays at 100%", (await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.getZoomFactor())) === 1);
+
+  // 메뉴는 포커스가 없으면 지금 본문 보기를 바꾼다. 사이드바와 위 막대, 창의 픽셀 비율은 그대로이다 (#2628).
   await clickMenu("zoom-in");
-  check("the view menu zooms in one step", await zoomIs(1.1));
-  check("the window shows the new factor for a moment", (await page.getByTestId("zoom-notice").textContent()) === "110%");
-  check("the zoom factor is saved in the userData folder", savedState().zoom === 1.1, JSON.stringify(savedState()));
+  check("the view menu zooms the body view one step", await zoomIs("home", 2));
+  check("the window shows the scope and the new factor for a moment", (await page.getByTestId("zoom-notice").textContent()) === "홈 200%");
+  check("the body factor is saved in the userData folder", savedState().zooms?.home === 2 && savedState().zoom === undefined, JSON.stringify(savedState()));
+  const sidebarAfter = await box("folders");
+  const topBarAfter = await box("gateway-info");
+  check("the sidebar keeps its size while the body zooms", sidebarAfter.width === sidebarBefore.width, JSON.stringify({ sidebarBefore, sidebarAfter }));
+  check("the top bar keeps its size while the body zooms", topBarAfter.height === topBarBefore.height, JSON.stringify({ topBarBefore, topBarAfter }));
+  check("the device pixel ratio does not change", (await page.evaluate(() => window.devicePixelRatio)) === pixelRatio);
+  for (const scope of ["home", "fleet", "thread", "remote"]) await page.evaluate((key) => window.akra.zoom.step(key, "reset"), scope);
+  check("each body view resets on its own", await zoomIs("remote", 1) && (await cssZoom(".main-view")) === "1");
 
-  // 확대한 상태에서 브라우저 패널의 페이지가 빈 자리와 같은 곳에 있다.
+  // ⌘ + 휠은 포인터 아래의 영역을 바꾼다. 사이드바 위에서는 바꾸지 않는다.
+  await page.getByTestId("folders").hover();
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -120);
+  await page.keyboard.up("Control");
+  await page.waitForTimeout(200);
+  check("a wheel over the sidebar does not zoom it", (await zoomOf("sidebar")) === 1);
+
+  // 브라우저 패널의 내용을 125% 로 확대해도 웹 페이지는 빈 자리와 같은 곳에 있다 (#2629).
   await page.getByTestId("browser-toggle").click();
   await page.getByTestId("browser-slot").waitFor({ timeout: 10_000 });
+  await page.evaluate(() => {
+    window.akra.zoom.step("panel:browser", "in");
+    window.akra.zoom.step("panel:browser", "in");
+  });
+  check("the browser tab zooms on its own", await zoomIs("panel:browser", 1.25) && (await cssZoom(".panel-body")) === "1.25");
   const placed = async () => {
-    const slot = await page.getByTestId("browser-slot").evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
-    });
+    const slot = await box("browser-slot");
     const view = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.contentView.children.at(-1)?.getBounds() ?? null);
-    const near = (key) => view !== null && Math.abs(view[key] - slot[key] * 1.1) <= 2;
+    const near = (key) => view !== null && Math.abs(view[key] - slot[key]) <= 2;
     return { ok: near("x") && near("y") && near("width") && near("height"), slot, view };
   };
   let placement = await placed();
@@ -70,10 +104,22 @@ try {
     await page.waitForTimeout(100);
     placement = await placed();
   }
-  check("the browser page sits on its slot while zoomed", placement.ok, JSON.stringify(placement));
+  check("the browser page sits on its slot while the tab is zoomed", placement.ok, JSON.stringify(placement));
+  // 웹 페이지 자체의 배율은 탭의 배율과 따로이다. 배율은 읽은 페이지에만 걸리므로 먼저 페이지를 읽는다.
+  const loadPage = (html) => app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows()[0]?.contentView.children.at(-1)?.webContents.loadURL(url), `data:text/html,${html}`);
+  const pageFactor = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.contentView.children.at(-1)?.webContents.getZoomFactor() ?? null);
+  await loadPage("<p>one</p>");
+  await page.evaluate(() => window.akra.zoom.step("browser-page", "in"));
+  await zoomIs("browser-page", 1.1);
+  check("the web page has its own factor", Math.abs((await pageFactor()) - 1.1) < 0.001, String(await pageFactor()));
+  await loadPage("<p>two</p>");
+  check("the web page keeps its factor after it loads another page", Math.abs((await pageFactor()) - 1.1) < 0.001, String(await pageFactor()));
+  await page.evaluate(() => {
+    window.akra.zoom.step("browser-page", "reset");
+    window.akra.zoom.step("panel:browser", "reset");
+  });
+  check("the browser tab resets", await zoomIs("panel:browser", 1));
   await page.getByTestId("browser-toggle").click();
-  await clickMenu("zoom-reset");
-  check("the view menu resets the zoom", await zoomIs(1));
 
   // 이동 기록: 새 스레드 화면 → 스레드 → 뒤로 → 앞으로.
   check("back is off before the first move", await page.getByTestId("nav-back").isDisabled());

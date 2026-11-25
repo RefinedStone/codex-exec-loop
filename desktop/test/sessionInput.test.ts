@@ -98,7 +98,7 @@ function harness(readOnly = false) {
     notion: { openExternal: () => undefined },
     dots: { getEnabled: () => Promise.resolve(false), setEnabled: () => Promise.resolve(false), openWindow: () => Promise.resolve(true), takeDraft: () => Promise.resolve(null), reportSeen: () => undefined, onSeen: () => () => undefined, hasWindow: () => Promise.resolve(false), dock: () => undefined, onDock: () => () => undefined, isSendAllowed: () => Promise.resolve(false), allowSend: () => undefined },
     remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
-    zoom: { get: () => Promise.resolve(1), step: () => undefined, onChanged: () => () => undefined },
+    zoom: { get: () => Promise.resolve({}), step: () => undefined, onChanged: () => () => undefined, onCommand: () => () => undefined },
     isAppFocused: () => Promise.resolve(false),
     settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: () => Promise.resolve(DEFAULT_SETTINGS), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined },
     skills: {

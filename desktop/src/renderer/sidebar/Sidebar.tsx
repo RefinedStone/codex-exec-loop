@@ -6,6 +6,7 @@ import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
 import { closeChat, closeDot, isDotDockVisible, MOD_KEY, showChat, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
 import { DotAvatar } from "../views/DotChat";
+import { useZoomFactor, zoomStyle } from "../views/useZoom";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
 const PHASE_LABEL: Record<ConnectionState["phase"], string> = {
@@ -309,10 +310,13 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { o
   const view = useUiStore((state) => state.view);
   const theme = useUiStore((state) => state.theme);
   const phase = connection?.phase ?? "connecting";
+  const zoom = useZoomFactor("sidebar");
+  // macOS 창 단추 밑의 끌기 칸은 위 막대의 높이를 따른다. 사이드바 배율로 나누어 두 배율이 달라도 단추가 항목과 겹치지 않는다.
+  const dragScale = useZoomFactor("topbar") / zoom;
 
   return (
-    <nav className="sidebar" data-testid="folders">
-      <div className="sidebar-drag" />
+    <nav className="sidebar" style={zoomStyle(zoom)} data-zoom-scope="sidebar" data-testid="folders">
+      <div className="sidebar-drag" style={dragScale === 1 ? undefined : ({ "--drag-scale": dragScale } as React.CSSProperties)} />
       <div className="sidebar-nav">
         <button type="button" className={view === "home" ? "nav-item selected" : "nav-item"} onClick={() => showHome()} data-testid="new-folder-thread">
           <Icon name="pencil" />

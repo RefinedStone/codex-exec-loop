@@ -273,6 +273,15 @@ kbd {
   min-width: 0;
 }
 
+/* 본문 보기의 칸이다. 이 칸만 본문 배율로 확대한다 (#2626). 터미널은 이 칸 밖에 있다. */
+.main-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .column {
   width: 100%;
   max-width: 780px;
@@ -297,7 +306,7 @@ kbd {
 }
 
 .inset-title-bar .sidebar-drag {
-  height: 40px;
+  height: calc(40px * var(--drag-scale, 1));
 }
 
 .sidebar-nav {
@@ -564,7 +573,7 @@ kbd {
   -webkit-app-region: no-drag;
 }
 
-/* macOS 창 단추의 자리이다. 단추는 확대해도 같은 자리에 있으므로 확대 값으로 나눈다 (plan 26 Z3). */
+/* macOS 창 단추의 자리이다. 단추는 위 막대를 확대해도 같은 자리에 있으므로 위 막대의 확대 값으로 나눈다. */
 .inset-title-bar .top-bar.no-sidebar {
   padding-left: calc(84px / var(--zoom, 1));
 }
@@ -761,6 +770,12 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+}
+
+.zoom-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .stepper-value {

@@ -4,6 +4,7 @@ export type { PanelId } from "../extensions/panelDefinitions";
 import { create } from "zustand";
 
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
+import type { ZoomFactors } from "../../shared/zoom";
 
 export type View = "home" | "thread" | "fleet" | "remote";
 export type Theme = "light" | "dark";
@@ -33,8 +34,10 @@ export interface UiState {
   nav: NavHistory;
   /** A → 홈 → A도 구별하는 사용자의 화면 이동 세대이다. */
   navigationRevision: number;
-  /** 확대 값을 바꾼 직후에 잠깐 보이는 배율이다. null 이면 보이지 않는다. */
-  zoomNotice: number | null;
+  /** 확대 값을 바꾼 직후에 잠깐 보이는 영역과 배율이다 (예: "본문 175%"). null 이면 보이지 않는다. */
+  zoomNotice: string | null;
+  /** main 이 가진 영역별 확대 값이다 (#2626). 값이 없는 영역은 100% 이다. */
+  zooms: ZoomFactors;
   /** 새 스레드 화면이 고른 작업 폴더이다. null 이면 보낼 때 폴더를 고르게 한다. */
   homeCwd: string | null;
   /** 입력창에 쓰던 글이다. 키는 스레드 id 이고, 새 스레드 화면은 `HOME_DRAFT` 이다. 보기를 바꿔도 남는다. */
@@ -95,6 +98,7 @@ export const useUiStore = create<UiState>(() => ({
   nav: INITIAL_NAV,
   navigationRevision: 0,
   zoomNotice: null,
+  zooms: {},
   homeCwd: null,
   drafts: {},
   toasts: [],
@@ -146,10 +150,10 @@ export function showHome(cwd?: string): void {
 const ZOOM_NOTICE_MS = 1200;
 let zoomNoticeTimer: number | undefined;
 
-/** 바뀐 배율을 잠깐 보인다 (plan 26 Z2). */
-export function showZoomNotice(factor: number): void {
+/** 바뀐 영역과 배율을 잠깐 보인다 (plan 26 Z2). */
+export function showZoomNotice(text: string): void {
   window.clearTimeout(zoomNoticeTimer);
-  set({ zoomNotice: factor });
+  set({ zoomNotice: text });
   zoomNoticeTimer = window.setTimeout(() => set({ zoomNotice: null }), ZOOM_NOTICE_MS);
 }
 

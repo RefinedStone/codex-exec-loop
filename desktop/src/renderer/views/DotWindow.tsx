@@ -11,11 +11,16 @@ import { DotChat } from "./DotChat";
 import { notifyDotReply } from "./notify";
 import { useAppSettings } from "./useAppSettings";
 import { useZoom } from "./useZoom";
+import { ZoomNotice } from "./Views";
+import type { ZoomScope } from "../../shared/zoom";
+
+/** dot 창에서 단축키가 바꾸는 영역이다. */
+const dotWindowScope = (): ZoomScope => "dot-window";
 
 export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId: string; clientVersion: string }) {
   const useStore = remoteHostStore(host);
   const session = useRef<DesktopSession | null>(null);
-  useZoom();
+  useZoom(dotWindowScope);
   useAppSettings();
   useEffect(() => {
     const created = new DesktopSession(remoteHostBridge(window.akra.remote, host, "dot-window"), desktopSessionStore(useStore), clientVersion, undefined, true);
@@ -76,6 +81,7 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
         <p className={problem ? "empty error" : "empty muted"} data-testid="dot-window-state">
           {problem ?? (phase === "connected" ? "에이전트를 찾는 중입니다." : "Gateway 에 연결하는 중입니다.")}
         </p>
+        <ZoomNotice />
       </div>
     );
   }
@@ -88,6 +94,7 @@ export function DotWindow({ host, dotId, clientVersion }: { host: string; dotId:
           window.akra.dots.reportSeen(host, dotId);
         }}
         onDock={() => window.akra.dots.dock(host, dotId, useUiStore.getState().drafts[dotDraftKey(dotId)] ?? "")} />
+      <ZoomNotice />
     </div>
   );
 }

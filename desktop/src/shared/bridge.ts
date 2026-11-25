@@ -5,7 +5,7 @@ import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings, AppSettingsPatch } from "./settings";
 import type { SkillsBridge } from "./skills";
 import type { VaultApprovedMapping, VaultRestoreTarget, VaultRestoreViewState } from "./vaultRestore";
-import type { ZoomDirection } from "./zoom";
+import type { ZoomDirection, ZoomFactors, ZoomScope } from "./zoom";
 import type { ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "./issueConfirmation";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
@@ -95,6 +95,7 @@ export const IPC_CHANNELS = {
   zoomGet: "akra:zoom-get",
   zoomStep: "akra:zoom-step",
   zoomChanged: "akra:zoom-changed",
+  zoomCommand: "akra:zoom-command",
   appFocused: "akra:app-focused",
   settingsGet: "akra:settings-get",
   settingsSet: "akra:settings-set",
@@ -477,13 +478,15 @@ export interface SettingsBridge {
   reportWorking(working: boolean): void;
 }
 
-/** 앱 전체 확대이다 (plan 26 Z1–Z2). 값은 main 이 가지고 모든 창에 적용한다. */
+/** 영역별 확대이다 (#2626). 값은 main 이 가지고 저장한다. renderer 가 영역마다 CSS `zoom` 으로 적용한다. */
 export interface ZoomBridge {
-  get(): Promise<number>;
-  /** 한 단계 확대하거나 축소하거나 100% 로 되돌린다. */
-  step(direction: ZoomDirection): void;
-  /** 확대 값이 바뀌면 부른다. 메뉴, 단축키, 다른 창에서 바꾼 것도 온다. */
-  onChanged(listener: (factor: number) => void): () => void;
+  get(): Promise<ZoomFactors>;
+  /** 한 영역을 한 단계 확대하거나 축소하거나 100% 로 되돌린다. main 이 영역 이름을 검증한다. */
+  step(scope: ZoomScope, direction: ZoomDirection): void;
+  /** 확대 값이 바뀌면 부른다. 다른 창에서 바꾼 것도 온다. `scope` 는 바뀐 영역, `here` 는 이 창에서 바꿨는지이다. */
+  onChanged(listener: (factors: ZoomFactors, scope: ZoomScope, here: boolean) => void): () => void;
+  /** 메뉴나 단축키(⌘+ / ⌘− / ⌘0)이다. 어느 영역을 바꿀지는 이 창이 포커스로 정한다. */
+  onCommand(listener: (direction: ZoomDirection) => void): () => void;
 }
 
 /** dots 클라우드 호스트의 활성화 설정이다 (plan 25 §3.2). Gateway 를 다시 시작해야 적용된다. */

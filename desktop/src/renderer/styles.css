@@ -23,7 +23,7 @@
 }
 
 /* 스레드가 없거나 열지 못한 상태에서도 입력창과 터미널이 화면 아래에 붙게 한다. */
-.main > p.empty {
+.main-view > p.empty {
   flex: 1;
 }
 
@@ -88,7 +88,8 @@
 .approvals {
   display: grid;
   gap: 8px;
-  max-height: 55vh;
+  /* CSS zoom 은 vh 에도 곱한다. 본문 배율로 나누어 창 높이의 55% 로 둔다. */
+  max-height: calc(55vh / var(--area-zoom, 1));
   overflow-y: auto;
 }
 
