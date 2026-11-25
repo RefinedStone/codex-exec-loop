@@ -3249,7 +3249,7 @@ mod tests {
                     ConversationStreamEvent::TurnTerminal {
                         receipt: completed_receipt(
                             "turn-completed-before-port-error",
-                            vec![".codex-exec-loop/planning/result.md".to_string()],
+                            vec![".akra/planning/result.md".to_string()],
                         ),
                     },
                 ],

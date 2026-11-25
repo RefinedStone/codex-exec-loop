@@ -2581,8 +2581,7 @@ mod tests {
             context.planning_workspace_directory = workspace.path.clone();
             let mut request = test_request(context.clone());
             request.workspace_directory = workspace.path.clone();
-            request.changed_planning_file_paths =
-                vec![".codex-exec-loop/planning/result.md".into()];
+            request.changed_planning_file_paths = vec![".akra/planning/result.md".into()];
             attach_synthetic_expected_lease(&mut request);
 
             let capture = executor.begin_official_completion_if_needed(&context, &request);
@@ -3585,11 +3584,9 @@ mod tests {
     }
 
     fn seed_queue_idle_review_authority(workspace_directory: &str) {
-        let prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md";
-        fs::create_dir_all(format!(
-            "{workspace_directory}/.codex-exec-loop/planning/prompts"
-        ))
-        .expect("queue idle prompt directory should be seeded");
+        let prompt_path = ".akra/planning/prompts/queue-idle-review.md";
+        fs::create_dir_all(format!("{workspace_directory}/.akra/planning/prompts"))
+            .expect("queue idle prompt directory should be seeded");
         fs::write(
             format!("{workspace_directory}/{prompt_path}"),
             "# Queue Idle Review\nSuggest a justified follow-up task when the queue is empty.\n",

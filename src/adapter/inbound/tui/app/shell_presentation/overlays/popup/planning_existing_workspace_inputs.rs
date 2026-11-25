@@ -56,7 +56,7 @@ mod tests {
         )
         .with_queue_idle_policy(
             QueueIdlePolicy::ReviewAndEnqueue,
-            Some(".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string()),
+            Some(".akra/planning/prompts/queue-idle-review.md".to_string()),
         );
 
         let copy = build_existing_workspace_copy("/tmp/workspace", &runtime_projection);

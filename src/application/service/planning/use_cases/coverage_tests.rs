@@ -347,7 +347,7 @@ fn queue_refresh_preparation_reports_queue_idle_stop_and_missing_prompt() {
         &missing_repo,
         missing_workspace.path_str(),
         QueueIdlePolicy::ReviewAndEnqueue,
-        ".codex-exec-loop/planning/prompts/missing-queue-idle.md",
+        ".akra/planning/prompts/missing-queue-idle.md",
     );
     let missing = planning_services(missing_repo, Arc::new(NoopPlanningWorkerPort))
         .worker
@@ -373,7 +373,7 @@ fn queue_refresh_preparation_reports_queue_idle_stop_and_missing_prompt() {
 #[test]
 fn reconcile_post_turn_preserves_content_when_current_snapshot_cannot_be_read() {
     let workspace = TempPlanningWorkspace::new("planning-use-cases-reconcile-error");
-    let planning_parent = workspace.path().join(".codex-exec-loop");
+    let planning_parent = workspace.path().join(".akra");
     fs::create_dir_all(&planning_parent).expect("planning parent should exist");
     fs::write(planning_parent.join("planning"), "not a directory")
         .expect("planning path fixture should be a file");

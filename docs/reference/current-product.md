@@ -244,8 +244,13 @@ grant is cached.
 - Planning follows `draft -> validate -> promote`.
 - SQLite behind `PlanningTaskRepositoryPort` is the accepted task, direction, queue, claim, and
   runtime authority.
-- `.codex-exec-loop/planning/` holds operator-authored details, prompts, staged drafts, exports, and
-  rejected-write evidence. It is not the task-authority database.
+- `.akra/planning/` holds operator-authored details, prompts, staged drafts, exports, and
+  rejected-write evidence. It is not the task-authority database. `.akra/runtime/` holds private
+  locks, quarantine, and trace logs.
+- The repository kernel lock owner moves a pre-#2588 `.codex-exec-loop/{planning,runtime,followups}`
+  into `.akra/` with a directory rename before any planning read or write. It refuses to merge when
+  both locations exist. Authority store schema 21 rewrites the stored `.codex-exec-loop/` path
+  prefixes once, in the schema migration transaction.
 - Builtin `next-task` and internal continuation execute only the accepted queue head.
 - Proposed tasks remain visible but non-executable until accepted.
 - Queue-idle behavior comes from accepted direction authority.

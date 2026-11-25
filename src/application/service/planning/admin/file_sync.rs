@@ -275,8 +275,8 @@ mod tests {
         );
         let candidate = Path::new(&workspace.path).join(RESULT_OUTPUT_FILE_PATH);
         assert_eq!(fs::read_to_string(&candidate).unwrap(), accepted_body);
-        let manifest = Path::new(&workspace.path)
-            .join(".codex-exec-loop/planning/.akra-file-sync-result-output.json");
+        let manifest =
+            Path::new(&workspace.path).join(".akra/planning/.akra-file-sync-result-output.json");
         assert!(
             !manifest.exists(),
             "git-backed export baseline must stay in the repo-scoped DB"

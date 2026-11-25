@@ -7,6 +7,8 @@ pub(crate) mod secure_fs;
 pub mod task_evidence_artifact;
 // kernel_lock 은 저장소당 커널 하나를 지키는 OS 파일 잠금이다 (plan 18 K3-4).
 pub(crate) mod kernel_lock;
+// workspace_layout_migration 은 커널 잠금 아래에서 `.codex-exec-loop/`를 `.akra/`로 옮긴다 (#2588).
+pub(crate) mod workspace_layout_migration;
 // git_operation_journal 은 저장소마다 하나인 git 작업 일지 파일이다 (plan 27 G3).
 pub(crate) mod git_operation_journal;
 // issue_policy 는 사용자와 프로젝트의 이슈 정책 파일을 읽는다 (#2416).
@@ -31,6 +33,7 @@ pub use self::parallel_agent_profile::FilesystemParallelAgentProfileRepositoryAd
 pub use self::planning_workspace::FilesystemPlanningWorkspaceAdapter;
 pub use self::pr_validation_rollout_evidence::FilesystemPrValidationRolloutEvidenceAdapter;
 pub use self::task_evidence_artifact::FilesystemTaskEvidenceArtifactAdapter;
+pub(crate) use self::workspace_layout_migration::WorkspaceLayoutMigrationError;
 
 pub mod issue_creation_journal;
 pub use self::issue_creation_journal::IssueCreationJournalAdapter;

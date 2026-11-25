@@ -84,7 +84,7 @@ fn vault_workspace_read_keeps_the_creation_scope_without_creating_authority_file
     assert_eq!(fixture.files(), before);
     assert!(!fixture.0.join(".git/akra-repository-id").exists());
     assert!(!fixture.0.join(".git/akra-repository-id.lock").exists());
-    assert!(!fixture.0.join(".codex-exec-loop").exists());
+    assert!(!fixture.0.join(".akra").exists());
     assert!(!fixture.0.join(".akra").exists());
     #[cfg(windows)]
     {

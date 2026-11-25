@@ -130,6 +130,11 @@ impl RepositoryKernelLockAdapter {
                     .with_context(|| format!("failed to lock `{}`", lock_path.display()));
             }
         }
+        // #2588: the lock owner moves this workspace's legacy directory before any planning read
+        // or write. On failure the lock file drops here, so no runtime starts on a half-moved layout.
+        super::workspace_layout_migration::migrate_legacy_workspace_layout(Path::new(
+            workspace_dir,
+        ))?;
         if let Err(error) = write_holder_record(&mut file, workspace_dir, owner) {
             // 기록은 진단용이다. 쓰지 못해도 잠금은 유효하다.
             tracing::warn!(error = %error, "kernel lock holder record write failed");

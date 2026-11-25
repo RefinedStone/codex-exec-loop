@@ -124,8 +124,12 @@ fail-closed입니다. 세션 전체 grant는 저장하지 않습니다.
 
 - Planning은 `draft -> validate -> promote` 순서를 따릅니다.
 - `PlanningTaskRepositoryPort` 뒤의 SQLite가 승인된 task, direction, queue, claim, runtime 권한입니다.
-- `.codex-exec-loop/planning/`은 운영자 상세 문서, prompt, staged draft, export, 거부 근거를
-  보관하며 task-authority DB가 아닙니다.
+- `.akra/planning/`은 운영자 상세 문서, prompt, staged draft, export, 거부 근거를
+  보관하며 task-authority DB가 아닙니다. `.akra/runtime/`은 비공개 잠금, 격리 파일, trace log를 둡니다.
+- 저장소 커널 잠금을 잡은 프로세스는 planning을 읽거나 쓰기 전에 #2588 이전의
+  `.codex-exec-loop/{planning,runtime,followups}`를 디렉터리 이름 바꾸기로 `.akra/`에 옮깁니다. 두 위치가
+  모두 있으면 합치지 않고 멈춥니다. authority store schema 21은 저장된 `.codex-exec-loop/` 경로 접두어를
+  schema migration transaction 안에서 한 번 바꿉니다.
 - Builtin `next-task`와 내부 continuation은 승인된 queue head만 실행합니다.
 - Proposed task는 보이지만 승인 전에는 실행할 수 없습니다.
 - Queue-idle 동작은 승인된 direction authority를 따릅니다.

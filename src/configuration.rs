@@ -3621,7 +3621,7 @@ mod tests {
             & 0o777;
         assert_eq!(project_mode, 0o644);
         assert!(
-            !workspace.join(".akra/.codex-exec-loop").exists(),
+            !workspace.join(".akra/.akra").exists(),
             "configuration writes must not create planning runtime state inside .akra"
         );
 

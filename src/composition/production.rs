@@ -864,6 +864,14 @@ pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
             Ok(Some(lock))
         }
         Err(error) if error.downcast_ref::<RepositoryKernelLockHeld>().is_some() => Err(error),
+        // A blocked workspace move must stop startup; the lockless fallback would read a half-moved layout.
+        Err(error)
+            if error
+                .downcast_ref::<crate::adapter::outbound::filesystem::WorkspaceLayoutMigrationError>()
+                .is_some() =>
+        {
+            Err(error)
+        }
         Err(error) => {
             // 잠금 없이 시작하는 기존 fallback도 durable 제어 fence를 건너뛰지는 않는다.
             recover_pending_issue_interventions(workspace_dir)?;
@@ -2058,7 +2066,7 @@ mod tests {
                 .expect("reset Windows authority should remain initialized")
         );
         assert!(
-            !workspace.path().join(".codex-exec-loop").exists(),
+            !workspace.path().join(".akra").exists(),
             "private-authority flow must not fall back to full-path planning writes"
         );
     }

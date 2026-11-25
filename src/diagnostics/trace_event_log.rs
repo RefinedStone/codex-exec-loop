@@ -1824,8 +1824,7 @@ fn default_trace_log_directory() -> Option<PathBuf> {
     Some(
         std::env::current_dir()
             .ok()?
-            .join(".codex-exec-loop")
-            .join("runtime")
+            .join(crate::domain::planning::PLANNING_RUNTIME_DIRECTORY)
             .join("log"),
     )
 }

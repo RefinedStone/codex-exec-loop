@@ -45,27 +45,27 @@ mod tests {
     #[test]
     fn planning_markdown_path_rejects_prefix_mismatch_and_traversal_edges() {
         assert!(is_valid_planning_markdown_path(
-            ".codex-exec-loop/planning/directions/detail.md",
+            ".akra/planning/directions/detail.md",
             PLANNING_DIRECTION_DOCS_DIRECTORY
         ));
         assert!(is_valid_planning_markdown_path(
-            " .codex-exec-loop\\planning\\directions\\detail.md ",
+            " .akra\\planning\\directions\\detail.md ",
             PLANNING_DIRECTION_DOCS_DIRECTORY
         ));
         assert!(!is_valid_planning_markdown_path(
-            ".codex-exec-loop/planning/prompts/review.md",
+            ".akra/planning/prompts/review.md",
             PLANNING_DIRECTION_DOCS_DIRECTORY
         ));
         assert!(!is_valid_planning_markdown_path(
-            ".codex-exec-loop/planning/directions",
+            ".akra/planning/directions",
             PLANNING_DIRECTION_DOCS_DIRECTORY
         ));
         assert!(!is_valid_planning_markdown_path(
-            ".codex-exec-loop/planning/directions/../prompts/review.md",
+            ".akra/planning/directions/../prompts/review.md",
             PLANNING_PROMPTS_DIRECTORY
         ));
         assert!(!is_valid_planning_markdown_path(
-            "/.codex-exec-loop/planning/directions/detail.md",
+            "/.akra/planning/directions/detail.md",
             PLANNING_DIRECTION_DOCS_DIRECTORY
         ));
     }

@@ -18,7 +18,7 @@ primary surface; CLI, Admin, Telegram, and automation adapters reuse the same ap
 | Gateway daemon | `akra-gateway` relays local clients to a Gateway-owned `codex app-server` and hosts the repository kernel |
 | Akra Desktop | Electron client in `desktop/` over `akra-gateway`. Development build only: run it from source (`npm --prefix desktop ci`, then `npm --prefix desktop run dev`); no packaged release yet |
 | Core runtime | Headless command/effect/completion/snapshot flow for startup, sessions, turns, streams, and post-turn evaluation |
-| Planning | SQLite authority with staged planning artifacts under `.codex-exec-loop/planning/` |
+| Planning | SQLite authority with staged planning artifacts under `.akra/planning/` |
 | Parallel mode | Three guarded worktree slots, worker leases, official completion refresh, reviewed GitHub delivery, integration, and cleanup |
 | CLI and automation | Planning health, queue/reset operations, structured planning mutation, and manual parallel distributor ticks |
 | Admin and Telegram | Loopback Admin UI/API and allowlisted Telegram control plane over the same application services |
@@ -102,8 +102,13 @@ group commands also require an allowed sender.
 - Planning authority is stored below `${AKRA_HOME:-~/.akra}/projects/<project>/runtime/`.
 - Git repositories are bound to an owner-private incarnation marker in the canonical Git common
   directory, so linked worktrees share authority while fresh clones remain isolated.
-- `.codex-exec-loop/planning/` contains operator-authored details, prompts, staged drafts, and
-  rejected-write evidence; it is not the task-authority database.
+- `.akra/planning/` contains operator-authored details, prompts, staged drafts, and
+  rejected-write evidence; it is not the task-authority database. `.akra/runtime/` holds private
+  locks and logs and is not committed.
+- Workspaces from before #2588 used `.codex-exec-loop/`. The process that takes the repository
+  kernel lock moves `planning/`, `runtime/`, and `followups/` into `.akra/` and rewrites the stored
+  paths once. Commit the moved files. If both directories hold the same entry, Akra stops and names
+  both paths; keep one copy and start again.
 - `AKRA_APP_SERVER_PROMPT_LOG=1` opts into bounded prompt/response diagnostics. Trace JSONL is a
   separate opt-in and remains body-redacted.
 - GitHub writes require the configured login to match the API credential and repository target;
