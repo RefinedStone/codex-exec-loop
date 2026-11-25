@@ -292,6 +292,8 @@ spec_names! {
             "The Jira provider cannot establish whether a linked pull request exists; only an exact Human start approval may accept that limitation when every other prerequisite is known.";
         LinearPullRequestLookupUnsupported => "linear_pull_request_lookup_unsupported",
             "The Linear provider cannot establish whether a linked pull request exists; only an exact Human start approval may accept that limitation when every other prerequisite is known.";
+        BoardUnavailable => "board_unavailable",
+            "The policy's GitHub Projects column condition could not be read, for example without the read:project scope; the issue is not selected until the board is readable.";
         BudgetExhausted => "budget_exhausted",
             "A zero static budget cap prevents an automatic start and requires a person to review the budget.";
         ModeOff => "mode_off",
@@ -893,6 +895,7 @@ mod tests {
                 "auto_repository_restricted",
                 "jira_pull_request_lookup_unsupported",
                 "linear_pull_request_lookup_unsupported",
+                "board_unavailable",
                 "budget_exhausted",
                 "mode_off",
                 "observation_only",

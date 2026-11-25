@@ -179,6 +179,13 @@ fn apply_receipt(
             }
             state.close_proof = Some(receipt.clone());
         }
+        (
+            IssueFeedbackOperation::SetBoardField { .. },
+            IssueFeedbackEvidence::BoardField { .. },
+        ) => {
+            // 마지막 확인만 기준이다. 이전 단계의 증거는 일지의 확인 기록에 남는다.
+            state.board_proof = Some(receipt.clone());
+        }
         _ => bail!("the feedback completion does not match its operation"),
     }
     Ok(())

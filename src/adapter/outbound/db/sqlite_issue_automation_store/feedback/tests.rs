@@ -25,6 +25,7 @@ use rusqlite::{Connection, params};
 
 mod admission;
 mod binding_pause;
+mod board;
 mod closure;
 mod jira;
 mod migration;
@@ -74,6 +75,7 @@ fn seed(fixture: &Fixture, issue_id: &str) -> IssueReference {
             completeness: IssueMetadataCompleteness::Complete,
         },
         linked_pull_request: IssuePrPresence::Absent,
+        board: None,
         content: IssueSourceContent::Shared(shared),
     };
     adapter

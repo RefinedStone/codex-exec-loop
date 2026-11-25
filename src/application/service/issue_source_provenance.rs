@@ -2,6 +2,7 @@
 use super::issue_automation_policy::IssueAutomationPolicyService;
 use std::sync::Arc;
 
+use crate::application::port::outbound::issue_board_field_port::IssueBoardFieldPort;
 use crate::application::port::outbound::issue_creation_provenance_port::{
     IssueCreationProvenancePort, IssueCreationProvenanceSnapshot,
 };
@@ -26,6 +27,7 @@ pub struct IssueSourceProvenanceService {
         Arc<dyn IssueFeedbackStorePort>,
         IssueAutomationPolicyService,
     )>,
+    board: Option<(Arc<dyn IssueBoardFieldPort>, IssueAutomationPolicyService)>,
 }
 
 impl IssueSourceProvenanceService {
@@ -37,7 +39,18 @@ impl IssueSourceProvenanceService {
             source,
             provenance,
             feedback: None,
+            board: None,
         }
+    }
+
+    /// 정책에 보드 열 조건이 있을 때만 이슈마다 보드 항목을 읽는다 (#2565).
+    pub fn with_board_fields(
+        mut self,
+        board: Arc<dyn IssueBoardFieldPort>,
+        policy: IssueAutomationPolicyService,
+    ) -> Self {
+        self.board = Some((board, policy));
+        self
     }
 
     pub fn with_feedback(
@@ -138,7 +151,7 @@ impl IssueSourcePort for IssueSourceProvenanceService {
                 // 이미 추적 중인 해당 이슈만 보류한다. 같은 페이지의 다른 이슈와
                 // 원격 scanned_count/next_cursor는 그대로 진행한다.
                 page.observations.retain(|observation| {
-                    !has_pending_label_feedback(&observation.issue, &pending)
+                    !has_pending_observed_feedback(&observation.issue, &pending)
                 });
             }
             if page.observations.is_empty() {
@@ -147,9 +160,11 @@ impl IssueSourcePort for IssueSourceProvenanceService {
             // Sent는 원격 생성 전에 저장된다. 원격 응답보다 먼저 장부를 읽으면
             // 동시 생성 시도와 새로 발견한 이슈의 관계를 놓칠 수 있다.
             let snapshot = self.provenance.load(&page.repository).ok();
+            let board = self.board_condition(&page.repository.project_scope.workspace_dir);
             for observation in &mut page.observations {
                 Self::apply(observation, snapshot.as_ref());
                 self.apply_feedback(observation)?;
+                self.apply_board(observation, board.as_ref())?;
             }
         }
         Ok(page)
@@ -184,7 +199,7 @@ impl IssueSourcePort for IssueSourceProvenanceService {
                     };
                 }
             };
-            if has_pending_label_feedback(&expected, &pending) {
+            if has_pending_observed_feedback(&expected, &pending) {
                 return IssueSourceRead::Unknown {
                     issue: expected,
                     reason: IssueSourceFailure::FeedbackUnconfirmed,
@@ -195,7 +210,11 @@ impl IssueSourcePort for IssueSourceProvenanceService {
             let repository = IssueSourceRepository::from_reference(&expected);
             let snapshot = self.provenance.load(&repository).ok();
             Self::apply(observation, snapshot.as_ref());
-            if let Err(reason) = self.apply_feedback(observation) {
+            let board = self.board_condition(&expected.project_scope.workspace_dir);
+            if let Err(reason) = self
+                .apply_feedback(observation)
+                .and_then(|()| self.apply_board(observation, board.as_ref()))
+            {
                 return IssueSourceRead::Unknown {
                     issue: expected,
                     reason,
@@ -206,7 +225,7 @@ impl IssueSourcePort for IssueSourceProvenanceService {
     }
 }
 
-fn has_pending_label_feedback(
+fn has_pending_observed_feedback(
     issue: &IssueReference,
     pending: &[IssueFeedbackIntentRecord],
 ) -> bool {
@@ -217,9 +236,11 @@ fn has_pending_label_feedback(
                 &record.intent.operation,
                 IssueFeedbackOperation::AddLabel { .. }
                     | IssueFeedbackOperation::RemoveLabel { .. }
+                    | IssueFeedbackOperation::SetBoardField { .. }
             )
     })
 }
 
+mod board;
 #[cfg(test)]
 mod tests;

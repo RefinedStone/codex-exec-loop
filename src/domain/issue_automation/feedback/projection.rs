@@ -151,6 +151,7 @@ mod tests {
             author: None,
             label_actors: complete(Vec::new()),
             linked_pull_request: IssuePrPresence::Unknown,
+            board: None,
             content: IssueSourceContent::Withheld {
                 basis: IssueComparisonBasis {
                     field_hash: IssueFieldHash::of_fields("private", "private"),

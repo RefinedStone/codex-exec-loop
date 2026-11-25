@@ -6,10 +6,12 @@ use crate::domain::issue_work::IssueProvider;
 
 use super::IssueAutomationAutonomy;
 
+mod board;
 mod jira;
 mod linear;
 mod validation;
 
+pub use board::IssueAutomationGitHubBoard;
 pub use jira::{IssueAutomationJiraBinding, IssueAutomationJiraCloseTransition};
 pub use linear::{IssueAutomationLinearBinding, IssueAutomationLinearCloseState};
 
@@ -72,6 +74,9 @@ pub struct IssueAutomationGitHubBinding {
     /// 사람이 고른 owner/name이다. 안정 repository ID나 저장된 binding을 대신하지 않는다.
     pub repository: Option<String>,
     pub mode: IssueAutomationAutonomy,
+    /// Projects 보드의 열 조건과 진행 필드이다 (#2565). 없으면 기존 정책의 정규 바이트를 바꾸지 않는다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board: Option<IssueAutomationGitHubBoard>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -224,6 +229,9 @@ pub struct IssueAutomationFeedback {
     /// Telegram 알림 (IA8-3). 알림은 권한이 아니므로 정책 판에 넣지 않는다. 켜도 열린 결정이 낡지 않는다.
     #[serde(skip)]
     pub telegram: bool,
+    /// 보드 필드 쓰기는 댓글·라벨·본문 쓰기와 별개의 허가이다 (#2565). 꺼진 값은 정규 바이트에 넣지 않는다.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub board_field: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,6 +309,7 @@ impl IssueAutomationPolicy {
                 github: IssueAutomationGitHubBinding {
                     repository: None,
                     mode: IssueAutomationAutonomy::Observe,
+                    board: None,
                 },
                 jira: None,
                 linear: None,
@@ -363,6 +372,9 @@ impl IssueAutomationPolicy {
             if let Some(close) = &mut linear.close_state {
                 normalize_set(&mut close.from_state_ids);
             }
+        }
+        if let Some(board) = &mut self.binding.github.board {
+            normalize_set(&mut board.select_option_ids);
         }
         normalize_set(&mut self.select.labels_any);
         self.select.trusted_actors.sort_by(|left, right| {

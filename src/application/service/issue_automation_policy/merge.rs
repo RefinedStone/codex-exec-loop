@@ -1,9 +1,9 @@
 use crate::domain::issue_automation::policy::{
-    IssueAutomationGateSet, IssueAutomationPolicy, IssueAutomationPolicyGates,
-    IssueAutomationRiskGates,
+    IssueAutomationGateSet, IssueAutomationGitHubBoard, IssueAutomationPolicy,
+    IssueAutomationPolicyGates, IssueAutomationRiskGates,
 };
 
-use super::layer::{GateSetLayer, GatesLayer, PolicyLayer, RiskGatesLayer};
+use super::layer::{GateSetLayer, GatesLayer, PolicyLayer, RiskGatesLayer, github_board};
 use super::provenance::PolicyProvenance;
 use super::{
     IssueAutomationPolicyOriginScope as Scope, IssueAutomationPolicyResolution as Resolution,
@@ -57,6 +57,7 @@ pub(super) fn merge(
         &mut origins,
     );
     restrict_with_project(&mut policy, &project, &mut origins);
+    grant_board_progress(&mut policy, &user, &mut origins);
     // 어느 layer도 명시하지 않았을 때만 최종 실행 라벨로 선택 기본값을 만든다.
     // 명시한 빈 목록과 이름 변경 전의 명시 목록은 그대로 유지한다.
     if !selection_explicit {
@@ -115,6 +116,14 @@ fn apply_common(
             scope,
             origins,
         );
+        if let Some(board) = &github.board {
+            // 진행 선택지는 grant_board_progress 만 붙인다.
+            policy.binding.github.board = Some(IssueAutomationGitHubBoard {
+                progress: None,
+                ..board.clone()
+            });
+            origins.replace("binding.github.board", scope);
+        }
     }
     if let Some(jira) = layer
         .binding
@@ -365,6 +374,11 @@ fn apply_user_grants(
                 &mut policy.feedback.telegram,
                 feedback.telegram,
             ),
+            (
+                "feedback.board_field",
+                &mut policy.feedback.board_field,
+                feedback.board_field,
+            ),
         ] {
             assign(target, value, key, Scope::User, origins);
         }
@@ -517,6 +531,11 @@ fn restrict_with_project(
                 &mut policy.feedback.telegram,
                 feedback.telegram,
             ),
+            (
+                "feedback.board_field",
+                &mut policy.feedback.board_field,
+                feedback.board_field,
+            ),
         ] {
             if let Some(value) = value {
                 *target &= value;
@@ -546,6 +565,29 @@ fn restrict_with_project(
     {
         policy.select.comment_commands &= enabled;
         origins.combine("select.comment_commands", Scope::Project, Resolution::And);
+    }
+}
+
+/// 사용자 파일이 같은 보드의 같은 필드를 가리킬 때만 진행 선택지를 붙인다.
+/// 저장소 파일이 보드를 바꾸면 사용자가 허가한 선택지는 따라가지 않는다.
+fn grant_board_progress(
+    policy: &mut IssueAutomationPolicy,
+    user: &PolicyLayer,
+    origins: &mut PolicyProvenance,
+) {
+    let Some(user_board) = github_board(user) else {
+        return;
+    };
+    if let Some(board) = &mut policy.binding.github.board
+        && board.same_field(user_board)
+        && user_board.progress.is_some()
+    {
+        board.progress = user_board.progress.clone();
+        origins.combine(
+            "binding.github.board",
+            Scope::User,
+            Resolution::Intersection,
+        );
     }
 }
 

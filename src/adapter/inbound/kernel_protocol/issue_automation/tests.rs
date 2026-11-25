@@ -121,6 +121,7 @@ fn observation(content: IssueSourceContent) -> IssueSourceRead {
             completeness: IssueMetadataCompleteness::Complete,
         },
         linked_pull_request: IssuePrPresence::Unknown,
+        board: None,
         content,
     }))
 }

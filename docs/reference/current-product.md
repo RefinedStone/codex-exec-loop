@@ -479,6 +479,13 @@ outcome; repeated reconciliation, confirmation, and event acknowledgement do not
 The count is independent of the implementation-attempt budget. Wire generation and fake-provider
 tests require no real GitHub write or model turn.
 
+IA7-4 ([#2565](https://github.com/RefinedStone/codex-exec-loop/issues/2565)) adds an optional
+GitHub Projects (v2) board column as a selection condition and, only when the user policy enables
+`feedback.board_field`, writes the execution phase to one single-select board field through the same
+feedback journal. A body-write approval never authorizes a board write. An unreadable board,
+including a login without the `read:project` scope, is `board_unavailable` and not a mismatch.
+See [GitHub Projects 보드 연동](issue-projects-board.md).
+
 ## Issue Decision Telegram Notifications
 
 IA8-3 ([#2568](https://github.com/RefinedStone/codex-exec-loop/issues/2568)) lets the existing

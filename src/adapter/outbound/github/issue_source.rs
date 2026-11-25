@@ -381,6 +381,7 @@ fn observation(
         author,
         label_actors,
         linked_pull_request,
+        board: None,
         content,
     })
 }

@@ -156,6 +156,7 @@ fn event_summary(event: &KernelEvent) -> String {
             IssueFeedbackRecordAction::CommentUpdated => "상태 댓글 갱신을 확인했습니다.",
             IssueFeedbackRecordAction::LabelAdded => "상태 라벨 추가를 확인했습니다.",
             IssueFeedbackRecordAction::LabelRemoved => "상태 라벨 제거를 확인했습니다.",
+            IssueFeedbackRecordAction::BoardFieldSet => "보드 필드 변경을 확인했습니다.",
         },
         // 좌표가 있는 지원 사건만 project_issue_timeline의 필터를 통과한다.
         _ => "이슈 기록을 확인했습니다.",

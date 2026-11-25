@@ -52,6 +52,7 @@ fn observed(fixture: &Fixture, id: &str, body: &str) -> IssueSourceObservation {
             completeness: IssueMetadataCompleteness::Complete,
         },
         linked_pull_request: IssuePrPresence::Unknown,
+        board: None,
         content: IssueSourceContent::Shared(snapshot(body)),
     }
 }

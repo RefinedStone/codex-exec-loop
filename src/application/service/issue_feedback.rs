@@ -3,6 +3,7 @@ use super::issue_automation_policy::{IssueAutomationPolicyService, ResolvedIssue
 use super::issue_collection::IssueCollectionCancellation;
 use super::issue_masking::{IssueTextField, mask_issue_text};
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
+use crate::application::port::outbound::issue_board_field_port::IssueBoardFieldPort;
 use crate::application::port::outbound::issue_feedback_port::{
     IssueFeedbackActorContext, IssueFeedbackLabelSnapshot, IssueFeedbackPort,
     IssueFeedbackReadResult, IssueFeedbackWriteResult,
@@ -28,6 +29,7 @@ use crate::domain::issue_work::{IssueProvider, IssueReference};
 use anyhow::{Result, anyhow, bail};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod board;
 mod closure;
 mod effects;
 mod labels;
@@ -48,6 +50,7 @@ pub struct IssueFeedbackService {
     disclosure: IssuePolicyService,
     gate: Mutex<()>,
     issue_binding_admission: Option<Arc<super::issue_binding_admission::IssueBindingAdmission>>,
+    board: Option<Arc<dyn IssueBoardFieldPort>>,
 }
 impl IssueFeedbackService {
     pub fn new(
@@ -67,7 +70,14 @@ impl IssueFeedbackService {
             disclosure,
             gate: Mutex::new(()),
             issue_binding_admission: None,
+            board: None,
         }
+    }
+
+    /// 보드 필드 쓰기와 그 확인 읽기의 경계이다 (#2565). 없으면 보드 필드를 쓰지 않는다.
+    pub fn with_board_fields(mut self, board: Arc<dyn IssueBoardFieldPort>) -> Self {
+        self.board = Some(board);
+        self
     }
 
     /// Off·정책 읽기 실패·보류와 무관하게 이미 보낸 의도를 읽기로만 확인한다.
@@ -154,6 +164,18 @@ impl IssueFeedbackService {
             self.close_integrated_issue(
                 &current,
                 decision_id,
+                now_unix_ms,
+                cancel,
+                lease.as_ref(),
+            )?;
+        }
+        if let Some(current) = self.current(issue)?
+            && let Some((automation, disclosure)) = self.write_context(&current)?
+        {
+            self.sync_board_field(
+                &current,
+                &automation,
+                &disclosure,
                 now_unix_ms,
                 cancel,
                 lease.as_ref(),

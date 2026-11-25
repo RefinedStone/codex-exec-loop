@@ -90,6 +90,7 @@ fn seed_issue(fixture: &Fixture, issue_id: &str) -> Prepared {
             completeness: IssueMetadataCompleteness::Complete,
         },
         linked_pull_request: IssuePrPresence::Absent,
+        board: None,
         content: IssueSourceContent::Shared(snapshot),
     }));
     adapter

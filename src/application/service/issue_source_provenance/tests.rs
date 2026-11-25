@@ -1,3 +1,4 @@
+mod board;
 mod feedback;
 
 use std::collections::BTreeSet;
@@ -58,6 +59,7 @@ fn observation(id: &str) -> IssueSourceObservation {
         author: None,
         label_actors: list(),
         linked_pull_request: IssuePrPresence::Unknown,
+        board: None,
         creation_provenance: IssueCreationProvenance::Unattributed,
         content: IssueSourceContent::Withheld {
             basis: IssueComparisonBasis {

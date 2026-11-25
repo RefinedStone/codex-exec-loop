@@ -9,6 +9,7 @@ pub enum IssueFeedbackRecordAction {
     CommentUpdated,
     LabelAdded,
     LabelRemoved,
+    BoardFieldSet,
 }
 
 /// provider_observation은 사람/PR 연결 등 실제 닫힘 원인을 추정하지 않는다.
@@ -52,6 +53,9 @@ impl crate::domain::kernel_event::KernelEvent {
                 Some(comment_id.clone()),
                 None,
             ),
+            IssueFeedbackEvidence::BoardField { .. } => {
+                (IssueFeedbackRecordAction::BoardFieldSet, None, None)
+            }
             IssueFeedbackEvidence::Label { label, applied, .. } => (
                 if *applied {
                     IssueFeedbackRecordAction::LabelAdded

@@ -10,7 +10,9 @@ use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJ
 use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
 use crate::adapter::outbound::filesystem::issue_publish_intent_journal::IssuePublishIntentJournalAdapter;
 use crate::adapter::outbound::git::issue_origin::GitIssueCollectionOriginAdapter;
+use crate::adapter::outbound::github::issue_board_field::GithubIssueBoardFieldAdapter;
 use crate::application::port::outbound::IssueAutomationRestartRegistryPort;
+use crate::application::port::outbound::issue_board_field_port::IssueBoardFieldPort;
 use crate::application::port::outbound::issue_feedback_store_port::IssueFeedbackStorePort;
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
@@ -117,6 +119,10 @@ fn build_with_runtime_services(
         crate::adapter::outbound::db::sqlite_issue_source_claims::SqliteIssueSourceClaimsAdapter::new(restart_registry_runtime),
     );
     let credential_reader = providers.as_ref().map(|services| services.credentials.clone() as Arc<dyn crate::application::port::outbound::provider_credentials_port::ProviderCredentialReadPort>);
+    // Projects 보드는 `gh` 의 같은 로그인을 쓴다. 보드 쓰기는 피드백 일지를 지난 의도만 보낸다 (#2565).
+    let board_fields: Arc<dyn IssueBoardFieldPort> = Arc::new(GithubIssueBoardFieldAdapter::new(
+        PathBuf::from(workspace_dir),
+    ));
     let feedback = Arc::new(
         IssueFeedbackService::new(
             workspace_dir.to_owned(),
@@ -133,7 +139,8 @@ fn build_with_runtime_services(
             )),
             IssuePolicyService::new(validation_source.clone()),
         )
-        .with_issue_binding_admission(admission.clone()),
+        .with_issue_binding_admission(admission.clone())
+        .with_board_fields(board_fields.clone()),
     );
     let triage = Arc::new(IssueTriageService::new(
         workspace_dir.to_string(),
@@ -166,6 +173,12 @@ fn build_with_runtime_services(
         )
         .with_feedback(
             store.clone(),
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
+        )
+        .with_board_fields(
+            board_fields,
             IssueAutomationPolicyService::new(Arc::new(
                 FilesystemIssueAutomationPolicySourceAdapter::new(),
             )),

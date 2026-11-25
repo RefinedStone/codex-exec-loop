@@ -5692,6 +5692,19 @@
       ]
     },
     {
+      "name": "board_unavailable",
+      "summary": "The policy's GitHub Projects column condition could not be read, for example without the read:project scope; the issue is not selected until the board is readable.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issues"
+        },
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
       "name": "budget_exhausted",
       "summary": "A zero static budget cap prevents an automatic start and requires a person to review the budget.",
       "next": [
@@ -9550,7 +9563,8 @@
         "comment_created",
         "comment_updated",
         "label_added",
-        "label_removed"
+        "label_removed",
+        "board_field_set"
       ],
       "type": "string"
     },
@@ -15155,6 +15169,7 @@
         "auto_repository_restricted",
         "jira_pull_request_lookup_unsupported",
         "linear_pull_request_lookup_unsupported",
+        "board_unavailable",
         "budget_exhausted",
         "mode_off",
         "observation_only",

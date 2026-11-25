@@ -573,4 +573,24 @@ mod tests {
         assert!(adapter.write_field(request).is_err());
         assert!(calls.lock().unwrap().is_empty());
     }
+
+    /// `read:project` scope 가 없는 로그인은 보드를 읽지 못한다. 빈 보드로 바꾸지 않고 오류로 돌려준다 (#2565).
+    #[test]
+    fn a_login_without_the_project_scope_is_an_error_not_an_empty_board() {
+        let scope_error = r#"{"type":"INSUFFICIENT_SCOPES","message":"requires read:project"}"#;
+        let (adapter, _) = adapter_with(vec![
+            // `gh` 가 실패로 끝난 경우.
+            Err(anyhow!("gh api graphql failed")),
+            // 데이터 없이 오류만 온 경우.
+            Ok(format!(r#"{{"data":null,"errors":[{scope_error}]}}"#)),
+            // 이슈는 읽었지만 보드 항목이 빠진 부분 응답.
+            Ok(format!(
+                r#"{{"data":{{"node":{{"__typename":"Issue","id":"I_kwDO-1","repository":{{"id":"R_kgDO-1"}},"projectItems":null}}}},"errors":[{scope_error}]}}"#
+            )),
+        ]);
+
+        for _ in 0..3 {
+            assert!(adapter.read_items(read_request()).is_err());
+        }
+    }
 }

@@ -71,6 +71,7 @@ fn setup(fixture: &Fixture) -> IssueReference {
             completeness: IssueMetadataCompleteness::Complete,
         },
         linked_pull_request: IssuePrPresence::Unknown,
+        board: None,
         content: IssueSourceContent::Shared(shared),
     };
     adapter

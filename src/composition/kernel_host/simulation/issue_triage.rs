@@ -192,6 +192,7 @@ impl SimIssueSource {
                 completeness: IssueMetadataCompleteness::Complete,
             },
             linked_pull_request: IssuePrPresence::Absent,
+            board: None,
             content: IssueSourceContent::Shared(IssueAutomationSnapshot {
                 basis: IssueComparisonBasis {
                     field_hash: IssueFieldHash::of_fields(TITLE, &body),

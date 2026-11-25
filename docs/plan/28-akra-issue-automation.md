@@ -578,7 +578,7 @@ IA4-2 (#2552)는 전송권을 얻은 피드백 의도마다 게시 횟수를 한
 | provider | 읽기 | 쓰기 | 자격 증명 | 순서 |
 | --- | --- | --- | --- | --- |
 | GitHub Issues | `gh api graphql`. 발견: 선택 조건의 열린 이슈, `updatedAt` 커서. 재동기화: node ID 로 한 건 | 댓글, 라벨, 담당자. 닫기는 §12.2 | `gh` 로그인. Gateway 에서 된다 | 첫 번째 |
-| GitHub Projects | 보드의 열과 필드 | `issue_board_field_port` (있음) | `read:project` | 뒤 |
+| GitHub Projects | 보드의 열과 필드 (§13.2, #2565) | `issue_board_field_port`, 정책이 켠 때만 | `read:project` (쓰기 `project`) | IA7-4 구현 |
 | Jira Cloud | JQL, `updated` 커서 | 댓글, 전이 | Gateway OS 키 저장소 (§13.1, #2562) | 있음 (#2563, [reference](../reference/issue-jira-cloud.md)) |
 | Linear | GraphQL, `updatedAt` 창과 `endCursor` | 댓글, 상태 | Gateway OS 키 저장소 (§13.1, #2562) | 있음 (#2564, [reference](../reference/issue-linear.md)) |
 
@@ -718,6 +718,19 @@ TLS는 OS 인증서 검증과 시스템·환경 proxy 설정을 사용하는 Gat
 인증 proxy 동작과 완전히 같다고 가정하지 않는다. 인증서 검증 우회나 Electron 토큰 소유권으로의 자동 fallback은 없다.
 OS 키 저장소와 endpoint는 현재 OS 사용자 경계이며, 같은 OS 사용자로 실행하는 모든 악성 프로세스까지 격리한다고
 주장하지 않는다.
+
+### 13.2 GitHub Projects 보드 (IA7-4, #2565)
+
+상태: 구현 PR 리뷰 대기. 계약과 설정은 [reference](../reference/issue-projects-board.md)에 둔다.
+
+- 선택: `binding.github.board.select_option_ids` 의 열에 있는 이슈만 선택한다. 라벨 조건과 AND 이다.
+- 반환: `feedback.board_field` (사용자 파일만 켠다) 와 사용자 파일의 `progress` 선택지가 있을 때만 실행 단계를
+  보드 필드에 쓴다. 보드 쓰기는 `IssueWriteOperation::BoardField` 승인이며 본문 쓰기 승인으로 되지 않는다.
+  쓰기는 피드백 일지를 지나 한 번 보내고, 복구는 읽기만 한다.
+- 결정 (`read:project` scope 가 없는 로그인): 보수적 기본값. 보드를 읽지 못하면 선택은 `unknown` +
+  `board_unavailable` 이유 코드이고, 쓰기 의도를 기록하지 않는다. 빈 보드나 열 불일치로 보지 않는다.
+- 사람이 바꾼 열은 다음 조정에서 덮지 않는다. 확인된 자기 쓰기는 판정 입력에서 숨긴다.
+- 제외: 보드 화면, 보드에 이슈 넣기, 여러 필드 편집, 쪽 넘김.
 
 ## 14. 안전
 

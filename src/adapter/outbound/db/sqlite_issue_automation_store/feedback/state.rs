@@ -86,6 +86,16 @@ fn validate_owned_receipts(connection: &Connection, state: &IssueFeedbackState) 
             bail!("the feedback label does not match its receipt");
         }
     }
+    if let Some(proof) = &state.board_proof {
+        let record = intents::read(connection, &proof.intent_id)?
+            .ok_or_else(|| anyhow!("the board field has no confirmed intent"))?;
+        if record.state != IssueFeedbackIntentState::Confirmed
+            || record.receipt.as_ref() != Some(proof)
+            || !matches!(&proof.evidence, IssueFeedbackEvidence::BoardField { .. })
+        {
+            bail!("the board field does not match its receipt");
+        }
+    }
     if let Some(proof) = &state.close_proof {
         let record = intents::read(connection, &proof.intent_id)?
             .ok_or_else(|| anyhow!("the issue close has no confirmed intent"))?;
@@ -399,6 +409,10 @@ pub(super) fn permits_new_write(
                     proof.issue == intent.issue && proof.actor_id == intent.actor_id
                         && matches!(&proof.evidence, IssueFeedbackEvidence::Label { label: observed, event_id, applied: true }
                             if observed == label && event_id == owned_event_id))
+        }
+        IssueFeedbackOperation::SetBoardField { project_id, item_id, field_id, from_option_id, origin_option_id, .. } => {
+            current.state.board_origin(project_id, item_id, field_id, from_option_id.as_deref())
+                == *origin_option_id
         }
     }
 }

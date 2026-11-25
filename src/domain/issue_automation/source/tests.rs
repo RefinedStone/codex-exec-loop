@@ -106,6 +106,7 @@ fn observation() -> IssueSourceObservation {
             completeness: IssueMetadataCompleteness::Truncated,
         },
         linked_pull_request: IssuePrPresence::Unknown,
+        board: None,
         content: IssueSourceContent::Shared(IssueAutomationSnapshot {
             basis: basis(),
             shared_copy: IssueSharedCopy {

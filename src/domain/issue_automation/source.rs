@@ -10,6 +10,8 @@ use crate::domain::issue_work::{
 
 use super::IssueAutomationSnapshot;
 
+mod board;
+pub use board::{IssueSourceBoardColumn, IssueSourceBoardRead};
 mod web;
 pub use web::{IssueSourceWeb, validate_repository_name_with_owner};
 mod jira;
@@ -448,6 +450,9 @@ pub struct IssueSourceObservation {
     pub author: Option<IssueSourceActor>,
     pub label_actors: IssueMetadataList<IssueLabelAttribution>,
     pub linked_pull_request: IssuePrPresence,
+    /// 정책의 보드 필드 값이다 (#2565). 정책에 보드가 없으면 None 이고 과거 관찰과 같은 바이트이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<IssueSourceBoardColumn>,
     pub content: IssueSourceContent,
 }
 

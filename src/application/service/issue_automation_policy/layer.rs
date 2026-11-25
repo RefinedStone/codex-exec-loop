@@ -4,9 +4,10 @@ use crate::domain::issue_automation::IssueAutomationAutonomy;
 use crate::domain::issue_automation::policy::{
     ISSUE_AUTOMATION_POLICY_SCHEMA_VERSION, IssueAutomationAdditionalHumanRule,
     IssueAutomationCloseWhen, IssueAutomationGate, IssueAutomationGateAction,
-    IssueAutomationHumanRule, IssueAutomationJiraBinding, IssueAutomationJiraCloseTransition,
-    IssueAutomationLinearBinding, IssueAutomationLinearCloseState, IssueAutomationPolicyValueError,
-    IssueAutomationRiskRule, IssueAutomationSelectionMode, IssueAutomationTrustedActor,
+    IssueAutomationGitHubBoard, IssueAutomationHumanRule, IssueAutomationJiraBinding,
+    IssueAutomationJiraCloseTransition, IssueAutomationLinearBinding,
+    IssueAutomationLinearCloseState, IssueAutomationPolicyValueError, IssueAutomationRiskRule,
+    IssueAutomationSelectionMode, IssueAutomationTrustedActor,
     MAX_ISSUE_AUTOMATION_TIMEOUT_SECONDS, validate_gate_action, validate_glob, validate_repository,
     validate_text_value,
 };
@@ -210,6 +211,8 @@ pub(super) fn validate_jira_layers(
 pub(super) struct GitHubBindingLayer {
     pub repository: Option<String>,
     pub mode: Option<IssueAutomationAutonomy>,
+    /// 표 전체가 한 단위이다. 두 파일의 반쪽 좌표를 섞지 않는다.
+    pub board: Option<IssueAutomationGitHubBoard>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -334,6 +337,7 @@ pub(super) struct FeedbackLayer {
     pub labels: Option<bool>,
     pub transition: Option<bool>,
     pub telegram: Option<bool>,
+    pub board_field: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -369,12 +373,32 @@ pub(super) fn parse(
             reason: "invalid_toml_or_shape",
         })?;
     validate(&layer).map_err(|error| IssueAutomationPolicyBlocked::invalid(scope, error))?;
+    // 보드에 쓸 선택지는 쓰기 허가와 같이 사용자 파일에서만 온다. 저장소 파일은 열 조건만 정한다.
+    if scope == IssueAutomationPolicyScope::Project
+        && github_board(&layer).is_some_and(|board| board.progress.is_some())
+    {
+        return Err(IssueAutomationPolicyBlocked::invalid(
+            scope,
+            invalid("binding.github.board.progress", "user_scope_only"),
+        ));
+    }
     Ok(layer)
+}
+
+pub(super) fn github_board(layer: &PolicyLayer) -> Option<&IssueAutomationGitHubBoard> {
+    layer
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.github.as_ref())
+        .and_then(|github| github.board.as_ref())
 }
 
 /// 생략값을 내장값으로 채우지 않고, 파일에 명시한 값과 교차 조건만 먼저 검사한다.
 /// 뒤의 파일이 덮어써도 앞의 잘못된 선언이 가려지지 않는다.
 fn validate(layer: &PolicyLayer) -> Result<(), IssueAutomationPolicyValueError> {
+    if let Some(board) = github_board(layer) {
+        board.validate()?;
+    }
     if let Some(jira) = layer
         .binding
         .as_ref()

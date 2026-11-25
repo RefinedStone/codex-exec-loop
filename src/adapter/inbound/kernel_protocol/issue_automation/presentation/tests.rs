@@ -68,6 +68,7 @@ fn item(id: &str, state: Option<IssueAutomationState>) -> IssueCollectionItem {
                     completeness: IssueMetadataCompleteness::Complete,
                 },
                 linked_pull_request: IssuePrPresence::Absent,
+                board: None,
                 content: IssueSourceContent::Shared(IssueAutomationSnapshot {
                     basis: basis(),
                     shared_copy: IssueSharedCopy {

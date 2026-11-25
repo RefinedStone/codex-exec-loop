@@ -181,6 +181,9 @@ impl IssueFeedbackPort for FakeProvider {
                     applied: state.present,
                 }
             }
+            IssueFeedbackOperation::SetBoardField { .. } => {
+                panic!("board field feedback must use the board field port")
+            }
         };
         Ok(IssueFeedbackReadResult::Confirmed(Box::new(
             IssueFeedbackReceipt {

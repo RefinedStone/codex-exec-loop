@@ -7,6 +7,7 @@ use crate::domain::issue_automation::policy::{
 };
 
 use super::*;
+mod board;
 mod jira;
 mod jira_examples;
 mod linear;
