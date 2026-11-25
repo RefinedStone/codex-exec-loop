@@ -38,7 +38,7 @@ export function libraryTestExecutable(output) {
   for (const line of output.split(/\r?\n/).filter(Boolean)) {
     const message = JSON.parse(line);
     if (message.reason === "compiler-artifact"
-      && message.target?.name === "codex_exec_loop_native"
+      && message.target?.name === "akra_ade"
       && message.target?.kind?.includes("lib")
       && message.profile?.test === true
       && typeof message.executable === "string" && message.executable) {

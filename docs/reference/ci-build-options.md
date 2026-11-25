@@ -24,7 +24,7 @@ their entire compile times are not removable duplication.
 
 `scripts/run_native_rust_contracts.mjs` prepares the library test executable once with Cargo's
 JSON artifact report, then runs each requested filter from that exact executable. It only accepts
-the unique `codex_exec_loop_native` artifact with `kind: lib` and `profile.test: true`.
+the unique `akra_ade` artifact with `kind: lib` and `profile.test: true`.
 Dependencies and production binary artifacts cannot be selected accidentally. Filter execution
 remains sequential; shared process/port/filesystem resources do not gain new concurrency.
 

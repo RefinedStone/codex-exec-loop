@@ -1,7 +1,7 @@
 {
-  "name": "codex-exec-loop",
+  "name": "akra-ade",
   "version": "1.0.0",
-  "description": "Akra is the native Rust terminal client in this repository for `codex app-server`. The repository name remains `codex-exec-loop`; the operator-facing command is `akra`.",
+  "description": "Akra ADE: a development workspace that manages AI agent work, changes, and verification on `codex app-server`. The operator command is `akra`.",
   "main": "index.js",
   "directories": {
     "doc": "docs",

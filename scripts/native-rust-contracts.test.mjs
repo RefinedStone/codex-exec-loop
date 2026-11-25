@@ -11,7 +11,7 @@ import {
 
 const artifact = (executable, changes = {}) => ({
   reason: "compiler-artifact",
-  target: { name: "codex_exec_loop_native", kind: ["lib"] },
+  target: { name: "akra_ade", kind: ["lib"] },
   profile: { test: true },
   executable,
   ...changes,
@@ -56,7 +56,7 @@ test("rejects missing, empty, duplicate filters and option injection before comp
 test("only accepts the unique Akra lib test artifact, not dependencies or production binaries", () => {
   const messages = [
     artifact("/other", { target: { name: "dependency", kind: ["lib"] } }),
-    artifact("/bin", { target: { name: "codex_exec_loop_native", kind: ["bin"] } }),
+    artifact("/bin", { target: { name: "akra_ade", kind: ["bin"] } }),
     artifact("/ordinary", { profile: { test: false } }),
     artifact("/actual"),
   ];

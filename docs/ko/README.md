@@ -2,8 +2,10 @@
 
 [English](../../README.md)
 
-Akra는 `codex app-server`를 사용하는 네이티브 Rust 운영 클라이언트입니다. 저장소 이름은
-`codex-exec-loop`, crate와 기존 바이너리 이름은 `codex-exec-loop-native`, 운영 명령은 `akra`입니다.
+Akra ADE는 `codex app-server`를 사용하는 네이티브 Rust 운영 클라이언트입니다. Rust package는
+`akra-ade`, 운영 명령은 `akra`입니다. 저장소 이름은 계획된 rename 전까지 `codex-exec-loop`이고,
+배포 archive는 아직 기존 `codex-exec-loop-native` 바이너리를 담습니다.
+[명명 계약](../reference/naming.md)을 참고하세요.
 
 Akra는 시작 진단, 세션 재개, 프롬프트 스트리밍, 승인된 planning, 큐 기반 연속 실행, 병렬 작업자
 전달을 하나의 장시간 터미널 흐름으로 묶습니다. TUI가 기본 화면이며 CLI, Admin, Telegram,

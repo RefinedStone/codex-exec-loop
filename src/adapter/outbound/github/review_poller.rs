@@ -178,7 +178,7 @@ impl GithubReviewPollerAdapter {
             curl_path,
             curl_resolution_error,
             api_base_url: GITHUB_API_BASE_URL.to_string(),
-            user_agent: format!("codex-exec-loop-native/{}", env!("CARGO_PKG_VERSION")),
+            user_agent: format!("akra-ade/{}", env!("CARGO_PKG_VERSION")),
             token: token.into(),
             write_login: None,
             subprocess_timeout: subprocess::configured_subprocess_timeout(),

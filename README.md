@@ -2,9 +2,10 @@
 
 [한국어](docs/ko/README.md)
 
-Akra is a native Rust operator client for `codex app-server`. The repository remains named
-`codex-exec-loop`, the crate and legacy binary remain `codex-exec-loop-native`, and the operator
-command is `akra`.
+Akra ADE is a native Rust operator client for `codex app-server`. The Rust package is `akra-ade`,
+the operator command is `akra`, the repository remains named `codex-exec-loop` until the planned
+rename, and release archives still ship the legacy `codex-exec-loop-native` binary. See
+[Naming](docs/reference/naming.md).
 
 Akra keeps startup checks, session resume, prompt streaming, accepted planning, queue-driven
 continuation, and parallel worker delivery in one long-lived terminal workflow. The TUI is the
