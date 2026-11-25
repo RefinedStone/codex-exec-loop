@@ -844,7 +844,8 @@ export function App() {
               {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
                 onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread}
-                onEditTasks={() => openTaskEditor()} />}
+                onEditTasks={() => openTaskEditor()}
+                onRequestVerification={async (target) => session.current?.requestTaskVerification(target)} />}
               {panel === "issues" && (
                 <IssuePanel
                   key={kernelWorkspace}
