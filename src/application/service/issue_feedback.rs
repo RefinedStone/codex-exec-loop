@@ -31,7 +31,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 mod closure;
 mod effects;
 mod labels;
+mod send_policy;
 use labels::terminal_for_feedback;
+pub(crate) use send_policy::validate_send_policy;
 #[cfg(test)]
 pub(crate) mod tests;
 

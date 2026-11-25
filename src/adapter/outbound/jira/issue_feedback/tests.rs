@@ -15,6 +15,7 @@ use crate::domain::issue_work::IssueProjectScope;
 use crate::domain::provider_credentials::*;
 
 mod comment_cases;
+mod policy_cases;
 mod transition_cases;
 
 const ACTOR: &str = "account-1";
@@ -136,12 +137,15 @@ struct Remote {
     parent: String,
     actor: String,
 }
+type ReadHook = dyn Fn(&JiraIssueFeedbackReadRequest) + Send;
+
 struct Api {
     remote: Mutex<Remote>,
     writes: AtomicUsize,
     reads: AtomicUsize,
     lose_ack: AtomicBool,
     before_send: Mutex<Option<Box<dyn Fn() + Send>>>,
+    after_read: Mutex<Option<Box<ReadHook>>>,
 }
 impl Api {
     fn new() -> Self {
@@ -163,6 +167,7 @@ impl Api {
             reads: AtomicUsize::new(0),
             lose_ack: AtomicBool::new(false),
             before_send: Mutex::new(None),
+            after_read: Mutex::new(None),
         }
     }
 }
@@ -220,6 +225,10 @@ impl JiraIssueFeedbackApiPort for Api {
                 remote.incomplete,
             ),
         };
+        drop(remote);
+        if let Some(hook) = self.after_read.lock().unwrap().as_ref() {
+            hook(request);
+        }
         Ok(JiraIssueFeedbackDocument::new(value))
     }
     fn write(
@@ -348,6 +357,7 @@ impl Fixture {
             credentials.clone(),
             api.clone(),
             Arc::new(move || Ok(reader.lock().unwrap().clone())),
+            Arc::new(|_| Ok(())),
         );
         Self {
             adapter,
