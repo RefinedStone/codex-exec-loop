@@ -31,8 +31,10 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux:: -- --
 
 - 제한된 로컬 Linux: UID 1000, kernel 6.18.57, bubblewrap 0.12.0. namespace 사전 확인이 exit 1로 실패했다: `Failed to create NETLINK_ROUTE socket: Operation not permitted`. 이 환경을 지원 프로필의 통과 증거로 사용하지 않는다.
 - WSL은 production에서 의도적으로 미지원이다. WSL의 컴파일·일반 회귀와 native 격리 통과를 구분한다.
-- 최초 WSL lib test 컴파일은 guest 디스크 공간 부족으로 중단됐다. 이번 실행이 생성한 실패 incremental만 정리하고 여유 있는 별도 출력 경로로 다시 검증 중이다.
+- 최초 WSL lib test 컴파일은 guest 디스크 공간 부족으로 중단됐다. 이번 실행이 생성한 실패 incremental만 정리하고 C:의 별도 출력 경로에서 재실행했다. Rust lib test 컴파일과 일반 회귀 **4 passed**가 통과했고, native capability 시험 **5개는 ignored**로 남았다. 이것은 native 격리 성공이 아니다.
 - 독립 읽기 리뷰에서 관측 증거 보존과 종료 판정을 보완했다. `cargo fmt --all`, `git diff --check` 통과.
-- planner 지정 Windows Full gate 및 실제 Ubuntu CI 결과는 진행 중이며, 완료 결과를 이 문서와 PR에 추가한다.
+- 검증 코드 `86831e4235459b106a804aa4599b515f11947934`에서 planner 지정 Windows Full gate가 **exit 0**으로 완료됐다. Windows 계약 회귀·build/check/clippy와 Desktop check/build가 통과했고, Desktop 시험은 **1205 passed / 7 existing skipped**였다.
+- 같은 코드의 Linux cfg를 WSL에서 `cargo clippy --locked --all-targets --all-features -- -D warnings`로 확인해 **exit 0**을 얻었다. 이 컴파일/정적 검사도 native 격리 성공 증거와 구분한다.
+- 실제 Ubuntu native CI 결과는 PR에서 확인하며, 성공한 exact head와 환경이 확보되기 전에는 #2722 완료나 Linux 지원 승격을 선언하지 않는다.
 
 이 변경만으로 모든 Linux 배포판이나 cgroup 전체 자원 quota를 지원한다고 선언하지 않는다. 실제 native suite가 성공한 정확한 환경만 검증된 프로필로 기록한다.
