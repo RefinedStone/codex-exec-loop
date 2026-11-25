@@ -5,7 +5,8 @@ use crate::application::port::outbound::issue_code_validator_runner_port::{
 /*
  * 승인한 코드 검증기를 격리해 실행한다 (#2431).
  *
- * 격리는 macOS 의 `/usr/bin/sandbox-exec` 뿐이다. 다른 플랫폼에는 격리가 없어서 실행하지 않는다.
+ * macOS는 sandbox-exec, Linux는 엄격한 native bubblewrap 프로필만 사용한다.
+ * Windows 및 지원되지 않는 Linux 프로필은 실행하지 않는다.
  * 격리 없는 실행으로 바꾸는 길은 없다.
  *
  * macOS 에서의 실행:
@@ -29,7 +30,11 @@ impl IssueCodeValidatorRunnerPort for SandboxedIssueCodeValidatorRunnerAdapter {
         {
             macos::run(&request)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            linux::run(&request)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             use crate::application::port::outbound::issue_code_validator_runner_port::IssueCodeValidatorNotRun;
 
@@ -38,6 +43,9 @@ impl IssueCodeValidatorRunnerPort for SandboxedIssueCodeValidatorRunnerAdapter {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 #[cfg(target_os = "macos")]
 mod macos {
