@@ -34,6 +34,18 @@ pub(super) fn board_target<'a>(
     Some((board, target))
 }
 
+fn confirmed_target(
+    snapshot: &IssueFeedbackSnapshot,
+    board: &IssueAutomationGitHubBoard,
+    target: &str,
+) -> bool {
+    matches!(
+        snapshot.state.board_proof.as_ref().map(|proof| &proof.evidence),
+        Some(IssueFeedbackEvidence::BoardField { project_id, field_id, option_id, .. })
+            if *project_id == board.project_id && *field_id == board.field_id && option_id == target
+    )
+}
+
 /// 마지막 자기 쓰기가 이 항목의 이 필드에 남긴 값이다.
 fn owned_option<'a>(
     snapshot: &'a IssueFeedbackSnapshot,
@@ -78,6 +90,10 @@ impl IssueFeedbackService {
         let Some((board, target)) = board_target(snapshot, &automation.policy) else {
             return Ok(());
         };
+        // 같은 보드·필드에 지금 목표를 이미 확인했으면 원격을 읽지 않는다. 추적 주기마다 `gh` 를 부르지 않는다.
+        if confirmed_target(snapshot, board, target) {
+            return Ok(());
+        }
         let issue = &snapshot.item.issue;
         if self.blocked_by_unresolved(issue)? {
             return Ok(());
