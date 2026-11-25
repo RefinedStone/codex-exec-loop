@@ -43,4 +43,5 @@ jobs:
           stat -c '%U %a %n' /usr/bin/bwrap
           # No sysctl changes, AppArmor unloading, namespace try flags, or fallback.
       - name: Run real isolation and publication gate evidence
-        run: cargo test --locked --lib adapter::outbound::issue_code_validator::linux:: -- --ignored --test-threads=1 --nocapture
+        run: |
+          cargo test --locked --lib 'adapter::outbound::issue_code_validator::linux::' -- --ignored --test-threads=1 --nocapture
