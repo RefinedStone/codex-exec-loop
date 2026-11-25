@@ -101,7 +101,7 @@ impl JiraIssueFeedbackAdapter {
             _ => unreachable!(),
         };
         self.issue_status(context, &intent.issue)?;
-        let response = match self.send(context, request) {
+        let response = match self.send(context, intent, request) {
             Ok(JiraIssueFeedbackWriteResponse::Comment(response)) => response.into_value(),
             Ok(_) => return Ok(IssueFeedbackWriteResult::Contradictory),
             Err(_) => return Ok(IssueFeedbackWriteResult::Unconfirmed),

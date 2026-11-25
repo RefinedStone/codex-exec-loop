@@ -1,6 +1,10 @@
 use super::*;
 
-fn update(fixture: &Fixture, original: &IssueFeedbackIntent, id: &str) -> IssueFeedbackIntent {
+pub(super) fn update(
+    fixture: &Fixture,
+    original: &IssueFeedbackIntent,
+    id: &str,
+) -> IssueFeedbackIntent {
     let mut next = fixture.intent("next-intent", "### Akra 작업 상태\n\n상태: 통합 확인");
     let IssueFeedbackOperation::CreateComment {
         body,

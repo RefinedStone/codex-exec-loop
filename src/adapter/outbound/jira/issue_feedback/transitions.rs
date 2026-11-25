@@ -106,6 +106,7 @@ impl JiraIssueFeedbackAdapter {
         // this one attempt, and a lost 204 remains unknown without a durable acknowledgement.
         match self.send(
             context,
+            intent,
             JiraIssueFeedbackWriteRequest::Transition {
                 issue_id: intent.issue.issue_id.clone(),
                 transition_id: target.transition_id.clone(),

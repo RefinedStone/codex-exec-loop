@@ -8,14 +8,19 @@ use serde_json::Value;
 
 use crate::application::port::outbound::issue_feedback_port::*;
 use crate::application::port::outbound::jira_issue_feedback_api_port::*;
-use crate::application::port::outbound::provider_credential_mutation_port::ProviderCredentialMutationPort;
+use crate::application::port::outbound::provider_credential_mutation_port::{
+    ProviderCredentialMutationPort, ProviderMutationAuthorizationPort,
+    ProviderMutationSendGuardPort,
+};
 use crate::application::port::outbound::provider_credentials_port::ProviderCredentialLease;
 use crate::domain::issue_automation::feedback::*;
 use crate::domain::issue_automation::policy::{
     IssueAutomationJiraBinding, IssueAutomationJiraCloseTransition,
 };
 use crate::domain::issue_work::{IssueProvider, IssueReference};
-use crate::domain::provider_credentials::{ConnectionRef, JiraDeployment, Provider};
+use crate::domain::provider_credentials::{
+    ConnectionRef, CredentialResult, JiraDeployment, Provider, ProviderCredentialError,
+};
 
 mod comments;
 #[cfg(test)]
@@ -23,6 +28,7 @@ mod tests;
 mod transitions;
 
 type BindingReader = dyn Fn() -> Result<IssueAutomationJiraBinding> + Send + Sync;
+type SendPolicyValidator = dyn Fn(&IssueFeedbackIntent) -> Result<()> + Send + Sync;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_PAGES: usize = 100;
 const MAX_ITEMS: usize = 10_000;
@@ -31,6 +37,22 @@ pub struct JiraIssueFeedbackAdapter {
     credentials: Arc<dyn ProviderCredentialMutationPort>,
     api: Arc<dyn JiraIssueFeedbackApiPort>,
     binding: Arc<BindingReader>,
+    validate_send_policy: Arc<SendPolicyValidator>,
+}
+
+struct FeedbackSendAuthorization {
+    credential: Arc<dyn ProviderMutationAuthorizationPort>,
+    validate_policy: Arc<SendPolicyValidator>,
+    intent: IssueFeedbackIntent,
+}
+impl ProviderMutationAuthorizationPort for FeedbackSendAuthorization {
+    fn begin_send(&self) -> CredentialResult<Box<dyn ProviderMutationSendGuardPort>> {
+        let send = self.credential.begin_send()?;
+        // Policy may change during remote preflight or transport preparation. Read it again
+        // at the sole HTTP send boundary, while retaining the one-shot credential admission.
+        (self.validate_policy)(&self.intent).map_err(|_| ProviderCredentialError::Conflict)?;
+        Ok(send)
+    }
 }
 struct FeedbackContext {
     binding: IssueAutomationJiraBinding,
@@ -48,11 +70,13 @@ impl JiraIssueFeedbackAdapter {
         credentials: Arc<dyn ProviderCredentialMutationPort>,
         api: Arc<dyn JiraIssueFeedbackApiPort>,
         binding: Arc<BindingReader>,
+        validate_send_policy: Arc<SendPolicyValidator>,
     ) -> Self {
         Self {
             credentials,
             api,
             binding,
+            validate_send_policy,
         }
     }
 
@@ -182,12 +206,16 @@ impl JiraIssueFeedbackAdapter {
     fn send(
         &self,
         context: &FeedbackContext,
+        intent: &IssueFeedbackIntent,
         request: JiraIssueFeedbackWriteRequest,
     ) -> Result<JiraIssueFeedbackWriteResponse> {
-        // The capability still checks this exact generation at the native transport boundary.
-        let authorization = self
-            .credentials
-            .authorize_mutation(&context.lease.reference)?;
+        let authorization = Arc::new(FeedbackSendAuthorization {
+            credential: self
+                .credentials
+                .authorize_mutation(&context.lease.reference)?,
+            validate_policy: self.validate_send_policy.clone(),
+            intent: intent.clone(),
+        });
         Ok(self.api.write(
             &context.lease,
             &request,

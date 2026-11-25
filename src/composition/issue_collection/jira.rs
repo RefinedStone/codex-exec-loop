@@ -1,5 +1,6 @@
 //! Shared Gateway credential ownership feeds repository graphs; no per-repository owner is built.
 use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
+use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
 use crate::adapter::outbound::github::{
     issue_feedback::GithubIssueFeedbackAdapter, issue_source::GithubIssueSourceAdapter,
 };
@@ -10,6 +11,8 @@ use crate::application::port::outbound::issue_source_claim_port::IssueSourceClai
 use crate::application::port::outbound::issue_source_port::*;
 use crate::application::service::issue_automation_policy::IssueAutomationPolicyService;
 use crate::application::service::issue_collection::jira::binding_for_source;
+use crate::application::service::issue_feedback::validate_send_policy;
+use crate::application::service::issue_policy::IssuePolicyService;
 use crate::composition::provider_credentials::ProviderServices;
 use crate::domain::issue_automation::feedback::IssueFeedbackIntent;
 use crate::domain::issue_automation::policy::{
@@ -180,11 +183,26 @@ impl RoutedIssueFeedback {
                 .jira
                 .context("Jira binding is unavailable")
         });
+        let policy_workspace = workspace.to_owned();
+        let policy_store = store.clone();
+        let automation = policy();
+        let disclosure =
+            IssuePolicyService::new(Arc::new(FilesystemIssuePolicySourceAdapter::new()));
+        let send_policy_validator = Arc::new(move |intent: &IssueFeedbackIntent| {
+            validate_send_policy(
+                &policy_workspace,
+                policy_store.as_ref(),
+                &automation,
+                &disclosure,
+                intent,
+            )
+        });
         let jira = providers.map(|providers| {
             JiraIssueFeedbackAdapter::new(
                 providers.credentials.clone(),
                 providers.api.clone(),
                 binding_reader,
+                send_policy_validator,
             )
         });
         Self {
