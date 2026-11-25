@@ -9,10 +9,12 @@
   "engines": {
     "node": ">=18"
   },
+  "license": "SEE LICENSE IN LICENSE",
   "files": [
     "bin",
     "lib",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "repository": {
     "type": "git",

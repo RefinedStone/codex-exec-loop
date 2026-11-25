@@ -135,6 +135,16 @@ Repository structure, architecture gates, worktree rules, and the GitHub deliver
 [Development Guide](docs/reference/development.md). Gemini-specific guidance delegates to the same
 contract in [.gemini/styleguide.md](.gemini/styleguide.md).
 
+## License
+
+Akra ADE is source-available, not open source. The [Akra ADE Source License](LICENSE) lets you
+build and run unmodified copies for personal or business use and modify them for your own
+non-commercial use. You may not distribute a modified version or use it commercially.
+Redistribution needs written permission from akra dev studio. Third-party components keep their own
+licenses; see [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES/README.md). Releases published before the
+license was added keep their earlier terms. See [CONTRIBUTING.md](CONTRIBUTING.md) for issues and
+permission requests.
+
 ## Documentation
 
 - [Documentation map](docs/README.md)

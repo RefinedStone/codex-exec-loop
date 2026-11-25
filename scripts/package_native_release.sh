@@ -254,14 +254,17 @@ copy_tracked_paths() {
 }
 
 require_regular_repo_file "${repo_root}/README.md" "README.md"
+require_regular_repo_file "${repo_root}/LICENSE" "LICENSE"
 require_regular_repo_file "${runbook_path}" "${runbook_path#${repo_root}/}"
 require_regular_repo_file "${runtime_scripts_dir}/gh-akra.sh" "scripts/gh-akra.sh"
 require_regular_repo_file "${admin_font_license_path}" "assets/admin/fonts/LICENSE-Galmuri.txt"
 cp "${binary_path}" "${bundle_dir}/${binary_file_name}"
 cp "${repo_root}/README.md" "${bundle_dir}/README.md"
+cp "${repo_root}/LICENSE" "${bundle_dir}/LICENSE"
 cp "${runbook_path}" "${bundle_dir}/OPERATOR.md"
 mkdir -p "${bundle_dir}/THIRD_PARTY_NOTICES"
 cp "${admin_font_license_path}" "${bundle_dir}/THIRD_PARTY_NOTICES/Galmuri-OFL.txt"
+copy_tracked_paths THIRD_PARTY_NOTICES
 copy_tracked_paths assets/app-server/skills
 mkdir -p "${bundle_dir}/scripts"
 cp "${runtime_scripts_dir}/gh-akra.sh" "${bundle_dir}/scripts/gh-akra.sh"
