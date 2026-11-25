@@ -103,13 +103,27 @@ test("runtime loader paths preserve caller directories and macOS fallback defaul
   assert.ok(mac.DYLD_FALLBACK_LIBRARY_PATH.endsWith("/Users/test/lib:/usr/local/lib:/usr/lib"));
 });
 
-test("Windows portable entrypoint retains the complete 108-filter inventory", () => {
+test("Windows portable entrypoint retains the complete inventory including Vault restore", () => {
   const shell = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
   const filters = [...shell.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1]);
-  assert.equal(filters.length, 108);
-  assert.equal(new Set(filters).size, 108);
+  assert.equal(filters.length, 118);
+  assert.equal(new Set(filters).size, 118);
   assert.ok(filters.includes("process_liveness::tests::"));
   assert.ok(filters.includes("application::service::evidence_vault_unlock::"));
+  for (const filter of [
+    "filesystem::vault_fs::",
+    "filesystem::evidence_vault_store::",
+    "filesystem::evidence_vault_backup::",
+    "filesystem::vault_restore_workspace::",
+    "adapter::outbound::native_vault_confirmation::",
+    "application::port::outbound::vault_native_confirmation_port::",
+    "adapter::inbound::desktop_restore_bridge::",
+    "application::service::evidence_vault_restore::",
+    "application::service::desktop_vault_restore::",
+    "composition::desktop_restore::",
+  ]) {
+    assert.ok(filters.includes(filter), `Windows portable gate is missing ${filter}`);
+  }
   assert.ok(filters.includes("host_owned_worker_commit_"));
   assert.ok(filters.includes("provider_credentials"));
   assert.ok(filters.includes("provider_http"));
