@@ -1065,7 +1065,7 @@ fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "20");
+        assert_eq!(version, "21");
         assert_eq!(
             migrated
                 .query_row(
@@ -1165,7 +1165,7 @@ fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_v
         );
     }
 
-    for unsupported_version in ["6", "21", "not-a-version"] {
+    for unsupported_version in ["6", "22", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -1203,6 +1203,150 @@ fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_v
     let error =
         open_authority_connection(&location).expect_err("missing schema marker must fail closed");
     assert!(error.to_string().contains("schema version is missing"));
+}
+
+fn read_workspace_path_columns(connection: &rusqlite::Connection) -> Vec<String> {
+    let mut paths = Vec::new();
+    for (table, column) in super::store::WORKSPACE_PATH_COLUMNS {
+        let mut statement = connection
+            .prepare(&format!("SELECT {column} FROM {table} ORDER BY {column}"))
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        paths.extend(
+            rows.into_iter()
+                .map(|path| format!("{table}.{column}={path}")),
+        );
+    }
+    let detail_in_json: String = connection
+        .query_row(
+            "SELECT json_extract(content_json, '$.detail_doc_path') FROM planning_directions",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    paths.push(format!("content_json={detail_in_json}"));
+    paths
+}
+
+#[test]
+fn authority_schema_v21_moves_legacy_workspace_paths_once() {
+    let workspace_dir = temp_workspace("schema-migrate-akra-directory");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    connection
+        .execute_batch(
+            "INSERT INTO shadow_documents (relative_path, content)
+             VALUES ('.codex-exec-loop/planning/result-output.md', 'shadow');
+             INSERT INTO staged_drafts (draft_name, updated_at) VALUES ('draft', 'now');
+             INSERT INTO staged_draft_files (draft_name, active_path, content)
+             VALUES ('draft', '.codex-exec-loop/planning/prompts/a_b.md', 'draft');
+             INSERT INTO planning_file_sync_baselines
+             (relative_path, observed_planning_revision, exported_at)
+             VALUES ('.codex-exec-loop/planning/result-output.md', 3, 'now');
+             INSERT INTO active_documents (relative_path, content)
+             VALUES ('.codex-exec-loop/planning/result-output.md', 'mentions .codex-exec-loop/x'),
+                    ('.codex-exec-loop-other/keep.md', 'not the legacy directory');
+             INSERT INTO planning_direction_config
+             (config_key, version, queue_idle_policy, queue_idle_prompt_path)
+             VALUES ('default', 1, 'review',
+                     '.codex-exec-loop/planning/prompts/queue-idle-review.md');
+             INSERT INTO planning_directions
+             (direction_id, direction_order, title, state, detail_doc_path, content_json)
+             VALUES ('d', 0, 'D', 'active', '.codex-exec-loop/planning/directions/d.md',
+                     '{\"id\":\"d\",\"detail_doc_path\":\".codex-exec-loop/planning/directions/d.md\"}');
+             UPDATE authority_metadata SET value = '20' WHERE key = 'schema_version';",
+        )
+        .expect("v20 fixture should install");
+    drop(connection);
+
+    let migrated = open_authority_connection(&location).expect("v20 store should migrate");
+    assert_eq!(
+        read_workspace_path_columns(&migrated),
+        [
+            "shadow_documents.relative_path=.akra/planning/result-output.md",
+            "staged_draft_files.active_path=.akra/planning/prompts/a_b.md",
+            "planning_file_sync_baselines.relative_path=.akra/planning/result-output.md",
+            "active_documents.relative_path=.akra/planning/result-output.md",
+            "active_documents.relative_path=.codex-exec-loop-other/keep.md",
+            "planning_direction_config.queue_idle_prompt_path=.akra/planning/prompts/queue-idle-review.md",
+            "planning_directions.detail_doc_path=.akra/planning/directions/d.md",
+            "content_json=.akra/planning/directions/d.md",
+        ]
+    );
+    let body: String = migrated
+        .query_row(
+            "SELECT content FROM active_documents WHERE relative_path = '.akra/planning/result-output.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        body, "mentions .codex-exec-loop/x",
+        "document bodies stay as written"
+    );
+    // A legacy row written after the migration proves the rewrite does not run a second time.
+    migrated
+        .execute(
+            "INSERT INTO shadow_documents (relative_path, content)
+             VALUES ('.codex-exec-loop/planning/late.md', 'late')",
+            [],
+        )
+        .unwrap();
+    drop(migrated);
+
+    let reopened = open_authority_connection(&location).expect("v21 store should reopen");
+    let version: String = reopened
+        .query_row(
+            "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "21");
+    assert!(
+        read_workspace_path_columns(&reopened)
+            .contains(&"shadow_documents.relative_path=.codex-exec-loop/planning/late.md".into())
+    );
+}
+
+#[test]
+fn authority_schema_v21_path_conflict_rolls_back_the_whole_migration() {
+    let workspace_dir = temp_workspace("schema-migrate-akra-conflict");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    connection
+        .execute_batch(
+            "INSERT INTO shadow_documents (relative_path, content)
+             VALUES ('.codex-exec-loop/planning/a.md', 'first');
+             INSERT INTO active_documents (relative_path, content)
+             VALUES ('.codex-exec-loop/planning/result-output.md', 'old'),
+                    ('.akra/planning/result-output.md', 'new');
+             UPDATE authority_metadata SET value = '20' WHERE key = 'schema_version';",
+        )
+        .expect("conflicting fixture should install");
+    drop(connection);
+
+    open_authority_connection(&location).expect_err("a path collision must fail closed");
+
+    let raw = rusqlite::Connection::open(&location.authority_store_path).unwrap();
+    let (version, shadow): (String, String) = raw
+        .query_row(
+            "SELECT (SELECT value FROM authority_metadata WHERE key = 'schema_version'),
+                    (SELECT relative_path FROM shadow_documents)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(version, "20");
+    assert_eq!(shadow, ".codex-exec-loop/planning/a.md");
 }
 
 #[test]
@@ -1287,7 +1431,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "20"
+        "21"
     );
     drop(migrated);
 
@@ -1490,7 +1634,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "20");
+    assert_eq!(version, "21");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -2946,7 +3090,7 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
                 authority_mutation_owner_token: None,
             },
         ),
-        "failed to store active document `.codex-exec-loop/planning/result-output.md`",
+        "failed to store active document `.akra/planning/result-output.md`",
     );
 
     let reloaded_direction = adapter
@@ -3038,7 +3182,7 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
     let baseline_tasks = task_authority_for_direction("task-retired", "direction-a");
     let queue = empty_test_queue_projection();
     let baseline_support = [PlanningAuthorityActiveDocumentMutation::Replace {
-        relative_path: ".codex-exec-loop/planning/prompts/old.md",
+        relative_path: ".akra/planning/prompts/old.md",
         body: "old prompt",
     }];
     let baseline = adapter
@@ -3079,10 +3223,10 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
     };
     let support_rewrite = [
         PlanningAuthorityActiveDocumentMutation::RemoveEntry {
-            relative_path: ".codex-exec-loop/planning/prompts",
+            relative_path: ".akra/planning/prompts",
         },
         PlanningAuthorityActiveDocumentMutation::Replace {
-            relative_path: ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            relative_path: ".akra/planning/prompts/queue-idle-review.md",
             body: "new prompt",
         },
     ];
@@ -3119,7 +3263,7 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
     assert_eq!(
         SqlitePlanningAuthorityAdapter::load_active_planning_file(
             &workspace_dir,
-            ".codex-exec-loop/planning/prompts/old.md",
+            ".akra/planning/prompts/old.md",
         )
         .expect("old support file should reload")
         .as_deref(),
@@ -3166,7 +3310,7 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
     assert!(
         SqlitePlanningAuthorityAdapter::load_active_planning_file(
             &workspace_dir,
-            ".codex-exec-loop/planning/prompts/old.md",
+            ".akra/planning/prompts/old.md",
         )
         .expect("removed support file should inspect")
         .is_none()
@@ -3174,7 +3318,7 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
     assert_eq!(
         SqlitePlanningAuthorityAdapter::load_active_planning_file(
             &workspace_dir,
-            ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            ".akra/planning/prompts/queue-idle-review.md",
         )
         .expect("new support file should reload")
         .as_deref(),
@@ -4454,17 +4598,14 @@ fn active_workspace_artifact_removal_preserves_task_authority_snapshot() {
 fn active_document_prefix_removal_treats_sql_wildcards_as_literal_path_text() {
     let workspace_dir = temp_workspace("active-document-literal-prefix");
     for (path, body) in [
-        (".codex-exec-loop/planning/prompts/a_b/target.md", "target"),
+        (".akra/planning/prompts/a_b/target.md", "target"),
         (
-            ".codex-exec-loop/planning/prompts/axb/preserved.md",
+            ".akra/planning/prompts/axb/preserved.md",
             "preserved underscore neighbor",
         ),
+        (".akra/planning/prompts/a%b/target.md", "percent target"),
         (
-            ".codex-exec-loop/planning/prompts/a%b/target.md",
-            "percent target",
-        ),
-        (
-            ".codex-exec-loop/planning/prompts/azzzb/preserved.md",
+            ".akra/planning/prompts/azzzb/preserved.md",
             "preserved percent neighbor",
         ),
     ] {
@@ -4478,18 +4619,18 @@ fn active_document_prefix_removal_treats_sql_wildcards_as_literal_path_text() {
 
     SqlitePlanningAuthorityAdapter::remove_active_planning_entry(
         &workspace_dir,
-        ".codex-exec-loop/planning/prompts/a_b",
+        ".akra/planning/prompts/a_b",
     )
     .expect("underscore path should remove literally");
     SqlitePlanningAuthorityAdapter::remove_active_planning_entry(
         &workspace_dir,
-        ".codex-exec-loop/planning/prompts/a%b",
+        ".akra/planning/prompts/a%b",
     )
     .expect("percent path should remove literally");
 
     for removed_path in [
-        ".codex-exec-loop/planning/prompts/a_b/target.md",
-        ".codex-exec-loop/planning/prompts/a%b/target.md",
+        ".akra/planning/prompts/a_b/target.md",
+        ".akra/planning/prompts/a%b/target.md",
     ] {
         assert!(
             SqlitePlanningAuthorityAdapter::load_active_planning_file(
@@ -4502,11 +4643,11 @@ fn active_document_prefix_removal_treats_sql_wildcards_as_literal_path_text() {
     }
     for (preserved_path, expected) in [
         (
-            ".codex-exec-loop/planning/prompts/axb/preserved.md",
+            ".akra/planning/prompts/axb/preserved.md",
             "preserved underscore neighbor",
         ),
         (
-            ".codex-exec-loop/planning/prompts/azzzb/preserved.md",
+            ".akra/planning/prompts/azzzb/preserved.md",
             "preserved percent neighbor",
         ),
     ] {

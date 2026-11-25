@@ -2663,14 +2663,14 @@ mod tests {
         assert!(
             stream_event(
                 ConversationTurnTerminalOutcome::Completed,
-                vec![".codex-exec-loop/planning/result-output.md".to_string()],
+                vec![".akra/planning/result-output.md".to_string()],
             )
             .supersedes_planning_ui_intent()
         );
         assert!(
             stream_event(
                 ConversationTurnTerminalOutcome::Interrupted,
-                vec![".codex-exec-loop/planning/result-output.md".to_string()],
+                vec![".akra/planning/result-output.md".to_string()],
             )
             .supersedes_planning_ui_intent()
         );

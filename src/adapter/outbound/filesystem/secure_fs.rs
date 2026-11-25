@@ -176,11 +176,11 @@ mod platform {
             RefCell::new(None);
         static AFTER_ATOMIC_REPLACE_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     }
-    const QUARANTINE_RELATIVE: &str = ".codex-exec-loop/runtime/planning-quarantine";
+    const QUARANTINE_RELATIVE: &str = ".akra/runtime/planning-quarantine";
     const QUARANTINE_PREFIX: &[u8] = b".akra-preserved-";
-    const MUTATION_LOCK_PARENT_RELATIVE: &str = ".codex-exec-loop/runtime";
+    const MUTATION_LOCK_PARENT_RELATIVE: &str = crate::domain::planning::PLANNING_RUNTIME_DIRECTORY;
     const MUTATION_LOCK_NAME: &str = "planning-workspace.lock";
-    const MUTATION_LOCK_RELATIVE: &str = ".codex-exec-loop/runtime/planning-workspace.lock";
+    const MUTATION_LOCK_RELATIVE: &str = ".akra/runtime/planning-workspace.lock";
     const MUTATION_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
     const MUTATION_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -1273,7 +1273,7 @@ mod platform {
     }
 
     fn quarantine_capacity_error() -> &'static str {
-        "private planning quarantine retention limit exceeded; no entry was removed and operator cleanup is required at .codex-exec-loop/runtime/planning-quarantine"
+        "private planning quarantine retention limit exceeded; no entry was removed and operator cleanup is required at .akra/runtime/planning-quarantine"
     }
 
     fn ensure_destination_unchanged(

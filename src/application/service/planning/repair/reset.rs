@@ -1035,18 +1035,15 @@ mod tests {
             .expect("stale repo-scoped draft rows should seed");
         for (path, body) in [
             (
-                ".codex-exec-loop/planning/directions/stale.md",
+                ".akra/planning/directions/stale.md",
                 "stale direction detail",
             ),
-            (".codex-exec-loop/planning/prompts/stale.md", "stale prompt"),
+            (".akra/planning/prompts/stale.md", "stale prompt"),
             (
-                ".codex-exec-loop/planning/drafts/stale/result-output.md",
+                ".akra/planning/drafts/stale/result-output.md",
                 "stale draft",
             ),
-            (
-                ".codex-exec-loop/planning/rejected/stale.md",
-                "stale rejection",
-            ),
+            (".akra/planning/rejected/stale.md", "stale rejection"),
         ] {
             workspace_port
                 .replace_planning_workspace_file(workspace.path_str(), path, Some(body))
@@ -1077,10 +1074,10 @@ mod tests {
         .expect("repo-scoped full reset should commit atomically");
         assert_eq!(result.target, PlanningResetTarget::All);
         for path in [
-            ".codex-exec-loop/planning/directions/stale.md",
-            ".codex-exec-loop/planning/prompts/stale.md",
-            ".codex-exec-loop/planning/drafts/stale/result-output.md",
-            ".codex-exec-loop/planning/rejected/stale.md",
+            ".akra/planning/directions/stale.md",
+            ".akra/planning/prompts/stale.md",
+            ".akra/planning/drafts/stale/result-output.md",
+            ".akra/planning/rejected/stale.md",
         ] {
             assert!(
                 workspace_port
@@ -1200,7 +1197,7 @@ mod tests {
         let preserved_files = [
             (DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, "Operator queue prompt"),
             (
-                ".codex-exec-loop/planning/directions/keep.md",
+                ".akra/planning/directions/keep.md",
                 "Operator direction details",
             ),
         ];

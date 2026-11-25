@@ -450,9 +450,7 @@ mod tests {
             queue_summary: Some("projection queue summary".to_string()),
             proposal_summary: Some("projection proposal summary".to_string()),
             queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
-            queue_idle_prompt_path: Some(
-                ".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string(),
-            ),
+            queue_idle_prompt_path: Some(".akra/planning/prompts/queue-idle-review.md".to_string()),
             has_structured_queue_projection: true,
             queue_head: Some(queue_task(1, "task-1", "Current task", TaskStatus::Ready)),
             visible_tasks: vec![

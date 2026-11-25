@@ -58,14 +58,14 @@
         "status": "completed",
         "changes": [
           {
-            "path": ".codex-exec-loop/planning/result-output.md",
+            "path": ".akra/planning/result-output.md",
             "diff": "",
             "kind": {
               "type": "update"
             }
           },
           {
-            "path": "/tmp/workspace/.codex-exec-loop/planning/result-output.md",
+            "path": "/tmp/workspace/.akra/planning/result-output.md",
             "diff": "",
             "kind": {
               "type": "update"

@@ -29,14 +29,13 @@ fn sample_session() -> PlanningDraftEditorSession {
         draft_directory: "/tmp/bootstrap-test".to_string(),
         editable_files: vec![
             PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                active_path: ".akra/planning/result-output.md".to_string(),
                 staged_path: "/tmp/bootstrap-test/result-output.md".to_string(),
                 body: "version = 1".to_string(),
             },
             PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
-                staged_path: "/tmp/bootstrap-test/.codex-exec-loop/planning/result-output.md"
-                    .to_string(),
+                active_path: ".akra/planning/result-output.md".to_string(),
+                staged_path: "/tmp/bootstrap-test/.akra/planning/result-output.md".to_string(),
                 body: "{\n  \"version\": 1,\n  \"tasks\": []\n}".to_string(),
             },
         ],
@@ -54,7 +53,7 @@ fn single_buffer_session(body: &str) -> PlanningDraftEditorSession {
         draft_name: "bootstrap-test".to_string(),
         draft_directory: "/tmp/bootstrap-test".to_string(),
         editable_files: vec![PlanningDraftEditorFile {
-            active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+            active_path: ".akra/planning/result-output.md".to_string(),
             staged_path: "/tmp/bootstrap-test/result-output.md".to_string(),
             body: body.to_string(),
         }],
@@ -68,7 +67,7 @@ fn correlated_single_buffer_session(body: &str) -> PlanningEditorSessionSnapshot
         session_identity: PlanningEditorSessionIdentity::new(7, "/tmp/workspace", "bootstrap-test"),
         draft_directory: "/tmp/bootstrap-test".to_string(),
         editable_files: vec![PlanningEditorFileSnapshot {
-            active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+            active_path: ".akra/planning/result-output.md".to_string(),
             staged_path: "/tmp/bootstrap-test/result-output.md".to_string(),
             body: body.to_string(),
         }],
@@ -108,7 +107,7 @@ fn editing_buffer_marks_it_dirty_and_preserves_file_switching() {
     state.move_file_selection(1);
     assert_eq!(
         state.selected_buffer().expect("buffer").active_path(),
-        ".codex-exec-loop/planning/result-output.md"
+        ".akra/planning/result-output.md"
     );
     assert!(!state.selected_buffer().expect("buffer").is_dirty());
     let files = state.collect_editable_files();

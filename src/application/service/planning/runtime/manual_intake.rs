@@ -719,7 +719,7 @@ mod tests {
     }
 
     fn write_invalid_result_output(workspace_dir: &str) {
-        let path = PathBuf::from(workspace_dir).join(".codex-exec-loop/planning");
+        let path = PathBuf::from(workspace_dir).join(".akra/planning");
         std::fs::create_dir_all(&path).expect("planning directory should be created");
         std::fs::write(path.join("result-output.md"), "not a markdown heading")
             .expect("invalid result output should write");

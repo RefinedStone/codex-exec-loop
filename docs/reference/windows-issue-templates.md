@@ -16,7 +16,7 @@ the generic planning/Vault `secure_fs` operations keep their existing behavior.
 - Template paths are relative to that workspace. Components containing alternate
   data stream syntax, control characters, trailing dots/spaces, or DOS device
   names (including COM/LPT superscript digits) are rejected. The private
-  `.codex-exec-loop/runtime` namespace stays excluded, including aliases using
+  `.akra/runtime` namespace stays excluded, including aliases using
   DOS short directory names.
 - The reader retains every ancestor directory handle and rejects reparse points,
   including junctions. It checks the selected root first, then each template

@@ -502,12 +502,12 @@ fn rejects_blank_result_output_prompt() {
 fn rejects_detail_doc_paths_that_only_match_prefix_textually() {
     /*
      * sandbox validation은 문자열 prefix만 보지 않는다. `directions_backup` 같은 sibling directory가
-     * 승인된 `.codex-exec-loop/planning/directions` 문자로 시작한다는 이유만으로 통과하면 안 된다.
+     * 승인된 `.akra/planning/directions` 문자로 시작한다는 이유만으로 통과하면 안 된다.
      */
     let validation_service = PlanningValidationService::new();
     let mut directions = test_directions("direction-a");
     directions.directions[0].detail_doc_path =
-        ".codex-exec-loop/planning/directions_backup/direction-a.md".to_string();
+        ".akra/planning/directions_backup/direction-a.md".to_string();
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
         directions: &directions,
         task_authority_json: r#"{"version":1,"tasks":[]}"#,
@@ -534,7 +534,7 @@ fn rejects_detail_doc_paths_with_parent_dir_components() {
     let validation_service = PlanningValidationService::new();
     let mut directions = test_directions("direction-a");
     directions.directions[0].detail_doc_path =
-        ".codex-exec-loop/planning/directions/../direction-a.md".to_string();
+        ".akra/planning/directions/../direction-a.md".to_string();
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
         directions: &directions,
         task_authority_json: r#"{"version":1,"tasks":[]}"#,
@@ -564,7 +564,7 @@ fn rejects_queue_idle_prompt_paths_that_only_match_prefix_textually() {
     let mut directions = test_directions("direction-a");
     directions.queue_idle = QueueIdleConfig {
         policy: QueueIdlePolicy::ReviewAndEnqueue,
-        prompt_path: ".codex-exec-loop/planning/prompts_backup/queue-idle-review.md".to_string(),
+        prompt_path: ".akra/planning/prompts_backup/queue-idle-review.md".to_string(),
     };
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
         directions: &directions,
@@ -595,7 +595,7 @@ fn rejects_queue_idle_prompt_paths_with_parent_dir_components() {
     let mut directions = test_directions("direction-a");
     directions.queue_idle = QueueIdleConfig {
         policy: QueueIdlePolicy::ReviewAndEnqueue,
-        prompt_path: ".codex-exec-loop/planning/prompts/../queue-idle-review.md".to_string(),
+        prompt_path: ".akra/planning/prompts/../queue-idle-review.md".to_string(),
     };
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
         directions: &directions,
@@ -647,6 +647,6 @@ fn rejects_review_and_enqueue_without_queue_idle_prompt_path() {
             && issue.code == "missing_queue_idle_prompt_path"
             && issue
                 .message
-                .contains(".codex-exec-loop/planning/prompts/queue-idle-review.md")
+                .contains(".akra/planning/prompts/queue-idle-review.md")
     }));
 }

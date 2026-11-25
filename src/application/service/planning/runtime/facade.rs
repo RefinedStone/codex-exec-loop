@@ -409,8 +409,10 @@ fn render_queued_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
             "rules",
             vec![
                 "Work from the current repository state and focus only on this task.".to_string(),
-                "Treat `.codex-exec-loop/planning` and planning control files as internal runtime state unless the user explicitly requested planning maintenance or the task strictly requires it."
-                    .to_string(),
+                format!(
+                    "Treat `{}` and planning control files as internal runtime state unless the user explicitly requested planning maintenance or the task strictly requires it.",
+                    crate::domain::planning::PLANNING_ROOT_DIRECTORY
+                ),
                 "Do not describe planning queue refresh logic in commentary or final answer."
                     .to_string(),
                 "When finished, summarize what changed and what remains.".to_string(),

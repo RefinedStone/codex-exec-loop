@@ -17,7 +17,7 @@ Akra는 시작 진단, 세션 재개, 프롬프트 스트리밍, 승인된 plann
 | Gateway daemon | `akra-gateway`가 로컬 클라이언트를 Gateway 소유 `codex app-server`에 연결하고 저장소 kernel을 실행합니다. |
 | Akra Desktop | `desktop/`의 Electron 클라이언트로 `akra-gateway`에 연결합니다. 개발판만 있습니다. 소스에서 실행합니다(`npm --prefix desktop ci` 후 `npm --prefix desktop run dev`). 설치 패키지는 아직 없습니다. |
 | Core runtime | 시작, 세션, turn 제출, stream, 완료, post-turn 평가를 위한 headless command/effect/completion/snapshot 흐름입니다. |
-| Planning | SQLite 권한 저장소와 `.codex-exec-loop/planning/` 아래의 staged planning 산출물을 사용합니다. |
+| Planning | SQLite 권한 저장소와 `.akra/planning/` 아래의 staged planning 산출물을 사용합니다. |
 | Parallel mode | 보호된 worktree 3개, worker lease, 공식 완료 갱신, 검토된 GitHub 전달, 통합, 정리를 관리합니다. |
 | CLI/자동화 | planning 상태·queue·reset, 구조화 planning mutation, 수동 distributor tick을 제공합니다. |
 | Admin/Telegram | 같은 application service 위에서 loopback Admin UI/API와 allowlist 기반 Telegram 제어를 제공합니다. |
@@ -101,8 +101,11 @@ capability 기반 login/CSRF 경계를 사용합니다. Telegram은 bot token과
 - Planning 권한은 `${AKRA_HOME:-~/.akra}/projects/<project>/runtime/` 아래에 저장됩니다.
 - Git 저장소는 canonical Git common directory의 owner-private incarnation marker로 식별됩니다.
   따라서 linked worktree는 권한을 공유하고 새 clone은 분리됩니다.
-- `.codex-exec-loop/planning/`에는 운영자가 작성한 상세 문서, prompt, staged draft, 거부 기록이
-  들어갑니다. task 권한 DB는 아닙니다.
+- `.akra/planning/`에는 운영자가 작성한 상세 문서, prompt, staged draft, 거부 기록이
+  들어갑니다. task 권한 DB는 아닙니다. `.akra/runtime/`에는 비공개 잠금과 로그가 있으며 커밋하지 않습니다.
+- #2588 이전 작업 폴더는 `.codex-exec-loop/`를 썼습니다. 저장소 커널 잠금을 잡은 프로세스가
+  `planning/`, `runtime/`, `followups/`를 `.akra/`로 옮기고 저장된 경로를 한 번 바꿉니다. 옮겨진 파일은
+  커밋하십시오. 두 디렉터리에 같은 항목이 있으면 Akra는 두 경로를 알리고 멈춥니다. 하나만 남기고 다시 시작하십시오.
 - `AKRA_APP_SERVER_PROMPT_LOG=1`은 제한된 prompt/response 진단을 활성화합니다. Trace JSONL은
   별도 opt-in이며 body를 기록하지 않습니다.
 - 전역 설정은 `${AKRA_HOME:-~/.akra}/config.toml`, Git worktree 설정은

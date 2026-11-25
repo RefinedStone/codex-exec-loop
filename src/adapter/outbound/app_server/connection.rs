@@ -8013,7 +8013,7 @@ mod tests {
     fn terminal_delivery_bounds_all_receipt_fields_before_projection() {
         let oversized_thread_id = format!("thread-{}", "t".repeat(8 * 1024));
         let oversized_turn_id = format!("turn-{}", "u".repeat(8 * 1024));
-        let oversized_path = format!(".codex-exec-loop/planning/{}.md", "p".repeat(32 * 1024));
+        let oversized_path = format!(".akra/planning/{}.md", "p".repeat(32 * 1024));
         let oversized_items_view = "future-view-".repeat(8 * 1024);
         let upstream_receipt = ConversationTurnTerminalReceipt::completed(
             oversized_thread_id.clone(),
@@ -8229,7 +8229,7 @@ mod tests {
                         "status": "completed",
                         "changes": [
                             {
-                                "path": ".codex-exec-loop/planning/result-output.md",
+                                "path": ".akra/planning/result-output.md",
                                 "diff": "",
                                 "kind": {
                                     "type": "update"

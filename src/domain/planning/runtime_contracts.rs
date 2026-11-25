@@ -301,7 +301,7 @@ impl ExecutionSnapshot {
     }
 }
 
-pub const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
+pub const RESULT_OUTPUT_FILE_PATH: &str = ".akra/planning/result-output.md";
 pub const ACTIVE_PLANNING_FILE_PATHS: [&str; 1] = [RESULT_OUTPUT_FILE_PATH];
 
 pub fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {

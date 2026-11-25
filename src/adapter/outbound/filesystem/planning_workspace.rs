@@ -14,14 +14,14 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::domain::planning::{
     ACTIVE_PLANNING_FILE_PATHS, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
-    RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path, validate_planning_draft_name,
+    PLANNING_ROOT_PREFIX, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
+    validate_planning_draft_name,
 };
 
 use super::secure_fs;
 
 #[cfg(not(windows))]
-const FILE_SYNC_MANIFEST_PATH: &str =
-    ".codex-exec-loop/planning/.akra-file-sync-result-output.json";
+const FILE_SYNC_MANIFEST_PATH: &str = ".akra/planning/.akra-file-sync-result-output.json";
 
 #[cfg(not(windows))]
 #[derive(Debug, Serialize, Deserialize)]
@@ -170,7 +170,7 @@ impl FilesystemPlanningWorkspaceAdapter {
         let normalized = active_path.replace('\\', "/");
         let normalized = normalized.trim_start_matches("./");
         let relative_path = normalized
-            .strip_prefix(".codex-exec-loop/planning/")
+            .strip_prefix(PLANNING_ROOT_PREFIX)
             .unwrap_or(normalized);
         normalize_workspace_relative_path(
             relative_path,
@@ -181,7 +181,7 @@ impl FilesystemPlanningWorkspaceAdapter {
     fn canonical_draft_active_path(active_path: &str) -> Result<String> {
         // promotion code는 active path가 canonical planning namespace에 있다고 가정하므로 draft-relative path를 다시 prefix한다.
         Ok(format!(
-            ".codex-exec-loop/planning/{}",
+            "{PLANNING_ROOT_PREFIX}{}",
             Self::draft_relative_path(active_path)?
         ))
     }
@@ -342,7 +342,13 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
                 })?;
                 let manifest: PlanningFileSyncManifest = serde_json::from_str(&manifest)
                     .context("failed to decode planning file-sync manifest; export again")?;
-                if manifest.relative_path != relative_path {
+                // A manifest exported before #2588 still names the `.codex-exec-loop/` path.
+                let exported_path =
+                    crate::domain::planning::workspace_contract::relocate_legacy_workspace_path(
+                        &manifest.relative_path,
+                    )
+                    .unwrap_or(manifest.relative_path);
+                if exported_path != relative_path {
                     bail!(
                         "planning file-sync manifest does not match the exported path; export again"
                     );
@@ -446,7 +452,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         let mut staged_files = secure_fs::read_tree(Path::new(workspace_dir), &draft_relative)?
             .into_iter()
             .map(|(relative_path, body)| PlanningDraftLoadFileRecord {
-                active_path: format!(".codex-exec-loop/planning/{relative_path}"),
+                active_path: format!("{PLANNING_ROOT_PREFIX}{relative_path}"),
                 staged_path: draft_directory.join(&relative_path).display().to_string(),
                 body,
             })
@@ -970,7 +976,7 @@ mod tests {
                 .contains("invalid planning draft name `../outside`")
         );
         assert!(
-            !workspace.join(".codex-exec-loop/planning/outside").exists(),
+            !workspace.join(".akra/planning/outside").exists(),
             "invalid draft name must not escape the drafts directory"
         );
 
@@ -1014,7 +1020,7 @@ mod tests {
             std::process::id()
         ));
         let workspace = root.join("workspace");
-        let planning = workspace.join(".codex-exec-loop/planning");
+        let planning = workspace.join(".akra/planning");
         std::fs::create_dir_all(&planning).expect("planning fixture should be created");
         let victim = root.join("victim.txt");
         std::fs::write(&victim, "do not touch").expect("victim should be seeded");
@@ -1065,7 +1071,7 @@ mod tests {
             std::process::id()
         ));
         let workspace = root.join("workspace");
-        let drafts = workspace.join(".codex-exec-loop/planning/drafts");
+        let drafts = workspace.join(".akra/planning/drafts");
         let victim = root.join("victim");
         std::fs::create_dir_all(&drafts).expect("draft fixture should be created");
         std::fs::create_dir_all(&victim).expect("victim directory should be created");
@@ -1078,7 +1084,7 @@ mod tests {
         adapter
             .remove_planning_workspace_entry(
                 workspace.to_str().expect("workspace should be utf8"),
-                ".codex-exec-loop/planning/drafts",
+                ".akra/planning/drafts",
             )
             .expect_err("tree removal must reject nested symlinks");
 
@@ -1101,7 +1107,7 @@ mod tests {
             "codex-exec-loop-fs-quarantine-test-{}-{unique_suffix}",
             std::process::id()
         ));
-        let draft = workspace.join(".codex-exec-loop/planning/drafts/review");
+        let draft = workspace.join(".akra/planning/drafts/review");
         std::fs::create_dir_all(draft.join("nested")).expect("draft fixture should be created");
         std::fs::write(draft.join("prompt.md"), "preserved prompt")
             .expect("prompt fixture should be seeded");
@@ -1112,12 +1118,12 @@ mod tests {
         adapter
             .remove_planning_workspace_entry(
                 workspace.to_str().expect("workspace should be utf8"),
-                ".codex-exec-loop/planning/drafts/review",
+                ".akra/planning/drafts/review",
             )
             .expect("valid planning tree should move into quarantine");
 
         assert!(!draft.exists(), "logical planning path should be removed");
-        let quarantine = workspace.join(".codex-exec-loop/runtime/planning-quarantine");
+        let quarantine = workspace.join(".akra/runtime/planning-quarantine");
         let retained = std::fs::read_dir(&quarantine)
             .expect("quarantine should exist")
             .collect::<Result<Vec<_>, _>>()
@@ -1146,13 +1152,13 @@ mod tests {
             "codex-exec-loop-fs-quarantine-limit-test-{}-{unique_suffix}",
             std::process::id()
         ));
-        let planning = workspace.join(".codex-exec-loop/planning");
+        let planning = workspace.join(".akra/planning");
         std::fs::create_dir_all(&planning).expect("planning fixture should be created");
         let workspace_dir = workspace.to_str().expect("workspace should be utf8");
         let adapter = FilesystemPlanningWorkspaceAdapter::new();
 
         for index in 0..16 {
-            let relative = format!(".codex-exec-loop/planning/stale-{index}.md");
+            let relative = format!(".akra/planning/stale-{index}.md");
             std::fs::write(workspace.join(&relative), format!("stale {index}"))
                 .expect("stale planning file should be seeded");
             adapter
@@ -1160,7 +1166,7 @@ mod tests {
                 .expect("retention below the entry limit should succeed");
         }
 
-        let final_relative = ".codex-exec-loop/planning/must-remain.md";
+        let final_relative = ".akra/planning/must-remain.md";
         let final_path = workspace.join(final_relative);
         std::fs::write(&final_path, "must remain").expect("final planning file should be seeded");
         let error = adapter
@@ -1169,7 +1175,7 @@ mod tests {
         assert!(error.to_string().contains("operator cleanup is required"));
         assert_eq!(std::fs::read_to_string(&final_path).unwrap(), "must remain");
         assert_eq!(
-            std::fs::read_dir(workspace.join(".codex-exec-loop/runtime/planning-quarantine"))
+            std::fs::read_dir(workspace.join(".akra/runtime/planning-quarantine"))
                 .unwrap()
                 .count(),
             16
@@ -1205,7 +1211,7 @@ mod tests {
                 "rejected body",
             )
             .expect("rejected file should archive in the repo DB");
-        let archived_relative = ".codex-exec-loop/planning/rejected/rejected-1/result-output.md";
+        let archived_relative = ".akra/planning/rejected/rejected-1/result-output.md";
         assert_eq!(archived, archived_relative);
         assert_eq!(
             sqlite
@@ -1219,16 +1225,13 @@ mod tests {
         sqlite
             .replace_active_planning_file(
                 workspace_dir,
-                ".codex-exec-loop/planning/supporting.md",
+                ".akra/planning/supporting.md",
                 Some("supporting body"),
             )
             .expect("supporting DB document should persist");
         assert_eq!(
             adapter
-                .load_optional_planning_file(
-                    workspace_dir,
-                    ".codex-exec-loop/planning/supporting.md",
-                )
+                .load_optional_planning_file(workspace_dir, ".akra/planning/supporting.md",)
                 .expect("supporting DB document should load")
                 .as_deref(),
             Some("supporting body")
@@ -1455,7 +1458,7 @@ mod tests {
             "codex-exec-loop-fs-windows-closed-test-{}-{unique_suffix}",
             std::process::id()
         ));
-        let planning = workspace.join(".codex-exec-loop/planning");
+        let planning = workspace.join(".akra/planning");
         std::fs::create_dir_all(&planning).expect("planning fixture should be created");
         let target = workspace.join(RESULT_OUTPUT_FILE_PATH);
         std::fs::write(&target, "unchanged").expect("target should be seeded");

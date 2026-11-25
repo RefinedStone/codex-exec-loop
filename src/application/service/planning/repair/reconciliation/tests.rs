@@ -204,8 +204,8 @@ fn repair_prompt_requests_task_command_payload_from_db_authority() {
 #[test]
 fn reconciliation_change_set_only_tracks_active_result_output_paths() {
     let changed_paths = vec![
-        "/tmp/workspace/.codex-exec-loop/planning/result-output.md".to_string(),
-        ".codex-exec-loop/planning/DB task authority".to_string(),
+        "/tmp/workspace/.akra/planning/result-output.md".to_string(),
+        ".akra/planning/DB task authority".to_string(),
         "src/main.rs".to_string(),
     ];
     let change_set = PlanningChangeSet::from_paths(&changed_paths);
@@ -213,8 +213,8 @@ fn reconciliation_change_set_only_tracks_active_result_output_paths() {
     assert!(change_set.result_output_changed);
 
     let unrelated_paths = vec![
-        ".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string(),
-        ".codex-exec-loop/planning/directions/core.md".to_string(),
+        ".akra/planning/prompts/queue-idle-review.md".to_string(),
+        ".akra/planning/directions/core.md".to_string(),
     ];
     let unrelated_change_set = PlanningChangeSet::from_paths(&unrelated_paths);
 

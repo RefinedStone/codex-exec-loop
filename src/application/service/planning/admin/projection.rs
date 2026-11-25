@@ -628,7 +628,7 @@ mod tests {
                 ),
                 direction_summary(
                     "dir-ready",
-                    Some(".codex-exec-loop/planning/directions/ready.md"),
+                    Some(".akra/planning/directions/ready.md"),
                     DirectionsSupportingFileStatus::Ready,
                 ),
                 direction_summary(
@@ -640,7 +640,7 @@ mod tests {
             missing_detail_doc_count: 1,
             broken_detail_doc_count: 1,
             queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
-            queue_idle_prompt_path: Some(".codex-exec-loop/planning/prompts/queue.md".to_string()),
+            queue_idle_prompt_path: Some(".akra/planning/prompts/queue.md".to_string()),
             queue_idle_prompt_status: DirectionsSupportingFileStatus::BrokenMapping,
             parse_error: Some("directions did not parse".to_string()),
         };
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(view.queue_idle_policy, "review_and_enqueue");
         assert_eq!(
             view.queue_idle_prompt_path.as_deref(),
-            Some(".codex-exec-loop/planning/prompts/queue.md")
+            Some(".akra/planning/prompts/queue.md")
         );
         assert_eq!(view.queue_idle_prompt_status, "broken");
         assert_eq!(
@@ -733,7 +733,7 @@ mod tests {
             summary: format!("Summary for {id}"),
             success_criteria: vec!["done".to_string(), "verified".to_string()],
             scope_hints: vec!["scope-a".to_string(), "scope-b".to_string()],
-            detail_doc_path: format!(".codex-exec-loop/planning/directions/{id}.md"),
+            detail_doc_path: format!(".akra/planning/directions/{id}.md"),
             state,
         }
     }

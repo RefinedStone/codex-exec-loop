@@ -43,19 +43,34 @@ impl PlanningResetRequest {
     }
 }
 
+/*
+ * Akra가 작업 폴더 안에 두는 디렉터리 이름은 여기 한 곳에서 정한다 (#2588).
+ * `.akra/`에는 프로젝트 설정과 정책 파일(`config.toml`, `issue-policy.toml`, `issue-automation.toml`,
+ * `parallel-agent-profiles.json`, `delegation.toml`)도 있다. 아래 하위 디렉터리 이름은 그 파일들과 겹치지 않는다.
+ * 다른 곳의 경로 상수는 이 값으로 시작해야 한다. tests의 `workspace_paths_share_one_root`가 이를 지킨다.
+ */
+pub const AKRA_WORKSPACE_DIRECTORY: &str = ".akra";
+// #2588 이전의 작업 폴더 디렉터리이다. 작업 폴더와 DB의 이전(migration) 코드만 이 이름을 읽는다.
+pub const LEGACY_WORKSPACE_DIRECTORY: &str = ".codex-exec-loop";
+// 이전 디렉터리에서 `.akra/`로 옮기는 하위 디렉터리이다.
+pub const RELOCATED_WORKSPACE_ENTRIES: [&str; 3] = ["planning", "runtime", "followups"];
+// planning 파일의 기준 디렉터리이다. 저장된 상대 경로는 모두 이 접두어로 시작한다.
+pub const PLANNING_ROOT_DIRECTORY: &str = ".akra/planning";
+pub const PLANNING_ROOT_PREFIX: &str = ".akra/planning/";
+// runtime 디렉터리는 잠금, 격리(quarantine), trace log 같은 비공개 상태를 둔다. Git에 올리지 않는다.
+pub const PLANNING_RUNTIME_DIRECTORY: &str = ".akra/runtime";
 // result-output은 현재 accepted planning state를 대표하는 active planning artifact이다. admin draft,
 // runtime validation, workspace adapter가 같은 domain runtime contract를 보도록 여기서 재수출한다.
 // direction detail docs는 direction catalog의 항목별 상세 설명을 markdown으로 저장하는 디렉터리이다.
-pub const PLANNING_DIRECTION_DOCS_DIRECTORY: &str = ".codex-exec-loop/planning/directions";
+pub const PLANNING_DIRECTION_DOCS_DIRECTORY: &str = ".akra/planning/directions";
 // prompt directory는 planning worker와 queue-idle review prompt 같은 prompt artifacts의 기준 위치이다.
-pub const PLANNING_PROMPTS_DIRECTORY: &str = ".codex-exec-loop/planning/prompts";
+pub const PLANNING_PROMPTS_DIRECTORY: &str = ".akra/planning/prompts";
 // queue-idle prompt는 queue에 active task가 없을 때 다음 planning response를 유도하는 기본 prompt이다.
-pub const DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH: &str =
-    ".codex-exec-loop/planning/prompts/queue-idle-review.md";
+pub const DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH: &str = ".akra/planning/prompts/queue-idle-review.md";
 // drafts directory는 accepted state에 쓰기 전 operator/admin이 검토하는 staged planning files를 둔다.
-pub const PLANNING_DRAFTS_DIRECTORY: &str = ".codex-exec-loop/planning/drafts";
+pub const PLANNING_DRAFTS_DIRECTORY: &str = ".akra/planning/drafts";
 // rejected directory는 validation이나 operator review에서 받아들이지 않은 planning output을 보관한다.
-pub const PLANNING_REJECTED_DIRECTORY: &str = ".codex-exec-loop/planning/rejected";
+pub const PLANNING_REJECTED_DIRECTORY: &str = ".akra/planning/rejected";
 // draft name은 filesystem directory segment로도 쓰이므로 common filesystem filename limit 아래에 둔다.
 pub const PLANNING_DRAFT_NAME_MAX_BYTES: usize = 255;
 
@@ -121,6 +136,19 @@ pub fn default_direction_detail_doc_path(direction_id: &str) -> String {
     )
 }
 
+/*
+ * 이전 작업 폴더 경로(`.codex-exec-loop/<x>`)를 현재 경로(`.akra/<x>`)로 바꾼다. 이전 경로가 아니면 None이다.
+ * 이전 이후에도 남아 있을 수 있는 기록(예: file-sync manifest)을 읽을 때 쓴다.
+ */
+// Only the Unix direct-filesystem file-sync manifest reads it; Windows keeps that baseline in SQLite.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn relocate_legacy_workspace_path(path: &str) -> Option<String> {
+    let rest = path
+        .strip_prefix(LEGACY_WORKSPACE_DIRECTORY)?
+        .strip_prefix('/')?;
+    Some(format!("{AKRA_WORKSPACE_DIRECTORY}/{rest}"))
+}
+
 // workspace contract tests keep path and storage identity rules in the pure domain layer.
 #[cfg(test)]
 mod tests {
@@ -140,21 +168,55 @@ mod tests {
         assert_eq!(
             // workspace absolute path라도 active planning suffix가 directory boundary에 맞으면
             // canonical relative path로 접힌다.
-            canonical_active_planning_file_path(
-                "/tmp/workspace/.codex-exec-loop/planning/result-output.md"
-            ),
+            canonical_active_planning_file_path("/tmp/workspace/.akra/planning/result-output.md"),
             Some(RESULT_OUTPUT_FILE_PATH)
         );
         assert!(
             // Windows separator는 정규화되지만, raw DB task authority path는 active allowlist에 없으므로
             // None이어야 한다.
-            canonical_active_planning_file_path(
-                r"C:\workspace\.codex-exec-loop\planning\DB task authority"
-            )
-            .is_none()
+            canonical_active_planning_file_path(r"C:\workspace\.akra\planning\DB task authority")
+                .is_none()
         );
         // 일반 repo source file은 planning artifact suffix가 없으므로 active planning file이 아니다.
         assert!(canonical_active_planning_file_path("src/main.rs").is_none());
+    }
+
+    #[test]
+    fn workspace_paths_share_one_root() {
+        use super::*;
+        assert_eq!(
+            PLANNING_ROOT_DIRECTORY,
+            format!("{AKRA_WORKSPACE_DIRECTORY}/planning")
+        );
+        assert_eq!(PLANNING_ROOT_PREFIX, format!("{PLANNING_ROOT_DIRECTORY}/"));
+        assert_eq!(
+            PLANNING_RUNTIME_DIRECTORY,
+            format!("{AKRA_WORKSPACE_DIRECTORY}/runtime")
+        );
+        for path in [
+            RESULT_OUTPUT_FILE_PATH,
+            PLANNING_DIRECTION_DOCS_DIRECTORY,
+            PLANNING_PROMPTS_DIRECTORY,
+            DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH,
+            PLANNING_DRAFTS_DIRECTORY,
+            PLANNING_REJECTED_DIRECTORY,
+        ] {
+            assert!(path.starts_with(PLANNING_ROOT_PREFIX), "{path}");
+        }
+    }
+
+    #[test]
+    fn legacy_workspace_paths_relocate_only_at_the_directory_boundary() {
+        use super::relocate_legacy_workspace_path;
+        assert_eq!(
+            relocate_legacy_workspace_path(".codex-exec-loop/planning/result-output.md").as_deref(),
+            Some(".akra/planning/result-output.md")
+        );
+        assert_eq!(
+            relocate_legacy_workspace_path(".codex-exec-loop-copy/planning/x.md"),
+            None
+        );
+        assert_eq!(relocate_legacy_workspace_path(".akra/planning/x.md"), None);
     }
 
     #[test]

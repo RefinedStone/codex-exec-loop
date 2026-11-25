@@ -1054,7 +1054,7 @@ mod tests {
         // editor에는 result-output만 들어가야 한다.
         assert!(is_operator_editable_draft_path(RESULT_OUTPUT_FILE_PATH));
         assert!(!is_operator_editable_draft_path(
-            ".codex-exec-loop/planning/direction-authority"
+            ".akra/planning/direction-authority"
         ));
         assert!(!is_operator_editable_draft_path("DB task authority"));
     }

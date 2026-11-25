@@ -23,6 +23,6 @@ test-results/
 blob-report/
 npm/vendor/
 npm/.staging/
-.codex-exec-loop/runtime/
-.codex-exec-loop/planning/.akra-file-sync-result-output.json
+.akra/runtime/
+.akra/planning/.akra-file-sync-result-output.json
 .reference

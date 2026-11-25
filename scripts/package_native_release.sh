@@ -458,7 +458,7 @@ create_reproducible_archive() {
 }
 
 write_bundle_launcher
-copy_tracked_paths examples .codex-exec-loop/followups
+copy_tracked_paths examples .akra/followups
 write_bundle_checksums > "${bundle_checksum_path}"
 normalize_bundle_metadata
 write_archive_member_list

@@ -727,7 +727,7 @@ mod tests {
     fn runtime_projection_discards_stale_stored_queue_and_validates_supporting_files() {
         let workspace = unique_workspace("stale-stored-queue");
         let repository = Arc::new(NoopPlanningTaskRepositoryPort);
-        let detail_doc_path = ".codex-exec-loop/planning/directions/general-workstream.md";
+        let detail_doc_path = ".akra/planning/directions/general-workstream.md";
         let directions = directions(detail_doc_path);
         let task_authority = empty_task_authority();
         seed_authority(
@@ -769,9 +769,7 @@ mod tests {
                 .prompt_fragment
                 .as_deref()
                 .expect("prompt fragment should be present")
-                .contains(
-                    "detail_doc_path=.codex-exec-loop/planning/directions/general-workstream.md"
-                )
+                .contains("detail_doc_path=.akra/planning/directions/general-workstream.md")
         );
     }
 

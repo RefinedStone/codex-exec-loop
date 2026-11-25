@@ -152,7 +152,7 @@ mod tests {
         )
         .with_queue_idle_policy(
             QueueIdlePolicy::ReviewAndEnqueue,
-            Some(".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string()),
+            Some(".akra/planning/prompts/queue-idle-review.md".to_string()),
         )
         .with_planning_revision(Some(11))
         .with_test_signatures(Some(42), Some(7));

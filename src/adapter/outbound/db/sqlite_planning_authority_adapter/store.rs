@@ -26,9 +26,9 @@ use crate::application::port::outbound::review_center_repository_port::{
 };
 use crate::domain::parallel_mode::PrValidationRecord;
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
-    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, RESULT_OUTPUT_FILE_PATH,
-    TaskAuthorityDocument,
+    AKRA_WORKSPACE_DIRECTORY, DirectionCatalogDocument, LEGACY_WORKSPACE_DIRECTORY,
+    PLANNING_FORMAT_VERSION, PlanningAuthorityLocation, PriorityQueueProjection,
+    PriorityQueueSkippedTask, PriorityQueueTask, RESULT_OUTPUT_FILE_PATH, TaskAuthorityDocument,
 };
 
 use super::{
@@ -485,6 +485,9 @@ pub(super) fn ensure_schema(
     if previous_schema_version.is_some_and(|version| version < 14) {
         migrate_pr_validation_review_watch_projection(&transaction)?;
     }
+    if previous_schema_version.is_some_and(|version| version < 21) {
+        migrate_legacy_workspace_directory_paths(&transaction)?;
+    }
     upsert_metadata(
         &transaction,
         "schema_version",
@@ -859,6 +862,57 @@ fn migrate_pr_validation_scheduler_projection(connection: &Connection) -> Result
                 format!("failed to migrate PR validation scheduler record `{record_key}`")
             })?;
     }
+    Ok(())
+}
+
+/*
+#2588: 작업 폴더의 Akra 디렉터리가 `.codex-exec-loop/`에서 `.akra/`로 바뀌었다. 저장된 작업 폴더 상대 경로의
+접두어를 schema migration transaction 안에서 한 번 바꾼다. 같은 transaction이 `schema_version` 21을 기록하므로
+두 번째 열기에서는 실행되지 않는다. 실패하면 transaction 전체가 되돌아가 원래 행이 남는다.
+
+경로를 열쇠나 참조로 쓰는 열만 바꾼다. 실행 기록(`runtime_events`, `app_server_prompt_interactions`,
+`kernel_events`)과 문서 본문은 그때의 사실이므로 바꾸지 않는다.
+*/
+pub(super) const WORKSPACE_PATH_COLUMNS: [(&str, &str); 6] = [
+    ("shadow_documents", "relative_path"),
+    ("staged_draft_files", "active_path"),
+    ("planning_file_sync_baselines", "relative_path"),
+    ("active_documents", "relative_path"),
+    ("planning_direction_config", "queue_idle_prompt_path"),
+    ("planning_directions", "detail_doc_path"),
+];
+
+fn migrate_legacy_workspace_directory_paths(connection: &Connection) -> Result<()> {
+    let legacy = format!("{LEGACY_WORKSPACE_DIRECTORY}/");
+    let current = format!("{AKRA_WORKSPACE_DIRECTORY}/");
+    // `LIKE` treats `_` and `%` as wildcards, so the prefix check compares exact characters.
+    for (table, column) in WORKSPACE_PATH_COLUMNS {
+        connection
+            .execute(
+                &format!(
+                    "UPDATE {table} SET {column} = ?2 || substr({column}, length(?1) + 1)
+                     WHERE substr({column}, 1, length(?1)) = ?1"
+                ),
+                params![legacy, current],
+            )
+            .with_context(|| {
+                format!("failed to move `{table}.{column}` to the `{current}` workspace directory")
+            })?;
+    }
+    // The direction row also keeps the path inside the JSON that load deserializes.
+    connection
+        .execute(
+            "UPDATE planning_directions
+             SET content_json = json_set(
+                 content_json,
+                 '$.detail_doc_path',
+                 ?2 || substr(json_extract(content_json, '$.detail_doc_path'), length(?1) + 1)
+             )
+             WHERE json_valid(content_json)
+               AND substr(json_extract(content_json, '$.detail_doc_path'), 1, length(?1)) = ?1",
+            params![legacy, current],
+        )
+        .context("failed to move direction detail paths to the `.akra/` workspace directory")?;
     Ok(())
 }
 

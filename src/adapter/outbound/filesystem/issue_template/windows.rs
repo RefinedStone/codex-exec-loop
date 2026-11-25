@@ -201,7 +201,7 @@ fn reject_canonical_private_runtime(canonical_root: &Path, directory: &Path) -> 
 }
 
 fn reject_private_runtime(components: &[&str], reject_ancestors: bool) -> Result<()> {
-    const RUNTIME: [&str; 2] = [".codex-exec-loop", "runtime"];
+    const RUNTIME: [&str; 2] = [crate::domain::planning::AKRA_WORKSPACE_DIRECTORY, "runtime"];
     let is_prefix = components
         .iter()
         .zip(RUNTIME)

@@ -273,14 +273,14 @@ mod tests {
             version: PLANNING_FORMAT_VERSION,
             queue_idle: QueueIdleConfig {
                 policy: QueueIdlePolicy::ReviewAndEnqueue,
-                prompt_path: " .codex-exec-loop/planning/prompts/queue-idle.md ".to_string(),
+                prompt_path: " .akra/planning/prompts/queue-idle.md ".to_string(),
             },
             directions: vec![
                 direction(
                     "general-workstream",
                     "General",
                     DirectionState::Active,
-                    " .codex-exec-loop/planning/directions/general.md ",
+                    " .akra/planning/directions/general.md ",
                 ),
                 direction("paused-workstream", "Paused", DirectionState::Paused, ""),
                 direction("done-workstream", "Done", DirectionState::Done, "   "),
@@ -320,12 +320,10 @@ mod tests {
         assert!(fragment.contains("state=active"));
         assert!(fragment.contains("state=paused"));
         assert!(fragment.contains("state=done"));
-        assert!(
-            fragment.contains("detail_doc_path=.codex-exec-loop/planning/directions/general.md")
-        );
+        assert!(fragment.contains("detail_doc_path=.akra/planning/directions/general.md"));
         assert_eq!(fragment.matches("detail_doc_path=").count(), 1);
         assert!(fragment.contains("policy=review_and_enqueue"));
-        assert!(fragment.contains("prompt_path=.codex-exec-loop/planning/prompts/queue-idle.md"));
+        assert!(fragment.contains("prompt_path=.akra/planning/prompts/queue-idle.md"));
         assert!(fragment.contains(
             "next_task=rank 1; id=task-1; title=Next task; direction=general-workstream; status=ready; combined_priority=89"
         ));

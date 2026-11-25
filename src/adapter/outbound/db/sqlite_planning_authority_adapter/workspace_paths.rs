@@ -341,7 +341,7 @@ pub(super) fn draft_display_path(
     let draft_relative_path = active_path
         .replace('\\', "/")
         .trim_start_matches("./")
-        .trim_start_matches(".codex-exec-loop/planning/")
+        .trim_start_matches(crate::domain::planning::PLANNING_ROOT_PREFIX)
         .to_string();
     format!(
         "{}#drafts/{draft_name}/{draft_relative_path}",

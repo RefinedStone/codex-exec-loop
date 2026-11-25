@@ -432,17 +432,14 @@ fn windows_reader_does_not_treat_a_raced_entry_as_missing() {
 #[test]
 fn windows_reader_preserves_private_runtime_exclusion_case_insensitively() {
     let fixture = Fixture::new();
-    fixture.write(
-        ".codex-exec-loop/runtime/private.md",
-        b"## Private\nnot a template\n",
-    );
-    fixture.write(".codex-exec-loop/other.md", b"## Allowed\n");
+    fixture.write(".akra/runtime/private.md", b"## Private\nnot a template\n");
+    fixture.write(".akra/other.md", b"## Allowed\n");
     for relative in [
-        ".codex-exec-loop",
-        ".codex-exec-loop/runtime",
-        ".codex-exec-loop/runtime/private.md",
-        ".CODEX-EXEC-LOOP/RUNTIME/private.md",
-        r".CoDeX-ExEc-LoOp\RuNtImE\private.md",
+        ".akra",
+        ".akra/runtime",
+        ".akra/runtime/private.md",
+        ".AKRA/RUNTIME/private.md",
+        r".AkRa\RuNtImE\private.md",
     ] {
         let error = fixture.read(relative).unwrap_err();
         assert!(
@@ -451,10 +448,7 @@ fn windows_reader_preserves_private_runtime_exclusion_case_insensitively() {
         );
     }
     assert_eq!(
-        fixture
-            .read(".codex-exec-loop/other.md")
-            .unwrap()
-            .as_deref(),
+        fixture.read(".akra/other.md").unwrap().as_deref(),
         Some("## Allowed\n")
     );
 }
@@ -487,7 +481,7 @@ fn windows_reader_rejects_available_dos_short_names_for_private_runtime() {
     }
 
     let fixture = Fixture::new();
-    let relative = ".codex-exec-loop/runtime/private.md";
+    let relative = ".akra/runtime/private.md";
     fixture.write(relative, b"## Private\nnot a template\n");
     let short_root = short_path(&fixture.workspace);
     let short_file = short_path(&fixture.workspace.join(relative));

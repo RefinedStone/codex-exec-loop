@@ -202,9 +202,10 @@ pub(super) fn build_detail_doc_selection_overlay_view(
          * 후에만 새 detail doc을 참조한다는 경계를 유지한다.
          */
         summary_lines: vec![
-            Line::from(
-                "Generated docs follow `.codex-exec-loop/planning/directions/<direction-id>.md`.",
-            ),
+            Line::from(format!(
+                "Generated docs follow `{}/<direction-id>.md`.",
+                crate::domain::planning::PLANNING_DIRECTION_DOCS_DIRECTORY
+            )),
             Line::from(
                 "The file and `detail_doc_path` mapping are staged first and only become active after promote.",
             ),
@@ -242,7 +243,8 @@ pub(super) fn build_detail_doc_confirm_overlay_view(
         summary_lines: vec![
             Line::from(format!("direction: {direction_title}")),
             Line::from(format!(
-                "default repair path: .codex-exec-loop/planning/directions/{direction_id}.md"
+                "default repair path: {}",
+                crate::domain::planning::default_direction_detail_doc_path(direction_id)
             )),
         ],
         // selected_choice는 controller state에서 온 값이라 키 이동, highlight, Enter behavior가 같은 source를 본다.

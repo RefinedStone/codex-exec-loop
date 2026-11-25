@@ -152,7 +152,7 @@ mod tests {
             4,
             "review",
             "broken",
-            ".codex-exec-loop/planning/prompts/queue-idle.md",
+            ".akra/planning/prompts/queue-idle.md",
             Some("line 3: invalid direction"),
         );
 
@@ -176,7 +176,7 @@ mod tests {
         let broken = direction_summary(
             "dir-beta",
             "Beta",
-            Some(".codex-exec-loop/planning/directions/dir-beta.md"),
+            Some(".akra/planning/directions/dir-beta.md"),
             DirectionsSupportingFileStatus::BrokenMapping,
         );
 
@@ -187,9 +187,11 @@ mod tests {
             line_text(&projection.option_lines[0])
                 .contains("id=dir-alpha / status=unset / path=<unset>")
         );
-        assert!(line_text(&projection.option_lines[1]).contains(
-            "id=dir-beta / status=broken / path=.codex-exec-loop/planning/directions/dir-beta.md"
-        ));
+        assert!(
+            line_text(&projection.option_lines[1]).contains(
+                "id=dir-beta / status=broken / path=.akra/planning/directions/dir-beta.md"
+            )
+        );
         assert_eq!(
             projection.option_lines[1].spans[0].style,
             AkraTheme::selected()
@@ -217,8 +219,7 @@ mod tests {
         );
         assert!(section_text(&confirm.summary_lines).contains("direction: Alpha"));
         assert!(
-            section_text(&confirm.summary_lines)
-                .contains(".codex-exec-loop/planning/directions/dir-alpha.md")
+            section_text(&confirm.summary_lines).contains(".akra/planning/directions/dir-alpha.md")
         );
         assert_eq!(
             confirm.option_lines[0].spans[0].style,

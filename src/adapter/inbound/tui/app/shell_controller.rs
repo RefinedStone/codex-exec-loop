@@ -2823,7 +2823,7 @@ mod tests {
                 ),
                 draft_directory: "/tmp/root/directions-draft".to_string(),
                 editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
-                    active_path: ".codex-exec-loop/planning/directions.md".to_string(),
+                    active_path: ".akra/planning/directions.md".to_string(),
                     staged_path: "/tmp/root/directions-draft/directions.md".to_string(),
                     body: "preserve this editor body".to_string(),
                 }],

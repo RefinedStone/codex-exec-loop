@@ -1347,7 +1347,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
         repo.join("assets/app-server/skills/fixture"),
         repo.join("assets/admin/fonts"),
         repo.join("examples"),
-        repo.join(".codex-exec-loop/followups"),
+        repo.join(".akra/followups"),
         bin_dir.clone(),
         home_dir.clone(),
     ] {
@@ -1401,7 +1401,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
     fs::write(repo.join("examples/README.md"), "fixture example\n")
         .expect("fixture example should be written");
     fs::write(
-        repo.join(".codex-exec-loop/followups/10-review-queue.md"),
+        repo.join(".akra/followups/10-review-queue.md"),
         "fixture followup\n",
     )
     .expect("fixture followup should be written");
@@ -1426,7 +1426,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
                 "scripts/gh-akra.sh",
                 "assets",
                 "examples",
-                ".codex-exec-loop",
+                ".akra",
             ],
         ),
         "stage release fixture inputs",
@@ -1857,7 +1857,7 @@ fn bundled_operator_prompts_use_documented_guardrails_and_db_authority() {
         assert!(prompt.contains("AGENTS.md"));
     }
 
-    let followup = fs::read_to_string(root.join(".codex-exec-loop/followups/10-review-queue.md"))
+    let followup = fs::read_to_string(root.join(".akra/followups/10-review-queue.md"))
         .expect("queue review followup should be readable");
     assert!(followup.contains("[accepted-db-task-authority]"));
     assert!(followup.contains("[db-queue-projection]"));
@@ -1866,7 +1866,7 @@ fn bundled_operator_prompts_use_documented_guardrails_and_db_authority() {
 
     let package_script = fs::read_to_string(root.join("scripts/package_native_release.sh"))
         .expect("native packaging script should be readable");
-    assert!(package_script.contains("copy_tracked_paths examples .codex-exec-loop/followups"));
+    assert!(package_script.contains("copy_tracked_paths examples .akra/followups"));
 }
 
 #[test]

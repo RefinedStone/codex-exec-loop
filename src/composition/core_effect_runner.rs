@@ -2010,7 +2010,7 @@ mod tests {
                     draft_name: draft_name.to_string(),
                     draft_directory: format!("{workspace_dir}/drafts/{draft_name}"),
                     staged_files: vec![PlanningDraftLoadFileRecord {
-                        active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                        active_path: ".akra/planning/result-output.md".to_string(),
                         staged_path: format!(
                             "{workspace_dir}/drafts/{draft_name}/result-output.md"
                         ),

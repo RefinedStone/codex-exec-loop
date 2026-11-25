@@ -1741,7 +1741,7 @@ mod terminal_receipt_tests {
 
     const THREAD_ID: &str = "thread-live";
     const TURN_ID: &str = "turn-live";
-    const RESULT_OUTPUT_PATH: &str = ".codex-exec-loop/planning/result-output.md";
+    const RESULT_OUTPUT_PATH: &str = ".akra/planning/result-output.md";
 
     #[test]
     fn structured_read_transcript_copy_is_collapsed_first_and_drops_raw_command() {

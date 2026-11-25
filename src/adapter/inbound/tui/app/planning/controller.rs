@@ -2275,7 +2275,7 @@ mod tests {
                 session_identity: session_identity.clone(),
                 draft_directory: format!("{workspace_directory}/drafts/{draft_name}"),
                 editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
-                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    active_path: ".akra/planning/result-output.md".to_string(),
                     staged_path: format!(
                         "{workspace_directory}/drafts/{draft_name}/result-output.md"
                     ),
@@ -2497,7 +2497,7 @@ mod tests {
         active_path: &str,
     ) -> PathBuf {
         let draft_relative_path = active_path
-            .strip_prefix(".codex-exec-loop/planning/")
+            .strip_prefix(".akra/planning/")
             .unwrap_or(active_path);
         workspace
             .path()
@@ -3540,7 +3540,7 @@ mod tests {
                     session_workspace.path_str()
                 ),
                 editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
-                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    active_path: ".akra/planning/result-output.md".to_string(),
                     staged_path: "draft-save-new-session/result-output.md".to_string(),
                     body: "# Result Output\n\n- New session body.\n".to_string(),
                 }],
@@ -3940,7 +3940,7 @@ mod tests {
                     session_workspace.path_str()
                 ),
                 editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
-                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    active_path: ".akra/planning/result-output.md".to_string(),
                     staged_path: "draft-promote-new-session/result-output.md".to_string(),
                     body: "# Result Output\n\n- New session body.\n".to_string(),
                 }],

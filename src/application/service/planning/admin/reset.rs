@@ -89,17 +89,17 @@ mod tests {
         assert_eq!(
             outcome.rewritten_paths,
             vec![
-                ".codex-exec-loop/planning/result-output.md",
-                ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+                ".akra/planning/result-output.md",
+                ".akra/planning/prompts/queue-idle-review.md",
             ]
         );
         assert_eq!(
             outcome.removed_paths,
             vec![
-                ".codex-exec-loop/planning/directions",
-                ".codex-exec-loop/planning/prompts",
-                ".codex-exec-loop/planning/drafts",
-                ".codex-exec-loop/planning/rejected",
+                ".akra/planning/directions",
+                ".akra/planning/prompts",
+                ".akra/planning/drafts",
+                ".akra/planning/rejected",
             ]
         );
         assert_eq!(outcome.doctor.planning_state, "ready_without_task");
