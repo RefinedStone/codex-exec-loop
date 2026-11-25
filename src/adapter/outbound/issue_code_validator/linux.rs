@@ -476,3 +476,6 @@ exit 1
         );
     }
 }
+
+#[cfg(test)]
+mod native_tests;
