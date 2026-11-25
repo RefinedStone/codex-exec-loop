@@ -25,3 +25,17 @@
 - planner 지정 Windows Admin gate 실행: **1,227 passed, 7 skipped, 1 failed**. 실패는 기존 `gitStatus.test.ts` stage/unstage/discard fixture의 5초 timeout이다. 같은 파일과 변경 회귀는 위 최종 직렬 실행에서 통과했다. 전체 gate 성공으로 표시하지 않으며 시간 제한·기존 fixture는 변경하지 않았다.
 - 독립 코드 리뷰에서 발견한 “결과 불명 요청의 재확인 취소”와 사유 수명 문제를 수정하고 최종 회귀에 포함했다.
 - `git diff --check` 통과. PR CI 결과는 별도로 확인한다.
+
+
+## 작업 작성·호스트 검증 PR과의 통합 검증
+
+#2727 → #2726 → 이 PR 순서로 재배치했다. `App.tsx`와 `KernelPanel.tsx`는 작업 편집, 호스트 검증 요청, 사람 면제의 세 action을 모두 전달한다. `onEditTasks`의 선택성과 기존 attached 조건을 보존했으며 독립 리뷰를 받았다. #2738의 결과 조회 및 #2736의 이슈 완료 기준 채택과의 merge preview도 충돌 없이 통과했다.
+
+검증한 실행 코드 head는 `fa9553f4ac813f1785cbfd0f22c7ecc94dc80be8`이다. 이후 #2726의 검증 기록 commit `cfc00a4643947442fd46d27bf88e41e5ea08be92` 위로 재배치했고, 변경은 검증 문서에 한정됨을 전체 tree diff로 확인했다.
+
+- Desktop typecheck와 production build 통과.
+- Windows Admin gate: **1,234 passed / 6 failed / 7 skipped**. 실패는 기존 Git hunk·branch·publish fixture의 5초 timeout과 후속 assertion이다. 직렬 재시도는 같은 환경에서 기존 Git 경합이 반복되어 실행 도중 중단했으며 완료나 통과로 기록하지 않는다. 기존 fixture와 제한 시간은 바꾸지 않았다.
+- 같은 실행 코드의 `npm run e2e`: 전체 기본 **32개 spec 모두 runner exit 0**. 작업 작성·호스트 검증·사람 면제 시나리오가 함께 통과했다. 기존 Windows terminal spec 내부 검사는 skip이다.
+- E2E 보고서: `desktop/test-results/e2e/restack-20261125/shard-1-of-1-SQ9GZk/report.json`.
+- Admin offline asset policy와 `git diff --check` 통과.
+- 실제 Electron IPC와 utility process를 사용했고 dialog/helper/Gateway는 대역이다. 실제 사용자 승인·OS 인증·모델 호출의 증거로 계산하지 않는다.
