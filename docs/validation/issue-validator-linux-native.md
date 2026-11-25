@@ -35,7 +35,7 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux:: -- --
 - 독립 읽기 리뷰에서 관측 증거 보존과 종료 판정을 보완했다. `cargo fmt --all`, `git diff --check` 통과.
 - 검증 코드 `86831e4235459b106a804aa4599b515f11947934`에서 planner 지정 Windows Full gate가 **exit 0**으로 완료됐다. Windows 계약 회귀·build/check/clippy와 Desktop check/build가 통과했고, Desktop 시험은 **1205 passed / 7 existing skipped**였다.
 - 같은 코드의 Linux cfg를 WSL에서 `cargo clippy --locked --all-targets --all-features -- -D warnings`로 확인해 **exit 0**을 얻었다. 이 컴파일/정적 검사도 native 격리 성공 증거와 구분한다.
-- 실제 Ubuntu native CI 결과는 PR에서 확인하며, 성공한 exact head와 환경이 확보되기 전에는 #2722 완료나 Linux 지원 승격을 선언하지 않는다.
+- 아래 Ubuntu 22.04 / bubblewrap 0.13.1 프로필의 실제 native CI가 성공했다. 지원 범위는 이 정확한 환경으로 한정한다.
 
 이 변경만으로 모든 Linux 배포판이나 cgroup 전체 자원 quota를 지원한다고 선언하지 않는다. 실제 native suite가 성공한 정확한 환경만 검증된 프로필로 기록한다.
 
@@ -46,3 +46,18 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux:: -- --
 후속 [고정 no-op 진단](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45658718652)은 kernel `7.0.0-1018-aws`에서 같은 강제 namespace와 no-new-privileges 조건을 사용했고 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`로 종료됐다. 읽기 전용 확인에서 `apparmor_restrict_unprivileged_userns=1`, `unprivileged_userns_clone=1`이 관찰됐다. 이 값만으로 특정 정책이 원인이라고 단정하지 않고, 해당 기본 호스트에서 필수 네트워크 격리를 구성하지 못한 결과로 기록한다.
 
 호스트 보안 정책을 바꾸지 않고 지원 후보를 Ubuntu 22.04와 고정 upstream bubblewrap 0.13.1 조합으로 분리해 확인한다. Ubuntu 24.04 결과를 통과로 바꾸거나 미지원 실행을 우회하지 않는다.
+
+### 검증된 native 프로필 — Ubuntu 22.04 / bubblewrap 0.13.1
+
+[실제 native CI 45659579634](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45659579634/job/139365464089)가 **5 passed / 0 failed / 0 ignored**로 성공했다. 실행 시간은 3.86초이며 skip이나 모의 runner를 성공 증거로 사용하지 않았다.
+
+| 항목 | 실제 기록 |
+| --- | --- |
+| 제안 branch head | `454d89da024d2db7774da15eb9e0b42ceeee0324` |
+| CI가 체크아웃한 PR merge commit | `4b33614a12c3e27f4932999411d66218eab41c8a` — 위 head와 prerelease `f4aef3c05c2942f0789b88c2c78a9748a80e8a5e`의 조합 |
+| 호스트 | GitHub hosted Ubuntu 22.04, UID 1001, kernel `6.8.0-1070-azure` |
+| 실행기 | 공식 archive 해시를 확인해 빌드한 bubblewrap 0.13.1, `/usr/bin/bwrap`, root:root 0755, non-setuid |
+| 호스트 정책 | 기본 상태를 읽기만 함. `apparmor_restrict_unprivileged_userns=0`, `unprivileged_userns_clone=1`을 관찰했고 변경 명령은 실행하지 않음 |
+| 경계 시험 | 기존 filesystem, 외부/private 파일·쓰기·TCP·abstract Unix socket, stdin 공유본, 출력 보관·해시 변경, timeout·관측된 detach 자식 종료, 실제 service 게시 관문 모두 통과 |
+
+후속 commit은 이 결과와 지원 범위를 문서화하며, 검증한 Rust 코드와 workflow는 변경하지 않는다. 검증된 범위는 위 정확한 프로필이다. Ubuntu 24.04 기본 호스트의 앞선 차단 결과와 WSL 미지원은 유지하며, 다른 배포판·cgroup 집계 quota·실제 사용자 Vault 원문 접근 시험을 수행했다고 주장하지 않는다.
