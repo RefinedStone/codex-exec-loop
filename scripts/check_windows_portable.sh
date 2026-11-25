@@ -40,6 +40,7 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'application::port::outbound::vault_native_confirmation_port::' \
   'adapter::inbound::desktop_restore_bridge::' \
   'application::service::evidence_vault_restore::' \
+  'application::service::desktop_vault_restore::' \
   'composition::desktop_restore::' \
   'task_evidence_artifact::tests::' \
   'sqlite_planning_authority_adapter::tests::task_evidence::' \

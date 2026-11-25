@@ -524,3 +524,5 @@ fn windows_native_managed_child_drop_closes_a_pending_helper() {
     drop(child);
     probe.assert_exited();
 }
+
+mod workspace;
