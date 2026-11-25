@@ -486,6 +486,11 @@ pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
         bail!("work-order validation correlation is unavailable")
     }
 
+    /// Persisted validation identities for an exact task, including keys whose PR record is missing.
+    fn task_validation_record_keys(&self, _workspace: &str, _task_id: &str) -> Result<Vec<String>> {
+        bail!("task validation correlation is unavailable")
+    }
+
     fn work_order_validation_record_keys(
         &self,
         _workspace_dir: &str,

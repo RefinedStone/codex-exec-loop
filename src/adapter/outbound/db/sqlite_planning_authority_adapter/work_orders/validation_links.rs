@@ -170,6 +170,21 @@ pub(super) fn load(workspace: &str, key: &str) -> Result<Option<PlanningWorkOrde
     Ok(load_source(workspace, key)?.and_then(as_link))
 }
 
+/// A read of durable source identities; no queue backfill or task mutation is performed.
+pub(super) fn task_keys(workspace: &str, task_id: &str) -> Result<Vec<String>> {
+    validate_work_order_task_id(task_id)?;
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace)?;
+    let connection = open_authority_connection(&location)?;
+    ensure_work_order_tables(&connection)?;
+    let mut statement = connection.prepare(
+        "SELECT validation_record_key FROM planning_work_order_validation_links WHERE source_task_id=?1 ORDER BY validation_record_key",
+    )?;
+    Ok(statement
+        .query_map(params![task_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub(super) fn keys(workspace: &str, work_order_id: &str) -> Result<Vec<String>> {
     validate_work_order_id(work_order_id)?;
     let location =

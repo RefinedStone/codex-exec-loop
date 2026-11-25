@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { TaskCriteriaEditor } from "./TaskCriteriaEditor";
+import { TaskResultView } from "./TaskResultView";
 import { taskCriteriaError, type TaskAuthoringController, type TaskListAnswer, type TaskSaveOutcome } from "./taskAuthoring";
 import type { TaskFields } from "./protocol";
 import "./taskEditor.css";
@@ -36,6 +37,7 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
   const saving = useRef(false);
   const [snapshot, setSnapshot] = useState<TaskListAnswer | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [lookupId, setLookupId] = useState("");
   const [fields, setFields] = useState<TaskFields>(() => draftFields(source));
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(true);
@@ -137,6 +139,15 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
           </option>)}
         </select>
       </label>
+      <form className="task-editor-id-lookup" onSubmit={(event) => {
+        event.preventDefault();
+        if (!lookupId.trim() || busy || reading || uncertain) return;
+        const id = lookupId.trim(); setTaskId(id); void readTask(id);
+      }}>
+        <label htmlFor="task-editor-lookup">작업 ID로 열기</label>
+        <input id="task-editor-lookup" value={lookupId} onChange={(event) => setLookupId(event.target.value)} disabled={busy || reading || uncertain} />
+        <button type="submit" disabled={!lookupId.trim() || busy || reading || uncertain}>ID로 열기</button>
+      </form>
       {source && !taskId && <details className="task-editor-source">
         <summary>선택한 대화 내용 확인</summary>
         <p className="muted">스레드 {source.threadId} · 턴 {source.turnIds.join(", ")}</p>
@@ -170,6 +181,8 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
               data-testid="task-editor-save">{busy ? "저장 중…" : taskId ? "변경 확정" : "작업 확정"}</button>}
         </footer>
       </form>
+      {taskId && <TaskResultView workspace={workspace} taskId={taskId} revision={snapshot?.planning_revision} controller={controller}
+        onOpenTask={busy || reading || uncertain ? undefined : (id) => { setTaskId(id); void readTask(id); }} />}
     </dialog>
   );
 }

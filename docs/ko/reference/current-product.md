@@ -139,6 +139,11 @@ fail-closed입니다. 세션 전체 grant는 저장하지 않습니다.
 - 저장 응답을 잃으면 원 명령 키와 operation 기록을 읽어 task ID를 확인합니다. 성공 기록에는
   task ID와 planning revision만 남깁니다. 복구는 읽기 전용이며 기록 누락·보존 만료·옛 형식·중단으로
   결과를 확정할 수 없을 때는 미확정으로 유지하고 작업을 다시 만들지 않습니다.
+- 작업 상세는 정확한 task ID로 완료·취소 작업의 실행·증거·전달·PR 결과도 조회합니다.
+  `task_result`는 기존 원본 snapshot과 authority를 읽고 영속 validation source 및 명시적인
+  remediation 연결을 사용합니다. 전달 큐가 정리되어도 PR 연결을 읽으며 제목·브랜치로 작업을
+  합치지 않습니다. 관련 작업은 별도로 엽니다. 작업 상태·호스트 검증·작업자 보고·PR 머지와
+  외부 이슈 종료 미확인을 구분하며, 누락된 계보·조회 실패·저장소/연결 변경을 숨기지 않습니다.
 - Hidden planning worker는 활성 app-server 실행 profile을 상속합니다. Developer 계약은 계속
   planning-only이며 host가 구조화 명령을 검증하고 적용합니다.
 

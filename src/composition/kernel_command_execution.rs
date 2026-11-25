@@ -500,6 +500,11 @@ impl CommandOnlyKernel {
                 super::planning_task_list::query(&self.workspace)?,
             ))?);
         }
+        if let Some(task_id) = query.task_result_id().map_err(protocol_error)? {
+            return Ok(serde_json::to_value(KernelQueryAnswer::TaskResult(
+                Box::new(super::task_result::query(&self.workspace, task_id)?),
+            ))?);
+        }
         if let Some(evidence_query) = query.task_evidence_request().map_err(protocol_error)? {
             return Ok(serde_json::to_value(KernelQueryAnswer::TaskEvidence(
                 super::task_evidence::query(&self.workspace, &evidence_query)?,
@@ -1690,5 +1695,142 @@ mod tests {
                 ..
             }
         ));
+    }
+    #[test]
+    fn task_result_reads_completed_and_cancelled_tasks_and_prs_after_queue_pruning() {
+        use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+        use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+        use crate::application::port::outbound::planning_work_order_repository_port::PlanningWorkOrderRepositoryPort;
+        use crate::domain::parallel_mode::{
+            PrValidationCommitSha, PrValidationRecord, PrValidationRecordKey, PrValidationTarget,
+            PrValidationTargetShaSnapshot,
+        };
+
+        let (_directory, kernel) = fixture();
+        let create = |status: &str| {
+            let created = kernel.command(KernelCommandKind::CreateTask,
+                json!({"type":"create_task","task":{"title":"Identical title","status":status}}), None).unwrap();
+            created["result"]["task_id"].as_str().unwrap().to_owned()
+        };
+        let completed = create("done");
+        let cancelled = create("cancelled");
+        let store = SqlitePlanningAuthorityAdapter::new();
+        for (key, number, task_id) in [
+            ("completed-first", 41, &completed),
+            ("completed-second", 42, &completed),
+            ("cancelled-only", 43, &cancelled),
+        ] {
+            let record = PrValidationRecord::register(
+                PrValidationRecordKey::new(key).unwrap(),
+                PrValidationTarget::new("synthetic/repository", number).unwrap(),
+                PrValidationTargetShaSnapshot::new(
+                    PrValidationCommitSha::new("a".repeat(40)).unwrap(),
+                    PrValidationCommitSha::new("b".repeat(40)).unwrap(),
+                ),
+            );
+            assert!(
+                store
+                    .compare_and_swap_runtime_pr_validation_record(
+                        &kernel.workspace,
+                        record.key(),
+                        None,
+                        Some(&record)
+                    )
+                    .unwrap()
+            );
+            store
+                .link_work_order_validation_record(&kernel.workspace, key, task_id)
+                .unwrap();
+        }
+        let before = planning_revision(&kernel);
+        let result = kernel
+            .query(json!({"type":"task_result","task_id":completed}), false)
+            .unwrap();
+        assert_eq!(result["status"], "available");
+        assert_eq!(result["task"]["fields"]["status"], "done");
+        assert_eq!(result["pr_lineage_complete"], true);
+        assert!(result["deliveries"].as_array().unwrap().is_empty());
+        let numbers: std::collections::BTreeSet<_> = result["pull_requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pr| pr["number"].as_u64().unwrap())
+            .collect();
+        assert_eq!(numbers, [41, 42].into_iter().collect());
+        let result = kernel
+            .query(json!({"type":"task_result","task_id":cancelled}), false)
+            .unwrap();
+        assert_eq!(result["task"]["fields"]["status"], "cancelled");
+        assert_eq!(result["pull_requests"].as_array().unwrap().len(), 1);
+        assert_eq!(result["pull_requests"][0]["number"], 43);
+        assert_eq!(
+            planning_revision(&kernel),
+            before,
+            "result reads cannot mutate tasks"
+        );
+
+        store
+            .link_work_order_validation_record(&kernel.workspace, "other-dangling", &cancelled)
+            .unwrap();
+        let result = kernel
+            .query(json!({"type":"task_result","task_id":completed}), false)
+            .unwrap();
+        assert_eq!(
+            result["pr_lineage_complete"], true,
+            "another task's dangling source does not belong to this task"
+        );
+        store
+            .link_work_order_validation_record(&kernel.workspace, "selected-dangling", &completed)
+            .unwrap();
+        assert!(
+            store
+                .task_validation_record_keys(&kernel.workspace, &completed)
+                .unwrap()
+                .contains(&"selected-dangling".to_owned())
+        );
+        let result = kernel
+            .query(json!({"type":"task_result","task_id":completed}), false)
+            .unwrap();
+        assert_eq!(
+            result["pr_lineage_complete"], false,
+            "a persisted source without its PR record is unknown"
+        );
+        assert_eq!(result["pull_requests"].as_array().unwrap().len(), 2);
+
+        let unknown = PrValidationRecord::register(
+            PrValidationRecordKey::new("missing-source").unwrap(),
+            PrValidationTarget::new("synthetic/repository", 44).unwrap(),
+            PrValidationTargetShaSnapshot::new(
+                PrValidationCommitSha::new("a".repeat(40)).unwrap(),
+                PrValidationCommitSha::new("b".repeat(40)).unwrap(),
+            ),
+        );
+        assert!(
+            store
+                .compare_and_swap_runtime_pr_validation_record(
+                    &kernel.workspace,
+                    unknown.key(),
+                    None,
+                    Some(&unknown)
+                )
+                .unwrap()
+        );
+        let result = kernel
+            .query(json!({"type":"task_result","task_id":completed}), false)
+            .unwrap();
+        assert_eq!(result["pr_lineage_complete"], false);
+        assert_eq!(result["pull_requests"].as_array().unwrap().len(), 2);
+        let absent = kernel
+            .query(
+                json!({"type":"task_result","task_id":"removed-task"}),
+                false,
+            )
+            .unwrap();
+        assert_eq!(absent["status"], "missing");
+        assert!(
+            kernel
+                .query(json!({"type":"task_result","task_id":" "}), false)
+                .is_err()
+        );
     }
 }
