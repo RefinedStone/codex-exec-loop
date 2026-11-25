@@ -168,13 +168,21 @@ pub(super) fn supersede_work_questions(
     workspace: &str,
     issue: &IssueReference,
     work_order_id: &str,
+    waiting: Option<&crate::domain::issue_automation::execution::IssueExecutionQuestion>,
 ) -> Result<bool> {
+    use crate::domain::issue_automation::agent_question::IssueAgentAsk;
     use crate::domain::issue_automation::decision::IssueDecisionKind;
     let mut changed = false;
     for existing in open_for_issue(connection, workspace, issue)? {
         let definition = existing.request.definition();
         if definition.kind != IssueDecisionKind::AgentQuestion
             || definition.basis.work_order_id.as_deref() != Some(work_order_id)
+        {
+            continue;
+        }
+        // An agent question stays open while its own turn ends and the same lease waits.
+        if let (Some(ask), Some(question)) = (IssueAgentAsk::from_definition(definition), waiting)
+            && ask.matches(question)
         {
             continue;
         }
@@ -643,12 +651,9 @@ pub(super) fn work_context_current(
     };
     Ok(match definition.kind {
         IssueDecisionKind::AgentQuestion => {
-            work.current_authorization_basis().authorization_epoch
-                == definition.basis.authorization_epoch
-                && definition.basis.field_hash.as_ref() == Some(&work.order.field_hash)
-                && execution.question.as_ref().is_some_and(|question| {
-                    definition.evidence == [format!("question:{}", question.question_id)]
-                })
+            crate::domain::issue_automation::agent_question::agent_question_context_matches(
+                definition, &work, &execution,
+            )
         }
         IssueDecisionKind::FailureRecovery => {
             execution

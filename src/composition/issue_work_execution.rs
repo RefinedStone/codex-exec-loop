@@ -170,6 +170,28 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
         conversation::thread_id(self, workspace, work_order_id)
     }
 
+    fn asking_worker(
+        &self,
+        workspace: &str,
+        branch: &str,
+    ) -> Result<
+        Option<(
+            String,
+            crate::domain::issue_automation::agent_question::IssueAgentAsk,
+        )>,
+    > {
+        conversation::asking_worker(self, workspace, branch)
+    }
+
+    fn await_question(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        ask: &crate::domain::issue_automation::agent_question::IssueAgentAsk,
+    ) -> Result<bool> {
+        conversation::await_question(self, workspace, work_order_id, ask)
+    }
+
     fn snapshot(&self, workspace: &str, work_order_id: &str) -> Result<IssueWorkExecutionSnapshot> {
         source::snapshot(self, workspace, work_order_id)
     }

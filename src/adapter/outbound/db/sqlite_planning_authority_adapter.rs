@@ -1464,6 +1464,13 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
     ) -> Result<PlanningWorkerContinuationReceipt> {
         continuation::acknowledge(workspace, claim, thread_id, turn_id)
     }
+    fn mark_worker_awaiting_question(
+        &self,
+        workspace: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        continuation::mark_question_waiting(workspace, expected)
+    }
     fn preserve_worker_awaiting_user(
         &self,
         workspace: &str,

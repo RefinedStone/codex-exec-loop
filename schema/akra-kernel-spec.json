@@ -1612,7 +1612,8 @@
       "effect": "write",
       "idempotency": "keyed",
       "rejections": [
-        "human_confirmation_required"
+        "human_confirmation_required",
+        "own_issue_question"
       ],
       "completion": "records",
       "input": {
@@ -1687,6 +1688,92 @@
           "type",
           "decision",
           "outcome",
+          "changed",
+          "catalog_revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "ask_issue_decision",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Open one choice question from the running issue worker to a person. The server finds the issue and the thread from the running lease of `branch` (the asking worktree's current Git branch); the question text and labels pass the shared-copy policy. The task then waits as awaiting_user: end the turn after the command answers. A person's answer arrives once in the same thread. Resending the same question returns the same decision; another question beyond the open limit is rejected.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "issue_question_limit"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/$defs/IssueQuestionOptionFields"
+            },
+            "maxItems": 32,
+            "minItems": 2,
+            "type": "array"
+          },
+          "question": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "recommended": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "ask_issue_decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "branch",
+          "question",
+          "options"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "catalog_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "decision": {
+            "$ref": "#/$defs/IssueDecisionFactRecord"
+          },
+          "type": {
+            "const": "issue_decision_requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "decision",
           "changed",
           "catalog_revision"
         ],
@@ -5680,6 +5767,28 @@
       ]
     },
     {
+      "name": "issue_question_limit",
+      "summary": "The issue already has the maximum number of open agent questions. Nothing was asked. Do not ask again: end the turn and wait for the open question's answer in this thread, or read the issue for its open decisions.",
+      "next": [
+        {
+          "step": "query",
+          "name": "issue"
+        },
+        {
+          "step": "stop"
+        }
+      ]
+    },
+    {
+      "name": "own_issue_question",
+      "summary": "The connection that opened this agent question cannot answer it. A person answers it in Desktop.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
       "name": "issue_automation_off",
       "summary": "Issue collection is off. No source read was scheduled. Read issue_automation and decide whether to enable observe before sending sync_issues again.",
       "next": [
@@ -6416,6 +6525,32 @@
             "type",
             "decision",
             "outcome",
+            "changed",
+            "catalog_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "catalog_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "decision": {
+              "$ref": "#/$defs/IssueDecisionFactRecord"
+            },
+            "type": {
+              "const": "issue_decision_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision",
             "changed",
             "catalog_revision"
           ],
@@ -9918,6 +10053,28 @@
       ],
       "type": "string"
     },
+    "IssueQuestionOptionFields": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
     "IssueRemoteStateValue": {
       "enum": [
         "open",
@@ -11146,6 +11303,51 @@
             "type",
             "decision_id",
             "option"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "branch": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/IssueQuestionOptionFields"
+              },
+              "maxItems": 32,
+              "minItems": 2,
+              "type": "array"
+            },
+            "question": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "recommended": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "ask_issue_decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "branch",
+            "question",
+            "options"
           ],
           "type": "object"
         },
@@ -14960,6 +15162,8 @@
         "close_disabled",
         "human_confirmation_required",
         "decision_superseded",
+        "issue_question_limit",
+        "own_issue_question",
         "issue_automation_off"
       ],
       "type": "string"

@@ -172,6 +172,7 @@ pub(super) fn apply(
                     workspace,
                     &work.order.issue,
                     &work.order.work_order_id,
+                    next.question.as_ref(),
                 )?;
             let lineage_changed = work.task_ids != observation.task_ids;
             let tracked_changed = project_tracked(tx, workspace, &work, &old, &next)?;

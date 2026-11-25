@@ -4,6 +4,9 @@ use super::{
     validate_expected_revision, validate_reference_scope,
 };
 use crate::domain::issue_automation::IssueAutomationState;
+use crate::domain::issue_automation::agent_question::{
+    agent_question_reply, agent_question_targets,
+};
 use crate::domain::issue_automation::decision::{
     IssueDecisionAnswerBy, IssueDecisionBasis, IssueDecisionKind, IssueDecisionState,
 };
@@ -261,11 +264,10 @@ fn validate_claim(
         || definition.basis.work_order_id.as_deref() != Some(intent.work_order_id.as_str())
         || definition.basis.authorization_epoch != intent.authorization_epoch
         || definition.basis.field_hash.as_ref() != Some(&work.order.field_hash)
-        || definition.evidence != [format!("question:{}", intent.question.question_id)]
+        || !agent_question_targets(definition, &intent.question)
         || answer.by != IssueDecisionAnswerBy::Human
         || answer.confirmation.is_none()
-        || answer.option != "reply"
-        || answer.note.as_ref().map(|note| answer_hash(note.as_str()))
+        || agent_question_reply(definition, answer).map(|message| answer_hash(&message))
             != Some(intent.answer_sha256.clone())
         || !super::decision::work_context_current(connection, workspace, request)?
     {

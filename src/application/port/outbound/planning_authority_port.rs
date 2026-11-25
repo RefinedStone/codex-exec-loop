@@ -753,6 +753,16 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         anyhow::bail!("worker continuation receipts are unavailable")
     }
 
+    /// An agent question parks the running task as AwaitingUser for the exact lease generation.
+    /// The worker's turn then ends through the existing preserve path.
+    fn mark_worker_awaiting_question(
+        &self,
+        _workspace_dir: &str,
+        _expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     /// A terminal stream with a waiting task retains its workspace instead of becoming complete.
     fn preserve_worker_awaiting_user(
         &self,

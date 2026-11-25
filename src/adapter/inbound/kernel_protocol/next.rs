@@ -147,6 +147,9 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         // 수준을 올리는 선택은 사람이 한다. off에서 같은 동기화를 자동 재시도하지 않는다.
         ReasonCode::HumanConfirmationRequired => vec![Step::AskUser],
         ReasonCode::DecisionSuperseded => vec![Step::query(KernelQueryKind::Issue), Step::AskUser],
+        // 같은 이슈의 열린 질문을 읽고 그 답을 기다린다. 다른 질문을 다시 보내지 않는다.
+        ReasonCode::IssueQuestionLimit => vec![Step::query(KernelQueryKind::Issue), Step::Stop],
+        ReasonCode::OwnIssueQuestion => vec![Step::AskUser],
         ReasonCode::IssueAutomationOff => {
             vec![Step::query(KernelQueryKind::IssueAutomation), Step::AskUser]
         }

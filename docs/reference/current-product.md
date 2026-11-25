@@ -334,6 +334,21 @@ falls back to a new thread. An uncertain send remains `unknown` and is not autom
 Opening “my conversation” selects the confirmed current thread or a shared-copy draft; takeover
 and sending a turn remain explicit actions. An ambiguous conversation identity remains unavailable.
 
+A running issue worker can also ask a choice question with `akra kernel issue ask_issue_decision`
+(IA8-1, [#2566](https://github.com/RefinedStone/codex-exec-loop/issues/2566)). The command takes the
+worktree's current branch, a question, 2 to 32 options, and an optional recommendation. It takes no
+issue number: the server finds the running lease of that branch, its thread, and the work order's
+issue. The question and labels pass the same shared-copy policy as other decisions, and each option
+has a fixed effect text. The command records the asking connection, opens an `agent_question`
+decision card, and marks the task `awaiting_user` for that lease generation. The worker then ends its
+turn; the existing preserve path keeps the thread and worktree. No second awaiting_user card opens for
+that wait. Sending the same question again returns the same card. Each issue has at most one open
+agent question; another question is rejected with `issue_question_limit` and its `next` steps. The
+asking connection cannot answer its own question (`own_issue_question`), and every answer still needs a
+verified human confirmation. The answer is sent once to the same thread through the continuation
+claim above, as the question, the selected option, and the optional shared note. The generated
+`akra-kernel` skill describes this usage.
+
 Trusted integration is an immutable work fact. It fixes execution progress at `done`, separately
 from the provider issue's open/closed state. Later `observe_again` recovery preserves that state and
 the original integration identity while observing post-merge validation. It creates no new

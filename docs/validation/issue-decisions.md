@@ -22,7 +22,8 @@ withdrawn, superseded다. 이번 단계는 마감 타이머나 중재자를 실�
 현재 순수 평가와 같은 영속 triage가 있어야 새 요청을 저장할 수 있다.
 답변 dispatch는 `changed`가 참인 commit만 런타임 내부의 private 기록 함수에 전달한다.
 요청 생성 기록·이벤트는 실제 저장 결과를 전달하는 테스트 전용 fixture로 검증한다.
-자동 수집의 요청 생성 hook과 새 질문 명령은 추가하지 않았다. propose 자동 질문은
+자동 수집의 요청 생성 hook은 추가하지 않았다. 실행 중인 에이전트의 질문 명령은 아래
+[에이전트 질문](#에이전트-질문-ia8-1)이 설명한다. propose 자동 질문은
 #2548에서 기존 커널의 typed 실행 경로에 연결하며, 별도 공개 변경 진입점을 만들지 않는다.
 
 외부 명령은 다음 형태다.
@@ -117,3 +118,31 @@ default/arbiter 답, 잘못된 확인 참조, 주체와 confirmation이 맞지 �
 같은 시험을 단독 실행해 동일 실패를 확인했다. 해당 제품 경로와 fixture는 이번 변경에서
 수정하지 않았다. Linux에서는 같은 시험이 통과했다. 이번 변경의 직접 회귀와
 필수 Windows Full 결과는 이 추가 필터 결과와 구분해 보고한다.
+
+## 에이전트 질문 (IA8-1)
+
+`ask_issue_decision` (#2566)은 실행 중인 이슈 worker가 선택형 질문을 여는 저장 명령이다.
+
+```json
+{
+  "command": {
+    "type": "ask_issue_decision",
+    "branch": "akra-agent/slot-1/feature",
+    "question": "형식 A 를 유지합니까, B 로 옮깁니까?",
+    "options": [{"id": "a", "label": "A 유지"}, {"id": "b", "label": "B 로 옮김"}],
+    "recommended": "a"
+  },
+  "idempotency_key": "a-unique-question-key"
+}
+```
+
+- 이슈 번호를 받지 않는다. branch의 실행 lease, 그 thread, 작업 지시의 이슈를 서버가 찾는다.
+- 결정은 `agent_question`, 관문 `spec`, `on_timeout: wait`이다. 근거는 task·thread·lease generation이다.
+- 질문을 열면 그 task는 `awaiting_user`가 된다. worker는 턴을 끝내고 같은 thread가 답을 기다린다.
+- 이슈마다 열린 에이전트 질문은 1개이다. 초과는 `issue_question_limit`이며 `next`를 가진다.
+- 질문한 연결(`asked_by`)의 답은 `own_issue_question`으로 거절한다. 답에는 검증된 사람 확인이 필요하다.
+- 사람의 답은 IA4-1의 재개 claim으로 같은 thread에 한 번 간다. 결과 모름은 자동 재전송하지 않는다.
+
+검증: `src/composition/kernel_host/simulation/issue_decision/agent_question.rs`의 커널 시뮬레이션 시험과
+`src/application/service/issue_coordinator/tests/execution_questions/agent_ask.rs`의 서비스 시험.
+가짜 실행기를 쓰며 모델 턴이 없다.

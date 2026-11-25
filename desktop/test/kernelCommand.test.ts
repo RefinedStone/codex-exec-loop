@@ -46,6 +46,7 @@ const commands = {
   },
   sync_issues: { type: "sync_issues" },
   answer_issue_decision: { type: "answer_issue_decision", decision_id: "decision-1", option: "continue", note: "Shared note" },
+  ask_issue_decision: { type: "ask_issue_decision", branch: "akra-agent/slot-1/task", question: "A or B?", options: [{ id: "a", label: "A" }, { id: "b", label: "B" }] },
   hold_issue: { type: "hold_issue", issue, command_id: "hold-1" },
   release_issue: { type: "release_issue", issue, command_id: "release-1" },
   steer_issue: { type: "steer_issue", issue, command_id: "steer-1", message: "Check the migration" },

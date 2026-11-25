@@ -3,6 +3,7 @@
 //! 원본 필드의 해시와 정책을 지난 공유본만 보관한다.
 mod binding;
 // Observe 수집 설정과 현재 관찰 투영이다 (#2538).
+pub mod agent_question;
 pub mod arbiter;
 pub mod autonomy;
 pub mod binding_pause;

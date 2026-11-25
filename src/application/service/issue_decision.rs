@@ -12,6 +12,7 @@ use crate::application::port::outbound::issue_automation_store_port::{
     IssueAutomationStorePort, IssueDecisionCommit, IssueDecisionFence, IssueDecisionSaveResult,
     IssueTriageFence,
 };
+use crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionPort;
 use crate::domain::issue_automation::collection::IssueCollectionItem;
 use crate::domain::issue_automation::decision::{
     IssueDecisionAgentAnswer, IssueDecisionBasis, IssueDecisionDefinition, IssueDecisionError,
@@ -28,6 +29,7 @@ use super::issue_triage::IssueTriageService;
 
 const DECISION_CAS_ATTEMPTS: usize = 3;
 
+mod ask;
 mod deadlines;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +43,8 @@ pub struct IssueDecisionService {
     store: Arc<dyn IssueAutomationStorePort>,
     triage: Arc<IssueTriageService>,
     policy: IssuePolicyService,
+    /// 에이전트 질문(`ask`)만 쓴다. 실행 중인 thread 를 확인하고 그 task 를 기다리게 한다.
+    execution: Option<Arc<dyn IssueWorkExecutionPort>>,
 }
 
 impl IssueDecisionService {
@@ -55,7 +59,13 @@ impl IssueDecisionService {
             store,
             triage,
             policy,
+            execution: None,
         }
+    }
+
+    pub fn with_execution(mut self, execution: Arc<dyn IssueWorkExecutionPort>) -> Self {
+        self.execution = Some(execution);
+        self
     }
 
     /// 한 장부 snapshot의 요청과 판을 준비한다. 새 요청이나 확인 증거를 만들지 않는다.
@@ -202,6 +212,15 @@ impl IssueDecisionService {
             }
             reject_secret_identifier(option)?;
             let stored = snapshot.record;
+            let asked =
+                crate::domain::issue_automation::agent_question::IssueAgentAsk::from_definition(
+                    stored.request.definition(),
+                );
+            if asked.is_some()
+                && context.caller.as_deref() == Some(stored.request.definition().asked_by.as_str())
+            {
+                return Err(ask::own_question_rejection());
+            }
             let (fence, item) = self.current_item(stored.request.issue())?;
             let current = self.triage.assess_current(&item)?;
             let mut basis = IssueDecisionBasis::from_assessment(
@@ -283,7 +302,11 @@ impl IssueDecisionService {
                     crate::domain::issue_automation::policy::IssueAutomationGateAction::Human;
             }
             let shared_note = note.map(|note| shared_text(note, &policy)).transpose()?;
-            if is_worker_question && option == "reply" && shared_note.is_none() {
+            if is_worker_question
+                && asked.is_none()
+                && option == crate::domain::issue_automation::agent_question::WORKER_REPLY_OPTION
+                && shared_note.is_none()
+            {
                 bail!("the worker question requires a shared answer note")
             }
             let caller = context
@@ -395,12 +418,9 @@ impl IssueDecisionService {
         }
         Ok(match definition.kind {
             IssueDecisionKind::AgentQuestion => {
-                work.current_authorization_basis().authorization_epoch
-                    == definition.basis.authorization_epoch
-                    && definition.basis.field_hash.as_ref() == Some(&work.order.field_hash)
-                    && record.question.as_ref().is_some_and(|question| {
-                        definition.evidence == [format!("question:{}", question.question_id)]
-                    })
+                crate::domain::issue_automation::agent_question::agent_question_context_matches(
+                    definition, &work, &record,
+                )
             }
             IssueDecisionKind::FailureRecovery => {
                 record.progress.terminal.as_ref().is_some_and(|terminal| {
