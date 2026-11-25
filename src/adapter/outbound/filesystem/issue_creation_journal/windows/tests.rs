@@ -28,14 +28,14 @@ use crate::application::service::issue_publish_journal::{
 };
 use crate::domain::issue_automation::source::IssueSourceRepository;
 use crate::domain::issue_creation::{
-    IssueCreatedLocation, IssueCreationApproval, IssueCreationApprovedCopy,
-    IssueCreationIntentState, IssueRepositoryReference,
+    IssueCreationApproval, IssueCreationApprovedCopy, IssueCreationIntentState,
+    IssueRepositoryReference,
 };
 use crate::domain::issue_publish_intent::IssuePublishVaultField;
 use crate::domain::issue_validation::{IssueRequirements, validate_issue};
 use crate::domain::issue_work::{
-    IssueComparisonBasis, IssueFieldHash, IssueLocator, IssueProjectScope, IssueProvider,
-    IssueReference, IssueSharedCopy,
+    IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueProvider, IssueReference,
+    IssueSharedCopy,
 };
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
