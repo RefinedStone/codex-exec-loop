@@ -38,7 +38,9 @@ impl Default for OsVaultKeyStoreAdapter {
 impl OsVaultKeyStoreAdapter {
     pub fn new() -> Self {
         Self {
-            credential: Arc::new(OsCredentialBackend),
+            credential: Arc::new(OsCredentialBackend {
+                service: KEY_STORE_SERVICE.into(),
+            }),
             #[cfg(test)]
             runtime_override: None,
         }
@@ -78,7 +80,9 @@ impl VaultKeyStorePort for OsVaultKeyStoreAdapter {
     }
 }
 
-struct OsCredentialBackend;
+struct OsCredentialBackend {
+    service: String,
+}
 
 impl OsCredentialBackend {
     fn entry(&self) -> Result<keyring::Entry, VaultKeyStoreError> {
@@ -89,7 +93,7 @@ impl OsCredentialBackend {
         )) {
             return Err(VaultKeyStoreError::Unsupported);
         }
-        keyring::Entry::new(KEY_STORE_SERVICE, KEY_STORE_ACCOUNT).map_err(key_store_error)
+        keyring::Entry::new(&self.service, KEY_STORE_ACCOUNT).map_err(key_store_error)
     }
 }
 
@@ -106,6 +110,47 @@ impl CredentialBackend for OsCredentialBackend {
         self.entry()?
             .set_secret(key.expose())
             .map_err(key_store_error)
+    }
+}
+
+/// Real OS credential fixture with a unique non-product namespace and runtime.
+#[cfg(all(test, any(target_os = "macos", target_os = "linux", windows)))]
+pub(crate) struct ManualCredentialFixture {
+    backend: Arc<OsCredentialBackend>,
+    runtime: std::path::PathBuf,
+}
+#[cfg(all(test, any(target_os = "macos", target_os = "linux", windows)))]
+impl ManualCredentialFixture {
+    pub(crate) fn new(runtime: std::path::PathBuf) -> Result<Self, VaultKeyStoreError> {
+        let backend = Arc::new(OsCredentialBackend {
+            service: format!(
+                "akra-evidence-vault-manual-fixture-{:032x}",
+                rand::random::<u128>()
+            ),
+        });
+        // Never delete, adopt or overwrite an existing credential.
+        if backend.load()?.is_some() {
+            return Err(unavailable());
+        }
+        Ok(Self { backend, runtime })
+    }
+    pub(crate) fn adapter(&self) -> OsVaultKeyStoreAdapter {
+        OsVaultKeyStoreAdapter {
+            credential: self.backend.clone(),
+            runtime_override: Some(self.runtime.clone()),
+        }
+    }
+    pub(crate) fn delete(&self) -> Result<(), VaultKeyStoreError> {
+        match self.backend.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(key_store_error(error)),
+        }
+    }
+}
+#[cfg(all(test, any(target_os = "macos", target_os = "linux", windows)))]
+impl Drop for ManualCredentialFixture {
+    fn drop(&mut self) {
+        let _ = self.delete();
     }
 }
 
