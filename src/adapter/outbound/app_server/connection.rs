@@ -52,7 +52,8 @@ use super::protocol::{
 use super::steering::{AppServerTurnSteerBinding, AppServerTurnSteerBroker};
 use super::{AppServerEventSender, AppServerEventTrySendError, bounded_terminal_receipt};
 
-const RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
+const RESPONSE_TIMEOUT_ENV_VAR: &str = "AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS";
+const LEGACY_RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
 const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -398,7 +399,10 @@ impl AppServerConnectionConfig {
         // 운영 override는 response timeout만 열어두고, poll/drain 간격은 stream responsiveness 기준으로 고정한다.
         let configured_timeout = crate::configuration::current_process_config()
             .map(|config| config.config.app_server.response_timeout_secs.to_string());
-        let environment_timeout = std::env::var(RESPONSE_TIMEOUT_ENV_VAR).ok();
+        let environment_timeout = crate::configuration::renamed_env_var(
+            RESPONSE_TIMEOUT_ENV_VAR,
+            LEGACY_RESPONSE_TIMEOUT_ENV_VAR,
+        );
         let mut config = Self::from_response_timeout_secs_value(
             configured_timeout
                 .as_deref()
@@ -4101,16 +4105,16 @@ mod tests {
         AppServerReaderTermination, AppServerStdinWriter, AppServerTurnInterruptSignal,
         ApprovalInterruptContext, BoundApprovalContext, BoundedLineRead,
         CANCELLED_SERVER_REQUEST_METHODS, DISABLE_LOGIN_SHELL_OVERRIDE,
-        LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS, MAX_PENDING_NOTIFICATIONS,
-        MAX_RESPONSE_TIMEOUT_SECS, MAX_STDERR_LINE_BYTES, MAX_STDOUT_LINE_BYTES,
-        METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS, PROCESS_ENVIRONMENT_ENV_VAR,
-        ProcessEnvironmentPolicy, RESPONSE_TIMEOUT_ENV_VAR, SHELL_ENVIRONMENT_INHERIT_ENV_VAR,
-        SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE, ShellEnvironmentInherit, TransportFailure,
-        UNINSPECTABLE_SERVER_REQUEST_METHODS, app_server_api_key_environment_variable_allowed,
-        app_server_command_with_environment, app_server_process_environment_key_allowed,
-        canonical_proxy_environment_key, filtered_app_server_process_environment,
-        install_after_approval_decision_received_hook, openai_base_url_is_unsafe,
-        proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
+        LEGACY_RESPONSE_TIMEOUT_ENV_VAR, LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS,
+        MAX_PENDING_NOTIFICATIONS, MAX_RESPONSE_TIMEOUT_SECS, MAX_STDERR_LINE_BYTES,
+        MAX_STDOUT_LINE_BYTES, METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS,
+        PROCESS_ENVIRONMENT_ENV_VAR, ProcessEnvironmentPolicy, RESPONSE_TIMEOUT_ENV_VAR,
+        SHELL_ENVIRONMENT_INHERIT_ENV_VAR, SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE,
+        ShellEnvironmentInherit, TransportFailure, UNINSPECTABLE_SERVER_REQUEST_METHODS,
+        app_server_api_key_environment_variable_allowed, app_server_command_with_environment,
+        app_server_process_environment_key_allowed, canonical_proxy_environment_key,
+        filtered_app_server_process_environment, install_after_approval_decision_received_hook,
+        openai_base_url_is_unsafe, proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
         resolve_process_environment, resolve_shell_environment_inherit, spawn_pipe_reader,
     };
     use crate::adapter::outbound::app_server::approval::{
@@ -4950,6 +4954,10 @@ mod tests {
     fn timeout_env_var_name_is_stable() {
         assert_eq!(
             RESPONSE_TIMEOUT_ENV_VAR,
+            "AKRA_APP_SERVER_RESPONSE_TIMEOUT_SECS"
+        );
+        assert_eq!(
+            LEGACY_RESPONSE_TIMEOUT_ENV_VAR,
             "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS"
         );
         assert_eq!(

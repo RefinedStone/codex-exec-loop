@@ -64,8 +64,8 @@ native binary를 직접 실행할 수도 있습니다.
 
 주요 설정:
 
-- `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
-- `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
+- `AKRA_GITHUB_PR=owner/repo#123` (이전 이름 `CODEX_EXEC_LOOP_GITHUB_PR`)
+- `AKRA_GITHUB_POLL_INTERVAL_SECS=60` (이전 이름 `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS`)
 - `AKRA_GITHUB_LOGIN=<login>` 또는 repo-local `akra.githubLogin`
 - 신뢰하는 `gh auth token`을 사용할 수 없을 때만 `AKRA_GITHUB_TOKEN=<token>`
 

@@ -13,8 +13,11 @@ use std::time::Duration;
 // GitHub review polling is an optional shell-side watcher for the active PR
 // lane. Explicit env configuration wins, otherwise the adapter may discover an
 // open PR for the current branch against the parallel-mode integration branch.
-const GITHUB_PULL_REQUEST_ENV_VAR: &str = "CODEX_EXEC_LOOP_GITHUB_PR";
-const GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR: &str = "CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS";
+const GITHUB_PULL_REQUEST_ENV_VAR: &str = "AKRA_GITHUB_PR";
+const LEGACY_GITHUB_PULL_REQUEST_ENV_VAR: &str = "CODEX_EXEC_LOOP_GITHUB_PR";
+const GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR: &str = "AKRA_GITHUB_POLL_INTERVAL_SECS";
+const LEGACY_GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR: &str =
+    "CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS";
 const DEFAULT_GITHUB_POLL_INTERVAL_SECONDS: u64 = 60;
 const MAX_STATUS_DETAIL_LENGTH: usize = 48;
 
@@ -26,7 +29,10 @@ pub(super) struct GithubReviewPollingBootstrap {
 }
 impl GithubReviewPollingBootstrap {
     pub(super) fn from_environment() -> Self {
-        let pull_request_value = std::env::var(GITHUB_PULL_REQUEST_ENV_VAR).ok();
+        let pull_request_value = crate::configuration::renamed_env_var(
+            GITHUB_PULL_REQUEST_ENV_VAR,
+            LEGACY_GITHUB_PULL_REQUEST_ENV_VAR,
+        );
         if let Some(config) = crate::configuration::current_process_config() {
             if !config.config.github.auto_discover_pull_request && pull_request_value.is_none() {
                 return Self::disabled();
@@ -36,7 +42,10 @@ impl GithubReviewPollingBootstrap {
                 Some(config.config.github.review_poll_interval_secs.to_string()),
             );
         }
-        let interval_seconds_value = std::env::var(GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR).ok();
+        let interval_seconds_value = crate::configuration::renamed_env_var(
+            GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR,
+            LEGACY_GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR,
+        );
         Self::parse_env_values(pull_request_value, interval_seconds_value)
     }
 
