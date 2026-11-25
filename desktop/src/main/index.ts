@@ -48,10 +48,16 @@ import { TerminalService } from "./terminalService";
 import { VaultRestoreWindows } from "./vaultRestoreWindow";
 import { createVaultRestoreSource } from "./vaultRestoreSource";
 import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
+import { migrateUserData } from "./userDataMigration";
 
 // 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
 if (process.env.AKRA_DESKTOP_USER_DATA) {
   app.setPath("userData", process.env.AKRA_DESKTOP_USER_DATA);
+} else {
+  // 제품명(Akra ADE)으로 바뀐 userData 위치로 이전 폴더를 한 번 옮긴다 (#2588). 못 옮기면 이전 폴더를 계속 쓴다.
+  const migration = migrateUserData(app.getPath("appData"), app.getPath("userData"));
+  if (migration.kind === "kept-legacy") app.setPath("userData", migration.path);
+  if (migration.kind !== "none") console.warn("[akra] userData migration", migration);
 }
 
 const connections = new Map<number, GatewayConnection>();
