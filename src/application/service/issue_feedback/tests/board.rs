@@ -17,6 +17,7 @@ struct FakeBoard {
     selected: Mutex<Option<String>>,
     writes: Mutex<Vec<IssueBoardFieldWriteRequest>>,
     read_fails: AtomicBool,
+    reads: std::sync::atomic::AtomicUsize,
     lose_write_response: AtomicBool,
 }
 
@@ -51,6 +52,7 @@ impl FakeBoard {
 
 impl IssueBoardFieldPort for FakeBoard {
     fn read_items(&self, request: IssueBoardItemsReadRequest) -> Result<IssueBoardItemsResponse> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
         if self.read_fails.load(Ordering::SeqCst) {
             bail!("the login has no read:project scope");
         }
@@ -170,9 +172,11 @@ fn a_board_write_is_journaled_once_with_a_board_field_approval() {
         IssueFeedbackAction::BoardFieldSet
     );
 
-    // 같은 단계는 다시 쓰지 않는다.
+    // 같은 단계는 다시 쓰지 않고, 확인된 목표는 원격을 다시 읽지도 않는다.
+    let reads = board.reads.load(Ordering::SeqCst);
     sync(&fixture, &board).unwrap();
     assert_eq!(board.write_count(), 1);
+    assert_eq!(board.reads.load(Ordering::SeqCst), reads);
 
     // 다음 단계는 자기 쓰기 위에서 이어 쓰고 원래 값을 잇는다.
     set_execution(&fixture, IssueExecutionState::Done);
