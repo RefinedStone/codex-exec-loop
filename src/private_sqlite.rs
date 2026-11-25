@@ -245,10 +245,20 @@ pub(crate) fn open_existing(
     files: DatabaseFiles,
     synchronous: Synchronous,
 ) -> Result<Option<PrivateConnection>> {
+    open_existing_with_busy_timeout(runtime, files, synchronous, Duration::from_secs(5))
+}
+
+/// Existing-only access with a caller-owned SQLite contention budget.
+pub(crate) fn open_existing_with_busy_timeout(
+    runtime: &Path,
+    files: DatabaseFiles,
+    synchronous: Synchronous,
+    busy_timeout: Duration,
+) -> Result<Option<PrivateConnection>> {
     files.validate()?;
     validate_runtime_path(runtime)?;
     for attempt in 0..TRANSIENT_ATTEMPTS {
-        match open_existing_once(runtime, files, synchronous) {
+        match open_existing_once(runtime, files, synchronous, busy_timeout) {
             Err(error) if error.is::<EntryAppeared>() && attempt + 1 < TRANSIENT_ATTEMPTS => {
                 std::thread::sleep(TRANSIENT_DELAY);
             }
@@ -262,6 +272,7 @@ fn open_existing_once(
     runtime: &Path,
     files: DatabaseFiles,
     synchronous: Synchronous,
+    busy_timeout: Duration,
 ) -> Result<Option<PrivateConnection>> {
     let Some(directories) = platform::open_existing_runtime(runtime)? else {
         return Ok(None);
@@ -287,7 +298,7 @@ fn open_existing_once(
         runtime,
         files,
         synchronous,
-        Duration::from_secs(5),
+        busy_timeout,
         directories,
         database,
         false,
