@@ -1,6 +1,7 @@
 // 같은 Gateway 접속에서 저장소 커널에 한 번 붙고, 열린 패널의 관심 영역만 읽는다.
 // 개요와 이슈 목록은 서로 다른 조회 계약을 쓰며, 이슈를 읽는 동안 모델 턴을 만들지 않는다.
 import { JsonRpcError, type JsonRpcClient } from "../rpc/jsonRpcClient";
+import { verificationBlockReason, verificationTargetKey, type TaskVerificationRequests, type TaskVerificationRequestView, type TaskVerificationTarget } from "./taskVerificationActions";
 import type { ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "./issueInteractions";
 import {
@@ -113,6 +114,7 @@ export interface KernelView {
   autoFollow: AutoFollowSettings | null;
   planning: PlanningState | null;
   planningEvidenceFreshness: PlanningEvidenceFreshness;
+  taskVerificationRequests: TaskVerificationRequests;
   parallel: ParallelState | null;
   parallelControl: ParallelControlView;
   issues: KernelIssuesView;
@@ -131,6 +133,7 @@ export const EMPTY_KERNEL_VIEW: KernelView = {
   autoFollow: null,
   planning: null,
   planningEvidenceFreshness: "stale",
+  taskVerificationRequests: {},
   parallel: null,
   parallelControl: EMPTY_PARALLEL_CONTROL,
   issues: EMPTY_KERNEL_ISSUES,
@@ -305,6 +308,7 @@ export class KernelConnection {
   private readonly pendingArbiterEvents = new Map<string, symbol>();
   private readonly arbiterNoticeRevisions = new Map<string, number>();
   private scheduledIssueRefresh = false;
+  private readonly taskVerificationAttempts = new Map<string, { workspace: string; kernel: string; target: TaskVerificationTarget; view: TaskVerificationRequestView }>();
 
   private issuesGeneration = 0;
   private issueStateRequest = 0;
@@ -345,7 +349,7 @@ export class KernelConnection {
     if (sameWorkspace && !overviewChanged && !issuesChanged && !attentionChanged) return;
 
     const previous = this.wanted;
-    if (!sameWorkspace) this.uncertainIssueOutcome = null;
+    if (!sameWorkspace) { this.uncertainIssueOutcome = null; this.interruptTaskVerificationRequests(); }
     this.wanted = wanted;
     this.interests = next;
     if (overviewChanged || !sameWorkspace) {
@@ -388,6 +392,7 @@ export class KernelConnection {
   }
 
   connectionChanged(connected: boolean): void {
+    this.interruptTaskVerificationRequests();
     this.connected = connected;
     this.generation += 1;
     this.pendingArbiterEvents.clear();
@@ -447,6 +452,66 @@ export class KernelConnection {
     } finally {
       if (this.overviewScopeCurrent(generation, interest)) this.updateParallelControl({ pending: null });
     }
+  }
+
+
+  /** Only an explicit click can reserve a verification. Unknown replies reuse the same logical request. */
+  async requestTaskVerification(target: TaskVerificationTarget): Promise<void> {
+    const view = this.store.getKernel();
+    if (!this.canRead("overview") || !view.workspace || !view.kernel) return;
+    const key = JSON.stringify([view.workspace, view.kernel, verificationTargetKey(target)]);
+    const previous = this.taskVerificationAttempts.get(key);
+    if (verificationBlockReason(view.planning?.task_evidence, view.planningEvidenceFreshness, target, previous?.view)) return;
+    const generation = this.generation;
+    const requestId = previous?.view.status === "unknown" ? previous.view.requestId : crypto.randomUUID();
+    const attempt = {
+      workspace: view.workspace, kernel: view.kernel, target,
+      view: { status: "sending", requestId, attemptId: previous?.view.status === "unknown" ? previous.view.attemptId : null,
+        message: "호스트 검증 요청을 보내고 있습니다." } as TaskVerificationRequestView,
+    };
+    this.taskVerificationAttempts.set(key, attempt);
+    this.syncTaskVerificationRequests();
+    try {
+      const response = await this.client.request<CommandResponse>(KERNEL_METHOD.command, {
+        command: { type: "request_task_verification", ...target, request_id: requestId },
+        idempotency_key: requestId,
+      });
+      if (generation !== this.generation || this.taskVerificationAttempts.get(key) !== attempt) return;
+      if (response.rejection || response.failure) {
+        attempt.view = { ...attempt.view, status: "rejected", message: "요청이 거절되었습니다. 현재 작업과 완료 기준을 다시 확인해 주세요." };
+      } else if (response.processed === true && response.result?.type === "task_verification_requested") {
+        attempt.view = { ...attempt.view, status: "accepted", attemptId: response.result.attempt_id,
+          message: "검증 요청을 접수했습니다. 실행 결과는 커널 조회로 확인합니다." };
+      } else {
+        attempt.view = { ...attempt.view, status: "unknown", message: "요청의 처리 결과를 확인하지 못했습니다. 상태를 조회한 뒤 같은 요청을 다시 확인할 수 있습니다." };
+      }
+    } catch {
+      if (generation !== this.generation || this.taskVerificationAttempts.get(key) !== attempt) return;
+      attempt.view = { ...attempt.view, status: "unknown", message: "응답을 받지 못했습니다. 상태를 조회한 뒤 같은 요청을 다시 확인할 수 있습니다." };
+    } finally {
+      if (generation === this.generation && this.taskVerificationAttempts.get(key) === attempt) {
+        this.syncTaskVerificationRequests();
+        this.schedulePlanningEvidenceRead();
+      }
+    }
+  }
+
+  private interruptTaskVerificationRequests(): void {
+    for (const attempt of this.taskVerificationAttempts.values()) {
+      if (attempt.view.status === "sending") attempt.view = { ...attempt.view, status: "unknown",
+        message: "연결이 바뀌어 요청 결과를 확인하지 못했습니다. 상태를 조회한 뒤 같은 요청을 다시 확인할 수 있습니다." };
+    }
+  }
+
+  private syncTaskVerificationRequests(): void {
+    const view = this.store.getKernel();
+    const requests: Record<string, TaskVerificationRequestView> = {};
+    for (const attempt of this.taskVerificationAttempts.values()) {
+      if (attempt.workspace === view.workspace && attempt.kernel === view.kernel) {
+        requests[verificationTargetKey(attempt.target)] = attempt.view;
+      }
+    }
+    this.store.setKernel({ ...view, taskVerificationRequests: requests });
   }
 
   private updateParallelControl(change: Partial<ParallelControlView>): void {
@@ -622,7 +687,7 @@ export class KernelConnection {
         if (current?.status === "ready" && current.binding_id === record.receipt.binding_id) this.scheduleIssueRefresh();
         return;
       }
-      if (record.kind === "criterion_evidence_recorded" || record.kind === "criterion_waived") {
+      if (record.kind === "criterion_evidence_recorded" || record.kind === "criterion_waived" || record.kind === "task_verification_finished") {
         this.schedulePlanningEvidenceRead();
       } else if (record.kind === "issue_decision_requested" || record.kind === "issue_decision_resolved") {
         this.applyIssueDecision(record.decision, record.revision);
@@ -839,6 +904,7 @@ export class KernelConnection {
     if (generation !== this.generation) return;
     const kept = previous.kernel === attached.kernel ? this.store.getKernel() : EMPTY_KERNEL_VIEW;
     this.store.setKernel({ ...kept, phase: "attached", workspace, kernel: attached.kernel, message: null });
+    this.syncTaskVerificationRequests();
     this.restoreUncertainIssueOutcome();
     await Promise.all([
       this.interests.has("overview") ? this.readOverview(true) : Promise.resolve(),

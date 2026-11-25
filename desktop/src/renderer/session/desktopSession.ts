@@ -280,6 +280,10 @@ export class DesktopSession {
     return this.kernel.refresh();
   }
 
+  requestTaskVerification(target: import("../kernel/taskVerificationActions").TaskVerificationTarget): Promise<void> {
+    return this.kernel.requestTaskVerification(target);
+  }
+
   setParallelEnabled(enabled: boolean): Promise<void> {
     return this.kernel.setParallelEnabled(enabled);
   }

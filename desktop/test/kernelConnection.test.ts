@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
 import { taskEvidenceFixture } from "./fixtures/taskEvidence";
+import { taskVerificationFixture } from "./fixtures/taskVerification";
 
 interface Sent {
   id: number;
@@ -255,7 +256,8 @@ function planningWithEvidence(state: "pass" | "fail" = "pass", evidenceRevision 
   return { ...PLANNING, revision: evidence.planning_revision, task_evidence: evidence };
 }
 
-function criterionRecorded(kind: "criterion_evidence_recorded" | "criterion_waived") {
+function criterionRecorded(kind: "criterion_evidence_recorded" | "criterion_waived" | "task_verification_finished") {
+  if (kind === "task_verification_finished") return { event: { type: "recorded", event: { kind, ...taskVerificationFixture().tasks[0]!.criteria[0]!.host_verification.receipt } } };
   const receipt = planningWithEvidence("fail", 5).task_evidence.tasks[0]?.criteria[0]?.evidence;
   if (!receipt) throw new Error("Task evidence fixture must include an evidence receipt");
   const record = kind === "criterion_evidence_recorded"
@@ -445,7 +447,7 @@ describe("planning evidence freshness", () => {
     expect(h.view().message).toContain("planning unavailable later");
   });
 
-  it.each(["criterion_evidence_recorded", "criterion_waived"] as const)(
+  it.each(["criterion_evidence_recorded", "criterion_waived", "task_verification_finished"] as const)(
     "invalidates an already-resolved planning query synchronously on %s and coalesces reads",
     async (kind) => {
       const h = await evidenceHarness();
@@ -797,5 +799,102 @@ describe("explicit parallel execution control", () => {
     expect(h.view().parallel?.enabled).toBe(false);
     expect(h.requests("akra/kernel/command").filter((request) =>
       (request.params.command as { type: string })?.type === "enable_parallel")).toHaveLength(1);
+  });
+});
+
+describe("host verification requests", () => {
+  async function hostHarness() {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    const evidence = taskVerificationFixture();
+    await h.attachAndAnswer({ ...PLANNING, revision: evidence.planning_revision, task_evidence: evidence });
+    await attached;
+    const scope = evidence.tasks[0]!.scope;
+    const target = { task_id: scope.task_id, criterion_id: evidence.tasks[0]!.criteria[0]!.criterion.id,
+      scope_id: scope.scope_id, expected_acceptance_revision: scope.acceptance_revision };
+    return { ...h, target, evidence };
+  }
+  async function answerRefresh(h: Awaited<ReturnType<typeof hostHarness>>, before: number) {
+    await h.when(() => h.requests("akra/kernel/query").length >= before + 4);
+    for (const request of h.requests("akra/kernel/query").slice(before)) h.reply(request,
+      request.params.query?.type === "planning" ? { ...PLANNING, revision: h.evidence.planning_revision, task_evidence: h.evidence }
+        : defaultAnswer(request.params.query?.type ?? ""));
+    await h.when(() => h.view().planningEvidenceFreshness === "current");
+  }
+
+  it("sends exact current coordinates once and keeps an accepted reservation separate from host completion", async () => {
+    const h = await hostHarness();
+    const before = h.requests("akra/kernel/command").length;
+    const requested = h.connection.requestTaskVerification(h.target);
+    await h.connection.requestTaskVerification(h.target);
+    const command = h.requests("akra/kernel/command").at(-1)!;
+    expect(h.requests("akra/kernel/command")).toHaveLength(before + 1);
+    expect(command.params.command).toEqual({ type: "request_task_verification", ...h.target, request_id: command.params.idempotency_key });
+    const reads = h.requests("akra/kernel/query").length;
+    h.reply(command, { processed: true, result: { type: "task_verification_requested", attempt_id: "2".repeat(64), changed: true } });
+    await requested;
+    expect(Object.values(h.view().taskVerificationRequests)[0]?.status).toBe("accepted");
+    expect(h.view().planningEvidenceFreshness).toBe("refreshing");
+    expect(h.view().planning?.task_evidence?.tasks[0]?.criteria[0]?.host_verification?.attempt?.attempt_id).toBe("1".repeat(64));
+    await answerRefresh(h, reads);
+    await h.connection.requestTaskVerification(h.target);
+    expect(h.requests("akra/kernel/command")).toHaveLength(before + 1);
+    expect(h.requests("turn/start")).toHaveLength(0);
+  });
+
+  it("retries an unknown response with the same request and idempotency key after rereading", async () => {
+    const h = await hostHarness();
+    const requested = h.connection.requestTaskVerification(h.target);
+    const first = h.requests("akra/kernel/command").at(-1)!;
+    const reads = h.requests("akra/kernel/query").length;
+    h.fail(first, -32000, "synthetic transport loss");
+    await requested;
+    expect(Object.values(h.view().taskVerificationRequests)[0]?.status).toBe("unknown");
+    await answerRefresh(h, reads);
+    const retried = h.connection.requestTaskVerification(h.target);
+    const second = h.requests("akra/kernel/command").at(-1)!;
+    expect(second.params).toEqual(first.params);
+    const secondReads = h.requests("akra/kernel/query").length;
+    h.reply(second, { processed: true, result: { type: "task_verification_requested", attempt_id: "1".repeat(64), changed: false } });
+    await retried;
+    await answerRefresh(h, secondReads);
+  });
+
+  it("does not attribute another verification to a replay with no original attempt receipt", async () => {
+    const h = await hostHarness();
+    const requested = h.connection.requestTaskVerification(h.target);
+    const command = h.requests("akra/kernel/command").at(-1)!;
+    const reads = h.requests("akra/kernel/query").length;
+    h.reply(command, { processed: true, operation: { op_id: 5, state: "completed", replayed: true } });
+    await requested;
+    await answerRefresh(h, reads);
+    expect(Object.values(h.view().taskVerificationRequests)[0]?.status).toBe("unknown");
+    expect(Object.values(h.view().taskVerificationRequests)[0]?.attemptId).toBeNull();
+    const retried = h.connection.requestTaskVerification(h.target);
+    const retry = h.requests("akra/kernel/command").at(-1)!;
+    expect(retry.params).toEqual(command.params);
+    const rereads = h.requests("akra/kernel/query").length;
+    h.reply(retry, { processed: true, result: { type: "task_verification_requested", attempt_id: "2".repeat(64), changed: false } });
+    await retried;
+    await answerRefresh(h, rereads);
+    expect(Object.values(h.view().taskVerificationRequests)[0]?.attemptId).toBe("2".repeat(64));
+  });
+
+  it("rejects a stale rendered scope and does not replay a pending request on reconnect", async () => {
+    const h = await hostHarness();
+    const before = h.requests("akra/kernel/command").length;
+    await h.connection.requestTaskVerification({ ...h.target, scope_id: "9".repeat(64) });
+    expect(h.requests("akra/kernel/command")).toHaveLength(before);
+    const requested = h.connection.requestTaskVerification(h.target);
+    const first = h.requests("akra/kernel/command").at(-1)!;
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    await h.attachAndAnswer({ ...PLANNING, revision: h.evidence.planning_revision, task_evidence: h.evidence });
+    h.reply(first, { processed: true });
+    await requested;
+    expect(Object.values(h.view().taskVerificationRequests)[0]?.status).toBe("unknown");
+    const sent = h.requests("akra/kernel/command").filter((request) => (request.params.command as { type?: string })?.type === "request_task_verification");
+    expect(sent).toHaveLength(1);
   });
 });

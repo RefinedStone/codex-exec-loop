@@ -1,4 +1,4 @@
-import { taskEvidenceFixture } from "./taskEvidence";
+import { taskEvidenceFixture } from "./taskEvidence.ts";
 
 /** 합성된 host 실행 metadata. 실제 경로, 출력, 실행 capability를 포함하지 않는다. */
 export function taskVerificationFixture() {

@@ -14,6 +14,7 @@ const electronPath = createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
 
 const { taskEvidenceFixture } = await import("../fixtures/taskEvidence.ts");
+const { taskVerificationFixture } = await import("../fixtures/taskVerification.ts");
 
 function evidenceSnapshot() {
   const snapshot = taskEvidenceFixture();
@@ -54,6 +55,7 @@ const task = (rank, id, title, status) => ({ rank, task_id: id, direction_title:
 let releaseParallelReply = null;
 let parallelCommandReceived = null;
 let rejectNextParallel = false;
+let nextHostAttempt = null;
 const waitForParallelCommand = () => new Promise((resolve, reject) => {
   const timeout = setTimeout(() => reject(new Error("the parallel command did not reach the fake kernel")), 10_000);
   parallelCommandReceived = () => { clearTimeout(timeout); parallelCommandReceived = null; resolve(); };
@@ -109,6 +111,13 @@ const kernel = {
     const type = params.command?.type;
     if (method === "akra/kernel/command" && type === "refresh_planning") {
       return { result: { processed: true }, events: [planningNotification(kernel.queries.planning)] };
+    }
+    if (method === "akra/kernel/command" && type === "request_task_verification") {
+      if (!nextHostAttempt) throw new Error("host attempt was not prepared");
+      kernel.queries.planning.task_evidence.tasks[0].criteria[0].host_verification = {
+        phase: "running", state: "running", attempt: nextHostAttempt,
+      };
+      return { result: { processed: true, result: { type: "task_verification_requested", attempt_id: nextHostAttempt.attempt_id, changed: true } } };
     }
     if (method !== "akra/kernel/command" || !["enable_parallel", "disable_parallel"].includes(type)) return undefined;
     if (rejectNextParallel) {
@@ -254,6 +263,81 @@ try {
       (method === "akra/kernel/command"
         && ["prepare_evidence", "record_evidence", "waive_criterion"].includes(params.command?.type))));
 
+
+
+  // #2718: request admission is separate from the observed host result.
+  const hostFinished = taskVerificationFixture();
+  const hostEntry = hostFinished.tasks[0].criteria[0];
+  hostEntry.state = "fail";
+  hostEntry.evidence.evidence.status = "fail";
+  const beforeHost = structuredClone(hostFinished);
+  beforeHost.tasks[0].criteria[0].host_verification = { phase: "pending", state: "pending" };
+  kernel.queries.planning = { ...kernel.queries.planning, task_evidence: beforeHost };
+  gateway.sendKernelEvent(planningNotification(kernel.queries.planning));
+  const hostStatus = evidenceCard.getByTestId("task-host-status").first();
+  const hostButton = evidenceCard.getByTestId("task-host-request").first();
+  await hostStatus.filter({ hasText: /^호스트 검증 대기$/ }).waitFor();
+  check("worker failure does not invent a host failure", (await evidenceStatus.innerText()).includes("작업자 보고: 실패"));
+  nextHostAttempt = structuredClone(hostEntry.host_verification.attempt);
+  await hostButton.click();
+  await hostStatus.filter({ hasText: /^호스트 검증 중$/ }).waitFor();
+  check("accepted verification is not shown as passed", await hostButton.isDisabled()
+    && (await evidenceCard.getByTestId("task-host-request-status").innerText()).includes("접수")
+    && !(await hostStatus.innerText()).includes("통과"));
+  const requestedHost = requests.filter(({ method, params }) => method === "akra/kernel/command"
+    && params.command?.type === "request_task_verification");
+  check("the click sends exact scope and a stable logical request ID", requestedHost.length === 1
+    && requestedHost[0].params.command.scope_id === hostFinished.tasks[0].scope.scope_id
+    && requestedHost[0].params.command.expected_acceptance_revision === hostFinished.tasks[0].scope.acceptance_revision
+    && requestedHost[0].params.command.request_id === requestedHost[0].params.idempotency_key);
+  const readsBeforeHost = planningReads();
+  kernel.queries.planning = { ...kernel.queries.planning, task_evidence: hostFinished };
+  gateway.sendKernelEvent({ type: "recorded", sequence: 60, recorded_at: "2026-11-23T00:00:04Z",
+    event: { kind: "task_verification_finished", ...structuredClone(hostEntry.host_verification.receipt) } });
+  await hostStatus.filter({ hasText: /^호스트 검증 통과$/ }).waitFor();
+  check("finished host events reread the current snapshot", planningReads() > readsBeforeHost
+    && (await evidenceStatus.innerText()).includes("작업자 보고: 실패"));
+  await evidenceCard.locator("summary").filter({ hasText: "호스트 검증 정보" }).first().click();
+  check("host metadata names the fixed check and preserves empty output", (await evidenceCard.innerText()).includes("종료 코드 0")
+    && (await evidenceCard.innerText()).includes("0 바이트")
+    && (await evidenceCard.innerText()).includes("빌드·기능 테스트의 통과 여부는 별도로"));
+  for (const [state, result, label] of [
+    ["not_run", { kind: "not_run", reason: "lease_changed" }, "호스트 검증 미실행"],
+    ["not_run", { kind: "interrupted" }, "호스트 검증 중단"],
+  ]) {
+    const snapshot = structuredClone(hostFinished);
+    const host = snapshot.tasks[0].criteria[0].host_verification;
+    host.state = state;
+    host.receipt.verification.result = result;
+    delete host.receipt.verification.manifest;
+    delete host.receipt.verification.artifact;
+    kernel.queries.planning = { ...kernel.queries.planning, task_evidence: snapshot };
+    gateway.sendKernelEvent(planningNotification(kernel.queries.planning));
+    await hostStatus.filter({ hasText: label }).waitFor();
+    check(label + " is not a pass", !(await hostStatus.innerText()).includes("통과"));
+  }
+  const failedHost = structuredClone(hostFinished);
+  failedHost.tasks[0].criteria[0].host_verification.state = "failed";
+  failedHost.tasks[0].criteria[0].host_verification.receipt.verification.result.observation.outcome.exit_code = 1;
+  kernel.queries.planning = { ...kernel.queries.planning, task_evidence: failedHost };
+  gateway.sendKernelEvent(planningNotification(kernel.queries.planning));
+  await hostStatus.filter({ hasText: /^호스트 검증 실패$/ }).waitFor();
+  const staleHost = structuredClone(hostFinished);
+  staleHost.tasks[0].scope.scope_id = "9".repeat(64);
+  staleHost.tasks[0].criteria[0].state = "stale";
+  staleHost.tasks[0].criteria[0].host_verification.state = "stale";
+  kernel.queries.planning = { ...kernel.queries.planning, task_evidence: staleHost };
+  gateway.sendKernelEvent(planningNotification(kernel.queries.planning));
+  await hostStatus.filter({ hasText: "이전 범위의 호스트 검증" }).waitFor();
+  check("a changed scope never retains a current host pass", await hostStatus.getAttribute("data-current") === "false");
+  const unavailableHost = structuredClone(hostFinished);
+  unavailableHost.tasks[0].criteria[0].host_verification.state = "unavailable";
+  unavailableHost.tasks[0].criteria[0].host_verification.unavailable = "artifact_missing";
+  delete unavailableHost.tasks[0].criteria[0].host_verification.receipt.verification.artifact;
+  kernel.queries.planning = { ...kernel.queries.planning, task_evidence: unavailableHost };
+  gateway.sendKernelEvent(planningNotification(kernel.queries.planning));
+  await hostStatus.filter({ hasText: "호스트 검증 확인 불가" }).waitFor();
+  check("unavailable artifacts do not present a current pass", await hostStatus.getAttribute("data-current") === "false");
 
   // 워커 상태판 (#2378): 두 워커의 상태와 worktree 를 한 화면에서 구분하고, 실패한 워커에서 실패 카드와 로그로 간다.
   const workers = page.getByTestId("kernel-agent");

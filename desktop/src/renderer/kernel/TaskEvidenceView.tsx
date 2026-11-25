@@ -1,11 +1,12 @@
 /** 활성 작업의 완료 기준과 E2 읽기 metadata다. 판정과 쓰기 권한은 커널에 남긴다. */
 import type { PlanningEvidenceFreshness } from "./kernelConnection";
+import { TaskVerificationView, type TaskVerificationActions } from "./TaskVerificationView";
 import type {
   PlanningCriterionEvidenceState, PlanningState, TaskAcceptanceCriterion, TaskCriterionEvidenceState,
   TaskEvidenceError, TaskEvidenceTaskState, TaskEvidenceTree,
 } from "./protocol";
 
-export interface TaskEvidenceViewProps {
+export interface TaskEvidenceViewProps extends TaskVerificationActions {
   taskId: string;
   snapshot: PlanningState["task_evidence"];
   freshness: PlanningEvidenceFreshness;
@@ -61,11 +62,14 @@ function TreeMetadata({ tree }: { tree: TaskEvidenceTree }) {
   );
 }
 
-function CriterionRow({ entry, current, unavailable }: {
+function CriterionRow({ entry, current, unavailable, task, snapshot, freshness, ...actions }: {
   entry: PlanningCriterionEvidenceState;
   current: boolean;
   unavailable: boolean;
-}) {
+  task: TaskEvidenceTaskState;
+  snapshot: NonNullable<PlanningState["task_evidence"]>;
+  freshness: PlanningEvidenceFreshness;
+} & TaskVerificationActions) {
   const state = unavailable ? null : entry.state;
   const label = state == null ? "현재 상태 확인 불가" : STATE_LABEL[state];
   const reported = state === "pass" || state === "fail" || state === "blocked";
@@ -88,6 +92,7 @@ function CriterionRow({ entry, current, unavailable }: {
       </div>
       <p className="task-evidence-scenario">{entry.criterion.scenario}</p>
       <p className="muted">기준 ID: <code>{entry.criterion.id}</code></p>
+      <TaskVerificationView entry={entry} task={task} snapshot={snapshot} freshness={freshness} {...actions} />
       {evidence && (
         <details className="task-evidence-record">
           <summary>{currentReport ? "작업자 보고 정보" : "이전 작업자 보고"}</summary>
@@ -121,11 +126,11 @@ function CriterionRow({ entry, current, unavailable }: {
   );
 }
 
-function TaskCriteria({ task, snapshot, freshness }: {
+function TaskCriteria({ task, snapshot, freshness, ...actions }: {
   task: TaskEvidenceTaskState;
   snapshot: NonNullable<PlanningState["task_evidence"]>;
   freshness: PlanningEvidenceFreshness;
-}) {
+} & TaskVerificationActions) {
   return (
     <>
       {snapshot.truncated && (
@@ -142,7 +147,7 @@ function TaskCriteria({ task, snapshot, freshness }: {
           <ul className="task-evidence-criteria">
             {task.criteria.map((entry) => (
               <CriterionRow key={entry.criterion.id} entry={entry} current={freshness === "current"}
-                unavailable={task.unavailable != null} />
+                unavailable={task.unavailable != null} task={task} snapshot={snapshot} freshness={freshness} {...actions} />
             ))}
           </ul>
         </>
@@ -169,7 +174,7 @@ function TaskCriteria({ task, snapshot, freshness }: {
   );
 }
 
-export function TaskEvidenceView({ taskId, snapshot, freshness }: TaskEvidenceViewProps) {
+export function TaskEvidenceView({ taskId, snapshot, freshness, ...actions }: TaskEvidenceViewProps) {
   const task = snapshot?.unavailable ? undefined : snapshot?.tasks.find((entry) => entry.scope.task_id === taskId);
   const summaryState = freshness === "refreshing" ? "확인 중" : freshness === "stale" ? "마지막 조회"
     : snapshot == null ? "미제공" : snapshot.unavailable || task?.unavailable ? "확인 불가"
@@ -194,7 +199,7 @@ export function TaskEvidenceView({ taskId, snapshot, freshness }: TaskEvidenceVi
           {snapshot.truncated ? "이 작업은 현재 조회 범위에 포함되지 않았습니다." : "이 작업의 기준·증거 항목이 반환되지 않았습니다."}
         </p>
       ) : (
-        <TaskCriteria task={task} snapshot={snapshot} freshness={freshness} />
+        <TaskCriteria task={task} snapshot={snapshot} freshness={freshness} {...actions} />
       )}
     </details>
   );

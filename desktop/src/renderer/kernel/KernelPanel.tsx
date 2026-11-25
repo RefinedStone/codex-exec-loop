@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useDesktopStore } from "../session/desktopStore";
 import type { KernelView, ParallelControlView, PlanningEvidenceFreshness } from "./kernelConnection";
 import { TaskEvidenceView, type TaskEvidenceViewProps } from "./TaskEvidenceView";
+import type { TaskVerificationActions } from "./TaskVerificationView";
 import type { ParallelAgent, ParallelState, PlanningState, PlanningTask, ThreadActivity } from "./protocol";
 import { WORKER_STATUS_LABEL, WORKER_STEP, workerStatus, type WorkerStatus } from "./workerStatus";
 import { folderName } from "../sidebar/threadStatus";
@@ -49,7 +50,7 @@ function ThreadRow({ activity, title }: { activity: ThreadActivity; title: strin
   );
 }
 
-function TaskRow({ task, snapshot, freshness }: { task: PlanningTask } & Omit<TaskEvidenceViewProps, "taskId">) {
+function TaskRow({ task, snapshot, freshness, ...actions }: { task: PlanningTask } & Omit<TaskEvidenceViewProps, "taskId">) {
   return (
     <li className="work-item" data-testid="kernel-task">
       <span>
@@ -59,12 +60,12 @@ function TaskRow({ task, snapshot, freshness }: { task: PlanningTask } & Omit<Ta
         <span className="muted">{task.direction_title}</span>
         <span className="work-badge">{TASK_STATUS[task.status]}</span>
       </div>
-      <TaskEvidenceView taskId={task.task_id} snapshot={snapshot} freshness={freshness} />
+      <TaskEvidenceView taskId={task.task_id} snapshot={snapshot} freshness={freshness} {...actions} />
     </li>
   );
 }
 
-function PlanningSection({ planning, freshness }: { planning: PlanningState | null; freshness: PlanningEvidenceFreshness }) {
+function PlanningSection({ planning, freshness, ...actions }: { planning: PlanningState | null; freshness: PlanningEvidenceFreshness } & TaskVerificationActions) {
   if (!planning) {
     return <p className="muted">읽는 중…</p>;
   }
@@ -78,7 +79,7 @@ function PlanningSection({ planning, freshness }: { planning: PlanningState | nu
       {planning.auto_follow_pause_reason && <p className="warning">자동 후속 멈춤: {planning.auto_follow_pause_reason}</p>}
       <ul>
         {planning.active_tasks.map((task) => (
-          <TaskRow key={task.task_id} task={task} snapshot={planning.task_evidence} freshness={freshness} />
+          <TaskRow key={task.task_id} task={task} snapshot={planning.task_evidence} freshness={freshness} {...actions} />
         ))}
       </ul>
       {planning.proposed_tasks.length > 0 && <p className="muted">받아들이지 않은 제안 {planning.proposed_tasks.length}건</p>}
@@ -206,12 +207,13 @@ function KernelBody({
   threadTitle,
   onSetParallelEnabled,
   onOpenThread,
+  onRequestVerification,
 }: {
   kernel: KernelView;
   threadTitle(threadId: string): string;
   onSetParallelEnabled(enabled: boolean): Promise<void>;
   onOpenThread(threadId: string): void;
-}) {
+} & TaskVerificationActions) {
   if (kernel.workspace === null) {
     return <p className="muted work-section">스레드를 열면 그 폴더의 저장소 커널을 보여 줍니다.</p>;
   }
@@ -257,18 +259,19 @@ function KernelBody({
       </section>
       <section className="work-section">
         <h3>planning 큐</h3>
-        <PlanningSection planning={kernel.planning} freshness={kernel.planningEvidenceFreshness} />
+        <PlanningSection planning={kernel.planning} freshness={kernel.planningEvidenceFreshness}
+          verificationRequests={kernel.taskVerificationRequests} onRequestVerification={kernel.phase === "attached" ? onRequestVerification : undefined} />
       </section>
     </div>
   );
 }
 
-export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onEditTasks }: {
+export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onEditTasks, onRequestVerification }: {
   onRefresh(): Promise<void>;
   onSetParallelEnabled(enabled: boolean): Promise<void>;
   onOpenThread(threadId: string): void;
   onEditTasks?(): void;
-}) {
+} & TaskVerificationActions) {
   const kernel = useDesktopStore((state) => state.kernel);
   const folders = useDesktopStore((state) => state.folders);
   const [refreshing, setRefreshing] = useState(false);
@@ -294,7 +297,7 @@ export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onE
           {refreshing ? "읽는 중…" : "새로 고침"}
         </button>
       </div>
-      <KernelBody kernel={kernel} threadTitle={threadTitle} onSetParallelEnabled={onSetParallelEnabled} onOpenThread={onOpenThread} />
+      <KernelBody kernel={kernel} threadTitle={threadTitle} onSetParallelEnabled={onSetParallelEnabled} onOpenThread={onOpenThread} onRequestVerification={onRequestVerification} />
     </aside>
   );
 }
