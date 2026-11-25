@@ -337,6 +337,13 @@ impl IssueCreationJournalPort for MemoryCreationJournal {
         Ok(workspace_dir.trim_end_matches("/.").to_string())
     }
 
+    fn read_records(&self, _workspace_dir: &str) -> Result<Vec<IssueCreationIntentRecord>> {
+        self.records
+            .try_lock()
+            .map(|records| records.clone())
+            .map_err(|_| anyhow!("the creation snapshot is busy"))
+    }
+
     fn begin(&self, _workspace_dir: &str) -> Result<Box<dyn IssueCreationJournalTransaction + '_>> {
         Ok(Box::new(MemoryTransaction {
             journal: self,

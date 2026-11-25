@@ -526,3 +526,18 @@ fn child_checks_creation_lease() {
 }
 
 mod provenance;
+
+#[test]
+fn read_only_creation_snapshot_does_not_wait_for_the_writer_lease() {
+    let fixture = Fixture::new("readonly-snapshot");
+    let adapter = fixture.adapter();
+    let workspace = fixture.workspace.to_str().unwrap();
+    let mut writer = adapter.begin(workspace).unwrap();
+    let mut record = fixture.record();
+    approve(&mut record);
+    record.state = IssueCreationIntentState::Sent;
+    writer.save(&record).unwrap();
+
+    // Sent is durable before remote creation, even while the writer lease remains held.
+    assert_eq!(adapter.read_records(workspace).unwrap(), vec![record]);
+}

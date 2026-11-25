@@ -532,7 +532,7 @@ pub(crate) fn build_gateway_backend(
                 let primary = repository_kernel_target(cwd)?.workspace_root;
                 let canonical = std::fs::canonicalize(primary)?;
                 canonical.into_os_string().into_string().map_err(|_| anyhow::anyhow!("the hand-off workspace is not UTF-8"))
-            }),
+            }).with_creation_journal(build_issue_creation_journal()),
         ),
         dots: build_dots()?,
         chats: build_chats()?,
@@ -566,11 +566,24 @@ pub(crate) fn build_issue_publish_journal()
     }))
 }
 
+pub(crate) fn build_issue_creation_journal() -> Arc<
+    dyn crate::application::port::outbound::issue_creation_journal_port::IssueCreationJournalPort,
+> {
+    use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJournalAdapter;
+    Arc::new(
+        IssueCreationJournalAdapter::new(|workspace_dir| {
+            let location =
+                SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+            Ok(PathBuf::from(location.runtime_dir))
+        })
+        .with_workspace_resolver(|cwd| Ok(repository_kernel_target(cwd)?.workspace_root)),
+    )
+}
+
 fn build_issue_drafts()
 -> Result<Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>> {
     use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
     use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
-    use crate::adapter::outbound::filesystem::issue_creation_journal::IssueCreationJournalAdapter;
     use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
     use crate::adapter::outbound::filesystem::issue_template::FilesystemIssueTemplateSourceAdapter;
     use crate::adapter::outbound::github::{
@@ -600,16 +613,11 @@ fn build_issue_drafts()
         )
         .with_feedback_store(super::issue_collection::build_feedback_store()),
     );
-    let creation_journal = IssueCreationJournalAdapter::new(|workspace_dir| {
-        let location =
-            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
-        Ok(PathBuf::from(location.runtime_dir))
-    })
-    .with_workspace_resolver(|cwd| Ok(repository_kernel_target(cwd)?.workspace_root));
+    let creation_journal = build_issue_creation_journal();
     let creator = Arc::new(IssueCreationService::new(
         Arc::new(GithubIssueCreateAdapter::new(akra_home)),
         snapshot.clone(),
-        Arc::new(creation_journal),
+        creation_journal,
         vault,
         publisher.clone(),
     ));
