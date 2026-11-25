@@ -1,5 +1,6 @@
 //! Profile-scoped restart candidates; current authority stays in each repository ledger.
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params, types::ValueRef};
@@ -23,6 +24,9 @@ const SCHEMA_VERSION: i64 = 1;
 const MAX_ENTRIES: usize = 256;
 const MAX_KEY_BYTES: usize = 256;
 const MAX_WORKSPACE_BYTES: usize = 16 * 1024;
+const CONTENTION_RETRY_WINDOW: Duration = Duration::from_secs(5);
+const SQLITE_BUSY_SLICE: Duration = Duration::from_millis(100);
+const CONTENTION_RETRY_DELAY: Duration = Duration::from_millis(10);
 const SCHEMA: &str = r#"
 CREATE TABLE restart_candidates (
     repository_key TEXT COLLATE BINARY NOT NULL PRIMARY KEY
@@ -54,15 +58,51 @@ impl IssueAutomationRestartRegistryPort for SqliteIssueAutomationRestartRegistry
     fn register(&self, entry: &IssueAutomationRestartEntry) -> Result<()> {
         validate_entry(entry)?;
         let runtime = (self.resolve_runtime)()?;
-        let mut opened =
-            match crate::private_sqlite::open_existing(&runtime, FILES, Synchronous::Extra)? {
-                Some(opened) => opened,
-                None => crate::private_sqlite::open_or_create_strict(
-                    &runtime,
-                    FILES,
-                    Synchronous::Extra,
-                )?,
-            };
+        retry_busy(CONTENTION_RETRY_WINDOW, |busy_timeout| {
+            self.register_once(&runtime, entry, busy_timeout)
+        })
+    }
+
+    fn unregister(&self, repository_key: &str) -> Result<()> {
+        validate_key(repository_key)?;
+        let runtime = (self.resolve_runtime)()?;
+        retry_busy(CONTENTION_RETRY_WINDOW, |busy_timeout| {
+            self.unregister_once(&runtime, repository_key, busy_timeout)
+        })
+    }
+
+    fn list(&self) -> Result<Vec<IssueAutomationRestartEntry>> {
+        let runtime = (self.resolve_runtime)()?;
+        retry_busy(CONTENTION_RETRY_WINDOW, |busy_timeout| {
+            self.list_once(&runtime, busy_timeout)
+        })
+    }
+}
+
+impl SqliteIssueAutomationRestartRegistryAdapter {
+    fn register_once(
+        &self,
+        runtime: &Path,
+        entry: &IssueAutomationRestartEntry,
+        busy_timeout: Duration,
+    ) -> Result<()> {
+        let mut opened = match crate::private_sqlite::open_existing_with_busy_timeout(
+            runtime,
+            FILES,
+            Synchronous::Extra,
+            busy_timeout,
+        )
+        .context("failed to open existing restart registry for registration")?
+        {
+            Some(opened) => opened,
+            None => crate::private_sqlite::open_or_create_strict_with_busy_timeout(
+                runtime,
+                FILES,
+                Synchronous::Extra,
+                busy_timeout,
+            )
+            .context("failed to create restart registry for registration")?,
+        };
         let (connection, guard) = opened.parts();
         transaction(
             connection,
@@ -94,11 +134,19 @@ impl IssueAutomationRestartRegistryPort for SqliteIssueAutomationRestartRegistry
         )
     }
 
-    fn unregister(&self, repository_key: &str) -> Result<()> {
-        validate_key(repository_key)?;
-        let runtime = (self.resolve_runtime)()?;
-        let Some(mut opened) =
-            crate::private_sqlite::open_existing(&runtime, FILES, Synchronous::Extra)?
+    fn unregister_once(
+        &self,
+        runtime: &Path,
+        repository_key: &str,
+        busy_timeout: Duration,
+    ) -> Result<()> {
+        let Some(mut opened) = crate::private_sqlite::open_existing_with_busy_timeout(
+            runtime,
+            FILES,
+            Synchronous::Extra,
+            busy_timeout,
+        )
+        .context("failed to open restart registry for removal")?
         else {
             return Ok(());
         };
@@ -131,10 +179,18 @@ impl IssueAutomationRestartRegistryPort for SqliteIssueAutomationRestartRegistry
         )
     }
 
-    fn list(&self) -> Result<Vec<IssueAutomationRestartEntry>> {
-        let runtime = (self.resolve_runtime)()?;
-        let Some(mut opened) =
-            crate::private_sqlite::open_existing(&runtime, FILES, Synchronous::Extra)?
+    fn list_once(
+        &self,
+        runtime: &Path,
+        busy_timeout: Duration,
+    ) -> Result<Vec<IssueAutomationRestartEntry>> {
+        let Some(mut opened) = crate::private_sqlite::open_existing_with_busy_timeout(
+            runtime,
+            FILES,
+            Synchronous::Extra,
+            busy_timeout,
+        )
+        .context("failed to open restart registry for discovery")?
         else {
             return Ok(Vec::new());
         };
@@ -156,17 +212,53 @@ impl IssueAutomationRestartRegistryPort for SqliteIssueAutomationRestartRegistry
     }
 }
 
+fn retry_busy<T>(retry_window: Duration, mut work: impl FnMut(Duration) -> Result<T>) -> Result<T> {
+    // The window bounds starting another attempt, not synchronous filesystem I/O.
+    let deadline = Instant::now() + retry_window;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        // Short native waits handle ordinary contention without repeatedly reopening files.
+        // A BUSY can also bypass SQLite's handler; release the complete connection/transaction
+        // before retrying so another process can finish. Each attempt rechecks private identity.
+        match work(remaining.min(SQLITE_BUSY_SLICE)) {
+            Err(error) if is_busy(&error) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(error);
+                }
+                std::thread::sleep(CONTENTION_RETRY_DELAY.min(remaining));
+                if Instant::now() >= deadline {
+                    return Err(error);
+                }
+            }
+            result => return result,
+        }
+    }
+}
+
+fn is_busy(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(failure, _))
+            if failure.code == rusqlite::ErrorCode::DatabaseBusy
+    )
+}
+
 fn transaction<T>(
     connection: &mut Connection,
     guard: &PrivateStoreGuard,
     behavior: TransactionBehavior,
     work: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
-    let transaction = connection.transaction_with_behavior(behavior)?;
+    let transaction = connection
+        .transaction_with_behavior(behavior)
+        .context("failed to begin restart registry transaction")?;
     guard.verify_identity()?;
-    let result = work(&transaction)?;
+    let result = work(&transaction).context("failed to apply restart registry transaction")?;
     guard.verify_identity()?;
-    transaction.commit()?;
+    transaction
+        .commit()
+        .context("failed to commit restart registry transaction")?;
     guard.verify_identity()?;
     Ok(result)
 }

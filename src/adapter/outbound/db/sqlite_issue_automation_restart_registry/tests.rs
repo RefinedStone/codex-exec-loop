@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use super::*;
 
+mod contention;
+
 const WORKER: &str = "adapter::outbound::db::sqlite_issue_automation_restart_registry::tests::registry_subprocess_worker";
 const WORKER_RUNTIME: &str = "AKRA_TEST_RESTART_REGISTRY_RUNTIME";
 const WORKER_START: &str = "AKRA_TEST_RESTART_REGISTRY_START";
@@ -627,7 +629,9 @@ fn registry_subprocess_worker() {
     for number in start..start + 16 {
         let candidate = entry(&runtime, number);
         match action.as_str() {
-            "register" => adapter.register(&candidate).unwrap(),
+            "register" => adapter
+                .register(&candidate)
+                .unwrap_or_else(|error| panic!("registration {number} failed: {error:#}")),
             "unregister" => adapter.unregister(&candidate.repository_key).unwrap(),
             _ => panic!("unsupported registry fixture action"),
         }
