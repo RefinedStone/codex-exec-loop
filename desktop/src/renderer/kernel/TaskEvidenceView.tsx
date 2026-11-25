@@ -1,12 +1,16 @@
 /** 활성 작업의 완료 기준과 E2 읽기 metadata다. 판정과 쓰기 권한은 커널에 남긴다. */
 import type { PlanningEvidenceFreshness } from "./kernelConnection";
 import { TaskVerificationView, type TaskVerificationActions } from "./TaskVerificationView";
+import { TaskCriterionWaiverView } from "./TaskCriterionWaiverView";
+import type { TaskCriterionWaiverActions } from "./taskCriterionWaiver";
 import type {
   PlanningCriterionEvidenceState, PlanningState, TaskAcceptanceCriterion, TaskCriterionEvidenceState,
   TaskEvidenceError, TaskEvidenceTaskState, TaskEvidenceTree,
 } from "./protocol";
 
-export interface TaskEvidenceViewProps extends TaskVerificationActions {
+export type TaskEvidenceActions = TaskVerificationActions & TaskCriterionWaiverActions;
+
+export interface TaskEvidenceViewProps extends TaskEvidenceActions {
   taskId: string;
   snapshot: PlanningState["task_evidence"];
   freshness: PlanningEvidenceFreshness;
@@ -69,7 +73,7 @@ function CriterionRow({ entry, current, unavailable, task, snapshot, freshness, 
   task: TaskEvidenceTaskState;
   snapshot: NonNullable<PlanningState["task_evidence"]>;
   freshness: PlanningEvidenceFreshness;
-} & TaskVerificationActions) {
+} & TaskEvidenceActions) {
   const state = unavailable ? null : entry.state;
   const label = state == null ? "현재 상태 확인 불가" : STATE_LABEL[state];
   const reported = state === "pass" || state === "fail" || state === "blocked";
@@ -93,6 +97,8 @@ function CriterionRow({ entry, current, unavailable, task, snapshot, freshness, 
       <p className="task-evidence-scenario">{entry.criterion.scenario}</p>
       <p className="muted">기준 ID: <code>{entry.criterion.id}</code></p>
       <TaskVerificationView entry={entry} task={task} snapshot={snapshot} freshness={freshness} {...actions} />
+      <TaskCriterionWaiverView key={task.scope.scope_id + ":" + task.scope.acceptance_revision} task={task} entry={entry}
+        snapshot={snapshot} freshness={freshness} {...actions} />
       {evidence && (
         <details className="task-evidence-record">
           <summary>{currentReport ? "작업자 보고 정보" : "이전 작업자 보고"}</summary>
@@ -130,7 +136,7 @@ function TaskCriteria({ task, snapshot, freshness, ...actions }: {
   task: TaskEvidenceTaskState;
   snapshot: NonNullable<PlanningState["task_evidence"]>;
   freshness: PlanningEvidenceFreshness;
-} & TaskVerificationActions) {
+} & TaskEvidenceActions) {
   return (
     <>
       {snapshot.truncated && (

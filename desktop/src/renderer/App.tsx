@@ -845,7 +845,8 @@ export function App() {
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
                 onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread}
                 onEditTasks={() => openTaskEditor()}
-                onRequestVerification={async (target) => session.current?.requestTaskVerification(target)} />}
+                onRequestVerification={async (target) => session.current?.requestTaskVerification(target)}
+                onWaiveCriterion={async (target, reason) => session.current?.waiveTaskCriterion(target, reason) ?? "rejected"} />}
               {panel === "issues" && (
                 <IssuePanel
                   key={kernelWorkspace}

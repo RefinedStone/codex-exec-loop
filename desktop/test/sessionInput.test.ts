@@ -23,6 +23,7 @@ function harness(readOnly = false) {
   const messageListeners = new Set<(text: string) => void>();
   const stateListeners = new Set<(state: ConnectionState) => void>();
   const bridge: AkraBridge = {
+    confirmTaskCriterionWaiver: async () => ({ cancelled: true }),
     revealStoragePath: async () => undefined,
     delegatedChat: { enabled: async () => false, open: async () => false },
     send: (text) => {

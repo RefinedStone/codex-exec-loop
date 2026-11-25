@@ -61,6 +61,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     reconnectMaxMs: 200,
   });
   const bridge: AkraBridge = {
+    confirmTaskCriterionWaiver: async () => ({ cancelled: true }),
     revealStoragePath: async () => undefined,
     delegatedChat: { enabled: async () => false, open: async () => false },
     send: (text) => void connection.send(text),

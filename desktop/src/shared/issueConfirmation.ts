@@ -33,6 +33,19 @@ export interface ConfirmIssueBindingResumeRequest {
   key: string;
 }
 
+
+/** 현재 완료 기준과 사유를 native 확인에 결속한다. proof와 actor는 입력으로 받지 않는다. */
+export interface ConfirmTaskCriterionWaiverRequest {
+  workspace: string;
+  taskId: string;
+  criterionId: string;
+  scopeId: string;
+  expectedAcceptanceRevision: number;
+  reason: string;
+  requestId: string;
+  key: string;
+}
+
 export type IssueConfirmationResponse =
   | { cancelled: true }
   | { cancelled: false; response: CommandResponse }

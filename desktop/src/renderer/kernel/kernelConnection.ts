@@ -2,7 +2,8 @@
 // 개요와 이슈 목록은 서로 다른 조회 계약을 쓰며, 이슈를 읽는 동안 모델 턴을 만들지 않는다.
 import { JsonRpcError, type JsonRpcClient } from "../rpc/jsonRpcClient";
 import { verificationBlockReason, verificationTargetKey, type TaskVerificationRequests, type TaskVerificationRequestView, type TaskVerificationTarget } from "./taskVerificationActions";
-import type { ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
+import type { ConfirmTaskCriterionWaiverRequest, ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
+import { waiverBlockReason, waiverReasonValid, type TaskCriterionWaiverRequestView, type TaskCriterionWaiverTarget, type TaskCriterionWaiverOutcome } from "./taskCriterionWaiver";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "./issueInteractions";
 import {
   type AttachResponse,
@@ -47,6 +48,7 @@ export interface IssueDecisionAttention {
 }
 
 export interface IssueConfirmationBridge {
+  confirmTaskCriterionWaiver?(request: ConfirmTaskCriterionWaiverRequest): Promise<IssueConfirmationResponse>;
   confirmIssueDecision?(request: ConfirmIssueDecisionRequest): Promise<IssueConfirmationResponse>;
   confirmIssueAutonomy?(request: ConfirmIssueAutonomyRequest): Promise<IssueConfirmationResponse>;
   confirmIssueBindingResume?(request: ConfirmIssueBindingResumeRequest): Promise<IssueConfirmationResponse>;
@@ -115,6 +117,7 @@ export interface KernelView {
   planning: PlanningState | null;
   planningEvidenceFreshness: PlanningEvidenceFreshness;
   taskVerificationRequests: TaskVerificationRequests;
+  taskCriterionWaiverRequests: Readonly<Record<string, TaskCriterionWaiverRequestView>>;
   parallel: ParallelState | null;
   parallelControl: ParallelControlView;
   issues: KernelIssuesView;
@@ -134,6 +137,7 @@ export const EMPTY_KERNEL_VIEW: KernelView = {
   planning: null,
   planningEvidenceFreshness: "stale",
   taskVerificationRequests: {},
+  taskCriterionWaiverRequests: {},
   parallel: null,
   parallelControl: EMPTY_PARALLEL_CONTROL,
   issues: EMPTY_KERNEL_ISSUES,
@@ -308,6 +312,7 @@ export class KernelConnection {
   private readonly pendingArbiterEvents = new Map<string, symbol>();
   private readonly arbiterNoticeRevisions = new Map<string, number>();
   private scheduledIssueRefresh = false;
+  private readonly taskCriterionWaiverAttempts = new Map<string, { workspace: string; kernel: string; target: TaskCriterionWaiverTarget; request: ConfirmTaskCriterionWaiverRequest; view: TaskCriterionWaiverRequestView }>();
   private readonly taskVerificationAttempts = new Map<string, { workspace: string; kernel: string; target: TaskVerificationTarget; view: TaskVerificationRequestView }>();
 
   private issuesGeneration = 0;
@@ -501,10 +506,89 @@ export class KernelConnection {
   }
 
   private interruptTaskVerificationRequests(): void {
+    for (const attempt of this.taskCriterionWaiverAttempts.values()) {
+      if (attempt.view.status === "confirming") attempt.view = { status: "unknown", message: "연결이 바뀌어 면제 결과를 확인하지 못했습니다. 현재 상태를 다시 읽어 주세요." };
+    }
     for (const attempt of this.taskVerificationAttempts.values()) {
       if (attempt.view.status === "sending") attempt.view = { ...attempt.view, status: "unknown",
         message: "연결이 바뀌어 요청 결과를 확인하지 못했습니다. 상태를 조회한 뒤 같은 요청을 다시 확인할 수 있습니다." };
     }
+  }
+
+
+  /** Renderer supplies the target and reason; the private native bridge owns confirmation proof. */
+  async waiveTaskCriterion(target: TaskCriterionWaiverTarget, reason: string): Promise<TaskCriterionWaiverOutcome> {
+    const view = this.store.getKernel();
+    if (!this.canRead("overview") || !view.workspace || !view.kernel) return "rejected";
+    const key = JSON.stringify([view.workspace, view.kernel, verificationTargetKey(target)]);
+    const previous = this.taskCriterionWaiverAttempts.get(key);
+    if (waiverBlockReason(view.planning?.task_evidence, view.planningEvidenceFreshness, target)
+      || previous?.view.status === "confirming" || previous?.view.status === "accepted") return "rejected";
+    const retry = previous?.view.status === "unknown";
+    if (!retry && !waiverReasonValid(reason)) return "rejected";
+    const generation = this.generation;
+    const request = retry ? previous.request : {
+      workspace: view.workspace, taskId: target.task_id, criterionId: target.criterion_id, scopeId: target.scope_id,
+      expectedAcceptanceRevision: target.expected_acceptance_revision, reason, requestId: crypto.randomUUID(), key: crypto.randomUUID(),
+    };
+    const attempt = { workspace: view.workspace, kernel: view.kernel, target, request,
+      view: { status: "confirming", message: "시스템 확인" } as TaskCriterionWaiverRequestView };
+    attempt.view.message = "시스템 확인 창에서 면제 대상과 사유를 확인해 주세요.";
+    this.taskCriterionWaiverAttempts.set(key, attempt);
+    this.syncTaskCriterionWaiverRequests();
+    try {
+      if (!this.confirmations.confirmTaskCriterionWaiver) {
+        attempt.view = { status: "rejected", message: "이 창에서는 시스템 확인을 열 수 없습니다." };
+        attempt.request = { ...attempt.request, reason: "" };
+        return "rejected";
+      }
+      const result = await this.confirmations.confirmTaskCriterionWaiver(request);
+      if (generation !== this.generation || this.taskCriterionWaiverAttempts.get(key) !== attempt) return "unknown";
+      if (result.cancelled) {
+        if (retry) {
+          attempt.view = { status: "unknown", message: "이번 재확인을 취소했습니다. 이전 면제 요청의 적용 여부는 아직 확인되지 않았습니다." };
+          return "unknown";
+        }
+        this.taskCriterionWaiverAttempts.delete(key);
+        return "cancelled";
+      }
+      if ("outcome" in result) {
+        attempt.view = { status: "unknown", message: "면제 요청의 결과를 확인하지 못했습니다. 현재 상태를 다시 읽고 같은 요청을 확인해 주세요." };
+        return "unknown";
+      }
+      const response = result.response;
+      if (response.rejection || response.failure) {
+        attempt.view = { status: "rejected", message: "면제가 적용되지 않았습니다. 현재 완료 기준을 다시 확인해 주세요." };
+        attempt.request = { ...attempt.request, reason: "" };
+        return "rejected";
+      }
+      if (response.processed === true && response.result?.type === "criterion_waived") {
+        attempt.view = { status: "accepted", message: "면제 요청을 처리했습니다. 현재 면제 상태를 다시 조회합니다." };
+        attempt.request = { ...attempt.request, reason: "" };
+        return "accepted";
+      }
+      attempt.view = { status: "unknown", message: "면제 처리 결과가 확정되지 않았습니다. 현재 상태를 다시 읽고 같은 요청을 확인해 주세요." };
+      return "unknown";
+    } catch {
+      if (this.taskCriterionWaiverAttempts.get(key) === attempt) {
+        attempt.view = { status: "unknown", message: "시스템 확인의 결과를 받지 못했습니다. 같은 요청으로 다시 확인할 수 있습니다." };
+      }
+      return "unknown";
+    } finally {
+      if (generation === this.generation) {
+        this.syncTaskCriterionWaiverRequests();
+        if (this.taskCriterionWaiverAttempts.get(key)?.view.status !== "confirming") this.schedulePlanningEvidenceRead();
+      }
+    }
+  }
+
+  private syncTaskCriterionWaiverRequests(): void {
+    const view = this.store.getKernel();
+    const requests: Record<string, TaskCriterionWaiverRequestView> = {};
+    for (const attempt of this.taskCriterionWaiverAttempts.values()) {
+      if (attempt.workspace === view.workspace && attempt.kernel === view.kernel) requests[verificationTargetKey(attempt.target)] = attempt.view;
+    }
+    this.store.setKernel({ ...view, taskCriterionWaiverRequests: requests });
   }
 
   private syncTaskVerificationRequests(): void {
@@ -909,6 +993,7 @@ export class KernelConnection {
     const kept = previous.kernel === attached.kernel ? this.store.getKernel() : EMPTY_KERNEL_VIEW;
     this.store.setKernel({ ...kept, phase: "attached", workspace, kernel: attached.kernel, message: null });
     this.syncTaskVerificationRequests();
+    this.syncTaskCriterionWaiverRequests();
     this.restoreUncertainIssueOutcome();
     await Promise.all([
       this.interests.has("overview") ? this.readOverview(true) : Promise.resolve(),

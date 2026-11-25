@@ -47,6 +47,10 @@ export class IssueConfirmationService {
     return this.enqueue("binding_resume", input);
   }
 
+  confirmCriterionWaiver(input: unknown): Promise<IssueConfirmationResponse> {
+    return this.enqueue("criterion_waiver", input);
+  }
+
   invalidate(): void {
     this.generation++;
     this.active?.abort();

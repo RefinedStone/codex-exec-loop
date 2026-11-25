@@ -6,7 +6,7 @@ import type { AppSettings, AppSettingsPatch } from "./settings";
 import type { SkillsBridge } from "./skills";
 import type { VaultApprovedMapping, VaultRestoreTarget, VaultRestoreViewState } from "./vaultRestore";
 import type { ZoomDirection, ZoomFactors, ZoomScope } from "./zoom";
-import type { ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "./issueConfirmation";
+import type { ConfirmTaskCriterionWaiverRequest, ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "./issueConfirmation";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
 
@@ -43,6 +43,7 @@ export const IPC_CHANNELS = {
   confirmIssueAutomationMode: "akra:confirm-issue-automation-mode",
   confirmIssueAutonomy: "akra:confirm-issue-autonomy",
   confirmIssueBindingResume: "akra:confirm-issue-binding-resume",
+  confirmTaskCriterionWaiver: "akra:confirm-task-criterion-waiver",
   gitBranchSummary: "akra:git-branch-summary",
   gitCommitDiff: "akra:git-commit-diff",
   gitPush: "akra:git-push",
@@ -436,6 +437,7 @@ export interface AkraBridge {
   confirmIssueAutomationMode(request: ConfirmIssueAutomationModeRequest): Promise<IssueConfirmationResponse>;
   confirmIssueAutonomy(request: ConfirmIssueAutonomyRequest): Promise<IssueConfirmationResponse>;
   confirmIssueBindingResume(request: ConfirmIssueBindingResumeRequest): Promise<IssueConfirmationResponse>;
+  confirmTaskCriterionWaiver(request: ConfirmTaskCriterionWaiverRequest): Promise<IssueConfirmationResponse>;
   /** 브랜치가 기준 브랜치 뒤에 더한 커밋과 그 브랜치의 PR 을 읽는다. `fresh` 이면 잠깐 저장해 둔 PR 을 쓰지 않고 다시 묻는다. */
   gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary>;
   /** 커밋 하나의 변경을 읽는다. */

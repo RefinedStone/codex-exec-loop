@@ -213,3 +213,17 @@ it("routes binding resume to its own native confirmation kind without granting a
   expect(await response).toEqual({ cancelled: true });
   expect(h.child.sent.some((message) => message.type === "submit")).toBe(false);
 });
+
+it("routes criterion waiver through the private utility channel and native cancellation", async () => {
+  const h = harness();
+  const request = { workspace: "/work/repo", taskId: "task-1", criterionId: "criterion with spaces",
+    scopeId: "a".repeat(64), expectedAcceptanceRevision: 3, reason: "fixture reason", requestId: "waiver-1", key: "waiver-key" };
+  const response = h.service.confirmCriterionWaiver(request);
+  await h.prompt();
+  expect(h.child.sent[0]).toMatchObject({ type: "begin", kind: "criterion_waiver", input: request });
+  h.native.resolve(false);
+  await vi.waitFor(() => expect(h.child.sent).toContainEqual({ type: "answer", approved: false }));
+  h.child.event({ type: "result", response: { cancelled: true } });
+  expect(await response).toEqual({ cancelled: true });
+  expect(h.child.sent.some((message) => message.type === "submit")).toBe(false);
+});

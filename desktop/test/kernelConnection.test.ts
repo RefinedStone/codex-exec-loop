@@ -1,10 +1,11 @@
 // No model turns. Requests and store changes are the synchronization signals.
 import { describe, expect, it } from "vitest";
 
-import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView } from "../src/renderer/kernel/kernelConnection";
+import { EMPTY_KERNEL_VIEW, KernelConnection, type KernelView, type IssueConfirmationBridge } from "../src/renderer/kernel/kernelConnection";
 import { JsonRpcClient } from "../src/renderer/rpc/jsonRpcClient";
 import { taskEvidenceFixture } from "./fixtures/taskEvidence";
 import { taskVerificationFixture } from "./fixtures/taskVerification";
+import type { ConfirmTaskCriterionWaiverRequest, IssueConfirmationResponse } from "../src/shared/issueConfirmation";
 
 interface Sent {
   id: number;
@@ -31,7 +32,7 @@ function defaultAnswer(type: string): unknown {
   }
 }
 
-function harness() {
+function harness(confirmations: IssueConfirmationBridge = {}) {
   const sent: Sent[] = [];
   const listeners = new Set<() => void>();
   const changed = () => { for (const listener of listeners) listener(); };
@@ -45,7 +46,7 @@ function harness() {
   const connection = new KernelConnection(client, {
     getKernel: () => view,
     setKernel: (next) => { view = next; views.push(next); changed(); },
-  });
+  }, undefined, confirmations);
   const when = (condition: () => boolean) => {
     if (condition()) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
@@ -905,5 +906,92 @@ describe("host verification requests", () => {
     expect(Object.values(h.view().taskVerificationRequests)[0]?.status).toBe("unknown");
     const sent = h.requests("akra/kernel/command").filter((request) => (request.params.command as { type?: string })?.type === "request_task_verification");
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("native criterion waiver requests", () => {
+  async function waiverHarness(confirmations: IssueConfirmationBridge) {
+    const h = harness(confirmations);
+    const evidence = taskEvidenceFixture();
+    h.connection.connectionChanged(true);
+    const attached = h.connection.show("/repo");
+    await h.attachAndAnswer({ ...PLANNING, revision: evidence.planning_revision, task_evidence: evidence });
+    await attached;
+    const target = { task_id: "task-1", criterion_id: evidence.tasks[0]!.criteria[0]!.criterion.id,
+      scope_id: evidence.tasks[0]!.scope.scope_id, expected_acceptance_revision: 3 };
+    return { ...h, evidence, target };
+  }
+  async function refresh(h: Awaited<ReturnType<typeof waiverHarness>>, before: number) {
+    await h.when(() => h.requests("akra/kernel/query").length >= before + 4);
+    for (const request of h.requests("akra/kernel/query").slice(before)) h.reply(request,
+      request.params.query?.type === "planning" ? { ...PLANNING, revision: h.evidence.planning_revision, task_evidence: h.evidence }
+        : defaultAnswer(request.params.query?.type ?? ""));
+    await h.when(() => h.view().planningEvidenceFreshness === "current");
+  }
+
+  it("requires a fresh scope and native confirmation; cancellation does not submit a raw waiver", async () => {
+    const calls: unknown[] = [];
+    let resolve!: (response: IssueConfirmationResponse) => void;
+    const h = await waiverHarness({ confirmTaskCriterionWaiver: (request) => {
+      calls.push(request);
+      return new Promise((done) => { resolve = done; });
+    } });
+    await h.connection.waiveTaskCriterion({ ...h.target, expected_acceptance_revision: 2 }, "old");
+    await h.connection.waiveTaskCriterion(h.target, " ");
+    expect(calls).toHaveLength(0);
+    const pending = h.connection.waiveTaskCriterion(h.target, "private fixture reason");
+    expect(await h.connection.waiveTaskCriterion(h.target, "other")).toBe("rejected");
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(h.view().taskCriterionWaiverRequests)).not.toContain("private fixture reason");
+    const before = h.requests("akra/kernel/query").length;
+    resolve({ cancelled: true });
+    expect(await pending).toBe("cancelled");
+    await refresh(h, before);
+    expect(h.view().taskCriterionWaiverRequests).toEqual({});
+    expect(h.requests("akra/kernel/command").some((request) => (request.params.command as { type?: string })?.type === "waive_criterion")).toBe(false);
+  });
+
+  it("preserves the exact reason and logical key on unknown-result recheck without claiming a waiver", async () => {
+    const calls: ConfirmTaskCriterionWaiverRequest[] = [];
+    const h = await waiverHarness({ confirmTaskCriterionWaiver: async (request) => {
+      calls.push(structuredClone(request));
+      return calls.length === 2 ? { cancelled: true } : { cancelled: false, outcome: "unknown" };
+    } });
+    const before = h.requests("akra/kernel/query").length;
+    expect(await h.connection.waiveTaskCriterion(h.target, "original private reason")).toBe("unknown");
+    await refresh(h, before);
+    expect(h.view().planning?.task_evidence?.tasks[0]?.criteria[0]?.state).toBe("pass");
+    const reread = h.requests("akra/kernel/query").length;
+    expect(await h.connection.waiveTaskCriterion(h.target, "changed reason must not be sent")).toBe("unknown");
+    await refresh(h, reread);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(calls[0]);
+    expect(calls[1]?.reason).toBe("original private reason");
+    expect(Object.values(h.view().taskCriterionWaiverRequests)[0]?.status).toBe("unknown");
+    expect(Object.values(h.view().taskCriterionWaiverRequests)[0]?.message).toContain("이전 면제 요청");
+    const finalRead = h.requests("akra/kernel/query").length;
+    expect(await h.connection.waiveTaskCriterion(h.target, "another changed reason")).toBe("unknown");
+    await refresh(h, finalRead);
+    expect(calls[2]).toEqual(calls[0]);
+    expect(JSON.stringify(h.view())).not.toContain("original private reason");
+  });
+
+  it("keeps a disconnected native outcome unknown and rejects old coordinates after reconnect", async () => {
+    let resolve!: (response: IssueConfirmationResponse) => void;
+    let calls = 0;
+    const h = await waiverHarness({ confirmTaskCriterionWaiver: () => {
+      calls++;
+      return new Promise((done) => { resolve = done; });
+    } });
+    const pending = h.connection.waiveTaskCriterion(h.target, "reason");
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    await h.attachAndAnswer({ ...PLANNING, revision: h.evidence.planning_revision, task_evidence: h.evidence });
+    resolve({ cancelled: false, response: { processed: true } });
+    expect(await pending).toBe("unknown");
+    expect(Object.values(h.view().taskCriterionWaiverRequests)[0]?.status).toBe("unknown");
+    expect(calls).toBe(1);
+    expect(await h.connection.waiveTaskCriterion({ ...h.target, scope_id: "b".repeat(64) }, "reason")).toBe("rejected");
+    expect(calls).toBe(1);
   });
 });
