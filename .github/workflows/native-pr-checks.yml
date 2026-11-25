@@ -570,6 +570,9 @@ jobs:
             'application::service::parallel_mode::distributor::delivery::github::tests::jira_pr_metadata_' \
             'application::service::parallel_mode::tests::pool::lease::jira_branch_' \
             'application::service::parallel_mode::tests::distributor::work_permits::link_reference::jira_work_link_' \
+            'adapter::outbound::linear::' \
+            'application::service::issue_collection::tests::linear::' \
+            'application::service::issue_automation_policy::tests::linear::' \
             'provider_key_store' \
             'native_credential_prompt' \
             'provider_credential_prompt' \
