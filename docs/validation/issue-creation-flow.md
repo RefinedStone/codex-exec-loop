@@ -57,6 +57,15 @@ GitHub의 `clientMutationId`는 상관관계를 확인하는 값으로 사용한
 
 모델 turn과 실제 원격 이슈 생성은 검증에 사용하지 않는다. 플랫폼과 실행한 검증 결과는 PR에 기록한다.
 
+### Windows 복구 증거의 범위 (#2710 리뷰 반영)
+
+- `windows::tests::forced_process_exit_releases_lease_but_preserves_sent`는 **Sent 커밋이 끝난 뒤** 자식을 종료한다. 커밋된 기록 유지와 예약 해제를 확인하며, payload 커밋 도중 종료/hot-journal 복구나 전원 단절 검증은 아니다.
+- `windows::tests::lost_response_recovers_by_stable_id_with_real_windows_journal_and_vault`는 합성 원격에 생성이 적용된 뒤 응답을 잃고, 실제 Windows journal과 Vault를 재조립해 재전송 없이 안정 ID로 확정하는 경로를 확인한다. 실제 프로세스를 원격 생성 직후 강제 종료하는 시나리오는 별도 검증이 필요하다.
+- `issue_creation::tests::concurrency::competing_publishers_cannot_let_late_creation_adoption_replace_a_newer_original`와 `issue_creation::tests::scope::a_publish_from_another_workspace_scope_blocks_late_creation_adoption`는 늦은 생성 연결이 새 게시를 덮지 않는 기존 서비스 회귀다. 이 증거를 Windows 다중 프로세스 저장소 통합 검증과 동일하게 취급하지 않는다.
+
+상위 완료 조건에서 원격 생성 직후 강제 종료와 Windows에서의 생성/수정 경합을 완료로 표시하려면 해당 플랫폼의 집중 실행 증거를 추가해야 한다. 위 시험의 존재와 실제 실행 결과를 구분해 PR에 기록한다.
+
+
 ## 현재 한계
 
 - Windows에서는 #2702의 private SQLite journal과 #2688의 Vault 저장소를 사용한다. 예약 DB와 본문 DB를 분리해 Sent를 먼저 커밋하며, 기존 JSONL/lock 또는 지원하지 않는 schema는 자동 이전하지 않고 거절한다. 실제 원격 생성·전원 단절·OS 키 저장소를 포함한 검증은 별도로 필요하다.
