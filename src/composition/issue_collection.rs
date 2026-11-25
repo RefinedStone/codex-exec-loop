@@ -191,6 +191,7 @@ fn build_with_runtime_services(
             admission.clone(),
         ),
     );
+    let comment_commands = build_comment_commands(workspace_dir, store.clone(), execution.clone());
     let autonomy = Arc::new(
         crate::application::service::issue_autonomy::IssueAutonomyService::new(
             workspace_dir.to_owned(),
@@ -252,7 +253,41 @@ fn build_with_runtime_services(
         .with_interactions(interactions)
         .with_binding_pause(binding_pause)
         .with_coordinator(coordinator)
+        .with_comment_commands(comment_commands)
         .with_publication_journal(publication),
+    )
+}
+
+/// GitHub 댓글 명령은 같은 장부의 개입 경로로 `hold` 만 적용한다. 조립은 원격 호출을 하지 않는다.
+fn build_comment_commands(
+    workspace_dir: &str,
+    store: Arc<SqliteIssueAutomationStoreAdapter>,
+    execution: Arc<crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter>,
+) -> Arc<crate::application::service::issue_comment_command::IssueCommentCommandService> {
+    use crate::application::port::outbound::issue_work_steering_port::UnavailableIssueWorkSteering;
+    let interventions = Arc::new(
+        crate::application::service::issue_intervention::IssueInterventionService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            execution,
+            Arc::new(UnavailableIssueWorkSteering),
+        ),
+    );
+    Arc::new(
+        crate::application::service::issue_comment_command::IssueCommentCommandService::new(
+            workspace_dir.to_owned(),
+            store.clone(),
+            store,
+            Arc::new(
+                crate::adapter::outbound::github::issue_feedback::GithubIssueFeedbackAdapter::new(
+                    PathBuf::from(workspace_dir),
+                ),
+            ),
+            IssueAutomationPolicyService::new(Arc::new(
+                FilesystemIssueAutomationPolicySourceAdapter::new(),
+            )),
+            interventions,
+        ),
     )
 }
 

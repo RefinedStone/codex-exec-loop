@@ -445,6 +445,37 @@ fn schema_examples_resolve_with_the_documented_restrictions() {
     assert!(!resolved.policy.feedback.transition);
 }
 
+#[test]
+fn comment_commands_are_off_by_default_and_only_the_user_file_turns_them_on() {
+    let defaults = resolve_issue_automation_policy(None, None).unwrap();
+    assert!(!defaults.policy.select.comment_commands);
+    let explicit_off =
+        resolve_issue_automation_policy(Some("[select]\ncomment_commands = false"), None).unwrap();
+    assert_eq!(explicit_off.version, defaults.version);
+    let user = "[select]\ncomment_commands = true";
+    assert!(
+        resolve_issue_automation_policy(Some(user), None)
+            .unwrap()
+            .policy
+            .select
+            .comment_commands
+    );
+    assert!(
+        !resolve_issue_automation_policy(None, Some(user))
+            .unwrap()
+            .policy
+            .select
+            .comment_commands
+    );
+    assert!(
+        !resolve_issue_automation_policy(Some(user), Some("[select]\ncomment_commands = false"))
+            .unwrap()
+            .policy
+            .select
+            .comment_commands
+    );
+}
+
 struct FakeSource {
     user: Option<&'static str>,
     project: Option<&'static str>,

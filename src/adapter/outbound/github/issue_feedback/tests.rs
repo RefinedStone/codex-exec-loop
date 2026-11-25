@@ -12,6 +12,7 @@ use crate::domain::issue_automation::source::IssueSourceLabel;
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider};
 
 mod closure;
+mod commands;
 mod comments;
 mod labels;
 

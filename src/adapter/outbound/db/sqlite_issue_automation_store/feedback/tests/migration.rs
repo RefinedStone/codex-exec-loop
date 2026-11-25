@@ -24,7 +24,7 @@ fn legacy_schema(connection: &Connection) -> Vec<(String, String)> {
          AND name NOT LIKE 'issue_work_admissions%' AND name <> 'issue_start_budget_waits'
          AND name NOT LIKE 'issue_decision_reminders%'
          AND name NOT LIKE 'issue_arbiter_%'
-         AND name NOT LIKE 'issue_binding_pause_%'
+         AND name NOT LIKE 'issue_binding_pause_%' AND name <> 'issue_comment_commands'
          AND name <> 'issue_autonomy_selection'
          ORDER BY name",
         )
@@ -43,7 +43,7 @@ fn legacy_rows(connection: &Connection) -> Vec<(String, Vec<Vec<Value>>)> {
          AND name NOT LIKE 'issue_work_admissions%' AND name <> 'issue_start_budget_waits'
          AND name NOT LIKE 'issue_decision_reminders%'
          AND name NOT LIKE 'issue_arbiter_%'
-         AND name NOT LIKE 'issue_binding_pause_%' ORDER BY name",
+         AND name NOT LIKE 'issue_binding_pause_%' AND name <> 'issue_comment_commands' ORDER BY name",
         )
         .unwrap()
         .query_map([], |row| row.get::<_, String>(0))

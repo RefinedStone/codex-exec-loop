@@ -167,6 +167,7 @@ pub struct IssueCollectionService {
     autonomy: Option<Arc<super::issue_autonomy::IssueAutonomyService>>,
     interactions: Option<Arc<super::issue_interactions::IssueInteractionsService>>,
     binding_pause: Option<Arc<super::issue_binding_pause::IssueBindingPauseService>>,
+    comment_commands: Option<Arc<super::issue_comment_command::IssueCommentCommandService>>,
     /// Policy, Gateway credentials and profile claims shared by Jira and Linear sources.
     connected: Option<jira::ConnectedSourceContext>,
 }
@@ -191,6 +192,7 @@ impl IssueCollectionService {
             autonomy: None,
             interactions: None,
             binding_pause: None,
+            comment_commands: None,
             connected: None,
         }
     }
@@ -284,6 +286,20 @@ impl IssueCollectionService {
         &self,
     ) -> Option<Arc<super::issue_coordinator::IssueCoordinatorService>> {
         self.coordinator.clone()
+    }
+
+    pub fn with_comment_commands(
+        mut self,
+        comment_commands: Arc<super::issue_comment_command::IssueCommentCommandService>,
+    ) -> Self {
+        self.comment_commands = Some(comment_commands);
+        self
+    }
+
+    pub fn comment_command_service(
+        &self,
+    ) -> Option<Arc<super::issue_comment_command::IssueCommentCommandService>> {
+        self.comment_commands.clone()
     }
 
     pub fn with_triage(mut self, triage: Arc<super::issue_triage::IssueTriageService>) -> Self {

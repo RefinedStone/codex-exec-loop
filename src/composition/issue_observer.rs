@@ -23,6 +23,8 @@ pub(crate) enum IssueObserverCommittedFact {
     Tracked(IssueCollectionTrackedFact),
     Triaged(IssueTriagedFact),
     Coordinated(Box<crate::application::service::issue_coordinator::IssueCoordinatorFact>),
+    /// 신뢰하는 사람의 댓글 `hold` 가 새로 바꾼 개입이다 (IA8-2).
+    Intervened(Box<crate::domain::issue_automation::intervention::IssueInterventionReceipt>),
 }
 
 type Reporter = dyn Fn(Vec<IssueObserverCommittedFact>) + Send + Sync;
@@ -107,6 +109,22 @@ impl IssueObserver {
                     );
                 };
                 let mut outcome = service.collect_once_with_committed(cancel, at, &tracked)?;
+                // 보류를 판정과 시작보다 먼저 적용한다. 댓글 명령은 더 보수적으로만 바꾼다.
+                if !outcome.discarded
+                    && !cancel.is_cancelled()
+                    && let Some(comments) = service.comment_command_service()
+                {
+                    let receipts = comments.poll(cancel, at)?;
+                    if !receipts.is_empty() {
+                        committed(
+                            receipts
+                                .into_iter()
+                                .map(Box::new)
+                                .map(IssueObserverCommittedFact::Intervened)
+                                .collect(),
+                        );
+                    }
+                }
                 if !outcome.discarded
                     && !cancel.is_cancelled()
                     && let Some(triage) = service.triage_service()

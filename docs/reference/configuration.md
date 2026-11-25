@@ -141,6 +141,7 @@ Issue automation policy lives in a separate `issue-automation.toml`. It declares
 | `budget.*` | 사용자 최대값과 저장소 제한 중 작은 값. 저장소는 최대값을 늘릴 수 없습니다. |
 | `feedback.comment/labels/transition/telegram` | 사용자의 허가와 저장소의 제한을 AND로 결합합니다. 사용자 허가의 기본값은 모두 `false`입니다. 저장소의 `true`만으로 권한을 얻지 못합니다. |
 | `select.trusted_actors` | 사용자가 신뢰한 안정 ID 삼중항과 저장소 목록의 교집합. 저장소에서 생략하면 상속하고, `[]`이면 모두 제외합니다. |
+| `select.comment_commands` | 사용자의 허가와 저장소의 제한을 AND로 결합합니다. 기본 `false`이며 저장소의 `true`만으로 댓글을 읽지 않습니다. [이슈 댓글 명령](current-product.md#issue-comment-commands)을 참고합니다. |
 | `protection.paths` | 내장·사용자·저장소 경로 패턴의 합집합. `[]`으로 이전 보호를 지울 수 없습니다. |
 | `human_required.rules/additional` | 내장·사용자·저장소 규칙의 합집합. 저장소는 사람 승인이 필요한 조건을 더할 수만 있습니다. |
 
@@ -161,6 +162,7 @@ Issue automation policy lives in a separate `issue-automation.toml`. It declares
 | `select.mode` | `labels_any / all_open`; 기본 `labels_any` |
 | `select.labels_any` | 정확한 라벨 이름의 OR; 기본 `["akra:auto", "akra:gated", "akra:manual"]`. `[]`은 선택 대상 없음 |
 | `select.trusted_actors` | `{provider, server_id, actor_id}` 배열; 기본 `[]`. provider는 `github / jira` |
+| `select.comment_commands` | boolean; 사용자 허가 기본 `false` |
 | `classify.rule` | `class = low / normal / high`와 `labels_any`·`paths_any`의 순서 있는 규칙 배열; 기본 `[]`, 미일치는 `normal` |
 | `gates.<mode>.<risk>.<gate>` | 아래 관문 표 참고. 모든 기본값은 `human` |
 | `timeouts.start` | `1s`부터 `30d`까지; 기본 `24h` |

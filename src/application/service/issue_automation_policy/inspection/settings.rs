@@ -95,6 +95,11 @@ pub(super) fn from_policy(
         &policy.select.trusted_actors,
     )?;
     settings.add(
+        "select.comment_commands",
+        "신뢰하는 행위자의 댓글 명령 읽기",
+        &policy.select.comment_commands,
+    )?;
+    settings.add(
         "classify.rule",
         "위험 등급 규칙 순서",
         &policy.classify.rule,

@@ -455,10 +455,16 @@ decision: { id, issue, gate, kind, question, options[{ id, label, effect }], rec
 | 방향 | 예 | 수단 |
 | --- | --- | --- |
 | Akra → 사람 | "이슈 #12 를 시작할까요? 내일 09:00 에 중재자가 결정합니다" | Desktop 의 이슈 탭과 주의함, OS 알림. 정책이 켜면 이슈 댓글과 Telegram |
-| 사람 → Akra | 승인, 거절, 보류, 풀기, 다시 판정, 지시 추가, 내가 맡기 | Desktop. 나중에 신뢰하는 사람의 이슈 댓글 명령 |
+| 사람 → Akra | 승인, 거절, 보류, 풀기, 다시 판정, 지시 추가, 내가 맡기 | Desktop. 신뢰하는 사람의 이슈 댓글 명령은 보류만 바로 적용한다 (IA8-2) |
 | 실행 중인 에이전트 → 사람 | "A 와 B 중 무엇입니까?" | task 의 `awaiting_user`, 또는 에이전트가 `akra kernel issue ask_issue_decision … --json` 을 실행한다 |
 | 사람 → 실행 중인 에이전트 | 답, 방향 수정 | 조정기가 답을 그 thread 에 `submit_prompt` 나 `steer_turn` 으로 전달한다 |
 | 에이전트 → Akra | 이슈 상태 조회, 후속 이슈 제안 | CLI `--json` 과 skill (KP-05) |
+
+이슈 댓글 명령 (IA8-2, #2567): `/akra hold`, `/akra release`, `/akra retriage`, `/akra approve`.
+사용자 파일이 `select.comment_commands` 를 켜야 읽는다. 신뢰하는 사용자 계정이 쓰고 고치지 않은 댓글만 본다.
+실행 중인 에이전트도 사용자의 `gh` 로그인으로 댓글을 쓴다. 그래서 댓글은 사람 확인의 증거가 아니다.
+`hold` 만 다음 수집 주기에 기존 개입으로 적용한다. `release` 와 `retriage` 는 기록만 하고 Desktop 에서 다시 내려야 한다.
+`approve` 는 기록만 하고 `human` 관문을 통과시키지 못한다. 다른 계정의 댓글도 증거로 보지 않는다 (§19 Q-IA16).
 
 개입 명령:
 
@@ -844,6 +850,7 @@ IA4 전체의 완료 기준은 후속 조각까지 포함한다.
 | --- | --- | --- |
 | IA8-1 · #2566 | 구현 PR · 리뷰 대기 | 에이전트의 `ask_issue_decision`. branch → lease·thread → 작업 지시 → 이슈. 질문을 열면 그 task 는 `awaiting_user` 가 되고 턴이 끝난다. 답은 IA4-1 의 재개 claim 으로 같은 thread 에 한 번 간다. 이슈마다 열린 질문 1개, 초과는 `issue_question_limit`. 질문한 연결의 답은 `own_issue_question`. [reference](../reference/current-product.md#issue-automation-execution) |
 | IA8-3 · #2568 | 구현 PR · 리뷰 대기 | Telegram 결정 요청·중재자 결정·실패 알림 (`feedback.telegram`, 기본 꺼짐), `/decide` 답. 알림은 식별자만 싣고 intent 마다 한 번 (at-most-once, 결과 모름은 다시 보내지 않음). Telegram 답은 `by: agent` 이고 `human` 관문을 통과하지 못한다 (Q-IA11). 원격 message ID 기록과 Telegram 버튼은 범위 밖. [reference](../reference/current-product.md#issue-decision-telegram-notifications) |
+| IA8-2 · #2567 | PR 리뷰 대기 | 신뢰하는 사람의 GitHub 댓글 명령. `hold` 만 적용하고 나머지는 기록만 한다. 댓글 ID 로 한 번만 처리한다. 기록한 `release`·`retriage` 요청을 Desktop 에 보이는 일은 후속이다. [reference](../reference/current-product.md#issue-comment-commands) |
 
 결정 (IA8-1, 2026-11-25): 질문이 열려 있는 동안 턴은 끝낸다. 명령은 바로 답하고 task 는 기존
 `awaiting_user` 의 보존과 재개 경로를 쓴다. 도구 호출이 사람의 답까지 턴을 붙잡지 않는다.
@@ -916,6 +923,7 @@ plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.
 | Q-IA13 | 통합 브랜치가 기본 브랜치와 다를 때 외부 이슈를 언제 닫는가 | `close.when = never`. 이슈를 열어 두고 사람이 닫는다 (§12.2) |
 | Q-IA14 | `take_over` 한 작업의 슬롯 lease 를 어떻게 하는가 | 사람이 끝낼 때까지 그 슬롯을 쥔다. 호스트는 정리하지 않는다. 세부는 IA3 에서 정한다 |
 | Q-IA15 | 작업 지시 기록을 planning authority 의 어디에 두는가 (새 표인가, 기존 문서의 필드인가) | 새 표. schema version 을 올리지 않는다 |
+| Q-IA16 | 에이전트가 로그인하지 않은 다른 계정의 댓글을 사람 확인의 증거로 보는가 | 아니요 (IA8-2, #2567). 계정만으로 사람을 증명하지 못한다. 사람 확인은 Desktop main 의 확인 창만 만든다 |
 
 ## 20. 하지 않는 것
 

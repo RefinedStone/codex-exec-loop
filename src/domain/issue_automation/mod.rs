@@ -9,6 +9,7 @@ pub mod autonomy;
 pub mod binding_pause;
 pub mod closure;
 pub mod collection;
+pub mod comment_command;
 pub mod coordinator;
 pub mod execution;
 pub mod execution_answer;
