@@ -16,7 +16,7 @@ Test-only ManualCredentialFixture는 랜덤 신규 service 이름과 별도 임�
 
 ## 실제 OS 실행
 
-같은 revision에서 cargo build --locked --bin akra-gateway를 수행한다. Windows는 절대 경로의 해당 exe를 명시한다. 다른 OS는 실제 native adapter를 호출한다. 환경 변수를 지정하는 것은 실제 OS 승인 대신 사용되는 값이 아니다.
+같은 revision에서 cargo build --locked --bin akra-gateway를 수행한다. Windows의 `AKRA_MANUAL_GATEWAY_EXE`에는 해당 빌드 원본의 절대 경로를 지정한다. 수동 fixture는 OS credential에 접근하기 전에 저장소 밖 private 임시 디렉터리에 원본을 복사한다. 공유 읽기만 허용한 원본 handle, 새 파일 생성, 현재 사용자 전용 ACL, SHA-256 동일성, 기존 실행 파일 신뢰 검사와 native 형식 검사를 모두 통과한 사본만 실행한다. 저장소 안 빌드 원본을 직접 실행하도록 제품의 신뢰 검사를 완화하지 않는다. 외부 임시 경로가 신뢰 검사에 실패하면 중단한다. 다른 OS는 실제 native adapter를 호출한다. 환경 변수를 지정하는 것은 실제 OS 승인 대신 사용되는 값이 아니다.
 
 Windows PowerShell (폐기 사용자에서만):
 
@@ -34,7 +34,7 @@ macOS/Linux:
 AKRA_MANUAL_VAULT_PROFILE=isolated-disposable cargo test --locked --lib adapter::inbound::desktop_restore_bridge::tests::manual_os::real_os_confirmation_and_credential_restore_roundtrip -- --ignored --exact --nocapture
 ```
 
-테스트는 새 키의 재조회, 실제 암호화된 Vault binding, Desktop 전용 pipe 프로토콜과 실제 native 확인을 연결한다. 원격 스냅샷과 checkout resolver는 합성 fixture다. Windows는 실제 production helper binary를 실행하고, libtest binary로 native 확인을 대체하지 않는다. 첫 번째 창은 취소, 다음 열람 창은 승인, 외부 편집 후 열람 창과 별도 연결 저장 창은 승인한다. 실제 GitHub·모델을 호출하지 않는다.
+테스트는 새 키의 재조회, 실제 암호화된 Vault binding, Desktop 전용 pipe 프로토콜과 실제 native 확인을 연결한다. 원격 스냅샷과 checkout resolver는 합성 fixture다. Windows는 동일성을 검증한 실제 production helper binary의 private 사본을 실행하고, libtest binary로 native 확인을 대체하지 않는다. 별도 자동 회귀는 credential·확인 창을 호출하지 않고 합성 native 실행 파일의 준비·신뢰 경계·덮어쓰기 거절만 검증한다. 첫 번째 창은 취소, 다음 열람 창은 승인, 외부 편집 후 열람 창과 별도 연결 저장 창은 승인한다. 실제 GitHub·모델을 호출하지 않는다.
 
 ## 별도 실제 Desktop UI 검증
 

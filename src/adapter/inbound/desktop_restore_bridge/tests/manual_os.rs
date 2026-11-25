@@ -3,7 +3,10 @@
 use super::*;
 use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
 use crate::adapter::outbound::vault_key_store::ManualCredentialFixture;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[cfg(windows)]
+mod windows_helper;
 
 struct Folder(PathBuf);
 impl Folder {
@@ -27,13 +30,23 @@ struct RealDialog {
     executable: PathBuf,
 }
 impl RealDialog {
-    fn from_environment() -> Self {
+    fn from_environment(folder: &Path) -> Self {
+        #[cfg(not(windows))]
+        let _ = folder;
         Self {
             #[cfg(windows)]
-            executable: PathBuf::from(
-                std::env::var_os("AKRA_MANUAL_GATEWAY_EXE")
-                    .expect("absolute akra-gateway.exe built from this revision"),
-            ),
+            executable: {
+                let source = PathBuf::from(
+                    std::env::var_os("AKRA_MANUAL_GATEWAY_EXE")
+                        .expect("absolute akra-gateway.exe built from this revision"),
+                );
+                windows_helper::stage(
+                    &source,
+                    &folder.join("helper"),
+                    &std::env::current_dir().expect("manual test working directory"),
+                )
+                .expect("stage a private trusted helper before accessing OS credentials")
+            },
         }
     }
 }
@@ -99,7 +112,7 @@ async fn real_os_confirmation_and_credential_restore_roundtrip() {
         },
         ..issue()
     };
-    let dialog = Arc::new(RealDialog::from_environment());
+    let dialog = Arc::new(RealDialog::from_environment(&folder.0));
     let credentials =
         ManualCredentialFixture::new(runtime).expect("disposable OS credential namespace");
     let key_store = credentials.adapter();
