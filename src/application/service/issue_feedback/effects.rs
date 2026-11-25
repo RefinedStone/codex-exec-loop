@@ -70,10 +70,16 @@ impl IssueFeedbackService {
         if action_guard.validate().is_err() {
             return self.unconfirmed(&sent, false, None);
         }
-        let answer = self
-            .provider
-            .write(&intent)
-            .unwrap_or(IssueFeedbackWriteResult::Unconfirmed);
+        let answer = if matches!(
+            &intent.operation,
+            IssueFeedbackOperation::SetBoardField { .. }
+        ) {
+            self.write_board_field(&intent)
+        } else {
+            self.provider
+                .write(&intent)
+                .unwrap_or(IssueFeedbackWriteResult::Unconfirmed)
+        };
         lease.verify_identity()?;
         let record = match answer {
             IssueFeedbackWriteResult::Contradictory => return self.unconfirmed(&sent, true, None),
@@ -132,6 +138,21 @@ impl IssueFeedbackService {
                 self.close_policy_current(intent, snapshot, &automation.policy)
             } else if intent.operation.is_comment() {
                 automation.policy.feedback.comment
+            } else if let IssueFeedbackOperation::SetBoardField {
+                project_id,
+                field_id,
+                option_id,
+                ..
+            } = &intent.operation
+            {
+                // 보내기 직전에도 보드 허가와 지금 단계의 목표를 다시 본다.
+                super::board::board_target(snapshot, &automation.policy).is_some_and(
+                    |(board, target)| {
+                        board.project_id == *project_id
+                            && board.field_id == *field_id
+                            && target == option_id
+                    },
+                )
             } else {
                 automation.policy.feedback.labels
                     && safe_progress_label(&automation.policy)
@@ -187,10 +208,16 @@ impl IssueFeedbackService {
             return Ok(Some(record));
         }
         lease.verify_identity()?;
-        let answer = self
-            .provider
-            .reconcile(&record.intent)
-            .unwrap_or(IssueFeedbackReadResult::NeedsConfirmation);
+        let answer = if matches!(
+            &record.intent.operation,
+            IssueFeedbackOperation::SetBoardField { .. }
+        ) {
+            self.reconcile_board_field(&record.intent)
+        } else {
+            self.provider
+                .reconcile(&record.intent)
+                .unwrap_or(IssueFeedbackReadResult::NeedsConfirmation)
+        };
         lease.verify_identity()?;
         match answer {
             IssueFeedbackReadResult::Confirmed(receipt) => {

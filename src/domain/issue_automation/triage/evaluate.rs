@@ -5,8 +5,8 @@ use crate::domain::issue_automation::policy::{
 };
 use crate::domain::issue_automation::source::{
     IssueCreationProvenance, IssueMetadataCompleteness, IssuePrPresence, IssueRemoteState,
-    IssueRepositoryVisibility, IssueSourceActorKind, IssueSourceContent, IssueSourceContentProblem,
-    IssueSourceObservation, IssueSourceRead, JiraPullRequestLookup,
+    IssueRepositoryVisibility, IssueSourceActorKind, IssueSourceBoardRead, IssueSourceContent,
+    IssueSourceContentProblem, IssueSourceObservation, IssueSourceRead, JiraPullRequestLookup,
 };
 
 use super::readiness::{budget_exhausted, held_or_manual, label_cap};
@@ -186,6 +186,19 @@ fn eligibility(
         }
         None => unknown = true,
     }
+    match board_selected(observation, policy) {
+        Some(true) => {}
+        Some(false) => {
+            excluded = true;
+            if !reasons.contains(&IssueTriageReasonCode::SelectionNotMatched) {
+                reasons.push(IssueTriageReasonCode::SelectionNotMatched);
+            }
+        }
+        None => {
+            unknown = true;
+            reasons.push(IssueTriageReasonCode::BoardUnavailable);
+        }
+    }
     let requires_human_selection = observation.creation_provenance
         != IssueCreationProvenance::Unattributed
         || observation
@@ -275,6 +288,38 @@ fn selected(observation: &IssueSourceObservation, policy: &IssueAutomationPolicy
         return Some(true);
     }
     (observation.labels.completeness == IssueMetadataCompleteness::Complete).then_some(false)
+}
+
+/// 보드 열 조건은 라벨 조건과 AND 이다. 읽지 못한 보드와 다른 보드의 관찰은 None 이다 (#2565).
+fn board_selected(
+    observation: &IssueSourceObservation,
+    policy: &IssueAutomationPolicy,
+) -> Option<bool> {
+    let Some(board) = policy
+        .binding
+        .github
+        .board
+        .as_ref()
+        .filter(|board| !board.select_option_ids.is_empty())
+    else {
+        return Some(true);
+    };
+    if observation.issue.provider != crate::domain::issue_work::IssueProvider::GitHub {
+        return Some(true);
+    }
+    let column = observation.board.as_ref()?;
+    if column.project_id != board.project_id || column.field_id != board.field_id {
+        return None;
+    }
+    match &column.read {
+        IssueSourceBoardRead::NotOnBoard => Some(false),
+        IssueSourceBoardRead::Item { option_id, .. } => Some(
+            option_id
+                .as_ref()
+                .is_some_and(|id| board.select_option_ids.contains(id)),
+        ),
+        IssueSourceBoardRead::Unavailable => None,
+    }
 }
 
 fn actor_trusted(

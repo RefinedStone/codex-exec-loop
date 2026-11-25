@@ -314,6 +314,7 @@ impl Fixture {
                 completeness: IssueMetadataCompleteness::Complete,
             },
             linked_pull_request: IssuePrPresence::Absent,
+            board: None,
             content: IssueSourceContent::Shared(IssueAutomationSnapshot {
                 basis: IssueComparisonBasis {
                     field_hash: IssueFieldHash::of_fields(&shared_copy.title, &shared_copy.body),

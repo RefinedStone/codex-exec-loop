@@ -83,6 +83,7 @@ fn observed(issue: &IssueReference) -> IssueSourceRead {
             completeness: IssueMetadataCompleteness::Complete,
         },
         linked_pull_request: IssuePrPresence::Absent,
+        board: None,
         content: IssueSourceContent::Shared(IssueAutomationSnapshot {
             basis: basis(),
             shared_copy: IssueSharedCopy {

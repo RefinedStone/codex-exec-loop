@@ -27,6 +27,18 @@ pub(super) fn from_policy(
         "요청 자율 수준의 효과값",
         &policy.binding.github.mode,
     )?;
+    if let Some(board) = &policy.binding.github.board {
+        settings.add(
+            "binding.github.board",
+            "GitHub Projects 보드 필드와 열 조건",
+            board,
+        )?;
+        settings.add(
+            "feedback.board_field",
+            "보드 필드 쓰기 허용",
+            &policy.feedback.board_field,
+        )?;
+    }
     if let Some(jira) = &policy.binding.jira {
         settings.add("binding.jira.site_url", "Jira Cloud 사이트", &jira.site_url)?;
         settings.add(

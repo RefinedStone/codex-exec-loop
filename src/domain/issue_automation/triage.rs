@@ -149,10 +149,12 @@ pub enum IssueTriageReasonCode {
     AutoRepositoryRestricted,
     JiraPullRequestLookupUnsupported,
     LinearPullRequestLookupUnsupported,
+    /// 정책의 보드 열 조건을 확인하지 못했다 (`read:project` 권한 없음 포함). 불일치로 보지 않는다.
+    BoardUnavailable,
 }
 
 impl IssueTriageReasonCode {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::NotYetObserved,
         Self::SourceUnavailable,
         Self::MetadataIncomplete,
@@ -182,6 +184,7 @@ impl IssueTriageReasonCode {
         Self::AutoRepositoryRestricted,
         Self::JiraPullRequestLookupUnsupported,
         Self::LinearPullRequestLookupUnsupported,
+        Self::BoardUnavailable,
     ];
 
     /// The connected provider cannot prove that no linked pull request exists.
@@ -237,6 +240,7 @@ impl IssueTriageReasonCode {
             Self::AutoRepositoryRestricted => "auto_repository_restricted",
             Self::JiraPullRequestLookupUnsupported => "jira_pull_request_lookup_unsupported",
             Self::LinearPullRequestLookupUnsupported => "linear_pull_request_lookup_unsupported",
+            Self::BoardUnavailable => "board_unavailable",
         }
     }
 }

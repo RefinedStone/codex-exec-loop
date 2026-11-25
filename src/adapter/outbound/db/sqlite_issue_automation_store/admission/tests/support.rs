@@ -142,6 +142,7 @@ fn prepare_with_default_answer(
             completeness: IssueMetadataCompleteness::Complete,
         },
         linked_pull_request: IssuePrPresence::Absent,
+        board: None,
         content: IssueSourceContent::Shared(snapshot),
     };
     adapter

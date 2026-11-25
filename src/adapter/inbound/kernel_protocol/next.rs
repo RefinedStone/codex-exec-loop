@@ -115,6 +115,7 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         ReasonCode::NotYetObserved
         | ReasonCode::SourceUnavailable
         | ReasonCode::MetadataIncomplete
+        | ReasonCode::BoardUnavailable
         | ReasonCode::DisclosurePolicyStale => {
             vec![Step::query(KernelQueryKind::Issues), Step::AskUser]
         }

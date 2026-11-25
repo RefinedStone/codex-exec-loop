@@ -115,6 +115,7 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
         author: None,
         label_actors: empty_metadata(),
         linked_pull_request: IssuePrPresence::Absent,
+        board: None,
         content: IssueSourceContent::Shared(IssueAutomationSnapshot {
             basis: IssueComparisonBasis {
                 field_hash: hash.clone(),

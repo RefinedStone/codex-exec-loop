@@ -267,6 +267,10 @@ fn reason_parts(reason: IssueTriageReasonCode) -> (ReasonCode, &'static str) {
             ReasonCode::JiraPullRequestLookupUnsupported,
             "Jira 연결에서 관련 PR의 유무를 확인할 수 없어 자동으로 시작하지 않습니다.",
         ),
+        IssueTriageReasonCode::BoardUnavailable => (
+            ReasonCode::BoardUnavailable,
+            "정책의 보드 열 조건을 확인하지 못했습니다.",
+        ),
         IssueTriageReasonCode::BudgetExhausted => (
             ReasonCode::BudgetExhausted,
             "예산 상한이 0이어서 자동 시작할 수 없습니다.",
@@ -350,6 +354,9 @@ fn reason_next_summary(reason: IssueTriageReasonCode) -> &'static str {
         IssueTriageReasonCode::JiraPullRequestLookupUnsupported
         | IssueTriageReasonCode::LinearPullRequestLookupUnsupported => {
             "진행 중인 PR이나 중복 작업이 없는지 직접 확인하세요. 다른 준비 조건이 모두 충족되면 현재 이슈의 시작 결정을 Native 확인으로 승인할 수 있습니다."
+        }
+        IssueTriageReasonCode::BoardUnavailable => {
+            "gh 로그인에 read:project 권한이 있는지와 보드 설정을 확인한 뒤 다시 동기화하세요."
         }
         IssueTriageReasonCode::BudgetExhausted => {
             "예산과 시도 한도를 확인하고 사람의 검토를 기다리세요."

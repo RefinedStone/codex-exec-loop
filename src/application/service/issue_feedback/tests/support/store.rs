@@ -335,6 +335,10 @@ fn update_owner(
         (IssueFeedbackOperation::CloseIssue { .. }, IssueFeedbackEvidence::Closed { .. }) => {
             state.close_proof = Some(receipt.clone())
         }
+        (
+            IssueFeedbackOperation::SetBoardField { .. },
+            IssueFeedbackEvidence::BoardField { .. },
+        ) => state.board_proof = Some(receipt.clone()),
         _ => panic!("receipt was validated before this point"),
     }
 }

@@ -102,6 +102,7 @@ pub(super) fn observation(
             vec![]
         },
         jira: None,
+        board: None,
         linear: Some(IssueSourceLinearMetadata {
             identifier,
             url,

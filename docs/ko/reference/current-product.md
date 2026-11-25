@@ -145,6 +145,11 @@ Jira Cloud는 명시적인 Cloud/project/account/저장소 바인딩과 Propose�
 Linear는 저장소 파일이 선택한 팀만 수집하고 같은 Propose·Native Human Start 상한을 사용합니다.
 `branchName`은 슬롯 브랜치의 힌트입니다. [Linear 이슈 자동화](../../reference/issue-linear.md)를 참고하세요.
 
+GitHub Projects 보드의 열은 선택 조건이 될 수 있습니다. 진행 단계의 보드 필드 쓰기는 사용자 정책의
+`feedback.board_field`가 켠 때만 피드백 일지를 지나 보내며, 본문 쓰기 승인으로는 허용되지 않습니다.
+`read:project` 권한이 없어 보드를 읽지 못하면 `board_unavailable`로 남깁니다.
+[GitHub Projects 보드 연동](../../reference/issue-projects-board.md)을 참고하세요.
+
 적용 범위는 IA4-1 ([#2551](https://github.com/RefinedStone/codex-exec-loop/issues/2551))의
 [PR #2638](https://github.com/RefinedStone/codex-exec-loop/pull/2638)입니다.
 각 구현 PR과 부모 체인의 상태는 [plan 28](../../plan/28-akra-issue-automation.md#ia4-조각-상태)에 기록합니다.

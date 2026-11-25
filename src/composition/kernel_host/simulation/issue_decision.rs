@@ -345,6 +345,7 @@ impl Source {
             }),
             label_actors: complete(Vec::new()),
             linked_pull_request: IssuePrPresence::Absent,
+            board: None,
             content: IssueSourceContent::Shared(IssueAutomationSnapshot {
                 basis: IssueComparisonBasis {
                     field_hash: IssueFieldHash::of_fields("결정 요청 회귀", &body),

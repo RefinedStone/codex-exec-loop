@@ -33,6 +33,9 @@ pub(super) fn validate_policy(
     if let Some(repository) = &policy.binding.github.repository {
         validate_repository(repository)?;
     }
+    if let Some(board) = &policy.binding.github.board {
+        board.validate()?;
+    }
     if policy.binding.github.mode > policy.authority.autonomy_cap {
         return Err(invalid("binding.github.mode", "exceeds_autonomy_cap"));
     }

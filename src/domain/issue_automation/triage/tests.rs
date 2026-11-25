@@ -15,6 +15,7 @@ use crate::domain::issue_work::{
 
 mod arbiter;
 mod auto;
+mod board;
 mod jira;
 mod linear;
 
@@ -66,6 +67,7 @@ fn source() -> IssueSourceRead {
         author: Some(actor("U_trusted")),
         label_actors: list(Vec::new()),
         linked_pull_request: IssuePrPresence::Absent,
+        board: None,
         content: IssueSourceContent::Shared(IssueAutomationSnapshot {
             basis: IssueComparisonBasis {
                 field_hash: IssueFieldHash::of_fields("공유 제목", VALID_BODY),

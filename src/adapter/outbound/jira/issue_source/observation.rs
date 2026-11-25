@@ -182,6 +182,7 @@ pub(super) fn observation(
         },
         // Basic Cloud REST cannot establish complete development-panel PR absence.
         linked_pull_request: IssuePrPresence::Unknown,
+        board: None,
         content,
     };
     observation.validate_repository_metadata()?;

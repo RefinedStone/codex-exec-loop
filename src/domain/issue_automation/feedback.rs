@@ -220,6 +220,17 @@ pub enum IssueFeedbackOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         linear_state: Option<IssueFeedbackLinearState>,
     },
+    /// 보드 항목 하나의 단일 선택 필드 하나를 바꾼다 (#2565). 본문 쓰기와 다른 허가이다.
+    SetBoardField {
+        project_id: String,
+        item_id: String,
+        field_id: String,
+        option_id: String,
+        /// 기록 직전에 읽은 값이다. 사람이 바꾼 값을 덮지 않는 기준이다.
+        from_option_id: Option<String>,
+        /// Akra 가 처음 쓰기 전의 값이다. 자기 쓰기를 판정 입력에서 숨길 때 쓴다.
+        origin_option_id: Option<String>,
+    },
 }
 impl std::fmt::Debug for IssueFeedbackOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -262,6 +273,17 @@ impl std::fmt::Debug for IssueFeedbackOperation {
                 .field("integration_sha", integration_sha)
                 .field("decision_id", decision_id)
                 .field("previous_event_id", previous_event_id)
+                .finish(),
+            Self::SetBoardField {
+                item_id,
+                field_id,
+                option_id,
+                ..
+            } => f
+                .debug_tuple("SetBoardField")
+                .field(item_id)
+                .field(field_id)
+                .field(option_id)
                 .finish(),
         }
     }
@@ -410,6 +432,28 @@ impl IssueFeedbackIntent {
                     validate_feedback_id(id)?;
                 }
             }
+            IssueFeedbackOperation::SetBoardField {
+                project_id,
+                item_id,
+                field_id,
+                option_id,
+                from_option_id,
+                origin_option_id,
+            } => {
+                if self.issue.provider != IssueProvider::GitHub {
+                    return Err("board fields are GitHub only");
+                }
+                for id in [project_id, item_id, field_id, option_id]
+                    .into_iter()
+                    .chain(from_option_id)
+                    .chain(origin_option_id)
+                {
+                    validate_feedback_id(id)?;
+                }
+                if from_option_id.as_ref() == Some(option_id) {
+                    return Err("a board field write must change its value");
+                }
+            }
         }
         Ok(())
     }
@@ -458,6 +502,14 @@ pub enum IssueFeedbackEvidence {
     },
     Closed {
         event_id: String,
+    },
+    /// 다시 읽은 항목 필드 값이 목표와 같다. 같은 계정의 사람이 같은 값을 고른 경우와 구분하지 못한다.
+    BoardField {
+        project_id: String,
+        item_id: String,
+        field_id: String,
+        option_id: String,
+        origin_option_id: Option<String>,
     },
 }
 impl IssueFeedbackReceipt {
@@ -516,6 +568,30 @@ impl IssueFeedbackReceipt {
                 },
                 IssueFeedbackEvidence::Closed { event_id },
             ) if previous_event_id.as_ref() != Some(event_id) => validate_feedback_id(event_id),
+            (
+                IssueFeedbackOperation::SetBoardField {
+                    project_id,
+                    item_id,
+                    field_id,
+                    option_id,
+                    origin_option_id,
+                    ..
+                },
+                IssueFeedbackEvidence::BoardField {
+                    project_id: observed_project,
+                    item_id: observed_item,
+                    field_id: observed_field,
+                    option_id: observed_option,
+                    origin_option_id: observed_origin,
+                },
+            ) if project_id == observed_project
+                && item_id == observed_item
+                && field_id == observed_field
+                && option_id == observed_option
+                && origin_option_id == observed_origin =>
+            {
+                Ok(())
+            }
             _ => Err("feedback receipt does not prove its intent"),
         }
     }
@@ -600,6 +676,9 @@ pub struct IssueFeedbackState {
     /// A confirmed transition remains a historical fact after a human reopens the issue.
     #[serde(default)]
     pub close_proof: Option<IssueFeedbackReceipt>,
+    /// 마지막으로 확인한 자기 보드 필드 쓰기이다 (#2565). 다음 쓰기의 기준과 자기 쓰기 숨김에 쓴다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_proof: Option<IssueFeedbackReceipt>,
 }
 impl IssueFeedbackState {
     pub fn new(issue: IssueReference) -> Self {
@@ -612,7 +691,33 @@ impl IssueFeedbackState {
             label_proof: None,
             label_removal_confirmed: false,
             close_proof: None,
+            board_proof: None,
         }
+    }
+    /// 보드 쓰기의 원래 값이다. 마지막 자기 쓰기 위에서 이어 쓰면 그 원래 값을 잇고,
+    /// 아니면 (첫 쓰기, 다른 항목, 사람이 바꾼 값) 쓰기 직전의 값이 원래 값이다.
+    pub fn board_origin(
+        &self,
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        from_option_id: Option<&str>,
+    ) -> Option<String> {
+        if let Some(IssueFeedbackEvidence::BoardField {
+            project_id: owned_project,
+            item_id: owned_item,
+            field_id: owned_field,
+            option_id,
+            origin_option_id,
+        }) = self.board_proof.as_ref().map(|proof| &proof.evidence)
+            && owned_project == project_id
+            && owned_item == item_id
+            && owned_field == field_id
+            && Some(option_id.as_str()) == from_option_id
+        {
+            return origin_option_id.clone();
+        }
+        from_option_id.map(str::to_string)
     }
     pub fn validate(&self) -> Result<(), &'static str> {
         validate_feedback_issue(&self.issue)?;
@@ -651,6 +756,12 @@ impl IssueFeedbackState {
                 _ => return Err("invalid owned close proof"),
             }
         }
+        if let Some(proof) = &self.board_proof
+            && (proof.issue != self.issue
+                || !matches!(&proof.evidence, IssueFeedbackEvidence::BoardField { .. }))
+        {
+            return Err("invalid owned board field proof");
+        }
         Ok(())
     }
 }
@@ -662,6 +773,7 @@ pub enum IssueFeedbackAction {
     LabelAdded,
     LabelRemoved,
     IssueClosed,
+    BoardFieldSet,
 }
 impl IssueFeedbackOperation {
     pub fn action(&self) -> IssueFeedbackAction {
@@ -671,6 +783,7 @@ impl IssueFeedbackOperation {
             Self::AddLabel { .. } => IssueFeedbackAction::LabelAdded,
             Self::RemoveLabel { .. } => IssueFeedbackAction::LabelRemoved,
             Self::CloseIssue { .. } => IssueFeedbackAction::IssueClosed,
+            Self::SetBoardField { .. } => IssueFeedbackAction::BoardFieldSet,
         }
     }
 }

@@ -98,6 +98,10 @@ impl GithubIssueFeedbackAdapter {
                 }
             }
             IssueFeedbackOperation::CreateComment { .. } => {}
+            // 보드 필드는 승인을 검사하는 보드 adapter 만 쓴다 (#2565).
+            IssueFeedbackOperation::SetBoardField { .. } => {
+                bail!("board field feedback uses the board field port")
+            }
         }
         Ok(())
     }
@@ -184,6 +188,9 @@ impl IssueFeedbackPort for GithubIssueFeedbackAdapter {
             IssueFeedbackOperation::AddLabel { .. }
             | IssueFeedbackOperation::RemoveLabel { .. } => self.write_label(intent),
             IssueFeedbackOperation::CloseIssue { .. } => self.write_closure(intent),
+            IssueFeedbackOperation::SetBoardField { .. } => {
+                bail!("board field feedback uses the board field port")
+            }
         }
     }
 
@@ -195,6 +202,9 @@ impl IssueFeedbackPort for GithubIssueFeedbackAdapter {
             IssueFeedbackOperation::AddLabel { .. }
             | IssueFeedbackOperation::RemoveLabel { .. } => self.reconcile_label(intent),
             IssueFeedbackOperation::CloseIssue { .. } => self.reconcile_closure(intent),
+            IssueFeedbackOperation::SetBoardField { .. } => {
+                Err(anyhow!("board field feedback uses the board field port"))
+            }
         };
         // Read failures never become absence proofs or permission to write again.
         Ok(result.unwrap_or(IssueFeedbackReadResult::NeedsConfirmation))

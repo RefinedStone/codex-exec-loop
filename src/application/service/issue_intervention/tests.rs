@@ -297,6 +297,7 @@ impl Fixture {
                 completeness: IssueMetadataCompleteness::Complete,
             },
             linked_pull_request: IssuePrPresence::Absent,
+            board: None,
             creation_provenance: IssueCreationProvenance::Unattributed,
             content: IssueSourceContent::Shared(IssueAutomationSnapshot {
                 basis: IssueComparisonBasis {
