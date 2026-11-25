@@ -1,19 +1,25 @@
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 use super::issue_policy::resolve_issue_policy;
 use crate::application::port::inbound::issue_handoff_port::{
     IssueHandoffPort, IssueHandoffRequest,
 };
 use crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort;
+use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueSnapshotPort, IssueSnapshotResolveRequest,
 };
 use crate::domain::issue_masking::{IssueTextField, plan_issue_masking};
 use crate::domain::issue_policy::IssueDisclosureTarget;
+use crate::domain::issue_publish_intent::{IssuePublishIntentRecord, IssuePublishIntentState};
 use crate::domain::issue_secret_spans::secret_spans;
-use crate::domain::issue_work::{IssueProjectScope, IssueSharedCopy};
+use crate::domain::issue_work::{
+    IssueFieldHash, IssueProjectScope, IssueReference, IssueSharedCopy,
+};
+
+type WorkspaceResolver = dyn Fn(&str) -> Result<String> + Send + Sync;
 
 /*
  * 이슈 인계의 공유본을 만든다 (#2428). 원격의 제목과 본문은 다른 사람이 고친 글일 수 있다. 그래서 원시 값은 이
@@ -26,6 +32,8 @@ use crate::domain::issue_work::{IssueProjectScope, IssueSharedCopy};
 pub struct IssueHandoffService {
     snapshots: Arc<dyn IssueSnapshotPort>,
     policy_source: Arc<dyn IssuePolicySourcePort>,
+    journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
+    resolve_workspace: Option<Box<WorkspaceResolver>>,
 }
 
 impl IssueHandoffService {
@@ -36,15 +44,89 @@ impl IssueHandoffService {
         Self {
             snapshots,
             policy_source,
+            journal: None,
+            resolve_workspace: None,
         }
     }
+
+    /// Scoped hand-off reads the same private journal as the publisher.
+    pub fn with_publish_journal(
+        mut self,
+        journal: Arc<dyn IssuePublishIntentJournalPort>,
+        resolve_workspace: impl Fn(&str) -> Result<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.journal = Some(journal);
+        self.resolve_workspace = Some(Box::new(resolve_workspace));
+        self
+    }
+}
+
+/// Never fall back to an older approval after an uncertain write.
+fn approved_publication(
+    records: &[IssuePublishIntentRecord],
+    issue: &IssueReference,
+) -> Result<Option<IssueFieldHash>> {
+    let mut candidates = records
+        .iter()
+        .filter(|record| {
+            record.issue.same_remote_issue(issue)
+                && (record.state.is_unresolved()
+                    || record.state == IssuePublishIntentState::Confirmed
+                    || (record.state == IssuePublishIntentState::Abandoned
+                        && record.write_attempted != Some(false)))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    if candidates.iter().any(|record| record.state.is_unresolved()) {
+        bail!("the issue publication needs confirmation before hand-off");
+    }
+    candidates.sort_unstable_by_key(|record| record.sequence);
+    let latest = candidates.pop().expect("nonempty candidates");
+    if candidates
+        .last()
+        .is_some_and(|other| other.sequence == latest.sequence)
+        || latest.state != IssuePublishIntentState::Confirmed
+        || latest.write_attempted == Some(false)
+        || latest.write_response_mismatch
+        || latest.observed_hash.as_ref() != Some(&latest.approved_hash)
+    {
+        bail!("the issue has no unambiguous confirmed shared copy for hand-off");
+    }
+    Ok(Some(latest.approved_hash.clone()))
 }
 
 impl IssueHandoffPort for IssueHandoffService {
     fn handoff_copy(&self, request: IssueHandoffRequest) -> Result<IssueSharedCopy> {
+        let workspace_dir = request
+            .workspace_dir
+            .as_deref()
+            .map(|cwd| {
+                self.resolve_workspace
+                    .as_ref()
+                    .context("the issue hand-off workspace is unavailable")?(cwd)
+                .map_err(|_| anyhow!("the issue hand-off workspace could not be resolved"))
+            })
+            .transpose()?;
+        // Serialize against local publication until the remote copy and the
+        // authoritative journal have both been checked.
+        let scoped_journal = workspace_dir
+            .as_ref()
+            .map(|cwd| {
+                let journal = self
+                    .journal
+                    .as_ref()
+                    .context("the issue hand-off journal is unavailable")?;
+                let lease = journal
+                    .acquire_publication_lease(cwd)
+                    .map_err(|_| anyhow!("the issue hand-off publication state is unavailable"))?;
+                Ok::<_, anyhow::Error>((journal, lease))
+            })
+            .transpose()?;
         // 정책을 읽지 못하면 인계를 막는다. 기본값으로 대신하지 않는다.
         let user = self.policy_source.load_user_policy_toml()?;
-        let project = match &request.workspace_dir {
+        let project = match &workspace_dir {
             Some(workspace_dir) => self.policy_source.load_project_policy_toml(workspace_dir)?,
             None => None,
         };
@@ -53,13 +135,32 @@ impl IssueHandoffPort for IssueHandoffService {
         let snapshot = self.snapshots.resolve(IssueSnapshotResolveRequest {
             locator: request.locator,
             project_scope: IssueProjectScope {
-                workspace_dir: request.workspace_dir.unwrap_or_default(),
+                workspace_dir: workspace_dir.clone().unwrap_or_default(),
             },
         })?;
         if let Some(approved) = &request.approved
             && snapshot.verified_shared_copy(approved).is_none()
         {
             bail!("the issue changed after its shared copy was approved")
+        }
+
+        if let Some((journal, lease)) = &scoped_journal {
+            lease
+                .verify_identity()
+                .map_err(|_| anyhow!("the issue hand-off publication state changed"))?;
+            let records = journal
+                .load(workspace_dir.as_deref().expect("scoped journal"))
+                .map_err(|_| anyhow!("the issue hand-off publication state is unavailable"))?;
+            if let Some(approved) = approved_publication(&records, &snapshot.issue)?
+                && snapshot.verified_shared_copy(&approved).is_none()
+            {
+                bail!(
+                    "the issue changed after its shared copy was approved; review and publish again before hand-off"
+                );
+            }
+            lease
+                .verify_identity()
+                .map_err(|_| anyhow!("the issue hand-off publication state changed"))?;
         }
 
         let title = snapshot.raw_fields.expose_title();
@@ -84,9 +185,7 @@ mod tests {
     use crate::application::port::outbound::issue_snapshot_port::{
         IssueRawFields, IssueSnapshotReadRequest, IssueSnapshotResponse,
     };
-    use crate::domain::issue_work::{
-        IssueComparisonBasis, IssueFieldHash, IssueLocator, IssueProvider, IssueReference,
-    };
+    use crate::domain::issue_work::{IssueComparisonBasis, IssueLocator, IssueProvider};
 
     // 시험용으로 만든 값이다. 실제 비밀이 아니다.
     const SYNTHETIC_TOKEN: &str = "ghp_SyntheticCanary0000";
@@ -158,6 +257,73 @@ mod tests {
             workspace_dir: None,
             approved,
         })
+    }
+
+    fn publication(
+        issue_id: &str,
+        sequence: u64,
+        state: IssuePublishIntentState,
+    ) -> IssuePublishIntentRecord {
+        let hash = IssueFieldHash::of_fields("Title", &sequence.to_string());
+        IssuePublishIntentRecord {
+            intent_id: format!("intent-{issue_id}-{sequence}"),
+            issue: IssueReference {
+                provider: IssueProvider::GitHub,
+                server_id: "github.com".into(),
+                repository_id: "R_1".into(),
+                issue_id: issue_id.into(),
+                project_scope: IssueProjectScope {
+                    workspace_dir: "/work/project".into(),
+                },
+            },
+            previous_hash: hash.clone(),
+            approved_hash: hash.clone(),
+            pending_vault_fields: Vec::new(),
+            state,
+            observed_hash: Some(hash),
+            restore_link_finalized: false,
+            restore_binding_attempt: None,
+            write_response_mismatch: false,
+            write_attempted: Some(true),
+            sequence,
+        }
+    }
+
+    #[test]
+    fn approval_selection_uses_stable_identity_and_never_rolls_back_an_uncertain_write() {
+        use IssuePublishIntentState::*;
+        let old = publication("I_1", 1, Confirmed);
+        let latest = publication("I_1", 2, Confirmed);
+        let unrelated = publication("I_2", 3, Sent);
+        assert_eq!(
+            approved_publication(&[old.clone(), latest.clone(), unrelated], &old.issue).unwrap(),
+            Some(latest.approved_hash.clone())
+        );
+        assert!(
+            approved_publication(&[old.clone(), publication("I_1", 3, Abandoned)], &old.issue)
+                .is_err()
+        );
+        assert!(
+            approved_publication(
+                &[old.clone(), publication("I_1", 3, NeedsConfirmation)],
+                &old.issue
+            )
+            .is_err()
+        );
+        assert!(
+            approved_publication(
+                &[latest.clone(), publication("I_1", 2, Confirmed)],
+                &latest.issue
+            )
+            .is_err()
+        );
+        let mut inconsistent = latest.clone();
+        inconsistent.observed_hash = None;
+        assert!(approved_publication(&[old.clone(), inconsistent], &old.issue).is_err());
+        assert_eq!(
+            approved_publication(&[publication("I_2", 1, Confirmed)], &old.issue).unwrap(),
+            None
+        );
     }
 
     #[test]

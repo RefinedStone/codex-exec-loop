@@ -528,7 +528,11 @@ pub(crate) fn build_gateway_backend(
                 Arc::new(
                     crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter::new(),
                 ),
-            ),
+            ).with_publish_journal(build_issue_publish_journal(), |cwd| {
+                let primary = repository_kernel_target(cwd)?.workspace_root;
+                let canonical = std::fs::canonicalize(primary)?;
+                canonical.into_os_string().into_string().map_err(|_| anyhow::anyhow!("the hand-off workspace is not UTF-8"))
+            }),
         ),
         dots: build_dots()?,
         chats: build_chats()?,
