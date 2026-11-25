@@ -971,3 +971,35 @@ async fn direct_port_cancellation_does_not_wait_for_prompt_or_revive_late_approv
     ));
     fixture.assert_no_key_access();
 }
+
+#[tokio::test]
+async fn closing_one_private_window_during_key_lookup_does_not_revive_it_or_cancel_another() {
+    let fixture = Fixture::new(VaultNativeConfirmationOutcome::Confirmed, None);
+    let (mut a, task_a) = start(fixture.services(), SESSION_LIFETIME);
+    let (mut b, task_b) = start(fixture.services(), SESSION_LIFETIME);
+    send(&mut a, &prepare_request()).await;
+    assert_eq!(response(&mut a).await["result"]["kind"], "prepared");
+    send(&mut b, &prepare_request()).await;
+    assert_eq!(response(&mut b).await["result"]["kind"], "prepared");
+    fixture.assert_no_key_access();
+    let gate = Arc::new(Gate::default());
+    *fixture.keys.gate.lock().unwrap() = Some(gate.clone());
+    send(&mut a, &restore_request()).await;
+    tokio::time::timeout(Duration::from_secs(3), gate.started.notified())
+        .await
+        .unwrap();
+    a.get_mut().shutdown().await.unwrap();
+    no_more_output(&mut a).await;
+    task_a.await.unwrap().unwrap();
+    *fixture.keys.gate.lock().unwrap() = None;
+    gate.release();
+    send(&mut b, &restore_request()).await;
+    let restored = response(&mut b).await;
+    assert_eq!(restored["result"]["title"], TITLE);
+    assert_eq!(restored["result"]["body"], BODY);
+    no_more_output(&mut b).await;
+    task_b.await.unwrap().unwrap();
+    // The cancelled A cannot read remote data; B has its own live grant.
+    assert_eq!(fixture.remote.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.keys.stores.load(Ordering::SeqCst), 0);
+}
