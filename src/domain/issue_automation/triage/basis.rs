@@ -70,7 +70,7 @@ struct CanonicalLinear<'a> {
     identifier: &'a str,
     state_id: &'a str,
     state_type: LinearIssueStateType,
-    branch_name: &'a str,
+    branch_name: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -284,7 +284,7 @@ fn canonical_observation(observation: &IssueSourceObservation) -> CanonicalObser
             identifier: &linear.identifier,
             state_id: &linear.state_id,
             state_type: linear.state_type,
-            branch_name: &linear.branch_name,
+            branch_name: linear.branch_name.as_deref(),
         }),
         content,
     }

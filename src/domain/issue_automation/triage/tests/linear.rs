@@ -24,7 +24,7 @@ fn linear_source(branch_name: &str) -> IssueSourceRead {
         url: "https://linear.app/example/issue/ENG-7".into(),
         state_id: "6f1c1a52-0000-4000-8000-00000000d001".into(),
         state_type: LinearIssueStateType::Started,
-        branch_name: branch_name.into(),
+        branch_name: Some(branch_name.into()),
         connection: ConnectionRef {
             provider: Provider::Linear,
             profile_id: "a".repeat(64),

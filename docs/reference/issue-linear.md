@@ -88,7 +88,7 @@ when = "never"
 Linear가 준 `branchName`은 작업 지시의 `branch_hint`다. 슬롯 브랜치의 읽기 쉬운 부분으로만 쓴다.
 `operator/eng-7-fix-login`은 `akra-agent/slot-1/operator-eng-7-fix-login-<lease>`가 된다. 슬롯 접두사,
 lease 식별자, 충돌 번호는 기존 allocator가 정한다. `branchName`을 기존 슬롯·lease·worktree의 소유 근거로
-쓰지 않는다. `branchName`이 바뀌면 승인 판이 바뀐다.
+쓰지 않는다. `branchName`이 바뀌면 승인 판이 바뀐다. Git에 안전한 문자 범위 밖의 `branchName`은 버리고 힌트 없이 진행한다.
 
 PR 제목은 `[ENG-7] supersession: …`, 본문은 `Issue: https://linear.app/<workspace>/issue/ENG-7`을
 포함한다. Linear 작업 참조의 `close_on_merge`는 false이며 GitHub의 `Closes` 키워드를 붙이지 않는다.

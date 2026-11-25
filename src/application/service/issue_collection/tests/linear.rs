@@ -104,7 +104,10 @@ fn a_bound_team_issue_is_discovered_then_resynchronized_by_its_stable_id() {
         .unwrap();
     assert_eq!(first.newly_tracked, [expected(&fixture)]);
     let linear = current(&harness.service).linear.unwrap();
-    assert_eq!(linear.branch_name, "operator/eng-7-keep-the-description");
+    assert_eq!(
+        linear.branch_name.as_deref(),
+        Some("operator/eng-7-keep-the-description")
+    );
 
     // The issue leaves the discovery filter (completed). Resync still reads and closes it.
     let mut completed = issue(ISSUE, "ENG-7");

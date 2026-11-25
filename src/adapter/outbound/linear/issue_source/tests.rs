@@ -131,7 +131,10 @@ fn discovery_maps_a_team_issue_with_its_branch_name_and_exact_connection() {
     let linear = observation.linear.as_ref().unwrap();
     assert_eq!(linear.identifier, "ENG-7");
     assert_eq!(linear.url, "https://linear.app/example/issue/ENG-7");
-    assert_eq!(linear.branch_name, "operator/eng-7-keep-the-description");
+    assert_eq!(
+        linear.branch_name.as_deref(),
+        Some("operator/eng-7-keep-the-description")
+    );
     assert_eq!(linear.state_type, LinearIssueStateType::Started);
     assert_eq!(linear.connection, fixture.credentials.reference());
     let IssueSourceContent::Shared(snapshot) = &observation.content else {
@@ -283,7 +286,7 @@ fn a_viewer_change_or_credential_rotation_discards_the_read() {
 }
 
 #[test]
-fn label_selection_uses_complete_labels_and_an_unsafe_branch_name_is_malformed() {
+fn label_selection_uses_complete_labels_and_an_unsafe_branch_name_is_only_dropped() {
     let fixture = Fixture::new();
     let mut unlabeled = issue(ISSUE, "ENG-7");
     unlabeled["labels"]["nodes"] = json!([]);
@@ -293,15 +296,12 @@ fn label_selection_uses_complete_labels_and_an_unsafe_branch_name_is_malformed()
     let page = fixture.adapter.discover(selected).unwrap();
     assert_eq!((page.scanned_count, page.observations.len()), (1, 0));
 
-    let fixture = Fixture::new();
-    let mut unsafe_branch = issue(ISSUE, "ENG-7");
-    unsafe_branch["branchName"] = json!("../main");
-    fixture.api.resync(unsafe_branch);
-    assert!(matches!(
-        fixture.adapter.resync(resync()),
-        IssueSourceRead::Unknown {
-            reason: IssueSourceFailure::MalformedResponse,
-            ..
-        }
-    ));
+    for unsafe_name in ["../main", "사용자/eng-7"] {
+        let fixture = Fixture::new();
+        let mut unsafe_branch = issue(ISSUE, "ENG-7");
+        unsafe_branch["branchName"] = json!(unsafe_name);
+        fixture.api.resync(unsafe_branch);
+        let current = observed(fixture.adapter.resync(resync()));
+        assert_eq!(current.linear.unwrap().branch_name, None);
+    }
 }

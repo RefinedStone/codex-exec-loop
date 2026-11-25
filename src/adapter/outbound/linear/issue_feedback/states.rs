@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use super::*;
 
 struct StateEvent {
+    at: chrono::DateTime<chrono::FixedOffset>,
     id: String,
     actor: Option<String>,
     from: Option<String>,
@@ -152,7 +153,7 @@ impl LinearIssueFeedbackAdapter {
         )
     }
 
-    /// Workflow state changes only, newest first, as Linear's forward pagination returns them.
+    /// Workflow state changes only, sorted newest first by `createdAt`.
     fn state_events(
         &self,
         context: &FeedbackContext,
@@ -161,7 +162,6 @@ impl LinearIssueFeedbackAdapter {
         let mut after = None;
         let mut seen = BTreeSet::new();
         let mut result = Vec::new();
-        let mut last_at = None;
         for _ in 0..MAX_PAGES {
             let value = self.read(
                 context,
@@ -182,14 +182,11 @@ impl LinearIssueFeedbackAdapter {
                 }
                 let at = chrono::DateTime::parse_from_rfc3339(string(node, "createdAt")?)
                     .map_err(|_| anyhow!("invalid Linear history timestamp"))?;
-                if last_at.is_some_and(|newer| newer < at) {
-                    bail!("Linear history order changed");
-                }
-                last_at = Some(at);
                 let Some(to) = optional_id(node, "toStateId")? else {
                     continue;
                 };
                 result.push(StateEvent {
+                    at,
                     id: id.to_owned(),
                     actor: optional_id(node, "actorId")?,
                     from: optional_id(node, "fromStateId")?,
@@ -198,7 +195,11 @@ impl LinearIssueFeedbackAdapter {
             }
             match next {
                 Some(next) => after = Some(next),
-                None => return Ok(result),
+                None => {
+                    // Do not depend on the provider's page direction: newest first, stable ties.
+                    result.sort_by_key(|event| std::cmp::Reverse(event.at));
+                    return Ok(result);
+                }
             }
         }
         bail!("Linear state observation exceeded its bound")

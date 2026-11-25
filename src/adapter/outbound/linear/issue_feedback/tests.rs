@@ -316,7 +316,7 @@ fn the_close_state_change_uses_the_granted_completed_state_and_history() {
         "toStateId": DONE, "actorId": VIEWER});
     fixture.context(CLOSED);
     fixture.issue(CLOSED);
-    fixture.history(vec![moved, previous]);
+    fixture.history(vec![previous, moved]);
     fixture.issue(CLOSED);
     assert!(matches!(
         fixture.adapter.reconcile(&intent).unwrap(),

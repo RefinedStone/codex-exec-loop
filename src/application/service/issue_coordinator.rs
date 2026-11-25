@@ -1371,7 +1371,7 @@ impl IssueCoordinatorService {
                 branch_hint: observation
                     .linear
                     .as_ref()
-                    .map(|linear| linear.branch_name.clone()),
+                    .and_then(|linear| linear.branch_name.clone()),
                 link_reference: observation
                     .web
                     .as_ref()
