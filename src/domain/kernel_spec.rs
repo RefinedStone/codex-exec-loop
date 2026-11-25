@@ -814,7 +814,18 @@ mod tests {
         assert_eq!(answer.effect, CommandEffect::Write);
         assert_eq!(answer.idempotency, CommandIdempotency::Keyed);
         assert_eq!(answer.completion, CommandCompletion::Records);
-        assert_eq!(answer.rejections, &[ReasonCode::HumanConfirmationRequired]);
+        assert_eq!(
+            answer.rejections,
+            &[
+                ReasonCode::HumanConfirmationRequired,
+                ReasonCode::OwnIssueQuestion
+            ]
+        );
+        let ask = KernelCommandKind::AskIssueDecision.spec();
+        assert_eq!(ask.scope, CommandScope::Issue);
+        assert_eq!(ask.state, CommandState::Store);
+        assert_eq!(ask.idempotency, CommandIdempotency::Keyed);
+        assert_eq!(ask.rejections, &[ReasonCode::IssueQuestionLimit]);
         let sync = KernelCommandKind::SyncIssues.spec();
         assert_eq!(sync.scope, CommandScope::Issue);
         assert_eq!(sync.state, CommandState::Runtime);
@@ -889,6 +900,8 @@ mod tests {
                 "close_disabled",
                 "human_confirmation_required",
                 "decision_superseded",
+                "issue_question_limit",
+                "own_issue_question",
                 "issue_automation_off",
             ]
         );

@@ -557,7 +557,23 @@ mod tests {
             "string" if schema["pattern"] == "^[a-f0-9]{64}$" => json!("a".repeat(64)),
             "string" => json!("test-value"),
             "boolean" => json!(true),
-            "array" => json!([sample_value(&schema["items"], spec)]),
+            // Distinct items satisfy `minItems` and unique option ids.
+            "array" => Value::Array(
+                (0..schema["minItems"].as_u64().unwrap_or(1).max(1))
+                    .map(|index| match sample_value(&schema["items"], spec) {
+                        Value::Object(fields) => Value::Object(
+                            fields
+                                .into_iter()
+                                .map(|(name, value)| match value {
+                                    Value::String(text) => (name, json!(format!("{text}-{index}"))),
+                                    other => (name, other),
+                                })
+                                .collect(),
+                        ),
+                        other => other,
+                    })
+                    .collect(),
+            ),
             "object" => Value::Object(
                 schema["required"]
                     .as_array()

@@ -114,6 +114,13 @@ fn sample_commands() -> Vec<KernelCommand> {
             option: "continue".to_owned(),
             note: None,
         },
+        serde_json::from_value(json!({
+            "type": "ask_issue_decision",
+            "branch": "akra-agent/slot-1/task",
+            "question": "A or B?",
+            "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        }))
+        .unwrap(),
         KernelCommand::HoldIssue {
             issue: (&sample_issue_reference()).into(),
             command_id: "intervention-1".into(),
