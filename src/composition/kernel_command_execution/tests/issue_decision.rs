@@ -24,7 +24,7 @@ fn store() -> SqliteIssueAutomationStoreAdapter {
     })
 }
 
-fn seed_decision(kernel: &CommandOnlyKernel) -> IssueReference {
+pub(super) fn seed_decision(kernel: &CommandOnlyKernel) -> IssueReference {
     let ledger = store();
     let reference = IssueReference {
         provider: IssueProvider::GitHub,

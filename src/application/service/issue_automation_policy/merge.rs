@@ -289,6 +289,11 @@ fn apply_user_grants(
                 &mut policy.feedback.transition,
                 feedback.transition,
             ),
+            (
+                "feedback.telegram",
+                &mut policy.feedback.telegram,
+                feedback.telegram,
+            ),
         ] {
             assign(target, value, key, Scope::User, origins);
         }
@@ -411,6 +416,11 @@ fn restrict_with_project(
                 "feedback.transition",
                 &mut policy.feedback.transition,
                 feedback.transition,
+            ),
+            (
+                "feedback.telegram",
+                &mut policy.feedback.telegram,
+                feedback.telegram,
             ),
         ] {
             if let Some(value) = value {

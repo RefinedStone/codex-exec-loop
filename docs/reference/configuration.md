@@ -139,7 +139,7 @@ Issue automation policy lives in a separate `issue-automation.toml`. It declares
 | --- | --- |
 | `authority.autonomy_cap` | 사용자 상한과 저장소 제한 중 낮은 수준. 요청한 `binding.github.mode`도 이 상한까지 낮춥니다. |
 | `budget.*` | 사용자 최대값과 저장소 제한 중 작은 값. 저장소는 최대값을 늘릴 수 없습니다. |
-| `feedback.comment/labels/transition` | 사용자의 허가와 저장소의 제한을 AND로 결합합니다. 사용자 허가의 기본값은 모두 `false`입니다. 저장소의 `true`만으로 권한을 얻지 못합니다. |
+| `feedback.comment/labels/transition/telegram` | 사용자의 허가와 저장소의 제한을 AND로 결합합니다. 사용자 허가의 기본값은 모두 `false`입니다. 저장소의 `true`만으로 권한을 얻지 못합니다. |
 | `select.trusted_actors` | 사용자가 신뢰한 안정 ID 삼중항과 저장소 목록의 교집합. 저장소에서 생략하면 상속하고, `[]`이면 모두 제외합니다. |
 | `protection.paths` | 내장·사용자·저장소 경로 패턴의 합집합. `[]`으로 이전 보호를 지울 수 없습니다. |
 | `human_required.rules/additional` | 내장·사용자·저장소 규칙의 합집합. 저장소는 사람 승인이 필요한 조건을 더할 수만 있습니다. |
@@ -169,6 +169,7 @@ Issue automation policy lives in a separate `issue-automation.toml`. It declares
 | `budget.max_started_per_day` | 같은 범위; 기본 5 |
 | `budget.max_attempts` | 같은 범위; 기본 3 |
 | `feedback.comment/labels/transition` | boolean; 사용자 허가 기본 `false` |
+| `feedback.telegram` | boolean; 기본 `false`. 결정 요청·중재자 결정·실패의 Telegram 알림. 알림은 권한이 아니므로 정책 판(SHA-256)에 넣지 않습니다 |
 | `close.when` | `never / integration / provider_link`; 기본 `never` |
 | `protection.paths` | 상대 경로 glob 배열; 아래 내장 보호 경로와 합집합 |
 | `human_required.rules` | 아래 10개 고정 규칙; 내장값은 10개 전부 |

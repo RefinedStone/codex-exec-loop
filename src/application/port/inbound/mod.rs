@@ -33,6 +33,8 @@ pub mod review_center_query_port;
 pub mod stored_command_port;
 pub mod task_delivery_evidence_port;
 pub mod task_evidence_query_port;
+// telegram issue port 는 Telegram 의 이슈 결정 알림과 답이다 (IA8-3).
+pub mod telegram_issue_port;
 pub mod work_context_port;
 // 명시적인 이슈 폼 설치 요청은 서비스 구현이 아닌 이 경계로 들어간다.
 pub mod issue_form_install_port;

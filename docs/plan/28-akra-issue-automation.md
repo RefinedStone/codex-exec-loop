@@ -830,6 +830,12 @@ PR #2638은 선행 [PR #2637](https://github.com/RefinedStone/codex-exec-loop/pu
 `prerelease`에 반영됐다. 검증 결과는 해당 PR의 실행 SHA별 증거에 기록한다.
 IA4 전체의 완료 기준은 후속 조각까지 포함한다.
 
+### IA8 조각 상태
+
+| 조각 | 상태 | 계약과 남은 범위 |
+| --- | --- | --- |
+| IA8-3 · #2568 | 구현 PR · 리뷰 대기 | Telegram 결정 요청·중재자 결정·실패 알림 (`feedback.telegram`, 기본 꺼짐), `/decide` 답. 알림은 식별자만 싣고 intent 마다 한 번 (at-most-once, 결과 모름은 다시 보내지 않음). Telegram 답은 `by: agent` 이고 `human` 관문을 통과하지 못한다 (Q-IA11). 원격 message ID 기록과 Telegram 버튼은 범위 밖. [reference](../reference/current-product.md#issue-decision-telegram-notifications) |
+
 ## 18. 조각의 완료 기준
 
 plan 24 §7 의 방식을 쓴다. 조각마다 아래를 PR 에 붙인다.

@@ -782,6 +782,7 @@ mod tests {
     mod issue_intervention;
     mod issue_queries;
     mod task_verification;
+    mod telegram_issue;
     use super::*;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::service::planning::PlanningServices;

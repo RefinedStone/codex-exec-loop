@@ -12,6 +12,9 @@ use crate::application::port::inbound::planning_control_port::{
     PlanningControlCommand, PlanningControlPort, PlanningControlRequest,
 };
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
+use crate::application::port::inbound::telegram_issue_port::{
+    TelegramIssueAnswerOutcome, TelegramIssueAnswerPort, TelegramIssueNotificationPort,
+};
 use crate::application::port::outbound::telegram_bot_port::{
     TELEGRAM_LONG_POLL_TRANSPORT_MARGIN_SECONDS, TelegramBotPort, TelegramInboundMessage,
     TelegramPollRequest, TelegramSendMessageRequest, TelegramUpdate,
@@ -86,10 +89,14 @@ where
         .map_err(|_| anyhow::anyhow!("canonical Telegram repository path must be valid UTF-8"))?;
     let stream_key = telegram_stream_key(&args.token)?;
     let application = build_telegram_application(workspace_dir.clone());
+    let gateway = production::build_telegram_bot_port(args.token);
+    // 정책 (`feedback.telegram`) 이 켜면 이슈 결정 알림을 보낸다. 커널이 있을 수 없는 폴더에서는 없다.
+    let issue_notifications =
+        crate::composition::telegram_issue::build_notifications(&workspace_dir, gateway.clone());
 
     // Production wiring: Telegram HTTP adapter + planning control service + local allowlist policy.
-    let runner = TelegramBotRunner::new(
-        production::build_telegram_bot_port(args.token),
+    let mut runner = TelegramBotRunner::new(
+        gateway,
         application.telegram_global_runner_lease_port,
         application.telegram_update_ledger_port,
         application.planning_control_port,
@@ -109,7 +116,13 @@ where
             failure_backoff: DEFAULT_FAILURE_BACKOFF,
         },
     )
-    .with_review_center_query_port(application.review_center_query_port);
+    .with_review_center_query_port(application.review_center_query_port)
+    .with_issue_answer_port(
+        crate::composition::telegram_issue::KernelRoutedTelegramIssueAnswer::new(
+            workspace_dir.clone(),
+        ),
+    );
+    runner.issue_notifications = issue_notifications;
     runner.run(&shutdown)
 }
 
@@ -190,6 +203,9 @@ struct TelegramBotRunner {
     planning_control_port: Arc<dyn PlanningControlPort>,
     parallel_mode_control_port: Arc<dyn ParallelModeControlPort>,
     review_center_query_port: Option<Arc<dyn ReviewCenterQueryPort>>,
+    // 이슈 결정의 답과 알림이다 (IA8-3). 없으면 `/decide` 를 거절하고 알림을 보내지 않는다.
+    issue_answer_port: Option<Arc<dyn TelegramIssueAnswerPort>>,
+    issue_notifications: Option<Arc<dyn TelegramIssueNotificationPort>>,
     policy: TelegramBotPolicy,
     // Long polling timeout is configurable because Telegram HTTP infrastructure decides practical latency.
     poll_timeout_seconds: u16,
@@ -234,6 +250,8 @@ impl TelegramBotRunner {
             planning_control_port: Arc::new(planning_control_port),
             parallel_mode_control_port: Arc::new(parallel_mode_control_port),
             review_center_query_port: None,
+            issue_answer_port: None,
+            issue_notifications: None,
             policy: config.policy,
             poll_timeout_seconds: config.poll_timeout_seconds,
             drop_pending_updates: config.drop_pending_updates,
@@ -251,6 +269,11 @@ impl TelegramBotRunner {
         review_center_query_port: impl ReviewCenterQueryPort + 'static,
     ) -> Self {
         self.review_center_query_port = Some(Arc::new(review_center_query_port));
+        self
+    }
+
+    fn with_issue_answer_port(mut self, port: impl TelegramIssueAnswerPort + 'static) -> Self {
+        self.issue_answer_port = Some(Arc::new(port));
         self
     }
 
@@ -413,7 +436,25 @@ impl TelegramBotRunner {
         // update id cannot be advanced, returning an error prevents replaying the
         // same already-executed batch forever.
         validate_update_batch(&updates)?;
-        self.process_updates(&updates, durable_offset)
+        let next_offset = self.process_updates(&updates, durable_offset)?;
+        self.deliver_issue_notifications();
+        Ok(next_offset)
+    }
+
+    /// 알림의 실패는 polling 을 멈추지 않는다. 결정의 상태도 바꾸지 않는다.
+    fn deliver_issue_notifications(&self) {
+        let Some(notifications) = self.issue_notifications.as_ref() else {
+            return;
+        };
+        let chat_ids = self
+            .policy
+            .allowed_chat_ids
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        if let Err(error) = notifications.deliver(&self.stream_key, &chat_ids) {
+            eprintln!("telegram bot failed to deliver issue notifications: {error:#}");
+        }
     }
 
     fn drop_pending_updates(&self, current_offset: Option<i64>) -> Result<Option<i64>> {
@@ -555,6 +596,15 @@ impl TelegramBotRunner {
                 }
                 Ok(Some(self.render_reviews_summary()?))
             }
+            TelegramParsedMessage::Command(TelegramInboundCommand::Decide {
+                decision_id,
+                option,
+            }) => {
+                if !self.policy.is_allowed(message) {
+                    return Ok(Some(self.render_unauthorized(message)));
+                }
+                Ok(Some(self.answer_issue_decision(&decision_id, &option)?))
+            }
             TelegramParsedMessage::Command(TelegramInboundCommand::Planning(command)) => {
                 // Help is safe without allowlist because it only describes commands and includes `/whoami`.
                 if matches!(command, PlanningControlCommand::Help) {
@@ -652,9 +702,46 @@ impl TelegramBotRunner {
     fn render_help(&self) -> String {
         // `/whoami` lives in this adapter, so append it to the shared planning control help text.
         format!(
-            "{}\n/parallel\n/reviews\n/whoami",
+            "{}\n/parallel\n/reviews\n/decide <decision_id> <option>\n/whoami",
             self.planning_control_port.help_text()
         )
+    }
+
+    fn answer_issue_decision(&self, decision_id: &str, option: &str) -> Result<String> {
+        let port = self
+            .issue_answer_port
+            .as_ref()
+            .context("telegram issue answer port is not configured")?;
+        let outcome = port.answer(decision_id, option)?;
+        Ok(match outcome {
+            TelegramIssueAnswerOutcome::Answered => format!(
+                "answered: 결정 {decision_id} 에 {option} 을 기록했습니다. 기록의 출처는 agent (akra-telegram) 입니다."
+            ),
+            TelegramIssueAnswerOutcome::Superseded => format!(
+                "superseded: 결정 {decision_id} 의 판이 바뀌었습니다. 답을 적용하지 않았습니다. 새 결정 요청을 기다리세요."
+            ),
+            TelegramIssueAnswerOutcome::AlreadyResolved => {
+                format!(
+                    "already_resolved: 결정 {decision_id} 은 이미 닫혔습니다. 답을 적용하지 않았습니다."
+                )
+            }
+            TelegramIssueAnswerOutcome::Rejected(reason)
+                if reason == crate::domain::kernel_spec::ReasonCode::HumanConfirmationRequired =>
+            {
+                format!(
+                    "{}: 이 관문은 Desktop 의 사람 확인이 필요합니다. Telegram 의 답은 사람 확인의 증거가 아닙니다.",
+                    reason.name()
+                )
+            }
+            TelegramIssueAnswerOutcome::Rejected(reason) => {
+                format!("{}: 커널이 답을 거절했습니다.", reason.name())
+            }
+            TelegramIssueAnswerOutcome::Failed => {
+                format!(
+                    "failed: 결정 {decision_id} 의 답을 저장하지 못했습니다. Desktop 에서 확인하세요."
+                )
+            }
+        })
     }
 
     fn render_reviews_summary(&self) -> Result<String> {

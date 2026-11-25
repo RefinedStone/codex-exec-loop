@@ -255,6 +255,7 @@ pub(super) struct FeedbackLayer {
     pub comment: Option<bool>,
     pub labels: Option<bool>,
     pub transition: Option<bool>,
+    pub telegram: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]

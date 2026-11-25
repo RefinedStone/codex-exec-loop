@@ -24,6 +24,11 @@ pub(super) enum TelegramInboundCommand {
      */
     Reviews,
     /*
+     * `/decide <decision_id> <option>` 은 이슈 결정 요청에 답한다 (IA8-3). 답은 kernel 의
+     * `answer_issue_decision` 명령이고 사람 확인의 증거가 아니다.
+     */
+    Decide { decision_id: String, option: String },
+    /*
      * 나머지 운영 명령은 application service의 planning control 언어로 넘긴다.
      * adapter가 service 내부 모델을 다시 만들지 않도록 여기서 바로 감싼다.
      */
@@ -127,6 +132,15 @@ pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
          * 두지만, 하위 명령이 늘어나면 parse_plan_arguments에만 분기를 추가하면 된다.
          */
         "/plan" => parse_plan_arguments(&arguments),
+        "/decide" => match arguments.as_slice() {
+            [decision_id, option] => {
+                TelegramParsedMessage::Command(TelegramInboundCommand::Decide {
+                    decision_id: (*decision_id).to_string(),
+                    option: (*option).to_string(),
+                })
+            }
+            _ => TelegramParsedMessage::Error("사용법: /decide <decision_id> <option>".to_string()),
+        },
         /*
          * reset alias들은 target이 명령어 이름에 이미 들어 있으므로 `confirm` 외의 인자를 금지한다.
          * 이 제한 덕분에 `/reset_all now` 같은 애매한 입력이 조용히 실행되지 않는다.
@@ -152,7 +166,7 @@ pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
          * help copy는 inbound port 계약이 소유하므로 파서가 service를 조립하거나 I/O를 실행하지 않는다.
          */
         token if token.starts_with('/') => TelegramParsedMessage::Error(format!(
-            "지원하지 않는 명령어입니다: {token}\n{}\n/parallel\n/reviews\n/whoami",
+            "지원하지 않는 명령어입니다: {token}\n{}\n/parallel\n/reviews\n/decide\n/whoami",
             PLANNING_CONTROL_HELP_TEXT
         )),
         /*

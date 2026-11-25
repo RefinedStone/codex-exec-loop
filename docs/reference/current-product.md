@@ -462,6 +462,31 @@ outcome; repeated reconciliation, confirmation, and event acknowledgement do not
 The count is independent of the implementation-attempt budget. Wire generation and fake-provider
 tests require no real GitHub write or model turn.
 
+## Issue Decision Telegram Notifications
+
+IA8-3 ([#2568](https://github.com/RefinedStone/codex-exec-loop/issues/2568)) lets the existing
+`akra telegram` runner announce issue decisions and take answers. Notifications are off by default.
+Only user-policy `feedback.telegram` turns them on; a repository policy can only turn them off.
+The value is not part of the policy version, so enabling it does not supersede open decisions.
+
+- **Source.** After each poll the runner reads the repository kernel record from a durable cursor.
+  It announces `issue_decision_requested` (only while the request is still open),
+  `issue_decision_arbiter_finished` with `applied` or `waiting`, and `issue_execution_progressed`
+  with state `failed`. The first enabled cycle, and cycles while the policy is off, start from the
+  end of the record; old events are not replayed.
+- **Content.** Identifiers and closed enum names only: decision ID, provider, repository and issue
+  IDs, gate, kind, option IDs, arbiter outcome, terminal class, and attempt count. No issue title,
+  body, question text, local path, or provider error text.
+- **Once.** Each notification has an intent key (`decision_requested:<id>`, and so on) stored per
+  bot stream and chat in the repository authority store before sending. A send that fails, or a
+  process that stops during a send, leaves the intent `unknown`. It is not sent again. Delivery is
+  at most once, not exactly once.
+- **Answer.** `/decide <decision_id> <option>` from an allowed chat (and, in groups, an allowed
+  user) sends the kernel command `answer_issue_decision` with `caller: akra-telegram`. The runner
+  replies `answered`, `superseded`, `already_resolved`, a rejection reason, or `failed`.
+- **Evidence.** A Telegram answer carries no Desktop confirmation, so the kernel records it as
+  `by: agent`. It cannot pass a `human` gate; the reply is `human_confirmation_required` (Q-IA11).
+
 ## Issue Integration and External Closure
 
 IA4-3 ([#2553](https://github.com/RefinedStone/codex-exec-loop/issues/2553)) keeps trusted
