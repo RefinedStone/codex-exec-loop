@@ -1,6 +1,6 @@
 # @refinedstone/akra
 
-`@refinedstone/akra`는 `codex-exec-loop-native`를 npm으로 배포하는 패키지입니다.
+`@refinedstone/akra`는 `akra-ade`를 npm으로 배포하는 패키지입니다.
 설치 방식은 Codex CLI와 비슷하게 메타 패키지 + 플랫폼별 네이티브 optional dependency 조합을 사용합니다.
 
 ## 설치

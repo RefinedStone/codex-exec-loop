@@ -122,7 +122,7 @@ cargo test --locked --lib --no-run --timings
 6. 동일 편집의 compile/execute/runner 비용을 비교한다. 이득이 없으면 구조 변경을 되돌리고
    계측·문서는 남긴다. 두 번째 실행기 계약은 #2569 범위에서 별도로 충족한다.
 
-scripts/package_native_release.sh는 root manifest 및 codex-exec-loop-native 이름을 사용하고,
+scripts/package_native_release.sh는 root manifest 및 akra-ade 이름을 사용하고,
 release-native-assets.yml은 Cargo 버전과 배포 산출물을 연결한다. Workspace 변경 시 이
 계약과 npm launcher/platform 패키지의 이름을 함께 검증한다. 99238e87에서 유지할 native
 범위는 Windows 계약 필터 30개, macOS 계약 필터 12개이며, Linux/macOS의

@@ -12,13 +12,13 @@ Usage: scripts/verify_native_release.sh --version <version> --target <triple> [-
 Verify native release checksum artifacts produced by scripts/package_native_release.sh.
 
 Examples:
-  ./scripts/verify_native_release.sh --version 0.1.0 --target x86_64-unknown-linux-gnu --archive dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-  ./scripts/verify_native_release.sh --version 0.1.0 --target x86_64-unknown-linux-gnu --bundle-dir dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu
+  ./scripts/verify_native_release.sh --version 0.1.0 --target x86_64-unknown-linux-gnu --archive dist/native/akra-ade-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+  ./scripts/verify_native_release.sh --version 0.1.0 --target x86_64-unknown-linux-gnu --bundle-dir dist/native/akra-ade-0.1.0-x86_64-unknown-linux-gnu
   ./scripts/verify_native_release.sh \
     --version 0.1.0 \
     --target x86_64-unknown-linux-gnu \
-    --archive dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
-    --bundle-dir dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu
+    --archive dist/native/akra-ade-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+    --bundle-dir dist/native/akra-ade-0.1.0-x86_64-unknown-linux-gnu
 EOF
 }
 
@@ -127,7 +127,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "${script_dir}/.." && pwd -P)"
 node_verifier="${repo_root}/npm/scripts/verify-native-release-assets.mjs"
-expected_root="codex-exec-loop-native-${normalized_version}-${target}"
+expected_root="akra-ade-${normalized_version}-${target}"
 
 forbidden_release_path() {
   local relative_path="$1"

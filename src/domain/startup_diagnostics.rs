@@ -119,7 +119,7 @@ mod tests {
     fn bundled_schema_snapshot_label_carries_id_version_and_checksum() {
         let label = StartupDiagnostics::bundled_schema_snapshot_label();
         assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_PATH));
-        assert!(label.contains("urn:codex-exec-loop-native:app-server-protocol:v2:snapshot"));
+        assert!(label.contains("urn:akra-ade:app-server-protocol:v2:snapshot"));
         assert!(label.contains("v2"));
         assert!(label.contains("codex-cli 0.144.0"));
         assert!(label.contains("sha256:"));
@@ -129,7 +129,7 @@ mod tests {
     fn bundled_schema_snapshot_metadata_is_present_in_embedded_schema() {
         assert_eq!(
             StartupDiagnostics::bundled_schema_snapshot_string_field("$id").as_deref(),
-            Some("urn:codex-exec-loop-native:app-server-protocol:v2:snapshot")
+            Some("urn:akra-ade:app-server-protocol:v2:snapshot")
         );
         assert_eq!(
             StartupDiagnostics::bundled_schema_snapshot_string_field("version").as_deref(),

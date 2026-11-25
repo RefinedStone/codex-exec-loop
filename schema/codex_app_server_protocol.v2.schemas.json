@@ -1,5 +1,5 @@
 {
-  "$id": "urn:codex-exec-loop-native:app-server-protocol:v2:snapshot",
+  "$id": "urn:akra-ade:app-server-protocol:v2:snapshot",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "AbsolutePathBuf": {
@@ -21849,7 +21849,7 @@
       "type": "string"
     }
   },
-  "description": "Checked-in Codex app-server protocol snapshot pinned by codex-exec-loop-native for startup diagnostics and adapter contract verification.",
+  "description": "Checked-in Codex app-server protocol snapshot pinned by akra-ade for startup diagnostics and adapter contract verification.",
   "title": "CodexAppServerProtocolV2",
   "type": "object",
   "version": "v2",

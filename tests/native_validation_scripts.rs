@@ -221,7 +221,7 @@ fn release_version_check_reports_missing_tomllib_as_a_prerequisite() {
     let manifest = root.join("Cargo.toml");
     fs::write(
         &manifest,
-        "[package]\nname = \"codex-exec-loop-native\"\nversion = \"1.2.3\"\n",
+        "[package]\nname = \"akra-ade\"\nversion = \"1.2.3\"\n",
     )
     .expect("release manifest fixture should write");
 
@@ -557,7 +557,7 @@ fn release_version_check_accepts_matching_v_tag() {
 version = "9.9.9"
 
 [package]
-name = "codex-exec-loop-native"
+name = "akra-ade"
 version = "1.3.4"
 
 [dependencies]
@@ -582,7 +582,7 @@ fn release_version_check_rejects_non_string_package_version() {
     let output = run_release_version_check(
         "v1.3.4",
         r#"[package]
-name = "codex-exec-loop-native"
+name = "akra-ade"
 version.workspace = true
 "#,
     );
@@ -610,7 +610,7 @@ fn release_version_check_requires_tagged_commit_on_allowed_branch() {
     );
     fs::write(
         repo.join("Cargo.toml"),
-        "[package]\nname = \"codex-exec-loop-native\"\nversion = \"1.2.3\"\n",
+        "[package]\nname = \"akra-ade\"\nversion = \"1.2.3\"\n",
     )
     .expect("release ancestry manifest should be written");
     assert_success(
@@ -682,7 +682,7 @@ fn release_version_check_rejects_mismatched_tag() {
     let output = run_release_version_check(
         "v1.3.4",
         r#"[package]
-name = "codex-exec-loop-native"
+name = "akra-ade"
 version = "1.3.3"
 "#,
     );
@@ -699,7 +699,7 @@ fn release_version_check_rejects_unprefixed_matching_tag() {
     let output = run_release_version_check(
         "1.3.4",
         r#"[package]
-name = "codex-exec-loop-native"
+name = "akra-ade"
 version = "1.3.4"
 "#,
     );
@@ -716,7 +716,7 @@ fn release_version_check_rejects_prerelease_and_build_metadata_tags() {
         let tag = format!("v{version}");
         let manifest = format!(
             r#"[package]
-name = "codex-exec-loop-native"
+name = "akra-ade"
 version = "{version}"
 "#
         );
@@ -1333,8 +1333,8 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
     const SOURCE_DATE_EPOCH: u64 = 1_700_000_000;
     const VERSION: &str = "9.8.7";
     const TARGETS: [(&str, &str); 2] = [
-        ("x86_64-unknown-linux-gnu", "codex-exec-loop-native"),
-        ("x86_64-pc-windows-msvc", "codex-exec-loop-native.exe"),
+        ("x86_64-unknown-linux-gnu", "akra-ade"),
+        ("x86_64-pc-windows-msvc", "akra-ade.exe"),
     ];
 
     let root = make_records_dir();
@@ -1372,9 +1372,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
 
     fs::write(
         repo.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"codex-exec-loop-native\"\nversion = \"{VERSION}\"\nedition = \"2024\"\n"
-        ),
+        format!("[package]\nname = \"akra-ade\"\nversion = \"{VERSION}\"\nedition = \"2024\"\n"),
     )
     .expect("fixture manifest should be written");
     fs::write(repo.join("README.md"), "fixture readme\n")
@@ -1486,7 +1484,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
     for (target, binary_name) in TARGETS {
         let out_dir = root.join(format!("out-{target}"));
         run_package(target, &out_dir);
-        let package_name = format!("codex-exec-loop-native-{VERSION}-{target}");
+        let package_name = format!("akra-ade-{VERSION}-{target}");
         let archive_path = out_dir.join(format!("{package_name}.tar.gz"));
         first_runs.push(FirstRun {
             target,
@@ -1731,7 +1729,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
         }
     }
 
-    let package_name = format!("codex-exec-loop-native-{VERSION}-x86_64-unknown-linux-gnu");
+    let package_name = format!("akra-ade-{VERSION}-x86_64-unknown-linux-gnu");
 
     // #2317: with CARGO_TARGET_DIR set, the bundle must hold the fresh build, not the stale
     // binary left in repo/target. This fake cargo writes where real cargo would write.
@@ -1753,7 +1751,7 @@ case "$target_dir" in
   *) echo "fake cargo: relative --target-dir $target_dir" >&2; exit 1 ;;
 esac
 mkdir -p "$target_dir/$triple/release"
-printf 'fresh build\n' > "$target_dir/$triple/release/codex-exec-loop-native"
+printf 'fresh build\n' > "$target_dir/$triple/release/akra-ade"
 "#,
     );
     for (label, cargo_target_dir) in [
@@ -1779,12 +1777,8 @@ printf 'fresh build\n' > "$target_dir/$triple/release/codex-exec-loop-native"
             &format!("package from a {label} CARGO_TARGET_DIR"),
         );
         assert_eq!(
-            fs::read_to_string(
-                custom_target_out
-                    .join(&package_name)
-                    .join("codex-exec-loop-native")
-            )
-            .expect("custom target-dir bundle binary should be readable"),
+            fs::read_to_string(custom_target_out.join(&package_name).join("akra-ade"))
+                .expect("custom target-dir bundle binary should be readable"),
             "fresh build\n",
             "packaging must ship the binary cargo just built from a {label} CARGO_TARGET_DIR"
         );

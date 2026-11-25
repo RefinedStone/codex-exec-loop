@@ -57,7 +57,7 @@ function buildBundleContract(version, targetTriple, profile = "release") {
     throw new Error(`Invalid native release profile: ${profile}`);
   }
   return {
-    name: "codex-exec-loop-native",
+    name: "akra-ade",
     version: normalizedVersion,
     releaseTag: `v${normalizedVersion}`,
     targetTriple,
@@ -307,7 +307,7 @@ function runTar(args, inputDescriptor = "ignore") {
 }
 
 function archiveName(version, targetTriple) {
-  return `codex-exec-loop-native-${normalizeVersion(version)}-${targetTriple}.tar.gz`;
+  return `akra-ade-${normalizeVersion(version)}-${targetTriple}.tar.gz`;
 }
 
 function readBoundedRegularFile(filePath, label, maximumBytes) {

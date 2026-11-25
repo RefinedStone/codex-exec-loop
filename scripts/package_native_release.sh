@@ -141,7 +141,7 @@ export SOURCE_DATE_EPOCH="${source_date_epoch}"
 
 host_triple="$(rustc -vV | sed -n 's/^host: //p')"
 artifact_target="${target:-${host_triple}}"
-binary_name="codex-exec-loop-native"
+binary_name="akra-ade"
 binary_file_name="${binary_name}"
 launcher_file_name="akra"
 if [[ "${artifact_target}" == *windows* ]]; then

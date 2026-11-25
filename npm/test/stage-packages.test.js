@@ -43,7 +43,7 @@ function createArchive(
     afterManifest = null,
   } = {},
 ) {
-  const rootName = `codex-exec-loop-native-0.1.0-${config.targetTriple}`;
+  const rootName = `akra-ade-0.1.0-${config.targetTriple}`;
   const bundleRoot = path.join(releaseAssetsDir, rootName);
   fs.mkdirSync(bundleRoot, { recursive: true });
   writeFile(path.join(bundleRoot, config.binaryName), "binary");
@@ -81,7 +81,7 @@ function createArchive(
   writeFile(
     path.join(bundleRoot, "VERSION.txt"),
     [
-      "name=codex-exec-loop-native",
+      "name=akra-ade",
       "version=0.1.0",
       "release_tag=v0.1.0",
       `target=${config.targetTriple}`,
@@ -108,7 +108,7 @@ function createArchive(
 
   const archivePath = path.join(
     releaseAssetsDir,
-    `codex-exec-loop-native-0.1.0-${config.targetTriple}.tar.gz`,
+    `akra-ade-0.1.0-${config.targetTriple}.tar.gz`,
   );
   execFileSync("tar", [
     "--format=ustar",
@@ -303,7 +303,7 @@ test("archive preflight enforces the exact VERSION.txt release contract", async 
     ["profile", (body) => body.replace(/^profile=.*$/m, "profile=debug")],
     [
       "binary",
-      (body) => body.replace(/^binary=.*$/m, "binary=codex-exec-loop-native.exe"),
+      (body) => body.replace(/^binary=.*$/m, "binary=akra-ade.exe"),
     ],
     ["launcher", (body) => body.replace(/^launcher=.*$/m, "launcher=akra.cmd")],
     ["missing key", (body) => body.replace(/^profile=.*\n/m, "")],
@@ -471,7 +471,7 @@ test("stage-npm-packages rejects traversal and link archive members", () => {
       );
       const archivePath = archives[0];
       fs.rmSync(archivePath);
-      const sourceName = `codex-exec-loop-native-0.1.0-${PLATFORM_CONFIGS[0].targetTriple}`;
+      const sourceName = `akra-ade-0.1.0-${PLATFORM_CONFIGS[0].targetTriple}`;
       const source = path.join(tmp, sourceName);
       fs.mkdirSync(source);
       writeFile(path.join(source, "payload"), "unsafe\n");
@@ -595,7 +595,7 @@ test("verified extraction remains bound to the private archive snapshot", async 
 test("archive preflight rejects an oversized declared payload before extraction", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "akra-stage-bomb-"));
   const config = PLATFORM_CONFIGS[0];
-  const rootName = `codex-exec-loop-native-0.1.0-${config.targetTriple}`;
+  const rootName = `akra-ade-0.1.0-${config.targetTriple}`;
   const archivePath = path.join(tmp, `${rootName}.tar.gz`);
   const tar = Buffer.concat([
     tarHeader(`${rootName}/`, 0, "5"),
@@ -618,7 +618,7 @@ test("archive preflight rejects an oversized declared payload before extraction"
 test("archive preflight aborts an excessive gzip expansion ratio", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "akra-stage-ratio-"));
   const config = PLATFORM_CONFIGS[0];
-  const rootName = `codex-exec-loop-native-0.1.0-${config.targetTriple}`;
+  const rootName = `akra-ade-0.1.0-${config.targetTriple}`;
   const archivePath = path.join(tmp, `${rootName}.tar.gz`);
   const payloadBytes = 32 * 1024 * 1024;
   const tar = Buffer.concat([

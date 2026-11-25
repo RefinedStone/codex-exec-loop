@@ -31,7 +31,7 @@ test("resolvePlatformConfig returns supported mappings", () => {
   );
   assert.equal(
     resolvePlatformConfig("win32", "x64")?.binaryName,
-    "codex-exec-loop-native.exe",
+    "akra-ade.exe",
   );
   assert.equal(resolvePlatformConfig("darwin", "x64"), null);
 });
