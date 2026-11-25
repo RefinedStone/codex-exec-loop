@@ -45,7 +45,7 @@ export function TerminalDock({ bridge }: { bridge: TerminalBridge }) {
   }, [open]); // 열림 상태가 바뀔 때만 본다.
 
   return (
-    <section className="terminal-dock" hidden={!open} data-testid="terminal-dock">
+    <section className="terminal-dock" hidden={!open} data-zoom-scope="terminal" data-testid="terminal-dock">
       <header>
         {tabs.map((tab, index) => (
           <span key={tab.key} className={tab.key === activeKey ? "terminal-tab selected" : "terminal-tab"}>

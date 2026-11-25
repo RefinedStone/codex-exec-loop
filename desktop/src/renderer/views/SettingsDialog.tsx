@@ -1,6 +1,6 @@
 // 설정 화면이다 (plan 26 S1). 글자 크기(Z4), 알림(A2), 잠자기 방지(W5), 화면 밝기와 확대를 한곳에서 바꾼다.
 // 값은 main 이 저장하고 모든 창에 적용한다. 위의 입력란은 항목의 이름과 설명에서 찾는다.
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { type AppSettings, DEFAULT_SETTINGS, type FontArea, type KeepAwakeMode, MAX_FONT_PX, MIN_FONT_PX, type NotificationMode } from "../../shared/settings";
 import { Icon } from "../design/icons";
@@ -9,6 +9,9 @@ import { extensionPanels, panelForExtension } from "../extensions/registry";
 import { updateSettings, useSettings } from "../session/settingsStore";
 import { matchesSetting } from "../session/settingsView";
 import { MOD_KEY, openPanel, toggleTheme, useUiStore } from "../session/uiStore";
+import { BODY_ZOOM_SCOPES, nextZoom, OTHER_ZOOM_SCOPES, panelZoomScope, SHELL_ZOOM_SCOPES, type ZoomScope } from "../../shared/zoom";
+import { panels } from "../extensions/panelDefinitions";
+import { useZoomFactor, zoomTargetLabel } from "./useZoom";
 
 interface Row {
   id: string;
@@ -65,16 +68,25 @@ const KEEP_AWAKE_MODES: readonly (readonly [KeepAwakeMode, string])[] = [
   ["on", "항상"],
 ];
 
-function useZoomFactor(): number {
-  const [factor, setFactor] = useState(1);
-  useEffect(() => {
-    window.akra.zoom.get().then(setFactor, () => undefined);
-    return window.akra.zoom.onChanged(setFactor);
-  }, []);
-  return factor;
+/** 설정 창에서 고를 수 있는 확대 영역이다. 사이드바와 위 막대는 여기서만 바꾼다. */
+const ZOOM_TARGETS: readonly ZoomScope[] = [
+  ...BODY_ZOOM_SCOPES, ...SHELL_ZOOM_SCOPES, ...panels.map((panel) => panelZoomScope(panel.id)), ...OTHER_ZOOM_SCOPES,
+];
+
+function ZoomControl() {
+  const [scope, setScope] = useState<ZoomScope>("thread");
+  const factor = useZoomFactor(scope);
+  return (
+    <div className="zoom-control">
+      <select value={scope} onChange={(event) => setScope(event.target.value as ZoomScope)} aria-label="확대할 영역" data-testid="settings-zoom-scope">
+        {ZOOM_TARGETS.map((target) => <option key={target} value={target}>{zoomTargetLabel(target)}</option>)}
+      </select>
+      <Stepper value={`${Math.round(factor * 100)}%`} label={`${zoomTargetLabel(scope)} 확대`} onStep={(delta) => window.akra.zoom.step(scope, delta === 1 ? "in" : "out")} onReset={() => window.akra.zoom.step(scope, "reset")} canDecrease={nextZoom(factor, "out") !== factor} canIncrease={nextZoom(factor, "in") !== factor} testId="settings-zoom" />
+    </div>
+  );
 }
 
-function settingsRows(settings: AppSettings, theme: string, zoom: number): Row[] {
+function settingsRows(settings: AppSettings, theme: string): Row[] {
   const fontRows = FONT_ROWS.map<Row>(([area, label, hint]) => {
     const size = settings.fonts[area];
     const setSize = (next: number) => updateSettings({ fonts: { [area]: next } });
@@ -108,8 +120,8 @@ function settingsRows(settings: AppSettings, theme: string, zoom: number): Row[]
       id: "zoom",
       section: "화면",
       label: "확대",
-      hint: `앱 전체의 배율 (${MOD_KEY}+ · ${MOD_KEY}− · ${MOD_KEY}0)`,
-      control: <Stepper value={`${Math.round(zoom * 100)}%`} label="확대" onStep={(delta) => window.akra.zoom.step(delta === 1 ? "in" : "out")} onReset={() => window.akra.zoom.step("reset")} canDecrease={zoom > 0.5} canIncrease={zoom < 2} testId="settings-zoom" />,
+      hint: `영역마다 따로인 배율. ${MOD_KEY}+ · ${MOD_KEY}− · ${MOD_KEY}0 은 포커스한 영역을, ${MOD_KEY}휠은 포인터 아래 영역을 바꾼다. 사이드바와 위 막대는 여기서만 바꾼다`,
+      control: <ZoomControl />,
     },
     ...fontRows,
     {
@@ -156,10 +168,9 @@ function ExtensionControl({ extensions, id, enabled, compatible, lifecycle }: { 
 export function SettingsDialog({ extensions, localExtensions, chooseFolder }: { extensions?: RepositoryExtensions; localExtensions?: RepositoryExtensions; chooseFolder?: () => Promise<void> } = {}) {
   const settings = useSettings();
   const theme = useUiStore((state) => state.theme);
-  const zoom = useZoomFactor();
   const [query, setQuery] = useState("");
   const close = () => useUiStore.setState({ overlay: null });
-  const entries = settingsRows(settings, theme, zoom);
+  const entries = settingsRows(settings, theme);
   for (const [scope, source] of [["local_user", localExtensions], ["repository", extensions]] as const) {
     if (!source) continue;
     const items = source.items.length ? source.items : extensionPanels.filter(panel => panel.scope === scope).map(panel => ({

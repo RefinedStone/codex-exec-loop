@@ -14,6 +14,7 @@ import type { DotLive, DotMessage, DotSummary } from "../session/desktopStore";
 import { dotDraftKey, setDotSending, setDraft, useUiStore } from "../session/uiStore";
 import type { GatewayRequest } from "../work/notionHub";
 import { allowDotSending, dayLabel, dotStatusLine, nextDotReplyWait, isDotSendingAllowed, isSentDraft, lastReadMessageId, markDotSendingAllowed, messageClock, REPLY_POLL_MS, REPLY_WAIT_LIMIT_MS } from "./dotSend";
+import { useZoomFactor, zoomStyle } from "./useZoom";
 
 const DOTS_MESSAGES_METHOD = "akra/dots/messages";
 const DOTS_SEND_METHOD = "akra/dots/send";
@@ -50,6 +51,9 @@ export function DotAvatar({ name, size = 28 }: { name: string; size?: number }) 
 }
 
 export function DotChat({ dot, live, replies, request, visible = true, onSeen, onPopOut, onDock, onClose }: DotChatProps) {
+  // `onDock` 은 dot 창에만 있다. 옆 칸과 창은 배율을 따로 둔다.
+  const zoomScope = onDock ? "dot-window" : "dot";
+  const zoom = useZoomFactor(zoomScope);
   const [state, setState] = useState<ChatState>({ phase: "loading" });
   const [refresh, setRefresh] = useState(0);
   const [canSend, setCanSend] = useState(() => isDotSendingAllowed(dot.id));
@@ -251,7 +255,7 @@ export function DotChat({ dot, live, replies, request, visible = true, onSeen, o
   const readId = state.phase === "loaded" ? lastReadMessageId(messages, state.dotReadAt) : null;
   const status = dotStatusLine(dot, live);
   return (
-    <div className="dot-chat" data-testid="dot-view">
+    <div className="dot-chat" style={zoomStyle(zoom)} data-zoom-scope={zoomScope} data-testid="dot-view">
       <header className="dot-header" data-testid="dot-banner">
         <DotAvatar name={dot.displayName} size={36} />
         <div className="dot-identity">

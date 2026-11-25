@@ -1111,9 +1111,14 @@ The Gateway records the external documents that a thread mentions, without a mod
   access for delegated threads. Codex keeps this dedicated profile's session in the
   operating system credential store. Run the command as the user who runs the Gateway.
   For opt-in PR review, see [Configure defensive pull request review](pr-review-backend.md).
-- Desktop basics (plan 26 U1): one zoom factor for all windows (view menu, `Cmd/Ctrl` `+` `-` `0`, `Cmd/Ctrl`
-  + wheel, pinch), saved with the main window's size and position in `userData/window-state.json`; the
-  browser panel and the macOS window buttons follow the factor. On macOS the main window has an inset title
+- Desktop basics (plan 26 U1, #2626): zoom is per area. The window page stays at 100%; the renderer applies
+  CSS `zoom` to each body view (home, fleet, thread, remote), the sidebar, the top bar, each right-panel tab,
+  the dot dock, the dot window, and the ChatGPT dock. The terminal multiplies its font size, and the browser
+  panel's web page has its own factor (`browser-page`). The view menu and `Cmd/Ctrl` `+` `-` `0` change the
+  focused area (the current body view when focus is elsewhere); `Cmd/Ctrl` + wheel and pinch change the area
+  under the pointer. The sidebar and the top bar change only from the settings dialog. The factors are saved
+  with the main window's size and position in `userData/window-state.json` (`zooms`); an old single `zoom`
+  moves to the body views once. The macOS window buttons follow only the top bar factor. On macOS the main window has an inset title
   bar. A right-click menu gives the edit commands, spelling suggestions, and "링크 복사" in the app window and
   the browser panel. Each window keeps a navigation history of views and opened threads (top-bar buttons,
   `Cmd/Ctrl` `[` `]`, mouse back and forward buttons; a deleted thread is skipped). `Cmd/Ctrl+F` finds text
@@ -1125,7 +1130,7 @@ The Gateway records the external documents that a thread mentions, without a mod
   `desktop/src/renderer/session/navHistory.ts`, `desktop/src/renderer/conversation/find.ts`,
   `desktop/src/renderer/session/attention.ts`).
 - Desktop settings (plan 26 U2): the settings dialog opens from the app menu ("설정…", `Cmd/Ctrl+,`), the
-  sidebar footer, and the command palette. It has a search field and these settings: theme, zoom, font size
+  sidebar footer, and the command palette. It has a search field and these settings: theme, zoom per area, font size
   for the UI, the conversation, code and diffs, and the terminal (10–24 px); OS notifications (off, only when
   no app window has focus, always) and their sound; sleep prevention (off, only while a turn runs, always).
   main validates the values, saves them in `userData/app-settings.json`, and sends them to every window.

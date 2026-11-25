@@ -61,6 +61,22 @@ try {
   await page.keyboard.type("echo akra-term-$((40+2))\r");
   check("a typed command runs in the shell", await waitForText(page, 0, "akra-term-42", 15_000));
 
+  // 포커스가 터미널에 있으면 메뉴의 확대는 터미널만 바꾼다. 글자 크기에 곱하고 열과 행을 다시 맞춘다 (#2629).
+  const terminalSize = () => page.getByTestId("terminal-view").first().evaluate((element) => ({ cols: element.akraTerminal.cols, fontSize: element.akraTerminal.options.fontSize }));
+  const clickMenu = (id) => app.evaluate(({ BrowserWindow, Menu }, itemId) => Menu.getApplicationMenu()?.getMenuItemById(itemId)?.click(undefined, BrowserWindow.getAllWindows()[0]), id);
+  const before = await terminalSize();
+  await clickMenu("zoom-in");
+  await clickMenu("zoom-in");
+  await clickMenu("zoom-in");
+  await page.waitForFunction((size) => document.querySelector('[data-testid="terminal-view"]').akraTerminal.options.fontSize > size, before.fontSize, { timeout: 5_000 }).catch(() => undefined);
+  const zoomed = await terminalSize();
+  const zooms = await page.evaluate(() => window.akra.zoom.get());
+  check("the zoom shortcut in the terminal zooms only the terminal", zooms.terminal === 1.5 && zooms.home === undefined, JSON.stringify(zooms));
+  check("the terminal font grows and the columns fit again", zoomed.fontSize > before.fontSize && zoomed.cols < before.cols, JSON.stringify({ before, zoomed }));
+  await clickMenu("zoom-reset");
+  await page.waitForFunction((size) => document.querySelector('[data-testid="terminal-view"]').akraTerminal.options.fontSize === size, before.fontSize, { timeout: 5_000 }).catch(() => undefined);
+  check("the terminal zoom resets", (await terminalSize()).cols === before.cols);
+
   await page.getByTestId("terminal-add").click();
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="terminal-view"]').length === 2);
   check("a second tab opens its own shell", (await page.getByTestId("terminal-tab").count()) === 2);

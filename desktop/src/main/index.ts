@@ -6,13 +6,13 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents, utilityProcess } from "electron";
+import { app, type BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents, utilityProcess } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { mergeSettings, shouldKeepAwake, validateSettings } from "../shared/settings";
 import { isVaultRestoreTarget, vaultRestoreProfileHold } from "../shared/vaultRestore";
-import { isZoomDirection, nextZoom, type ZoomDirection } from "../shared/zoom";
+import { isZoomDirection, isZoomScope, stepZoomFactors, type ZoomDirection, type ZoomScope } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
 import { spawn as spawnPty } from "node-pty";
@@ -66,7 +66,10 @@ const issueConfirmationQueue = new IssueConfirmationQueue();
 const remoteConnections = new Map<string, GatewayConnection>();
 const remoteKey = (contentsId: number, host: string) => `${contentsId}:${host}`;
 const terminals = new TerminalService(spawnPty);
-const browsers = new BrowserPanelService(installContextMenu);
+const browsers = new BrowserPanelService((contents) => {
+  installContextMenu(contents);
+  followPageZoom(contents);
+});
 const browserAgents = new BrowserAgentService({
   command: process.execPath,
   args: [join(__dirname, "browserMcp.js")],
@@ -143,28 +146,56 @@ function updateKeepAwake(): void {
 const TOP_BAR_HEIGHT = 44;
 const WINDOW_BUTTON_HEIGHT = 16;
 
-/** macOS 창 단추를 위 막대의 가운데 높이에 둔다. 위 막대는 확대 값만큼 커진다 (plan 26 Z3). */
-function windowButtonPosition(zoom: number): { x: number; y: number } {
+/** macOS 창 단추를 위 막대의 가운데 높이에 둔다. 위 막대는 자기 확대 값만큼만 커진다. 본문 확대로는 움직이지 않는다. */
+function windowButtonPosition(window: BrowserWindow | null): { x: number; y: number } {
+  // 블루프린트 창의 위 막대는 확대하지 않는다.
+  const zoom = window && mainWindows.has(window) ? (windowState.zooms.topbar ?? 1) : 1;
   return { x: 14, y: Math.max(2, Math.round((TOP_BAR_HEIGHT * zoom - WINDOW_BUTTON_HEIGHT) / 2)) };
 }
 
 /** 제목 막대를 화면 위 막대와 합친 창이다 (macOS 의 본 창과 블루프린트 창). dot 창은 기본 제목 막대를 쓴다. */
 const insetWindows = new WeakSet<BrowserWindow>();
 
+/** 앱 화면의 페이지 배율은 늘 100% 이다. 영역 확대는 renderer 가 CSS 로 한다 (#2626). */
 function applyZoom(window: BrowserWindow): void {
   if (window.isDestroyed()) return;
-  window.webContents.setZoomFactor(windowState.zoom);
-  if (insetWindows.has(window)) window.setWindowButtonPosition(windowButtonPosition(windowState.zoom));
+  window.webContents.setZoomFactor(1);
+  if (insetWindows.has(window)) window.setWindowButtonPosition(windowButtonPosition(window));
 }
 
-/** 확대 값을 한 단계 바꾼다. 모든 창에 적용하고 저장한다. 창은 배율을 잠깐 보인다 (plan 26 Z1–Z2). */
-function stepZoom(direction: ZoomDirection): void {
-  windowState.zoom = nextZoom(windowState.zoom, direction);
+/** 브라우저 패널의 웹 페이지이다. 페이지 배율은 `browser-page` 값이고, 앱 화면의 배율과 따로이다. */
+const browserPages = new Set<WebContents>();
+
+function followPageZoom(contents: WebContents): void {
+  browserPages.add(contents);
+  contents.once("destroyed", () => browserPages.delete(contents));
+  contents.on("did-finish-load", () => contents.setZoomFactor(windowState.zooms["browser-page"] ?? 1));
+  // 페이지 위의 ⌘(Ctrl) + 휠이다. Electron 은 스스로 확대하지 않고 이 이벤트만 보낸다.
+  contents.on("zoom-changed", (_event, direction) => stepZoom("browser-page", direction, BrowserWindow.fromWebContents(contents)?.webContents ?? null));
+}
+
+/** 한 영역을 한 단계 바꾼다. 저장하고 모든 창에 알린다. 창은 영역 이름과 배율을 잠깐 보인다. */
+function stepZoom(scope: ZoomScope, direction: ZoomDirection, source: WebContents | null): void {
+  windowState.zooms = stepZoomFactors(windowState.zooms, scope, direction);
   for (const window of BrowserWindow.getAllWindows()) {
-    applyZoom(window);
-    window.webContents.send(IPC_CHANNELS.zoomChanged, windowState.zoom);
+    if (scope === "topbar") applyZoom(window);
+    window.webContents.send(IPC_CHANNELS.zoomChanged, windowState.zooms, scope, window.webContents === source);
+  }
+  if (scope === "browser-page") {
+    for (const page of browserPages) if (!page.isDestroyed()) page.setZoomFactor(windowState.zooms["browser-page"] ?? 1);
   }
   persistWindowState();
+}
+
+/** 메뉴나 단축키의 확대이다. 브라우저 패널의 페이지에 포커스가 있으면 그 페이지를, 아니면 창에 맡긴다. */
+function zoomFromMenu(window: BaseWindow | undefined, direction: ZoomDirection): void {
+  const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow();
+  if (!target || target.isDestroyed()) return;
+  if (browsers.forAgent(target.webContents.id)?.contents.isFocused()) {
+    stepZoom("browser-page", direction, target.webContents);
+    return;
+  }
+  target.webContents.send(IPC_CHANNELS.zoomCommand, direction);
 }
 
 /** 오른쪽 클릭 메뉴이다 (plan 26 C1). 앱 창과 브라우저 패널의 페이지에 건다. */
@@ -376,7 +407,7 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     ...(dotQuery ? { minWidth: 340, minHeight: 420 } : {}),
     title: BLUEPRINT ? "Akra Desktop Blueprint" : "Akra Desktop",
     show: false,
-    ...(inset ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: windowButtonPosition(windowState.zoom) } : {}),
+    ...(inset ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: windowButtonPosition(null) } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: true,
@@ -415,7 +446,7 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
       if (!BrowserWindow.getAllWindows().length && process.platform !== "darwin") app.quit();
     });
   }
-  // 확대 값은 페이지를 읽을 때마다 다시 적용한다.
+  // 페이지를 읽을 때마다 배율을 100% 로 둔다. 옛 판이 같은 출처에 남긴 배율을 따르지 않는다.
   contents.on("did-finish-load", () => applyZoom(window));
   installContextMenu(contents);
 
@@ -770,9 +801,9 @@ ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
 });
 
 ipcMain.handle(IPC_CHANNELS.appFocused, () => BrowserWindow.getFocusedWindow() !== null);
-ipcMain.handle(IPC_CHANNELS.zoomGet, () => windowState.zoom);
-ipcMain.on(IPC_CHANNELS.zoomStep, (_event, direction: unknown) => {
-  if (isZoomDirection(direction)) stepZoom(direction);
+ipcMain.handle(IPC_CHANNELS.zoomGet, () => windowState.zooms);
+ipcMain.on(IPC_CHANNELS.zoomStep, (event, scope: unknown, direction: unknown) => {
+  if (isZoomScope(scope) && isZoomDirection(direction)) stepZoom(scope, direction, event.sender);
 });
 
 ipcMain.handle(IPC_CHANNELS.settingsGet, () => appSettings);
@@ -889,11 +920,11 @@ function installApplicationMenu(): void {
     {
       label: "보기",
       submenu: [
-        { id: "zoom-in", label: "확대", accelerator: "CmdOrCtrl+Plus", click: () => stepZoom("in") },
+        { id: "zoom-in", label: "확대", accelerator: "CmdOrCtrl+Plus", click: (_item, window) => zoomFromMenu(window, "in") },
         // 미국 자판에서 Shift 없이 누르는 글쇠는 `=` 이다. 같은 동작을 숨긴 항목으로 한 번 더 건다.
-        { label: "확대", accelerator: "CmdOrCtrl+=", visible: false, acceleratorWorksWhenHidden: true, click: () => stepZoom("in") },
-        { id: "zoom-out", label: "축소", accelerator: "CmdOrCtrl+-", click: () => stepZoom("out") },
-        { id: "zoom-reset", label: "실제 크기", accelerator: "CmdOrCtrl+0", click: () => stepZoom("reset") },
+        { label: "확대", accelerator: "CmdOrCtrl+=", visible: false, acceleratorWorksWhenHidden: true, click: (_item, window) => zoomFromMenu(window, "in") },
+        { id: "zoom-out", label: "축소", accelerator: "CmdOrCtrl+-", click: (_item, window) => zoomFromMenu(window, "out") },
+        { id: "zoom-reset", label: "실제 크기", accelerator: "CmdOrCtrl+0", click: (_item, window) => zoomFromMenu(window, "reset") },
         { type: "separator" },
         { role: "reload" },
         { role: "toggleDevTools" },

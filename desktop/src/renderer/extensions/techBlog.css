@@ -9,7 +9,7 @@
 .blog-back { justify-self: start; }
 .blog-title { overflow-wrap: anywhere; }
 .blog-commits, .blog-articles, .blog-checks { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.blog-commits { max-height: 40vh; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 4px; }
+.blog-commits { max-height: calc(40vh / var(--area-zoom, 1)); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 4px; }
 .blog-commits label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px; font-size: var(--text-s); }
 .blog-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .blog-articles button { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; width: 100%; padding: 6px; border-radius: var(--radius-s); text-align: start; color: inherit; }
@@ -28,7 +28,7 @@
 .blog-view > .segmented { justify-self: start; }
 .blog-request { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); }
 .blog-studio textarea { width: 100%; box-sizing: border-box; color: inherit; background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: var(--radius-s); padding: 6px; resize: vertical; font: inherit; }
-.blog-draft { min-height: 50vh; font-family: var(--font-mono) !important; font-size: var(--text-s) !important; }
+.blog-draft { min-height: calc(50vh / var(--area-zoom, 1)); font-family: var(--font-mono) !important; font-size: var(--text-s) !important; }
 .blog-more { position: relative; }
 .blog-more > summary { list-style: none; cursor: pointer; }
 .blog-more > summary::-webkit-details-marker { display: none; }

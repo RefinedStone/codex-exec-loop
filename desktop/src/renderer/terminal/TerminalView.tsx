@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 
 import type { TerminalBridge } from "../../shared/bridge";
 import { useSettings } from "../session/settingsStore";
+import { useUiStore } from "../session/uiStore";
 
 export interface TerminalViewProps {
   bridge: TerminalBridge;
@@ -22,6 +23,11 @@ export interface TerminalElement extends HTMLDivElement {
   akraTerminal?: Terminal;
 }
 
+/** 터미널 배율은 CSS 로 확대하지 않고 글자 크기에 곱한다: xterm 의 마우스 자리와 열·행 계산이 맞는다. */
+function terminalFontSize(): number {
+  return Math.round(useSettings.getState().fonts.terminal * (useUiStore.getState().zooms.terminal ?? 1));
+}
+
 export function TerminalView({ bridge, cwd, visible, onOpened, onExited }: TerminalViewProps) {
   const containerRef = useRef<TerminalElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -34,7 +40,7 @@ export function TerminalView({ bridge, cwd, visible, onOpened, onExited }: Termi
     if (!container) return;
     const terminal = new Terminal({
       fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
-      fontSize: useSettings.getState().fonts.terminal,
+      fontSize: terminalFontSize(),
       cursorBlink: true,
       scrollback: 10_000,
       allowProposedApi: false,
@@ -83,12 +89,15 @@ export function TerminalView({ bridge, cwd, visible, onOpened, onExited }: Termi
       callbacks.current.onOpened({ cwd: result.cwd, shell: result.shell });
     });
 
-    // 터미널 글자 크기 설정이 바뀌면 열과 행을 다시 맞춘다 (plan 26 Z4).
-    const unsubscribeSettings = useSettings.subscribe((state) => {
-      if (terminal.options.fontSize === state.fonts.terminal) return;
-      terminal.options.fontSize = state.fonts.terminal;
+    // 터미널 글자 크기 설정이나 터미널 배율이 바뀌면 열과 행을 다시 맞춘다 (plan 26 Z4, #2629).
+    const refit = () => {
+      const fontSize = terminalFontSize();
+      if (terminal.options.fontSize === fontSize) return;
+      terminal.options.fontSize = fontSize;
       if (container.offsetParent !== null) fit.fit();
-    });
+    };
+    const unsubscribeSettings = useSettings.subscribe(refit);
+    const unsubscribeZoom = useUiStore.subscribe(refit);
 
     const observer = new ResizeObserver(() => {
       if (container.offsetParent !== null) fit.fit();
@@ -99,6 +108,7 @@ export function TerminalView({ bridge, cwd, visible, onOpened, onExited }: Termi
       disposed = true;
       observer.disconnect();
       unsubscribeSettings();
+      unsubscribeZoom();
       unsubscribeData();
       unsubscribeExit();
       input.dispose();

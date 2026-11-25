@@ -210,7 +210,7 @@ const SHORTCUTS = [
   [`${MOD_KEY},`, "설정"],
   [`${MOD_KEY}[ · ${MOD_KEY}]`, "뒤로 · 앞으로 (마우스 뒤로·앞으로 단추)"],
   [`${MOD_KEY}F`, "대화 안 찾기 (⏎ 다음, ⇧⏎ 이전)"],
-  [`${MOD_KEY}+ · ${MOD_KEY}− · ${MOD_KEY}0`, `확대 · 축소 · 실제 크기 (${MOD_KEY}휠, 핀치)`],
+  [`${MOD_KEY}+ · ${MOD_KEY}− · ${MOD_KEY}0`, `포커스한 영역 확대 · 축소 · 실제 크기 (${MOD_KEY}휠, 핀치는 포인터 아래 영역)`],
   ["↑ · ↓", "빈 입력창에서 이전 프롬프트 불러오기"],
   ["⏎", "보내기 (진행 중이면 추가 지시)"],
   ["⇧⏎", "줄바꿈"],
@@ -246,11 +246,11 @@ export function ShortcutsDialog() {
 
 /** 확대 값을 바꾼 직후에 배율을 잠깐 보인다 (plan 26 Z2). */
 export function ZoomNotice() {
-  const factor = useUiStore((state) => state.zoomNotice);
-  if (factor === null) return null;
+  const text = useUiStore((state) => state.zoomNotice);
+  if (text === null) return null;
   return (
     <div className="zoom-notice" role="status" data-testid="zoom-notice">
-      {Math.round(factor * 100)}%
+      {text}
     </div>
   );
 }

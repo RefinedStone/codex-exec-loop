@@ -1,6 +1,6 @@
 // 기본 데스크톱 동작의 계산이다 (plan 26 U1): 확대 단계, 창 자리 복원, 오른쪽 클릭 메뉴, 이동 기록, 찾기,
 // 입력창 글쇠, 알림 판정.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,7 @@ import type { TurnView } from "../src/renderer/conversation/transcript";
 import { attentionEvents } from "../src/renderer/session/attention";
 import type { DesktopState } from "../src/renderer/session/desktopStore";
 import { INITIAL_NAV, type NavEntry, pushNav, stepNav } from "../src/renderer/session/navHistory";
-import { nextZoom, validZoom } from "../src/shared/zoom";
+import { isZoomScope, nextZoom, parseZoomFactors, stepZoomFactors, validZoom } from "../src/shared/zoom";
 
 describe("zoom", () => {
   it("steps through the fixed factors and stops at both ends", () => {
@@ -35,6 +35,34 @@ describe("zoom", () => {
     expect(validZoom(9)).toBe(2);
     expect(validZoom(0.1)).toBe(0.5);
   });
+
+  it("changes one scope and leaves every other scope as it is", () => {
+    let factors = stepZoomFactors({ sidebar: 1.25 }, "thread", "in");
+    expect(factors).toEqual({ sidebar: 1.25, thread: 1.1 });
+    factors = stepZoomFactors(factors, "panel:review", "in");
+    expect(factors).toEqual({ sidebar: 1.25, thread: 1.1, "panel:review": 1.1 });
+    // 100% 로 돌아온 영역은 지운다.
+    expect(stepZoomFactors(factors, "thread", "reset")).toEqual({ sidebar: 1.25, "panel:review": 1.1 });
+  });
+
+  it("accepts only known scopes and panel ids", () => {
+    expect(isZoomScope("thread")).toBe(true);
+    expect(isZoomScope("panel:akra.tech-blog")).toBe(true);
+    expect(isZoomScope("panel:")).toBe(false);
+    expect(isZoomScope("panel:../x")).toBe(false);
+    expect(isZoomScope("body")).toBe(false);
+    expect(isZoomScope(1)).toBe(false);
+  });
+
+  it("moves an old single factor to the body views once and keeps the shell at 100%", () => {
+    expect(parseZoomFactors(undefined, 1.75)).toEqual({ home: 1.75, fleet: 1.75, thread: 1.75, remote: 1.75 });
+    expect(parseZoomFactors(undefined, 1)).toEqual({});
+    // 새 형식이 있으면 옛 값은 보지 않는다: 다시 옮기지 않는다.
+    expect(parseZoomFactors({ thread: 1.25 }, 1.75)).toEqual({ thread: 1.25 });
+    // 모르는 영역, 숫자가 아닌 값, 100% 는 버린다. 범위 밖은 끝 단계로 줄인다.
+    expect(parseZoomFactors({ thread: "x", nope: 1.5, sidebar: 1, terminal: 9 }, undefined)).toEqual({ terminal: 2 });
+    expect(parseZoomFactors([1.5], 1.5)).toEqual({ home: 1.5, fleet: 1.5, thread: 1.5, remote: 1.5 });
+  });
 });
 
 describe("window state", () => {
@@ -52,20 +80,26 @@ describe("window state", () => {
   });
 
   it("validates the file and survives a missing or broken file", () => {
-    expect(parseWindowState({ zoom: 1.25, bounds: { x: 1, y: 2, width: 900.4, height: 600 }, maximized: true })).toEqual({
-      zoom: 1.25,
+    expect(parseWindowState({ zooms: { thread: 1.25 }, bounds: { x: 1, y: 2, width: 900.4, height: 600 }, maximized: true })).toEqual({
+      zooms: { thread: 1.25 },
       bounds: { x: 1, y: 2, width: 900, height: 600 },
       maximized: true,
     });
-    expect(parseWindowState({ zoom: "x", bounds: { x: 1, y: 2, width: 10, height: 10 } })).toEqual({ zoom: 1, bounds: null, maximized: false });
+    expect(parseWindowState({ zoom: "x", bounds: { x: 1, y: 2, width: 10, height: 10 } })).toEqual({ zooms: {}, bounds: null, maximized: false });
     const directory = mkdtempSync(join(tmpdir(), "akra-window-state-"));
     try {
       const path = join(directory, "window-state.json");
-      expect(loadWindowState(path).zoom).toBe(1);
+      expect(loadWindowState(path).zooms).toEqual({});
       writeFileSync(path, "{broken");
       expect(loadWindowState(path).bounds).toBeNull();
-      saveWindowState(path, { zoom: 1.5, bounds: { x: 0, y: 0, width: 1000, height: 700 }, maximized: false });
-      expect(loadWindowState(path)).toEqual({ zoom: 1.5, bounds: { x: 0, y: 0, width: 1000, height: 700 }, maximized: false });
+      saveWindowState(path, { zooms: { thread: 1.5, sidebar: 0.9 }, bounds: { x: 0, y: 0, width: 1000, height: 700 }, maximized: false });
+      expect(loadWindowState(path)).toEqual({ zooms: { thread: 1.5, sidebar: 0.9 }, bounds: { x: 0, y: 0, width: 1000, height: 700 }, maximized: false });
+      // 옛 판의 파일이다. 본문만 175% 로 옮기고, 저장하면 새 형식만 남는다.
+      writeFileSync(path, JSON.stringify({ zoom: 1.75, bounds: null, maximized: false }));
+      const migrated = loadWindowState(path);
+      expect(migrated.zooms).toEqual({ home: 1.75, fleet: 1.75, thread: 1.75, remote: 1.75 });
+      saveWindowState(path, migrated);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ zooms: migrated.zooms, bounds: null, maximized: false });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

@@ -9,6 +9,7 @@ import { useResizableWidth } from "../design/useResizableWidth";
 import { staleNotice } from "../session/chatsProblem";
 import { remoteHostStore } from "../session/desktopStore";
 import { closeChat } from "../session/uiStore";
+import { useZoomFactor, zoomStyle } from "./useZoom";
 
 const MIN_DOCK_WIDTH = 320;
 const MAX_DOCK_WIDTH = 640;
@@ -18,6 +19,7 @@ export function ChatDock({ host, chatId, readChat }: { readonly host: string; re
   const summary = useStore((state) => state.chats.find((candidate) => candidate.id === chatId) ?? null);
   const storedConversation = useStore((state) => state.chatConversation?.id === chatId ? state.chatConversation : null);
   const [width, startResize] = useResizableWidth(420, MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
+  const zoom = useZoomFactor("chat");
   const [loading, setLoading] = useState(true);
   const [hasRead, setHasRead] = useState(false);
   const [refresh, setRefresh] = useState(0);
@@ -48,7 +50,7 @@ export function ChatDock({ host, chatId, readChat }: { readonly host: string; re
   return (
     <aside className="dot-dock" style={{ width }} aria-label={`${title} (ChatGPT 대화)`} data-testid="chat-dock">
       <div className="resize-handle" onPointerDown={startResize} />
-      <div className="dot-chat" data-testid="chat-view">
+      <div className="dot-chat" style={zoomStyle(zoom)} data-zoom-scope="chat" data-testid="chat-view">
         <header className="dot-header" data-testid="chat-banner">
           <div className="dot-identity">
             <span className="dot-name">{title}</span>

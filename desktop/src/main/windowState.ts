@@ -1,8 +1,8 @@
-// 창의 크기, 위치, 최대화와 앱 확대 값을 userData 의 JSON 파일에 둔다 (plan 26 W1, U-3).
+// 창의 크기, 위치, 최대화와 영역별 확대 값을 userData 의 JSON 파일에 둔다 (plan 26 W1, #2627).
 // 파일은 사용자가 고칠 수 있으므로 읽을 때마다 검증한다.
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
-import { validZoom } from "../shared/zoom";
+import { parseZoomFactors, type ZoomFactors } from "../shared/zoom";
 
 export interface WindowBounds {
   x: number;
@@ -12,13 +12,14 @@ export interface WindowBounds {
 }
 
 export interface WindowState {
-  zoom: number;
+  /** 영역별 확대 값이다. 옛 파일의 `zoom` 한 개는 읽을 때 본문 보기로 옮긴다. */
+  zooms: ZoomFactors;
   /** 최대화하기 전의 크기와 위치이다. 저장한 적이 없으면 null 이다. */
   bounds: WindowBounds | null;
   maximized: boolean;
 }
 
-export const DEFAULT_WINDOW_STATE: WindowState = { zoom: 1, bounds: null, maximized: false };
+export const DEFAULT_WINDOW_STATE: WindowState = { zooms: {}, bounds: null, maximized: false };
 
 const MIN_WIDTH = 480;
 const MIN_HEIGHT = 320;
@@ -35,7 +36,7 @@ function parseBounds(input: unknown): WindowBounds | null {
 
 export function parseWindowState(input: unknown): WindowState {
   const raw = (input ?? {}) as Record<string, unknown>;
-  return { zoom: validZoom(raw.zoom), bounds: parseBounds(raw.bounds), maximized: raw.maximized === true };
+  return { zooms: parseZoomFactors(raw.zooms, raw.zoom), bounds: parseBounds(raw.bounds), maximized: raw.maximized === true };
 }
 
 /**

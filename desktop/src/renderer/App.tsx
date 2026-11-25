@@ -35,7 +35,8 @@ import { DotDock } from "./views/DotDock";
 import { notifyDotReply, notifyIssueDecision, notifyOs } from "./views/notify";
 import { SettingsDialog } from "./views/SettingsDialog";
 import { useAppSettings } from "./views/useAppSettings";
-import { useZoom } from "./views/useZoom";
+import { useZoom, useZoomFactor, zoomStyle } from "./views/useZoom";
+import { panelZoomScope, type ZoomScope } from "../shared/zoom";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, ZoomNotice } from "./views/Views";
 import { DelegationPanel } from "./work/DelegationPanel";
 import { PrReviewResult, type PrReviewMode, type StoredPrReview } from "./work/PrReviewResult";
@@ -89,8 +90,11 @@ function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegat
   const cwd = useDesktopStore(openThreadCwd);
   const counts = workingTreeCounts(tree);
   const pullRequest = tree.branch.phase === "loaded" && tree.branch.summary.ok ? tree.branch.summary.pullRequest : null;
+  const zoom = useZoomFactor("topbar");
+  // `--zoom` 은 macOS 창 단추의 자리를 비우는 CSS 가 쓴다. 단추는 위 막대를 확대해도 같은 자리에 있다.
+  const style = zoom === 1 ? undefined : ({ zoom, "--zoom": zoom } as React.CSSProperties);
   return (
-    <header className={sidebarOpen ? "top-bar" : "top-bar no-sidebar"} data-testid="gateway-info">
+    <header className={sidebarOpen ? "top-bar" : "top-bar no-sidebar"} style={style} data-zoom-scope="topbar" data-testid="gateway-info">
       <button type="button" className="icon-button" title={`사이드바 (${MOD_KEY}B)`} onClick={() => useUiStore.setState({ sidebarOpen: !sidebarOpen })}>
         <Icon name="sidebar" />
       </button>
@@ -216,6 +220,7 @@ function RightPanel({ panel, maximized, delegationEnabled, enabledExtensions, ch
   const [width, startResize] = useResizableWidth(520, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
   const extension = panelForExtension(panel);
   const maximizeLabel = extension?.label ?? (panel === "delegation" ? "위임 패널" : "이슈 패널");
+  const zoom = useZoomFactor(panelZoomScope(panel));
   return (
     <aside className="right-panel" style={maximized ? undefined : { width }} data-testid="right-panel" data-maximized={maximized}>
       {!maximized && <div className="resize-handle" onPointerDown={startResize} />}
@@ -237,7 +242,8 @@ function RightPanel({ panel, maximized, delegationEnabled, enabledExtensions, ch
           <Icon name="close" />
         </button>
       </header>
-      <div className="panel-body">{children}</div>
+      {/* 탭 머리줄은 그대로 두고 탭의 내용만 확대한다. 탭마다 값이 따로 있다. */}
+      <div className="panel-body" style={zoomStyle(zoom)} data-zoom-scope={panelZoomScope(panel)}>{children}</div>
     </aside>
   );
 }
@@ -347,6 +353,9 @@ function WorkTab({ request, onHandOff, onLinearHandOff }: {
   );
 }
 
+/** 포커스가 영역 밖일 때 단축키가 바꾸는 영역이다: 지금 보이는 본문 보기. */
+const currentBodyScope = (): ZoomScope => useUiStore.getState().view;
+
 export function App() {
   const session = useRef<DesktopSession | null>(null);
   const [delegationEnabled, setDelegationEnabled] = useState(false);
@@ -361,8 +370,9 @@ export function App() {
   const overlay = useUiStore((state) => state.overlay);
   const openCwd = useDesktopStore(openThreadCwd);
   const tree = useWorkingTree(window.akra);
-  useZoom();
+  useZoom(currentBodyScope);
   useAppSettings();
+  const bodyZoom = useZoomFactor(view);
   // 앱 메뉴의 "설정…" (⌘,) 은 main 이 받아서 이 창에 알린다.
   useEffect(() => window.akra.settings.onOpen(() => useUiStore.setState({ overlay: "settings" })), []);
   // 실행 중인 턴이 있는지 main 에 알린다. main 이 "일할 때만 잠자기 방지"에 쓴다 (plan 26 W5).
@@ -773,6 +783,8 @@ export function App() {
         <SessionBanner />
         <div className={panelMaximized ? "workspace-body with-maximized-panel" : "workspace-body"}>
           <main className="main">
+            {/* 본문 보기만 확대한다. 터미널은 자기 배율을 글자 크기로 쓰므로 이 칸 밖에 둔다. */}
+            <div className="main-view" style={zoomStyle(bodyZoom)} data-zoom-scope={view}>
             {view === "home" && <Home actions={composerActions} onChooseFolder={() => window.akra.chooseFolder()} onOpenThread={openThread} />}
             {view === "fleet" && <Fleet onOpenThread={openThread} />}
             {view === "thread" && (
@@ -792,6 +804,7 @@ export function App() {
                 <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
               </ConversationStoreContext.Provider>
             )}
+            </div>
             <TerminalDock bridge={window.akra.terminal} />
           </main>
           {panel && (
