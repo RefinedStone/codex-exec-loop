@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { migrateUserData } from "../src/main/userDataMigration";
+import { loadAppSettings } from "../src/main/appSettings";
+import { migrateUserData, prepareUserData } from "../src/main/userDataMigration";
 
 const roots: string[] = [];
 function appData(): string {
@@ -16,6 +17,18 @@ function legacyWith(root: string, file: string, body: string): string {
   mkdirSync(legacy, { recursive: true });
   writeFileSync(join(legacy, file), body);
   return legacy;
+}
+/** Electron 45 처럼 `getPath("userData")` 가 아직 없는 폴더를 만든다. 기본값은 appData/<제품명> 이다. */
+function electronApp(root: string) {
+  const paths: Record<string, string> = { appData: root };
+  return {
+    getPath: (name: string) => {
+      const path = paths[name] ?? join(root, "Akra ADE");
+      if (name === "userData") mkdirSync(path, { recursive: true });
+      return path;
+    },
+    setPath: (name: string, path: string) => { paths[name] = path; },
+  };
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -51,5 +64,37 @@ describe("migrateUserData", () => {
 
     expect(migrateUserData(root, current, busy as never)).toEqual({ kind: "kept-legacy", path: legacy, reason: "EBUSY" });
     expect(readFileSync(join(legacy, "Cookies"), "utf8")).toBe("c");
+  });
+});
+
+describe("prepareUserData", () => {
+  it("moves the legacy profile before Electron creates the new userData folder", () => {
+    const root = appData();
+    const legacy = legacyWith(root, "app-settings.json", JSON.stringify({ keepAwake: "on" }));
+    const current = join(root, "Akra ADE");
+
+    const first = electronApp(root);
+    expect(prepareUserData(first as never, undefined)).toEqual({ kind: "moved", from: legacy, to: current });
+    expect(first.getPath("userData")).toBe(current);
+    expect(loadAppSettings(join(first.getPath("userData"), "app-settings.json")).keepAwake).toBe("on");
+
+    const second = electronApp(root);
+    expect(prepareUserData(second as never, undefined)).toEqual({ kind: "none" });
+    expect(loadAppSettings(join(second.getPath("userData"), "app-settings.json")).keepAwake).toBe("on");
+  });
+
+  it("keeps the explicit override and the legacy folder when the move fails", () => {
+    const root = appData();
+    const legacy = legacyWith(root, "Cookies", "c");
+    const override = electronApp(root);
+    expect(prepareUserData(override as never, join(root, "test"))).toEqual({ kind: "none" });
+    expect(override.getPath("userData")).toBe(join(root, "test"));
+    expect(existsSync(legacy)).toBe(true);
+
+    const busy = { existsSync, readdirSync: () => [], rmdirSync: () => {}, renameSync: () => { throw new Error("EBUSY"); } };
+    const kept = electronApp(root);
+    expect(prepareUserData(kept as never, undefined, busy as never)).toMatchObject({ kind: "kept-legacy", path: legacy });
+    expect(kept.getPath("userData")).toBe(legacy);
+    expect(existsSync(join(root, "Akra ADE"))).toBe(false);
   });
 });
