@@ -27,6 +27,8 @@ fn replay_with_rng(scenario: &Scenario, rng: SimRng) -> Result<ScenarioResult> {
             thread_prompt_budget: 0,
             restarts: false,
             approval_budget: 0,
+            decision_budget: 0,
+            steer_budget: 0,
         },
     );
     for (index, step) in scenario.steps.iter().enumerate() {
